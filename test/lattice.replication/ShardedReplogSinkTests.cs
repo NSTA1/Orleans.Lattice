@@ -23,16 +23,6 @@ public partial class ShardedReplogSinkTests
         return monitor;
     }
 
-    private static WalRecord MakeEntry(string treeId, string key, string originClusterId = "site-a") => new()
-    {
-        TreeId = treeId,
-        Op = MutationKind.Set,
-        Key = key,
-        Value = new byte[] { 1 },
-        Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
-        OriginClusterId = originClusterId,
-    };
-
     // ------------------------------------------------------------------
     // The commit-time sink is a nudge, not a WAL writer. The leaf
     // commit-log writer is the single WAL appender; the log-tailing
@@ -50,10 +40,9 @@ public partial class ShardedReplogSinkTests
             factory,
             Monitor(),
             new FakeReplicationTopology(new[] { "site-b" }),
-            new LocalVectorClockCache(factory),
             NullLogger<ShardedReplogSink>.Instance);
 
-        await sink.WriteAsync(MakeEntry("orders", "k"), CancellationToken.None);
+        await sink.WriteAsync("orders", CancellationToken.None);
         await Task.Delay(20);
 
         factory.DidNotReceive().GetGrain<IWalShardGrain>(Arg.Any<string>());
@@ -69,12 +58,11 @@ public partial class ShardedReplogSinkTests
             factory,
             Monitor(),
             new FakeReplicationTopology(peers: null),
-            new LocalVectorClockCache(factory),
             NullLogger<ShardedReplogSink>.Instance);
 
-        // With no peers the commit-time path is pure local work (VC
-        // advance only) and must not await any cross-grain call.
-        var task = sink.WriteAsync(MakeEntry("orders", "k"), CancellationToken.None);
+        // With no peers the commit-time path is pure local work (no
+        // doorbell fan-out) and must not await any cross-grain call.
+        var task = sink.WriteAsync("orders", CancellationToken.None);
 
         Assert.That(task.IsCompletedSuccessfully, Is.True);
     }
@@ -107,9 +95,9 @@ public partial class ShardedReplogSinkTests
         var shipperC = Substitute.For<IReplicationShipperGrain>();
         factory.GetGrain<IReplicationShipperGrain>("orders/site-b").Returns(shipperB);
         factory.GetGrain<IReplicationShipperGrain>("orders/site-c").Returns(shipperC);
-        var sink = new ShardedReplogSink(factory, monitor, topology, new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
+        var sink = new ShardedReplogSink(factory, monitor, topology, NullLogger<ShardedReplogSink>.Instance);
 
-        await sink.WriteAsync(MakeEntry("orders", "k"), CancellationToken.None);
+        await sink.WriteAsync("orders", CancellationToken.None);
         // Doorbell ring is fire-and-forget; let the continuations drain.
         await Task.Yield();
         await Task.Delay(20);
@@ -126,9 +114,9 @@ public partial class ShardedReplogSinkTests
         var factory = Substitute.For<IGrainFactory>();
         var shipperB = Substitute.For<IReplicationShipperGrain>();
         factory.GetGrain<IReplicationShipperGrain>(Arg.Any<string>()).Returns(shipperB);
-        var sink = new ShardedReplogSink(factory, monitor, topology, new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
+        var sink = new ShardedReplogSink(factory, monitor, topology, NullLogger<ShardedReplogSink>.Instance);
 
-        await sink.WriteAsync(MakeEntry("orders", "k"), CancellationToken.None);
+        await sink.WriteAsync("orders", CancellationToken.None);
         await Task.Delay(20);
 
         await shipperB.DidNotReceive().OnDoorbellAsync(Arg.Any<CancellationToken>());
@@ -142,17 +130,17 @@ public partial class ShardedReplogSinkTests
         var factory = Substitute.For<IGrainFactory>();
         var shipper = Substitute.For<IReplicationShipperGrain>();
         factory.GetGrain<IReplicationShipperGrain>(Arg.Any<string>()).Returns(shipper);
-        var sink = new ShardedReplogSink(factory, monitor, topology, new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
+        var sink = new ShardedReplogSink(factory, monitor, topology, NullLogger<ShardedReplogSink>.Instance);
 
-        await sink.WriteAsync(MakeEntry("orders", "k"), CancellationToken.None);
+        await sink.WriteAsync("orders", CancellationToken.None);
         await Task.Delay(20);
 
         await shipper.DidNotReceive().OnDoorbellAsync(Arg.Any<CancellationToken>());
 
         // And again with an explicitly empty collection.
         var topology2 = new FakeReplicationTopology(Array.Empty<string>());
-        var sink2 = new ShardedReplogSink(factory, monitor, topology2, new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
-        await sink2.WriteAsync(MakeEntry("orders", "k"), CancellationToken.None);
+        var sink2 = new ShardedReplogSink(factory, monitor, topology2, NullLogger<ShardedReplogSink>.Instance);
+        await sink2.WriteAsync("orders", CancellationToken.None);
         await Task.Delay(20);
         await shipper.DidNotReceive().OnDoorbellAsync(Arg.Any<CancellationToken>());
     }
@@ -167,13 +155,13 @@ public partial class ShardedReplogSinkTests
         shipper.OnDoorbellAsync(Arg.Any<CancellationToken>())
             .Returns<Task>(_ => Task.FromException(new InvalidOperationException("doorbell-failed")));
         factory.GetGrain<IReplicationShipperGrain>(Arg.Any<string>()).Returns(shipper);
-        var sink = new ShardedReplogSink(factory, monitor, topology, new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
+        var sink = new ShardedReplogSink(factory, monitor, topology, NullLogger<ShardedReplogSink>.Instance);
 
         // The producer-side commit path must never fault on a
         // doorbell ring failure; WriteAsync returns successfully even
         // when every doorbell ring throws.
         Assert.That(
-            async () => await sink.WriteAsync(MakeEntry("orders", "k"), CancellationToken.None),
+            async () => await sink.WriteAsync("orders", CancellationToken.None),
             Throws.Nothing);
         await Task.Delay(20);
     }
@@ -190,9 +178,9 @@ public partial class ShardedReplogSinkTests
         var factory = Substitute.For<IGrainFactory>();
         var shipper = Substitute.For<IReplicationShipperGrain>();
         factory.GetGrain<IReplicationShipperGrain>(Arg.Any<string>()).Returns(shipper);
-        var sink = new ShardedReplogSink(factory, monitor, topology, new LocalVectorClockCache(factory), NullLogger<ShardedReplogSink>.Instance);
+        var sink = new ShardedReplogSink(factory, monitor, topology, NullLogger<ShardedReplogSink>.Instance);
 
-        await sink.WriteAsync(MakeEntry("orders", "k"), CancellationToken.None);
+        await sink.WriteAsync("orders", CancellationToken.None);
         await Task.Delay(20);
 
         await shipper.DidNotReceive().OnDoorbellAsync(Arg.Any<CancellationToken>());

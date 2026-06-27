@@ -39,8 +39,7 @@ public partial class ReplicationApplierTests
         monitor.CurrentValue.Returns(options);
         monitor.Get(Arg.Any<string>()).Returns(options);
 
-        var cache = new LocalVectorClockCache(factory);
-        var applier = new ReplicationApplier(factory, monitor, cache);
+        var applier = new ReplicationApplier(factory, monitor);
         return (applier, apply);
     }
 

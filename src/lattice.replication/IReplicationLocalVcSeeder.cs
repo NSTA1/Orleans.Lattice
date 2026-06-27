@@ -45,10 +45,7 @@ namespace Orleans.Lattice.Replication;
 /// (<see cref="Grains.IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>
 /// with <see cref="Orleans.Lattice.HybridLogicalClock.Zero"/> as the
 /// snapshot as-of HLC, since the intra-cluster path has no
-/// cross-cluster snapshot HLC concept) and primes the
-/// producer-side <see cref="LocalVectorClockCache"/> per-origin so
-/// outbound emits read the seeded frontier without a fresh
-/// cold-start RPC.
+/// cross-cluster snapshot HLC concept).
 /// </para>
 /// <para>
 /// <b>No-op for non-replicated trees.</b> When

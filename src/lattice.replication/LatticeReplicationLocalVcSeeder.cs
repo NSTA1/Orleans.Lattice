@@ -14,8 +14,7 @@ namespace Orleans.Lattice.Replication;
 /// pointwise-max <see cref="VersionVector"/> across every non-null
 /// <see cref="LwwEntry.VectorClock"/> slot, then pins the computed
 /// frontier on the per-tree
-/// <see cref="IReplicationHighWaterMarkGrain"/> and primes the
-/// producer-side <see cref="LocalVectorClockCache"/>.
+/// <see cref="IReplicationHighWaterMarkGrain"/>.
 /// <para>
 /// The walk is shard-sequential; each shard''s leaf chain is walked
 /// in-order via the leaf-sibling pointers. The seeder takes a single
@@ -27,8 +26,7 @@ namespace Orleans.Lattice.Replication;
 internal sealed class LatticeReplicationLocalVcSeeder(
     IGrainFactory grainFactory,
     IShardCountProvider shardCounts,
-    ILatticeMergeModeResolver modeResolver,
-    LocalVectorClockCache localVcCache)
+    ILatticeMergeModeResolver modeResolver)
     : IReplicationLocalVcSeeder
 {
     private readonly IGrainFactory _grainFactory =
@@ -37,8 +35,6 @@ internal sealed class LatticeReplicationLocalVcSeeder(
         shardCounts ?? throw new ArgumentNullException(nameof(shardCounts));
     private readonly ILatticeMergeModeResolver _modeResolver =
         modeResolver ?? throw new ArgumentNullException(nameof(modeResolver));
-    private readonly LocalVectorClockCache _localVcCache =
-        localVcCache ?? throw new ArgumentNullException(nameof(localVcCache));
 
     /// <inheritdoc />
     public async Task<LocalVcSeedReport> SeedFromTreeAsync(
@@ -106,19 +102,6 @@ internal sealed class LatticeReplicationLocalVcSeeder(
         // it; the frontier is the authoritative new vector.
         var hwmGrain = _grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(treeName);
         await hwmGrain.PinSnapshotAsync(HybridLogicalClock.Zero, frontier, cancellationToken).ConfigureAwait(false);
-
-        // In-memory prime: advance the producer-side cache per-origin
-        // so post-restore outbound emits read the seeded frontier
-        // without waiting for a fresh
-        // IReplicationHighWaterMarkGrain.GetVectorAsync cold-start.
-        // The cache is the producer-side counterpart to the
-        // receiver-side HWM grain; both must reflect the seeded
-        // frontier for the silo to be in a consistent post-restore
-        // state.
-        foreach (var (origin, hlc) in frontier.Entries)
-        {
-            _localVcCache.AdvanceForeign(treeName, origin, hlc);
-        }
 
         return new LocalVcSeedReport(
             TreeName: treeName,

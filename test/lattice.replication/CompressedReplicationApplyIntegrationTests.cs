@@ -64,12 +64,21 @@ public class CompressedReplicationApplyIntegrationTests
         const string tree = "rzc-set-cycle";
         var apply = _fixture.SiteB.Client.GetGrain<IReplicationApplyGrain>(tree);
 
-        var beforeLocal = _fixture.SiteBSink.Entries.Count(e => e.TreeId == tree && e.OriginClusterId == CompressedTwoSiteClusterFixture.SiteBClusterId);
+        var before = (await LeafWalReader.ReadAllAsync(_fixture.SiteB.Client, tree))
+            .Count(e => e.OriginClusterId == CompressedTwoSiteClusterFixture.SiteBClusterId);
         await apply.ApplySetAsync("k", new byte[] { 9 }, Hlc(1_000), CompressedTwoSiteClusterFixture.SiteAClusterId, sourceVectorClock: null, expiresAtTicks: 0);
-        var afterLocal = _fixture.SiteBSink.Entries.Count(e => e.TreeId == tree && e.OriginClusterId == CompressedTwoSiteClusterFixture.SiteBClusterId);
 
-        Assert.That(afterLocal, Is.EqualTo(beforeLocal),
-            "Apply with remote origin must not produce a Site B-origin replog entry.");
+        // The applied record is present and carries the source origin.
+        var applied = await LeafWalReader.WaitForRecordsAsync(
+            _fixture.SiteB.Client, tree, e => e.Key == "k" && e.Op == MutationKind.Set);
+        Assert.That(applied, Is.Not.Empty);
+        Assert.That(applied[^1].OriginClusterId, Is.EqualTo(CompressedTwoSiteClusterFixture.SiteAClusterId));
+
+        // And no Site B-origin record was produced for the remote apply.
+        var after = (await LeafWalReader.ReadAllAsync(_fixture.SiteB.Client, tree))
+            .Count(e => e.OriginClusterId == CompressedTwoSiteClusterFixture.SiteBClusterId);
+        Assert.That(after, Is.EqualTo(before),
+            "Apply with remote origin must not produce a Site B-origin WAL record.");
     }
 
     [Test]
@@ -165,7 +174,7 @@ public class CompressedReplicationApplyIntegrationTests
         };
         monitor.CurrentValue.Returns(opts);
         monitor.Get(Arg.Any<string>()).Returns(opts);
-        return new ReplicationApplier(_fixture.SiteB.Client, monitor, new LocalVectorClockCache(_fixture.SiteB.Client));
+        return new ReplicationApplier(_fixture.SiteB.Client, monitor);
     }
 
     [Test]

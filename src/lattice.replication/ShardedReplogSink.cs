@@ -7,9 +7,10 @@ namespace Orleans.Lattice.Replication;
 /// <summary>
 /// Default <see cref="IReplogSink"/> registered by
 /// <see cref="LatticeReplicationServiceCollectionExtensions.AddLatticeReplication"/>.
-/// Reduced to a low-latency commit-time nudge: it advances the
-/// producer-side local vector clock cache and rings the per-peer shipper
-/// doorbells. It does <b>not</b> append to the write-ahead log.
+/// Reduced to a low-latency commit-time nudge: it rings the per-peer
+/// shipper doorbells for a committed tree. It does <b>not</b> append to
+/// the write-ahead log and no longer maintains any producer-side vector
+/// clock state.
 /// <para>
 /// The write-ahead log is the single per-shard <c>IWalShardGrain</c>
 /// keyed <c>{treeId}/{partition}</c> that the foreground commit-log
@@ -54,35 +55,15 @@ internal sealed class ShardedReplogSink(
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeReplicationOptions> options,
     IReplicationTopology topology,
-    LocalVectorClockCache localVectorClockCache,
     ILogger<ShardedReplogSink> logger) : IReplogSink
 {
     private readonly IReplicationTopology _topology =
         topology ?? throw new ArgumentNullException(nameof(topology));
 
     /// <inheritdoc />
-    public Task WriteAsync(WalRecord entry, CancellationToken cancellationToken)
+    public Task WriteAsync(string treeId, CancellationToken cancellationToken)
     {
         var resolved = options.CurrentValue;
-
-        // Advance the producer-side local vector clock cache's local
-        // diagonal entry for this tree. The receiver-side HWM grain
-        // never advances the local cluster's diagonal (the apply path
-        // filters local-origin entries), so this is the only seam that
-        // tracks "what is the highest HLC this silo has appended for
-        // its own cluster id". A subsequent emit (range delete fan-out,
-        // multi-leaf saga, follow-on write) reads the advanced value
-        // when it stamps its VectorClock from the cache. Range deletes
-        // (HLC.Zero) never advance the diagonal - pointwise-max in the
-        // cache leaves it unchanged. Skipped entirely for foreign-origin
-        // entries because foreign origins are advanced post-apply via
-        // AdvanceForeign, not post-commit.
-        if (entry.TreeId is { Length: > 0 } treeId
-            && entry.OriginClusterId is { Length: > 0 } originClusterId
-            && string.Equals(originClusterId, resolved.ClusterId, StringComparison.Ordinal))
-        {
-            localVectorClockCache.AdvanceLocal(treeId, originClusterId, entry.Timestamp);
-        }
 
         // Doorbell fan-out: wake every shipper for this tree so the
         // background log-tailing producer drains the newly-committed
@@ -96,7 +77,7 @@ internal sealed class ShardedReplogSink(
         // membership. Best-effort and fire-and-forget - the commit-path
         // semantics never depend on a doorbell ring.
         if (resolved.ShipDoorbellEnabled
-            && entry.TreeId is { Length: > 0 } doorbellTreeId)
+            && treeId is { Length: > 0 } doorbellTreeId)
         {
             var peers = _topology.CurrentPeers;
             if (peers.Count > 0)

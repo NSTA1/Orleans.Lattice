@@ -32,12 +32,11 @@ Routing of a mutation to a partition is deterministic and process-independent: a
                       │
                       ▼
                ShardedReplogSink
-        commit-time nudge: advance the producer-side
-        local vector clock cache + ring each peer
+        commit-time nudge: ring each peer
         shipper's doorbell so it drains the leaf WAL now
 ```
 
-The leaf commit-log writer is the single WAL appender: every commit reaches the per-shard `IWalShardGrain` exactly once through it. The commit-time `ShardedReplogSink` does **not** write the WAL - it is reduced to a low-latency nudge that advances the producer-side local vector clock cache for local-origin entries and rings each per-`(tree, peer)` shipper's doorbell. The shipper is the log-first replication producer: it tails the same leaf WAL from a durable per-partition cursor and ships to peers.
+The leaf commit-log writer is the single WAL appender: every commit reaches the per-shard `IWalShardGrain` exactly once through it. The commit-time `ShardedReplogSink` does **not** write the WAL and maintains no producer-side vector clock state - it is reduced to a low-latency tree-id doorbell nudge that rings each per-`(tree, peer)` shipper's doorbell. The shipper is the log-first replication producer: it tails the same leaf WAL from a durable per-partition cursor and ships to peers. The causal frontier the shipper sends is read from the leaf WAL itself, not from any in-memory commit-time mirror.
 
 For the `IWalShardGrain` API surface (`AppendAsync`, `ReadAsync`, `GetNextSequenceAsync`, `GetLiveEntryCountAsync`) and the turn-safe batching
 
@@ -83,7 +82,7 @@ The maintenance gate runs **before** mode resolution and per-key filters: a main
 
 WAL-append failures propagate. The leaf commit-log writer's append runs inside the originating grain's foreground commit path, so a storage-provider failure surfaces as the same exception the calling `ILattice.SetAsync` / `DeleteAsync` / `DeleteRangeAsync` observes. Because the WAL is the single source of truth for replication, this guarantees that every committed mutation is durably captured for replication before the write reports success.
 
-The commit-time replication nudge is, by contrast, best-effort. `ShardedReplogSink` does not append to the WAL; it advances the in-memory producer-side local vector clock cache and rings each peer shipper's doorbell fire-and-forget. A doorbell ring that fails (silo loss, transient fault, missing activation) is logged at `Trace` and swallowed, so the commit path never fails on a nudge failure - a missed doorbell only delays the affected peer by one shipper timer tick.
+The commit-time replication nudge is, by contrast, best-effort. `ShardedReplogSink` does not append to the WAL and holds no producer-side vector clock state; it rings each peer shipper's doorbell fire-and-forget. A doorbell ring that fails (silo loss, transient fault, missing activation) is logged at `Trace` and swallowed, so the commit path never fails on a nudge failure - a missed doorbell only delays the affected peer by one shipper timer tick.
 
 There is intentionally no opt-in "best-effort" mode that would catch the WAL-append exception and let the primary write report success while silently dropping the log record. Silent log drops are exactly the hazard commit-time capture exists to remove; a host that wants different semantics for a specific tree should compose its own `IMutationObserver` rather than configure correctness away.
 

@@ -144,7 +144,6 @@ internal sealed class ProductionShipperFixture : IAsyncDisposable
             var inner = new ReplicationApplier(
                 cluster.Client,
                 optsMonitor,
-                new LocalVectorClockCache(cluster.Client),
                 crdtShapes: null,
                 logger: null,
                 peerStats: _peerStats[i]);

@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// Additional regression coverage for
 /// <see cref="LatticeReplicationLocalVcSeeder"/>: failure-propagation
 /// paths, mid-walk cancellation, idempotency under repeated invocation,
-/// cache-already-populated semantics, and uniformity across replication
+/// and uniformity across replication
 /// modes / tree topologies.
 /// </summary>
 public partial class LatticeReplicationLocalVcSeederTests
@@ -34,7 +34,7 @@ public partial class LatticeReplicationLocalVcSeederTests
             Array.Empty<IReadOnlyList<LwwEntry>>(),
             Array.Empty<IReadOnlyList<LwwEntry>>(),
         };
-        var (seeder, factory, _, _, cache, hwmGrain) = CreateSeeder(shards: shards);
+        var (seeder, factory, _, _, hwmGrain) = CreateSeeder(shards: shards);
         using var cts = new CancellationTokenSource();
 
         // Re-wire shard 0's leaf-id call to cancel the token as a
@@ -57,10 +57,6 @@ public partial class LatticeReplicationLocalVcSeederTests
         // Durable pin must not have run.
         hwmGrain.DidNotReceive().PinSnapshotAsync(
             Arg.Any<HybridLogicalClock>(), Arg.Any<VersionVector>(), Arg.Any<CancellationToken>());
-        // Cache must not have been primed: cold-start RPC returns
-        // empty so a clean cache snapshot is empty.
-        var snapshot = cache.GetSnapshotAsync(Tree).GetAwaiter().GetResult();
-        Assert.That(snapshot.Entries, Is.Empty);
     }
 
     [Test]
@@ -105,8 +101,7 @@ public partial class LatticeReplicationLocalVcSeederTests
             Task.FromResult(new List<LwwEntry> { Entry("k2", Vector((OriginA, Hlc(2)))) }));
         factory.GetGrain<IBPlusLeafGrain>(leaf1Id).Returns(leaf1);
 
-        var cache = new LocalVectorClockCache(factory);
-        var seeder = new LatticeReplicationLocalVcSeeder(factory, shardCounts, resolver, cache);
+        var seeder = new LatticeReplicationLocalVcSeeder(factory, shardCounts, resolver);
 
         Assert.That(
             async () => await seeder.SeedFromTreeAsync(Tree, cts.Token),
@@ -114,7 +109,7 @@ public partial class LatticeReplicationLocalVcSeederTests
 
         // Leaf-1 must never be read.
         leaf1.DidNotReceive().GetLiveRawEntriesAsync();
-        // No durable pin, no cache prime.
+        // No durable pin.
         hwmGrain.DidNotReceive().PinSnapshotAsync(
             Arg.Any<HybridLogicalClock>(), Arg.Any<VersionVector>(), Arg.Any<CancellationToken>());
     }
@@ -124,7 +119,7 @@ public partial class LatticeReplicationLocalVcSeederTests
     // ==================================================================
 
     [Test]
-    public void SeedFromTreeAsync_propagates_pin_snapshot_failure_and_does_not_prime_cache()
+    public void SeedFromTreeAsync_propagates_pin_snapshot_failure()
     {
         var shards = new IReadOnlyList<IReadOnlyList<LwwEntry>>[]
         {
@@ -133,7 +128,7 @@ public partial class LatticeReplicationLocalVcSeederTests
                 new[] { Entry("k1", Vector((OriginA, Hlc(11)), (OriginB, Hlc(22)))) },
             },
         };
-        var (seeder, _, _, _, cache, hwmGrain) = CreateSeeder(shards: shards);
+        var (seeder, _, _, _, hwmGrain) = CreateSeeder(shards: shards);
 
         // Override the helper's default no-throw setup.
         hwmGrain.PinSnapshotAsync(
@@ -143,14 +138,6 @@ public partial class LatticeReplicationLocalVcSeederTests
         Assert.That(
             async () => await seeder.SeedFromTreeAsync(Tree),
             Throws.InstanceOf<InvalidOperationException>().With.Message.EqualTo("pin failed"));
-
-        // Cache must not have been primed: AdvanceForeign runs strictly
-        // after a successful PinSnapshotAsync. The cold-start RPC
-        // returns an empty vector so the post-failure snapshot is
-        // empty when the seed never reached the cache-prime phase.
-        var snapshot = cache.GetSnapshotAsync(Tree).GetAwaiter().GetResult();
-        Assert.That(snapshot.Entries, Is.Empty,
-            "Cache must not contain seeded origins when the durable pin failed.");
     }
 
     // ==================================================================
@@ -158,7 +145,7 @@ public partial class LatticeReplicationLocalVcSeederTests
     // ==================================================================
 
     [Test]
-    public void SeedFromTreeAsync_propagates_leaf_read_failure_and_does_not_pin_or_prime()
+    public void SeedFromTreeAsync_propagates_leaf_read_failure_and_does_not_pin()
     {
         // Manual setup so we can throw from the leaf's
         // GetLiveRawEntriesAsync without re-using the helper's
@@ -183,18 +170,15 @@ public partial class LatticeReplicationLocalVcSeederTests
         leaf.GetLiveRawEntriesAsync().ThrowsAsync(new InvalidOperationException("leaf read failed"));
         factory.GetGrain<IBPlusLeafGrain>(leafId).Returns(leaf);
 
-        var cache = new LocalVectorClockCache(factory);
-        var seeder = new LatticeReplicationLocalVcSeeder(factory, shardCounts, resolver, cache);
+        var seeder = new LatticeReplicationLocalVcSeeder(factory, shardCounts, resolver);
 
         Assert.That(
             async () => await seeder.SeedFromTreeAsync(Tree),
             Throws.InstanceOf<InvalidOperationException>().With.Message.EqualTo("leaf read failed"));
 
-        // No durable pin, no cache prime.
+        // No durable pin.
         hwmGrain.DidNotReceive().PinSnapshotAsync(
             Arg.Any<HybridLogicalClock>(), Arg.Any<VersionVector>(), Arg.Any<CancellationToken>());
-        var snapshot = cache.GetSnapshotAsync(Tree).GetAwaiter().GetResult();
-        Assert.That(snapshot.Entries, Is.Empty);
     }
 
     // ==================================================================
@@ -218,7 +202,7 @@ public partial class LatticeReplicationLocalVcSeederTests
                 new[] { Entry("k2", Vector((OriginA, Hlc(20)))) },
             },
         };
-        var (seeder, _, _, _, _, _) = CreateSeeder(shards: shards);
+        var (seeder, _, _, _, _) = CreateSeeder(shards: shards);
 
         var report = await seeder.SeedFromTreeAsync(Tree);
 
@@ -247,7 +231,7 @@ public partial class LatticeReplicationLocalVcSeederTests
                 },
             },
         };
-        var (seeder, _, _, _, _, hwmGrain) = CreateSeeder(shards: shards);
+        var (seeder, _, _, _, hwmGrain) = CreateSeeder(shards: shards);
 
         var first = await seeder.SeedFromTreeAsync(Tree);
         var second = await seeder.SeedFromTreeAsync(Tree);
@@ -267,45 +251,13 @@ public partial class LatticeReplicationLocalVcSeederTests
     }
 
     // ==================================================================
-    // T-6 - Cache already populated (seed must not regress)
-    // ==================================================================
-
-    [Test]
-    public async Task SeedFromTreeAsync_does_not_regress_already_populated_cache()
-    {
-        // Cache already holds OriginA = Hlc(50) (e.g. a producer was
-        // emitting before the operator ran the seeder). The seeder's
-        // walk produces a frontier with OriginA = Hlc(20). The cache
-        // half is pointwise-max so the higher pre-existing value
-        // must survive.
-        var shards = new IReadOnlyList<IReadOnlyList<LwwEntry>>[]
-        {
-            new IReadOnlyList<LwwEntry>[]
-            {
-                new[] { Entry("k1", Vector((OriginA, Hlc(20)))) },
-            },
-        };
-        var (seeder, _, _, _, cache, _) = CreateSeeder(shards: shards);
-
-        // Pre-populate the cache. AdvanceForeign is the producer-side
-        // pointwise-max accumulator.
-        cache.AdvanceForeign(Tree, OriginA, Hlc(50));
-
-        await seeder.SeedFromTreeAsync(Tree);
-
-        var snapshot = await cache.GetSnapshotAsync(Tree);
-        Assert.That(snapshot.GetClock(OriginA), Is.EqualTo(Hlc(50)),
-            "The seed's pointwise-max advance must not regress an already-higher cache entry.");
-    }
-
-    // ==================================================================
     // T-7 - IShardCountProvider failure propagation
     // ==================================================================
 
     [Test]
     public void SeedFromTreeAsync_propagates_shard_count_provider_failure()
     {
-        var (seeder, factory, _, shardCounts, _, hwmGrain) = CreateSeeder();
+        var (seeder, factory, _, shardCounts, hwmGrain) = CreateSeeder();
         shardCounts.GetShardCountAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .ThrowsAsync(new InvalidOperationException("registry unreachable"));
 
@@ -340,7 +292,7 @@ public partial class LatticeReplicationLocalVcSeederTests
                 new[] { Entry("k1", Vector((OriginA, Hlc(13)))) },
             },
         };
-        var (seeder, _, _, _, _, hwmGrain) = CreateSeeder(mode: mode, shards: shards);
+        var (seeder, _, _, _, hwmGrain) = CreateSeeder(mode: mode, shards: shards);
 
         var report = await seeder.SeedFromTreeAsync(Tree);
 
@@ -372,7 +324,7 @@ public partial class LatticeReplicationLocalVcSeederTests
             leafBatches[i] = new[] { Entry($"k{i}", Vector((OriginA, Hlc(i)))) };
         }
         var shards = new IReadOnlyList<IReadOnlyList<LwwEntry>>[] { leafBatches };
-        var (seeder, _, _, _, _, _) = CreateSeeder(shards: shards);
+        var (seeder, _, _, _, _) = CreateSeeder(shards: shards);
 
         var report = await seeder.SeedFromTreeAsync(Tree);
 

@@ -94,7 +94,7 @@ public partial class ReplicationApplierTests
 
         return new CausalHarness
         {
-            Applier = new ReplicationApplier(factory, monitor, new LocalVectorClockCache(factory)),
+            Applier = new ReplicationApplier(factory, monitor),
             Factory = factory,
             Apply = apply,
             Hwm = hwm,

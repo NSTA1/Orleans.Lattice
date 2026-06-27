@@ -92,7 +92,7 @@ public partial class ReplicationApplierTests
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(HybridLogicalClock.Zero);
         hwm.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
             .Returns(true);
-        var applier = new ReplicationApplier(factory, Monitor(), new LocalVectorClockCache(factory));
+        var applier = new ReplicationApplier(factory, Monitor());
 
         await applier.ApplyAsync(SetEntry("k", Hlc(20)) with { TreeId = "tree-a" });
         // tree-b sees a "lower" HLC than tree-a's last apply, but it's a

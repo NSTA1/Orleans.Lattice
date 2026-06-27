@@ -222,7 +222,7 @@ public partial class BootstrapCausalHandoffTests
 
         return new HandoffHarness
         {
-            Applier = new ReplicationApplier(factory, monitor, new LocalVectorClockCache(factory)),
+            Applier = new ReplicationApplier(factory, monitor),
             Factory = factory,
             Monitor = monitor,
             Apply = apply,

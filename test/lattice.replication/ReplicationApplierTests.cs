@@ -40,8 +40,7 @@ public partial class ReplicationApplierTests
         hwm.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
             .Returns(true);
         hwm.GetVectorAsync(Arg.Any<CancellationToken>()).Returns(new VersionVector());
-        var cache = new LocalVectorClockCache(factory);
-        var applier = new ReplicationApplier(factory, Monitor(), cache);
+        var applier = new ReplicationApplier(factory, Monitor());
         return (applier, factory, apply, hwm);
     }
 
@@ -261,7 +260,7 @@ public partial class ReplicationApplierTests
         var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
         monitor.Get(Arg.Any<string>())
             .Returns(new LatticeReplicationOptions { ClusterId = LocalCluster });
-        var applier = new ReplicationApplier(factory, monitor, new LocalVectorClockCache(factory));
+        var applier = new ReplicationApplier(factory, monitor);
 
         await applier.ApplyAsync(new WalRecord
         {
@@ -377,7 +376,7 @@ public partial class ReplicationApplierTests
             .Returns(new VersionedValue { Value = null, Version = HybridLogicalClock.Zero });
         lattice.SetIfVersionAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
             .Returns(true);
-        return (new ReplicationApplier(factory, Monitor(), new LocalVectorClockCache(factory)), lattice, apply, hwm);
+        return (new ReplicationApplier(factory, Monitor()), lattice, apply, hwm);
     }
 
     private static byte[] EncodeOrSet(Action<OrSet>? configure = null)

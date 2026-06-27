@@ -279,19 +279,11 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         // can replace the registration by pre-registering their own
         // IReplicationTopology singleton before AddLatticeReplication.
         builder.Services.TryAddSingleton<IReplicationTopology, OptionsReplicationTopology>();
-        // Producer-side per-(silo, tree) local vector clock cache.
-        // Read by ReplicationMutationObserver to stamp every emit's
-        // VectorClock when the caller does not supply one via
-        // LatticeVectorClockContext; advanced post-WAL-append (local
-        // diagonal) by ShardedReplogSink and post-TryAdvanceAsync
-        // (foreign entries) by ReplicationApplier.
-        builder.Services.TryAddSingleton<LocalVectorClockCache>();
 
         // Producer-side seeder used by operator tooling after an
         // intra-cluster snapshot/restore to walk the restored values'
         // VC slots and re-seed the per-tree LocalVectorClock (durable
-        // pin via IReplicationHighWaterMarkGrain.PinSnapshotAsync +
-        // in-memory prime via LocalVectorClockCache.AdvanceForeign).
+        // pin via IReplicationHighWaterMarkGrain.PinSnapshotAsync).
         // IShardCountProvider is the testability seam wrapping the
         // core LatticeOptionsResolver shard-count component.
         builder.Services.TryAddSingleton<IShardCountProvider, DefaultShardCountProvider>();
