@@ -1,26 +1,26 @@
-using Orleans.Lattice.BPlusTree.Grains;
 namespace Orleans.Lattice.Replication;
 
 /// <summary>
-/// Sink for change-feed records captured at commit time. The default
-/// registration is a no-op so the rest of the replication pipeline can
-/// be wired up in isolation; later phases register a write-ahead-log
-/// implementation that durably persists every <see cref="WalRecord"/>
-/// before the originating grain's write returns.
+/// Commit-time doorbell nudge seam. The durable replication log is now
+/// written exclusively by the foreground leaf commit-log writer in the
+/// core assembly; this sink no longer appends anything. Its sole job is
+/// to wake the background log-tailing shipper for a committed tree so
+/// the outbound ship loop pumps immediately instead of waiting for its
+/// next steady-state timer tick. The default registration is a no-op.
 /// <para>
 /// Implementations are invoked synchronously inside the grain's
 /// scheduler via the core <see cref="IMutationObserver"/> hook, so every
 /// millisecond spent inside <see cref="WriteAsync"/> is added to the
 /// caller's write latency. Implementations must complete quickly or
-/// enqueue the entry onto a background drain.
+/// enqueue the work onto a background drain.
 /// </para>
 /// </summary>
 internal interface IReplogSink
 {
     /// <summary>
-    /// Persists or forwards a captured <see cref="WalRecord"/>.
+    /// Nudges the background shipper(s) for a committed tree.
     /// </summary>
-    /// <param name="entry">The captured mutation record.</param>
+    /// <param name="treeId">The identifier of the tree that just committed.</param>
     /// <param name="cancellationToken">Cancellation token propagated from the grain call.</param>
-    Task WriteAsync(WalRecord entry, CancellationToken cancellationToken);
+    Task WriteAsync(string treeId, CancellationToken cancellationToken);
 }

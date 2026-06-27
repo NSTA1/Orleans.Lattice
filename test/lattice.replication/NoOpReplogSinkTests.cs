@@ -1,4 +1,3 @@
-using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Replication;
 
 namespace Orleans.Lattice.Replication.Tests;
@@ -10,16 +9,16 @@ public class NoOpReplogSinkTests
     public async Task WriteAsync_completes_synchronously()
     {
         IReplogSink sink = new NoOpReplogSink();
-        var task = sink.WriteAsync(new WalRecord { TreeId = "t", Key = "k" }, CancellationToken.None);
+        var task = sink.WriteAsync("t", CancellationToken.None);
         Assert.That(task.IsCompletedSuccessfully, Is.True);
         await task;
     }
 
     [Test]
-    public async Task WriteAsync_accepts_default_entry()
+    public async Task WriteAsync_accepts_empty_tree_id()
     {
         IReplogSink sink = new NoOpReplogSink();
-        await sink.WriteAsync(default, CancellationToken.None);
+        await sink.WriteAsync(string.Empty, CancellationToken.None);
         Assert.Pass();
     }
 }

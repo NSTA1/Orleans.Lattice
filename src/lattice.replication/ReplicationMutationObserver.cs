@@ -7,13 +7,13 @@ namespace Orleans.Lattice.Replication;
 
 /// <summary>
 /// <see cref="IMutationObserver"/> registered by the replication package.
-/// Captures every locally-originating mutation at commit time, builds a
-/// fully-formed <see cref="WalRecord"/> (op + key + value + HLC + origin
-/// + TTL + declared <see cref="LatticeMergeMode"/>), and forwards it to the
-/// registered <see cref="IReplogSink"/> before the originating grain's
-/// write returns. Replaces the host-level outgoing-call filter used by the
-/// legacy <c>MultiSiteManufacturing</c> sample - capture is now atomic
-/// with the write.
+/// Observes every locally-originating mutation at commit time and, when
+/// the tree is declared for replication and the mutation passes the
+/// per-key filters, nudges the registered <see cref="IReplogSink"/> so
+/// the background log-tailing shipper for that tree pumps immediately.
+/// The durable change-feed record is written separately by the
+/// foreground leaf commit-log writer in the core assembly; this observer
+/// no longer builds a <c>WalRecord</c> or captures any vector clock.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -62,7 +62,6 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
     private readonly IReplogSink _sink;
     private readonly IOptionsMonitor<LatticeReplicationOptions> _options;
     private readonly ILatticeMergeModeResolver _modeResolver;
-    private readonly LocalVectorClockCache _localVectorClockCache;
     private readonly ILatticeCompressionDictionarySampler? _dictionarySampler;
     private readonly ConcurrentDictionary<string, CompiledFilter> _filters = new(StringComparer.Ordinal);
     private readonly Func<string, CompiledFilter> _factory;
@@ -72,17 +71,14 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
         IReplogSink sink,
         IOptionsMonitor<LatticeReplicationOptions> options,
         ILatticeMergeModeResolver modeResolver,
-        LocalVectorClockCache localVectorClockCache,
         ILatticeCompressionDictionaryProvider? dictionaryProvider = null)
     {
         ArgumentNullException.ThrowIfNull(sink);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(modeResolver);
-        ArgumentNullException.ThrowIfNull(localVectorClockCache);
         _sink = sink;
         _options = options;
         _modeResolver = modeResolver;
-        _localVectorClockCache = localVectorClockCache;
         // The injected shared-dictionary provider doubles as the training
         // sampler when it trains at runtime (the auto-trainer). The default
         // operator-supplied provider does not implement the sampler, so the
@@ -174,121 +170,12 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
             sampler.Observe(valueBytes);
         }
 
-        // The mutation already carries an origin when it is a replay of a
-        // remote write; otherwise stamp the validated local cluster id.
-        // LatticeReplicationOptionsValidator guarantees ClusterId is non-empty
-        // before any observer call can reach this point.
-        var origin = mutation.OriginClusterId ?? filter.ClusterId;
-
-        // Vector-clock capture priority:
-        //   1. mutation.VectorClock when supplied via
-        //      LatticeVectorClockContext.With(...) - preserves the
-        //      caller-supplied frontier verbatim. This is the path
-        //      structural rewrites (shard-split shadow-forward, saga
-        //      compensate, atomic multi-key writes) take so the
-        //      shadow-forwarded entry inherits the originating commit's
-        //      VC rather than capturing a fresh one against the
-        //      destination shard's local view.
-        //   2. LocalVectorClockCache snapshot when the mutation does
-        //      not carry an explicit VC. Multi-shard user writes
-        //      (range delete, multi-leaf saga) emit from multiple
-        //      grains in close succession; reading the cache on each
-        //      emit yields a silo-wide consistent view of the local
-        //      vector clock so every per-emit VC agrees on cross-shard
-        //      origins. The cache cold-starts from
-        //      IReplicationHighWaterMarkGrain.GetVectorAsync once per
-        //      tree per silo lifetime.
-        // Defensive snapshot (case 1): VersionVector is a mutable
-        // reference type whose Entries dictionary is publicly mutable,
-        // so retaining the supplied mutation.VectorClock reference
-        // would leave the captured entry exposed to any caller that
-        // advances the frontier after this observer returns. The
-        // cache's GetSnapshotAsync already returns a defensive copy
-        // (no further clone needed for case 2).
-        VersionVector? capturedFrontier = mutation.VectorClock?.Clone();
-        if (capturedFrontier is null)
-        {
-            capturedFrontier = await _localVectorClockCache
-                .GetSnapshotAsync(mutation.TreeId, cancellationToken)
-                .ConfigureAwait(false);
-        }
-
-        var entry = new WalRecord
-        {
-            TreeId = mutation.TreeId,
-            Op = op,
-            Key = key,
-            EndExclusiveKey = mutation.EndExclusiveKey,
-            Value = mutation.Value,
-            Timestamp = mutation.Timestamp,
-            IsTombstone = mutation.IsTombstone,
-            ExpiresAtTicks = mutation.ExpiresAtTicks,
-            OriginClusterId = origin,
-            Mode = mode.Value,
-            // Causal-plus frontier: stamp the captured snapshot (either
-            // the caller-supplied clone or the cache's defensive copy)
-            // so the entry is detached from any post-emit mutation of
-            // the producer's frontier source. Both slots share the
-            // single instance - the dependency summary slot is
-            // reserved for a future Bloom-filter shape but starts
-            // identical to the absolute frontier so a receiver
-            // consulting either slot sees the same value.
-            VectorClock = capturedFrontier,
-            DependencySummary = capturedFrontier,
-            // Pre-merge typed delta passthrough: the producer-side
-            // accessors (OR-Set / PN-Counter / version-vector) and any
-            // caller that opted in via LatticeDeltaContext stamped these
-            // slots on the originating LatticeMutation. Forwarding them
-            // verbatim lets receivers replay the author's intent rather
-            // than the post-merge state. Both fields decode as null on
-            // legacy peers and on plain Set/Delete writes that did not
-            // author a delta.
-            Delta = mutation.Delta,
-            // Atomic-batch metadata passthrough: mirror
-            // LatticeMutation.AtomicBatchSize / AtomicBatchIndex onto
-            // the WalRecord verbatim. The slots are wire-shape-stable
-            // and flow through whatever the producer supplies. The
-            // saga-wide capture-once stamp inside AtomicWriteGrain is
-            // wired today, so saga emits carry (Size=N, Index=0..N-1);
-            // single-key writes outside a saga emit (0, 0) by default.
-            // No shipped receiver-side path consumes the slots - every
-            // entry applies as a point write - but the slots are
-            // preserved on the wire as observability metadata for a
-            // future host-facing receiver-side primitive.
-            AtomicBatchSize = mutation.AtomicBatchSize,
-            AtomicBatchIndex = mutation.AtomicBatchIndex,
-            // Atomic-batch sibling-membership key passthrough: mirror
-            // LatticeMutation.TransactionId (the saga identity
-            // captured by AtomicWriteGrain) onto the wire so a future
-            // host-facing receiver-side atomic-batch primitive can key
-            // a staging buffer by (originClusterId, transactionId). The
-            // current shipped surface has no such consumer (the
-            // receiver-side staging buffer was retired by the WAL
-            // repivot); the slot is preserved as observability
-            // metadata. For non-saga writes the value is whatever the
-            // producer-side ambient LatticeTransactionContext supplied
-            // (Guid.Empty by default).
-            TransactionId = mutation.TransactionId,
-            // Saga touched-shard count passthrough. Stamped only on
-            // terminal mutations by the saga coordinator (read via
-            // LatticeAtomicShardCountContext inside
-            // ShardRootGrain.AppendTxTerminalAsync). Non-terminal
-            // mutations leave the slot at the wire default (0).
-            // Terminal mutations on this branch are theoretical - the
-            // producer terminal path goes through
-            // WalCommitLogWriter / WalRecordConverter, not the
-            // observer - but the passthrough is defensive in case a
-            // future emit path routes terminals through the observer.
-            AtomicShardCount = mutation.AtomicShardCount,
-            // Cross-tree terminal metadata passthrough (defensive, same
-            // rationale as AtomicShardCount above): stamped only on
-            // cross-tree sub-saga terminals, which today flow through the
-            // WAL writer path, not the observer.
-            CrossTreeOperationId = mutation.CrossTreeOperationId,
-            CrossTreeParticipants = mutation.CrossTreeParticipants,
-        };
-
-        await _sink.WriteAsync(entry, cancellationToken).ConfigureAwait(false);
+        // The tree is declared, the key passed the filters, and the
+        // mutation is not maintenance: nudge the registered sink so the
+        // background log-tailing shipper for this tree pumps immediately.
+        // The durable change-feed record was already written to the leaf
+        // WAL by the foreground commit-log writer; nothing is built here.
+        await _sink.WriteAsync(mutation.TreeId, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />

@@ -98,7 +98,7 @@ public partial class BootstrapCausalHandoffTests
         // post-restart state: the pinned HWM grain state survives, but
         // the in-memory buffer does not. Re-delivering the same entry
         // re-parks it; the apply grain still must not be touched.
-        var freshApplier = new ReplicationApplier(h.Factory, h.Monitor, new LocalVectorClockCache(h.Factory));
+        var freshApplier = new ReplicationApplier(h.Factory, h.Monitor);
 
         var redelivered = await freshApplier.ApplyAsync(blocked);
 

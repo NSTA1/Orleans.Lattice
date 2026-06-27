@@ -19,7 +19,7 @@ public class ReplicationMutationObserverSamplingTests
 {
     private sealed class CapturingSink : IReplogSink
     {
-        public Task WriteAsync(WalRecord entry, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task WriteAsync(string treeId, CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
     private sealed class AllowAllResolver : ILatticeMergeModeResolver
@@ -66,7 +66,6 @@ public class ReplicationMutationObserverSamplingTests
             new CapturingSink(),
             Monitor(new LatticeReplicationOptions { ClusterId = "site-a", AutoSharedDictionaryEnabled = true }),
             new AllowAllResolver(),
-            new LocalVectorClockCache(Substitute.For<IGrainFactory>()),
             provider);
 
         await observer.OnMutationAsync(SetMutation(new byte[] { 1, 2, 3 }), CancellationToken.None);
@@ -83,7 +82,6 @@ public class ReplicationMutationObserverSamplingTests
             new CapturingSink(),
             Monitor(new LatticeReplicationOptions { ClusterId = "site-a", AutoSharedDictionaryEnabled = false }),
             new AllowAllResolver(),
-            new LocalVectorClockCache(Substitute.For<IGrainFactory>()),
             provider);
 
         await observer.OnMutationAsync(SetMutation(new byte[] { 1, 2, 3 }), CancellationToken.None);
@@ -99,7 +97,6 @@ public class ReplicationMutationObserverSamplingTests
             new CapturingSink(),
             Monitor(new LatticeReplicationOptions { ClusterId = "site-a", AutoSharedDictionaryEnabled = true }),
             new AllowAllResolver(),
-            new LocalVectorClockCache(Substitute.For<IGrainFactory>()),
             provider);
 
         await observer.OnMutationAsync(new LatticeMutation
@@ -122,7 +119,6 @@ public class ReplicationMutationObserverSamplingTests
             new CapturingSink(),
             Monitor(new LatticeReplicationOptions { ClusterId = "site-a", AutoSharedDictionaryEnabled = true }),
             new AllowAllResolver(),
-            new LocalVectorClockCache(Substitute.For<IGrainFactory>()),
             OperatorSuppliedCompressionDictionaryProvider.Empty);
 
         Assert.That(

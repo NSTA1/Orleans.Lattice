@@ -1,4 +1,3 @@
-using Orleans.Lattice.BPlusTree.Grains;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice;
@@ -7,6 +6,15 @@ using Orleans.Lattice.Replication;
 
 namespace Orleans.Lattice.Replication.Tests;
 
+/// <summary>
+/// Unit tests for <see cref="ReplicationMutationObserver"/>. The observer
+/// no longer builds a WAL record or captures a vector clock - the durable
+/// change-feed record is written by the foreground leaf commit-log writer.
+/// The observer's remaining job is to nudge the registered
+/// <see cref="IReplogSink"/> with the committed tree id when (and only
+/// when) the mutation is eligible for replication, so these tests assert
+/// the gating behaviour through a tree-id-recording fake sink.
+/// </summary>
 [TestFixture]
 public class ReplicationMutationObserverTests
 {
@@ -25,7 +33,7 @@ public class ReplicationMutationObserverTests
 
     /// <summary>
     /// Permissive resolver used by the unit tests that focus on
-    /// per-key filters / origin stamping. Opts every tree id in to
+    /// per-key filters. Opts every tree id in to
     /// <see cref="LatticeMergeMode.LwwRegister"/>; tests that exercise mode
     /// resolution itself construct an explicit resolver instead.
     /// </summary>
@@ -36,22 +44,37 @@ public class ReplicationMutationObserverTests
 
     private static ILatticeMergeModeResolver AllowAll() => new AllowAllResolver();
 
-    private sealed class CapturingSink : IReplogSink
+    /// <summary>
+    /// Records the tree id of every nudge the observer fires.
+    /// </summary>
+    private sealed class RecordingSink : IReplogSink
     {
-        public List<WalRecord> Entries { get; } = new();
-        public Task WriteAsync(WalRecord entry, CancellationToken cancellationToken)
+        public List<string> Nudges { get; } = new();
+
+        public Task WriteAsync(string treeId, CancellationToken cancellationToken)
         {
-            Entries.Add(entry);
+            Nudges.Add(treeId);
             return Task.CompletedTask;
         }
     }
 
-    [Test]
-    public async Task Set_mutation_emits_entry_with_value_and_local_origin()
+    private static LatticeMutation SetMutation(string treeId, string key) => new()
     {
-        var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
-        var ts = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
+        TreeId = treeId,
+        Kind = MutationKind.Set,
+        Key = key,
+        Value = new byte[] { 1 },
+    };
+
+    // ------------------------------------------------------------------
+    // Eligible commits nudge the sink with the committed tree id
+    // ------------------------------------------------------------------
+
+    [Test]
+    public async Task Set_mutation_nudges_sink_with_tree_id()
+    {
+        var sink = new RecordingSink();
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
 
         await observer.OnMutationAsync(new LatticeMutation
         {
@@ -59,32 +82,16 @@ public class ReplicationMutationObserverTests
             Kind = MutationKind.Set,
             Key = "k",
             Value = new byte[] { 1, 2, 3 },
-            Timestamp = ts,
-            ExpiresAtTicks = 100L,
         }, CancellationToken.None);
 
-        Assert.That(sink.Entries, Has.Count.EqualTo(1));
-        var e = sink.Entries[0];
-        Assert.Multiple(() =>
-        {
-            Assert.That(e.TreeId, Is.EqualTo(DefaultTree));
-            Assert.That(e.Op, Is.EqualTo(MutationKind.Set));
-            Assert.That(e.Key, Is.EqualTo("k"));
-            Assert.That(e.EndExclusiveKey, Is.Null);
-            Assert.That(e.Value, Is.EqualTo(new byte[] { 1, 2, 3 }));
-            Assert.That(e.Timestamp, Is.EqualTo(ts));
-            Assert.That(e.IsTombstone, Is.False);
-            Assert.That(e.ExpiresAtTicks, Is.EqualTo(100L));
-            Assert.That(e.OriginClusterId, Is.EqualTo("site-a"));
-            Assert.That(e.Mode, Is.EqualTo(LatticeMergeMode.LwwRegister));
-        });
+        Assert.That(sink.Nudges, Is.EqualTo(new[] { DefaultTree }));
     }
 
     [Test]
-    public async Task Delete_mutation_emits_entry_with_tombstone_flag()
+    public async Task Delete_mutation_nudges_sink_with_tree_id()
     {
-        var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        var sink = new RecordingSink();
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
 
         await observer.OnMutationAsync(new LatticeMutation
         {
@@ -94,23 +101,14 @@ public class ReplicationMutationObserverTests
             IsTombstone = true,
         }, CancellationToken.None);
 
-        var e = sink.Entries.Single();
-        Assert.Multiple(() =>
-        {
-            Assert.That(e.Op, Is.EqualTo(MutationKind.Delete));
-            Assert.That(e.Key, Is.EqualTo("gone"));
-            Assert.That(e.IsTombstone, Is.True);
-            Assert.That(e.Value, Is.Null);
-            Assert.That(e.OriginClusterId, Is.EqualTo("site-a"));
-            Assert.That(e.Mode, Is.EqualTo(LatticeMergeMode.LwwRegister));
-        });
+        Assert.That(sink.Nudges, Is.EqualTo(new[] { DefaultTree }));
     }
 
     [Test]
-    public async Task DeleteRange_mutation_emits_entry_with_end_exclusive_key()
+    public async Task DeleteRange_mutation_nudges_sink_with_tree_id()
     {
-        var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        var sink = new RecordingSink();
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
 
         await observer.OnMutationAsync(new LatticeMutation
         {
@@ -121,55 +119,32 @@ public class ReplicationMutationObserverTests
             IsTombstone = true,
         }, CancellationToken.None);
 
-        var e = sink.Entries.Single();
-        Assert.Multiple(() =>
-        {
-            Assert.That(e.Op, Is.EqualTo(MutationKind.DeleteRange));
-            Assert.That(e.Key, Is.EqualTo("a"));
-            Assert.That(e.EndExclusiveKey, Is.EqualTo("z"));
-            Assert.That(e.IsTombstone, Is.True);
-        });
+        Assert.That(sink.Nudges, Is.EqualTo(new[] { DefaultTree }));
     }
 
     [Test]
-    public async Task Existing_origin_cluster_id_is_preserved_for_remote_replays()
+    public async Task Tombstone_reap_kind_is_skipped()
     {
-        var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        // Tombstone-reap envelopes are local structural cleanup and have
+        // no observer dispatch path; the defence-in-depth short-circuit
+        // must suppress any nudge before the Set/Delete/DeleteRange switch.
+        var sink = new RecordingSink();
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
 
         await observer.OnMutationAsync(new LatticeMutation
         {
             TreeId = DefaultTree,
-            Kind = MutationKind.Set,
+            Kind = MutationKind.Tombstone,
             Key = "k",
-            Value = new byte[] { 7 },
-            OriginClusterId = "site-b",
         }, CancellationToken.None);
 
-        Assert.That(sink.Entries.Single().OriginClusterId, Is.EqualTo("site-b"));
-    }
-
-    [Test]
-    public async Task Local_cluster_id_is_forwarded_verbatim_when_origin_unset()
-    {
-        var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-x"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
-
-        await observer.OnMutationAsync(new LatticeMutation
-        {
-            TreeId = DefaultTree,
-            Kind = MutationKind.Set,
-            Key = "k",
-            Value = new byte[] { 7 },
-        }, CancellationToken.None);
-
-        Assert.That(sink.Entries.Single().OriginClusterId, Is.EqualTo("site-x"));
+        Assert.That(sink.Nudges, Is.Empty);
     }
 
     [Test]
     public void Unknown_mutation_kind_throws_invalid_operation()
     {
-        var observer = new ReplicationMutationObserver(new CapturingSink(), Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        var observer = new ReplicationMutationObserver(new RecordingSink(), Monitor("site-a"), AllowAll());
 
         Assert.That(
             async () => await observer.OnMutationAsync(
@@ -182,7 +157,7 @@ public class ReplicationMutationObserverTests
     public async Task Sink_cancellation_token_is_forwarded()
     {
         var sink = Substitute.For<IReplogSink>();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
         using var cts = new CancellationTokenSource();
 
         await observer.OnMutationAsync(new LatticeMutation
@@ -193,33 +168,34 @@ public class ReplicationMutationObserverTests
             Value = Array.Empty<byte>(),
         }, cts.Token);
 
-        await sink.Received(1).WriteAsync(Arg.Any<WalRecord>(), cts.Token);
+        await sink.Received(1).WriteAsync(DefaultTree, cts.Token);
     }
 
+    // ------------------------------------------------------------------
+    // Constructor guards
+    // ------------------------------------------------------------------
+
     [Test]
-    public async Task Constructor_throws_on_null_sink()
+    public void Constructor_throws_on_null_sink()
     {
-        await Task.CompletedTask;
         Assert.That(
-            () => new ReplicationMutationObserver(null!, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>())),
+            () => new ReplicationMutationObserver(null!, Monitor("site-a"), AllowAll()),
             Throws.ArgumentNullException);
     }
 
     [Test]
-    public async Task Constructor_throws_on_null_options()
+    public void Constructor_throws_on_null_options()
     {
-        await Task.CompletedTask;
         Assert.That(
-            () => new ReplicationMutationObserver(new CapturingSink(), null!, AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>())),
+            () => new ReplicationMutationObserver(new RecordingSink(), null!, AllowAll()),
             Throws.ArgumentNullException);
     }
 
     [Test]
-    public async Task Constructor_throws_on_null_mode_resolver()
+    public void Constructor_throws_on_null_mode_resolver()
     {
-        await Task.CompletedTask;
         Assert.That(
-            () => new ReplicationMutationObserver(new CapturingSink(), Monitor("site-a"), null!, new LocalVectorClockCache(Substitute.For<IGrainFactory>())),
+            () => new ReplicationMutationObserver(new RecordingSink(), Monitor("site-a"), null!),
             Throws.ArgumentNullException);
     }
 
@@ -230,46 +206,41 @@ public class ReplicationMutationObserverTests
     [Test]
     public async Task Mode_resolver_null_skips_mutation()
     {
-        var sink = new CapturingSink();
+        var sink = new RecordingSink();
         var resolver = Substitute.For<ILatticeMergeModeResolver>();
         resolver.Resolve(Arg.Any<string>()).Returns((LatticeMergeMode?)null);
 
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), resolver, new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), resolver);
 
         await observer.OnMutationAsync(SetMutation("undeclared", "k"), CancellationToken.None);
 
-        Assert.That(sink.Entries, Is.Empty);
+        Assert.That(sink.Nudges, Is.Empty);
     }
 
     [Test]
-    public async Task Mode_resolver_value_is_stamped_on_entry()
+    public async Task Declared_tree_nudges_and_undeclared_tree_is_skipped()
     {
-        var sink = new CapturingSink();
+        var sink = new RecordingSink();
         var resolver = Substitute.For<ILatticeMergeModeResolver>();
         resolver.Resolve("declared").Returns(LatticeMergeMode.LwwRegister);
         resolver.Resolve("undeclared").Returns((LatticeMergeMode?)null);
 
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), resolver, new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), resolver);
 
         await observer.OnMutationAsync(SetMutation("declared", "k"), CancellationToken.None);
         await observer.OnMutationAsync(SetMutation("undeclared", "k"), CancellationToken.None);
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(sink.Entries, Has.Count.EqualTo(1));
-            Assert.That(sink.Entries[0].TreeId, Is.EqualTo("declared"));
-            Assert.That(sink.Entries[0].Mode, Is.EqualTo(LatticeMergeMode.LwwRegister));
-        });
+        Assert.That(sink.Nudges, Is.EqualTo(new[] { "declared" }));
     }
 
     [Test]
     public async Task Mode_resolver_is_consulted_per_mutation()
     {
-        var sink = new CapturingSink();
+        var sink = new RecordingSink();
         var resolver = Substitute.For<ILatticeMergeModeResolver>();
         resolver.Resolve(Arg.Any<string>()).Returns(LatticeMergeMode.LwwRegister);
 
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), resolver, new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), resolver);
 
         await observer.OnMutationAsync(SetMutation("t", "k1"), CancellationToken.None);
         await observer.OnMutationAsync(SetMutation("t", "k2"), CancellationToken.None);
@@ -284,101 +255,101 @@ public class ReplicationMutationObserverTests
     [Test]
     public async Task Key_filter_rejecting_predicate_skips_mutation()
     {
-        var sink = new CapturingSink();
+        var sink = new RecordingSink();
         var observer = new ReplicationMutationObserver(sink, Monitor(new LatticeReplicationOptions
         {
             ClusterId = "site-a",
             KeyFilter = static k => k.StartsWith("ok/"),
-        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        }), AllowAll());
 
         await observer.OnMutationAsync(SetMutation("t", "ok/1"), CancellationToken.None);
         await observer.OnMutationAsync(SetMutation("t", "skip/1"), CancellationToken.None);
 
-        Assert.That(sink.Entries.Select(e => e.Key).ToArray(), Is.EqualTo(new[] { "ok/1" }));
+        // Only the accepted key produces a nudge.
+        Assert.That(sink.Nudges, Is.EqualTo(new[] { "t" }));
     }
 
     [Test]
     public async Task Key_filter_null_replicates_every_key()
     {
-        var sink = new CapturingSink();
+        var sink = new RecordingSink();
         var observer = new ReplicationMutationObserver(sink, Monitor(new LatticeReplicationOptions
         {
             ClusterId = "site-a",
             KeyFilter = null,
-        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        }), AllowAll());
 
         await observer.OnMutationAsync(SetMutation("t", "anything"), CancellationToken.None);
 
-        Assert.That(sink.Entries, Has.Count.EqualTo(1));
+        Assert.That(sink.Nudges, Has.Count.EqualTo(1));
     }
 
     [Test]
     public async Task Key_prefixes_empty_imposes_no_restriction()
     {
-        var sink = new CapturingSink();
+        var sink = new RecordingSink();
         var observer = new ReplicationMutationObserver(sink, Monitor(new LatticeReplicationOptions
         {
             ClusterId = "site-a",
             KeyPrefixes = Array.Empty<string>(),
-        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        }), AllowAll());
 
         await observer.OnMutationAsync(SetMutation("t", "any"), CancellationToken.None);
 
-        Assert.That(sink.Entries, Has.Count.EqualTo(1));
+        Assert.That(sink.Nudges, Has.Count.EqualTo(1));
     }
 
     [Test]
     public async Task Key_prefixes_match_first_prefix_passes()
     {
-        var sink = new CapturingSink();
+        var sink = new RecordingSink();
         var observer = new ReplicationMutationObserver(sink, Monitor(new LatticeReplicationOptions
         {
             ClusterId = "site-a",
             KeyPrefixes = new[] { "a/", "b/" },
-        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        }), AllowAll());
 
         await observer.OnMutationAsync(SetMutation("t", "a/1"), CancellationToken.None);
         await observer.OnMutationAsync(SetMutation("t", "b/2"), CancellationToken.None);
         await observer.OnMutationAsync(SetMutation("t", "c/3"), CancellationToken.None);
 
-        Assert.That(
-            sink.Entries.Select(e => e.Key).ToArray(),
-            Is.EqualTo(new[] { "a/1", "b/2" }));
+        // Two of the three keys match a configured prefix.
+        Assert.That(sink.Nudges, Is.EqualTo(new[] { "t", "t" }));
     }
 
     [Test]
     public async Task Key_prefix_match_is_ordinal_case_sensitive()
     {
-        var sink = new CapturingSink();
+        var sink = new RecordingSink();
         var observer = new ReplicationMutationObserver(sink, Monitor(new LatticeReplicationOptions
         {
             ClusterId = "site-a",
             KeyPrefixes = new[] { "Repl/" },
-        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        }), AllowAll());
 
         await observer.OnMutationAsync(SetMutation("t", "repl/1"), CancellationToken.None);
 
-        Assert.That(sink.Entries, Is.Empty);
+        Assert.That(sink.Nudges, Is.Empty);
     }
 
     [Test]
     public async Task Filters_combine_with_logical_and()
     {
-        var sink = new CapturingSink();
+        var sink = new RecordingSink();
         var observer = new ReplicationMutationObserver(sink, Monitor(new LatticeReplicationOptions
         {
             ClusterId = "site-a",
             KeyFilter = static k => k.EndsWith("-keep"),
             KeyPrefixes = new[] { "x/" },
-        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        }), AllowAll());
 
         await observer.OnMutationAsync(SetMutation("t", "x/a-keep"), CancellationToken.None);
         await observer.OnMutationAsync(SetMutation("t", "x/a-drop"), CancellationToken.None);
         await observer.OnMutationAsync(SetMutation("t", "y/a-keep"), CancellationToken.None);
 
-        Assert.That(
-            sink.Entries.Select(e => e.Key).ToArray(),
-            Is.EqualTo(new[] { "x/a-keep" }));
+        // Only the key matching both the prefix allowlist and the
+        // predicate produces a nudge.
+        Assert.That(sink.Nudges, Is.EqualTo(new[] { "t" }));
     }
 
     [Test]
@@ -401,13 +372,13 @@ public class ReplicationMutationObserverTests
         monitor.Get(Arg.Any<string>()).Returns(defaults);
         monitor.Get("vip").Returns(vip);
 
-        var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, monitor, AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        var sink = new RecordingSink();
+        var observer = new ReplicationMutationObserver(sink, monitor, AllowAll());
 
         await observer.OnMutationAsync(SetMutation("vip", "k"), CancellationToken.None);
         await observer.OnMutationAsync(SetMutation("other", "k"), CancellationToken.None);
 
-        Assert.That(sink.Entries.Select(e => e.TreeId).ToArray(), Is.EqualTo(new[] { "vip" }));
+        Assert.That(sink.Nudges, Is.EqualTo(new[] { "vip" }));
     }
 
     [Test]
@@ -418,22 +389,22 @@ public class ReplicationMutationObserverTests
         {
             ClusterId = "site-a",
             KeyFilter = static _ => false,
-        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        }), AllowAll());
 
         await observer.OnMutationAsync(SetMutation("t", "k"), CancellationToken.None);
 
-        await sink.DidNotReceive().WriteAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>());
+        await sink.DidNotReceive().WriteAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
     public async Task DeleteRange_filter_evaluates_against_start_key()
     {
-        var sink = new CapturingSink();
+        var sink = new RecordingSink();
         var observer = new ReplicationMutationObserver(sink, Monitor(new LatticeReplicationOptions
         {
             ClusterId = "site-a",
             KeyPrefixes = new[] { "a/" },
-        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        }), AllowAll());
 
         await observer.OnMutationAsync(new LatticeMutation
         {
@@ -453,7 +424,8 @@ public class ReplicationMutationObserverTests
             IsTombstone = true,
         }, CancellationToken.None);
 
-        Assert.That(sink.Entries.Select(e => e.Key).ToArray(), Is.EqualTo(new[] { "a/start" }));
+        // Only the range whose start key matches the prefix nudges.
+        Assert.That(sink.Nudges, Is.EqualTo(new[] { "t" }));
     }
 
     // ------------------------------------------------------------------
@@ -468,7 +440,7 @@ public class ReplicationMutationObserverTests
         monitor.CurrentValue.Returns(opts);
         monitor.Get(Arg.Any<string>()).Returns(opts);
 
-        using var observer = new ReplicationMutationObserver(new CapturingSink(), monitor, AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        using var observer = new ReplicationMutationObserver(new RecordingSink(), monitor, AllowAll());
 
         await observer.OnMutationAsync(SetMutation("t1", "k1"), CancellationToken.None);
         await observer.OnMutationAsync(SetMutation("t1", "k2"), CancellationToken.None);
@@ -489,12 +461,12 @@ public class ReplicationMutationObserverTests
     public async Task Filter_predicate_runs_per_mutation_even_when_cache_is_warm()
     {
         var calls = 0;
-        var sink = new CapturingSink();
+        var sink = new RecordingSink();
         var observer = new ReplicationMutationObserver(sink, Monitor(new LatticeReplicationOptions
         {
             ClusterId = "site-a",
             KeyFilter = _ => { calls++; return true; },
-        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        }), AllowAll());
 
         await observer.OnMutationAsync(SetMutation("t", "k1"), CancellationToken.None);
         await observer.OnMutationAsync(SetMutation("t", "k2"), CancellationToken.None);
@@ -505,7 +477,7 @@ public class ReplicationMutationObserverTests
         Assert.Multiple(() =>
         {
             Assert.That(calls, Is.EqualTo(3));
-            Assert.That(sink.Entries, Has.Count.EqualTo(3));
+            Assert.That(sink.Nudges, Has.Count.EqualTo(3));
         });
     }
 
@@ -534,51 +506,18 @@ public class ReplicationMutationObserverTests
             return subscription;
         });
 
-        var sink = new CapturingSink();
-        using var observer = new ReplicationMutationObserver(sink, monitor, AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        var sink = new RecordingSink();
+        using var observer = new ReplicationMutationObserver(sink, monitor, AllowAll());
 
         await observer.OnMutationAsync(SetMutation("t", "k"), CancellationToken.None);
-        Assert.That(sink.Entries, Is.Empty, "Initial deny-all filter should suppress the write.");
+        Assert.That(sink.Nudges, Is.Empty, "Initial deny-all filter should suppress the nudge.");
 
         current = allow;
         Assert.That(changeCallback, Is.Not.Null);
         changeCallback!.Invoke(allow, null);
 
         await observer.OnMutationAsync(SetMutation("t", "k"), CancellationToken.None);
-        Assert.That(sink.Entries, Has.Count.EqualTo(1));
-    }
-
-    [Test]
-    public async Task Cluster_id_is_snapshotted_until_options_change()
-    {
-        Action<LatticeReplicationOptions, string?>? changeCallback = null;
-        var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
-
-        var v1 = new LatticeReplicationOptions { ClusterId = "site-a" };
-        var v2 = new LatticeReplicationOptions { ClusterId = "site-b" };
-        var current = v1;
-        monitor.CurrentValue.Returns(_ => current);
-        monitor.Get(Arg.Any<string>()).Returns(_ => current);
-        monitor.OnChange(Arg.Any<Action<LatticeReplicationOptions, string?>>()).Returns(call =>
-        {
-            changeCallback = call.Arg<Action<LatticeReplicationOptions, string?>>();
-            return Substitute.For<IDisposable>();
-        });
-
-        var sink = new CapturingSink();
-        using var observer = new ReplicationMutationObserver(sink, monitor, AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
-
-        await observer.OnMutationAsync(SetMutation("t", "k1"), CancellationToken.None);
-
-        current = v2;
-        await observer.OnMutationAsync(SetMutation("t", "k2"), CancellationToken.None);
-
-        changeCallback!.Invoke(v2, null);
-        await observer.OnMutationAsync(SetMutation("t", "k3"), CancellationToken.None);
-
-        Assert.That(
-            sink.Entries.Select(e => e.OriginClusterId).ToArray(),
-            Is.EqualTo(new[] { "site-a", "site-a", "site-b" }));
+        Assert.That(sink.Nudges, Has.Count.EqualTo(1));
     }
 
     [Test]
@@ -590,7 +529,7 @@ public class ReplicationMutationObserverTests
         monitor.Get(Arg.Any<string>()).Returns(new LatticeReplicationOptions { ClusterId = "x" });
         monitor.OnChange(Arg.Any<Action<LatticeReplicationOptions, string?>>()).Returns(subscription);
 
-        var observer = new ReplicationMutationObserver(new CapturingSink(), monitor, AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        var observer = new ReplicationMutationObserver(new RecordingSink(), monitor, AllowAll());
         observer.Dispose();
 
         subscription.Received(1).Dispose();
@@ -604,7 +543,7 @@ public class ReplicationMutationObserverTests
         monitor.Get(Arg.Any<string>()).Returns(new LatticeReplicationOptions { ClusterId = "x" });
         monitor.OnChange(Arg.Any<Action<LatticeReplicationOptions, string?>>()).Returns((IDisposable?)null);
 
-        var observer = new ReplicationMutationObserver(new CapturingSink(), monitor, AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        var observer = new ReplicationMutationObserver(new RecordingSink(), monitor, AllowAll());
 
         Assert.DoesNotThrow(() => observer.Dispose());
         Assert.DoesNotThrow(() => observer.Dispose());
@@ -613,420 +552,43 @@ public class ReplicationMutationObserverTests
     [Test]
     public async Task Null_prefix_entries_are_ignored_when_compiling_filter()
     {
-        var sink = new CapturingSink();
+        var sink = new RecordingSink();
         var observer = new ReplicationMutationObserver(sink, Monitor(new LatticeReplicationOptions
         {
             ClusterId = "site-a",
             KeyPrefixes = new[] { null!, "ok/" },
-        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        }), AllowAll());
 
         await observer.OnMutationAsync(SetMutation("t", "ok/1"), CancellationToken.None);
         await observer.OnMutationAsync(SetMutation("t", "skip/1"), CancellationToken.None);
 
-        Assert.That(sink.Entries.Select(e => e.Key).ToArray(), Is.EqualTo(new[] { "ok/1" }));
+        Assert.That(sink.Nudges, Is.EqualTo(new[] { "t" }));
     }
 
     [Test]
     public async Task All_null_prefix_collection_imposes_no_restriction()
     {
-        var sink = new CapturingSink();
+        var sink = new RecordingSink();
         var observer = new ReplicationMutationObserver(sink, Monitor(new LatticeReplicationOptions
         {
             ClusterId = "site-a",
             KeyPrefixes = new[] { (string)null!, null! },
-        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        }), AllowAll());
 
         await observer.OnMutationAsync(SetMutation("t", "anything"), CancellationToken.None);
 
-        Assert.That(sink.Entries, Has.Count.EqualTo(1));
-    }
-
-    private static LatticeMutation SetMutation(string treeId, string key) => new()
-    {
-        TreeId = treeId,
-        Kind = MutationKind.Set,
-        Key = key,
-        Value = new byte[] { 1 },
-    };
-
-    // ------------------------------------------------------------------
-    // Causal-plus vector-clock stamping (commit-time frontier capture)
-    // ------------------------------------------------------------------
-
-    [Test]
-    public async Task Vector_clock_from_mutation_is_stamped_on_emitted_entry()
-    {
-        var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
-        var vc = new VersionVector();
-        var ticked = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
-        vc.Entries["site-a"] = ticked;
-
-        await observer.OnMutationAsync(new LatticeMutation
-        {
-            TreeId = "t",
-            Kind = MutationKind.Set,
-            Key = "k",
-            Value = new byte[] { 1 },
-            VectorClock = vc,
-        }, CancellationToken.None);
-
-        var entry = sink.Entries.Single();
-        Assert.Multiple(() =>
-        {
-            // The captured frontier is a defensive clone of the
-            // mutation's VectorClock - never the same reference.
-            Assert.That(entry.VectorClock, Is.Not.SameAs(vc));
-            Assert.That(entry.VectorClock, Is.Not.Null);
-            Assert.That(entry.VectorClock!.GetClock("site-a"), Is.EqualTo(ticked));
-            Assert.That(entry.VectorClock.Entries, Has.Count.EqualTo(1));
-            // Inter-slot aliasing is preserved per spec: both slots
-            // share the single clone instance.
-            Assert.That(entry.DependencySummary, Is.SameAs(entry.VectorClock));
-        });
-    }
-
-    [Test]
-    public async Task Null_vector_clock_on_mutation_flows_back_to_local_cache_snapshot()
-    {
-        // Under the producer-side local vector clock cache, a mutation
-        // that does not carry an explicit VectorClock falls back to
-        // the cache's tree-global snapshot rather than emitting a
-        // null frontier. With a fresh cache (no prior local writes,
-        // no prior foreign applies, an empty cold-start snapshot
-        // from the substituted grain factory) the snapshot is a
-        // non-null empty VersionVector - exactly what a remote
-        // receiver's dep-check expects when no causal predecessors
-        // have been declared.
-        var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
-
-        await observer.OnMutationAsync(new LatticeMutation
-        {
-            TreeId = "t",
-            Kind = MutationKind.Set,
-            Key = "k",
-            Value = new byte[] { 1 },
-            VectorClock = null,
-        }, CancellationToken.None);
-
-        var entry = sink.Entries.Single();
-        Assert.Multiple(() =>
-        {
-            Assert.That(entry.VectorClock, Is.Not.Null,
-                "Cache fallback must stamp a non-null empty VersionVector when ambient VC is unset.");
-            Assert.That(entry.VectorClock!.Entries, Is.Empty,
-                "Fresh cache snapshot before any local advance has no entries.");
-            Assert.That(entry.DependencySummary, Is.SameAs(entry.VectorClock),
-                "Inter-slot aliasing is preserved on the cache-fallback path.");
-        });
-    }
-
-    [Test]
-    public async Task DeleteRange_carries_ambient_vector_clock_when_present()
-    {
-        var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
-        var vc = new VersionVector();
-        var ticked = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
-        vc.Entries["site-a"] = ticked;
-
-        await observer.OnMutationAsync(new LatticeMutation
-        {
-            TreeId = "t",
-            Kind = MutationKind.DeleteRange,
-            Key = "a",
-            EndExclusiveKey = "z",
-            IsTombstone = true,
-            VectorClock = vc,
-        }, CancellationToken.None);
-
-        var entry = sink.Entries.Single();
-        Assert.Multiple(() =>
-        {
-            Assert.That(entry.VectorClock, Is.Not.SameAs(vc));
-            Assert.That(entry.VectorClock, Is.Not.Null);
-            Assert.That(entry.VectorClock!.GetClock("site-a"), Is.EqualTo(ticked));
-        });
-    }
-
-    // -- Gap (i): defensive-clone contract -----------------------------
-
-    [Test]
-    public async Task Vector_clock_is_defensively_cloned_so_post_emit_mutation_does_not_leak()
-    {
-        var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
-        var vc = new VersionVector();
-        var atEmit = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
-        vc.Entries["site-a"] = atEmit;
-
-        await observer.OnMutationAsync(new LatticeMutation
-        {
-            TreeId = "t",
-            Kind = MutationKind.Set,
-            Key = "k",
-            Value = new byte[] { 1 },
-            VectorClock = vc,
-        }, CancellationToken.None);
-
-        // Producer-side advances applied AFTER the observer returned
-        // must not leak into the captured entry. This pins the
-        // defensive-clone contract: a downstream consumer reading the
-        // entry's frontier sees the value at emit time, not the
-        // current value of the originating site's local clock.
-        vc.Tick("site-b");
-        vc.Entries["site-a"] = HybridLogicalClock.Tick(atEmit);
-
-        var entry = sink.Entries.Single();
-        Assert.Multiple(() =>
-        {
-            Assert.That(entry.VectorClock, Is.Not.SameAs(vc));
-            Assert.That(entry.VectorClock!.Entries.ContainsKey("site-b"), Is.False,
-                "post-emit advance on a new origin must not leak into the captured entry");
-            Assert.That(entry.VectorClock.GetClock("site-a"), Is.EqualTo(atEmit),
-                "post-emit advance on an existing origin must not leak into the captured entry");
-            Assert.That(entry.DependencySummary, Is.SameAs(entry.VectorClock),
-                "both slots remain aliased to the single clone (per spec)");
-        });
-    }
-
-    // -- Gap (vi): filter-rejected mutation does not emit a VC entry ---
-
-    [Test]
-    public async Task Filter_rejected_mutation_does_not_emit_even_when_vector_clock_is_set()
-    {
-        var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor(new LatticeReplicationOptions
-        {
-            ClusterId = "site-a",
-            KeyPrefixes = new[] { "ok/" },
-        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
-        var vc = new VersionVector();
-        vc.Tick("site-a");
-
-        await observer.OnMutationAsync(new LatticeMutation
-        {
-            TreeId = "t",
-            Kind = MutationKind.Set,
-            Key = "skip/1",
-            Value = new byte[] { 1 },
-            VectorClock = vc,
-        }, CancellationToken.None);
-
-        // The per-key filter runs before the entry is constructed, so
-        // a rejected mutation never reaches the sink even when it
-        // carries a non-null causal-plus frontier.
-        Assert.That(sink.Entries, Is.Empty);
-    }
-
-    // -- Gap (viii): options-change cache invalidation does not break VC stamping --
-
-    [Test]
-    public async Task Options_change_invalidation_does_not_break_vector_clock_stamping()
-    {
-        // The observer's per-tree filter cache is invalidated on
-        // IOptionsMonitor.OnChange. VC stamping reads from
-        // mutation.VectorClock directly (not from cached options) so
-        // an options change must have no effect on the stamping path.
-        // Capture the registered callback, fire it between emits,
-        // and assert that the VC slot is correctly stamped on both
-        // the pre-change and post-change emits.
-        var initialOptions = new LatticeReplicationOptions { ClusterId = "site-a" };
-        var changedOptions = new LatticeReplicationOptions { ClusterId = "site-a" };
-        Action<LatticeReplicationOptions, string?>? captured = null;
-        var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
-        monitor.CurrentValue.Returns(initialOptions);
-        monitor.Get(Arg.Any<string>()).Returns(initialOptions);
-        monitor.OnChange(Arg.Do<Action<LatticeReplicationOptions, string?>>(h => captured = h))
-            .Returns((IDisposable?)null);
-
-        var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, monitor, AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
-        var vc1 = new VersionVector();
-        var t1 = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
-        vc1.Entries["site-a"] = t1;
-
-        await observer.OnMutationAsync(new LatticeMutation
-        {
-            TreeId = "t",
-            Kind = MutationKind.Set,
-            Key = "k1",
-            Value = new byte[] { 1 },
-            VectorClock = vc1,
-        }, CancellationToken.None);
-
-        // Simulate a runtime options change: the observer clears its
-        // compiled-filter cache, but VC stamping must still work on
-        // the next emit because it does not consult the cache.
-        Assert.That(captured, Is.Not.Null, "observer must subscribe to OnChange");
-        captured!.Invoke(changedOptions, null);
-
-        var vc2 = new VersionVector();
-        var t2 = HybridLogicalClock.Tick(t1);
-        vc2.Entries["site-a"] = t2;
-
-        await observer.OnMutationAsync(new LatticeMutation
-        {
-            TreeId = "t",
-            Kind = MutationKind.Set,
-            Key = "k2",
-            Value = new byte[] { 2 },
-            VectorClock = vc2,
-        }, CancellationToken.None);
-
-        Assert.That(sink.Entries, Has.Count.EqualTo(2));
-        Assert.Multiple(() =>
-        {
-            Assert.That(sink.Entries[0].VectorClock!.GetClock("site-a"), Is.EqualTo(t1));
-            Assert.That(sink.Entries[1].VectorClock!.GetClock("site-a"), Is.EqualTo(t2));
-            Assert.That(sink.Entries[0].VectorClock, Is.Not.SameAs(sink.Entries[1].VectorClock),
-                "each emit gets its own defensive clone");
-        });
+        Assert.That(sink.Nudges, Has.Count.EqualTo(1));
     }
 
     // ------------------------------------------------------------------
-    // Pre-merge typed delta passthrough
-    // ------------------------------------------------------------------
-
-    [Test]
-    public async Task Delta_payload_is_forwarded_verbatim_on_set()
-    {
-        var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
-        var payload = new byte[] { 4, 5, 6 };
-
-        await observer.OnMutationAsync(new LatticeMutation
-        {
-            TreeId = "t",
-            Kind = MutationKind.Set,
-            Key = "k",
-            Value = new byte[] { 1 },
-            Delta = payload,
-        }, CancellationToken.None);
-
-        var entry = sink.Entries.Single();
-        Assert.That(entry.Delta, Is.SameAs(payload));
-    }
-
-    [Test]
-    public async Task Delta_slot_is_null_on_emit_when_mutation_did_not_author_a_delta()
-    {
-        var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
-
-        await observer.OnMutationAsync(new LatticeMutation
-        {
-            TreeId = "t",
-            Kind = MutationKind.Set,
-            Key = "k",
-            Value = new byte[] { 1 },
-        }, CancellationToken.None);
-
-        var entry = sink.Entries.Single();
-        Assert.That(entry.Delta, Is.Null);
-    }
-
-    [Test]
-    public async Task Delete_mutation_forwards_delta_payload()
-    {
-        var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
-        var payload = new byte[] { 1 };
-
-        await observer.OnMutationAsync(new LatticeMutation
-        {
-            TreeId = "t",
-            Kind = MutationKind.Delete,
-            Key = "k",
-            IsTombstone = true,
-            Delta = payload,
-        }, CancellationToken.None);
-
-        var entry = sink.Entries.Single();
-        Assert.That(entry.Delta, Is.SameAs(payload));
-    }
-
-    [Test]
-    public async Task Delta_payload_is_forwarded_by_reference_not_cloned()
-    {
-        // Bytes are treated as opaque (matching the observer's
-        // existing handling of mutation.Value): the producer authored
-        // the payload once at the call site and the observer forwards
-        // the reference verbatim. Pinned to keep the hot path
-        // allocation-free for typed CRDT emits.
-        var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
-        var payload = new byte[] { 7 };
-
-        await observer.OnMutationAsync(new LatticeMutation
-        {
-            TreeId = "t",
-            Kind = MutationKind.Set,
-            Key = "k",
-            Value = new byte[] { 1 },
-            Delta = payload,
-        }, CancellationToken.None);
-
-        Assert.That(sink.Entries.Single().Delta, Is.SameAs(payload));
-    }
-
-    [Test]
-    public async Task MvRegister_set_delta_payload_is_forwarded_verbatim()
-    {
-        // MV-Register producer-side delta passthrough: the typed
-        // accessor stamps an Orleans-serialised `MvRegisterDelta`
-        // payload via `LatticeDeltaContext`. The observer must forward
-        // the slot verbatim so the receiver-side dispatch path can
-        // replay the *added* dot rather than reconstruct it from the
-        // post-merge full state.
-        var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
-        var payload = new byte[] { 0xAA, 0xBB, 0xCC };
-
-        await observer.OnMutationAsync(new LatticeMutation
-        {
-            TreeId = "t",
-            Kind = MutationKind.Set,
-            Key = "k",
-            Value = new byte[] { 1 },
-            Delta = payload,
-        }, CancellationToken.None);
-
-        Assert.That(sink.Entries.Single().Delta, Is.SameAs(payload));
-    }
-
-    [Test]
-    public async Task MvRegister_merge_delta_payload_is_forwarded_verbatim()
-    {
-        // The accessor's out-of-band merge path stamps an Orleans-
-        // serialised `MvRegisterDelta` payload. Forwarded verbatim
-        // like every other typed CRDT delta.
-        var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
-        var payload = new byte[] { 0xDE, 0xAD, 0xBE, 0xEF };
-
-        await observer.OnMutationAsync(new LatticeMutation
-        {
-            TreeId = "t",
-            Kind = MutationKind.Set,
-            Key = "k",
-            Value = new byte[] { 1 },
-            Delta = payload,
-        }, CancellationToken.None);
-
-        Assert.That(sink.Entries.Single().Delta, Is.SameAs(payload));
-    }
-
-    // ----------------------------------------------------------------__
-    // MutationCategory classification + maintenance skip
+    // Maintenance-category mutations are suppressed
     // ------------------------------------------------------------------
 
     [Test]
     public async Task Maintenance_category_set_is_skipped()
     {
-        var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        var sink = new RecordingSink();
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
 
         await observer.OnMutationAsync(new LatticeMutation
         {
@@ -1037,14 +599,14 @@ public class ReplicationMutationObserverTests
             Category = MutationCategory.Maintenance,
         }, CancellationToken.None);
 
-        Assert.That(sink.Entries, Is.Empty);
+        Assert.That(sink.Nudges, Is.Empty);
     }
 
     [Test]
     public async Task Maintenance_category_delete_is_skipped()
     {
-        var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        var sink = new RecordingSink();
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
 
         await observer.OnMutationAsync(new LatticeMutation
         {
@@ -1055,14 +617,14 @@ public class ReplicationMutationObserverTests
             Category = MutationCategory.Maintenance,
         }, CancellationToken.None);
 
-        Assert.That(sink.Entries, Is.Empty);
+        Assert.That(sink.Nudges, Is.Empty);
     }
 
     [Test]
     public async Task Maintenance_category_delete_range_is_skipped()
     {
-        var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        var sink = new RecordingSink();
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
 
         await observer.OnMutationAsync(new LatticeMutation
         {
@@ -1074,7 +636,7 @@ public class ReplicationMutationObserverTests
             Category = MutationCategory.Maintenance,
         }, CancellationToken.None);
 
-        Assert.That(sink.Entries, Is.Empty);
+        Assert.That(sink.Nudges, Is.Empty);
     }
 
     [Test]
@@ -1082,9 +644,9 @@ public class ReplicationMutationObserverTests
     {
         // Wire-compat regression: a freshly-constructed LatticeMutation
         // with no explicit Category should default to MutationCategory.User
-        // (the [Id(11)] default) and emit through the observer unchanged.
-        var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        // and nudge the sink unchanged.
+        var sink = new RecordingSink();
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
 
         await observer.OnMutationAsync(new LatticeMutation
         {
@@ -1094,14 +656,14 @@ public class ReplicationMutationObserverTests
             Value = new byte[] { 1 },
         }, CancellationToken.None);
 
-        Assert.That(sink.Entries, Has.Count.EqualTo(1));
+        Assert.That(sink.Nudges, Has.Count.EqualTo(1));
     }
 
     [Test]
     public async Task Explicit_user_category_is_emitted_to_sink()
     {
-        var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        var sink = new RecordingSink();
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
 
         await observer.OnMutationAsync(new LatticeMutation
         {
@@ -1112,17 +674,17 @@ public class ReplicationMutationObserverTests
             Category = MutationCategory.User,
         }, CancellationToken.None);
 
-        Assert.That(sink.Entries, Has.Count.EqualTo(1));
+        Assert.That(sink.Nudges, Has.Count.EqualTo(1));
     }
 
     [Test]
     public async Task Maintenance_category_skip_is_independent_of_origin_cluster_id()
     {
-        // Spec: the classification is independent of OriginClusterId.
-        // A remote-origin maintenance emit is still Maintenance and still
-        // skips the WAL.
-        var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        // The classification is independent of OriginClusterId: a
+        // remote-origin maintenance emit is still Maintenance and still
+        // skips the nudge.
+        var sink = new RecordingSink();
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
 
         await observer.OnMutationAsync(new LatticeMutation
         {
@@ -1134,7 +696,7 @@ public class ReplicationMutationObserverTests
             Category = MutationCategory.Maintenance,
         }, CancellationToken.None);
 
-        Assert.That(sink.Entries, Is.Empty);
+        Assert.That(sink.Nudges, Is.Empty);
     }
 
     [Test]
@@ -1145,7 +707,7 @@ public class ReplicationMutationObserverTests
         var resolver = Substitute.For<ILatticeMergeModeResolver>();
         resolver.Resolve(Arg.Any<string>()).Returns(LatticeMergeMode.LwwRegister);
 
-        var observer = new ReplicationMutationObserver(new CapturingSink(), Monitor("site-a"), resolver, new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        var observer = new ReplicationMutationObserver(new RecordingSink(), Monitor("site-a"), resolver);
 
         await observer.OnMutationAsync(new LatticeMutation
         {
@@ -1166,12 +728,12 @@ public class ReplicationMutationObserverTests
         // evaluation so the predicate is never invoked for a maintenance
         // emit, even when one is configured.
         var calls = 0;
-        var sink = new CapturingSink();
+        var sink = new RecordingSink();
         var observer = new ReplicationMutationObserver(sink, Monitor(new LatticeReplicationOptions
         {
             ClusterId = "site-a",
             KeyFilter = _ => { calls++; return true; },
-        }), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        }), AllowAll());
 
         await observer.OnMutationAsync(new LatticeMutation
         {
@@ -1184,7 +746,7 @@ public class ReplicationMutationObserverTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(sink.Entries, Is.Empty);
+            Assert.That(sink.Nudges, Is.Empty);
             Assert.That(calls, Is.EqualTo(0));
         });
     }
@@ -1192,10 +754,10 @@ public class ReplicationMutationObserverTests
     [Test]
     public async Task Maintenance_category_skip_does_not_invoke_sink()
     {
-        // Pin the no-WriteAsync contract: a maintenance emit must not
-        // touch the sink at all (no allocation, no awaitable).
+        // Pin the no-nudge contract: a maintenance emit must not touch the
+        // sink at all.
         var sink = Substitute.For<IReplogSink>();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
 
         await observer.OnMutationAsync(new LatticeMutation
         {
@@ -1206,17 +768,16 @@ public class ReplicationMutationObserverTests
             Category = MutationCategory.Maintenance,
         }, CancellationToken.None);
 
-        await sink.DidNotReceive().WriteAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>());
+        await sink.DidNotReceive().WriteAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
     public async Task User_and_maintenance_emits_interleave_correctly()
     {
         // Pin that the gate is per-mutation (not sticky): a maintenance
-        // emit followed by a user emit on the same observer instance
-        // produces exactly one captured entry, and vice versa.
-        var sink = new CapturingSink();
-        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll(), new LocalVectorClockCache(Substitute.For<IGrainFactory>()));
+        // emit between two user emits suppresses exactly one nudge.
+        var sink = new RecordingSink();
+        var observer = new ReplicationMutationObserver(sink, Monitor("site-a"), AllowAll());
 
         await observer.OnMutationAsync(new LatticeMutation
         {
@@ -1245,9 +806,7 @@ public class ReplicationMutationObserverTests
             Category = MutationCategory.User,
         }, CancellationToken.None);
 
-        Assert.That(
-            sink.Entries.Select(e => e.Key).ToArray(),
-            Is.EqualTo(new[] { "k1", "k3" }));
+        // The two user emits nudge; the maintenance emit is suppressed.
+        Assert.That(sink.Nudges, Is.EqualTo(new[] { DefaultTree, DefaultTree }));
     }
 }
-

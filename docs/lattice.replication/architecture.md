@@ -23,7 +23,7 @@ flowchart LR
         Leaf -->|"step 2: apply"| Proj[(Leaf projection)]
         Leaf -->|"step 3: observe (nudge)"| Capture[IMutationObserver]
         Wal -->|"IChangeFeed cursor, tailed + batched"| Ship[Per-peer shipper]
-        Capture -.->|"advance local VC + ring doorbell: drain now"| Ship
+        Capture -.->|"ring doorbell: drain now"| Ship
         Ship --> Transport[IReplicationTransport<br/>in-process / gRPC]
     end
 
@@ -41,9 +41,11 @@ flowchart LR
    WAL appender, writing each mutation to the per-shard log before the originating
    `SetAsync` / `DeleteAsync` reports success, so an append failure surfaces to the
    caller rather than silently dropping a change. The replication subsystem attaches
-   to the `observe` step only as a low-latency nudge - it advances the producer-side
-   local vector clock cache and rings the per-peer shipper doorbells; it performs no
-   second WAL write and is best-effort.
+   to the `observe` step only as a low-latency nudge - it rings the per-peer
+   shipper doorbells so the background log-tailing loop drains immediately; it
+   maintains no producer-side vector clock state, performs no second WAL write,
+   and is best-effort. The causal frontier the shipper sends is read from the
+   leaf WAL it tails, never from an in-memory commit-time mirror.
 
 2. **Per-shard replication WAL.** Each commit is appended by the leaf's commit-log
    writer to a per-tree,

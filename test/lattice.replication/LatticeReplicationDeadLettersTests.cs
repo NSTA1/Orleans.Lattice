@@ -23,8 +23,7 @@ public class LatticeReplicationDeadLettersTests
         var innerFactory = Substitute.For<IGrainFactory>();
         var inner = new ReplicationApplier(
             innerFactory,
-            Substitute.For<Microsoft.Extensions.Options.IOptionsMonitor<LatticeReplicationOptions>>(),
-            new LocalVectorClockCache(innerFactory));
+            Substitute.For<Microsoft.Extensions.Options.IOptionsMonitor<LatticeReplicationOptions>>());
         var seam = new LatticeReplicationDeadLetters(grainFactory, inner);
         return (seam, grain);
     }

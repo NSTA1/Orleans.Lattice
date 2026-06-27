@@ -276,9 +276,9 @@ The shipper grain is the log-first replication producer: it tails the
 single per-shard leaf write-ahead log (the leaf commit-log writer is the
 sole WAL appender) from a durable per-partition cursor and is the only
 ship driver. The commit-time `ShardedReplogSink` does not append to the
-WAL and does not ship; it is reduced to a low-latency nudge that advances
-the producer-side local vector clock cache for local-origin entries and
-rings shipper doorbells so the background tailing loop drains immediately.
+WAL and does not ship; it maintains no producer-side vector clock state
+and is reduced to a low-latency tree-id nudge that rings shipper
+doorbells so the background tailing loop drains immediately.
 
 In addition to the phase timer, the shipper exposes
 `OnDoorbellAsync(CancellationToken)`. The producer-side `ShardedReplogSink`

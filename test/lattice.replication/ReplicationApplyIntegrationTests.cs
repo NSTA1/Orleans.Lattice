@@ -57,19 +57,29 @@ public class ReplicationApplyIntegrationTests
     public async Task ApplySetAsync_with_remote_origin_does_not_republish_on_site_b()
     {
         // Cycle-break: a value applied on Site B with origin "site-a"
-        // must NOT generate a new outbound replog entry on Site B's sink
-        // (because the change-feed observer filters local-origin only,
-        // and the persisted entry's origin must remain "site-a" - proving
-        // the apply seam preserved it verbatim).
+        // must NOT surface a new Site B-origin record on Site B's leaf
+        // WAL (the shipped path). The apply seam preserves the source
+        // origin verbatim, so the only record written carries origin
+        // "site-a" and the shipper's local-origin filter never re-ships
+        // it back out as if Site B had authored it.
         const string tree = "ri-set-cycle";
         var apply = _fixture.SiteB.Client.GetGrain<IReplicationApplyGrain>(tree);
 
-        var beforeLocal = _fixture.SiteBSink.Entries.Count(e => e.TreeId == tree && e.OriginClusterId == TwoSiteClusterFixture.SiteBClusterId);
+        var before = (await LeafWalReader.ReadAllAsync(_fixture.SiteB.Client, tree))
+            .Count(e => e.OriginClusterId == TwoSiteClusterFixture.SiteBClusterId);
         await apply.ApplySetAsync("k", new byte[] { 9 }, Hlc(1_000), TwoSiteClusterFixture.SiteAClusterId, sourceVectorClock: null, expiresAtTicks: 0);
-        var afterLocal = _fixture.SiteBSink.Entries.Count(e => e.TreeId == tree && e.OriginClusterId == TwoSiteClusterFixture.SiteBClusterId);
 
-        Assert.That(afterLocal, Is.EqualTo(beforeLocal),
-            "Apply with remote origin must not produce a Site B-origin replog entry.");
+        // The applied record is present and carries the source origin.
+        var applied = await LeafWalReader.WaitForRecordsAsync(
+            _fixture.SiteB.Client, tree, e => e.Key == "k" && e.Op == MutationKind.Set);
+        Assert.That(applied, Is.Not.Empty);
+        Assert.That(applied[^1].OriginClusterId, Is.EqualTo(TwoSiteClusterFixture.SiteAClusterId));
+
+        // And no Site B-origin record was produced for the remote apply.
+        var after = (await LeafWalReader.ReadAllAsync(_fixture.SiteB.Client, tree))
+            .Count(e => e.OriginClusterId == TwoSiteClusterFixture.SiteBClusterId);
+        Assert.That(after, Is.EqualTo(before),
+            "Apply with remote origin must not produce a Site B-origin WAL record.");
     }
 
     [Test]
@@ -199,7 +209,7 @@ public class ReplicationApplyIntegrationTests
         var opts = new LatticeReplicationOptions { ClusterId = TwoSiteClusterFixture.SiteBClusterId };
         monitor.CurrentValue.Returns(opts);
         monitor.Get(Arg.Any<string>()).Returns(opts);
-        return new ReplicationApplier(_fixture.SiteB.Client, monitor, new LocalVectorClockCache(_fixture.SiteB.Client));
+        return new ReplicationApplier(_fixture.SiteB.Client, monitor);
     }
 
     [Test]
@@ -448,14 +458,24 @@ public class ReplicationApplyIntegrationTests
         return list;
     }
 
+    private static readonly IComparer<HybridLogicalClock> HlcComparer =
+        Comparer<HybridLogicalClock>.Create((a, b) => a.CompareTo(b));
+
     private async Task<int> ReplayIndexEntriesIntoSiteBAsync(string indexTree, int expectedMin)
     {
         var applier = CreateSiteBApplier();
         IReadOnlyList<WalRecord> entries = Array.Empty<WalRecord>();
         for (var attempt = 0; attempt < 100; attempt++)
         {
-            entries = _fixture.SiteASink.Entries
-                .Where(e => e.TreeId == indexTree)
+            // Source the records that actually ship from Site A's leaf WAL,
+            // mirroring the shipper's filter: local-origin, non-tombstone.
+            // These are the records the background shipper would tail and
+            // send, including their typed CRDT Delta payload.
+            var all = await LeafWalReader.ReadAllAsync(_fixture.SiteA.Client, indexTree);
+            entries = all
+                .Where(e => e.OriginClusterId == TwoSiteClusterFixture.SiteAClusterId
+                    && e.Op != MutationKind.Tombstone)
+                .OrderBy(e => e.Timestamp, HlcComparer)
                 .ToList();
             if (entries.Count >= expectedMin)
             {
@@ -465,7 +485,7 @@ public class ReplicationApplyIntegrationTests
         }
 
         Assert.That(entries.Count, Is.GreaterThanOrEqualTo(expectedMin),
-            $"Expected at least {expectedMin} captured WAL records for index tree '{indexTree}'.");
+            $"Expected at least {expectedMin} shipped WAL records for index tree '{indexTree}'.");
 
         foreach (var entry in entries)
         {

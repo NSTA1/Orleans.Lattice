@@ -51,7 +51,6 @@ public partial class ShardedReplogSinkTests
             factory,
             monitor,
             new FakeReplicationTopology(peerArr),
-            new LocalVectorClockCache(factory),
             NullLogger<ShardedReplogSink>.Instance);
         return (sink, factory, shippers);
     }
@@ -66,7 +65,7 @@ public partial class ShardedReplogSinkTests
             topologyPeers: new[] { "site-b" },
             optionsPeers: Array.Empty<string>());
 
-        await sink.WriteAsync(MakeEntry("orders", "k"), CancellationToken.None);
+        await sink.WriteAsync("orders", CancellationToken.None);
         await Task.Yield();
         await Task.Delay(20);
 
@@ -84,7 +83,7 @@ public partial class ShardedReplogSinkTests
             topologyPeers: Array.Empty<string>(),
             optionsPeers: new[] { "site-b" });
 
-        await sink.WriteAsync(MakeEntry("orders", "k"), CancellationToken.None);
+        await sink.WriteAsync("orders", CancellationToken.None);
         await Task.Yield();
         await Task.Delay(20);
 
@@ -100,7 +99,7 @@ public partial class ShardedReplogSinkTests
             topologyPeers: new[] { "site-c" },
             optionsPeers: new[] { "site-b" });
 
-        await sink.WriteAsync(MakeEntry("orders", "k"), CancellationToken.None);
+        await sink.WriteAsync("orders", CancellationToken.None);
         await Task.Yield();
         await Task.Delay(20);
 
@@ -137,12 +136,11 @@ public partial class ShardedReplogSinkTests
             factory,
             monitor,
             topology,
-            new LocalVectorClockCache(factory),
             NullLogger<ShardedReplogSink>.Instance);
 
         topology.EmitAdded("site-b");
 
-        await sink.WriteAsync(MakeEntry("orders", "k"), CancellationToken.None);
+        await sink.WriteAsync("orders", CancellationToken.None);
         await Task.Yield();
         await Task.Delay(20);
 

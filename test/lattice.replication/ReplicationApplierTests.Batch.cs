@@ -541,7 +541,6 @@ public partial class ReplicationApplierTests
             hwms[treeId] = hwm;
         }
 
-        var cache = new LocalVectorClockCache(factory);
         var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
         var options = new LatticeReplicationOptions
         {
@@ -551,7 +550,7 @@ public partial class ReplicationApplierTests
         monitor.CurrentValue.Returns(options);
         monitor.Get(Arg.Any<string>()).Returns(options);
 
-        var applier = new ReplicationApplier(factory, monitor, cache);
+        var applier = new ReplicationApplier(factory, monitor);
         return (applier, factory, applies, hwms);
     }
 

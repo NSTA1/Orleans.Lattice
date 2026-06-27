@@ -233,7 +233,6 @@ internal sealed class MultiSiteClusterFixture
             _appliers[i] = new ReplicationApplier(
                 _sites[i].Client,
                 options,
-                new LocalVectorClockCache(_sites[i].Client),
                 crdtShapes: siloShapes,
                 logger: null,
                 peerStats: _peerStats[i]);
