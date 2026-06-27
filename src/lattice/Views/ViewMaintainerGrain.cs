@@ -4,6 +4,7 @@ using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
+using Orleans.Lattice.Wal;
 using Orleans.Runtime;
 using Orleans.Timers;
 
@@ -36,6 +37,7 @@ internal sealed partial class ViewMaintainerGrain(
     ILogger<ViewMaintainerGrain> logger,
     IViewCatalog catalog,
     ICommitLogReader commitLogReader,
+    IWalSubscriber subscriber,
     IWalCursorRegistry cursorRegistry,
     LatticeOptionsResolver optionsResolver,
     IOptionsMonitor<LatticeViewOptions> viewOptions,
@@ -244,81 +246,47 @@ internal sealed partial class ViewMaintainerGrain(
         batchSize = ApplyBackpressureBatchScaling(sourceTreeId, batchSize, options);
         var partitions = await optionsResolver.GetWalPartitionsAsync(sourceTreeId);
 
-        // Fall-off-log guard: if the oldest still-readable offset has advanced
-        // past our next-to-read position, the entries we need were trimmed and we
-        // must rebuild from current source state rather than tail-replay.
-        for (var partition = 0; partition < partitions; partition++)
-        {
-            var checkpoint = state.State.AppliedOffsets.GetValueOrDefault(partition, -1);
-            var tail = await commitLogReader.GetTailOffsetAsync(sourceTreeId, partition, cancellationToken);
-            if (tail > checkpoint + 1)
-            {
-                logger.LogWarning(
-                    "View '{ViewName}' fell off the WAL on partition {Partition} (tail {Tail} > checkpoint {Checkpoint}); rebuilding.",
-                    ViewName, partition, tail, checkpoint);
-                await RebuildAsync(cancellationToken);
-                return 0;
-            }
-        }
-
+        // Tail the source WAL through the shared subscriber: the cursored read,
+        // fall-off-log detection, dynamic shard onboarding and back-pressure all
+        // live in one place. The handler classifies each surfaced entry into an
+        // ordinary projection apply or an atomic-batch stage; the async apply,
+        // checkpoint persist and cursor report run below after the pass returns.
+        // PinWal is false because the maintainer reports its own richer cursor
+        // (highest applied plus the staging blocked-floor) after the flush.
         var collected = new List<ViewWrite>();
-        var advancedOffsets = new Dictionary<int, long>();
-        var highest = state.State.HighestAppliedTimestamp;
         var completedTransactions = new List<Guid>();
-        long backlogRead = 0;
-
-        for (var partition = 0; partition < partitions; partition++)
-        {
-            var checkpoint = state.State.AppliedOffsets.GetValueOrDefault(partition, -1);
-            var lastOffset = checkpoint;
-            var readThisPartition = 0;
-
-            await foreach (var (offset, mutation) in commitLogReader
-                .ReadAsync(sourceTreeId, partition, checkpoint, cancellationToken)
-                )
+        var handler = new ViewDrainHandler(
+            this,
+            mutation =>
             {
-                lastOffset = offset;
-                readThisPartition++;
-                backlogRead++;
-
-                switch (Classify(mutation, out var terminalCommit, out var terminalAbort))
+                foreach (var write in registration.Projection!.Project(mutation))
                 {
-                    case StagingDisposition.Apply:
-                        RecordOrdinaryOverStagedKey(mutation);
-                        foreach (var write in registration.Projection!.Project(mutation))
-                        {
-                            collected.Add(write);
-                        }
-
-                        break;
-
-                    case StagingDisposition.Stage:
-                        HandleStagingEntry(mutation, partition, offset, terminalCommit, terminalAbort, completedTransactions);
-                        break;
-
-                    case StagingDisposition.Skip:
-                    default:
-                        break;
+                    collected.Add(write);
                 }
+            },
+            completedTransactions);
 
-                // Advance the consumed-HLC high-water mark for every entry read
-                // past, applicable or not. It pins WAL GC to what has been
-                // consumed and is the position the read-your-writes barrier waits
-                // on, so a skipped maintenance / transaction-terminal entry at the
-                // source head must not leave it stuck below a non-applicable head.
-                if (mutation.Timestamp > highest)
-                {
-                    highest = mutation.Timestamp;
-                }
+        var drainContext = new WalSubscriptionContext(sourceTreeId, ConsumerId, partitions, state.State.AppliedOffsets)
+        {
+            HighestApplied = state.State.HighestAppliedTimestamp,
+            BatchSize = batchSize,
+            MaintenancePolicy = WalMaintenancePolicy.Skip,
+            PinWal = false,
+        };
 
-                if (readThisPartition >= batchSize)
-                {
-                    break;
-                }
-            }
-
-            advancedOffsets[partition] = lastOffset;
+        var drain = await subscriber.DrainAsync(drainContext, handler, cancellationToken);
+        if (drain.FellOffLog)
+        {
+            logger.LogWarning(
+                "View '{ViewName}' fell off the WAL on source '{SourceTree}'; rebuilding.",
+                ViewName, sourceTreeId);
+            await RebuildAsync(cancellationToken);
+            return 0;
         }
+
+        var advancedOffsets = new Dictionary<int, long>(drain.AdvancedOffsets);
+        var highest = drain.HighestTimestamp;
+        var backlogRead = drain.EntriesRead;
 
         // Bounded-buffer / retention backstop: if staging would grow without
         // bound or an un-terminated batch can no longer be held under the WAL

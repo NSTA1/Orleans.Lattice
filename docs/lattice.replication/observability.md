@@ -4,7 +4,7 @@
 
 - **Per-peer gauges** - `entries_behind`, `bytes_behind`, `ship_in_flight`, `consecutive_errors`, `last_contact_seconds`. Owned by `ReplicationPeerStats`. Tagged `tree` + `peer`. The `consecutive_errors` and `last_contact_seconds` gauges are **bidirectional** and additionally carry a `direction` tag (`outbound` from the local sender's ship loop, `inbound` from the local receiver's apply loop). `entries_behind`, `bytes_behind`, and `ship_in_flight` remain outbound-only (the receiver does not track a per-peer backlog into itself, nor does it pipeline into itself).
 - **Per-operation histograms** - `ship.duration`, `apply.duration`, `apply.lag`, `apply.parallel_runs`, `ship.effective_batch_size`, `ship.ack_latency`. Reported in milliseconds except `apply.parallel_runs` (unit `{run}`) and `ship.effective_batch_size` (unit `{entry}`).
-- **Throughput counters** - `wal.entries_appended`, `wal.entries_shipped`. Used to compute growth-rate vs. ship-rate ratios. The companion `wal.entries_trimmed` counter belongs to the core library and is published on the `orleans.lattice` meter (`LatticeMetrics.WalEntriesTrimmed`); subscribe to both meters when correlating ship-rate against trim-rate. The `ship.redundant_payloads` / `ship.redundant_payload_bytes` counters (see below) ride on the same meter and emit in a default build because content-hash dedup measurement is on by default; the `coalesce.entries_elided` / `coalesce.bytes_elided` / `coalesce.deltas_merged` counters likewise emit by default because pre-ship coalescing is on by default. Each set falls silent only when its option (`ContentHashDedupEnabled` / `PreShipCoalescingEnabled`) is explicitly set to `false`.
+- **Throughput counters** - `wal.entries_shipped`. Counts entries the producer durably ships to each peer; correlate it against WAL retention / GC to confirm the sender keeps pace with the log. The companion `wal.entries_trimmed` counter belongs to the core library and is published on the `orleans.lattice` meter (`LatticeMetrics.WalEntriesTrimmed`); subscribe to both meters when correlating ship-rate against trim-rate. The `ship.redundant_payloads` / `ship.redundant_payload_bytes` counters (see below) ride on the same meter and emit in a default build because content-hash dedup measurement is on by default; the `coalesce.entries_elided` / `coalesce.bytes_elided` / `coalesce.deltas_merged` counters likewise emit by default because pre-ship coalescing is on by default. Each set falls silent only when its option (`ContentHashDedupEnabled` / `PreShipCoalescingEnabled`) is explicitly set to `false`.
 - **DLQ counters** - `dead_letter.enqueued`, `dead_letter.removed`. Tagged `tree` + `reason`.
 
 ## Replication-lag histogram (`apply.lag`)
@@ -65,16 +65,15 @@ The histogram is untagged: the measurement describes the batch as a whole, which
 
 Operators use the distribution to confirm parallel apply is actually engaging under multi-tree load (the `p50` rising above `1` after raising `ApplyMaxParallelRuns`) and to correlate the achieved parallelism against `apply.lag` and `apply.duration`. Independence is enforced at the tree granularity: distinct trees apply concurrently, while runs that share a tree stay sequential so the per-tree causal-apply buffer, shadow-forward dedupe cache, per-origin FIFO, and per-origin high-water-mark monotonicity hold exactly as in the sequential path. See [the batch-apply section of replication-apply.md](replication-apply.md) for the full independence model.
 
-## Growth-rate vs. ship-rate (`wal.entries_appended` / `wal.entries_shipped`)
+## Ship-rate (`wal.entries_shipped`)
 
-The two counters are deliberately a pair:
+The producer no longer emits a commit-time append counter: a commit reaches the per-shard write-ahead log exactly once, via the leaf commit-log writer, and the per-`(tree, peer)` shipper tails that log in the background. Ship progress is therefore observed directly through the ship counter and correlated against WAL retention / GC.
 
 | Counter | Tags | Recorded |
 |---|---|---|
-| `orleans.lattice.replication.wal.entries_appended` | `tree` | After a successful WAL append at the `ShardedReplogSink` seam - counts entries the producer durably committed to the local WAL. A throwing append does **not** contribute. |
 | `orleans.lattice.replication.wal.entries_shipped` | `tree`, `peer` | After a successful Push acknowledgement at the gRPC transport. Incremented by the count of entries inside the acknowledged envelope; a heartbeat / keep-alive (zero-entry) batch contributes zero. |
 
-Operators monitor `rate(wal_entries_appended) / rate(wal_entries_shipped)` per tree-peer pair. Steady-state replication keeps the ratio close to `1`. A persistently rising ratio indicates the local WAL is growing faster than the sender can ship, which is the signal the min-acked-cursor WAL GC predicate and a future health check both consume.
+Operators monitor `rate(wal_entries_shipped)` per tree-peer pair against the WAL's growth and trim signals (`wal.entries_trimmed`, plus the configured retention window). A ship rate that persistently lags the WAL's growth means the local log is accumulating faster than the sender can drain it, which is the signal the min-acked-cursor WAL GC predicate and a future health check both consume.
 
 ## DLQ enqueue-reason classification
 

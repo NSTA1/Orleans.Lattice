@@ -372,9 +372,9 @@ internal sealed class GrpcPushTransport : IReplicationTransport, IReplicationDig
             outcome = "ok";
 
             // Count successfully shipped entries on ack. An empty
-            // (heartbeat / keep-alive) batch contributes zero. Pairs
-            // with WalEntriesAppended on the producer side so operators
-            // can compute the growth-rate vs. ship-rate ratio.
+            // (heartbeat / keep-alive) batch contributes zero. This is
+            // the producer-side ship-rate signal; the log-tailing
+            // shipper is the sole driver of outbound entries.
             if (entryCount > 0)
             {
                 LatticeReplicationMetrics.WalEntriesShipped.Add(

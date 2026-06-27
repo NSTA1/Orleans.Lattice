@@ -48,7 +48,7 @@
           "type": "prometheus",
           "uid": "${DS_PROMETHEUS}"
         },
-        "query": "label_values(orleans_lattice_replication_wal_entries_appended_total, tree)",
+        "query": "label_values(orleans_lattice_replication_wal_entries_shipped_total, tree)",
         "includeAll": true,
         "multi": true,
         "refresh": 2,
@@ -78,7 +78,7 @@
           "type": "prometheus",
           "uid": "${DS_PROMETHEUS}"
         },
-        "query": "label_values(orleans_lattice_replication_wal_entries_appended_total, cluster)",
+        "query": "label_values(orleans_lattice_replication_wal_entries_shipped_total, cluster)",
         "includeAll": true,
         "multi": true,
         "refresh": 2,
@@ -93,7 +93,7 @@
           "type": "prometheus",
           "uid": "${DS_PROMETHEUS}"
         },
-        "query": "label_values(orleans_lattice_replication_wal_entries_appended_total, instance)",
+        "query": "label_values(orleans_lattice_replication_wal_entries_shipped_total, instance)",
         "includeAll": true,
         "multi": true,
         "refresh": 2,
@@ -274,11 +274,6 @@
         "overrides": []
       },
       "targets": [
-        {
-          "refId": "A",
-          "expr": "sum(rate(orleans_lattice_replication_wal_entries_appended_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
-          "legendFormat": "appended"
-        },
         {
           "refId": "S",
           "expr": "sum(rate(orleans_lattice_replication_wal_entries_shipped_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
@@ -1445,6 +1440,19 @@
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "sum by (tree, peer, reason) (rate(orleans_lattice_replication_ship_wire_version_down_stamp_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{reason}} {{tree}} -> {{peer}}" }
+      ]
+    },
+    {
+      "id": 60,
+      "title": "Log-tailing producer: leaf WAL append vs ship rate (ops/s)",
+      "description": "Throughput of the log-first replication producer. appended = entries committed to the leaf write-ahead log by WalCommitLogWriter (orleans.lattice.wal.shard.dispatch.entries), which is now the sole appender; the replication sink no longer performs a redundant second WAL append. shipped = entries the shipper drained from that same WAL and sent to peers (orleans.lattice.replication.wal.entries_shipped). In steady state the two series track each other; a sustained gap (appended outpacing shipped) is the log-tailing producer falling behind the WAL it tails - cross-check with per-peer entries-behind and fell-off-log.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 155 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(orleans_lattice_wal_shard_dispatch_entries_sum{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "appended (leaf WAL)" },
+        { "refId": "S", "expr": "sum(rate(orleans_lattice_replication_wal_entries_shipped_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "shipped" }
       ]
     }
   ]

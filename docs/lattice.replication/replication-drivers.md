@@ -6,7 +6,7 @@ WAL garbage collector, and the fall-off-the-log detector - into a running
 end-to-end pipeline. Without these drivers, calling `AddLatticeReplication`
 yields the seam set but emits nothing on the wire and trims nothing from
 disk: every metric on `LatticeReplicationMetrics` other than
-`wal.entries_appended` and `dead_letter.*` stays at zero.
+`dead_letter.*` stays at zero.
 
 The drivers are wired automatically when the host calls
 `siloBuilder.AddLatticeReplication(...)`. There is no separate registration
@@ -139,7 +139,7 @@ are currently reachable. Every one of them reads
 | Consumer | Source it reads | Effect of a topology change |
 |---|---|---|
 | `ReplicationDriverActivationService` (startup pass + runtime adds) | `CurrentPeers` at startup + `Subscribe(...)` for the silo's lifetime | On `Added`, activates one `IReplicationShipperGrain` per replicated tree under a retry-with-backoff loop. No silo restart required. |
-| `ShardedReplogSink` (doorbell fan-out per WAL append) | `CurrentPeers` (live read per append) | The next WAL append rings doorbells for exactly the current snapshot. A peer added 1 ms ago is rung; a peer removed 1 ms ago is not. |
+| `ShardedReplogSink` (doorbell fan-out per commit) | `CurrentPeers` (live read per commit) | The next commit rings doorbells for exactly the current snapshot. A peer added 1 ms ago is rung; a peer removed 1 ms ago is not. |
 | `ReplicationMaintenanceGrain.ProbeFallOffAsync` (per-cadence fall-off probe) | `CurrentPeers` (live read per cadence tick) | The next cadence tick probes exactly the current snapshot - a removed peer is dropped from the probe set; an added peer joins it on the next tick. |
 | `ReplicationShipperGrain` (per-peer pump) | The grain key it was activated under - neither topology nor options is re-read | The shipper is bound to a specific `(tree, peer)` for its activation lifetime. See *Shipper-lifetime asymmetry* below. |
 
@@ -179,11 +179,11 @@ empty topology rather than a surprising re-emergence of a stale list.
 ##### Lifecycle rules
 
 1. **Add (peer appears in topology).** The activation service activates
-   one shipper per replicated tree. The next WAL append rings the new
+   one shipper per replicated tree. The next commit rings the new
    shipper's doorbell. The next fall-off cadence tick probes the new
    peer.
 2. **Remove (peer disappears from topology).** The doorbell loop stops
-   ringing the removed peer on the next WAL append. The next fall-off
+   ringing the removed peer on the next commit. The next fall-off
    cadence tick excludes it from the probe set. The activation service
    does *not* tear down the existing shipper - see the asymmetry rule
    below.
@@ -272,10 +272,18 @@ the backoff budget.
 
 ### Doorbell
 
+The shipper grain is the log-first replication producer: it tails the
+single per-shard leaf write-ahead log (the leaf commit-log writer is the
+sole WAL appender) from a durable per-partition cursor and is the only
+ship driver. The commit-time `ShardedReplogSink` does not append to the
+WAL and does not ship; it is reduced to a low-latency nudge that advances
+the producer-side local vector clock cache for local-origin entries and
+rings shipper doorbells so the background tailing loop drains immediately.
+
 In addition to the phase timer, the shipper exposes
 `OnDoorbellAsync(CancellationToken)`. The producer-side `ShardedReplogSink`
-rings the doorbell after every successful WAL append for the affected
-`(tree, peer)` activations, so steady-state ship latency is sub-second
+rings the doorbell after every commit for the affected
+`(tree, peer)` activations, so steady-state ship latency is sub-second.
 The doorbell is
 best-effort - a missed call only delays the next ship by one timer tick (default 100 ms).
 
@@ -644,7 +652,6 @@ shows which driver is the source of each.
 
 | Metric | Source | When it fires |
 |---|---|---|
-| `wal.entries_appended` | (already wired by `ShardedReplogSink`) | Successful WAL append. |
 | `wal.entries_shipped` | Shipper grain via `IReplicationTransport.SendAsync` | Outbound batch acknowledged. |
 | `wal.entries_trimmed` (on the core `orleans.lattice` meter, not `orleans.lattice.replication` - see `LatticeMetrics.WalEntriesTrimmed`) | Maintenance grain GC pass | GC trim removed at least one entry. |
 | `ship.duration` | Shipper grain via `IReplicationTransport.SendAsync` | Every send call (success or failure). |

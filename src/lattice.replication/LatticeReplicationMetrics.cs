@@ -259,26 +259,7 @@ public static class LatticeReplicationMetrics
         Meter.CreateHistogram<double>("orleans.lattice.replication.apply.lag", unit: "ms",
             description: "Receiver-side replication lag at successful apply, tagged by tree and peer.");
 
-    // --- Throughput counters (replog growth vs. ship rate) ----------------------
-
-    /// <summary>
-    /// Counter of <see cref="WalRecord"/> records appended to the
-    /// per-tree write-ahead log on the local cluster. Incremented once
-    /// per successful append at the
-    /// <see cref="ShardedReplogSink"/> seam - i.e. counts entries that
-    /// have committed durably onto the WAL, not entries the producer
-    /// merely attempted to capture. Tagged by <see cref="TagTree"/>.
-    /// <para>
-    /// Pairs with <see cref="WalEntriesShipped"/> to surface the
-    /// "replog growth-rate vs. ship-rate" ratio operators monitor for
-    /// back-pressure: a steady-state replicating peer keeps the two
-    /// counters tracking each other; a stalled or overwhelmed receiver
-    /// shows growth outpacing ship.
-    /// </para>
-    /// </summary>
-    public static readonly Counter<long> WalEntriesAppended =
-        Meter.CreateCounter<long>("orleans.lattice.replication.wal.entries_appended", unit: "{entry}",
-            description: "Replog entries committed to the local WAL, tagged by tree.");
+    // --- Throughput counters (ship rate) ----------------------
 
     /// <summary>
     /// Counter of <see cref="WalRecord"/> records the local sender
@@ -784,11 +765,6 @@ public static class LatticeReplicationMetrics
     /// the string.
     /// </summary>
     public const string ApplyDurationName = "orleans.lattice.replication.apply.duration";
-
-    /// <summary>
-    /// Canonical name of the <see cref="WalEntriesAppended"/> counter.
-    /// </summary>
-    public const string WalEntriesAppendedName = "orleans.lattice.replication.wal.entries_appended";
 
     /// <summary>
     /// Canonical name of the <see cref="WalEntriesShipped"/> counter.

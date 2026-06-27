@@ -19,11 +19,11 @@ them is internal machinery the host never wires by hand.
 flowchart LR
     subgraph "Cluster A (producer)"
         Leaf[Leaf commit]
-        Leaf -->|"step 1: wal"| Wal[(Replication WAL)]
+        Leaf -->|"step 1: append (commit-log writer)"| Wal[(Per-shard WAL)]
         Leaf -->|"step 2: apply"| Proj[(Leaf projection)]
-        Leaf -->|"step 3: observe"| Capture[IMutationObserver]
-        Capture -->|"record: op + key + value + HLC + origin + mode"| Log[(Per-shard WAL)]
-        Log -->|"IChangeFeed cursor, batched"| Ship[Per-peer shipper]
+        Leaf -->|"step 3: observe (nudge)"| Capture[IMutationObserver]
+        Wal -->|"IChangeFeed cursor, tailed + batched"| Ship[Per-peer shipper]
+        Capture -.->|"advance local VC + ring doorbell: drain now"| Ship
         Ship --> Transport[IReplicationTransport<br/>in-process / gRPC]
     end
 
@@ -31,18 +31,22 @@ flowchart LR
         Transport --> Apply[IReplicationApplier]
         Apply --> LeafB[Leaf commit]
         LeafB -->|"merge under source HLC + origin"| ProjB[(Leaf projection)]
-        LeafB -.->|"capture sees foreign origin and does not re-ship"| CaptureB[IMutationObserver]
+        LeafB -.->|"shipper cycle-break drops foreign origin, never re-ships"| CaptureB[IMutationObserver]
     end
 ```
 
-1. **Commit-time capture (`IMutationObserver`).** Every leaf commit on the
+1. **Commit-time WAL append (`ICommitLogWriter`) and replication nudge (`IMutationObserver`).** Every leaf commit on the
    producing cluster runs the core `wal -> apply -> observe` pipeline. The
-   replication subsystem attaches to the `observe` step, so each captured record
-   describes a mutation that is already durably committed. The capture call is
-   awaited inline with the originating `SetAsync` / `DeleteAsync`, so a capture
-   failure surfaces to the caller rather than silently dropping a change.
+   `wal` step is the durable capture: the leaf's commit-log writer is the single
+   WAL appender, writing each mutation to the per-shard log before the originating
+   `SetAsync` / `DeleteAsync` reports success, so an append failure surfaces to the
+   caller rather than silently dropping a change. The replication subsystem attaches
+   to the `observe` step only as a low-latency nudge - it advances the producer-side
+   local vector clock cache and rings the per-peer shipper doorbells; it performs no
+   second WAL write and is best-effort.
 
-2. **Per-shard replication WAL.** Captured records are appended to a per-tree,
+2. **Per-shard replication WAL.** Each commit is appended by the leaf's commit-log
+   writer to a per-tree,
    per-shard write-ahead log addressed by a deterministic hash of the key. The
    WAL is the single source of truth for replication: shipping, snapshotting,
    and recovery all read from it, never from the primary tree. The WAL grain
@@ -55,8 +59,12 @@ flowchart LR
    cursor and origin, and merges in HLC-ascending order. See
    [`change-feed.md`](change-feed.md).
 
-4. **Shipping.** A per-peer outbound worker streams batches to each configured
-   peer, advancing a durable resume cursor as acknowledgements arrive. Redundant
+4. **Shipping.** A per-`(tree, peer)` outbound worker - the log-first replication
+   producer - tails the WAL from a durable per-partition cursor and streams batches
+   to each configured
+   peer, advancing the resume cursor as acknowledgements arrive. It is the sole ship
+   driver; the commit-time observer does not ship, it only rings the worker's doorbell
+   so it drains immediately instead of waiting for its next timer tick. Redundant
    per-key versions are coalesced off the wire before shipping, and the framing
    tail is compressed; both are convergent transforms over what the ship loop
    reads, never a mutation of the durable WAL. The efficiency posture is
@@ -90,16 +98,19 @@ flowchart LR
 
 ## Invariants the pipeline preserves
 
-1. **Capture is atomic with the local commit.** Capture runs in the `observe`
-   step of the leaf commit, after the write is durable, so a captured record
-   always describes a committed mutation. The capture call is awaited inline; a
-   capture-side failure surfaces to the original writer.
+1. **The WAL append is atomic with the local commit.** The leaf's commit-log
+   writer appends to the per-shard WAL in the `wal` step of the leaf commit,
+   before the write reports success, so a recorded entry always describes a
+   committed mutation and an append failure surfaces to the original writer. The
+   commit-time replication nudge in the later `observe` step is best-effort and
+   never blocks or fails the commit.
 
 2. **Origin metadata rides through verbatim.** The authoring cluster stamps each
    record with its configured `LatticeReplicationOptions.ClusterId`, and the
-   receiver applies under that same origin. This is what breaks cycles: the
-   receiver's own capture seam sees the foreign origin and does not re-ship the
-   write back toward its source, so a write replicated into and back out of a
+   receiver applies under that same origin. This is what breaks cycles: when the
+   receiver's shipper tails its own WAL, the producer-side cycle-break filter
+   skips any entry whose origin matches the destination peer, so a write
+   replicated into and back out of a
    peer never loops.
 
 3. **Source HLCs are preserved on the receiver.** Apply does not advance the
@@ -128,7 +139,7 @@ flowchart LR
 ## Relationship to the core library
 
 The only contact surfaces between the core library and the replication
-subsystem are `IMutationObserver` (commit-time capture) and `IReplicationApplier`
+subsystem are `IMutationObserver` (commit-time nudge) and `IReplicationApplier`
 (receiver-side merge), both first-class public extension points. The
 single-cluster and multi-cluster code paths are identical up to the point where
 the transport carries a batch across a network boundary; there is no

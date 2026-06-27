@@ -25,7 +25,6 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-095](https://github.com/NSTA1/Orleans.Lattice/issues/664) - Orleans.Lattice.GrainIndex: reminder-driven background backfill
 - [F-096](https://github.com/NSTA1/Orleans.Lattice/issues/665) - Orleans.Lattice.GrainIndex: observability (OTel metrics & IGrainIndexAdmin)
 - [F-097](https://github.com/NSTA1/Orleans.Lattice/issues/666) - Orleans.Lattice.GrainIndex: docs, sample & end-to-end convergence tests
-- [F-107](https://github.com/NSTA1/Orleans.Lattice/issues/795) - Reusable log-tailing WAL subscriber abstraction; migrate the replication producer from the inline mutation observer to a log-first delivery model
 
 ### Shipped
 
@@ -116,6 +115,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-104](https://github.com/NSTA1/Orleans.Lattice/issues/778) - Atomic value-plus-flag-membership coupling for tag indexes: additively honour `SetValueWithTags(...).Atomic()` under flag merge modes (per-entry saga deltas) so it no longer silently downgrades to eventual coupling
 - [F-105](https://github.com/NSTA1/Orleans.Lattice/issues/780) - Public generic CRDT-in-saga builder API: let any typed CRDT mutation ride a cross-tree atomic write (genericise F-104's per-entry delta carry)
 - [F-106](https://github.com/NSTA1/Orleans.Lattice/issues/794) - Asynchronous materialised views: WAL-consumer-driven, eventually-consistent filter/re-project and aggregation views over a source tree, derived locally per cluster
+- [F-107](https://github.com/NSTA1/Orleans.Lattice/issues/795) - Reusable log-tailing WAL subscriber abstraction; migrate the replication producer from the inline mutation observer to a log-first delivery model
 - [F-108](https://github.com/NSTA1/Orleans.Lattice/issues/797) - Extend lazy CRDT row materialisation to the durable writer path (delta-only WAL) so production apply allocation drops from O(state) to O(delta)
 - [F-109](https://github.com/NSTA1/Orleans.Lattice/issues/798) - Lazy CRDT post-merge row materialisation on the writerless apply path + growing-state apply microbench
 - [F-110](https://github.com/NSTA1/Orleans.Lattice/issues/836) - Orleans.Lattice.Api.State: optional gRPC add-on that lets external clients query, observe, and subscribe to a cluster's tree state and metadata (trees, structure, entries, views) for a tree-explorer dashboard and a later MCP surface, registered via `AddLatticeStateApi(...)`

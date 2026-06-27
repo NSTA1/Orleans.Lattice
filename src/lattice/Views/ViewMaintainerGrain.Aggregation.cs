@@ -1,5 +1,6 @@
 using System.Diagnostics.Metrics;
 using Microsoft.Extensions.Logging;
+using Orleans.Lattice.Wal;
 
 namespace Orleans.Lattice.Views;
 
@@ -46,73 +47,44 @@ internal sealed partial class ViewMaintainerGrain
         batchSize = ApplyBackpressureBatchScaling(sourceTreeId, batchSize, options);
         var partitions = await optionsResolver.GetWalPartitionsAsync(sourceTreeId);
 
-        // Fall-off-log guard: trimmed entries force a rebuild from current source.
-        for (var partition = 0; partition < partitions; partition++)
-        {
-            var checkpoint = state.State.AppliedOffsets.GetValueOrDefault(partition, -1);
-            var tail = await commitLogReader.GetTailOffsetAsync(sourceTreeId, partition, cancellationToken);
-            if (tail > checkpoint + 1)
-            {
-                logger.LogWarning(
-                    "Aggregation view '{ViewName}' fell off the WAL on partition {Partition} (tail {Tail} > checkpoint {Checkpoint}); rebuilding.",
-                    ViewName, partition, tail, checkpoint);
-                await RebuildAsync(cancellationToken);
-                return 0;
-            }
-        }
-
+        // Tail the source WAL through the shared subscriber (identical mechanics
+        // to the filter path); the handler folds each applicable entry into the
+        // contribution buffer and stages atomic-batch members. PinWal is false:
+        // the maintainer reports its own cursor after the fold below.
         var contributions = new List<AggregationContribution>();
-        var advancedOffsets = new Dictionary<int, long>();
-        var highest = state.State.HighestAppliedTimestamp;
         var completedTransactions = new List<Guid>();
-        long backlogRead = 0;
-
-        for (var partition = 0; partition < partitions; partition++)
-        {
-            var checkpoint = state.State.AppliedOffsets.GetValueOrDefault(partition, -1);
-            var lastOffset = checkpoint;
-            var readThisPartition = 0;
-
-            await foreach (var (offset, mutation) in commitLogReader
-                .ReadAsync(sourceTreeId, partition, checkpoint, cancellationToken))
+        var handler = new ViewDrainHandler(
+            this,
+            mutation =>
             {
-                lastOffset = offset;
-                readThisPartition++;
-                backlogRead++;
-
-                switch (Classify(mutation, out var terminalCommit, out var terminalAbort))
+                foreach (var contribution in registration.AggregationProjection!.Project(mutation))
                 {
-                    case StagingDisposition.Apply:
-                        RecordOrdinaryOverStagedKey(mutation);
-                        foreach (var contribution in registration.AggregationProjection!.Project(mutation))
-                        {
-                            contributions.Add(contribution);
-                        }
-
-                        break;
-
-                    case StagingDisposition.Stage:
-                        HandleStagingEntry(mutation, partition, offset, terminalCommit, terminalAbort, completedTransactions);
-                        break;
-
-                    case StagingDisposition.Skip:
-                    default:
-                        break;
+                    contributions.Add(contribution);
                 }
+            },
+            completedTransactions);
 
-                if (mutation.Timestamp > highest)
-                {
-                    highest = mutation.Timestamp;
-                }
+        var drainContext = new WalSubscriptionContext(sourceTreeId, ConsumerId, partitions, state.State.AppliedOffsets)
+        {
+            HighestApplied = state.State.HighestAppliedTimestamp,
+            BatchSize = batchSize,
+            MaintenancePolicy = WalMaintenancePolicy.Skip,
+            PinWal = false,
+        };
 
-                if (readThisPartition >= batchSize)
-                {
-                    break;
-                }
-            }
-
-            advancedOffsets[partition] = lastOffset;
+        var drain = await subscriber.DrainAsync(drainContext, handler, cancellationToken);
+        if (drain.FellOffLog)
+        {
+            logger.LogWarning(
+                "Aggregation view '{ViewName}' fell off the WAL on source '{SourceTree}'; rebuilding.",
+                ViewName, sourceTreeId);
+            await RebuildAsync(cancellationToken);
+            return 0;
         }
+
+        var advancedOffsets = new Dictionary<int, long>(drain.AdvancedOffsets);
+        var highest = drain.HighestTimestamp;
+        var backlogRead = drain.EntriesRead;
 
         // Bounded-buffer / retention backstop, identical to the filter path.
         if (StagingBackstopTripped(options, await GetSourceWalRetentionAsync(sourceTreeId)))
