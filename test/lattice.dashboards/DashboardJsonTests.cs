@@ -21,7 +21,7 @@ namespace Orleans.Lattice.Dashboards.Tests;
 /// expected PromQL token forms) rather than reverse mapping (PromQL token
 /// to instrument name), because many instrument names embed underscores
 /// (for example <c>orleans.lattice.replication.apply.dependency_wait_ms</c>
-/// and <c>orleans.lattice.replication.wal.entries_appended</c>) and the
+/// and <c>orleans.lattice.replication.wal.entries_shipped</c>) and the
 /// reverse direction is fundamentally ambiguous once dot-separated
 /// segments and embedded-underscore segments are both translated to
 /// underscores by the OpenTelemetry Prometheus exporter.
