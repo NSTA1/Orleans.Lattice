@@ -241,9 +241,18 @@ internal sealed partial class ShardRootGrain
             RowBytes = rowBytes,
         };
 
-        var baselineGrain = grainFactory.GetGrain<ISnapshotBaselineStorageGrain>(
+        // Issue #916: seed the materialised baseline directly into the transient
+        // per-shard snapshot leaf the cursor will reach, in memory, instead of
+        // writing it to durable storage here. A snapshot that drains in a single
+        // page never touches the durable store at all (no capture-time write, no
+        // close-time delete). The leaf flushes the baseline to
+        // ISnapshotBaselineStorageGrain lazily, only once the owning cursor's
+        // first page returns HasMore = true (EnsurePersistedAsync), so any cursor
+        // that survives past page 1 still has a durable baseline before the
+        // client ever sees a continuation token.
+        var snapshotLeaf = grainFactory.GetGrain<ISnapshotLeafGrain>(
             SnapshotLeafGrain.BuildBaselineKey(TreeId, ShardIndex, token));
-        await baselineGrain.SaveAsync(baseline, cancellationToken);
+        await snapshotLeaf.SeedAsync(TreeId, ShardIndex, baseline, token, cancellationToken);
 
         return new SnapshotBaselineCaptureResult(capturedHead, materialised.Count);
     }

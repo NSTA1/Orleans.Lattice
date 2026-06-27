@@ -141,6 +141,109 @@ public sealed class SnapshotFrozenBaselineWalGcTests
                 + "restart the fold from zero.");
         });
     }
+
+    [Test]
+    public async Task Single_page_snapshot_serves_from_in_memory_seed_after_wal_prefix_trimmed()
+    {
+        // Lazy-persist (issue #916): a snapshot whose entire range fits in one
+        // page is served from the in-memory frozen baseline seeded at capture,
+        // with no durable baseline write. The correctness contract is unchanged
+        // even after the WAL prefix is trimmed: the in-memory seed is fully
+        // materialised and independent of the WAL.
+        var treeId = $"snap-lazy-single-{Guid.NewGuid():N}";
+        var tree = await _fixture.CreateTreeAsync(treeId);
+
+        const int keyCount = 40;
+        var expected = new Dictionary<string, string>(keyCount);
+        for (var i = 0; i < keyCount; i++)
+        {
+            var key = $"k-{i:D4}";
+            var value = $"v-{i}";
+            await tree.SetAsync(key, Bytes(value));
+            expected[key] = value;
+        }
+
+        var trimmed = await _fixture.AdvanceAndTrimWalAsync(treeId);
+        Assert.That(trimmed, Is.GreaterThan(0),
+            "The WAL GC must trim a non-empty prefix for this test to prove the in-memory seed is "
+            + "independent of the trimmed log.");
+
+        var cursorId = await tree.OpenSnapshotEntryCursorAsync();
+
+        // A page larger than the key set drains the whole snapshot in one call:
+        // HasMore must be false, so nothing is ever persisted durably.
+        var page = await tree.NextEntriesAsync(cursorId, keyCount + 10);
+        Assert.That(page.HasMore, Is.False,
+            "A page larger than the whole key set must drain the snapshot in a single page.");
+        await tree.CloseCursorAsync(cursorId);
+
+        var collectedByKey = page.Entries.ToDictionary(kv => kv.Key, kv => kv.Value);
+        Assert.Multiple(() =>
+        {
+            Assert.That(page.Entries.Select(kv => kv.Key), Is.EquivalentTo(expected.Keys),
+                "Single-page snapshot must surface every seeded key from the in-memory seed.");
+            foreach (var (key, value) in expected)
+            {
+                Assert.That(collectedByKey.ContainsKey(key), Is.True, $"Single-page snapshot dropped '{key}'.");
+                Assert.That(Encoding.UTF8.GetString(collectedByKey[key]), Is.EqualTo(value),
+                    $"Single-page snapshot returned a wrong value for '{key}'.");
+            }
+        });
+    }
+
+    [Test]
+    public async Task Multi_page_snapshot_is_stable_across_pages_after_wal_prefix_trimmed()
+    {
+        // Lazy-persist (issue #916): a multi-page snapshot flushes its frozen
+        // baselines durably the first time a page reports HasMore == true, then
+        // keeps serving the identical point-in-time view across every remaining
+        // page. Paging in tiny increments forces the persist trigger and proves
+        // the per-page view stays complete and duplicate-free.
+        var treeId = $"snap-lazy-multi-{Guid.NewGuid():N}";
+        var tree = await _fixture.CreateTreeAsync(treeId);
+
+        const int keyCount = 50;
+        var expected = new Dictionary<string, string>(keyCount);
+        for (var i = 0; i < keyCount; i++)
+        {
+            var key = $"k-{i:D4}";
+            var value = $"v-{i}";
+            await tree.SetAsync(key, Bytes(value));
+            expected[key] = value;
+        }
+
+        var trimmed = await _fixture.AdvanceAndTrimWalAsync(treeId);
+        Assert.That(trimmed, Is.GreaterThan(0));
+
+        var cursorId = await tree.OpenSnapshotEntryCursorAsync();
+        var collected = new List<KeyValuePair<string, byte[]>>();
+        var pageCount = 0;
+        while (true)
+        {
+            var page = await tree.NextEntriesAsync(cursorId, 7);
+            collected.AddRange(page.Entries);
+            pageCount++;
+            if (!page.HasMore) break;
+        }
+        await tree.CloseCursorAsync(cursorId);
+
+        Assert.That(pageCount, Is.GreaterThan(1),
+            "A 7-key page over 50 keys must span multiple pages to exercise the persist trigger.");
+
+        var collectedByKey = collected.ToDictionary(kv => kv.Key, kv => kv.Value);
+        Assert.Multiple(() =>
+        {
+            Assert.That(collected.Select(kv => kv.Key), Is.Unique,
+                "Multi-page snapshot must not surface duplicate keys across pages.");
+            Assert.That(collected.Select(kv => kv.Key), Is.EquivalentTo(expected.Keys),
+                "Multi-page snapshot must surface every seeded key across its pages.");
+            foreach (var (key, value) in expected)
+            {
+                Assert.That(Encoding.UTF8.GetString(collectedByKey[key]), Is.EqualTo(value),
+                    $"Multi-page snapshot returned a wrong value for '{key}'.");
+            }
+        });
+    }
 }
 
 /// <summary>

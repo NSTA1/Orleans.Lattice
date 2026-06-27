@@ -242,6 +242,14 @@ internal sealed partial class LatticeCursorGrain
         if (state.State.SnapshotCoordinate is not { } coord) return;
         if (coord.SnapshotBaselineToken == Guid.Empty) return;
 
+        // A single-page scan never flushed its baselines to durable storage (they
+        // lived only in the transient snapshot leaves' memory and are gone with
+        // the cursor), so there is nothing to delete and issuing a ClearAsync per
+        // shard would be pure write-amplification - exactly what issue #916
+        // removes. Only a cursor that paged past page 1 (and therefore set this
+        // flag while persisting) has durable rows to reclaim here.
+        if (!state.State.SnapshotBaselinePersisted) return;
+
         var treeId = state.State.TreeId;
         foreach (var shardIndex in coord.PerShardWalOffsets.Keys)
         {
@@ -258,6 +266,31 @@ internal sealed partial class LatticeCursorGrain
                     CursorKey, shardIndex);
             }
         }
+    }
+
+    /// <summary>
+    /// Durably flushes every per-shard frozen baseline this snapshot cursor
+    /// seeded in memory at open. Called the first time a page returns
+    /// <c>HasMore = true</c>, BEFORE the cursor's advanced position is persisted
+    /// and the page is returned, so the client only ever observes a continuation
+    /// token after every shard's baseline is durable (issue #916). This upholds
+    /// the failover-durability invariant for any cursor that survives past page
+    /// 1, while a single-page scan (which never reaches here) pays zero storage
+    /// writes. No-op for a legacy coordinate that carries no baseline token, or
+    /// once already persisted (idempotent and cheap on the leaf side).
+    /// </summary>
+    private async Task EnsureSnapshotBaselinesPersistedAsync(LatticeSnapshotCoordinate coord)
+    {
+        if (coord.SnapshotBaselineToken == Guid.Empty) return;
+
+        var shards = ResolvePerShardPerPartitionOffsets(coord);
+        var tasks = new List<Task>(shards.Count);
+        foreach (var (shardIdx, _) in shards)
+        {
+            var leaf = grainFactory.GetGrain<ISnapshotLeafGrain>(BuildSnapshotLeafKey(coord, shardIdx));
+            tasks.Add(leaf.EnsurePersistedAsync(default));
+        }
+        await Task.WhenAll(tasks);
     }
 
     /// <summary>
@@ -278,6 +311,7 @@ internal sealed partial class LatticeCursorGrain
         var hasMore = collected.Count >= pageSize && AnyShardHasRemaining(perShardLists, pageSize);
         var prevLastYieldedKey = state.State.LastYieldedKey;
         var prevPhase = state.State.Phase;
+        var prevPersisted = state.State.SnapshotBaselinePersisted;
         if (collected.Count > 0)
         {
             state.State.LastYieldedKey = collected[^1];
@@ -285,6 +319,15 @@ internal sealed partial class LatticeCursorGrain
         if (!hasMore)
         {
             state.State.Phase = LatticeCursorPhase.Exhausted;
+        }
+        else if (!state.State.SnapshotBaselinePersisted)
+        {
+            // The scan must survive past this page, so durably flush the frozen
+            // baselines the shard roots seeded in memory before the cursor's
+            // advance is persisted - the client must not see a continuation
+            // token whose baselines a failover could lose.
+            await EnsureSnapshotBaselinesPersistedAsync(coord);
+            state.State.SnapshotBaselinePersisted = true;
         }
         try
         {
@@ -294,6 +337,7 @@ internal sealed partial class LatticeCursorGrain
         {
             state.State.LastYieldedKey = prevLastYieldedKey;
             state.State.Phase = prevPhase;
+            state.State.SnapshotBaselinePersisted = prevPersisted;
             throw;
         }
         await TryReportSnapshotPinAsync();
@@ -320,6 +364,7 @@ internal sealed partial class LatticeCursorGrain
         var hasMore = collected.Count >= pageSize && AnyShardEntryHasRemaining(perShardLists, pageSize);
         var prevLastYieldedKey = state.State.LastYieldedKey;
         var prevPhase = state.State.Phase;
+        var prevPersisted = state.State.SnapshotBaselinePersisted;
         if (collected.Count > 0)
         {
             state.State.LastYieldedKey = collected[^1].Key;
@@ -327,6 +372,13 @@ internal sealed partial class LatticeCursorGrain
         if (!hasMore)
         {
             state.State.Phase = LatticeCursorPhase.Exhausted;
+        }
+        else if (!state.State.SnapshotBaselinePersisted)
+        {
+            // See NextSnapshotKeysAsync: flush the seeded baselines durably
+            // before the continuation token escapes to the client.
+            await EnsureSnapshotBaselinesPersistedAsync(coord);
+            state.State.SnapshotBaselinePersisted = true;
         }
         try
         {
@@ -336,6 +388,7 @@ internal sealed partial class LatticeCursorGrain
         {
             state.State.LastYieldedKey = prevLastYieldedKey;
             state.State.Phase = prevPhase;
+            state.State.SnapshotBaselinePersisted = prevPersisted;
             throw;
         }
         await TryReportSnapshotPinAsync();
@@ -604,11 +657,20 @@ internal sealed partial class LatticeCursorGrain
     }
 
     /// <summary>
-    /// Builds the deterministic per-shard snapshot-leaf grain key:
-    /// <c>{treeId}/{shardIndex}/{coordHash}</c>.
+    /// Builds the deterministic per-shard snapshot-leaf grain key. For a
+    /// frozen-baseline coordinate (non-empty
+    /// <see cref="LatticeSnapshotCoordinate.SnapshotBaselineToken"/>) this is
+    /// <c>{treeId}/{shardIndex}/{token:N}</c> - identical to the key the
+    /// shard-root capture seeds (issue #916), so the cursor reaches the very
+    /// activation that already holds the in-memory baseline. For a legacy
+    /// from-zero replay coordinate (empty token) it falls back to the
+    /// coordinate-hash key <c>{treeId}/{shardIndex}/{coordHash}</c>.
     /// </summary>
     private string BuildSnapshotLeafKey(LatticeSnapshotCoordinate coord, int shardIndex)
     {
+        if (coord.SnapshotBaselineToken != Guid.Empty)
+            return SnapshotLeafGrain.BuildBaselineKey(state.State.TreeId, shardIndex, coord.SnapshotBaselineToken);
+
         var hash = ComputeCoordinateHash(coord);
         return $"{state.State.TreeId}/{shardIndex}/{hash}";
     }

@@ -98,5 +98,21 @@ internal sealed class LatticeCursorState
     /// continues to serve the same snapshot view it opened with.
     /// </summary>
     [Id(7)] public LatticeSnapshotCoordinate? SnapshotCoordinate { get; set; }
+
+    /// <summary>
+    /// <see langword="true"/> once this snapshot cursor has durably persisted
+    /// its per-shard frozen baselines to the
+    /// <see cref="Grains.ISnapshotBaselineStorageGrain"/> store. The baselines
+    /// are seeded into the transient snapshot leaves in memory at open and are
+    /// only flushed to durable storage lazily, the first time a page returns
+    /// <see cref="LatticeCursorKeysPage.HasMore"/> = <see langword="true"/> (the
+    /// cursor must now survive past page 1 across a failover or idle eviction).
+    /// A cursor that drains in a single page never sets this flag, so its
+    /// close path can skip the durable baseline delete entirely - the
+    /// write-amplification fix of issue #916. <see langword="false"/> for
+    /// non-snapshot cursors and for snapshot cursors still serving from the
+    /// in-memory freeze.
+    /// </summary>
+    [Id(8)] public bool SnapshotBaselinePersisted { get; set; }
 }
 

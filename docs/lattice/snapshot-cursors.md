@@ -36,11 +36,13 @@ returning the cursor ID:
    own `(leaf_frontier, capturedHead]` WAL tail exactly once (CRDT folds
    are not idempotent, so each record is applied to a single leaf a
    single time). The per-leaf results are unioned into one fully
-   materialised per-shard projection and persisted durably to a new
-   `ISnapshotBaselineStorageGrain` keyed by
-   `{treeId}/{shardIndex}/{baselineToken:N}`. The uniform `capturedHead`
-   (each shard's per-partition WAL head, read after every leaf has
-   frozen) is the bound recorded on the coordinate.
+   materialised per-shard projection and **seeded in memory** into the
+   transient `ISnapshotLeafGrain` for that shard, keyed by
+   `{treeId}/{shardIndex}/{baselineToken:N}`. The seed is *not* written
+   durably at capture - see [Lazy baseline persistence](#lazy-baseline-persistence)
+   below. The uniform `capturedHead` (each shard's per-partition WAL
+   head, read after every leaf has frozen) is the bound recorded on the
+   coordinate.
 3. **Registry HLC capture.** The current `IWalCursorRegistry` snapshot
    HLC pins the WAL retention floor.
 
@@ -71,15 +73,46 @@ On every `NextKeysAsync` / `NextEntriesAsync` call, the cursor grain:
 1. Resolves the per-page sub-range from the cursor's persisted
    bookmark.
 2. Fans out to the per-shard transient `ISnapshotLeafGrain`s addressed
-   by `{treeId}/{shardIndex}/{coordinateHash}`. Each snapshot leaf seeds
-   its in-memory `SortedDictionary` once from its durable
-   `SnapshotShardBaseline` rows - through the same `IsKeyOwned`
-   donor-orphan / virtual-slot ownership filter the live read path uses -
-   and performs **no WAL replay**. A coordinate persisted before the
+   by `{treeId}/{shardIndex}/{baselineToken:N}`. Each snapshot leaf was
+   seeded in memory at capture from the materialised per-shard
+   projection. Pages are served straight from that in-memory baseline -
+   through the same `IsKeyOwned` donor-orphan / virtual-slot ownership
+   filter the live read path uses - with **no WAL replay**. If the leaf
+   was evicted and later reloads, it reloads from its durable baseline
+   row (written lazily; see below). A coordinate persisted before the
    frozen-baseline store existed (empty `SnapshotBaselineToken`) falls
    back to the legacy from-zero WAL replay for wire compatibility.
 3. Performs a k-way merge of the per-shard pages back into the
    cursor's scan order, advancing the persisted bookmark.
+
+## Lazy baseline persistence
+
+A snapshot whose entire range drains in a **single page** is the common
+case (small range, or a generous page size). For that case the durable
+baseline write at capture plus the durable delete at close are pure
+write-amplification: the snapshot never survives past the first page, so
+the in-memory seed is sufficient.
+
+The frozen baseline is therefore seeded **in memory** at capture and
+persisted **lazily**: the cursor flushes every shard's baseline durably
+(`ISnapshotLeafGrain.EnsurePersistedAsync`) the first time a page reports
+`HasMore == true`, *before* it returns that page or writes its
+continuation bookmark. The client only ever observes a continuation
+token after every shard baseline is durable, so any cursor that survives
+past page 1 - and can therefore fail over to another silo - is always
+backed by a durable baseline.
+
+| Outcome | Durable writes |
+|---|---|
+| Snapshot drains in one page (`HasMore == false`) | none - served from the in-memory seed, close skips the durable delete |
+| Snapshot spans multiple pages | one baseline write per shard on the first `HasMore == true` page, deleted at close |
+
+**Eviction before the first read.** Because nothing is persisted until
+the first multi-page boundary, a seeded leaf that idle-evicts *before its
+first page is read* loses the unread snapshot. The next read fails fast
+with `LatticeSnapshotExpiredException` (an `InvalidOperationException`),
+and the caller simply reopens the snapshot. This is an availability edge
+only - a wrong or partial point-in-time view is never returned.
 
 The snapshot leaves are activation-cached and idle-evict after
 `LatticeOptions.SnapshotLeafIdleTtl` (default 30 minutes). A
@@ -91,14 +124,30 @@ regardless of any WAL trimming that happened in the meantime.
 
 A snapshot cursor still registers a per-cursor WAL retention pin through
 `IWalCursorRegistry.ReportCursorAsync(...)` for the lifetime of the
-cursor. Because pages are served from the durable frozen baseline rather
-than the WAL, the pin is a defensive retention floor (and a diagnostic
-anchor) rather than a correctness dependency: even if the pinned prefix
-were trimmed, the already-captured baseline continues to serve the
-snapshot. The durable per-shard baselines are deleted when the cursor is
-closed (`CloseCursorAsync`) or evicted by the idle-TTL reminder; an
-interrupted delete leaves a baseline row keyed by a per-open token no
-other cursor reuses, reclaimable by storage GC.
+cursor. Because pages are served from the frozen baseline rather than the
+WAL, the pin is a defensive retention floor (and a diagnostic anchor)
+rather than a correctness dependency: even if the pinned prefix were
+trimmed, the already-captured baseline continues to serve the snapshot.
+Any durable per-shard baselines (written only once a snapshot spans
+multiple pages) are deleted when the cursor is closed
+(`CloseCursorAsync`) or evicted by the idle-TTL reminder; a single-page
+snapshot persists nothing and so deletes nothing.
+
+### Baseline TTL leak-guard
+
+A durable baseline is normally deleted at close, but an interrupted close
+(silo crash, lost client) can orphan a baseline row keyed by a per-open
+token no other cursor reuses. To bound that leak, every persisted
+baseline carries a sliding time-to-live governed by
+`LatticeOptions.SnapshotBaselineTtl` (default 6 hours; set to
+`Timeout.InfiniteTimeSpan` to disable). `SnapshotBaselineStorageGrain`
+arms a self-clearing Orleans reminder when a baseline is written and
+slides it forward while the snapshot is actively served, so a long-running
+scan keeps its baseline alive while an abandoned one is reclaimed once the
+TTL lapses. Both the slide on write and the serving leaf's keep-alive
+touch are throttled (no more than once per `SnapshotBaselineTtl / 2`,
+floored at one minute) so the reminder table is not rewritten on every
+page.
 
 ## Bounding the cost
 
