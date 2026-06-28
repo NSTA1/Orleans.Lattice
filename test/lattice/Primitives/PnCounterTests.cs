@@ -202,4 +202,58 @@ public class PnCounterTests
         var merged = PnCounter.Merge(r1, r2);
         Assert.That(merged.Value, Is.EqualTo(5));
     }
+
+    [Test]
+    public void Clone_copies_both_components_value_for_value()
+    {
+        var original = new PnCounter();
+        original.Increment("r1", 5);
+        original.Increment("r2", 7);
+        original.Decrement("r1", 2);
+        original.Decrement("r3", 4);
+
+        var clone = original.Clone();
+
+        Assert.That(clone.Value, Is.EqualTo(original.Value));
+        Assert.That(clone.Increments, Is.EquivalentTo(original.Increments));
+        Assert.That(clone.Decrements, Is.EquivalentTo(original.Decrements));
+    }
+
+    [Test]
+    public void Clone_of_empty_counter_is_bottom()
+    {
+        var clone = new PnCounter().Clone();
+
+        Assert.That(clone.IsBottom, Is.True);
+        Assert.That(clone.Value, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void Clone_is_a_deep_copy_mutating_clone_does_not_affect_original()
+    {
+        var original = new PnCounter();
+        original.Increment("r1", 5);
+        original.Decrement("r1", 2);
+
+        var clone = original.Clone();
+        clone.Increment("r1", 100);
+        clone.Decrement("r2", 50);
+
+        Assert.That(original.Increments["r1"], Is.EqualTo(5));
+        Assert.That(original.Decrements.ContainsKey("r2"), Is.False);
+        Assert.That(clone.Increments["r1"], Is.EqualTo(105));
+        Assert.That(clone.Decrements["r2"], Is.EqualTo(50));
+    }
+
+    [Test]
+    public void Clone_does_not_share_dictionary_references_with_original()
+    {
+        var original = new PnCounter();
+        original.Increment("r1", 1);
+
+        var clone = original.Clone();
+
+        Assert.That(clone.Increments, Is.Not.SameAs(original.Increments));
+        Assert.That(clone.Decrements, Is.Not.SameAs(original.Decrements));
+    }
 }

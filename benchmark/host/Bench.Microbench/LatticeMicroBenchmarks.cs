@@ -178,6 +178,37 @@ public class LatticeMicroBenchmarks
         return register;
     }
 
+    // ===== CRDT primitive merge instrument (PnCounter.Clone + MergeFrom) =====
+    // Two identity-stable PnCounter states representing concurrent activity
+    // from two different replicas, each carrying populated Increments /
+    // Decrements components (8 shared observed replicas + one own live
+    // entry per side). PnCounter.Merge clones the left side and folds the
+    // right in through MergeFrom; the clone is the entry-by-entry-vs-
+    // copy-constructor path this benchmark exists to measure. Both states are
+    // built once and never mutated (Merge does not touch its inputs), so the
+    // measured window isolates the merge algorithm's steady-state allocation.
+    // Surfaced as microbench_crdt_pncounter_merge_alloc_b.
+    private readonly PnCounter _pnCounterLeft = BuildPnCounter("replica-left", 8);
+    private readonly PnCounter _pnCounterRight = BuildPnCounter("replica-right", 8);
+
+    private static PnCounter BuildPnCounter(string liveReplica, int observedReplicas)
+    {
+        var counter = new PnCounter();
+        // Shared observed components: both sides have already recorded these
+        // replicas on both sides, so the clone presizes over a non-trivial
+        // pair of dictionaries (exactly the resize-grow churn the copy
+        // constructor eliminates) and the merge takes a real pointwise-max.
+        for (var i = 0; i < observedReplicas; i++)
+        {
+            counter.Increment($"obs-{i:D2}", 5);
+            counter.Decrement($"obs-{i:D2}", 2);
+        }
+        // The side's own live component. Neither side has observed the
+        // other's replica, so both survive the merge.
+        counter.Increment(liveReplica, 3);
+        return counter;
+    }
+
     // ===== CRDT grow-state apply instrument (O(state) re-serialise) =====
     // Per-N pre-seeded OrSet keys whose post-merge state holds ~N
     // dot-tagged elements. The CrdtApplyGrowstate benchmark applies a
@@ -1155,6 +1186,22 @@ public class LatticeMicroBenchmarks
     [Benchmark(Description = "Crdt mvregister merge")]
     public MvRegister CrdtMvRegisterMerge() =>
         MvRegister.Merge(_mvRegisterLeft, _mvRegisterRight);
+
+    /// <summary>
+    /// Single <see cref="PnCounter.Merge(PnCounter, PnCounter)"/> of two
+    /// identity-stable concurrent-replica states pre-built in the field
+    /// initialisers. <see cref="PnCounter.Merge"/> clones the left side and
+    /// folds the right in through <c>MergeFrom</c>; the clone uses the
+    /// dictionary copy constructor, presizing each backing store to the
+    /// source count exactly and bulk-copying rather than paying the
+    /// incremental <c>Resize()</c> grows the previous entry-by-entry fill
+    /// incurred. The inputs are never mutated, so the measured per-iteration
+    /// allocation is the steady-state cost of one counter merge. Surfaced as
+    /// <c>microbench_crdt_pncounter_merge_alloc_b</c>.
+    /// </summary>
+    [Benchmark(Description = "Crdt pncounter merge")]
+    public PnCounter CrdtPnCounterMerge() =>
+        PnCounter.Merge(_pnCounterLeft, _pnCounterRight);
 
     /// <summary>
     /// Single <see cref="ILattice.ApplyCrdtDeltaAsync(string, LatticeMergeMode, byte[], CancellationToken)"/>
