@@ -189,6 +189,32 @@ internal sealed partial class LatticeGrain
             new KeyValuePair<string, object?>(LatticeMetrics.TagConfig, "publish_events"));
     }
 
+    public async Task SetHistoryRetentionAsync(HistoryRetentionMode? mode, TimeSpan? window, CancellationToken cancellationToken = default)
+    {
+        ThrowIfSystemTree();
+        cancellationToken.ThrowIfCancellationRequested();
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        await registry.SetHistoryRetentionAsync(TreeId, mode, window);
+        LatticeMetrics.ConfigChanged.Add(1,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagConfig, "history_retention"));
+    }
+
+    public async Task<HistoryRetentionSettings> GetHistoryRetentionAsync(CancellationToken cancellationToken = default)
+    {
+        ThrowIfSystemTree();
+        cancellationToken.ThrowIfCancellationRequested();
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var entry = await registry.GetEntryAsync(TreeId);
+        return new HistoryRetentionSettings
+        {
+            Mode = entry?.HistoryRetentionMode ?? HistoryRetentionMode.MetadataOnly,
+            Window = entry?.HistoryRetentionWindowTicks is { } ticks
+                ? TimeSpan.FromTicks(ticks)
+                : TimeSpan.Zero,
+        };
+    }
+
     public async Task MergeAsync(string sourceTreeId, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();

@@ -43,6 +43,7 @@ internal sealed partial class ViewMaintainerGrain(
     IOptionsMonitor<LatticeViewOptions> viewOptions,
     IOptionsMonitor<LatticeOptions> latticeOptions,
     IWalSaturationSignal? saturationSignal,
+    HistoryRowCodec historyRowCodec,
     [PersistentState("view-checkpoint", LatticeOptions.StorageProviderName)]
     IPersistentState<ViewCheckpointState> state)
     : IGrainBase, IRemindable, IViewMaintainerGrain
@@ -144,14 +145,29 @@ internal sealed partial class ViewMaintainerGrain(
             period: TimeSpan.FromMinutes(1));
 
         // A projection-version change means the view's logic is no longer the one
-        // that built the persisted state; rebuild from current source state.
+        // that built the persisted state; rebuild from current source state. An
+        // accumulative (history) view is the exception: its tree is an append-only
+        // log, so a version change adopts the new version forward and keeps the
+        // existing rows rather than wiping and rebuilding (only an explicit
+        // operator RebuildAsync clears it).
         if (!string.IsNullOrEmpty(state.State.ProjectionVersion)
             && !string.Equals(state.State.ProjectionVersion, registration.ProjectionVersion, StringComparison.Ordinal))
         {
-            logger.LogInformation(
-                "View '{ViewName}' projection version changed ({Old} -> {New}); rebuilding.",
-                ViewName, state.State.ProjectionVersion, registration.ProjectionVersion);
-            await RebuildAsync(cancellationToken);
+            if (registration.Accumulative)
+            {
+                logger.LogInformation(
+                    "Accumulative view '{ViewName}' projection version changed ({Old} -> {New}); adopting forward and keeping existing rows.",
+                    ViewName, state.State.ProjectionVersion, registration.ProjectionVersion);
+                state.State.ProjectionVersion = registration.ProjectionVersion;
+                await state.WriteStateAsync();
+            }
+            else
+            {
+                logger.LogInformation(
+                    "View '{ViewName}' projection version changed ({Old} -> {New}); rebuilding.",
+                    ViewName, state.State.ProjectionVersion, registration.ProjectionVersion);
+                await RebuildAsync(cancellationToken);
+            }
         }
         else if (string.IsNullOrEmpty(state.State.ProjectionVersion))
         {
@@ -301,16 +317,36 @@ internal sealed partial class ViewMaintainerGrain(
 
         // A re-keyed unconstrained range delete cannot be lowered to exact view
         // writes; the projection emits a RangeReconcile asking us to re-derive the
-        // affected range from source. The conservative, always-correct realisation
-        // is a full rebuild (it reads current source state and re-advances the
-        // checkpoint to head), so do that and let the rebuild own this pass.
+        // affected range from source. On an ordinary view the conservative,
+        // always-correct realisation is a full rebuild (it reads current source
+        // state and re-advances the checkpoint to head). An accumulative (history)
+        // view never auto-rebuilds: in an append-only log a range delete does not
+        // erase the fact that prior values existed, so each RangeReconcile is
+        // recorded as a range-tombstone marker row and draining continues.
         if (collected.Exists(static w => w.Kind == ViewWriteKind.RangeReconcile))
         {
-            logger.LogInformation(
-                "View '{ViewName}' observed an unconstrained range delete on a re-keyed projection; rebuilding to reconcile the affected range.",
-                ViewName);
-            await RebuildAsync(cancellationToken);
-            return 0;
+            if (registration.Accumulative)
+            {
+                ConvertRangeReconcilesToMarkers(collected);
+            }
+            else
+            {
+                logger.LogInformation(
+                    "View '{ViewName}' observed an unconstrained range delete on a re-keyed projection; rebuilding to reconcile the affected range.",
+                    ViewName);
+                await RebuildAsync(cancellationToken);
+                return 0;
+            }
+        }
+
+        // On an accumulative view the retention mode (read once from the source
+        // tree's live registry override) shapes each revision row before it is
+        // applied: it stamps the age-bound expiry and strips LWW value bytes to
+        // metadata per the active mode. CRDT-delta, delete and range-tombstone rows
+        // keep their payload.
+        if (registration.Accumulative && collected.Count > 0)
+        {
+            await ShapeHistoryWritesAsync(collected, sourceTreeId);
         }
 
         var viewTree = grainFactory.GetGrain<ILattice>(ViewTreeId);

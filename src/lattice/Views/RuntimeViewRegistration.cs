@@ -44,4 +44,12 @@ internal sealed record RuntimeViewRegistration
     /// <summary>Whether this view is an aggregation (grouped reduce) view.</summary>
     [Id(4)]
     public bool IsAggregation { get; init; }
+
+    /// <summary>
+    /// Whether this view is append-only (a durable history substrate). Restored
+    /// onto the re-hydrated <see cref="ViewRegistration"/> so the maintainer keeps
+    /// its non-destructive guard behaviour across a silo restart.
+    /// </summary>
+    [Id(5)]
+    public bool Accumulative { get; init; }
 }

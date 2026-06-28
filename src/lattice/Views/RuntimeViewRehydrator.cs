@@ -62,7 +62,8 @@ internal static class RuntimeViewRehydrator
         }
         else if (instance is ILatticeViewProjection projection)
         {
-            return new ViewRegistration(record.ViewName, record.SourceTreeId, projection);
+            return new ViewRegistration(
+                record.ViewName, record.SourceTreeId, projection, Accumulative: record.Accumulative);
         }
 
         logger.LogWarning(

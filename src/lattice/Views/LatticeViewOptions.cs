@@ -104,6 +104,14 @@ public sealed class LatticeViewOptions
     public const int DefaultSaturatedPauseMs = 500;
 
     /// <summary>
+    /// Default <see cref="HistoryHybridFullValueWindow"/> (5 minutes): under
+    /// <see cref="HistoryRetentionMode.Hybrid"/>, a revision keeps its full value
+    /// bytes only while its apply-time age is within this window; older revisions
+    /// are shaped to metadata.
+    /// </summary>
+    public static readonly TimeSpan DefaultHistoryHybridFullValueWindow = TimeSpan.FromMinutes(5);
+
+    /// <summary>
     /// Maximum number of source WAL entries the maintainer reads and applies in a
     /// single drain pass per source shard before checkpointing. Must be positive;
     /// the registered validator rejects a non-positive value at first resolve.
@@ -298,4 +306,16 @@ public sealed class LatticeViewOptions
     /// to <see cref="DefaultSaturatedPauseMs"/>.
     /// </summary>
     public int SaturatedPauseMs { get; set; } = DefaultSaturatedPauseMs;
+
+    /// <summary>
+    /// Under <see cref="HistoryRetentionMode.Hybrid"/> on a durable history view,
+    /// the maximum apply-time age of a revision for which the maintainer keeps the
+    /// full LWW value bytes; an older revision (drained from a backlog or a
+    /// catch-up replay) is shaped to metadata only. Bounds full-byte storage to the
+    /// recent tail while keeping an unbounded metadata-only timeline behind it.
+    /// A non-positive value degrades hybrid to metadata-only. Ignored by the other
+    /// retention modes and by non-history views. Defaults to
+    /// <see cref="DefaultHistoryHybridFullValueWindow"/>.
+    /// </summary>
+    public TimeSpan HistoryHybridFullValueWindow { get; set; } = DefaultHistoryHybridFullValueWindow;
 }

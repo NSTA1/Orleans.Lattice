@@ -20,12 +20,20 @@ public sealed class LatticeViewDefinition
     /// Must not be <see langword="null"/> or empty.
     /// </param>
     /// <param name="projection">The projection that maintains the view. Must not be <see langword="null"/>.</param>
-    public LatticeViewDefinition(string viewName, ILatticeViewProjection projection)
+    /// <param name="accumulative">
+    /// Whether the view is append-only (a durable history substrate). When
+    /// <see langword="true"/> the maintainer never auto-clears the view tree: a
+    /// projection-version mismatch adopts the new version forward instead of
+    /// wipe-and-rebuild, and an unconstrained range reconcile records a marker
+    /// instead of rebuilding. Defaults to <see langword="false"/>.
+    /// </param>
+    public LatticeViewDefinition(string viewName, ILatticeViewProjection projection, bool accumulative = false)
     {
         ArgumentException.ThrowIfNullOrEmpty(viewName);
         ArgumentNullException.ThrowIfNull(projection);
         ViewName = viewName;
         Projection = projection;
+        Accumulative = accumulative;
     }
 
     /// <summary>
@@ -62,4 +70,12 @@ public sealed class LatticeViewDefinition
     /// <see cref="Projection"/> and <see cref="AggregationProjection"/> is set.
     /// </summary>
     public ILatticeAggregationProjection? AggregationProjection { get; }
+
+    /// <summary>
+    /// Whether this view is append-only (a durable history substrate). When
+    /// <see langword="true"/> the maintainer never auto-clears the view tree;
+    /// only an explicit operator rebuild clears it. Always <see langword="false"/>
+    /// for an aggregation view.
+    /// </summary>
+    public bool Accumulative { get; }
 }

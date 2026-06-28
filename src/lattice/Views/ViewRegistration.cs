@@ -15,11 +15,20 @@ namespace Orleans.Lattice.Views;
 /// <param name="SourceTreeId">The source tree id whose WAL the view tails.</param>
 /// <param name="Projection">The filter / re-project projection, or <see langword="null"/> for an aggregation view.</param>
 /// <param name="AggregationProjection">The aggregation projection, or <see langword="null"/> for a filter / re-project view.</param>
+/// <param name="Accumulative">
+/// Whether the view is append-only (a durable history substrate). When
+/// <see langword="true"/> the maintainer never auto-clears the view tree: a
+/// projection-version mismatch adopts the new version forward instead of
+/// wipe-and-rebuild, and an unconstrained range reconcile records a marker
+/// instead of rebuilding. Only an explicit operator rebuild clears an
+/// accumulative view.
+/// </param>
 internal sealed record ViewRegistration(
     string ViewName,
     string SourceTreeId,
     ILatticeViewProjection? Projection,
-    ILatticeAggregationProjection? AggregationProjection = null)
+    ILatticeAggregationProjection? AggregationProjection = null,
+    bool Accumulative = false)
 {
     /// <summary>Whether this view is an aggregation (grouped reduce) view.</summary>
     public bool IsAggregation => AggregationProjection is not null;

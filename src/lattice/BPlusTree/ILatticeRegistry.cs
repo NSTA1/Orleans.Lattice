@@ -116,6 +116,24 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     Task SetPublishEventsAsync(string treeId, bool? enabled);
 
     /// <summary>
+    /// Sets or clears the per-tree durable-history retention override for
+    /// <paramref name="treeId"/> in one atomic upsert: the
+    /// <see cref="State.TreeRegistryEntry.HistoryRetentionMode"/> applied to LWW
+    /// value bytes and the age-bound
+    /// <see cref="State.TreeRegistryEntry.HistoryRetentionWindowTicks"/>. A
+    /// <see langword="null"/> argument clears that half of the override
+    /// independently (mode falls back to
+    /// <see cref="HistoryRetentionMode.MetadataOnly"/>; window falls back to no age
+    /// bound). The <paramref name="window"/> must be strictly positive when
+    /// supplied. Upserts the registry entry if the tree is not yet registered;
+    /// propagation to other activations is best-effort.
+    /// </summary>
+    /// <param name="treeId">The tree whose history retention is being configured.</param>
+    /// <param name="mode">The retention mode to pin, or <see langword="null"/> to clear it.</param>
+    /// <param name="window">The age bound to pin, or <see langword="null"/> to clear it.</param>
+    Task SetHistoryRetentionAsync(string treeId, HistoryRetentionMode? mode, TimeSpan? window);
+
+    /// <summary>
     /// Sets or clears the per-tree
     /// <see cref="State.TreeRegistryEntry.MaintainProjectionDigest"/>
     /// override for <paramref name="treeId"/>. Pass <c>true</c>/<c>false</c>

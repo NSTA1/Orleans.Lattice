@@ -502,6 +502,46 @@ public interface ILattice : IGrainWithStringKey
     Task SetPublishEventsEnabledAsync(bool? enabled, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Sets or clears this tree's durable-history retention policy: the
+    /// <see cref="HistoryRetentionMode"/> applied to LWW value bytes in history
+    /// revision rows and the age-bound <paramref name="window"/> after which a row
+    /// expires. Each argument is independent - pass <c>null</c> for
+    /// <paramref name="mode"/> to fall back to the default
+    /// <see cref="HistoryRetentionMode.MetadataOnly"/>, or <c>null</c> for
+    /// <paramref name="window"/> to remove the age bound. The override is persisted
+    /// on the tree's registry entry and survives silo restarts.
+    /// <para>
+    /// This configures retention only; it does not by itself create or remove the
+    /// history view. The retention policy is read by the view maintainer at drain
+    /// time and never trips a view rebuild, so a change is absorbed forward
+    /// (already-written rows keep their stamped shape; new rows adopt the new
+    /// policy). Propagation is best-effort, mirroring
+    /// <see cref="SetPublishEventsEnabledAsync"/>.
+    /// </para>
+    /// </summary>
+    /// <param name="mode">
+    /// The retention mode for LWW value bytes, or <c>null</c> to clear the override
+    /// (defaulting to <see cref="HistoryRetentionMode.MetadataOnly"/>).
+    /// </param>
+    /// <param name="window">
+    /// The age after which a revision row expires, or <c>null</c> for no age bound.
+    /// Must be strictly positive when supplied.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the registry write.</param>
+    Task SetHistoryRetentionAsync(HistoryRetentionMode? mode, TimeSpan? window, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns this tree's effective durable-history retention policy: the
+    /// resolved <see cref="HistoryRetentionMode"/> and the age-bound window (or
+    /// <see cref="TimeSpan.Zero"/> for no age bound). Reflects the persisted
+    /// per-tree override, falling back to the documented defaults
+    /// (<see cref="HistoryRetentionMode.MetadataOnly"/>, no age bound) when no
+    /// override is set.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the registry read.</param>
+    Task<HistoryRetentionSettings> GetHistoryRetentionAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Merges all entries from <paramref name="sourceTreeId"/> into this tree
     /// using LWW semantics, preserving original timestamps. For each key present
     /// in both trees, the entry with the higher <see cref="Orleans.Lattice.HybridLogicalClock"/>

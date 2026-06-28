@@ -307,6 +307,20 @@ internal sealed partial class ViewMaintainerGrain
         var highest = HybridLogicalClock.Zero;
         var aggregationApplier = registration.IsAggregation ? CreateAggregationApplier(shadowTree) : null;
 
+        // An accumulative (history) view shapes every rebuilt row under the source
+        // tree's live retention policy, exactly as the incremental drain does, so a
+        // rebuild (initial backfill, fall-off-log recovery, or an explicit operator
+        // rebuild) never stores unshaped value bytes. The policy and the apply clock
+        // are read once for the whole build.
+        HistoryRetentionPolicy historyPolicy = default;
+        var historyNowTicks = 0L;
+        if (registration.Accumulative)
+        {
+            historyPolicy = await optionsResolver
+                .GetHistoryRetentionAsync(sourceTreeId, Options.HistoryHybridFullValueWindow);
+            historyNowTicks = DateTime.UtcNow.Ticks;
+        }
+
         await foreach (var key in sourceTree.KeysAsync(cancellationToken: cancellationToken))
         {
             var versioned = await sourceTree.GetWithVersionAsync(key, cancellationToken);
@@ -334,6 +348,13 @@ internal sealed partial class ViewMaintainerGrain
                 foreach (var contribution in registration.AggregationProjection!.Project(synthetic))
                 {
                     await aggregationApplier.ApplyAsync(contribution, cancellationToken);
+                }
+            }
+            else if (registration.Accumulative)
+            {
+                foreach (var write in registration.Projection!.Project(synthetic))
+                {
+                    await ApplyAsync(shadowTree, ShapeHistoryWrite(write, historyPolicy, historyNowTicks), cancellationToken);
                 }
             }
             else

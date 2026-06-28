@@ -631,6 +631,16 @@ meter, each tagged with the view name:
 | `orleans.lattice.view.lag_budget_eviction` | Counter | Views force-evicted (WAL unpinned and rebuilt) for exceeding their `MaxLagBudget`. |
 | `orleans.lattice.view.source_backpressure` | Counter | Background drain passes that throttled themselves because the source tree was under WAL saturation back-pressure. Also tagged with the observed source regime (`throttled` / `saturated`). |
 
+## Durable per-key history
+
+A history view is an opt-in, append-only variant maintained on this same
+subsystem: an **accumulative** view whose projection re-keys every source mutation
+into a durable revision row at `{sourceKey}/{encodedHlc}`, so a key's full
+timeline survives independently of source WAL garbage collection. The accumulative
+flag suppresses the automatic version-change and range-delete rebuilds that would
+otherwise collapse the timeline, and per-tree retention modes bound the storage
+cost. See [Durable per-key history views](history-views.md).
+
 ## Limitations
 
 - **WAL provider required.** Views tail the commit log, so a WAL-backed lattice

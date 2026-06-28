@@ -138,4 +138,26 @@ internal sealed record TreeRegistryEntry
     /// stamps each change for fail-closed fencing.
     /// </summary>
     [Id(10)] public WalPlacementPin? WalPlacement { get; init; }
+
+    /// <summary>
+    /// Per-tree durable-history retention mode override, or <see langword="null"/>
+    /// (the default) to use <see cref="HistoryRetentionMode.MetadataOnly"/>. Read
+    /// by the view maintainer at drain time to shape each LWW history revision row
+    /// (full value, recent-hybrid, or metadata-only). Mutated at runtime through
+    /// <see cref="ILattice.SetHistoryRetentionAsync(HistoryRetentionMode?, System.TimeSpan?, CancellationToken)"/>;
+    /// propagation to other activations is best-effort (each resolve reads the
+    /// registry fresh). Kept out of the projection's code identity so a mode change
+    /// never trips a view rebuild.
+    /// </summary>
+    [Id(11)] public HistoryRetentionMode? HistoryRetentionMode { get; init; }
+
+    /// <summary>
+    /// Per-tree durable-history age bound in ticks: a history revision row written
+    /// while this is set expires that many ticks after it is drained. <c>null</c>
+    /// (the default) means no age bound - the timeline is retained until an
+    /// explicit rebuild. Set through the same runtime setter as
+    /// <see cref="HistoryRetentionMode"/> and validated to be strictly positive
+    /// when supplied.
+    /// </summary>
+    [Id(12)] public long? HistoryRetentionWindowTicks { get; init; }
 }
