@@ -18,6 +18,10 @@ Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.
 
 - **F-139 - State API entries now carry the CRDT shape.** `EntryRecord.CrdtShape` (returned by `ILatticeStateQuery.ScanEntriesAsync` / `GetEntryAsync` and across the gRPC binding) is no longer always `null`: it now reports the name of the tree's declared CRDT merge mode (for example `"OrSet"`) for a typed-CRDT tree, and stays `null` for an opaque last-writer-wins tree. The shape is sourced from the per-tree merge mode the system already tracks, so a consumer - the Explorer Data tab or any external dashboard - can tell a CRDT entry apart from raw bytes without decoding the value. No new wire field or alias; the existing `CrdtShape` slot is simply populated. See [`docs/lattice.api.state/surfaces.md`](docs/lattice.api.state/surfaces.md) (#951).
 
+### Fixed
+
+- **Cursor pages no longer pre-allocate an unbounded buffer from the caller-supplied `pageSize` (denial-of-service hardening).** The stateful cursor grain behind the public `ILattice.NextKeysAsync` / `NextEntriesAsync` (and the snapshot-isolated variants) sized each page's result buffer directly from the caller's requested `pageSize`. A request with a hostile or buggy `pageSize` (up to `int.MaxValue`) reserved gigabytes of list capacity before a single entry was read, throwing `OutOfMemoryException` and faulting the silo against an arbitrarily small or empty range. The up-front buffer capacity is now clamped to a fixed ceiling; a page is still filled by a streaming scan that stops after `pageSize` items, so paging semantics are unchanged (a legitimately large page still grows on demand and the returned page is still "up to pageSize") while the amplification is removed. Core-library fix in `Orleans.Lattice`; no public-API or wire-format change. (#965)
+
 ## [7.5.0] - 2026-06-27
 
 Coordinated minor release across the shipping package family (`Orleans.Lattice`, `Orleans.Lattice.Storage.AzureTable`, `Orleans.Lattice.Replication`, `Orleans.Lattice.Replication.Grpc`, `Orleans.Lattice.Dashboards`), all raised to `7.5.0` in lockstep on the minor digit.

@@ -48,6 +48,28 @@ internal sealed partial class LatticeCursorGrain(
     private const string IdleReminderName = "cursor-ttl";
 
     /// <summary>
+    /// Upper bound on the capacity reserved up-front for a single page's
+    /// result buffer. A page is filled by a streaming scan that stops after
+    /// <c>pageSize</c> items, so the realised result is always bounded by the
+    /// data actually present in the range; this cap governs only the
+    /// <i>pre-allocation</i>. It prevents a caller-supplied <c>pageSize</c>
+    /// (for example <see cref="int.MaxValue"/>) from reserving gigabytes of
+    /// list capacity against a small or empty range - an amplification
+    /// denial-of-service that could throw <see cref="OutOfMemoryException"/>
+    /// and fault the silo before a single entry is read. Paging semantics are
+    /// unchanged: a legitimately large page still grows the buffer on demand
+    /// as items are appended, and the returned page is still "up to pageSize".
+    /// </summary>
+    private const int MaxPageBufferPreallocation = 65_536;
+
+    /// <summary>
+    /// Safe initial capacity for a page result buffer: the caller's requested
+    /// <paramref name="pageSize"/> clamped to <see cref="MaxPageBufferPreallocation"/>.
+    /// </summary>
+    private static int PageBufferCapacity(int pageSize) =>
+        Math.Min(pageSize, MaxPageBufferPreallocation);
+
+    /// <summary>
     /// Stable consumer-id prefix for snapshot WAL pins. Pairs with the
     /// per-cursor id so a snapshot consumer is uniquely identifiable in
     /// <see cref="IWalCursorRegistry"/> snapshots and so a tree-wide
@@ -255,7 +277,7 @@ internal sealed partial class LatticeCursorGrain(
         var lattice = grainFactory.GetGrain<ILattice>(state.State.TreeId);
         var (effStart, effEnd) = ComputeEffectiveRange();
 
-        var collected = new List<string>(pageSize);
+        var collected = new List<string>(PageBufferCapacity(pageSize));
         var predicate = state.State.Spec.Predicate;
         using (BeginPointInTimeScopeIfNeeded())
         {
@@ -327,7 +349,7 @@ internal sealed partial class LatticeCursorGrain(
         var lattice = grainFactory.GetGrain<ILattice>(state.State.TreeId);
         var (effStart, effEnd) = ComputeEffectiveRange();
 
-        var collected = new List<KeyValuePair<string, byte[]>>(pageSize);
+        var collected = new List<KeyValuePair<string, byte[]>>(PageBufferCapacity(pageSize));
         var predicate = state.State.Spec.Predicate;
         using (BeginPointInTimeScopeIfNeeded())
         {
