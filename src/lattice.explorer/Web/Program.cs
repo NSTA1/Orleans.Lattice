@@ -71,26 +71,10 @@ app.MapStaticAssets();
 
 // Server-side sign-in / sign-out endpoints. The login form posts here so the
 // password is handled on the server and stored in the encrypted cookie rather
-// than round-tripped over the circuit. SameSite=Strict on the credential cookie
-// mitigates cross-site posts, so antiforgery is disabled on these form posts.
-app.MapPost("/auth/login", async (HttpContext context, IExplorerAuthSession auth) =>
-{
-    var form = await context.Request.ReadFormAsync();
-    var username = form["username"].ToString();
-    var password = form["password"].ToString();
-    if (!string.IsNullOrWhiteSpace(username))
-    {
-        await auth.LoginAsync(username.Trim(), password);
-    }
-
-    return Results.Redirect("/");
-}).DisableAntiforgery();
-
-app.MapPost("/auth/logout", async (IExplorerAuthSession auth) =>
-{
-    await auth.LogoutAsync();
-    return Results.Redirect("/");
-}).DisableAntiforgery();
+// than round-tripped over the circuit. Antiforgery is validated on each POST
+// (the forms embed a RequestVerificationToken) to block login / logout CSRF
+// against the shared process-global auth session.
+app.MapExplorerAuthEndpoints();
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode()

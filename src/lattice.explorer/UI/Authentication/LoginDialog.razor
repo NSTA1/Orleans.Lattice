@@ -12,6 +12,7 @@
     @if (_options.UseServerFormPost)
     {
         <form method="post" action="@_options.LoginPath">
+            <AntiforgeryToken />
             <label class="explorer-config-field">
                 <span>Username</span>
                 <input type="text" name="username" autocomplete="username" />
