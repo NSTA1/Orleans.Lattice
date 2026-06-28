@@ -36,6 +36,38 @@ public partial class WalShardGrainTests
     }
 
     [Test]
+    public async Task AppendBatchAsync_throws_on_oversized_entry_count()
+    {
+        // Defence-in-depth: a pathologically large batch must be rejected
+        // before the grain pre-allocates per-entry working arrays sized to
+        // entries.Count, so a caller cannot drive an unbounded up-front
+        // allocation. The synthetic list reports an oversized Count but is
+        // never indexed (the guard throws first), so the test stays cheap.
+        var grain = await CreateGrainAsync();
+        var oversized = new OversizedWalRecordList((1 << 20) + 1);
+
+        Assert.That(
+            async () => await grain.AppendBatchAsync(oversized, CancellationToken.None),
+            Throws.InstanceOf<ArgumentOutOfRangeException>());
+    }
+
+    // Reports a large Count without materialising any entries. Indexing it
+    // throws, proving the size guard rejects the batch before the grain
+    // touches a single element.
+    private sealed class OversizedWalRecordList(int count) : IReadOnlyList<WalRecord>
+    {
+        public int Count => count;
+
+        public WalRecord this[int index] =>
+            throw new InvalidOperationException("Oversized batch must be rejected before indexing.");
+
+        public IEnumerator<WalRecord> GetEnumerator() =>
+            throw new InvalidOperationException("Oversized batch must be rejected before enumeration.");
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    [Test]
     public async Task AppendBatchAsync_returns_dense_ascending_offsets_starting_at_zero()
     {
         var grain = await CreateGrainAsync();
