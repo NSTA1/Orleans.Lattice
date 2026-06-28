@@ -83,11 +83,13 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`MaxConcurrentDrains`](#maxconcurrentdrains) | `int` | 4 | Yes |
 | [`MaxConcurrentMigrations`](#maxconcurrentmigrations) | `int` | 4 | Yes |
 | [`MaxCursorSnapshotPinTtl`](#maxcursorsnapshotpinttl) | `TimeSpan` | 7 days | Yes |
+| [`MaxKeyLength`](#maxkeylength) | `int?` | `null` (unbounded) | Yes |
 | [`MaxLeafEntriesBeforeForcedCompaction`](tombstone-compaction.md) | `int` | 0 (disabled) | Yes |
 | [`MaxLeafReplayEntries`](#maxleafreplayentries) | `int` | 10 000 | Yes |
 | [`MaxPinnedSagaDecisions`](#maxpinnedsagadecisions) | `int` | 100 000 | Yes |
 | [`MaxScanRetries`](#maxscanretries) | `int` | 3 | Yes |
 | [`MaxSnapshotReplayEntries`](snapshot-cursors.md) | `long` | 10 000 000 | Yes |
+| [`MaxValueSizeBytes`](#maxvaluesizebytes) | `int?` | `null` (unbounded) | Yes |
 | [`MinTombstoneRatioForCompaction`](tombstone-compaction.md) | `double` | 0.0 (disabled) | Yes |
 | [`PrefetchEntriesScan`](#prefetchentriesscan) | `bool` | `false` | Yes |
 | [`PrefetchKeysScan`](#prefetchkeysscan) | `bool` | `false` | Yes |
@@ -339,6 +341,16 @@ The cap exists so a forgotten point-in-time cursor cannot stall registry-tombsto
 
 This option can be changed freely at any time.
 
+### `MaxKeyLength`
+
+Optional upper bound on the number of characters in a key accepted by the `ILattice` write surface - `SetAsync` (and its TTL overload), `SetIfVersionAsync`, `GetOrSetAsync`, `SetManyAsync`, and the CRDT delta-apply path (default: `null`, unbounded). When set, a write whose key is longer than this bound is rejected with an `ArgumentException` before any shard work, so a client cannot drive unbounded heap growth by writing pathologically large keys. Leaving it `null` preserves the historical unbounded behaviour; when set it must be at least `1`.
+
+```csharp verify
+siloBuilder.ConfigureLattice(o => o.MaxKeyLength = 1024);
+```
+
+This option can be changed freely at any time. It is enforced per write, so a new value takes effect on the next write.
+
 ### `MaxLeafReplayEntries`
 
 Maximum number of WAL entries a cold leaf is permitted to replay against its projection at activation time before the leaf falls back to the snapshot-then-WAL recovery path indicated by `ProjectionRebuildPolicy` (default: 10 000). Bounds activation latency for a leaf whose persisted checkpoint has fallen far behind the WAL head; see [Projection Rebuild](projection-rebuild.md) for the full trigger set.
@@ -362,6 +374,16 @@ This option can be changed freely at any time.
 Maximum bounded-retry passes for `CountAsync`, `ScanKeysAsync`, and `ScanEntriesAsync` when the shard topology changes mid-scan (default: 3). If the topology keeps mutating after every reconciliation step, the scan throws `InvalidOperationException` rather than returning a silently incomplete result. Under the default split rate-limits (`MaxConcurrentAutoSplits = 2`, `HotShardSplitCooldown = 2 minutes`), exhausting 3 retries is not a realistic operational concern. See [Scan reliability](api.md#scan-reliability).
 
 This option can be changed freely at any time.
+
+### `MaxValueSizeBytes`
+
+Optional upper bound, in bytes, on the size of a value (or CRDT delta) accepted by the `ILattice` write surface - `SetAsync` (and its TTL overload), `SetIfVersionAsync`, `GetOrSetAsync`, `SetManyAsync`, and the CRDT delta-apply path (default: `null`, unbounded). When set, a write whose value exceeds this many bytes is rejected with an `ArgumentException` before any shard work, so a client cannot drive unbounded heap growth by writing pathologically large values. Leaving it `null` preserves the historical unbounded behaviour; when set it must be at least `1`.
+
+```csharp verify
+siloBuilder.ConfigureLattice(o => o.MaxValueSizeBytes = 1024 * 1024);
+```
+
+This option can be changed freely at any time. It is enforced per write, so a new value takes effect on the next write.
 
 ### `PrefetchEntriesScan`
 

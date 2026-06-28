@@ -44,6 +44,33 @@ public class LatticeOptions
     public int? QueueCapacity { get; set; }
 
     /// <summary>
+    /// Optional upper bound on the number of characters in a key accepted by
+    /// the <see cref="ILattice"/> write surface (<see cref="ILattice.SetAsync(string, byte[], CancellationToken)"/>
+    /// and its TTL overload, <see cref="ILattice.SetIfVersionAsync"/>,
+    /// <see cref="ILattice.GetOrSetAsync"/>, <see cref="ILattice.SetManyAsync"/>,
+    /// and the CRDT delta-apply path). When set, a write whose key is longer
+    /// than this bound is rejected with an <see cref="ArgumentException"/>
+    /// before any shard work, so a client cannot drive unbounded heap growth
+    /// by writing pathologically large keys (memory-exhaustion DoS).
+    /// <see langword="null"/> (the default) leaves key length unbounded,
+    /// preserving the historical behaviour. When set it must be at least
+    /// <c>1</c>, enforced by the options validator.
+    /// </summary>
+    public int? MaxKeyLength { get; set; }
+
+    /// <summary>
+    /// Optional upper bound, in bytes, on the size of a value (or CRDT delta)
+    /// accepted by the <see cref="ILattice"/> write surface. When set, a write
+    /// whose value exceeds this many bytes is rejected with an
+    /// <see cref="ArgumentException"/> before any shard work, so a client
+    /// cannot drive unbounded heap growth by writing pathologically large
+    /// values (memory-exhaustion DoS). <see langword="null"/> (the default)
+    /// leaves value size unbounded, preserving the historical behaviour. When
+    /// set it must be at least <c>1</c>, enforced by the options validator.
+    /// </summary>
+    public int? MaxValueSizeBytes { get; set; }
+
+    /// <summary>
     /// How long a tombstone must exist before it is eligible for compaction.
     /// A grain reminder fires at this interval; tombstones older than this
     /// grace period are permanently removed. Set to <see cref="Timeout.InfiniteTimeSpan"/>
