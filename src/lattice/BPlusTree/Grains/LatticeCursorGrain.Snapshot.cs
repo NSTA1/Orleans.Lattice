@@ -305,7 +305,7 @@ internal sealed partial class LatticeCursorGrain
         var reverse = state.State.Spec.Reverse;
 
         var perShardLists = await FetchPerShardKeysAsync(coord, effStart, effEnd, pageSize, state.State.Spec.Predicate, reverse);
-        var collected = new List<string>(pageSize);
+        var collected = new List<string>(PageBufferCapacity(pageSize));
         MergeSortedKeyLists(perShardLists, reverse, pageSize, collected);
 
         var hasMore = collected.Count >= pageSize && AnyShardHasRemaining(perShardLists, pageSize);
@@ -358,7 +358,7 @@ internal sealed partial class LatticeCursorGrain
         var reverse = state.State.Spec.Reverse;
 
         var perShardLists = await FetchPerShardEntriesAsync(coord, effStart, effEnd, pageSize, state.State.Spec.Predicate, reverse);
-        var collected = new List<KeyValuePair<string, byte[]>>(pageSize);
+        var collected = new List<KeyValuePair<string, byte[]>>(PageBufferCapacity(pageSize));
         MergeSortedEntryLists(perShardLists, reverse, pageSize, collected);
 
         var hasMore = collected.Count >= pageSize && AnyShardEntryHasRemaining(perShardLists, pageSize);
