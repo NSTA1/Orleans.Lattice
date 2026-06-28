@@ -53,6 +53,18 @@ internal sealed class WalShardGrain(
     ILatticeOriginClusterIdResolver clusterIdResolver,
     IWalRecordEncoder encoder) : IWalShardGrain, IGrainBase
 {
+    /// <summary>
+    /// Upper bound on the number of <see cref="WalRecord"/> entries accepted by a
+    /// single <see cref="AppendBatchAsync"/> call. The method pre-allocates
+    /// per-entry working arrays sized to <c>entries.Count</c> before doing any
+    /// work, so an unbounded count would let a caller reserve arbitrarily large
+    /// arrays up front (memory-exhaustion risk). <c>IWalShardGrain</c> is an
+    /// internal grain reached only via the WAL/replication pipeline, so this is a
+    /// defence-in-depth guard; the ceiling is generous enough that no legitimate
+    /// coalesced batch from <see cref="WalCommitLogWriter"/> can reach it.
+    /// </summary>
+    private const int MaxAppendBatchEntries = 1 << 20;
+
     private string _treeId = "";
     private int _shardIndex;
     private IWalStorageProvider _provider = null!;
@@ -791,6 +803,18 @@ internal sealed class WalShardGrain(
         if (entries.Count == 0)
         {
             return Array.Empty<long>();
+        }
+
+        // Defence-in-depth: reject a pathologically large batch before
+        // pre-allocating the per-entry working arrays below, so a caller
+        // cannot drive an unbounded up-front allocation (OOM) by passing a
+        // huge entry count.
+        if (entries.Count > MaxAppendBatchEntries)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(entries),
+                entries.Count,
+                $"A single AppendBatchAsync call accepts at most {MaxAppendBatchEntries} entries.");
         }
 
         // If a previous flush in the chain failed, every subsequent
