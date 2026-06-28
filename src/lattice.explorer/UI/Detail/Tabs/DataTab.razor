@@ -499,6 +499,10 @@
         _rendered = null;
         _detailError = null;
         _detailLoading = true;
+
+        // Publish the inspected key for the History tab to reuse as its selection.
+        SessionStore.Set(DataSelection.SelectedKey(Selection.Id), key);
+
         StateHasChanged();
 
         try
