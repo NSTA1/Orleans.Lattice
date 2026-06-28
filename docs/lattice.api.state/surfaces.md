@@ -107,6 +107,8 @@ while (continuation is not null);
 
 `GetEntryAsync` returns the full record for a single key as an `EntryGetResponse`, including whether the key was found and the value when present.
 
+Every `EntryRecord` carries a `CrdtShape` tag: the name of the tree's declared CRDT merge mode (for example `"OrSet"`) when the tree is a typed CRDT, or `null` for an opaque last-writer-wins tree. The shape is the same for every entry on a tree because the merge mode is declared per tree, so a consumer can tell a CRDT entry apart from opaque bytes without decoding the value.
+
 ## Change observation
 
 `ObserveChangesAsync` subscribes to a tree's live mutation stream and yields a `StateChangeNotification` per mutation until the call is cancelled or the server ends the stream. Each notification carries the `TreeId`, the affected `Key`, and the change `Kind` (set, delete, or range delete). Set `IncludeMaintenance` on the request to also observe maintenance rewrites.

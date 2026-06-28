@@ -37,6 +37,21 @@ internal sealed class LatticeCallCountingFilter(LatticeCallCounter counter) : II
 }
 
 /// <summary>
+/// Test <see cref="ILatticeMergeModeResolver"/> that declares any tree whose id
+/// starts with <c>"orset"</c> as an <see cref="LatticeMergeMode.OrSet"/> tree
+/// and leaves every other tree undeclared (last-writer-wins). Lets the read
+/// facade observe a per-tree CRDT merge mode without standing up the full
+/// replication package.
+/// </summary>
+internal sealed class OrSetPrefixMergeModeResolver : ILatticeMergeModeResolver
+{
+    public LatticeMergeMode? Resolve(string treeId) =>
+        treeId.StartsWith("orset", StringComparison.Ordinal)
+            ? LatticeMergeMode.OrSet
+            : null;
+}
+
+/// <summary>
 /// Single-silo fixture that registers the core lattice, the state API, and a
 /// grain-call-counting filter, and pre-creates multi-shard trees via the
 /// registry. Shared by the read-facade integration tests.
@@ -97,6 +112,29 @@ internal sealed class StateQueryClusterFixture
         return tree;
     }
 
+    /// <summary>
+    /// Registers <paramref name="treeId"/> (declared as an OR-Set tree by the
+    /// fixture's merge-mode resolver) and writes one OR-Set element per key in
+    /// <paramref name="keys"/>, returning its grain reference.
+    /// </summary>
+    public async Task<ILattice> CreateOrSetTreeAsync(string treeId, params string[] keys)
+    {
+        var registry = Cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        await registry.RegisterAsync(treeId, new TreeRegistryEntry
+        {
+            MaxLeafKeys = MaxLeafKeys,
+            ShardCount = ShardCount,
+        });
+
+        var tree = Cluster.Client.GetGrain<ILattice>(treeId);
+        foreach (var key in keys)
+        {
+            await tree.OrSet(key).AddAsync(System.Text.Encoding.UTF8.GetBytes($"member-of-{key}"), "replica-a");
+        }
+
+        return tree;
+    }
+
     private sealed class SiloConfigurator : ISiloConfigurator
     {
         public void Configure(ISiloBuilder siloBuilder)
@@ -106,6 +144,7 @@ internal sealed class StateQueryClusterFixture
             siloBuilder.AddLatticeStateApi();
             siloBuilder.Services.AddSingleton<LatticeCallCounter>();
             siloBuilder.Services.AddSingleton<IIncomingGrainCallFilter, LatticeCallCountingFilter>();
+            siloBuilder.Services.AddSingleton<ILatticeMergeModeResolver, OrSetPrefixMergeModeResolver>();
         }
     }
 }

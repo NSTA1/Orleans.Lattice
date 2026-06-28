@@ -11,7 +11,7 @@ namespace Orleans.Lattice.Api.State.Tests;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
-public sealed class LatticeStateQueryIntegrationTests
+public sealed partial class LatticeStateQueryIntegrationTests
 {
     private readonly StateQueryClusterFixture _fixture = new();
 

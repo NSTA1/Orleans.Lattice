@@ -283,6 +283,36 @@ public class LatticeStateGrpcClientE2ETests
         }));
     }
 
+    [Test]
+    public async Task scan_and_get_preserve_crdt_shape_over_the_wire()
+    {
+        const string orsetTree = "orset-e2e-shape";
+        await _fixture.CreateOrSetTreeAsync(orsetTree, ShardCount, "alpha", "bravo", "charlie");
+
+        await using var host = await _fixture.CreateGrpcHostAsync();
+        var client = LatticeStateApiGrpcClient.Create(host.Channel.CreateCallInvoker(), host.Services);
+
+        // A paged scan over the OR-Set tree must carry the OrSet shape tag on
+        // every entry across the wire round-trip.
+        var entries = await ScanAllAsync(client, orsetTree);
+        Assert.That(entries, Has.Count.EqualTo(3));
+        Assert.That(entries.Select(e => e.CrdtShape),
+            Is.All.EqualTo("OrSet"),
+            "the CRDT shape tag must survive the gRPC scan round-trip");
+
+        // A single-entry get must preserve the same tag.
+        var detail = await client.GetEntryAsync(new EntryGetRequest { TreeId = orsetTree, Key = "alpha" });
+        Assert.That(detail.Status, Is.EqualTo(StateQueryStatus.Found));
+        Assert.That(detail.Entry!.CrdtShape, Is.EqualTo("OrSet"));
+
+        // An opaque last-writer-wins tree continues to report no shape.
+        await _fixture.CreatePopulatedTreeAsync("lww-e2e-shape", KeyCount, ShardCount);
+        var lww = await ScanAllAsync(client, "lww-e2e-shape");
+        Assert.That(lww, Is.Not.Empty);
+        Assert.That(lww.Select(e => e.CrdtShape), Is.All.Null,
+            "opaque LWW entries report no CRDT shape over the wire");
+    }
+
     private static async Task<List<EntryRecord>> ScanAllAsync(LatticeStateApiGrpcClient client, string treeId)
     {
         var all = new List<EntryRecord>();
