@@ -25,6 +25,15 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-095](https://github.com/NSTA1/Orleans.Lattice/issues/664) - Orleans.Lattice.GrainIndex: reminder-driven background backfill
 - [F-096](https://github.com/NSTA1/Orleans.Lattice/issues/665) - Orleans.Lattice.GrainIndex: observability (OTel metrics & IGrainIndexAdmin)
 - [F-097](https://github.com/NSTA1/Orleans.Lattice/issues/666) - Orleans.Lattice.GrainIndex: docs, sample & end-to-end convergence tests
+- [F-138](https://github.com/NSTA1/Orleans.Lattice/issues/950) - Change-history / revision timeline for keys (CRDT + LWW), Explorer + State API (epic)
+- [F-139](https://github.com/NSTA1/Orleans.Lattice/issues/951) - State API: surface the CRDT shape on entries (fix CrdtShape=null)
+- [F-140](https://github.com/NSTA1/Orleans.Lattice/issues/952) - Storage: read the retained WAL mutation window for a key
+- [F-141](https://github.com/NSTA1/Orleans.Lattice/issues/953) - Storage: opt-in durable, bounded per-key revision retention surviving WAL GC
+- [F-142](https://github.com/NSTA1/Orleans.Lattice/issues/954) - CRDT: element-level provenance decoding (OrSet dots to member change events)
+- [F-143](https://github.com/NSTA1/Orleans.Lattice/issues/955) - State API: GetEntryHistoryAsync endpoint (+ gRPC service/client + explorer passthrough)
+- [F-144](https://github.com/NSTA1/Orleans.Lattice/issues/956) - Orleans.Lattice.Explorer: History tab - per-key revision timeline + value diff
+- [F-145](https://github.com/NSTA1/Orleans.Lattice/issues/957) - Orleans.Lattice.Explorer: live follow mode for the History tab (ObserveChanges)
+- [F-146](https://github.com/NSTA1/Orleans.Lattice/issues/958) - Change-history sample + docs showcase (MultiSiteManufacturing + features.md sync)
 
 ### Shipped
 
