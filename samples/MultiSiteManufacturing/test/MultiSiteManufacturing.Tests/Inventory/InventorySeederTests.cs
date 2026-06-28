@@ -1,7 +1,10 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using MultiSiteManufacturing.Host;
 using MultiSiteManufacturing.Host.Domain;
 using MultiSiteManufacturing.Host.Inventory;
+using MultiSiteManufacturing.Host.Lattice;
 using MultiSiteManufacturing.Tests.Federation;
+using Orleans.Lattice;
 
 namespace MultiSiteManufacturing.Tests.Inventory;
 
@@ -14,6 +17,11 @@ namespace MultiSiteManufacturing.Tests.Inventory;
 public sealed class InventorySeederTests
 {
     private FederationTestClusterFixture _fixture = null!;
+
+    // The CRDT-history seeding step writes through a PartCrdtStore bound to the
+    // primary "us" silo, matching the production wiring where only that silo
+    // runs the seeder.
+    private static readonly SiloIdentity SeederSilo = new("a", IsPrimary: true);
 
     [SetUp]
     public async Task SetUp()
@@ -29,7 +37,7 @@ public sealed class InventorySeederTests
     public async Task Seed_populates_exactly_five_parts()
     {
         var (router, _, lattice) = _fixture.NewRouter();
-        var seeder = new InventorySeeder(router, _fixture.GrainFactory, NullLogger<InventorySeeder>.Instance);
+        var seeder = new InventorySeeder(router, _fixture.GrainFactory, new PartCrdtStore(_fixture.GrainFactory, SeederSilo), NullLogger<InventorySeeder>.Instance);
 
         await seeder.SeedAsync(CancellationToken.None);
 
@@ -41,7 +49,7 @@ public sealed class InventorySeederTests
     public async Task Seed_produces_expected_state_distribution()
     {
         var (router, _, lattice) = _fixture.NewRouter();
-        var seeder = new InventorySeeder(router, _fixture.GrainFactory, NullLogger<InventorySeeder>.Instance);
+        var seeder = new InventorySeeder(router, _fixture.GrainFactory, new PartCrdtStore(_fixture.GrainFactory, SeederSilo), NullLogger<InventorySeeder>.Instance);
 
         await seeder.SeedAsync(CancellationToken.None);
 
@@ -63,7 +71,7 @@ public sealed class InventorySeederTests
     public async Task Seed_is_idempotent_across_invocations()
     {
         var (router, _, lattice) = _fixture.NewRouter();
-        var seeder = new InventorySeeder(router, _fixture.GrainFactory, NullLogger<InventorySeeder>.Instance);
+        var seeder = new InventorySeeder(router, _fixture.GrainFactory, new PartCrdtStore(_fixture.GrainFactory, SeederSilo), NullLogger<InventorySeeder>.Instance);
 
         await seeder.SeedAsync(CancellationToken.None);
         var firstCount = (await lattice.ListPartsAsync()).Count;
@@ -89,7 +97,7 @@ public sealed class InventorySeederTests
     public async Task Seed_serials_are_deterministic()
     {
         var (router, _, lattice) = _fixture.NewRouter();
-        var seeder = new InventorySeeder(router, _fixture.GrainFactory, NullLogger<InventorySeeder>.Instance);
+        var seeder = new InventorySeeder(router, _fixture.GrainFactory, new PartCrdtStore(_fixture.GrainFactory, SeederSilo), NullLogger<InventorySeeder>.Instance);
 
         await seeder.SeedAsync(CancellationToken.None);
 
@@ -106,7 +114,7 @@ public sealed class InventorySeederTests
     public async Task Seed_reseeds_when_marker_set_but_lattice_empty()
     {
         var (router, _, lattice) = _fixture.NewRouter();
-        var seeder = new InventorySeeder(router, _fixture.GrainFactory, NullLogger<InventorySeeder>.Instance);
+        var seeder = new InventorySeeder(router, _fixture.GrainFactory, new PartCrdtStore(_fixture.GrainFactory, SeederSilo), NullLogger<InventorySeeder>.Instance);
 
         // Simulate a durable seed marker that survived a restart which wiped
         // the (non-durable) lattice fact tree: set the flag, leave the tree
@@ -123,10 +131,35 @@ public sealed class InventorySeederTests
     }
 
     [Test]
+    public async Task Seed_populates_crdt_change_history_for_the_showcase_part()
+    {
+        var (router, _, _) = _fixture.NewRouter();
+        var seeder = new InventorySeeder(router, _fixture.GrainFactory, new PartCrdtStore(_fixture.GrainFactory, SeederSilo), NullLogger<InventorySeeder>.Instance);
+
+        await seeder.SeedAsync(CancellationToken.None);
+
+        var serial = new PartSerialNumber("HPT-BLD-S1-2028-00002");
+        var store = new PartCrdtStore(_fixture.GrainFactory, SeederSilo);
+
+        // Final converged state: the last operator handoff wins; the two
+        // removed labels are gone, leaving the live OR-Set membership.
+        var op = await store.GetOperatorAsync(serial);
+        Assert.That(op?.Value, Is.EqualTo(OperatorId.Demo.Value));
+        Assert.That(await store.GetLabelsAsync(serial), Is.EquivalentTo(new[] { "priority", "qa-hold" }));
+
+        // The operator last-writer-wins key carries a multi-revision timeline,
+        // so the Explorer History tab has successive values to render.
+        var operatorTree = _fixture.GrainFactory.GetGrain<ILattice>(PartCrdtStore.OperatorTreeId);
+        var history = await operatorTree.ScanEntryHistoryAsync(serial.Value, null, null, 100, null, CancellationToken.None);
+        Assert.That(history.Revisions.Count, Is.GreaterThanOrEqualTo(2),
+            "the showcase part's operator key should expose multiple revisions");
+    }
+
+    [Test]
     public async Task Seed_baseline_and_lattice_agree_post_seed()
     {
         var (router, baseline, lattice) = _fixture.NewRouter();
-        var seeder = new InventorySeeder(router, _fixture.GrainFactory, NullLogger<InventorySeeder>.Instance);
+        var seeder = new InventorySeeder(router, _fixture.GrainFactory, new PartCrdtStore(_fixture.GrainFactory, SeederSilo), NullLogger<InventorySeeder>.Instance);
 
         await seeder.SeedAsync(CancellationToken.None);
 

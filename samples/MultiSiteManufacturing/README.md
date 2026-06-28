@@ -184,6 +184,30 @@ a signed-in one succeeds.
 
 `./run.ps1 -Down` and `./run.ps1 -Clean` delete the generated `.env`.
 
+### Inspecting change history
+
+The sample enables a durable **change-history** view (with full-value retention) over
+two CRDT trees on startup and then seeds a multi-revision timeline into them, so the
+Explorer's **History** tab has something non-trivial - and durable - to show out of
+the box (see [`docs/lattice/change-history.md`](../../docs/lattice/change-history.md)):
+
+- `mfg-part-operator` (last-writer-wins register) gets a sequence of operator
+  handoffs on one part's key, so the History tab renders successive values plus diffs.
+- `mfg-part-labels` (process-label OR-Set) gets interleaved label adds and removes on
+  the same part's key, so the History tab renders element-level member changes.
+
+Both are seeded for part `HPT-BLD-S1-2028-00002`. To see it:
+
+1. Start the cluster and explorer: `./run.ps1` then `./run-explorer.ps1`.
+2. In the explorer, open tree `mfg-part-operator` (or `mfg-part-labels`), select key
+   `HPT-BLD-S1-2028-00002`, and open the **History** tab.
+3. Toggle live-follow, then add or remove a label on that part's detail page in the
+   sample UI and watch the new revision appear at the top of the timeline.
+
+The durable view is enabled by a small startup activator (`HistoryShowcaseActivator`)
+that sets a value-retaining retention mode and creates a history view on each tree;
+the change-history doc explains the retention modes and the truncation caveats.
+
 ## Project layout
 
 ```

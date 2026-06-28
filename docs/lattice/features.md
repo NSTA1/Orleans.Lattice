@@ -25,9 +25,6 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-095](https://github.com/NSTA1/Orleans.Lattice/issues/664) - Orleans.Lattice.GrainIndex: reminder-driven background backfill
 - [F-096](https://github.com/NSTA1/Orleans.Lattice/issues/665) - Orleans.Lattice.GrainIndex: observability (OTel metrics & IGrainIndexAdmin)
 - [F-097](https://github.com/NSTA1/Orleans.Lattice/issues/666) - Orleans.Lattice.GrainIndex: docs, sample & end-to-end convergence tests
-- [F-138](https://github.com/NSTA1/Orleans.Lattice/issues/950) - Change-history / revision timeline for keys (CRDT + LWW), Explorer + State API (epic)
-- [F-139](https://github.com/NSTA1/Orleans.Lattice/issues/951) - State API: surface the CRDT shape on entries (fix CrdtShape=null)
-- [F-146](https://github.com/NSTA1/Orleans.Lattice/issues/958) - Change-history sample + docs showcase (MultiSiteManufacturing + features.md sync)
 - [F-147](https://github.com/NSTA1/Orleans.Lattice/issues/971) - Orleans.Lattice.Membership + Orleans.Lattice.Auth: identity, authorization & enforcement layer (epic)
 - [F-148](https://github.com/NSTA1/Orleans.Lattice/issues/972) - Orleans.Lattice.Membership: project & package scaffolding
 - [F-149](https://github.com/NSTA1/Orleans.Lattice/issues/973) - Core: caller-credential propagation `RequestContext` seam
@@ -151,12 +148,15 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-121](https://github.com/NSTA1/Orleans.Lattice/issues/835) - Orleans.Lattice.Api.State: docs, sample explorer & end-to-end tests, plus validation of the MCP-reuse seam
 - [F-122](https://github.com/NSTA1/Orleans.Lattice/issues/839) - Materialised views: reject deleting a source tree that still has dependent views, and reject creating a view whose source is itself a view
 - [F-123](https://github.com/NSTA1/Orleans.Lattice/issues/846) - Materialised views: name-only `ILatticeView` read handle via `ILatticeViewFactory.GetAsync`, plus a guard that rejects direct content reads of a view's backing tree through `ILattice` (a rebuild can swap the active generation under a raw bind)
+- [F-138](https://github.com/NSTA1/Orleans.Lattice/issues/950) - Change-history / revision timeline for keys (CRDT + LWW), Explorer + State API (epic)
+- [F-139](https://github.com/NSTA1/Orleans.Lattice/issues/951) - State API: surface the CRDT shape on entries (fix CrdtShape=null)
 - [F-140](https://github.com/NSTA1/Orleans.Lattice/issues/952) - Storage: read a key's revision timeline (history-view prefix scan; optional retained-WAL-window fallback)
 - [F-141](https://github.com/NSTA1/Orleans.Lattice/issues/953) - Storage: durable per-key history as an opt-in accumulative materialised view (rebuild guard + retention modes)
 - [F-142](https://github.com/NSTA1/Orleans.Lattice/issues/954) - CRDT: element-level provenance decoding (OrSet dots to member change events)
 - [F-143](https://github.com/NSTA1/Orleans.Lattice/issues/955) - State API: GetEntryHistoryAsync endpoint (+ gRPC service/client + explorer passthrough)
 - [F-144](https://github.com/NSTA1/Orleans.Lattice/issues/956) - Orleans.Lattice.Explorer: History tab - per-key revision timeline + value diff, retention-mode aware
 - [F-145](https://github.com/NSTA1/Orleans.Lattice/issues/957) - Orleans.Lattice.Explorer: live follow mode for the History tab (ObserveChanges)
+- [F-146](https://github.com/NSTA1/Orleans.Lattice/issues/958) - Change-history sample + docs showcase (MultiSiteManufacturing + features.md sync)
 - [P-000](https://github.com/NSTA1/Orleans.Lattice/issues/555) - Server-side predicate filtering (expression-tree push-down) for typed reads, scans, cursors, and conditional mutations
 - [P-001](https://github.com/NSTA1/Orleans.Lattice/issues/556) - Expression-tree predicate IR + server-side document-model evaluator (umbrella spine)
 - [P-002](https://github.com/NSTA1/Orleans.Lattice/issues/557) - `GetManyAsync<T>` server-side predicate push-down
