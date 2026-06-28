@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Views;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
 
@@ -237,6 +238,20 @@ internal sealed class LatticeRegistryGrain(
 
         var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
         var updated = existing with { PublishEvents = enabled };
+        await UpdateAsync(treeId, updated);
+    }
+
+    public async Task SetHistoryRetentionAsync(string treeId, HistoryRetentionMode? mode, TimeSpan? window)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        HistoryRetentionValidator.Validate(mode, window);
+
+        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        var updated = existing with
+        {
+            HistoryRetentionMode = mode,
+            HistoryRetentionWindowTicks = window?.Ticks,
+        };
         await UpdateAsync(treeId, updated);
     }
 

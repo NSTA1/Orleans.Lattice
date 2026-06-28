@@ -40,7 +40,7 @@ internal sealed class LatticeViewFactory(
         ViewSourceTreeValidator.ThrowIfViewTree(sourceTreeId);
         var registration = definition.AggregationProjection is { } aggregation
             ? new ViewRegistration(viewName, sourceTreeId, Projection: null, aggregation)
-            : new ViewRegistration(viewName, sourceTreeId, definition.Projection);
+            : new ViewRegistration(viewName, sourceTreeId, definition.Projection, Accumulative: definition.Accumulative);
         catalog.Register(registration);
 
         var maintainer = grainFactory.GetGrain<IViewMaintainerGrain>(viewName);
@@ -206,6 +206,7 @@ internal sealed class LatticeViewFactory(
                         ProjectionTypeName = typeName,
                         ProjectionVersion = registration.ProjectionVersion,
                         IsAggregation = registration.IsAggregation,
+                        Accumulative = registration.Accumulative,
                     });
                 }
             }

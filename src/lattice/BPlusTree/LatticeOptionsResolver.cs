@@ -182,6 +182,36 @@ internal sealed class LatticeOptionsResolver(
     }
 
     /// <summary>
+    /// Reads the effective durable-history retention policy for
+    /// <paramref name="treeId"/> fresh from the registry (no caching - the policy
+    /// is runtime-mutable and read once per view drain pass, never on a write hot
+    /// path). A tree with no override resolves to
+    /// <see cref="HistoryRetentionMode.MetadataOnly"/> and no age bound,
+    /// matching the documented defaults. The <paramref name="hybridFullValueWindow"/>
+    /// is supplied by the caller (the view maintainer reads it from
+    /// <see cref="Views.LatticeViewOptions.HistoryHybridFullValueWindow"/>) and is
+    /// only consulted under <see cref="HistoryRetentionMode.Hybrid"/>.
+    /// </summary>
+    /// <param name="treeId">The source tree whose history retention is resolved.</param>
+    /// <param name="hybridFullValueWindow">The recent-tail window for hybrid mode.</param>
+    public ValueTask<Views.HistoryRetentionPolicy> GetHistoryRetentionAsync(string treeId, TimeSpan hybridFullValueWindow)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        return new ValueTask<Views.HistoryRetentionPolicy>(LoadHistoryRetentionAsync(treeId, hybridFullValueWindow));
+    }
+
+    private async Task<Views.HistoryRetentionPolicy> LoadHistoryRetentionAsync(string treeId, TimeSpan hybridFullValueWindow)
+    {
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var entry = await registry.GetEntryAsync(treeId).ConfigureAwait(false);
+        var mode = entry?.HistoryRetentionMode ?? HistoryRetentionMode.MetadataOnly;
+        var window = entry?.HistoryRetentionWindowTicks is { } ticks
+            ? TimeSpan.FromTicks(ticks)
+            : TimeSpan.Zero;
+        return new Views.HistoryRetentionPolicy(mode, window, hybridFullValueWindow);
+    }
+
+    /// <summary>
     /// Resolves the <see cref="IWalStorageProvider"/> backing
     /// <paramref name="partition"/> of <paramref name="treeId"/> against the
     /// supplied placement <paramref name="pin"/>, <b>failing closed</b> if the

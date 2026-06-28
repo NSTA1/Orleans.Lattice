@@ -377,6 +377,17 @@ internal static class TypeAliases
     internal const string AggregationContribution = "ol.agc";
     internal const string AggregationContributionKind = "ol.ack";
 
+    // Durable per-key history (an opt-in accumulative materialised view): the
+    // per-revision row stored as the view entry value, its kind discriminator,
+    // the LWW value-retention mode, and the effective retention policy surfaced
+    // by the public getter. The row is serializable because the read path and
+    // the State API decode it; the mode/settings types are serializable because
+    // they cross the public ILattice setter/getter surface.
+    internal const string HistoryRow = "ol.hir";
+    internal const string HistoryRowKind = "ol.hik";
+    internal const string HistoryRetentionMode = "ol.hrm";
+    internal const string HistoryRetentionSettings = "ol.hrs";
+
     // Materialised views (Phase 5): the order-independent content fingerprint a
     // view's drift digest / ReconcileAsync compares between the live view and a
     // fresh source re-projection.

@@ -54,6 +54,9 @@ public static class LatticeViewsServiceCollectionExtensions
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IValidateOptions<LatticeViewOptions>, LatticeViewOptionsValidator>());
 
+        builder.Services.TryAddSingleton<HistoryRowCodec>();
+        builder.Services.TryAddSingleton(
+            static sp => new HistoryLatticeViewProjection(sp.GetRequiredService<HistoryRowCodec>()));
         builder.Services.TryAddSingleton<IViewCatalog, ViewCatalog>();
         builder.Services.TryAddSingleton<IViewSourceGuard, ViewSourceGuard>();
         builder.Services.TryAddSingleton<ILatticeViewFactory, LatticeViewFactory>();
