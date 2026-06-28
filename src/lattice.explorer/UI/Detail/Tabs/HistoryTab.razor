@@ -2,6 +2,7 @@
 @using Orleans.Lattice.Explorer.Core.Data
 @inherits DetailTabBase
 @inject IHistoryReader HistoryReader
+@inject IHistoryLiveFollower LiveFollower
 @inject IUiSessionStore SessionStore
 
 <div class="explorer-history">
@@ -24,6 +25,29 @@
             </label>
         }
     </div>
+
+    @if (_key is not null && _following)
+    {
+        <div class="explorer-history-live">
+            <span class="explorer-history-live-dot explorer-history-live-dot-@(_paused ? "paused" : "on")"></span>
+            <span class="explorer-history-live-label">@(_paused ? "Live paused" : "Live")</span>
+            @if (_paused && _pendingLive.Count > 0)
+            {
+                <span class="explorer-history-live-pending">@_pendingLive.Count buffered</span>
+            }
+            <button type="button" class="explorer-btn-link" @onclick="TogglePause">
+                @(_paused ? "Resume" : "Pause")
+            </button>
+            <span class="explorer-history-live-note"
+                  title="The live feed only carries changes emitted while this tab is open: it extends the timeline forward from now and is not a substitute for durable retention of past changes. Live rows show kind, time and origin only - no value diff or CRDT members - pending a durable backfill.">
+                forward-only
+            </span>
+        </div>
+    }
+    @if (_liveError is not null)
+    {
+        <div class="explorer-history-hint explorer-history-error">Live updates stopped: @_liveError</div>
+    }
 
     @if (_key is null)
     {
@@ -97,9 +121,13 @@
                 {
                     <li class="explorer-history-divider">@transition.Label()</li>
                 }
-                <li class="explorer-history-row explorer-history-row-@KindClass(row.Kind)">
+                <li class="explorer-history-row @RowClass(row)">
                     <div class="explorer-history-rowhead">
                         <span class="explorer-history-kind explorer-history-kind-@KindClass(row.Kind)">@KindLabel(row.Kind)</span>
+                        @if (row.IsLiveTail)
+                        {
+                            <span class="explorer-history-live-tag" title="Appended live from the change feed; metadata only, pending durable backfill.">live</span>
+                        }
                         <span class="explorer-history-time" title="@FormatAbsolute(row.Hlc)">@FormatRelative(row.Hlc)</span>
                         <span class="explorer-history-origin">@OriginLabel(row.OriginClusterId)</span>
                     </div>
@@ -157,6 +185,11 @@
                             case HistoryRowRenderMode.RangeTombstone:
                                 <p class="explorer-history-metaonly">Swept by a range delete@(row.EndKey is not null ? $" up to {row.EndKey}" : string.Empty).</p>
                                 break;
+                            case HistoryRowRenderMode.LiveTail:
+                                <p class="explorer-history-metaonly explorer-history-livetail">
+                                    Live @KindLabel(row.Kind)@(row.EndKey is not null ? $" up to {row.EndKey}" : string.Empty) - metadata only, pending durable backfill.
+                                </p>
+                                break;
                         }
                     </div>
                 </li>
@@ -191,6 +224,16 @@
     private bool _loading;
     private string? _error;
     private bool _newestFirst = true;
+
+    // Live follow mode state. The follow loop runs as a fire-and-forget task fed
+    // by the forward change feed; it is torn down on key change and tab dispose
+    // by cancelling the linked token, with the linked source disposed in the
+    // loop's finally to avoid a dispose/await race.
+    private readonly List<HistoryRevisionRow> _pendingLive = new();
+    private CancellationTokenSource? _liveCts;
+    private bool _following;
+    private bool _paused;
+    private string? _liveError;
 
     protected override async Task OnInitializedAsync()
     {
@@ -230,10 +273,18 @@
 
     private async Task LoadFirstAsync()
     {
+        StopFollowing();
         _accumulated.Clear();
+        _pendingLive.Clear();
+        _liveError = null;
         _continuation = null;
         _timeline = null;
         await LoadPageAsync(continuation: null);
+
+        // Begin (or restart) the live tail only once the retrospective first page
+        // has loaded, so the seen-set is seeded against the loaded revisions and
+        // the live tail does not double-count an overlapping revision.
+        StartFollowing();
     }
 
     private Task LoadMoreAsync() => LoadPageAsync(_continuation);
@@ -295,6 +346,103 @@
             Selection.Id, _key, _status, _accumulated, _bound, _earliest, _continuation, _newestFirst);
     }
 
+    // Opens the live subscription for the current key, seeding the de-duplication
+    // tail with the already-loaded revisions. The loop is linked to TabToken so a
+    // tab dispose cancels it; StopFollowing cancels it on a key change.
+    private void StartFollowing()
+    {
+        if (_key is null)
+        {
+            return;
+        }
+
+        var tail = new HistoryLiveTail(_key, _accumulated);
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(TabToken);
+        _liveCts = cts;
+        _following = true;
+        _ = FollowLoopAsync(tail, cts);
+    }
+
+    private async Task FollowLoopAsync(HistoryLiveTail tail, CancellationTokenSource cts)
+    {
+        var treeId = Selection.Id;
+        try
+        {
+            await foreach (var row in LiveFollower.FollowAsync(treeId, tail, cts.Token).ConfigureAwait(false))
+            {
+                await InvokeAsync(() =>
+                {
+                    OnLiveRow(row);
+                    StateHasChanged();
+                });
+            }
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
+        {
+            // Expected teardown on key change or tab dispose.
+        }
+        catch (Exception ex)
+        {
+            await InvokeAsync(() =>
+            {
+                _liveError = ex.Message;
+                _following = false;
+                StateHasChanged();
+            });
+        }
+        finally
+        {
+            cts.Dispose();
+        }
+    }
+
+    // Appends an accepted live row. While paused, rows are buffered (still
+    // de-duplicated by the tail) and flushed on resume, so no change is lost and
+    // none is double-counted.
+    private void OnLiveRow(HistoryRevisionRow row)
+    {
+        if (_paused)
+        {
+            _pendingLive.Add(row);
+            return;
+        }
+
+        _accumulated.Add(row);
+        Rebuild();
+    }
+
+    private void TogglePause()
+    {
+        _paused = !_paused;
+        if (_paused || _pendingLive.Count == 0)
+        {
+            return;
+        }
+
+        _accumulated.AddRange(_pendingLive);
+        _pendingLive.Clear();
+        Rebuild();
+    }
+
+    private void StopFollowing()
+    {
+        _liveCts?.Cancel();
+        _liveCts = null;
+        _following = false;
+        _paused = false;
+    }
+
+    /// <inheritdoc />
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            StopFollowing();
+        }
+
+        base.Dispose(disposing);
+    }
+
     private static string RetentionBadge(HistoryRetentionMode mode, bool valueRetained) => mode switch
     {
         HistoryRetentionMode.FullValue => "full-value",
@@ -328,6 +476,11 @@
         HistoryRowKind.RangeTombstone => "range",
         _ => "other",
     };
+
+    private static string RowClass(HistoryRevisionRow row) =>
+        row.IsLiveTail
+            ? $"explorer-history-row-{KindClass(row.Kind)} explorer-history-row-live"
+            : $"explorer-history-row-{KindClass(row.Kind)}";
 
     private static string MemberLabel(CrdtMemberChangeKind kind) =>
         kind == CrdtMemberChangeKind.Added ? "added" : "removed";

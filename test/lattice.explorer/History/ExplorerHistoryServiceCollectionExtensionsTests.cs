@@ -21,6 +21,18 @@ public class ExplorerHistoryServiceCollectionExtensionsTests
     }
 
     [Test]
+    public async Task AddExplorerHistory_RegistersLiveFollower()
+    {
+        var services = new ServiceCollection();
+        services.AddExplorerConfiguration(options => options.FilePath = "C:/tmp/config.json");
+        services.AddExplorerCatalog();
+        services.AddExplorerHistory();
+        await using var provider = services.BuildServiceProvider();
+
+        Assert.That(provider.GetRequiredService<IHistoryLiveFollower>(), Is.InstanceOf<HistoryLiveFollower>());
+    }
+
+    [Test]
     public async Task AddExplorerHistory_ReaderIsSingleton()
     {
         var services = new ServiceCollection();

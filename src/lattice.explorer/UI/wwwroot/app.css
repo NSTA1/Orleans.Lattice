@@ -1639,3 +1639,66 @@ code, .explorer-mono {
 .explorer-history-error {
     color: var(--danger);
 }
+
+.explorer-history-live {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+}
+
+.explorer-history-live-dot {
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 50%;
+    flex: 0 0 auto;
+}
+
+.explorer-history-live-dot-on {
+    background: var(--ok);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--ok) 25%, transparent);
+}
+
+.explorer-history-live-dot-paused {
+    background: var(--warn);
+}
+
+.explorer-history-live-label {
+    font-weight: 600;
+    color: var(--text);
+}
+
+.explorer-history-live-pending {
+    color: var(--warn);
+}
+
+.explorer-history-live-note {
+    margin-left: auto;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--text-dim);
+    cursor: help;
+}
+
+.explorer-history-row-live {
+    border-left-style: dashed;
+    border-left-color: var(--ok);
+    background: color-mix(in srgb, var(--bg-panel) 92%, var(--ok) 8%);
+}
+
+.explorer-history-live-tag {
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--ok);
+    border: 1px solid var(--ok);
+    border-radius: 4px;
+    padding: 0.02rem 0.3rem;
+}
+
+.explorer-history-livetail {
+    color: var(--text-dim);
+    font-style: italic;
+}
