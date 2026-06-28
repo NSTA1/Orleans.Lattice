@@ -1,5 +1,7 @@
 namespace Orleans.Lattice;
 
+using System.Runtime.InteropServices;
+
 /// <summary>
 /// A version vector that tracks causal history per replica (grain).
 /// Each entry maps a <see cref="GrainId"/> to the highest <see cref="HybridLogicalClock"/>
@@ -30,9 +32,16 @@ public sealed class VersionVector : ICrdt<VersionVector>
     /// </summary>
     public HybridLogicalClock Tick(string replicaId)
     {
-        var previous = GetClock(replicaId);
-        var next = HybridLogicalClock.Tick(previous);
-        Entries[replicaId] = next;
+        // Single probe: GetValueRefOrAddDefault hashes replicaId once and
+        // returns a ref to the entry (added zero-initialised when absent).
+        // HybridLogicalClock.Zero is default(HybridLogicalClock), so the
+        // add-default slot equals the Zero that GetClock returns for a
+        // missing replica - the value fed into Tick is identical to the
+        // previous TryGetValue-then-indexer-set form, with one fewer hash
+        // and bucket walk per tick.
+        ref var slot = ref CollectionsMarshal.GetValueRefOrAddDefault(Entries, replicaId, out _);
+        var next = HybridLogicalClock.Tick(slot);
+        slot = next;
         return next;
     }
 
