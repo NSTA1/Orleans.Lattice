@@ -141,6 +141,43 @@ public class LatticeMicroBenchmarks
     // mode whose delta payload survives leaf-side JSON decode.
     private byte[] _crdtDeltaPayload = null!;
 
+    // ===== CRDT primitive merge instrument (MvRegister.MergeFrom) =====
+    // Two identity-stable MvRegister states representing concurrent writes
+    // from two different replicas, each carrying a populated dot-context
+    // (8 shared observed replicas + one own live entry). MvRegister.Merge
+    // clones the left side and folds the right in through MergeFrom, which
+    // is the per-write CRDT merge path - every MvRegister write folds
+    // through MergeDelta -> MergeFrom. Both states are built once and never
+    // mutated (Merge does not touch its inputs), so the measured window
+    // isolates the merge algorithm's steady-state allocation rather than
+    // the grain dispatch / retry envelope the other CRDT workloads pay.
+    // Surfaced as microbench_crdt_mvregister_merge_alloc_b.
+    private readonly MvRegister _mvRegisterLeft = BuildMvRegister("replica-left", 8);
+    private readonly MvRegister _mvRegisterRight = BuildMvRegister("replica-right", 8);
+
+    private static MvRegister BuildMvRegister(string liveReplica, int observedReplicas)
+    {
+        var register = new MvRegister();
+        // Shared observed dot-context: both sides have already seen these
+        // replicas, so the merge takes a pointwise-max over a non-trivial
+        // context (the dictionary whose redundant defensive clone this
+        // benchmark exists to measure).
+        for (var i = 0; i < observedReplicas; i++)
+        {
+            register.Context[$"obs-{i:D2}"] = 5;
+        }
+        // The side's own live, dot-tagged value. Neither side has observed
+        // the other's dot, so both survive the merge as conflict candidates.
+        register.Context[liveReplica] = 1;
+        register.Entries.Add(new MvRegisterEntry
+        {
+            ReplicaId = liveReplica,
+            Counter = 1,
+            Value = new byte[16],
+        });
+        return register;
+    }
+
     // ===== CRDT grow-state apply instrument (O(state) re-serialise) =====
     // Per-N pre-seeded OrSet keys whose post-merge state holds ~N
     // dot-tagged elements. The CrdtApplyGrowstate benchmark applies a
@@ -1103,6 +1140,21 @@ public class LatticeMicroBenchmarks
         var key = _crdtDeltaKeys[i % _crdtDeltaKeys.Length];
         return _lattice.ApplyCrdtDeltaAsync(key, LatticeMergeMode.PnCounter, _crdtDeltaPayload);
     }
+
+    /// <summary>
+    /// Single <see cref="MvRegister.Merge(MvRegister, MvRegister)"/> of two
+    /// identity-stable concurrent-replica states pre-built in the field
+    /// initialisers. Isolates the <see cref="MvRegister"/> CRDT merge
+    /// algorithm - the per-write fold path (<c>MergeDelta</c> -&gt;
+    /// <c>MergeFrom</c>) - from the grain dispatch and retry envelope the
+    /// other CRDT workloads measure. The inputs are never mutated, so the
+    /// measured per-iteration allocation is the steady-state cost of one
+    /// register merge. Surfaced as
+    /// <c>microbench_crdt_mvregister_merge_alloc_b</c>.
+    /// </summary>
+    [Benchmark(Description = "Crdt mvregister merge")]
+    public MvRegister CrdtMvRegisterMerge() =>
+        MvRegister.Merge(_mvRegisterLeft, _mvRegisterRight);
 
     /// <summary>
     /// Single <see cref="ILattice.ApplyCrdtDeltaAsync(string, LatticeMergeMode, byte[], CancellationToken)"/>
