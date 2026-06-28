@@ -96,13 +96,17 @@ public sealed class PnCounter : ICrdt<PnCounter>
     }
 
     /// <summary>Creates a deep copy of this counter.</summary>
-    public PnCounter Clone()
-    {
-        var copy = new PnCounter();
-        foreach (var (k, v) in Increments) copy.Increments[k] = v;
-        foreach (var (k, v) in Decrements) copy.Decrements[k] = v;
-        return copy;
-    }
+    public PnCounter Clone() =>
+        // The dictionary copy constructor presizes each backing store to the
+        // source Count exactly and bulk-copies the entries, eliminating the
+        // incremental Resize() grows the previous entry-by-entry fill paid as
+        // replica components accumulated. string keys and long values are
+        // immutable, so the shallow per-entry copy is a deep copy.
+        new()
+        {
+            Increments = new Dictionary<string, long>(Increments),
+            Decrements = new Dictionary<string, long>(Decrements),
+        };
 
     /// <summary>
     /// Folds a <see cref="PnCounterDelta"/> into this counter: every
