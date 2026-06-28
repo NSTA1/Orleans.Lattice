@@ -17,6 +17,7 @@
         @if (_options.UseServerFormPost)
         {
             <form method="post" action="@_options.LogoutPath" class="explorer-auth-form">
+                <AntiforgeryToken />
                 <button type="submit" class="explorer-btn-link" title="Sign out">Sign out</button>
             </form>
         }
