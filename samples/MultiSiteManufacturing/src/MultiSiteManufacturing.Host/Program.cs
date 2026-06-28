@@ -161,6 +161,11 @@ builder.Host.UseOrleans(silo =>
         silo.AddMemoryGrainStorage("msmfgGrainState");
         silo.AddLattice((services, name) => services.AddMemoryGrainStorage(name));
 
+        // Durable materialised-view subsystem - required so the change-history
+        // showcase can enable a per-key history view over the CRDT trees (see
+        // HistoryShowcaseActivator). Must follow AddLattice (views tail its WAL).
+        silo.AddLatticeViews();
+
         // Read-only cluster state API (issue #886). Co-hosted on the
         // lattice-backed silo so the Orleans.Lattice.Explorer can browse this
         // single-process quick-start over the gRPC state surface. Must follow
@@ -241,6 +246,11 @@ builder.Host.UseOrleans(silo =>
                 options.TableServiceClient = new TableServiceClient(tableStorageConnectionString);
             });
         });
+
+        // Durable materialised-view subsystem - required so the change-history
+        // showcase can enable a per-key history view over the CRDT trees (see
+        // HistoryShowcaseActivator). Must follow AddLattice (views tail its WAL).
+        silo.AddLatticeViews();
 
         // Persist the lattice write-ahead log to Azure Table Storage
         // (Azurite locally) rather than the in-memory baseline AddLattice
@@ -561,6 +571,11 @@ if (!builder.Environment.IsEnvironment("Testing"))
 }
 if (isSeeder)
 {
+    // Enable the durable change-history views over the CRDT trees before the
+    // seeder writes the showcase revisions, so every seeded mutation is tailed
+    // into durable history rather than only the transient WAL window. Registered
+    // first so its StartAsync runs before the seeder's.
+    builder.Services.AddHostedService<MultiSiteManufacturing.Host.Lattice.HistoryShowcaseActivator>();
     builder.Services.AddHostedService<InventorySeeder>();
 }
 

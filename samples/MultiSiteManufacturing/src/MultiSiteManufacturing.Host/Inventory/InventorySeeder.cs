@@ -44,6 +44,7 @@ namespace MultiSiteManufacturing.Host.Inventory;
 public sealed class InventorySeeder(
     FederationRouter router,
     IGrainFactory grains,
+    PartCrdtStore crdt,
     ILogger<InventorySeeder> logger) : IHostedService
 {
     private const string Family = "HPT-BLD-S1";
@@ -51,6 +52,28 @@ public sealed class InventorySeeder(
 
     /// <summary>Total number of parts the seeder produces against an empty store.</summary>
     public const int TotalParts = 5;
+
+    /// <summary>
+    /// Sequence number of the part the seeder drives CRDT change-history into,
+    /// so the Explorer History tab has a non-trivial timeline to render for
+    /// both CRDT shapes (operator last-writer-wins register and process-label
+    /// OR-Set) the moment the sample starts.
+    /// </summary>
+    private const int CrdtHistorySeq = 2;
+
+    /// <summary>
+    /// Ordered operator handoffs written to the same operator-register key so
+    /// the last-writer-wins timeline shows successive values plus diffs. The
+    /// final entry is <see cref="OperatorId.Demo"/> so the part's current
+    /// operator matches the rest of the seeded inventory.
+    /// </summary>
+    private static readonly OperatorId[] CrdtHistoryOperators =
+    [
+        new("operator:alice"),
+        new("operator:bob"),
+        new("operator:carol"),
+        OperatorId.Demo,
+    ];
 
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken) => SeedAsync(cancellationToken);
@@ -117,6 +140,61 @@ public sealed class InventorySeeder(
         }
 
         logger.LogInformation("Inventory seed complete.");
+
+        // Drive change-history into the CRDT trees so the Explorer History
+        // tab has a populated, multi-revision timeline the moment the sample
+        // starts - independent of the fact log seeded above.
+        await SeedCrdtHistoryAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Writes several revisions into the same CRDT keys for one representative
+    /// part so the Explorer History tab shows a non-trivial timeline for both
+    /// CRDT shapes:
+    /// <list type="bullet">
+    ///   <item>
+    ///     the operator last-writer-wins register in the
+    ///     <see cref="PartCrdtStore.OperatorTreeId"/> tree - a sequence of
+    ///     operator handoffs, so the History tab renders successive values
+    ///     plus diffs;
+    ///   </item>
+    ///   <item>
+    ///     the process-label OR-Set in the
+    ///     <see cref="PartCrdtStore.LabelsTreeId"/> tree - interleaved add and
+    ///     remove operations, so the History tab renders element-level member
+    ///     changes.
+    ///   </item>
+    /// </list>
+    /// Each lattice write advances the source tree's hybrid logical clock, so
+    /// every call below lands as a distinct, time-ordered revision. The
+    /// <see cref="MultiSiteManufacturing.Host.Lattice.HistoryShowcaseActivator"/>
+    /// enables a durable history view (with value-retaining retention) over both
+    /// trees ahead of this seeding step, so these revisions are captured into a
+    /// durable, retention-bounded timeline rather than only the transient
+    /// write-ahead-log window.
+    /// </summary>
+    private async Task SeedCrdtHistoryAsync(CancellationToken cancellationToken)
+    {
+        var serial = PartSerialNumber.From(new PartFamily(Family), SeedYear, CrdtHistorySeq);
+
+        // Operator LWW register: one key, four successive values (handoffs).
+        foreach (var op in CrdtHistoryOperators)
+        {
+            await crdt.AssignOperatorAsync(serial, op, cancellationToken);
+        }
+
+        // Process-label OR-Set: one key, interleaved add / remove operations.
+        await crdt.AddLabelAsync(serial, "priority", cancellationToken);
+        await crdt.AddLabelAsync(serial, "expedite", cancellationToken);
+        await crdt.AddLabelAsync(serial, "rework-watch", cancellationToken);
+        await crdt.RemoveLabelAsync(serial, "expedite", cancellationToken);
+        await crdt.AddLabelAsync(serial, "qa-hold", cancellationToken);
+        await crdt.RemoveLabelAsync(serial, "rework-watch", cancellationToken);
+
+        logger.LogInformation(
+            "Seeded CRDT change-history for {Serial}: {OperatorRevisions} operator revisions, 6 label operations.",
+            serial.Value,
+            CrdtHistoryOperators.Length);
     }
 
     /// <summary>
