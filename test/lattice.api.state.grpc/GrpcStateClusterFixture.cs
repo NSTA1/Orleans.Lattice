@@ -164,6 +164,40 @@ internal sealed class GrpcStateClusterFixture
     public static string KeyAt(int index) => $"key-{index:D5}";
 
     /// <summary>
+    /// Creates a durable per-key history view over <paramref name="sourceTreeId"/>
+    /// and establishes the maintainer's write-ahead-log cursor before any source
+    /// write so each mutation is tailed as its own revision.
+    /// </summary>
+    public async Task CreateHistoryViewAsync(string sourceTreeId, string viewName)
+    {
+        var factory = SiloServices.GetRequiredService<ILatticeViewFactory>();
+        var source = Cluster.Client.GetGrain<ILattice>(sourceTreeId);
+        factory.Create(source, viewName, LatticeHistoryView.Definition(viewName, SiloServices));
+
+        var maintainer = Cluster.Client.GetGrain<IViewMaintainerGrain>(viewName);
+        await maintainer.EnsureActiveAsync();
+    }
+
+    /// <summary>Drains the history view maintainer until it has caught up to the source head.</summary>
+    public async Task DrainToZeroAsync(string viewName)
+    {
+        var maintainer = Cluster.Client.GetGrain<IViewMaintainerGrain>(viewName);
+        await maintainer.EnsureActiveAsync();
+        for (var attempt = 0; attempt < 50; attempt++)
+        {
+            await maintainer.DrainAsync();
+            if (await maintainer.GetLagAsync() == 0)
+            {
+                return;
+            }
+
+            await Task.Delay(20);
+        }
+
+        Assert.Fail($"History view '{viewName}' did not catch up to the source head.");
+    }
+
+    /// <summary>
     /// Defines a view over <paramref name="sourceTreeId"/> so the catalog's
     /// view-listing surface has something to return through the public client.
     /// </summary>

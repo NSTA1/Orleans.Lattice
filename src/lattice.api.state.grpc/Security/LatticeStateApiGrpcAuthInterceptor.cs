@@ -137,6 +137,7 @@ internal sealed class LatticeStateApiGrpcAuthInterceptor : Interceptor
             LatticeStateGrpcMethods.GetTreeStructureMethodName => LatticeStateApiOperation.GetTreeStructure,
             LatticeStateGrpcMethods.ScanEntriesMethodName => LatticeStateApiOperation.ScanEntries,
             LatticeStateGrpcMethods.GetEntryMethodName => LatticeStateApiOperation.GetEntry,
+            LatticeStateGrpcMethods.GetEntryHistoryMethodName => LatticeStateApiOperation.GetEntryHistory,
             _ => LatticeStateApiOperation.ListTrees,
         };
 
@@ -145,6 +146,7 @@ internal sealed class LatticeStateApiGrpcAuthInterceptor : Interceptor
             StructureRequest s => s.TreeId,
             EntryScanRequest s => s.TreeId,
             EntryGetRequest g => g.TreeId,
+            EntryHistoryRequest h => h.TreeId,
             _ => null,
         };
 

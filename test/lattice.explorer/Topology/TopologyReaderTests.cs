@@ -32,6 +32,9 @@ public class TopologyReaderTests
             => Task.FromResult(new EntryScanResponse { TreeId = "t" });
         public Task<EntryGetResponse> GetEntryAsync(EntryGetRequest request, CancellationToken cancellationToken = default)
             => Task.FromResult(new EntryGetResponse { TreeId = "t", Key = "k" });
+
+        public Task<EntryHistoryResponse> GetEntryHistoryAsync(EntryHistoryRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(new EntryHistoryResponse { TreeId = "t", Key = "k" });
         public Task<EntryScanCancelResponse> CancelScanAsync(EntryScanCancelRequest request, CancellationToken cancellationToken = default)
             => Task.FromResult(new EntryScanCancelResponse());
         public Task<TreeMetricsSnapshot> GetMetricsSnapshotAsync(TreeMetricsRequest request, CancellationToken cancellationToken = default)

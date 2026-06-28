@@ -44,6 +44,9 @@ internal abstract class LatticeStateGrpcServiceBase
     /// <summary>Returns the full record for a single key. Implemented in <see cref="LatticeStateGrpcService"/>.</summary>
     public abstract Task<EntryGetResponse> GetEntry(EntryGetRequest request, ServerCallContext context);
 
+    /// <summary>Returns a page of a single key's change-history timeline. Implemented in <see cref="LatticeStateGrpcService"/>.</summary>
+    public abstract Task<EntryHistoryResponse> GetEntryHistory(EntryHistoryRequest request, ServerCallContext context);
+
     /// <summary>Releases a snapshot scan cursor named by a continuation token. Implemented in <see cref="LatticeStateGrpcService"/>.</summary>
     public abstract Task<EntryScanCancelResponse> CancelScan(EntryScanCancelRequest request, ServerCallContext context);
 
@@ -91,6 +94,7 @@ internal abstract class LatticeStateGrpcServiceBase
             binder.AddMethod(methods.GetTreeStructure, (UnaryServerMethod<StructureRequest, StructureResponse>?)null);
             binder.AddMethod(methods.ScanEntries, (UnaryServerMethod<EntryScanRequest, EntryScanResponse>?)null);
             binder.AddMethod(methods.GetEntry, (UnaryServerMethod<EntryGetRequest, EntryGetResponse>?)null);
+            binder.AddMethod(methods.GetEntryHistory, (UnaryServerMethod<EntryHistoryRequest, EntryHistoryResponse>?)null);
             binder.AddMethod(methods.CancelScan, (UnaryServerMethod<EntryScanCancelRequest, EntryScanCancelResponse>?)null);
             binder.AddMethod(methods.ObserveChanges, (ServerStreamingServerMethod<StateObserveRequest, StateChangeNotification>?)null);
             binder.AddMethod(methods.ObserveMetrics, (ServerStreamingServerMethod<TreeMetricsRequest, TreeMetricsSnapshot>?)null);
@@ -106,6 +110,7 @@ internal abstract class LatticeStateGrpcServiceBase
         binder.AddMethod(methods.GetTreeStructure, new UnaryServerMethod<StructureRequest, StructureResponse>(serviceImpl.GetTreeStructure));
         binder.AddMethod(methods.ScanEntries, new UnaryServerMethod<EntryScanRequest, EntryScanResponse>(serviceImpl.ScanEntries));
         binder.AddMethod(methods.GetEntry, new UnaryServerMethod<EntryGetRequest, EntryGetResponse>(serviceImpl.GetEntry));
+        binder.AddMethod(methods.GetEntryHistory, new UnaryServerMethod<EntryHistoryRequest, EntryHistoryResponse>(serviceImpl.GetEntryHistory));
         binder.AddMethod(methods.CancelScan, new UnaryServerMethod<EntryScanCancelRequest, EntryScanCancelResponse>(serviceImpl.CancelScan));
         binder.AddMethod(methods.ObserveChanges, new ServerStreamingServerMethod<StateObserveRequest, StateChangeNotification>(serviceImpl.ObserveChanges));
         binder.AddMethod(methods.ObserveMetrics, new ServerStreamingServerMethod<TreeMetricsRequest, TreeMetricsSnapshot>(serviceImpl.ObserveMetrics));
@@ -230,6 +235,28 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
                 TreeId = result.TreeId,
                 Key = result.Key,
                 Entry = result.Entry,
+            };
+        });
+
+    /// <inheritdoc />
+    public override Task<EntryHistoryResponse> GetEntryHistory(EntryHistoryRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static async (q, req, ct) =>
+        {
+            var result = await q.GetEntryHistoryAsync(req, ct).ConfigureAwait(false);
+            if (result.Status == StateQueryStatus.TreeNotFound)
+            {
+                throw NotFound($"Tree '{result.TreeId}' was not found.");
+            }
+
+            return new EntryHistoryResponse
+            {
+                Status = result.Status,
+                TreeId = result.TreeId,
+                Key = result.Key,
+                Revisions = result.Revisions,
+                ContinuationToken = result.ContinuationToken,
+                Bound = result.Bound,
+                EarliestAvailable = result.EarliestAvailable,
             };
         });
 

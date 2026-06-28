@@ -15,12 +15,16 @@ internal sealed class FakeEntryStateClient : ILatticeStateClient
     public CatalogRequest? LastTagIndexes { get; private set; }
     public CatalogRequest? LastTagValues { get; private set; }
     public EntryScanCancelRequest? LastCancel { get; private set; }
+    public EntryHistoryRequest? LastHistory { get; private set; }
 
     public Func<EntryScanRequest, EntryScanResponse> OnScan { get; set; } =
         _ => new EntryScanResponse { TreeId = "t" };
 
     public Func<EntryGetRequest, EntryGetResponse> OnGet { get; set; } =
         r => new EntryGetResponse { TreeId = r.TreeId, Key = r.Key, Status = StateQueryStatus.KeyNotFound };
+
+    public Func<EntryHistoryRequest, EntryHistoryResponse> OnHistory { get; set; } =
+        r => new EntryHistoryResponse { TreeId = r.TreeId, Key = r.Key };
 
     public Func<CatalogRequest, TagIndexCatalogPage> OnListTagIndexes { get; set; } =
         _ => new TagIndexCatalogPage();
@@ -38,6 +42,12 @@ internal sealed class FakeEntryStateClient : ILatticeStateClient
     {
         LastGet = request;
         return Task.FromResult(OnGet(request));
+    }
+
+    public Task<EntryHistoryResponse> GetEntryHistoryAsync(EntryHistoryRequest request, CancellationToken cancellationToken = default)
+    {
+        LastHistory = request;
+        return Task.FromResult(OnHistory(request));
     }
 
     public Task<EntryScanCancelResponse> CancelScanAsync(EntryScanCancelRequest request, CancellationToken cancellationToken = default)

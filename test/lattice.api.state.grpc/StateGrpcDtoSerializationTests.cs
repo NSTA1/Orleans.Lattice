@@ -194,4 +194,80 @@ public sealed class StateGrpcDtoSerializationTests
     {
         Assert.That(RoundTrip(new ClusterInfoRequest()), Is.EqualTo(new ClusterInfoRequest()));
     }
+
+    [Test]
+    public void EntryHistoryResponse_round_trips_with_revisions()
+    {
+        var original = new EntryHistoryResponse
+        {
+            Status = StateQueryStatus.Found,
+            TreeId = "tree-a",
+            Key = "k1",
+            Revisions = new[]
+            {
+                new EntryRevisionRecord
+                {
+                    Hlc = new HybridLogicalClock { WallClockTicks = 10, Counter = 1 },
+                    Kind = HistoryRowKind.Set,
+                    Category = MutationCategory.User,
+                    SourceKey = "k1",
+                    OriginClusterId = "west",
+                    ValuePreview = new byte[] { 1, 2, 3 },
+                    ValueLength = 3,
+                    Truncated = false,
+                    ValueHash = 999,
+                    Mode = LatticeMergeMode.LwwRegister,
+                    Retention = new RevisionRetention { Mode = HistoryRetentionMode.FullValue, ValueRetained = true },
+                },
+                new EntryRevisionRecord
+                {
+                    Hlc = new HybridLogicalClock { WallClockTicks = 20, Counter = 0 },
+                    Kind = HistoryRowKind.Delete,
+                    Category = MutationCategory.User,
+                    SourceKey = "k1",
+                    Mode = LatticeMergeMode.LwwRegister,
+                    Retention = new RevisionRetention { Mode = HistoryRetentionMode.MetadataOnly, ValueRetained = false },
+                },
+            },
+            ContinuationToken = "cursor-h",
+            Bound = EntryHistoryBound.BoundedByAge,
+            EarliestAvailable = HybridLogicalClock.Zero,
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Status, Is.EqualTo(StateQueryStatus.Found));
+            Assert.That(copy.Key, Is.EqualTo("k1"));
+            Assert.That(copy.Revisions, Has.Count.EqualTo(2));
+            Assert.That(copy.Revisions[0].ValuePreview, Is.EqualTo(new byte[] { 1, 2, 3 }));
+            Assert.That(copy.Revisions[0].Retention.ValueRetained, Is.True);
+            Assert.That(copy.Revisions[1].Kind, Is.EqualTo(HistoryRowKind.Delete));
+            Assert.That(copy.ContinuationToken, Is.EqualTo("cursor-h"));
+            Assert.That(copy.Bound, Is.EqualTo(EntryHistoryBound.BoundedByAge));
+        });
+    }
+
+    [Test]
+    public void EntryHistoryResponse_round_trips_truncated_with_earliest_available()
+    {
+        var original = new EntryHistoryResponse
+        {
+            Status = StateQueryStatus.Found,
+            TreeId = "tree-a",
+            Key = "k1",
+            Revisions = Array.Empty<EntryRevisionRecord>(),
+            ContinuationToken = null,
+            Bound = EntryHistoryBound.Truncated,
+            EarliestAvailable = new HybridLogicalClock { WallClockTicks = 4242, Counter = 7 },
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Bound, Is.EqualTo(EntryHistoryBound.Truncated));
+            Assert.That(copy.EarliestAvailable, Is.EqualTo(original.EarliestAvailable));
+            Assert.That(copy.Revisions, Is.Empty);
+        });
+    }
 }

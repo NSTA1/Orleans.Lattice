@@ -225,3 +225,77 @@ public sealed record EntryDetailResult
         return new EntryDetailResult { Status = StateQueryStatus.KeyNotFound, TreeId = treeId, Key = key };
     }
 }
+
+/// <summary>
+/// Result of <see cref="ILatticeStateQuery.GetEntryHistoryAsync"/>: a
+/// continuation-paged page of a key's revision timeline plus the history
+/// metadata (how the timeline is bounded and, when truncated, the oldest
+/// still-readable revision), or a typed not-found when the tree does not exist.
+/// </summary>
+public sealed record EntryHistoryResult
+{
+    /// <summary>Lookup outcome.</summary>
+    public StateQueryStatus Status { get; init; }
+
+    /// <summary>The tree id that was queried.</summary>
+    public required string TreeId { get; init; }
+
+    /// <summary>The key whose history was queried.</summary>
+    public required string Key { get; init; }
+
+    /// <summary>
+    /// The revisions in this page, ordered per the request's
+    /// <see cref="EntryHistoryRequest.Reverse"/> flag (oldest-first by default).
+    /// Empty when not found or when the timeline is drained.
+    /// </summary>
+    public IReadOnlyList<EntryRevisionRecord> Revisions { get; init; } = Array.Empty<EntryRevisionRecord>();
+
+    /// <summary>
+    /// Opaque token to pass as
+    /// <see cref="EntryHistoryRequest.ContinuationToken"/> to fetch the next
+    /// page, or <see langword="null"/> when the timeline is fully drained.
+    /// </summary>
+    public string? ContinuationToken { get; init; }
+
+    /// <summary>How the returned timeline is bounded below.</summary>
+    public EntryHistoryBound Bound { get; init; }
+
+    /// <summary>
+    /// On a <see cref="EntryHistoryBound.Truncated"/> page, the
+    /// hybrid-logical-clock timestamp of the oldest still-readable revision;
+    /// <see cref="HybridLogicalClock.Zero"/> otherwise.
+    /// </summary>
+    public HybridLogicalClock EarliestAvailable { get; init; }
+
+    /// <summary>Builds a found page.</summary>
+    public static EntryHistoryResult Found(
+        string treeId,
+        string key,
+        IReadOnlyList<EntryRevisionRecord> revisions,
+        string? continuationToken,
+        EntryHistoryBound bound,
+        HybridLogicalClock earliestAvailable)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentNullException.ThrowIfNull(key);
+        ArgumentNullException.ThrowIfNull(revisions);
+        return new EntryHistoryResult
+        {
+            Status = StateQueryStatus.Found,
+            TreeId = treeId,
+            Key = key,
+            Revisions = revisions,
+            ContinuationToken = continuationToken,
+            Bound = bound,
+            EarliestAvailable = earliestAvailable,
+        };
+    }
+
+    /// <summary>Builds a tree-not-found result.</summary>
+    public static EntryHistoryResult TreeNotFound(string treeId, string key)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentNullException.ThrowIfNull(key);
+        return new EntryHistoryResult { Status = StateQueryStatus.TreeNotFound, TreeId = treeId, Key = key };
+    }
+}

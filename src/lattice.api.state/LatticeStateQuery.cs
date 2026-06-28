@@ -532,6 +532,185 @@ internal sealed class LatticeStateQuery(
         return EntryDetailResult.Found(treeId, record);
     }
 
+    public async Task<EntryHistoryResult> GetEntryHistoryAsync(
+        EntryHistoryRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentException.ThrowIfNullOrEmpty(request.TreeId);
+        ArgumentNullException.ThrowIfNull(request.Key);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var tree = _grainFactory.GetGrain<ILattice>(request.TreeId);
+        if (IsReservedTree(request.TreeId) || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return EntryHistoryResult.TreeNotFound(request.TreeId, request.Key);
+        }
+
+        var limit = ClampHistoryLimit(request.Limit);
+        var previewBudget = ClampHistoryPreviewBudget(request.ValuePreviewBudget);
+
+        var page = await tree
+            .ScanEntryHistoryAsync(request.Key, request.FromHlc, request.ToHlc, limit, request.ContinuationToken, cancellationToken)
+            .ConfigureAwait(false);
+
+        // The merge mode is declared per tree, so the CRDT shape (and therefore
+        // the decoder) is the same for every revision; resolve the registries
+        // once and decode per revision off the bytes the read path retained.
+        var shapeRegistry = _services.GetService<CrdtShapeRegistry>();
+        var decoderRegistry = _services.GetService<CrdtProvenanceDecoderRegistry>()
+            ?? CrdtProvenanceDecoderRegistry.Default;
+
+        var records = new List<EntryRevisionRecord>(page.Revisions.Count);
+        for (var i = 0; i < page.Revisions.Count; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            records.Add(MapRevision(request.TreeId, page.Revisions[i], previewBudget, shapeRegistry, decoderRegistry));
+        }
+
+        if (request.Reverse)
+        {
+            // Paging advances oldest-to-newest through the timeline; Reverse only
+            // flips the order of the revisions within this page (newest-first).
+            records.Reverse();
+        }
+
+        var bound = MapHistoryBound(page);
+        var earliest = bound == EntryHistoryBound.Truncated ? page.EarliestAvailable : HybridLogicalClock.Zero;
+
+        return EntryHistoryResult.Found(request.TreeId, request.Key, records, page.Continuation, bound, earliest);
+    }
+
+    /// <summary>
+    /// Maps a core <see cref="EntryRevision"/> onto the public
+    /// <see cref="EntryRevisionRecord"/>: re-clips the value / delta preview to
+    /// the (smaller) request budget, derives the per-row retention descriptor,
+    /// and decodes the CRDT member changes when the revision retained its bytes
+    /// in full.
+    /// </summary>
+    private static EntryRevisionRecord MapRevision(
+        string treeId,
+        in EntryRevision revision,
+        int previewBudget,
+        CrdtShapeRegistry? shapeRegistry,
+        CrdtProvenanceDecoderRegistry decoderRegistry)
+    {
+        var truncated = revision.ValueTruncated;
+
+        var valuePreview = revision.ValuePreview;
+        if (valuePreview is not null && valuePreview.Length > previewBudget)
+        {
+            valuePreview = valuePreview[..previewBudget];
+            truncated = true;
+        }
+
+        var deltaPreview = revision.Delta;
+        if (deltaPreview is not null && deltaPreview.Length > previewBudget)
+        {
+            deltaPreview = deltaPreview[..previewBudget];
+            truncated = true;
+        }
+
+        var memberChanges = DecodeMemberChanges(treeId, revision, shapeRegistry, decoderRegistry);
+
+        return new EntryRevisionRecord
+        {
+            Hlc = revision.Hlc,
+            Kind = revision.Kind,
+            Category = MutationCategory.User,
+            SourceKey = revision.SourceKey,
+            OriginClusterId = revision.OriginClusterId,
+            ValuePreview = valuePreview,
+            ValueLength = revision.ValueLength,
+            Truncated = truncated,
+            ValueHash = revision.ValueHash,
+            Delta = deltaPreview,
+            Mode = revision.Mode,
+            MemberChanges = memberChanges,
+            Retention = new RevisionRetention
+            {
+                Mode = revision.RetentionShape,
+                ValueRetained = revision.ValuePreview is not null || revision.Delta is not null,
+            },
+            EndKey = revision.EndKey,
+        };
+    }
+
+    /// <summary>
+    /// Decodes the element-level member changes for a CRDT revision whose bytes
+    /// were retained in full (an untruncated delta or full-state value), or
+    /// returns an empty list for an LWW revision, a non-CRDT tree, a
+    /// metadata-only or truncated CRDT revision, or an unregistered shape. A
+    /// decode failure (e.g. a forward-incompatible delta) is swallowed and
+    /// yields no member changes rather than failing the whole history read.
+    /// </summary>
+    private static IReadOnlyList<CrdtMemberChange> DecodeMemberChanges(
+        string treeId,
+        in EntryRevision revision,
+        CrdtShapeRegistry? shapeRegistry,
+        CrdtProvenanceDecoderRegistry decoderRegistry)
+    {
+        if (revision.Mode == LatticeMergeMode.LwwRegister
+            || shapeRegistry is null
+            || revision.ValueTruncated
+            || !decoderRegistry.TryGet(revision.Mode, out var decoder))
+        {
+            return Array.Empty<CrdtMemberChange>();
+        }
+
+        var shape = shapeRegistry.TryGet(treeId, revision.Mode);
+        if (shape is null)
+        {
+            return Array.Empty<CrdtMemberChange>();
+        }
+
+        try
+        {
+            if (revision.Kind == HistoryRowKind.CrdtDelta && revision.Delta is { } deltaBytes)
+            {
+                var delta = shape.DeserializeDelta(deltaBytes);
+                return decoder.DecodeDeltas(new[] { new CrdtProvenanceDelta(delta, revision.Hlc) });
+            }
+
+            if (revision.Kind == HistoryRowKind.Set && revision.ValuePreview is { } valueBytes)
+            {
+                var state = shape.DeserializeState(valueBytes);
+                return decoder.DecodeState(state);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // A revision whose retained bytes cannot be decoded (partial,
+            // corrupt, or forward-incompatible) carries no member changes rather
+            // than failing the page.
+            return Array.Empty<CrdtMemberChange>();
+        }
+
+        return Array.Empty<CrdtMemberChange>();
+    }
+
+    /// <summary>Maps the backing history substrate and truncation flag onto the public bound classification.</summary>
+    private static EntryHistoryBound MapHistoryBound(EntryHistoryPage page) => page.Source switch
+    {
+        EntryHistorySource.View => EntryHistoryBound.BoundedByAge,
+        EntryHistorySource.WalWindow when page.Truncated => EntryHistoryBound.Truncated,
+        _ => EntryHistoryBound.WalWindowFallback,
+    };
+
+    private int ClampHistoryLimit(int requested) => requested switch
+    {
+        < 1 => _apiOptions.DefaultHistoryPageSize,
+        _ when requested > _apiOptions.MaxHistoryPageSize => _apiOptions.MaxHistoryPageSize,
+        _ => requested,
+    };
+
+    private int ClampHistoryPreviewBudget(int requested) => requested switch
+    {
+        < 1 => _apiOptions.DefaultHistoryValuePreviewBytes,
+        _ when requested > _apiOptions.MaxHistoryValuePreviewBytes => _apiOptions.MaxHistoryValuePreviewBytes,
+        _ => requested,
+    };
+
     public async Task CancelScanAsync(
         string treeId,
         string? continuationToken,

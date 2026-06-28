@@ -425,4 +425,144 @@ public sealed class StateDtoSerializationTests
             Assert.That(copy.Trees[0].ShardHotness[0].OpsPerSecond, Is.EqualTo(12.5));
         });
     }
+
+    [Test]
+    public void EntryHistoryRequest_round_trips()
+    {
+        var original = new EntryHistoryRequest
+        {
+            TreeId = "tree-a",
+            Key = "k1",
+            FromHlc = new HybridLogicalClock { WallClockTicks = 100, Counter = 1 },
+            ToHlc = new HybridLogicalClock { WallClockTicks = 900, Counter = 2 },
+            Limit = 50,
+            ContinuationToken = "cursor-1",
+            ValuePreviewBudget = 128,
+            Reverse = true,
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TreeId, Is.EqualTo("tree-a"));
+            Assert.That(copy.Key, Is.EqualTo("k1"));
+            Assert.That(copy.FromHlc, Is.EqualTo(original.FromHlc));
+            Assert.That(copy.ToHlc, Is.EqualTo(original.ToHlc));
+            Assert.That(copy.Limit, Is.EqualTo(50));
+            Assert.That(copy.ContinuationToken, Is.EqualTo("cursor-1"));
+            Assert.That(copy.ValuePreviewBudget, Is.EqualTo(128));
+            Assert.That(copy.Reverse, Is.True);
+        });
+    }
+
+    [Test]
+    public void EntryHistoryRequest_round_trips_with_open_bounds()
+    {
+        var original = new EntryHistoryRequest { TreeId = "tree-a", Key = "k1" };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.FromHlc, Is.Null);
+            Assert.That(copy.ToHlc, Is.Null);
+            Assert.That(copy.ContinuationToken, Is.Null);
+            Assert.That(copy.Reverse, Is.False);
+        });
+    }
+
+    [Test]
+    public void RevisionRetention_round_trips()
+    {
+        var original = new RevisionRetention { Mode = HistoryRetentionMode.Hybrid, ValueRetained = true };
+
+        Assert.That(RoundTrip(original), Is.EqualTo(original));
+    }
+
+    [Test]
+    public void EntryRevisionRecord_round_trips_with_member_changes()
+    {
+        var original = new EntryRevisionRecord
+        {
+            Hlc = new HybridLogicalClock { WallClockTicks = 500, Counter = 3 },
+            Kind = HistoryRowKind.CrdtDelta,
+            Category = MutationCategory.User,
+            SourceKey = "k1",
+            OriginClusterId = "west",
+            ValuePreview = null,
+            ValueLength = 0,
+            Truncated = false,
+            ValueHash = 0,
+            Delta = new byte[] { 9, 8, 7 },
+            Mode = LatticeMergeMode.OrSet,
+            MemberChanges = new[]
+            {
+                new CrdtMemberChange
+                {
+                    Element = new byte[] { 1, 2 },
+                    Kind = CrdtMemberChangeKind.Added,
+                    ReplicaId = "r1",
+                    Ordinal = 42,
+                    WallClock = new HybridLogicalClock { WallClockTicks = 500, Counter = 3 },
+                },
+            },
+            Retention = new RevisionRetention { Mode = HistoryRetentionMode.FullValue, ValueRetained = true },
+            EndKey = null,
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Hlc, Is.EqualTo(original.Hlc));
+            Assert.That(copy.Kind, Is.EqualTo(HistoryRowKind.CrdtDelta));
+            Assert.That(copy.Category, Is.EqualTo(MutationCategory.User));
+            Assert.That(copy.SourceKey, Is.EqualTo("k1"));
+            Assert.That(copy.OriginClusterId, Is.EqualTo("west"));
+            Assert.That(copy.Delta, Is.EqualTo(new byte[] { 9, 8, 7 }));
+            Assert.That(copy.Mode, Is.EqualTo(LatticeMergeMode.OrSet));
+            Assert.That(copy.MemberChanges, Has.Count.EqualTo(1));
+            Assert.That(copy.MemberChanges[0].Element, Is.EqualTo(new byte[] { 1, 2 }));
+            Assert.That(copy.MemberChanges[0].Kind, Is.EqualTo(CrdtMemberChangeKind.Added));
+            Assert.That(copy.MemberChanges[0].ReplicaId, Is.EqualTo("r1"));
+            Assert.That(copy.MemberChanges[0].Ordinal, Is.EqualTo(42));
+            Assert.That(copy.Retention.Mode, Is.EqualTo(HistoryRetentionMode.FullValue));
+            Assert.That(copy.Retention.ValueRetained, Is.True);
+        });
+    }
+
+    [Test]
+    public void EntryRevisionRecord_round_trips_metadata_only_set()
+    {
+        var original = new EntryRevisionRecord
+        {
+            Hlc = new HybridLogicalClock { WallClockTicks = 10, Counter = 0 },
+            Kind = HistoryRowKind.Set,
+            Category = MutationCategory.User,
+            SourceKey = "k2",
+            ValuePreview = null,
+            ValueLength = 4096,
+            Truncated = false,
+            ValueHash = unchecked((long)0xDEADBEEFCAFEF00D),
+            Mode = LatticeMergeMode.LwwRegister,
+            Retention = new RevisionRetention { Mode = HistoryRetentionMode.MetadataOnly, ValueRetained = false },
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.ValuePreview, Is.Null);
+            Assert.That(copy.ValueLength, Is.EqualTo(4096));
+            Assert.That(copy.ValueHash, Is.EqualTo(original.ValueHash));
+            Assert.That(copy.MemberChanges, Is.Empty);
+            Assert.That(copy.Retention.ValueRetained, Is.False);
+        });
+    }
+
+    [Test]
+    public void EntryHistoryBound_round_trips_every_value()
+    {
+        foreach (var value in Enum.GetValues<EntryHistoryBound>())
+        {
+            Assert.That(RoundTrip(value), Is.EqualTo(value));
+        }
+    }
 }
