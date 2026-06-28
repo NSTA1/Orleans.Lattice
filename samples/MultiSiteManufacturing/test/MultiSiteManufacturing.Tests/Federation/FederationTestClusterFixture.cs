@@ -102,6 +102,10 @@ public sealed class FederationTestClusterFixture
             siloBuilder.AddMemoryGrainStorage("msmfgGrainState");
             siloBuilder.UseInMemoryReminderService();
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
+            // Durable materialised-view subsystem so tests can enable a per-key
+            // history view over the CRDT trees (HistoryShowcaseActivator), mirroring
+            // the production silo configuration in Program.cs. Must follow AddLattice.
+            siloBuilder.AddLatticeViews();
             // Dashboard broadcast stream: mirrors the production silo
             // configuration in Program.cs so DashboardBroadcaster can
             // publish and subscribe during tests without ceremony.

@@ -199,6 +199,26 @@ public sealed class PartCrdtStore(IGrainFactory grainFactory, SiloIdentity silo)
     }
 
     /// <summary>
+    /// Removes <paramref name="label"/> from the part's process-label
+    /// OR-Set via <see cref="OrSetAccessor.RemoveAsync"/>. Observed-remove
+    /// semantics: only the causal dots visible at call time are tombstoned,
+    /// so a concurrent re-add on another replica survives the merge.
+    /// Removing a label that is not present is a no-op. Under partition the
+    /// write goes to this silo's shadow key in the labels tree, mirroring
+    /// <see cref="AddLabelAsync"/>.
+    /// </summary>
+    public async Task RemoveLabelAsync(PartSerialNumber serial, string label, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(label);
+        var key = await Partition.IsPartitionedAsync().ConfigureAwait(false)
+            ? ShadowKey(silo.Id, serial)
+            : SharedKey(serial);
+        var bytes = Encoding.UTF8.GetBytes(label);
+        await LabelsTree.OrSet(key).RemoveAsync(bytes, cancellationToken).ConfigureAwait(false);
+        RaisePartChanged(serial);
+    }
+
+    /// <summary>
     /// Returns the current process-label set for <paramref name="serial"/>
     /// in lexicographic order. Union of (shared OR-Set, this silo's
     /// shadow OR-Set) - so a silo always sees its own partition-era
