@@ -14,4 +14,7 @@ public enum DetailTab
 
     /// <summary>Key and value drill-down for the selected tree or view.</summary>
     Data,
+
+    /// <summary>Per-key revision timeline for the selected tree or view.</summary>
+    History,
 }

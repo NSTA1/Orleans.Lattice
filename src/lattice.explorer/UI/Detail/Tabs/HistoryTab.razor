@@ -1,0 +1,402 @@
+@using Orleans.Lattice.Api.State
+@using Orleans.Lattice.Explorer.Core.Data
+@inherits DetailTabBase
+@inject IHistoryReader HistoryReader
+@inject IUiSessionStore SessionStore
+
+<div class="explorer-history">
+    <div class="explorer-history-toolbar">
+        <div class="explorer-history-keyfield">
+            <input type="text" class="explorer-history-keyinput" placeholder="Key to inspect..."
+                   value="@_keyInput" disabled="@_loading"
+                   @oninput="OnKeyInput" @onkeyup="OnKeyUpAsync" />
+            <button type="button" class="explorer-btn" disabled="@(_loading || string.IsNullOrEmpty(_keyInput))"
+                    @onclick="LoadKeyAsync">Load</button>
+        </div>
+        @if (_key is not null)
+        {
+            <button type="button" class="explorer-btn" disabled="@_loading" @onclick="ReloadAsync">
+                @(_loading ? "Loading..." : "Refresh")
+            </button>
+            <label class="explorer-history-order">
+                <input type="checkbox" checked="@_newestFirst" @onchange="ToggleOrder" disabled="@_loading" />
+                Newest first
+            </label>
+        }
+    </div>
+
+    @if (_key is null)
+    {
+        <div class="explorer-history-state">Select a key in the Data tab, or enter one above, to see its revision history.</div>
+    }
+    else if (_loading && _timeline is null)
+    {
+        <div class="explorer-history-state">Loading history...</div>
+    }
+    else if (_error is not null)
+    {
+        <div class="explorer-history-state explorer-history-error">
+            <span>@_error</span>
+            <button type="button" class="explorer-btn-link" @onclick="ReloadAsync">Try again</button>
+        </div>
+    }
+    else if (_timeline is null)
+    {
+        <div class="explorer-history-state">No history loaded.</div>
+    }
+    else if (_timeline.Status == StateQueryStatus.TreeNotFound)
+    {
+        <div class="explorer-history-state">Tree not found (it may have been deleted since the catalog was listed).</div>
+    }
+    else if (_timeline.Status == StateQueryStatus.KeyNotFound || !_timeline.HasRows)
+    {
+        <div class="explorer-history-state">No revisions recorded for <code>@_key</code>.</div>
+    }
+    else
+    {
+        var t = _timeline;
+        <div class="explorer-history-head">
+            <code class="explorer-history-key" title="@_key">@_key</code>
+            @if (t.ActiveRetentionMode is { } mode)
+            {
+                <span class="explorer-history-badge explorer-history-badge-retention" title="Active retention mode for this key">
+                    @RetentionBadge(mode, t.ActiveValueRetained)
+                </span>
+            }
+            <span class="explorer-history-badge explorer-history-badge-bound">@BoundBadge(t.Bound)</span>
+        </div>
+
+        @switch (t.Bound)
+        {
+            case EntryHistoryBound.Truncated:
+                <div class="explorer-history-banner explorer-history-banner-truncated">
+                    History truncated by retention. Older revisions
+                    @if (t.EarliestAvailable.WallClockTicks > 0)
+                    {
+                        @:before @FormatAbsolute(t.EarliestAvailable)
+                    }
+                    are no longer available.
+                </div>
+                break;
+            case EntryHistoryBound.WalWindowFallback:
+                <div class="explorer-history-hint">
+                    No durable history view is enabled for this tree; showing only the retained write-ahead-log window.
+                </div>
+                break;
+            default:
+                <div class="explorer-history-hint">
+                    Durable history view, bounded only by the configured retention age.
+                </div>
+                break;
+        }
+
+        <ol class="explorer-history-timeline">
+            @foreach (var row in t.Rows)
+            {
+                @if (row.RetentionChange is { } transition)
+                {
+                    <li class="explorer-history-divider">@transition.Label()</li>
+                }
+                <li class="explorer-history-row explorer-history-row-@KindClass(row.Kind)">
+                    <div class="explorer-history-rowhead">
+                        <span class="explorer-history-kind explorer-history-kind-@KindClass(row.Kind)">@KindLabel(row.Kind)</span>
+                        <span class="explorer-history-time" title="@FormatAbsolute(row.Hlc)">@FormatRelative(row.Hlc)</span>
+                        <span class="explorer-history-origin">@OriginLabel(row.OriginClusterId)</span>
+                    </div>
+                    <div class="explorer-history-rowbody">
+                        @switch (row.RenderMode)
+                        {
+                            case HistoryRowRenderMode.ValueDiff:
+                                if (row.Value is { } rendered)
+                                {
+                                    @if (row.Diff.Count > 0)
+                                    {
+                                        <pre class="explorer-history-diff">@foreach (var line in row.Diff)
+{<span class="explorer-history-diff-@DiffClass(line.Kind)">@DiffPrefix(line.Kind)@line.Text
+</span>}</pre>
+                                    }
+                                    else
+                                    {
+                                        <pre class="explorer-history-value">@rendered.Content</pre>
+                                    }
+                                    @if (rendered.Note is not null)
+                                    {
+                                        <p class="explorer-history-note">@rendered.Note</p>
+                                    }
+                                }
+                                break;
+                            case HistoryRowRenderMode.MetadataOnly:
+                                <p class="explorer-history-metaonly">Values not retained - metadata only.</p>
+                                <dl class="explorer-history-meta">
+                                    <div><dt>Value hash</dt><dd>@FormatHash(row.ValueHash)</dd></div>
+                                    <div><dt>Value length</dt><dd>@row.ValueLength.ToString("N0") bytes</dd></div>
+                                </dl>
+                                break;
+                            case HistoryRowRenderMode.CrdtMembers:
+                                @if (row.MemberChanges.Count > 0)
+                                {
+                                    <ul class="explorer-history-members">
+                                        @foreach (var member in row.MemberChanges)
+                                        {
+                                            <li class="explorer-history-member explorer-history-member-@MemberClass(member.Kind)">
+                                                <span class="explorer-history-member-kind">@MemberLabel(member.Kind)</span>
+                                                <code class="explorer-history-member-element">@ElementText(member)</code>
+                                                <span class="explorer-history-member-replica">@member.ReplicaId (dot @member.Ordinal)</span>
+                                            </li>
+                                        }
+                                    </ul>
+                                }
+                                else
+                                {
+                                    <p class="explorer-history-metaonly">CRDT delta not retained in full - member changes unavailable for this revision.</p>
+                                }
+                                break;
+                            case HistoryRowRenderMode.Delete:
+                                <p class="explorer-history-metaonly">Key deleted.</p>
+                                break;
+                            case HistoryRowRenderMode.RangeTombstone:
+                                <p class="explorer-history-metaonly">Swept by a range delete@(row.EndKey is not null ? $" up to {row.EndKey}" : string.Empty).</p>
+                                break;
+                        }
+                    </div>
+                </li>
+            }
+        </ol>
+
+        @if (t.HasMore)
+        {
+            <div class="explorer-history-more">
+                <button type="button" class="explorer-btn" disabled="@_loading" @onclick="LoadMoreAsync">
+                    @(_loading ? "Loading..." : "Load more revisions")
+                </button>
+            </div>
+        }
+    }
+</div>
+
+@code {
+    /// <summary>The page size requested for each history read.</summary>
+    private const int PageLimit = 50;
+
+    private string? _key;
+    private string _keyInput = string.Empty;
+
+    private readonly List<HistoryRevisionRow> _accumulated = new();
+    private HistoryTimeline? _timeline;
+    private StateQueryStatus _status;
+    private EntryHistoryBound _bound;
+    private HybridLogicalClock _earliest;
+    private string? _continuation;
+
+    private bool _loading;
+    private string? _error;
+    private bool _newestFirst = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Reuse the Data tab's selection: open the key the user last drilled into.
+        var selected = SessionStore.GetOrDefault(DataSelection.SelectedKey(Selection.Id), string.Empty);
+        if (!string.IsNullOrEmpty(selected))
+        {
+            _key = selected;
+            _keyInput = selected;
+            await LoadFirstAsync();
+        }
+    }
+
+    private void OnKeyInput(ChangeEventArgs e) => _keyInput = e.Value?.ToString() ?? string.Empty;
+
+    private async Task OnKeyUpAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            await LoadKeyAsync();
+        }
+    }
+
+    private async Task LoadKeyAsync()
+    {
+        if (string.IsNullOrEmpty(_keyInput))
+        {
+            return;
+        }
+
+        _key = _keyInput;
+        SessionStore.Set(DataSelection.SelectedKey(Selection.Id), _key);
+        await LoadFirstAsync();
+    }
+
+    private Task ReloadAsync() => LoadFirstAsync();
+
+    private async Task LoadFirstAsync()
+    {
+        _accumulated.Clear();
+        _continuation = null;
+        _timeline = null;
+        await LoadPageAsync(continuation: null);
+    }
+
+    private Task LoadMoreAsync() => LoadPageAsync(_continuation);
+
+    private async Task LoadPageAsync(string? continuation)
+    {
+        if (_key is null)
+        {
+            return;
+        }
+
+        _loading = true;
+        _error = null;
+        StateHasChanged();
+
+        try
+        {
+            var page = await HistoryReader.LoadAsync(Selection.Id, _key, PageLimit, continuation, TabToken);
+
+            _accumulated.AddRange(page.Revisions);
+            _status = page.Status;
+            _bound = page.Bound;
+            _earliest = page.EarliestAvailable;
+            _continuation = page.ContinuationToken;
+
+            Rebuild();
+        }
+        catch (OperationCanceledException) when (TabToken.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void ToggleOrder(ChangeEventArgs e)
+    {
+        _newestFirst = e.Value is bool b ? b : !_newestFirst;
+        Rebuild();
+    }
+
+    // Re-derives the display timeline (diffs, dividers, ordering, active mode)
+    // from the accumulated chronological revisions without a server round trip.
+    private void Rebuild()
+    {
+        if (_key is null)
+        {
+            return;
+        }
+
+        _timeline = HistoryTimeline.Build(
+            Selection.Id, _key, _status, _accumulated, _bound, _earliest, _continuation, _newestFirst);
+    }
+
+    private static string RetentionBadge(HistoryRetentionMode mode, bool valueRetained) => mode switch
+    {
+        HistoryRetentionMode.FullValue => "full-value",
+        HistoryRetentionMode.MetadataOnly => "metadata-only",
+        HistoryRetentionMode.Hybrid => valueRetained ? "hybrid (value)" : "hybrid (metadata)",
+        _ => mode.ToString(),
+    };
+
+    private static string BoundBadge(EntryHistoryBound bound) => bound switch
+    {
+        EntryHistoryBound.BoundedByAge => "durable",
+        EntryHistoryBound.Truncated => "truncated",
+        EntryHistoryBound.WalWindowFallback => "WAL-window fallback",
+        _ => bound.ToString(),
+    };
+
+    private static string KindLabel(HistoryRowKind kind) => kind switch
+    {
+        HistoryRowKind.Set => "set",
+        HistoryRowKind.Delete => "delete",
+        HistoryRowKind.CrdtDelta => "crdt-merge",
+        HistoryRowKind.RangeTombstone => "range-delete",
+        _ => kind.ToString().ToLowerInvariant(),
+    };
+
+    private static string KindClass(HistoryRowKind kind) => kind switch
+    {
+        HistoryRowKind.Set => "set",
+        HistoryRowKind.Delete => "delete",
+        HistoryRowKind.CrdtDelta => "crdt",
+        HistoryRowKind.RangeTombstone => "range",
+        _ => "other",
+    };
+
+    private static string MemberLabel(CrdtMemberChangeKind kind) =>
+        kind == CrdtMemberChangeKind.Added ? "added" : "removed";
+
+    private static string MemberClass(CrdtMemberChangeKind kind) =>
+        kind == CrdtMemberChangeKind.Added ? "added" : "removed";
+
+    private static string DiffClass(HistoryDiffLineKind kind) => kind switch
+    {
+        HistoryDiffLineKind.Added => "added",
+        HistoryDiffLineKind.Removed => "removed",
+        _ => "unchanged",
+    };
+
+    private static string DiffPrefix(HistoryDiffLineKind kind) => kind switch
+    {
+        HistoryDiffLineKind.Added => "+ ",
+        HistoryDiffLineKind.Removed => "- ",
+        _ => "  ",
+    };
+
+    private static string ElementText(HistoryMemberChange member) =>
+        member.ElementFormat == ValueFormat.Empty ? "(empty)" : member.ElementText;
+
+    private static string OriginLabel(string? originClusterId) =>
+        string.IsNullOrEmpty(originClusterId) ? "local" : originClusterId;
+
+    private static string FormatHash(long hash) =>
+        hash == 0 ? "-" : "0x" + ((ulong)hash).ToString("x16");
+
+    private static string FormatAbsolute(HybridLogicalClock hlc)
+    {
+        if (hlc.WallClockTicks <= 0)
+        {
+            return "-";
+        }
+
+        var wall = new DateTime(hlc.WallClockTicks, DateTimeKind.Utc).ToLocalTime();
+        return $"{wall:yyyy-MM-dd HH:mm:ss} (+{hlc.Counter})";
+    }
+
+    private static string FormatRelative(HybridLogicalClock hlc)
+    {
+        if (hlc.WallClockTicks <= 0)
+        {
+            return "-";
+        }
+
+        var elapsed = DateTime.UtcNow - new DateTime(hlc.WallClockTicks, DateTimeKind.Utc);
+        if (elapsed < TimeSpan.Zero)
+        {
+            elapsed = TimeSpan.Zero;
+        }
+
+        if (elapsed.TotalSeconds < 60)
+        {
+            return $"{(int)elapsed.TotalSeconds}s ago";
+        }
+
+        if (elapsed.TotalMinutes < 60)
+        {
+            return $"{(int)elapsed.TotalMinutes}m ago";
+        }
+
+        if (elapsed.TotalHours < 24)
+        {
+            return $"{(int)elapsed.TotalHours}h ago";
+        }
+
+        return $"{(int)elapsed.TotalDays}d ago";
+    }
+}

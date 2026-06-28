@@ -27,7 +27,6 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-097](https://github.com/NSTA1/Orleans.Lattice/issues/666) - Orleans.Lattice.GrainIndex: docs, sample & end-to-end convergence tests
 - [F-138](https://github.com/NSTA1/Orleans.Lattice/issues/950) - Change-history / revision timeline for keys (CRDT + LWW), Explorer + State API (epic)
 - [F-139](https://github.com/NSTA1/Orleans.Lattice/issues/951) - State API: surface the CRDT shape on entries (fix CrdtShape=null)
-- [F-144](https://github.com/NSTA1/Orleans.Lattice/issues/956) - Orleans.Lattice.Explorer: History tab - per-key revision timeline + value diff, retention-mode aware
 - [F-145](https://github.com/NSTA1/Orleans.Lattice/issues/957) - Orleans.Lattice.Explorer: live follow mode for the History tab (ObserveChanges)
 - [F-146](https://github.com/NSTA1/Orleans.Lattice/issues/958) - Change-history sample + docs showcase (MultiSiteManufacturing + features.md sync)
 - [F-147](https://github.com/NSTA1/Orleans.Lattice/issues/971) - Orleans.Lattice.Membership + Orleans.Lattice.Auth: identity, authorization & enforcement layer (epic)
@@ -157,6 +156,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-141](https://github.com/NSTA1/Orleans.Lattice/issues/953) - Storage: durable per-key history as an opt-in accumulative materialised view (rebuild guard + retention modes)
 - [F-142](https://github.com/NSTA1/Orleans.Lattice/issues/954) - CRDT: element-level provenance decoding (OrSet dots to member change events)
 - [F-143](https://github.com/NSTA1/Orleans.Lattice/issues/955) - State API: GetEntryHistoryAsync endpoint (+ gRPC service/client + explorer passthrough)
+- [F-144](https://github.com/NSTA1/Orleans.Lattice/issues/956) - Orleans.Lattice.Explorer: History tab - per-key revision timeline + value diff, retention-mode aware
 - [P-000](https://github.com/NSTA1/Orleans.Lattice/issues/555) - Server-side predicate filtering (expression-tree push-down) for typed reads, scans, cursors, and conditional mutations
 - [P-001](https://github.com/NSTA1/Orleans.Lattice/issues/556) - Expression-tree predicate IR + server-side document-model evaluator (umbrella spine)
 - [P-002](https://github.com/NSTA1/Orleans.Lattice/issues/557) - `GetManyAsync<T>` server-side predicate push-down

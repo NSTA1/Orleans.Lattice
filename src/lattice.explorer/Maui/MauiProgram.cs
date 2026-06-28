@@ -3,6 +3,7 @@ using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Catalog;
 using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.Core.Data;
+using Orleans.Lattice.Explorer.Core.History;
 using Orleans.Lattice.Explorer.Core.Metrics;
 using Orleans.Lattice.Explorer.Core.Session;
 using Orleans.Lattice.Explorer.Core.Topology;
@@ -53,6 +54,7 @@ public static class MauiProgram
         builder.Services.AddExplorerMetrics();
         builder.Services.AddExplorerTopology();
         builder.Services.AddExplorerData();
+        builder.Services.AddExplorerHistory();
         builder.Services.AddExplorerSession();
 
         // The desktop head persists UI preferences to the platform preference
