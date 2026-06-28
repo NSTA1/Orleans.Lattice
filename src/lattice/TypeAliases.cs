@@ -395,6 +395,13 @@ internal static class TypeAliases
     internal const string HistoryRetentionMode = "ol.hrm";
     internal const string HistoryRetentionSettings = "ol.hrs";
 
+    // History read path: the per-key revision-timeline read returns a paged set of
+    // revision records (one per stored history row, or per retained write-ahead-log
+    // mutation on the fallback path), tagged with the substrate that produced them.
+    internal const string EntryRevision = "ol.erv";
+    internal const string EntryHistoryPage = "ol.ehp";
+    internal const string EntryHistorySource = "ol.ehs";
+
     // Materialised views (Phase 5): the order-independent content fingerprint a
     // view's drift digest / ReconcileAsync compares between the live view and a
     // fresh source re-projection.
