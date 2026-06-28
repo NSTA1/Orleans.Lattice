@@ -85,4 +85,16 @@ public static class ApiStateTypeAliases
 
     /// <summary>Alias for <see cref="TagValueCatalogPage"/>.</summary>
     public const string TagValueCatalogPage = "ola.tvp";
+
+    /// <summary>Alias for <see cref="EntryHistoryRequest"/>.</summary>
+    public const string EntryHistoryRequest = "ola.ehq";
+
+    /// <summary>Alias for <see cref="EntryRevisionRecord"/>.</summary>
+    public const string EntryRevisionRecord = "ola.erev";
+
+    /// <summary>Alias for <see cref="RevisionRetention"/>.</summary>
+    public const string RevisionRetention = "ola.rret";
+
+    /// <summary>Alias for <see cref="EntryHistoryBound"/>.</summary>
+    public const string EntryHistoryBound = "ola.ehb";
 }

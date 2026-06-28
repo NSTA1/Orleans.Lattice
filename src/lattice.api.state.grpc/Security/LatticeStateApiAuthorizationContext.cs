@@ -24,6 +24,9 @@ public enum LatticeStateApiOperation
 
     /// <summary>The <c>GetEntry</c> single-key inspection RPC.</summary>
     GetEntry,
+
+    /// <summary>The <c>GetEntryHistory</c> per-key change-history RPC.</summary>
+    GetEntryHistory,
 }
 
 /// <summary>

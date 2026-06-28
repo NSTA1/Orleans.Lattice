@@ -33,6 +33,9 @@ public interface ILatticeStateClient
     /// <summary>Returns the full record for a single key.</summary>
     Task<EntryGetResponse> GetEntryAsync(EntryGetRequest request, CancellationToken cancellationToken = default);
 
+    /// <summary>Returns a page of a single key's change-history timeline.</summary>
+    Task<EntryHistoryResponse> GetEntryHistoryAsync(EntryHistoryRequest request, CancellationToken cancellationToken = default);
+
     /// <summary>Releases a snapshot scan cursor named by a continuation token.</summary>
     Task<EntryScanCancelResponse> CancelScanAsync(EntryScanCancelRequest request, CancellationToken cancellationToken = default);
 

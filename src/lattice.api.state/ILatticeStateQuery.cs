@@ -160,6 +160,26 @@ internal interface ILatticeStateQuery
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Reads a single key's change-history timeline as a continuation-paged page
+    /// of revision records, sourced from the tree's durable per-key history view
+    /// when one is enabled (a clean, age-bounded timeline) or, as a best-effort
+    /// fallback, from the retained source write-ahead-log window (which reports
+    /// truncation honestly once garbage collection has trimmed its oldest
+    /// entries). Each revision carries its hybrid-logical-clock, kind, origin,
+    /// category, a value-or-metadata view bounded by the tree's retention mode,
+    /// the per-revision retention descriptor, and - for a CRDT revision whose
+    /// bytes were retained in full - the decoded element-level member changes.
+    /// The result's <see cref="EntryHistoryResult.Bound"/> tells the consumer
+    /// whether the timeline is durable-bounded or a truncated fallback. Returns a
+    /// typed not-found when the tree does not exist.
+    /// </summary>
+    /// <param name="request">Scope (tree, key), optional HLC bounds, paging, preview budget, and in-page order.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<EntryHistoryResult> GetEntryHistoryAsync(
+        EntryHistoryRequest request,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Releases the server-side snapshot cursor named by a scan continuation
     /// token, freeing its WAL-retention pin and per-shard baseline promptly
     /// instead of waiting for the cursor's idle TTL. Intended for a client that

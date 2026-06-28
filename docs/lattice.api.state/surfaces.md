@@ -109,6 +109,39 @@ while (continuation is not null);
 
 Every `EntryRecord` carries a `CrdtShape` tag: the name of the tree's declared CRDT merge mode (for example `"OrSet"`) when the tree is a typed CRDT, or `null` for an opaque last-writer-wins tree. The shape is the same for every entry on a tree because the merge mode is declared per tree, so a consumer can tell a CRDT entry apart from opaque bytes without decoding the value.
 
+## Change history
+
+`GetEntryHistoryAsync` returns a continuation-paged page of a single key's **change-history timeline** as an `EntryHistoryResponse`. Each `EntryRevisionRecord` carries the revision's `Hlc` (the timeline order key), its `Kind` (set, delete, CRDT delta, or range tombstone), the authoring `OriginClusterId`, the mutation `Category`, and a value-or-metadata view bounded by the tree's retention mode: a size-bounded `ValuePreview` (plus full `ValueLength`) when values are retained, or a `ValueHash` and length only under metadata-only retention. A CRDT revision whose bytes were retained in full also carries the decoded element-level `MemberChanges` (added / removed element, replica, and causal ordinal).
+
+Each revision carries a per-row `Retention` descriptor (the mode applied when the row was written, and whether its value bytes were retained), so a consumer can detect a retention-config transition by diffing adjacent revisions of the same key. The top-level `Bound` reports how the timeline is bounded: `BoundedByAge` when sourced from the durable per-key history view (clean, age-bounded, never truncated), `Truncated` when the retained write-ahead-log window has lost its oldest revisions (with `EarliestAvailable` naming the oldest still-readable revision), or `WalWindowFallback` when no history view is enabled. Set `Reverse` to order revisions newest-first within each page.
+
+```csharp verify
+using Grpc.Net.Client;
+using Microsoft.Extensions.DependencyInjection;
+using Orleans.Serialization;
+
+var serializerProvider = new ServiceCollection().AddSerializer().BuildServiceProvider();
+using var channel = GrpcChannel.ForAddress("https://cluster.example:5001");
+var stateClient = LatticeStateApiGrpcClient.Create(channel.CreateCallInvoker(), serializerProvider);
+
+string? continuation = null;
+do
+{
+    var page = await stateClient.GetEntryHistoryAsync(
+        new EntryHistoryRequest { TreeId = "factory-floor", Key = "press-7", Limit = 100, ContinuationToken = continuation },
+        cancellationToken);
+
+    foreach (var revision in page.Revisions)
+    {
+        var retained = revision.Retention.ValueRetained ? $"{revision.ValueLength} bytes" : $"hash {revision.ValueHash}";
+        Console.WriteLine($"{revision.Hlc}  {revision.Kind}  {retained}");
+    }
+
+    continuation = page.ContinuationToken;
+}
+while (continuation is not null);
+```
+
 ## Change observation
 
 `ObserveChangesAsync` subscribes to a tree's live mutation stream and yields a `StateChangeNotification` per mutation until the call is cancelled or the server ends the stream. Each notification carries the `TreeId`, the affected `Key`, and the change `Kind` (set, delete, or range delete). Set `IncludeMaintenance` on the request to also observe maintenance rewrites.

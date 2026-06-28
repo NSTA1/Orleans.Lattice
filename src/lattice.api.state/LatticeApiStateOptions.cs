@@ -48,6 +48,36 @@ public sealed class LatticeApiStateOptions
     public int SingleEntryValuePreviewBytes { get; set; } = 1024 * 1024;
 
     /// <summary>
+    /// Page size used for a per-key history read
+    /// (<c>GetEntryHistoryAsync</c>) when the request leaves <c>Limit</c> unset
+    /// (<c>0</c> or negative). Defaults to <c>100</c>.
+    /// </summary>
+    public int DefaultHistoryPageSize { get; set; } = 100;
+
+    /// <summary>
+    /// Largest per-key history page size honoured; larger requested limits are
+    /// clamped down. Defaults to <c>1000</c>.
+    /// </summary>
+    public int MaxHistoryPageSize { get; set; } = 1000;
+
+    /// <summary>
+    /// Per-revision value / delta preview byte budget for a per-key history read
+    /// when the request leaves the budget unset (<c>0</c> or negative). The
+    /// durable history substrate already clips stored previews to a fixed
+    /// per-revision ceiling, so a larger budget cannot recover more bytes than
+    /// were retained. Defaults to <c>256</c> bytes.
+    /// </summary>
+    public int DefaultHistoryValuePreviewBytes { get; set; } = 256;
+
+    /// <summary>
+    /// Largest per-revision value / delta preview byte budget honoured for a
+    /// per-key history read; larger requested budgets are clamped down. Defaults
+    /// to <c>256</c> bytes, the per-revision ceiling the history substrate
+    /// stores.
+    /// </summary>
+    public int MaxHistoryValuePreviewBytes { get; set; } = 256;
+
+    /// <summary>
     /// How long a change-observation subscription waits before re-polling the
     /// WAL tail once it has drained all currently-available changes. Lower
     /// values reduce notification latency at the cost of more idle WAL reads.

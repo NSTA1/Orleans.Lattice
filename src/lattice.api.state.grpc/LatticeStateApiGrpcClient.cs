@@ -80,6 +80,10 @@ public sealed class LatticeStateApiGrpcClient
     public Task<EntryGetResponse> GetEntryAsync(EntryGetRequest request, CancellationToken cancellationToken = default)
         => UnaryAsync(_methods.GetEntry, request, cancellationToken);
 
+    /// <summary>Returns a page of a single key's change-history timeline.</summary>
+    public Task<EntryHistoryResponse> GetEntryHistoryAsync(EntryHistoryRequest request, CancellationToken cancellationToken = default)
+        => UnaryAsync(_methods.GetEntryHistory, request, cancellationToken);
+
     /// <summary>Releases a snapshot scan cursor named by a continuation token.</summary>
     public Task<EntryScanCancelResponse> CancelScanAsync(EntryScanCancelRequest request, CancellationToken cancellationToken = default)
         => UnaryAsync(_methods.CancelScan, request, cancellationToken);
