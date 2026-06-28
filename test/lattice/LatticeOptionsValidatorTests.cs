@@ -54,6 +54,54 @@ public class LatticeOptionsValidatorTests
     }
 
     [Test]
+    public void MaxKeyLength_null_succeeds()
+    {
+        var result = Validate(o => o.MaxKeyLength = null);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [TestCase(1)]
+    [TestCase(4096)]
+    public void MaxKeyLength_positive_succeeds(int value)
+    {
+        var result = Validate(o => o.MaxKeyLength = value);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void MaxKeyLength_below_one_fails(int value)
+    {
+        var result = Validate(o => o.MaxKeyLength = value);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain("MaxKeyLength"));
+    }
+
+    [Test]
+    public void MaxValueSizeBytes_null_succeeds()
+    {
+        var result = Validate(o => o.MaxValueSizeBytes = null);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [TestCase(1)]
+    [TestCase(1048576)]
+    public void MaxValueSizeBytes_positive_succeeds(int value)
+    {
+        var result = Validate(o => o.MaxValueSizeBytes = value);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void MaxValueSizeBytes_below_one_fails(int value)
+    {
+        var result = Validate(o => o.MaxValueSizeBytes = value);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain("MaxValueSizeBytes"));
+    }
+
+    [Test]
     public void Valid_custom_values_pass()
     {
         var result = Validate(o =>

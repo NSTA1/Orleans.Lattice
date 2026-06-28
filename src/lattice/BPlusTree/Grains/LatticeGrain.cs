@@ -100,6 +100,34 @@ internal sealed partial class LatticeGrain(
     }
 
     private LatticeOptions Options => optionsMonitor.Get(TreeId);
+
+    /// <summary>
+    /// Enforces the optional <see cref="LatticeOptions.MaxKeyLength"/> /
+    /// <see cref="LatticeOptions.MaxValueSizeBytes"/> write-size bounds at the
+    /// public write boundary, so a client cannot drive unbounded heap growth by
+    /// writing pathologically large keys or values (memory-exhaustion DoS).
+    /// No-op when both bounds are unset (the default). Pass <c>null</c> for
+    /// <paramref name="value"/> on a key-only check.
+    /// </summary>
+    private void ValidateWriteSize(string key, byte[]? value)
+    {
+        var options = Options;
+        if (options.MaxKeyLength is { } maxKeyLength && key.Length > maxKeyLength)
+        {
+            throw new ArgumentException(
+                $"Key length {key.Length} exceeds the configured LatticeOptions.MaxKeyLength of {maxKeyLength}.",
+                nameof(key));
+        }
+        if (value is not null
+            && options.MaxValueSizeBytes is { } maxValueSizeBytes
+            && value.Length > maxValueSizeBytes)
+        {
+            throw new ArgumentException(
+                $"Value size {value.Length} bytes exceeds the configured LatticeOptions.MaxValueSizeBytes of {maxValueSizeBytes}.",
+                nameof(value));
+        }
+    }
+
     private bool _compactionEnsured;
     private bool _monitorEnsured;
     private string? _physicalTreeId;
@@ -865,6 +893,8 @@ internal sealed partial class LatticeGrain(
         ThrowIfSystemTree();
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
+        ArgumentNullException.ThrowIfNull(key);
+        ValidateWriteSize(key, value);
         return LatticeIdempotencyContext.IsActive
             ? RunMutationAsync(ct => SetAsyncCore(key, value, ct), cancellationToken)
             : SetAsyncCore(key, value, cancellationToken);
@@ -1043,6 +1073,7 @@ internal sealed partial class LatticeGrain(
         ThrowIfShuttingDown();
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
+        ValidateWriteSize(key, value);
         if (ttl <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(ttl), "TTL must be positive.");
         var nowUtc = DateTimeOffset.UtcNow;
@@ -1090,6 +1121,7 @@ internal sealed partial class LatticeGrain(
         ThrowIfShuttingDown();
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
+        ValidateWriteSize(key, value);
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
@@ -1121,6 +1153,7 @@ internal sealed partial class LatticeGrain(
         ThrowIfShuttingDown();
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(deltaBytes);
+        ValidateWriteSize(key, deltaBytes);
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
@@ -1152,6 +1185,7 @@ internal sealed partial class LatticeGrain(
         ThrowIfShuttingDown();
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
+        ValidateWriteSize(key, value);
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
@@ -1183,6 +1217,17 @@ internal sealed partial class LatticeGrain(
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ArgumentNullException.ThrowIfNull(entries);
+        {
+            var sizeOptions = Options;
+            if (sizeOptions.MaxKeyLength is not null || sizeOptions.MaxValueSizeBytes is not null)
+            {
+                foreach (var entry in entries)
+                {
+                    if (entry.Key is not null)
+                        ValidateWriteSize(entry.Key, entry.Value);
+                }
+            }
+        }
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
 

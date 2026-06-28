@@ -14,6 +14,18 @@ internal sealed class LatticeOptionsValidator : IValidateOptions<LatticeOptions>
                 $"{nameof(LatticeOptions.QueueCapacity)} must be greater than or equal to 1 when set "
                 + "(null leaves the cluster-internal queue unbounded; a positive value caps it with FIFO eviction).");
         }
+        if (options.MaxKeyLength is { } maxKeyLength && maxKeyLength < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.MaxKeyLength)} must be greater than or equal to 1 when set "
+                + "(null leaves key length unbounded; a positive value caps the number of characters in a key).");
+        }
+        if (options.MaxValueSizeBytes is { } maxValueSizeBytes && maxValueSizeBytes < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.MaxValueSizeBytes)} must be greater than or equal to 1 when set "
+                + "(null leaves value size unbounded; a positive value caps the byte length of a value or CRDT delta).");
+        }
         if (options.MaxLeafReplayEntries < 1)
             return ValidateOptionsResult.Fail($"{nameof(LatticeOptions.MaxLeafReplayEntries)} must be greater than or equal to 1.");
         if (options.MaterialiserCheckpointEntries < 1)
