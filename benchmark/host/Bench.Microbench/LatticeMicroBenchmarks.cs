@@ -2889,6 +2889,14 @@ public class LatticeMicroBenchmarks
     private VersionVector _vvLeft = null!;
     private VersionVector _vvRight = null!;
 
+    // Dedicated operand for the VersionVector_Tick micro-benchmark. Kept
+    // separate from _vvLeft/_vvRight so the tick loop's clock advancement does
+    // not perturb the Merge/Clone/MergeFrom operands (whose overlap clocks must
+    // stay strictly ordered). Pre-seeded with the same replica fan so every
+    // tick hits the dominant existing-entry path.
+    private VersionVector _vvTick = null!;
+    private string[] _vvTickReplicaIds = null!;
+
     // ===== OrMap primitive micro-suite operands =====
     // Two same-shape OrMap<string, PnCounter> operands. PnCounter is an
     // alloc-free value CRDT with a parameterless ctor, so the suite measures
@@ -3120,6 +3128,19 @@ public class LatticeMicroBenchmarks
             _vvRight.Tick(id);
             _vvRight.Tick(id);
         }
+
+        // Tick operand: the same replica fan as the left vector, each id
+        // ticked once so it already exists. The benchmark re-ticks every id,
+        // exercising the per-write existing-entry mutator path the
+        // single-probe Tick optimises (one hash + bucket walk per tick).
+        _vvTick = new VersionVector();
+        _vvTickReplicaIds = new string[entries];
+        for (var i = 0; i < entries; i++)
+        {
+            var id = $"replica-{i:D2}";
+            _vvTickReplicaIds[i] = id;
+            _vvTick.Tick(id);
+        }
     }
 
     /// <summary>
@@ -3153,6 +3174,28 @@ public class LatticeMicroBenchmarks
     /// </summary>
     [Benchmark(Description = "VersionVector clone")]
     public VersionVector VersionVector_Clone() => _vvLeft.Clone();
+
+    /// <summary>
+    /// Per-write vector-clock mutator: re-ticks every replica id already in the
+    /// vector, so each <see cref="VersionVector.Tick(string)"/> call hits the
+    /// dominant existing-entry path. This is the hot mutator the
+    /// <see cref="VersionVector"/> accessor runs on every CRDT vector-clock
+    /// write; isolating it here measures the single-probe lookup cost (one hash
+    /// + bucket walk per tick) with zero allocation and no mock noise. The loop
+    /// only advances clocks on a fixed-size dictionary, so the operand's
+    /// structure stays stable across iterations.
+    /// </summary>
+    [Benchmark(Description = "VersionVector tick (existing replica)")]
+    public HybridLogicalClock VersionVector_Tick()
+    {
+        var ids = _vvTickReplicaIds;
+        var last = default(HybridLogicalClock);
+        for (var i = 0; i < ids.Length; i++)
+        {
+            last = _vvTick.Tick(ids[i]);
+        }
+        return last;
+    }
 
     /// <summary>
     /// Builds the two operand OR-maps for the <see cref="OrMap_Merge"/> /
