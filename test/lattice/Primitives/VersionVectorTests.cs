@@ -34,6 +34,24 @@ public class VersionVectorTests
     }
 
     [Test]
+    public void Tick_on_missing_replica_advances_from_zero_and_records_entry()
+    {
+        // The single-probe Tick adds a default (Zero) slot for an absent
+        // replica before advancing it. This locks in that the add-default
+        // path is behaviour-identical to first reading Zero: the first tick
+        // produces a clock strictly greater than Zero and is recorded under
+        // the replica id, growing the vector by exactly one entry.
+        var vv = new VersionVector();
+
+        var first = vv.Tick("fresh");
+
+        Assert.That(first > HybridLogicalClock.Zero, Is.True);
+        Assert.That(vv.GetClock("fresh"), Is.EqualTo(first));
+        Assert.That(vv.Entries, Has.Count.EqualTo(1));
+        Assert.That(vv.IsBottom, Is.False);
+    }
+
+    [Test]
     public void Merge_is_commutative()
     {
         var a = new VersionVector();
