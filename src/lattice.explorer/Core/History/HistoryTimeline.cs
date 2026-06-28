@@ -87,6 +87,17 @@ public sealed record HistoryTimeline
         {
             var row = chronological[i];
 
+            // A live-tail row carries only forward-feed metadata: never diff it,
+            // never emit a retention divider around it, and do not let it advance
+            // the diff baseline or count as the active-retention probe. It passes
+            // through unchanged and the next durable row still diffs against the
+            // last durable value.
+            if (row.IsLiveTail)
+            {
+                enriched[i] = row;
+                continue;
+            }
+
             var diff = row.RenderMode == HistoryRowRenderMode.ValueDiff && row.Value is { } rendered
                 ? HistoryValueDiff.Compute(previousValue, rendered.Content)
                 : Array.Empty<HistoryDiffLine>();
@@ -129,7 +140,17 @@ public sealed record HistoryTimeline
             rows = reversed;
         }
 
-        var newest = chronological.Count > 0 ? chronological[^1] : null;
+        // The active retention badge tracks the newest *durable* revision; a
+        // live-tail row carries no retention descriptor, so it is skipped here.
+        HistoryRevisionRow? newest = null;
+        for (var i = chronological.Count - 1; i >= 0; i--)
+        {
+            if (!chronological[i].IsLiveTail)
+            {
+                newest = chronological[i];
+                break;
+            }
+        }
 
         return new HistoryTimeline
         {

@@ -9,13 +9,15 @@ namespace Orleans.Lattice.Explorer.Core.History;
 public static class ExplorerHistoryServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers the <see cref="IHistoryReader"/>. Call after <c>AddExplorerCatalog</c>,
-    /// which exposes the state-API client facet the reader depends on.
+    /// Registers the <see cref="IHistoryReader"/> and the
+    /// <see cref="IHistoryLiveFollower"/>. Call after <c>AddExplorerCatalog</c>,
+    /// which exposes the state-API client facet they depend on.
     /// </summary>
     public static IServiceCollection AddExplorerHistory(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
         services.TryAddSingleton<IHistoryReader, HistoryReader>();
+        services.TryAddSingleton<IHistoryLiveFollower, HistoryLiveFollower>();
         return services;
     }
 }

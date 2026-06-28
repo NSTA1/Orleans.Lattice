@@ -65,6 +65,30 @@ public sealed record HistoryRevisionRow
     public string? EndKey { get; init; }
 
     /// <summary>
+    /// Whether this row is a live-tail row appended from the forward change feed
+    /// (see <see cref="FromLive"/>) rather than a durable revision returned by a
+    /// history page. A live-tail row carries only notification metadata and is
+    /// never diffed, never advances the diff baseline, and never emits a
+    /// retention divider; it is pending a durable backfill.
+    /// </summary>
+    public bool IsLiveTail { get; init; }
+
+    /// <summary>
+    /// The opaque, monotonic resume cursor of the source change notification for a
+    /// live-tail row; <see langword="null"/> for a durable revision. Carried for
+    /// diagnostics only - cross-source de-duplication keys on <see cref="Hlc"/>,
+    /// which both a loaded page row and a live notification carry.
+    /// </summary>
+    public string? Position { get; init; }
+
+    /// <summary>
+    /// Whether the source change was a user-driven write or library maintenance,
+    /// for a live-tail row. Defaults to <see cref="MutationCategory.User"/> for a
+    /// durable revision (the history view never records maintenance churn).
+    /// </summary>
+    public MutationCategory Category { get; init; }
+
+    /// <summary>
     /// The retention-shape divider that sits immediately before this row, when its
     /// retention descriptor differs from the chronologically previous revision;
     /// <see langword="null"/> otherwise. Filled in by <see cref="HistoryTimeline.Build"/>.
@@ -101,6 +125,43 @@ public sealed record HistoryRevisionRow
             EndKey = record.EndKey,
         };
     }
+
+    /// <summary>
+    /// Projects a forward-feed <see cref="StateChangeNotification"/> into a
+    /// lightweight live-tail row. The notification carries only metadata (tree,
+    /// key, kind, clock, category, position), so the row has no value preview,
+    /// line diff, or CRDT member list - it renders as a metadata-only marker that
+    /// is clearly the live tail pending a durable backfill. The live feed only
+    /// carries changes emitted while subscribed; it extends the timeline forward
+    /// from "now" and is not a substitute for durable history retention.
+    /// </summary>
+    public static HistoryRevisionRow FromLive(StateChangeNotification notification)
+    {
+        ArgumentNullException.ThrowIfNull(notification);
+
+        return new HistoryRevisionRow
+        {
+            Hlc = notification.Hlc,
+            Kind = MapLiveKind(notification.Kind),
+            RenderMode = HistoryRowRenderMode.LiveTail,
+
+            // The change feed carries no origin-cluster id; the row renders as a
+            // local-origin live marker.
+            OriginClusterId = null,
+            EndKey = notification.EndExclusiveKey,
+            IsLiveTail = true,
+            Position = notification.Position,
+            Category = notification.Category,
+        };
+    }
+
+    private static HistoryRowKind MapLiveKind(StateChangeKind kind) => kind switch
+    {
+        StateChangeKind.Set => HistoryRowKind.Set,
+        StateChangeKind.Delete => HistoryRowKind.Delete,
+        StateChangeKind.DeleteRange => HistoryRowKind.RangeTombstone,
+        _ => HistoryRowKind.Set,
+    };
 
     private static HistoryRowRenderMode ResolveRenderMode(EntryRevisionRecord record) => record.Kind switch
     {

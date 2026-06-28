@@ -32,4 +32,13 @@ public enum HistoryRowRenderMode
 
     /// <summary>A marker recording that an unconstrained range delete swept this key.</summary>
     RangeTombstone,
+
+    /// <summary>
+    /// A lightweight live-tail row appended from the forward change feed while the
+    /// tab is open. It carries only the notification metadata (kind, clock,
+    /// origin) - never a value preview, line diff, or CRDT member list - so it is
+    /// rendered as a metadata-only marker that is clearly the live tail pending a
+    /// durable backfill.
+    /// </summary>
+    LiveTail,
 }

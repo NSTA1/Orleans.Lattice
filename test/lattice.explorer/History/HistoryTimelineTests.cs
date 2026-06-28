@@ -36,6 +36,28 @@ public class HistoryTimelineTests
     }
 
     [Test]
+    public void Build_LiveTailRow_HasNoDiffNoDividerAndDoesNotChangeActiveMode()
+    {
+        // A retained Set (full-value) followed by a live-tail row whose retention
+        // descriptor defaults differently: the live row must not emit a retention
+        // divider, must not be diffed, and must not become the active-mode probe.
+        var durable = HistoryRevisionRow.From(RevisionFactory.Set(
+            10, value: "v", mode: HistoryRetentionMode.FullValue));
+        var live = HistoryRevisionRow.FromLive(NotificationFactory.Set("k", 20));
+
+        var timeline = Build(new[] { durable, live }, newestFirst: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(timeline.Rows[1].RenderMode, Is.EqualTo(HistoryRowRenderMode.LiveTail));
+            Assert.That(timeline.Rows[1].Diff, Is.Empty);
+            Assert.That(timeline.Rows[1].RetentionChange, Is.Null, "a live-tail row never emits a retention divider");
+            Assert.That(timeline.ActiveRetentionMode, Is.EqualTo(HistoryRetentionMode.FullValue),
+                "the active badge tracks the newest durable revision, not the live tail");
+        });
+    }
+
+    [Test]
     public void Build_MetadataOnlyLww_HasNoDiffAndNoValue()
     {
         var rows = Rows(
