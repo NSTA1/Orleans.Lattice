@@ -86,6 +86,64 @@ HistoryRetentionSettings policy = await tree.GetHistoryRetentionAsync(cancellati
 
 A tree with no override resolves to `MetadataOnly` with no age bound.
 
+## Reading a key's history
+
+`ILattice.ScanEntryHistoryAsync` returns one key's revision timeline as a page of
+`EntryRevision` records. When a history view is enabled for the tree it is the
+primary read: a prefix scan over the view tree's `{sourceKey}/{encodedHlc}` rows,
+ordered by encoded clock and paged with a continuation token, reusing the same
+range-scan machinery as an ordinary entry scan. The read is side-effect-free and
+never perturbs the maintainer or its source WAL pin.
+
+```csharp verify
+// Read the first page of a key's revision timeline (oldest first).
+EntryHistoryPage page = await tree.ScanEntryHistoryAsync(
+    "order-42",
+    fromHlc: null,
+    toHlc: null,
+    limit: 100,
+    continuation: null,
+    cancellationToken);
+
+foreach (EntryRevision revision in page.Revisions)
+{
+    // revision.Hlc           - the hybrid-logical-clock stamp of the revision
+    // revision.Kind          - Set / Delete / CrdtDelta / RangeTombstone
+    // revision.OriginClusterId - authoring cluster, or null for a local write
+    // revision.ValueHash     - content fingerprint (all retention modes)
+    // revision.ValuePreview  - size-bounded value bytes (FullValue / Hybrid)
+    // revision.Delta         - size-bounded CRDT author delta (CrdtDelta rows)
+}
+
+// Page through the rest of the timeline with the continuation token.
+if (page.Continuation is not null)
+{
+    EntryHistoryPage next = await tree.ScanEntryHistoryAsync(
+        "order-42", null, null, 100, page.Continuation, cancellationToken);
+}
+```
+
+The optional `fromHlc` / `toHlc` arguments clamp the scan to an inclusive
+hybrid-logical-clock window. The returned `EntryHistoryPage` describes where the
+data came from and whether it is complete:
+
+| Field | Meaning |
+|-------|---------|
+| `Source` | `View` when read from the durable history view, `WalWindow` for the best-effort write-ahead-log fallback, or `None` when neither is available. |
+| `Truncated` | Always `false` on the `View` path - the timeline is bounded only by the configured retention age, never cut off below. `true` on the `WalWindow` fallback when garbage collection has trimmed older entries. |
+| `EarliestAvailable` | On a truncated `WalWindow` read, the oldest hybrid-logical-clock still readable; `HybridLogicalClock.Zero` otherwise. |
+
+### Fallback without a history view
+
+For a tree that has **not** opted into a history view, the same method falls back,
+best-effort, to the retained source write-ahead-log window for the key: it
+enumerates surviving mutations above the current per-partition garbage-collection
+trim point in offset order and reports `Source == EntryHistorySource.WalWindow`.
+This window is bounded by WAL garbage collection, so it sets `Truncated` and
+`EarliestAvailable` honestly when older revisions have already been trimmed - a
+partial window is never presented as a full history. Enable a history view when a
+durable, retention-bounded timeline is required.
+
 ## The accumulative guard
 
 An ordinary materialised view is rebuilt from *current* source state when its
@@ -114,9 +172,9 @@ live-tunable policy, not code identity, so changing them never trips a rebuild.
   backfill of revisions that predate it.
 - **Count-based retention ("keep last N per key") is not expressible** in a pure
   per-mutation projection and is out of scope for this substrate.
-- **The read path is a separate concern.** This substrate stores the durable
-  revision rows; querying a key's timeline and decoding CRDT provenance are built
-  on top of it.
+- **The read path is built in.** `ILattice.ScanEntryHistoryAsync` queries a key's
+  timeline directly off this substrate (see "Reading a key's history" above);
+  decoding element-level CRDT provenance is layered on top of the stored deltas.
 - **Do not enable lag-budget eviction on a history view.** Lag-budget eviction
   rebuilds from current source state, which collapses the timeline; leave
   `MaxLagBudget` at its default of zero for accumulative views.

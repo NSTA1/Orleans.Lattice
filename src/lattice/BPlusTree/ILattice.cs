@@ -1006,4 +1006,47 @@ public interface ILattice : IGrainWithStringKey
     /// no-op.
     /// </summary>
     Task CloseCursorAsync(string cursorId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads one page of a key's revision timeline, oldest revision first. The
+    /// primary path is a prefix scan over this tree's durable per-key history view
+    /// (enabled via a runtime <c>LatticeHistoryView</c>): the view stores one
+    /// append-only revision row per source mutation at <c>{key}/{encodedHlc}</c>, so
+    /// a single half-open range scan returns the key's timeline in hybrid-logical-
+    /// clock order. That path is bounded only by the view's configured retention age
+    /// - it stays readable after source write-ahead-log garbage collection has
+    /// trimmed the original entries - so it never reports truncation
+    /// (<see cref="EntryHistoryPage.Truncated"/> is <see langword="false"/> and
+    /// <see cref="EntryHistoryPage.Source"/> is <see cref="EntryHistorySource.View"/>).
+    /// <para>
+    /// When no history view is enabled the call falls back, best-effort, to the
+    /// retained source write-ahead-log window: the surviving suffix of mutations for
+    /// the key above the current per-partition garbage-collection trim point. That
+    /// window is bounded below by write-ahead-log garbage collection, so it honestly
+    /// reports truncation (<see cref="EntryHistoryPage.Truncated"/> and
+    /// <see cref="EntryHistoryPage.EarliestAvailable"/>) and tags the page
+    /// <see cref="EntryHistorySource.WalWindow"/>. The fallback reads through the
+    /// commit-log read seam registered by <c>AddLattice</c>; on a host that did not
+    /// register it the page is empty and tagged
+    /// <see cref="EntryHistorySource.None"/>.
+    /// </para>
+    /// <para>
+    /// The read is non-mutating: it scans the history-view tree (or the
+    /// write-ahead-log) directly and never perturbs the view maintainer or its
+    /// cursor pins.
+    /// </para>
+    /// </summary>
+    /// <param name="key">The source key whose revision timeline is read. Must not be <see langword="null"/>.</param>
+    /// <param name="fromHlc">Inclusive lower bound on revision timestamp, or <see langword="null"/> for the oldest available.</param>
+    /// <param name="toHlc">Inclusive upper bound on revision timestamp, or <see langword="null"/> for the newest available.</param>
+    /// <param name="limit">Maximum revisions in the page; clamped to a bounded ceiling. Must be greater than zero.</param>
+    /// <param name="continuation">An opaque token from a prior page's <see cref="EntryHistoryPage.Continuation"/>, or <see langword="null"/> to start from the beginning.</param>
+    /// <param name="cancellationToken">Cancels the scan.</param>
+    Task<EntryHistoryPage> ScanEntryHistoryAsync(
+        string key,
+        HybridLogicalClock? fromHlc,
+        HybridLogicalClock? toHlc,
+        int limit,
+        string? continuation,
+        CancellationToken cancellationToken = default);
 }
