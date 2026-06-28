@@ -110,6 +110,40 @@ public class LatticeCursorIntegrationTests
     }
 
     [Test]
+    public async Task Key_cursor_with_oversized_page_size_does_not_over_allocate()
+    {
+        // Regression: a caller-supplied pageSize was used verbatim to pre-size
+        // the page buffer (new List<string>(pageSize)). A hostile or buggy
+        // caller passing int.MaxValue would reserve gigabytes and throw
+        // OutOfMemoryException before any data was read. The buffer capacity is
+        // now clamped, so an oversized request still returns the real data and
+        // exhausts in a single page rather than faulting the silo.
+        var tree = await SeedTreeAsync($"cur-keys-big-{Guid.NewGuid():N}",
+            new[] { "a", "b", "c" });
+
+        var cursorId = await tree.OpenKeyCursorAsync();
+        var page = await tree.NextKeysAsync(cursorId, int.MaxValue);
+        await tree.CloseCursorAsync(cursorId);
+
+        Assert.That(page.Keys, Is.EqualTo(new[] { "a", "b", "c" }));
+        Assert.That(page.HasMore, Is.False);
+    }
+
+    [Test]
+    public async Task Entry_cursor_with_oversized_page_size_does_not_over_allocate()
+    {
+        var tree = await SeedTreeAsync($"cur-ent-big-{Guid.NewGuid():N}",
+            new[] { "a", "b", "c" });
+
+        var cursorId = await tree.OpenEntryCursorAsync();
+        var page = await tree.NextEntriesAsync(cursorId, int.MaxValue);
+        await tree.CloseCursorAsync(cursorId);
+
+        Assert.That(page.Entries.Select(kv => kv.Key), Is.EqualTo(new[] { "a", "b", "c" }));
+        Assert.That(page.HasMore, Is.False);
+    }
+
+    [Test]
     public async Task Key_cursor_throws_on_null_cursor_id()
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>($"cur-null-{Guid.NewGuid():N}");
