@@ -34,6 +34,22 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-144](https://github.com/NSTA1/Orleans.Lattice/issues/956) - Orleans.Lattice.Explorer: History tab - per-key revision timeline + value diff, retention-mode aware
 - [F-145](https://github.com/NSTA1/Orleans.Lattice/issues/957) - Orleans.Lattice.Explorer: live follow mode for the History tab (ObserveChanges)
 - [F-146](https://github.com/NSTA1/Orleans.Lattice/issues/958) - Change-history sample + docs showcase (MultiSiteManufacturing + features.md sync)
+- [F-147](https://github.com/NSTA1/Orleans.Lattice/issues/971) - Orleans.Lattice.Membership + Orleans.Lattice.Auth: identity, authorization & enforcement layer (epic)
+- [F-148](https://github.com/NSTA1/Orleans.Lattice/issues/972) - Orleans.Lattice.Membership: project & package scaffolding
+- [F-149](https://github.com/NSTA1/Orleans.Lattice/issues/973) - Core: caller-credential propagation `RequestContext` seam
+- [F-150](https://github.com/NSTA1/Orleans.Lattice/issues/974) - Orleans.Lattice.Membership: subject model, user/group directory & resolution (`sys-membership-*`)
+- [F-151](https://github.com/NSTA1/Orleans.Lattice/issues/975) - Orleans.Lattice.Auth: project & package scaffolding
+- [F-152](https://github.com/NSTA1/Orleans.Lattice/issues/976) - Core: access-gate enforcement seam (`ILatticeAccessGate`, allow-all default)
+- [F-153](https://github.com/NSTA1/Orleans.Lattice/issues/977) - Core: range-scan key-filter seam (server-side per-key read visibility)
+- [F-154](https://github.com/NSTA1/Orleans.Lattice/issues/978) - Orleans.Lattice.Auth: authorization rule model & policy store (`sys-auth-policy`)
+- [F-155](https://github.com/NSTA1/Orleans.Lattice/issues/979) - Orleans.Lattice.Auth: compiled policy snapshot, change-feed invalidation & decision engine
+- [F-156](https://github.com/NSTA1/Orleans.Lattice/issues/980) - Orleans.Lattice.Auth: enforcement wiring at `LatticeGrain` (fail-closed, bootstrap admins)
+- [F-157](https://github.com/NSTA1/Orleans.Lattice/issues/981) - State API: honour read-access visibility when Membership + Auth are registered
+- [F-158](https://github.com/NSTA1/Orleans.Lattice/issues/982) - Replication: replicate the auth/membership system trees (special case)
+- [F-159](https://github.com/NSTA1/Orleans.Lattice/issues/983) - Orleans.Lattice.Auth: observability & audit (`orleans.lattice.auth` meter + audit sink)
+- [F-160](https://github.com/NSTA1/Orleans.Lattice/issues/984) - Orleans.Lattice.Api.Auth: configuration & control facade
+- [F-161](https://github.com/NSTA1/Orleans.Lattice/issues/985) - Orleans.Lattice.Api.Auth.Grpc: gRPC binding, client & meta-authorizer
+- [F-162](https://github.com/NSTA1/Orleans.Lattice/issues/986) - Membership/Auth: docs, sample & end-to-end tests
 
 ### Shipped
 
