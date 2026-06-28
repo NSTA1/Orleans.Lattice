@@ -147,11 +147,13 @@ public sealed class MvRegister : ICrdt<MvRegister>
     {
         ArgumentNullException.ThrowIfNull(other);
 
-        // Capture the pre-merge local context so the dominance checks
-        // below see the pre-merge witnesses on each side - a
-        // union-then-filter against the merged context would drop
-        // every entry whose dot is present on both sides.
-        var localContext = new Dictionary<string, long>(Context, StringComparer.Ordinal);
+        // The dominance checks below must see the pre-merge witnesses on
+        // each side - a union-then-filter against the merged context would
+        // drop every entry whose dot is present on both sides. The local
+        // context is read directly because it is not mutated until the
+        // pointwise-max fold further down, which runs strictly after the
+        // only read of it (the other-side survivor scan), so no defensive
+        // snapshot clone is required.
         var otherContext = other.Context;
 
         // Build dot-key sets so the "same dot on both sides" case is
@@ -191,7 +193,7 @@ public sealed class MvRegister : ICrdt<MvRegister>
         foreach (var entry in other.Entries)
         {
             if (localDots.Contains((entry.ReplicaId, entry.Counter))) continue;
-            if (IsObserved(entry, localContext)) continue;
+            if (IsObserved(entry, Context)) continue;
             survivors.Add(entry);
         }
 
