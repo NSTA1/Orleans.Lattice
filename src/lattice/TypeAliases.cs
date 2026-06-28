@@ -225,6 +225,13 @@ internal static class TypeAliases
     internal const string OrFlagDelta = "ol.ofd";
     internal const string RwFlagDelta = "ol.rwd";
 
+    // CRDT element-level provenance decoding - the structured member-change
+    // events a provenance decoder produces from a CRDT's stored state and/or
+    // its author deltas. Serializable because the State API surfaces them to
+    // clients.
+    internal const string CrdtMemberChange = "ol.cmc";
+    internal const string CrdtMemberChangeKind = "ol.cmk";
+
     // Tag index (associate tags with keys and query by tag). The membership
     // rows live in an ordinary sibling Lattice tree resolved as
     // tag-{indexName}; these aliases cover the public value/report types the
