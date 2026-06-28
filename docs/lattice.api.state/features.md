@@ -31,3 +31,4 @@ The surface is **strictly read-only**: it observes trees, structure, entries, ch
 - [F-119](https://github.com/NSTA1/Orleans.Lattice/issues/833) - Live metadata / metrics observation
 - [F-120](https://github.com/NSTA1/Orleans.Lattice/issues/834) - Efficiency & overhead guardrails
 - [F-121](https://github.com/NSTA1/Orleans.Lattice/issues/835) - Docs, sample explorer & end-to-end tests
+- [F-139](https://github.com/NSTA1/Orleans.Lattice/issues/951) - Surface the CRDT shape on State API entries (populate `EntryRecord.CrdtShape`)

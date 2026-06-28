@@ -145,6 +145,22 @@ internal sealed class GrpcStateClusterFixture
         return tree;
     }
 
+    /// <summary>
+    /// Registers <paramref name="treeId"/> (declared as an OR-Set tree by the
+    /// fixture's merge-mode resolver) and writes one OR-Set element per key in
+    /// <paramref name="keys"/>, returning its grain reference.
+    /// </summary>
+    public async Task<ILattice> CreateOrSetTreeAsync(string treeId, int shardCount, params string[] keys)
+    {
+        var tree = await RegisterTreeAsync(treeId, shardCount);
+        foreach (var key in keys)
+        {
+            await tree.OrSet(key).AddAsync(Encoding.UTF8.GetBytes($"member-of-{key}"), "replica-a");
+        }
+
+        return tree;
+    }
+
     public static string KeyAt(int index) => $"key-{index:D5}";
 
     /// <summary>
@@ -183,8 +199,23 @@ internal sealed class GrpcStateClusterFixture
                 o.ChangeObservationPollInterval = TimeSpan.FromMilliseconds(25);
                 o.MetricsSampleInterval = TimeSpan.FromMilliseconds(100);
             });
+            siloBuilder.Services.AddSingleton<ILatticeMergeModeResolver, OrSetPrefixMergeModeResolver>();
         }
     }
+}
+
+/// <summary>
+/// Test <see cref="ILatticeMergeModeResolver"/> that declares any tree whose id
+/// starts with <c>"orset"</c> as an <see cref="LatticeMergeMode.OrSet"/> tree so
+/// the gRPC binding can prove the per-entry CRDT shape survives the wire
+/// round-trip, without standing up the full replication package.
+/// </summary>
+internal sealed class OrSetPrefixMergeModeResolver : ILatticeMergeModeResolver
+{
+    public LatticeMergeMode? Resolve(string treeId) =>
+        treeId.StartsWith("orset", StringComparison.Ordinal)
+            ? LatticeMergeMode.OrSet
+            : null;
 }
 
 /// <summary>

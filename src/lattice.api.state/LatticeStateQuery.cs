@@ -418,11 +418,16 @@ internal sealed class LatticeStateQuery(
                 ex);
         }
 
+        // The merge mode is declared per tree, so the CRDT shape tag is the
+        // same for every entry on the page; resolve it once and stamp each
+        // record with it (null for an opaque last-writer-wins tree).
+        var crdtShape = ResolveCrdtShape(request.TreeId);
+
         var records = new List<EntryRecord>(page.Entries.Count);
         foreach (var entry in page.Entries)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            records.Add(await BuildEntryRecordAsync(tree, entry.Key, entry.Value, previewBudget, cancellationToken)
+            records.Add(await BuildEntryRecordAsync(tree, entry.Key, entry.Value, previewBudget, crdtShape, cancellationToken)
                 .ConfigureAwait(false));
         }
 
@@ -455,6 +460,7 @@ internal sealed class LatticeStateQuery(
         var index = tagFactory.Create(tree, request.IndexName!);
         var pageSize = ClampPageSize(request.PageSize);
         var previewBudget = ClampScanPreviewBudget(request.ValuePreviewBudget);
+        var crdtShape = ResolveCrdtShape(request.TreeId);
 
         // Tag-filtered paging is keyed on the source key (the membership query
         // yields keys in ascending ordinal order); the continuation token is the
@@ -486,7 +492,7 @@ internal sealed class LatticeStateQuery(
                 continue;
             }
 
-            records.Add(BuildEntryRecord(key, versioned.Value, versioned.Version, versioned.ExpiresAtTicks, previewBudget));
+            records.Add(BuildEntryRecord(key, versioned.Value, versioned.Version, versioned.ExpiresAtTicks, previewBudget, crdtShape));
         }
 
         return EntryScanResult.Found(request.TreeId, records, nextToken);
@@ -520,7 +526,8 @@ internal sealed class LatticeStateQuery(
             versioned.Value,
             versioned.Version,
             versioned.ExpiresAtTicks,
-            _apiOptions.SingleEntryValuePreviewBytes);
+            _apiOptions.SingleEntryValuePreviewBytes,
+            ResolveCrdtShape(treeId));
 
         return EntryDetailResult.Found(treeId, record);
     }
@@ -558,13 +565,14 @@ internal sealed class LatticeStateQuery(
         string key,
         byte[] value,
         int previewBudget,
+        string? crdtShape,
         CancellationToken cancellationToken)
     {
         // The cursor page carries the snapshot value bytes (used verbatim for
         // the preview and full length); the per-entry version / TTL is overlaid
         // from a metadata read so the record carries HLC and expiry.
         var versioned = await tree.GetWithVersionAsync(key, cancellationToken).ConfigureAwait(false);
-        return BuildEntryRecord(key, value, versioned.Version, versioned.ExpiresAtTicks, previewBudget);
+        return BuildEntryRecord(key, value, versioned.Version, versioned.ExpiresAtTicks, previewBudget, crdtShape);
     }
 
     private static EntryRecord BuildEntryRecord(
@@ -572,7 +580,8 @@ internal sealed class LatticeStateQuery(
         byte[] value,
         Orleans.Lattice.HybridLogicalClock version,
         long expiresAtTicks,
-        int previewBudget)
+        int previewBudget,
+        string? crdtShape)
     {
         var fullLength = value.Length;
         var truncated = fullLength > previewBudget;
@@ -587,8 +596,22 @@ internal sealed class LatticeStateQuery(
             Hlc = version,
             IsTombstone = false,
             ExpiresAtTicks = expiresAtTicks,
-            CrdtShape = null,
+            CrdtShape = crdtShape,
         };
+    }
+
+    /// <summary>
+    /// Resolves the CRDT shape tag for <paramref name="treeId"/> from the
+    /// declared per-tree <see cref="LatticeMergeMode"/>. The merge mode is the
+    /// only thing the system knows about a value's shape - the core stores
+    /// every value as opaque bytes - so an undeclared (single-cluster) or
+    /// last-writer-wins tree yields <see langword="null"/> and a typed CRDT
+    /// tree yields the mode name (e.g. <c>"OrSet"</c>).
+    /// </summary>
+    private string? ResolveCrdtShape(string treeId)
+    {
+        var mode = _services.GetService<ILatticeMergeModeResolver>()?.Resolve(treeId);
+        return mode is null or LatticeMergeMode.LwwRegister ? null : mode.Value.ToString();
     }
 
     private int ClampPageSize(int requested) => requested switch
