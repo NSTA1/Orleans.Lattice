@@ -1230,6 +1230,52 @@ code, .explorer-mono {
     color: var(--accent);
 }
 
+.explorer-data-live {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+}
+
+.explorer-data-live + .explorer-data-history-btn {
+    margin-left: 0;
+}
+
+.explorer-data-live-dot {
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 50%;
+    flex: 0 0 auto;
+}
+
+.explorer-data-live-dot-on {
+    background: var(--ok);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--ok) 25%, transparent);
+}
+
+.explorer-data-live-dot-warn {
+    background: var(--warn);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn) 25%, transparent);
+}
+
+.explorer-data-live-dot-down {
+    background: var(--danger);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 25%, transparent);
+}
+
+.explorer-data-live-label {
+    font-weight: 600;
+    color: var(--text);
+}
+
+.explorer-data-live-error {
+    margin: 0 0 0.6rem;
+    font-size: 0.78rem;
+    color: var(--danger);
+}
+
 .explorer-data-meta {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));

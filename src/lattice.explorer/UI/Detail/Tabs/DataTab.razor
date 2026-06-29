@@ -1,8 +1,10 @@
+@using Orleans.Lattice.Explorer.Core.Connection
 @using Orleans.Lattice.Explorer.Core.Data
 @inherits DetailTabBase
 @inject IDataReader DataReader
 @inject IUiSessionStore SessionStore
 @inject IUiPreferenceStore Preferences
+@inject IServiceProvider Services
 
 <div class="explorer-data">
     <div class="explorer-data-toolbar">
@@ -139,11 +141,23 @@
                     {
                         <span class="explorer-data-format">@_rendered.Format.ToString().ToLowerInvariant()</span>
                     }
+                    @if (_liveFollower is not null)
+                    {
+                        <span class="explorer-data-live" title="This entry refreshes automatically as it is mutated. The live feed only carries changes emitted while this tab is open.">
+                            <span class="explorer-data-live-dot explorer-data-live-dot-@LiveDotClass()"></span>
+                            <span class="explorer-data-live-label">@LiveLabel()</span>
+                        </span>
+                    }
                     <button type="button" class="explorer-btn explorer-data-history-btn @(_showHistory ? "is-active" : null)"
                             @onclick="ToggleHistory">
                         @(_showHistory ? "Hide history" : "History")
                     </button>
                 </div>
+
+                @if (_liveError is not null)
+                {
+                    <div class="explorer-data-live-error">Live updates stopped: @_liveError</div>
+                }
 
                 @if (_showHistory)
                 {
@@ -216,6 +230,20 @@
     private bool _detailLoading;
     private string? _detailError;
 
+    // Live follow state for the selected-entry detail. The follower and the
+    // connection are resolved best-effort (a minimal host may not register
+    // them), so the detail still loads request/response when live updates are
+    // unavailable. The follow loop runs as a fire-and-forget task fed by the
+    // forward change feed; it is torn down on key change and tab dispose by
+    // cancelling the linked token. A matching notification schedules a debounced
+    // silent refetch (no spinner) that swaps the displayed value and decoded
+    // CRDT members.
+    private IEntryLiveFollower? _liveFollower;
+    private ILatticeStateConnection? _connection;
+    private CancellationTokenSource? _liveCts;
+    private CancellationTokenSource? _refreshCts;
+    private string? _liveError;
+
     // When true, the selected key's detail panel shows its revision history
     // instead of the value view. Reset whenever the selected key changes.
     private bool _showHistory;
@@ -236,6 +264,17 @@
     {
         _pager = new DataPager(DataReader);
 
+        // Resolve the live-follow collaborators best-effort: a minimal host (for
+        // example a lighter integration fixture) may not register them, in which
+        // case the detail panel still works as a request/response view without
+        // the live indicator or auto-refresh.
+        _liveFollower = Services.GetService(typeof(IEntryLiveFollower)) as IEntryLiveFollower;
+        _connection = Services.GetService(typeof(ILatticeStateConnection)) as ILatticeStateConnection;
+        if (_connection is not null)
+        {
+            _connection.StatusChanged += OnConnectionStatusChanged;
+        }
+
         // Hydrate durable preferences before the first read so the controls and
         // the first scan reflect the prior view. Tolerant of an unreachable
         // backing store (for example during server prerender), in which case the
@@ -243,6 +282,33 @@
         await Preferences.EnsureLoadedAsync(TabToken);
         await SeedFromPreferencesAndScanAsync();
         _seededFromPreferences = Preferences.IsLoaded;
+    }
+
+    // The live indicator mirrors the app's top-right connection state, so a
+    // status change must redraw the detail head dot/label.
+    private void OnConnectionStatusChanged(LatticeConnectionStatus _) => InvokeAsync(StateHasChanged);
+
+    private string LiveDotClass()
+    {
+        var state = _connection?.Status.State ?? LatticeConnectionState.Disconnected;
+        return state switch
+        {
+            LatticeConnectionState.Connected => "on",
+            LatticeConnectionState.Connecting or LatticeConnectionState.Reconnecting => "warn",
+            _ => "down",
+        };
+    }
+
+    private string LiveLabel()
+    {
+        var state = _connection?.Status.State ?? LatticeConnectionState.Disconnected;
+        return state switch
+        {
+            LatticeConnectionState.Connected => "Live",
+            LatticeConnectionState.Connecting => "Connecting",
+            LatticeConnectionState.Reconnecting => "Reconnecting",
+            _ => "Offline",
+        };
     }
 
     // Seeds this selection's retained view from durable preferences, then opens
@@ -532,10 +598,15 @@
             return;
         }
 
+        // A new selection tears down the previous key's live subscription before
+        // the swap, so no follow loop or pending refresh outlives its key.
+        StopFollowing();
+
         _selectedKey = key;
         _detail = null;
         _rendered = null;
         _detailError = null;
+        _liveError = null;
         _detailLoading = true;
         _showHistory = false;
 
@@ -562,14 +633,131 @@
             _detailLoading = false;
             StateHasChanged();
         }
+
+        // Begin the live tail for the freshly-selected key. Following an absent
+        // key is intentional: a later write that creates it refreshes the panel.
+        StartFollowing(key);
+    }
+
+    // Opens the live subscription for the current key. The loop is linked to
+    // TabToken so a tab dispose cancels it; StopFollowing cancels it on a key
+    // change. No-op when the follower was not registered.
+    private void StartFollowing(string key)
+    {
+        if (_liveFollower is null)
+        {
+            return;
+        }
+
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(TabToken);
+        _liveCts = cts;
+        _ = FollowLoopAsync(key, cts);
+    }
+
+    private async Task FollowLoopAsync(string key, CancellationTokenSource cts)
+    {
+        var treeId = Selection.Id;
+        try
+        {
+            await foreach (var _ in _liveFollower!.FollowAsync(treeId, key, cts.Token).ConfigureAwait(false))
+            {
+                // Marshal to the renderer's context so the refresh-debounce
+                // bookkeeping (_refreshCts) is only ever touched on the same
+                // thread as StopFollowing, avoiding a teardown race.
+                await InvokeAsync(() => ScheduleRefresh(key, cts.Token));
+            }
+        }
+        catch (Exception) when (cts.IsCancellationRequested)
+        {
+            // Expected teardown on key change or tab dispose. The cancelled
+            // stream may surface either as OperationCanceledException or as a
+            // transport "Cancelled" status; both are silent teardown, not a fault.
+        }
+        catch (Exception ex)
+        {
+            await InvokeAsync(() =>
+            {
+                _liveError = ex.Message;
+                StateHasChanged();
+            });
+        }
+        finally
+        {
+            cts.Dispose();
+        }
+    }
+
+    // Debounced silent refetch: a burst of notifications for the followed key
+    // coalesces into a single re-read that swaps the displayed value and decoded
+    // CRDT current-state members without a spinner.
+    private void ScheduleRefresh(string key, CancellationToken followToken)
+    {
+        _refreshCts?.Cancel();
+        _refreshCts?.Dispose();
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(followToken);
+        _refreshCts = cts;
+        _ = RefreshDetailAsync(key, cts);
+    }
+
+    private async Task RefreshDetailAsync(string key, CancellationTokenSource cts)
+    {
+        try
+        {
+            await Task.Delay(400, cts.Token).ConfigureAwait(false);
+            var entry = await DataReader.GetEntryAsync(Selection.Id, key, cts.Token).ConfigureAwait(false);
+            await InvokeAsync(() =>
+            {
+                // Ignore a refresh that raced past a key change.
+                if (!string.Equals(_selectedKey, key, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                _detail = entry;
+                _rendered = entry is null ? null : ValueRenderer.Render(entry.Value, entry.Truncated);
+                _liveError = null;
+                StateHasChanged();
+            });
+        }
+        catch (Exception) when (cts.IsCancellationRequested)
+        {
+            // Superseded by a newer change or torn down; leave the panel as-is.
+        }
+        catch (Exception ex)
+        {
+            await InvokeAsync(() =>
+            {
+                _liveError = ex.Message;
+                StateHasChanged();
+            });
+        }
+        finally
+        {
+            if (ReferenceEquals(_refreshCts, cts))
+            {
+                _refreshCts = null;
+            }
+
+            cts.Dispose();
+        }
+    }
+
+    private void StopFollowing()
+    {
+        _liveCts?.Cancel();
+        _liveCts = null;
+        _refreshCts?.Cancel();
+        _refreshCts = null;
     }
 
     private void ClearSelection()
     {
+        StopFollowing();
         _selectedKey = null;
         _detail = null;
         _rendered = null;
         _detailError = null;
+        _liveError = null;
         _showHistory = false;
     }
 
@@ -611,9 +799,19 @@
     /// </summary>
     protected override void Dispose(bool disposing)
     {
-        if (disposing && _pager is not null)
+        if (disposing)
         {
-            _ = _pager.CloseAsync(CancellationToken.None);
+            if (_connection is not null)
+            {
+                _connection.StatusChanged -= OnConnectionStatusChanged;
+            }
+
+            StopFollowing();
+
+            if (_pager is not null)
+            {
+                _ = _pager.CloseAsync(CancellationToken.None);
+            }
         }
 
         base.Dispose(disposing);
