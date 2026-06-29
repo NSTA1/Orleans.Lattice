@@ -370,6 +370,31 @@ public partial class LatticeCursorGrainTests
     }
 
     [Test]
+    public async Task DeleteRangeStepAsync_clamps_oversized_maxToDelete_buffer_preallocation()
+    {
+        // A hostile or buggy maxToDelete (here int.MaxValue) must not drive an
+        // unbounded probe-buffer pre-allocation or overflow the +1 capacity
+        // arithmetic into a negative argument - the up-front capacity is clamped
+        // to a fixed ceiling, so the step completes against a small/empty range
+        // instead of throwing OutOfMemoryException / ArgumentOutOfRangeException.
+        var (grain, state, lattice) = CreateGrain();
+        lattice.KeysAsync("a", "z", false, null)
+            .Returns(ToAsyncEnumerable(Array.Empty<string>()));
+        await grain.OpenAsync(TreeId, new LatticeCursorSpec
+        {
+            Kind = LatticeCursorKind.DeleteRange,
+            StartInclusive = "a",
+            EndExclusive = "z",
+        });
+
+        var progress = await grain.DeleteRangeStepAsync(int.MaxValue);
+
+        Assert.That(progress.IsComplete, Is.True);
+        Assert.That(progress.DeletedThisStep, Is.EqualTo(0));
+        Assert.That(state.State.Phase, Is.EqualTo(LatticeCursorPhase.Exhausted));
+    }
+
+    [Test]
     public async Task DeleteRangeStepAsync_final_step_deletes_full_remaining_range()
     {
         var (grain, state, lattice) = CreateGrain();
