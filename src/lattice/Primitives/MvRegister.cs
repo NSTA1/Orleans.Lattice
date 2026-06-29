@@ -155,32 +155,25 @@ public sealed class MvRegister : ICrdt<MvRegister>
         // only read of it (the other-side survivor scan), so no defensive
         // snapshot clone is required.
         var otherContext = other.Context;
+        var otherEntries = other.Entries;
+        var localEntries = Entries;
 
-        // Build dot-key sets so the "same dot on both sides" case is
-        // handled by structural presence, not by dominance: if a dot
-        // is still present on a side, that side has not superseded
-        // it, so the entry must survive even when the side's context
-        // dominates the dot's counter.
-        var otherDots = new HashSet<(string ReplicaId, long Counter)>();
-        foreach (var entry in other.Entries)
-        {
-            otherDots.Add((entry.ReplicaId, entry.Counter));
-        }
-
-        var localDots = new HashSet<(string ReplicaId, long Counter)>();
-        foreach (var entry in Entries)
-        {
-            localDots.Add((entry.ReplicaId, entry.Counter));
-        }
-
-        var survivors = new List<MvRegisterEntry>(Entries.Count + other.Entries.Count);
+        // The "same dot on both sides" case is handled by structural
+        // presence, not by dominance: if a dot is still present on a
+        // side, that side has not superseded it, so the entry must
+        // survive even when the side's context dominates the dot's
+        // counter. A register is single-valued in the steady state and
+        // multi-valued only transiently, so both entry lists are tiny;
+        // a linear ContainsDot scan beats allocating two HashSets per
+        // merge on the replication hot path.
+        var survivors = new List<MvRegisterEntry>(localEntries.Count + otherEntries.Count);
 
         // Keep a local entry iff the other side either still has the
         // same dot (so it has not been superseded there) or has never
         // observed it.
-        foreach (var entry in Entries)
+        foreach (var entry in localEntries)
         {
-            if (otherDots.Contains((entry.ReplicaId, entry.Counter))
+            if (ContainsDot(otherEntries, entry.ReplicaId, entry.Counter)
                 || !IsObserved(entry, otherContext))
             {
                 survivors.Add(entry);
@@ -190,9 +183,9 @@ public sealed class MvRegister : ICrdt<MvRegister>
         // Add an other-side entry iff we have not already taken its
         // dot from the local side and we (the local side) have not
         // observed-and-superseded it.
-        foreach (var entry in other.Entries)
+        foreach (var entry in otherEntries)
         {
-            if (localDots.Contains((entry.ReplicaId, entry.Counter))) continue;
+            if (ContainsDot(localEntries, entry.ReplicaId, entry.Counter)) continue;
             if (IsObserved(entry, Context)) continue;
             survivors.Add(entry);
         }
@@ -233,6 +226,15 @@ public sealed class MvRegister : ICrdt<MvRegister>
 
     private static bool IsObserved(MvRegisterEntry entry, Dictionary<string, long> context) =>
         context.TryGetValue(entry.ReplicaId, out var observed) && entry.Counter <= observed;
+
+    private static bool ContainsDot(List<MvRegisterEntry> entries, string replicaId, long counter)
+    {
+        foreach (var entry in entries)
+        {
+            if (entry.Counter == counter && entry.ReplicaId == replicaId) return true;
+        }
+        return false;
+    }
 
     /// <summary>
     /// Folds an <see cref="MvRegisterDelta"/> into this register. The
