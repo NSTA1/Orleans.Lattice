@@ -96,6 +96,19 @@ internal sealed class CatalogClusterFixture
         return factory.Create(source, viewName, new LatticeViewDefinition(viewName, new PredicateLatticeViewProjection()));
     }
 
+    /// <summary>
+    /// Registers an OR-Set source tree (its id is prefixed <c>orset</c> so the
+    /// fixture's merge-mode resolver declares it an <see cref="LatticeMergeMode.OrSet"/>)
+    /// and writes one OR-Set element under <paramref name="key"/>, returning the tree.
+    /// </summary>
+    public async Task<ILattice> CreateOrSetSourceTreeAsync(string treeId, string key, string element)
+    {
+        await RegisterTreeAsync(treeId, shardCount: 1, maxLeafKeys: 4);
+        var tree = Cluster.Client.GetGrain<ILattice>(treeId);
+        await tree.OrSet(key).AddAsync(System.Text.Encoding.UTF8.GetBytes(element), "replica-a");
+        return tree;
+    }
+
     private sealed class SiloConfigurator : ISiloConfigurator
     {
         public void Configure(ISiloBuilder siloBuilder)
@@ -104,6 +117,7 @@ internal sealed class CatalogClusterFixture
             siloBuilder.UseInMemoryReminderService();
             siloBuilder.AddLatticeViews();
             siloBuilder.AddLatticeStateApi();
+            siloBuilder.Services.AddSingleton<ILatticeMergeModeResolver, OrSetPrefixMergeModeResolver>();
         }
     }
 }

@@ -134,4 +134,52 @@ public class PnCounterProvenanceDecoderTests
 
         Assert.That(Decoder.DecodeDeltas(deltas)[0].WallClock, Is.EqualTo(hlc));
     }
+
+    // ---- current-value (net total) path ----
+
+    [Test]
+    public void DecodeCurrentValue_null_throws()
+    {
+        Assert.That(() => Decoder.DecodeCurrentValue(null!), Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void DecodeCurrentValue_empty_counter_yields_no_members()
+    {
+        Assert.That(Decoder.DecodeCurrentValue(new PnCounter()), Is.Empty);
+    }
+
+    [Test]
+    public void DecodeCurrentValue_yields_single_net_value_member()
+    {
+        var counter = new PnCounter();
+        counter.Increment("r1", 5);
+        counter.Decrement("r2", 2);
+
+        var members = Decoder.DecodeCurrentValue(counter);
+
+        // A single member carrying the net total (5 - 2 = 3), not per-replica
+        // contributions, with no single authoring replica.
+        Assert.That(members, Has.Count.EqualTo(1));
+        Assert.Multiple(() =>
+        {
+            Assert.That(Encoding.UTF8.GetString(members[0].Element), Is.EqualTo("3"));
+            Assert.That(members[0].Ordinal, Is.EqualTo(3L));
+            Assert.That(members[0].ReplicaId, Is.Empty);
+        });
+    }
+
+    [Test]
+    public void DecodeCurrentValue_negative_net_value_is_rendered()
+    {
+        var counter = new PnCounter();
+        counter.Increment("r1", 1);
+        counter.Decrement("r2", 4);
+
+        var members = Decoder.DecodeCurrentValue(counter);
+
+        Assert.That(members, Has.Count.EqualTo(1));
+        Assert.That(Encoding.UTF8.GetString(members[0].Element), Is.EqualTo("-3"));
+        Assert.That(members[0].Ordinal, Is.EqualTo(-3L));
+    }
 }

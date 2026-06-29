@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text;
 using Orleans.Lattice.Primitives;
 
@@ -101,6 +102,40 @@ public sealed class PnCounterProvenanceDecoder : ICrdtProvenanceDecoder
         Emit(result, counter.Decrements, CrdtMemberChangeKind.Removed, null);
         result.Sort(CrdtMemberChangeCausalComparer.Instance);
         return result;
+    }
+
+    /// <summary>
+    /// Projects a folded <see cref="PnCounter"/> into a single current-state
+    /// member carrying its net value. The net value (sum of every replica's
+    /// positive contribution minus every replica's negative contribution) is
+    /// rendered as the member element (its invariant-culture decimal text) and
+    /// also carried as the <see cref="CrdtMemberValue.Ordinal"/>;
+    /// <see cref="CrdtMemberValue.ReplicaId"/> is empty because the net total has
+    /// no single authoring replica. A counter with no contributions at all
+    /// (<see cref="PnCounter.IsBottom"/>) projects to no members. The per-replica
+    /// contribution breakdown that <see cref="DecodeState(object)"/> surfaces is
+    /// deliberately collapsed here: the current <em>value</em> of a counter is its
+    /// net total, not its provenance.
+    /// </summary>
+    /// <param name="state">The <see cref="PnCounter"/> to project.</param>
+    /// <returns>A single net-value member, or an empty list for a bottom counter.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="state"/> is <see langword="null"/>.</exception>
+    public IReadOnlyList<CrdtMemberValue> DecodeCurrentValue(object state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        var counter = (PnCounter)state;
+        if (counter.IsBottom) return Array.Empty<CrdtMemberValue>();
+
+        var value = counter.Value;
+        return new[]
+        {
+            new CrdtMemberValue
+            {
+                Element = Encoding.UTF8.GetBytes(value.ToString(CultureInfo.InvariantCulture)),
+                ReplicaId = string.Empty,
+                Ordinal = value,
+            },
+        };
     }
 
     private static void Emit(

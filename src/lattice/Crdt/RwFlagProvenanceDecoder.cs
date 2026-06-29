@@ -98,4 +98,23 @@ public sealed class RwFlagProvenanceDecoder : ICrdtProvenanceDecoder
         result.Sort(CrdtMemberChangeCausalComparer.Instance);
         return result;
     }
+
+    /// <summary>
+    /// Projects a folded <see cref="RwFlag"/> into a single current-state member
+    /// carrying its boolean state (<c>"enabled"</c> or <c>"disabled"</c>) under the
+    /// remove-wins resolution. A flag that has never been enabled or disabled (no
+    /// dots at all) projects to no members. Unlike
+    /// <see cref="DecodeState(object)"/>, which surfaces every enable and disable
+    /// dot, this returns only the resolved current presence.
+    /// </summary>
+    /// <param name="state">The <see cref="RwFlag"/> to project.</param>
+    /// <returns>A single boolean-state member, or an empty list for an untouched flag.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="state"/> is <see langword="null"/>.</exception>
+    public IReadOnlyList<CrdtMemberValue> DecodeCurrentValue(object state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        var flag = (RwFlag)state;
+        var hasAnyDot = flag.Enables.Count > 0 || flag.Disables.Count > 0;
+        return FlagProvenance.CurrentValue(hasAnyDot, flag.IsEnabled);
+    }
 }

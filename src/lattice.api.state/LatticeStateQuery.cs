@@ -452,8 +452,12 @@ internal sealed class LatticeStateQuery(
         foreach (var entry in page.Entries)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            records.Add(await BuildEntryRecordAsync(tree, entry.Key, entry.Value, previewBudget, crdtShape, cancellationToken)
-                .ConfigureAwait(false));
+            var record = await BuildEntryRecordAsync(tree, entry.Key, entry.Value, previewBudget, crdtShape, cancellationToken)
+                .ConfigureAwait(false);
+            // Decode current members off the full snapshot value bytes (before the
+            // preview clip) so the Data list shows a CRDT entry's materialised
+            // members, matching the single-entry detail view.
+            records.Add(WithCurrentMembers(record, request.TreeId, entry.Value));
         }
 
         string? continuation = page.HasMore ? cursorId : null;
@@ -517,7 +521,10 @@ internal sealed class LatticeStateQuery(
                 continue;
             }
 
-            records.Add(BuildEntryRecord(key, versioned.Value, versioned.Version, versioned.ExpiresAtTicks, previewBudget, crdtShape));
+            records.Add(WithCurrentMembers(
+                BuildEntryRecord(key, versioned.Value, versioned.Version, versioned.ExpiresAtTicks, previewBudget, crdtShape),
+                request.TreeId,
+                versioned.Value));
         }
 
         return EntryScanResult.Found(request.TreeId, records, nextToken);
@@ -561,6 +568,14 @@ internal sealed class LatticeStateQuery(
             versioned.ExpiresAtTicks,
             _apiOptions.SingleEntryValuePreviewBytes,
             ResolveCrdtShape(treeId));
+
+        // For a typed CRDT entry, decode the full folded state into its current
+        // member set so the consumer (the Explorer Data tab) can render the
+        // materialised value instead of an opaque blob. Decoded off the full
+        // value bytes the read returned, before the preview clip; an LWW value,
+        // a minimal deployment without the CRDT shape registry, or a decode
+        // failure all degrade to no members rather than failing the read.
+        record = WithCurrentMembers(record, treeId, versioned.Value);
 
         return EntryDetailResult.Found(treeId, record);
     }
@@ -730,6 +745,79 @@ internal sealed class LatticeStateQuery(
         return Array.Empty<CrdtMemberChange>();
     }
 
+    /// <summary>
+    /// Decodes the element-level members of a typed CRDT entry's <em>current</em>
+    /// folded state into its live, present members only - the materialised value
+    /// of the CRDT - via <see cref="ICrdtProvenanceDecoder.DecodeCurrentValue"/>.
+    /// Removed elements are excluded (a fully-removed OR-Set element does not
+    /// appear), unlike a provenance decode which surfaces lingering causal dots.
+    /// Returns an empty list for an opaque last-writer-wins value
+    /// (<paramref name="crdtShape"/> is <see langword="null"/>), a minimal
+    /// deployment that did not register the <see cref="CrdtShapeRegistry"/> or
+    /// the tree's shape, an unregistered shape, or a decode failure (corrupt or
+    /// forward-incompatible bytes are swallowed rather than failing the read).
+    /// </summary>
+    private IReadOnlyList<CrdtMemberValue> DecodeCurrentStateMembers(
+        string treeId,
+        byte[] value,
+        string? crdtShape)
+    {
+        if (crdtShape is null)
+        {
+            return Array.Empty<CrdtMemberValue>();
+        }
+
+        var shapeRegistry = _services.GetService<CrdtShapeRegistry>();
+        if (shapeRegistry is null)
+        {
+            return Array.Empty<CrdtMemberValue>();
+        }
+
+        var decoderRegistry = _services.GetService<CrdtProvenanceDecoderRegistry>()
+            ?? CrdtProvenanceDecoderRegistry.Default;
+        if (!decoderRegistry.TryGet(crdtShape, out var decoder))
+        {
+            return Array.Empty<CrdtMemberValue>();
+        }
+
+        var shape = shapeRegistry.TryGet(treeId, decoder.Mode);
+        if (shape is null)
+        {
+            return Array.Empty<CrdtMemberValue>();
+        }
+
+        try
+        {
+            var state = shape.DeserializeState(value);
+            return decoder.DecodeCurrentValue(state);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // A value whose bytes cannot be decoded (corrupt or
+            // forward-incompatible) carries no members rather than failing the
+            // detail read.
+            return Array.Empty<CrdtMemberValue>();
+        }
+    }
+
+    /// <summary>
+    /// Returns <paramref name="record"/> with its current-state members decoded
+    /// from <paramref name="fullValue"/> (the full value bytes, before any preview
+    /// clip), when the record is a typed CRDT and its current state has live
+    /// members; otherwise returns it unchanged. Used by every list and detail path
+    /// so a CRDT entry renders its materialised value rather than an opaque blob.
+    /// </summary>
+    private EntryRecord WithCurrentMembers(EntryRecord record, string treeId, byte[] fullValue)
+    {
+        if (record.CrdtShape is null)
+        {
+            return record;
+        }
+
+        var members = DecodeCurrentStateMembers(treeId, fullValue, record.CrdtShape);
+        return members.Count > 0 ? record with { CurrentMembers = members } : record;
+    }
+
     /// <summary>Maps the backing history substrate and truncation flag onto the public bound classification.</summary>
     private static EntryHistoryBound MapHistoryBound(EntryHistoryPage page) => page.Source switch
     {
@@ -821,16 +909,85 @@ internal sealed class LatticeStateQuery(
     }
 
     /// <summary>
-    /// Resolves the CRDT shape tag for <paramref name="treeId"/> from the
-    /// declared per-tree <see cref="LatticeMergeMode"/>. The merge mode is the
-    /// only thing the system knows about a value's shape - the core stores
-    /// every value as opaque bytes - so an undeclared (single-cluster) or
-    /// last-writer-wins tree yields <see langword="null"/> and a typed CRDT
-    /// tree yields the mode name (e.g. <c>"OrSet"</c>).
+    /// Resolves the CRDT shape tag for <paramref name="treeId"/>.
+    /// <para>
+    /// An ordinary tree's shape is its declared per-tree
+    /// <see cref="LatticeMergeMode"/> (the only thing the system knows about a
+    /// value's shape - the core stores every value as opaque bytes), so an
+    /// undeclared (single-cluster) or last-writer-wins tree yields
+    /// <see langword="null"/> and a typed CRDT tree yields the mode name (e.g.
+    /// <c>"OrSet"</c>).
+    /// </para>
+    /// <para>
+    /// A materialised-view tree (<c>view-*</c>) has no entry in the merge-mode map
+    /// (views are not replicated trees), so its shape is derived from its view
+    /// kind: a predicate / key-preserving view stores its source tree's value
+    /// verbatim and therefore mirrors the source tree's merge mode, while an
+    /// aggregation view (aggregation rows) and a history / accumulative view
+    /// (<c>HistoryRow</c> blobs) are not member CRDTs and yield
+    /// <see langword="null"/> (rendered as an opaque blob).
+    /// </para>
+    /// <para>
+    /// A tag-index membership tree (<c>tag-*</c>) is resolved through the same
+    /// merge-mode map as any other tree: a flag-membership index declared as
+    /// <c>OrFlag</c> / <c>RwFlag</c> yields that shape and renders its current
+    /// boolean state, while a default (last-writer-wins) index stores a one-byte
+    /// presence sentinel and correctly yields <see langword="null"/>.
+    /// </para>
     /// </summary>
     private string? ResolveCrdtShape(string treeId)
     {
+        if (IsViewTree(treeId))
+        {
+            return ResolveViewCrdtShape(treeId);
+        }
+
         var mode = _services.GetService<ILatticeMergeModeResolver>()?.Resolve(treeId);
+        return mode is null or LatticeMergeMode.LwwRegister ? null : mode.Value.ToString();
+    }
+
+    /// <summary>
+    /// Resolves the effective CRDT shape tag for a materialised-view tree by
+    /// looking up its registration in the local <see cref="IViewCatalog"/>: a
+    /// predicate / key-preserving view mirrors its source tree's merge mode; an
+    /// aggregation or accumulative (history) view is not a member CRDT and yields
+    /// <see langword="null"/>. Degrades to <see langword="null"/> (opaque blob)
+    /// when the view infrastructure is not registered (a minimal deployment), the
+    /// view name is unrecoverable, or the view is not in the local catalog.
+    /// </summary>
+    private string? ResolveViewCrdtShape(string treeId)
+    {
+        var catalog = _services.GetService<IViewCatalog>();
+        if (catalog is null)
+        {
+            return null;
+        }
+
+        var viewName = ViewNameFromTreeId(treeId);
+        if (viewName.Length == 0)
+        {
+            return null;
+        }
+
+        ViewRegistration? registration;
+        try
+        {
+            registration = catalog.TryGet(viewName);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+
+        // Only a predicate / key-preserving view stores a member CRDT value (the
+        // source value verbatim). Aggregation rows and history (accumulative)
+        // rows are bespoke blobs with no member projection.
+        if (registration is null || registration.IsAggregation || registration.Accumulative)
+        {
+            return null;
+        }
+
+        var mode = _services.GetService<ILatticeMergeModeResolver>()?.Resolve(registration.SourceTreeId);
         return mode is null or LatticeMergeMode.LwwRegister ? null : mode.Value.ToString();
     }
 

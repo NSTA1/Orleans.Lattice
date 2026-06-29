@@ -47,8 +47,11 @@ public sealed class OrMapProvenanceDecoder : ICrdtProvenanceDecoder
 
     private delegate void StateEmitter(object boxed, List<CrdtMemberChange> sink);
 
+    private delegate void CurrentValueEmitter(object boxed, List<CrdtMemberValue> sink);
+
     private static readonly ConcurrentDictionary<Type, DeltaEmitter> DeltaEmitters = new();
     private static readonly ConcurrentDictionary<Type, StateEmitter> StateEmitters = new();
+    private static readonly ConcurrentDictionary<Type, CurrentValueEmitter> CurrentValueEmitters = new();
 
     /// <summary>A shared, stateless instance. The decoder holds no per-call state.</summary>
     public static OrMapProvenanceDecoder Instance { get; } = new();
@@ -109,6 +112,102 @@ public sealed class OrMapProvenanceDecoder : ICrdtProvenanceDecoder
         if (result.Count == 0) return Array.Empty<CrdtMemberChange>();
         result.Sort(ElementOrderComparer.Instance);
         return result;
+    }
+
+    /// <summary>
+    /// Projects a folded <see cref="OrMap{TKey, TValue}"/> into its live keys: one
+    /// <see cref="CrdtMemberValue"/> per key that has at least one un-tombstoned
+    /// dot, carrying the key surrogate bytes (see the type remarks on the
+    /// key-to-bytes limitation) and the provenance of that key's surviving dot
+    /// with the highest causal ordinal. Tombstoned (removed) keys are excluded, so
+    /// unlike <see cref="DecodeState(object)"/> the projection is exactly the map's
+    /// current key set. The decoder does not recurse into the per-key value CRDTs.
+    /// Members are ordered by key surrogate bytes.
+    /// </summary>
+    /// <param name="state">The <see cref="OrMap{TKey, TValue}"/> to project.</param>
+    /// <returns>The live keys as current-state members.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="state"/> is <see langword="null"/>.</exception>
+    public IReadOnlyList<CrdtMemberValue> DecodeCurrentValue(object state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        var emitter = CurrentValueEmitters.GetOrAdd(state.GetType(), CreateCurrentValueEmitter);
+        var result = new List<CrdtMemberValue>();
+        emitter(state, result);
+        if (result.Count == 0) return Array.Empty<CrdtMemberValue>();
+        result.Sort(static (x, y) => CompareElementBytes(x.Element, y.Element));
+        return result;
+    }
+
+    private static CurrentValueEmitter CreateCurrentValueEmitter(Type closedType)
+    {
+        var args = closedType.GetGenericArguments();
+        var method = typeof(OrMapProvenanceDecoder)
+            .GetMethod(nameof(EmitCurrentValueTyped), BindingFlags.NonPublic | BindingFlags.Static)!
+            .MakeGenericMethod(args);
+        return (CurrentValueEmitter)method.CreateDelegate(typeof(CurrentValueEmitter));
+    }
+
+    private static void EmitCurrentValueTyped<TKey, TValue>(object boxed, List<CrdtMemberValue> sink)
+        where TKey : notnull
+        where TValue : ICrdt<TValue>, new()
+    {
+        var map = (OrMap<TKey, TValue>)boxed;
+
+        foreach (var (key, entries) in map.Adds)
+        {
+            if (entries.Count == 0) continue;
+            map.Tombstones.TryGetValue(key, out var tomb);
+
+            var hasLive = false;
+            var bestReplica = string.Empty;
+            var bestCounter = long.MinValue;
+            for (var i = 0; i < entries.Count; i++)
+            {
+                var entry = entries[i];
+                if (IsEntryTombstoned(tomb, entry.ReplicaId, entry.Counter)) continue;
+                if (!hasLive
+                    || entry.Counter > bestCounter
+                    || (entry.Counter == bestCounter && string.CompareOrdinal(entry.ReplicaId, bestReplica) > 0))
+                {
+                    hasLive = true;
+                    bestReplica = entry.ReplicaId;
+                    bestCounter = entry.Counter;
+                }
+            }
+
+            if (!hasLive) continue;
+            sink.Add(new CrdtMemberValue
+            {
+                Element = KeyToBytes(key),
+                ReplicaId = bestReplica,
+                Ordinal = bestCounter,
+            });
+        }
+    }
+
+    private static bool IsEntryTombstoned(List<OrSetDot>? tombstones, string replicaId, long counter)
+    {
+        if (tombstones is null) return false;
+        for (var i = 0; i < tombstones.Count; i++)
+        {
+            var t = tombstones[i];
+            if (t.Counter == counter && string.Equals(t.ReplicaId, replicaId, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static int CompareElementBytes(byte[] a, byte[] b)
+    {
+        var min = Math.Min(a.Length, b.Length);
+        for (var i = 0; i < min; i++)
+        {
+            var c = a[i].CompareTo(b[i]);
+            if (c != 0) return c;
+        }
+        return a.Length.CompareTo(b.Length);
     }
 
     private static DeltaEmitter CreateDeltaEmitter(Type closedType)

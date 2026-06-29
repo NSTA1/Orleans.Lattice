@@ -165,4 +165,47 @@ public class OrMapProvenanceDecoderTests
 
         Assert.That(Decoder.DecodeState(map).All(e => e.WallClock is null), Is.True);
     }
+
+    // ---- current-value (live keys only) path ----
+
+    private static string KeyOf(CrdtMemberValue member) => Encoding.UTF8.GetString(member.Element);
+
+    [Test]
+    public void DecodeCurrentValue_null_throws()
+    {
+        Assert.That(() => Decoder.DecodeCurrentValue(null!), Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void DecodeCurrentValue_empty_map_yields_no_members()
+    {
+        Assert.That(Decoder.DecodeCurrentValue(new OrMap<string, OrFlag>()), Is.Empty);
+    }
+
+    [Test]
+    public void DecodeCurrentValue_yields_one_member_per_live_key_sorted()
+    {
+        var map = new OrMap<string, OrFlag>();
+        map.Set("kB", "r1", new OrFlag());
+        map.Set("kA", "r1", new OrFlag());
+
+        var members = Decoder.DecodeCurrentValue(map);
+
+        Assert.That(members.Select(KeyOf), Is.EqualTo(new[] { "kA", "kB" }));
+    }
+
+    [Test]
+    public void DecodeCurrentValue_excludes_removed_key()
+    {
+        var map = new OrMap<string, OrFlag>();
+        map.Set("kept", "r1", new OrFlag());
+        map.Set("dropped", "r1", new OrFlag());
+        map.Remove("dropped");
+
+        var members = Decoder.DecodeCurrentValue(map);
+
+        // The removed key's add dot lingers under a tombstone but must not surface
+        // in the current value.
+        Assert.That(members.Select(KeyOf), Is.EqualTo(new[] { "kept" }));
+    }
 }

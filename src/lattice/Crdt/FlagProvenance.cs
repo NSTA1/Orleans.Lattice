@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Text;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice;
@@ -38,5 +39,27 @@ internal static class FlagProvenance
                 WallClock = wallClock,
             });
         }
+    }
+
+    /// <summary>
+    /// Projects a flag's current boolean state into a single
+    /// <see cref="CrdtMemberValue"/> whose element is the UTF-8 text
+    /// <c>"enabled"</c> or <c>"disabled"</c>, with an empty replica id and a zero
+    /// ordinal (a flag has no per-element provenance). Returns an empty projection
+    /// when the flag has never been touched (<paramref name="hasAnyDot"/> is
+    /// <see langword="false"/>), which the caller renders as an opaque blob.
+    /// </summary>
+    public static IReadOnlyList<CrdtMemberValue> CurrentValue(bool hasAnyDot, bool isEnabled)
+    {
+        if (!hasAnyDot) return Array.Empty<CrdtMemberValue>();
+        return new[]
+        {
+            new CrdtMemberValue
+            {
+                Element = Encoding.UTF8.GetBytes(isEnabled ? "enabled" : "disabled"),
+                ReplicaId = string.Empty,
+                Ordinal = 0,
+            },
+        };
     }
 }

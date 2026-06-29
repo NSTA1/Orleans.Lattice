@@ -65,4 +65,41 @@ public interface ICrdtProvenanceDecoder
     /// (dot-counter) order.
     /// </returns>
     IReadOnlyList<CrdtMemberChange> DecodeState(object state);
+
+    /// <summary>
+    /// Projects a folded current state into its live, present members only - the
+    /// materialised value of the CRDT as it currently stands. This is the
+    /// value-level counterpart to <see cref="DecodeState(object)"/> and differs
+    /// from it fundamentally:
+    /// <list type="bullet">
+    /// <item><description>
+    /// <see cref="DecodeState(object)"/> and <see cref="DecodeDeltas(IReadOnlyList{CrdtProvenanceDelta})"/>
+    /// reconstruct a <em>provenance timeline</em> of add and remove events by
+    /// mining every surviving causal dot. For an OR-Set that includes the add
+    /// dots of elements that have since been removed (their dots linger under the
+    /// tombstone set), so a removed element still surfaces - as both an add and a
+    /// remove event. That is correct for a membership history but wrong for "what
+    /// is in the set right now".
+    /// </description></item>
+    /// <item><description>
+    /// <see cref="DecodeCurrentValue(object)"/> returns only members that are
+    /// live in the current folded state: an OR-Set's <see cref="CrdtMemberValue"/>
+    /// per live element (removed elements excluded), a PN-counter's net total as a
+    /// single member, a register's current value(s), an OR-Map's live entries, a
+    /// version vector's frontier, a sequence's live nodes in order, a flag's
+    /// current boolean state. Shapes whose current value has no meaningful member
+    /// list return an empty projection, which the caller renders as an opaque blob.
+    /// </description></item>
+    /// </list>
+    /// </summary>
+    /// <param name="state">
+    /// The deserialised CRDT state instance whose concrete type this decoder's
+    /// <see cref="Mode"/> implies.
+    /// </param>
+    /// <returns>
+    /// The live members of the current folded state, in a deterministic order, or
+    /// an empty list when the state has no current members (an empty CRDT, or a
+    /// shape with no member-list projection).
+    /// </returns>
+    IReadOnlyList<CrdtMemberValue> DecodeCurrentValue(object state);
 }

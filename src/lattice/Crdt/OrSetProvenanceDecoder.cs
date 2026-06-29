@@ -189,6 +189,85 @@ public sealed class OrSetProvenanceDecoder : ICrdtProvenanceDecoder
     }
 
     /// <summary>
+    /// Projects a folded <see cref="OrSet"/> into its live elements only. Each
+    /// element with at least one un-tombstoned add dot yields one
+    /// <see cref="CrdtMemberValue"/> carrying the element bytes and the provenance
+    /// of its surviving dot with the highest causal ordinal (tie-broken by replica
+    /// id). A fully-removed element - every add dot cancelled by a tombstone - is
+    /// excluded, which is the key behavioural difference from
+    /// <see cref="DecodeState(object)"/>: the current value contains only what is
+    /// presently in the set. Members are ordered by the ordinal sort of each
+    /// element's internal base64 key, matching <see cref="OrSet.Elements"/>.
+    /// </summary>
+    /// <param name="state">The <see cref="OrSet"/> to project.</param>
+    /// <returns>The live elements as current-state members.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="state"/> is <see langword="null"/>.</exception>
+    public IReadOnlyList<CrdtMemberValue> DecodeCurrentValue(object state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        var set = (OrSet)state;
+        var adds = set.Adds;
+        if (adds.Count == 0) return Array.Empty<CrdtMemberValue>();
+
+        var keys = new List<string>(adds.Count);
+        foreach (var key in adds.Keys) keys.Add(key);
+        keys.Sort(StringComparer.Ordinal);
+
+        var tombstones = set.Tombstones;
+        var result = new List<CrdtMemberValue>(keys.Count);
+        foreach (var key in keys)
+        {
+            var addDots = adds[key];
+            tombstones.TryGetValue(key, out var tomb);
+
+            // Pick the surviving (un-tombstoned) dot with the highest causal
+            // ordinal, tie-broken by replica id, as the element's representative
+            // provenance. No surviving dot means the element has been fully
+            // removed and is absent from the current value.
+            var hasLive = false;
+            var bestReplica = string.Empty;
+            var bestCounter = long.MinValue;
+            for (var i = 0; i < addDots.Count; i++)
+            {
+                var dot = addDots[i];
+                if (IsTombstoned(tomb, dot)) continue;
+                if (!hasLive
+                    || dot.Counter > bestCounter
+                    || (dot.Counter == bestCounter && string.CompareOrdinal(dot.ReplicaId, bestReplica) > 0))
+                {
+                    hasLive = true;
+                    bestReplica = dot.ReplicaId;
+                    bestCounter = dot.Counter;
+                }
+            }
+
+            if (!hasLive) continue;
+            result.Add(new CrdtMemberValue
+            {
+                Element = Convert.FromBase64String(key),
+                ReplicaId = bestReplica,
+                Ordinal = bestCounter,
+            });
+        }
+
+        return result.Count == 0 ? Array.Empty<CrdtMemberValue>() : result;
+    }
+
+    private static bool IsTombstoned(List<OrSetDot>? tombstones, OrSetDot dot)
+    {
+        if (tombstones is null) return false;
+        for (var i = 0; i < tombstones.Count; i++)
+        {
+            var t = tombstones[i];
+            if (t.Counter == dot.Counter && string.Equals(t.ReplicaId, dot.ReplicaId, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
     /// Orders two member-change events for the same element by causal ordinal,
     /// then replica id, then kind (an add sorts before the remove that observed
     /// its own dot). Cached as a single shared instance so the per-element sort

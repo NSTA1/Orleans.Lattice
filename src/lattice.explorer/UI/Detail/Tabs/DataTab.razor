@@ -135,7 +135,7 @@
                 var d = _detail;
                 <div class="explorer-data-detail-head">
                     <code class="explorer-data-detail-key">@d.Key</code>
-                    @if (_rendered is not null)
+                    @if (d.CrdtShape is null && _rendered is not null)
                     {
                         <span class="explorer-data-format">@_rendered.Format.ToString().ToLowerInvariant()</span>
                     }
@@ -162,12 +162,35 @@
                         }
                     </dl>
 
-                    @if (_rendered?.Note is not null)
+                    @if (d.CrdtShape is null && _rendered?.Note is not null)
                     {
                         <p class="explorer-data-note">@_rendered.Note</p>
                     }
 
-                    @if (_rendered is null || _rendered.Format == ValueFormat.Empty)
+                    @if (d.CrdtShape is not null)
+                    {
+                        @* A typed CRDT renders its decoded current state - the live
+                           member set of the folded value - instead of the opaque
+                           serialized blob. Only present members are shown; removed
+                           elements are excluded server-side. *@
+                        @if (d.CurrentMembers.Count > 0)
+                        {
+                            <ul class="explorer-data-members">
+                                @foreach (var member in d.CurrentMembers)
+                                {
+                                    <li class="explorer-data-member">
+                                        <code class="explorer-data-member-element">@MemberElementText(member)</code>
+                                        <span class="explorer-data-member-replica">@MemberProvenance(member)</span>
+                                    </li>
+                                }
+                            </ul>
+                        }
+                        else
+                        {
+                            <p class="explorer-data-muted">Empty CRDT state - no current members.</p>
+                        }
+                    }
+                    else if (_rendered is null || _rendered.Format == ValueFormat.Empty)
                     {
                         <p class="explorer-data-muted">No value bytes.</p>
                     }
@@ -551,6 +574,12 @@
     }
 
     private void ToggleHistory() => _showHistory = !_showHistory;
+
+    private static string MemberElementText(DataCrdtMember member) =>
+        member.ElementFormat == ValueFormat.Empty ? "(empty)" : member.ElementText;
+
+    private static string MemberProvenance(DataCrdtMember member) =>
+        member.ReplicaId.Length == 0 ? string.Empty : $"{member.ReplicaId} (dot {member.Ordinal})";
 
     private static string FormatHlc(DataEntry entry)
     {

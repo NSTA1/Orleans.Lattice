@@ -145,4 +145,44 @@ public class RwFlagProvenanceDecoderTests
 
         Assert.That(Decoder.DecodeState(flag).All(e => e.WallClock is null), Is.True);
     }
+
+    // ---- current-value (boolean state) path ----
+
+    [Test]
+    public void DecodeCurrentValue_null_throws()
+    {
+        Assert.That(() => Decoder.DecodeCurrentValue(null!), Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void DecodeCurrentValue_untouched_flag_yields_no_members()
+    {
+        Assert.That(Decoder.DecodeCurrentValue(new RwFlag()), Is.Empty);
+    }
+
+    [Test]
+    public void DecodeCurrentValue_enabled_flag_yields_single_enabled_member()
+    {
+        var flag = new RwFlag();
+        flag.Enable("r1", 1);
+
+        var members = Decoder.DecodeCurrentValue(flag);
+
+        Assert.That(members, Has.Count.EqualTo(1));
+        Assert.That(System.Text.Encoding.UTF8.GetString(members[0].Element), Is.EqualTo("enabled"));
+    }
+
+    [Test]
+    public void DecodeCurrentValue_disabled_flag_yields_single_disabled_member()
+    {
+        // Remove-wins: a concurrent disable the enable has not observed.
+        var flag = new RwFlag();
+        flag.Enable("r1", 1);
+        flag.Disable("r2", 1);
+
+        var members = Decoder.DecodeCurrentValue(flag);
+
+        Assert.That(members, Has.Count.EqualTo(1));
+        Assert.That(System.Text.Encoding.UTF8.GetString(members[0].Element), Is.EqualTo("disabled"));
+    }
 }

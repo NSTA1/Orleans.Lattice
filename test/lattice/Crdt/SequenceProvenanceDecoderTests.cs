@@ -173,4 +173,33 @@ public class SequenceProvenanceDecoderTests
 
         Assert.That(Decoder.DecodeState(rga).All(e => e.WallClock is null), Is.True);
     }
+
+    // ---- current-value (live nodes in sequence order) path ----
+
+    [Test]
+    public void DecodeCurrentValue_null_throws()
+    {
+        Assert.That(() => Decoder.DecodeCurrentValue(null!), Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void DecodeCurrentValue_empty_sequence_yields_no_members()
+    {
+        Assert.That(Decoder.DecodeCurrentValue(new Rga()), Is.Empty);
+    }
+
+    [Test]
+    public void DecodeCurrentValue_excludes_tombstoned_nodes_in_sequence_order()
+    {
+        var rga = new Rga();
+        var d1 = rga.InsertAfter(Rga.Root, "r1", A);
+        rga.InsertAfter(d1, "r1", B);
+        rga.Remove(d1); // tombstones the node carrying A
+
+        var members = Decoder.DecodeCurrentValue(rga);
+
+        // Only the live node remains, surfaced in sequence order.
+        Assert.That(members, Has.Count.EqualTo(1));
+        Assert.That(members[0].Element, Is.EqualTo(B));
+    }
 }
