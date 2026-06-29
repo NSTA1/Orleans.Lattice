@@ -39,16 +39,27 @@ internal sealed class LatticeCallCountingFilter(LatticeCallCounter counter) : II
 /// <summary>
 /// Test <see cref="ILatticeMergeModeResolver"/> that declares any tree whose id
 /// starts with <c>"orset"</c> as an <see cref="LatticeMergeMode.OrSet"/> tree
-/// and leaves every other tree undeclared (last-writer-wins). Lets the read
-/// facade observe a per-tree CRDT merge mode without standing up the full
-/// replication package.
+/// and any tree whose id starts with <c>"pncounter"</c> as a
+/// <see cref="LatticeMergeMode.PnCounter"/> tree, leaving every other tree
+/// undeclared (last-writer-wins). Lets the read facade observe a per-tree CRDT
+/// merge mode without standing up the full replication package.
 /// </summary>
 internal sealed class OrSetPrefixMergeModeResolver : ILatticeMergeModeResolver
 {
-    public LatticeMergeMode? Resolve(string treeId) =>
-        treeId.StartsWith("orset", StringComparison.Ordinal)
-            ? LatticeMergeMode.OrSet
-            : null;
+    public LatticeMergeMode? Resolve(string treeId)
+    {
+        if (treeId.StartsWith("orset", StringComparison.Ordinal))
+        {
+            return LatticeMergeMode.OrSet;
+        }
+
+        if (treeId.StartsWith("pncounter", StringComparison.Ordinal))
+        {
+            return LatticeMergeMode.PnCounter;
+        }
+
+        return null;
+    }
 }
 
 /// <summary>
@@ -131,6 +142,32 @@ internal sealed class StateQueryClusterFixture
         {
             await tree.OrSet(key).AddAsync(System.Text.Encoding.UTF8.GetBytes($"member-of-{key}"), "replica-a");
         }
+
+        return tree;
+    }
+
+    /// <summary>
+    /// Registers <paramref name="treeId"/> (declared as a PN-counter tree by the
+    /// fixture's merge-mode resolver) and applies one increment and one decrement
+    /// to <paramref name="key"/> so the folded state carries both a positive and
+    /// a negative per-replica contribution, returning its grain reference.
+    /// </summary>
+    public async Task<ILattice> CreatePnCounterTreeAsync(
+        string treeId,
+        string key,
+        long increment = 5,
+        long decrement = 2)
+    {
+        var registry = Cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        await registry.RegisterAsync(treeId, new TreeRegistryEntry
+        {
+            MaxLeafKeys = MaxLeafKeys,
+            ShardCount = ShardCount,
+        });
+
+        var tree = Cluster.Client.GetGrain<ILattice>(treeId);
+        await tree.PnCounter(key).IncrementAsync("replica-a", increment);
+        await tree.PnCounter(key).DecrementAsync("replica-b", decrement);
 
         return tree;
     }

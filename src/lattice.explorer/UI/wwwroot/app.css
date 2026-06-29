@@ -1287,6 +1287,44 @@ code, .explorer-mono {
     font-size: 0.85rem;
 }
 
+.explorer-data-members {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.explorer-data-member {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    font-size: 0.78rem;
+}
+
+.explorer-data-member-kind {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    min-width: 4rem;
+}
+
+.explorer-data-member-added .explorer-data-member-kind { color: var(--ok); }
+.explorer-data-member-removed .explorer-data-member-kind { color: var(--danger); }
+
+.explorer-data-member-element {
+    font-family: var(--font-mono);
+    color: var(--text);
+}
+
+.explorer-data-member-replica {
+    color: var(--text-muted);
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+}
+
 .explorer-data-state {
     display: flex;
     align-items: center;

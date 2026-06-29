@@ -275,6 +275,49 @@ public class DataReaderTests
     }
 
     [Test]
+    public async Task GetEntryAsync_CrdtRecord_MapsCurrentMembers()
+    {
+        var client = new FakeEntryStateClient
+        {
+            OnGet = r => new EntryGetResponse
+            {
+                TreeId = r.TreeId,
+                Key = r.Key,
+                Status = StateQueryStatus.Found,
+                Entry = new EntryRecord
+                {
+                    Key = r.Key,
+                    ValuePreview = Encoding.UTF8.GetBytes("{opaque-crdt-blob}"),
+                    ValueLength = 18,
+                    CrdtShape = "OrSet",
+                    CurrentMembers = new[]
+                    {
+                        new CrdtMemberChange
+                        {
+                            Element = Encoding.UTF8.GetBytes("apple"),
+                            Kind = CrdtMemberChangeKind.Added,
+                            ReplicaId = "eu",
+                            Ordinal = 1,
+                        },
+                    },
+                },
+            },
+        };
+        var reader = new DataReader(client);
+
+        var entry = await reader.GetEntryAsync("t", "k1");
+
+        Assert.That(entry, Is.Not.Null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(entry!.CrdtShape, Is.EqualTo("OrSet"));
+            Assert.That(entry.CurrentMembers, Has.Count.EqualTo(1));
+            Assert.That(entry.CurrentMembers[0].ElementText, Is.EqualTo("apple"));
+            Assert.That(entry.CurrentMembers[0].Kind, Is.EqualTo(CrdtMemberChangeKind.Added));
+        });
+    }
+
+    [Test]
     public async Task GetEntryAsync_KeyNotFound_ReturnsNull()
     {
         var client = new FakeEntryStateClient

@@ -45,4 +45,15 @@ public sealed record EntryRecord
     /// for an opaque byte value.
     /// </summary>
     [Id(7)] public string? CrdtShape { get; init; }
+
+    /// <summary>
+    /// The decoded element-level members of the value's <em>current</em> folded
+    /// CRDT state, when the entry is a typed CRDT (<see cref="CrdtShape"/> is
+    /// non-<see langword="null"/>) and its shape has a registered decoder. This
+    /// is a point-in-time snapshot of the materialised value - the surviving
+    /// member set / per-replica contributions of the current state - not a
+    /// per-revision change timeline. Empty for an opaque last-writer-wins value,
+    /// an empty CRDT, or when no decoder is available for the shape.
+    /// </summary>
+    [Id(8)] public IReadOnlyList<CrdtMemberChange> CurrentMembers { get; init; } = Array.Empty<CrdtMemberChange>();
 }

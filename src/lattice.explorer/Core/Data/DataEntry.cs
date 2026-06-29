@@ -34,6 +34,15 @@ public sealed record DataEntry
     /// <summary>The CRDT shape tag when the value is a typed CRDT, or <see langword="null"/>.</summary>
     public string? CrdtShape { get; init; }
 
+    /// <summary>
+    /// The decoded element-level members of the value's current folded CRDT
+    /// state when the entry is a typed CRDT, or an empty list for an opaque
+    /// last-writer-wins value, an empty CRDT, or a deployment without a decoder
+    /// for the shape. A point-in-time snapshot of the materialised value, not a
+    /// per-revision change timeline.
+    /// </summary>
+    public IReadOnlyList<DataCrdtMember> CurrentMembers { get; init; } = Array.Empty<DataCrdtMember>();
+
     /// <summary>Projects a state-API <see cref="EntryRecord"/> into a <see cref="DataEntry"/>.</summary>
     public static DataEntry From(EntryRecord record)
     {
@@ -49,6 +58,23 @@ public sealed record DataEntry
             IsTombstone = record.IsTombstone,
             ExpiresAtTicks = record.ExpiresAtTicks,
             CrdtShape = record.CrdtShape,
+            CurrentMembers = MapMembers(record.CurrentMembers),
         };
+    }
+
+    private static IReadOnlyList<DataCrdtMember> MapMembers(IReadOnlyList<CrdtMemberChange> members)
+    {
+        if (members.Count == 0)
+        {
+            return Array.Empty<DataCrdtMember>();
+        }
+
+        var mapped = new DataCrdtMember[members.Count];
+        for (var i = 0; i < members.Count; i++)
+        {
+            mapped[i] = DataCrdtMember.From(members[i]);
+        }
+
+        return mapped;
     }
 }

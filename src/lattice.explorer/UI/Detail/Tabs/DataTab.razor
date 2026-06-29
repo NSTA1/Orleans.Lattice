@@ -135,7 +135,7 @@
                 var d = _detail;
                 <div class="explorer-data-detail-head">
                     <code class="explorer-data-detail-key">@d.Key</code>
-                    @if (_rendered is not null)
+                    @if (d.CrdtShape is null && _rendered is not null)
                     {
                         <span class="explorer-data-format">@_rendered.Format.ToString().ToLowerInvariant()</span>
                     }
@@ -162,12 +162,36 @@
                         }
                     </dl>
 
-                    @if (_rendered?.Note is not null)
+                    @if (d.CrdtShape is null && _rendered?.Note is not null)
                     {
                         <p class="explorer-data-note">@_rendered.Note</p>
                     }
 
-                    @if (_rendered is null || _rendered.Format == ValueFormat.Empty)
+                    @if (d.CrdtShape is not null)
+                    {
+                        @* A typed CRDT renders its decoded current state - the
+                           surviving member set / per-replica contributions of the
+                           folded value - instead of the opaque serialized blob,
+                           mirroring the History tab's member rows. *@
+                        @if (d.CurrentMembers.Count > 0)
+                        {
+                            <ul class="explorer-data-members">
+                                @foreach (var member in d.CurrentMembers)
+                                {
+                                    <li class="explorer-data-member explorer-data-member-@MemberClass(member.Kind)">
+                                        <span class="explorer-data-member-kind">@MemberLabel(member.Kind)</span>
+                                        <code class="explorer-data-member-element">@MemberElementText(member)</code>
+                                        <span class="explorer-data-member-replica">@member.ReplicaId (dot @member.Ordinal)</span>
+                                    </li>
+                                }
+                            </ul>
+                        }
+                        else
+                        {
+                            <p class="explorer-data-muted">Empty CRDT state - no current members.</p>
+                        }
+                    }
+                    else if (_rendered is null || _rendered.Format == ValueFormat.Empty)
                     {
                         <p class="explorer-data-muted">No value bytes.</p>
                     }
@@ -551,6 +575,15 @@
     }
 
     private void ToggleHistory() => _showHistory = !_showHistory;
+
+    private static string MemberLabel(CrdtMemberChangeKind kind) =>
+        kind == CrdtMemberChangeKind.Added ? "member" : "removed";
+
+    private static string MemberClass(CrdtMemberChangeKind kind) =>
+        kind == CrdtMemberChangeKind.Added ? "added" : "removed";
+
+    private static string MemberElementText(DataCrdtMember member) =>
+        member.ElementFormat == ValueFormat.Empty ? "(empty)" : member.ElementText;
 
     private static string FormatHlc(DataEntry entry)
     {

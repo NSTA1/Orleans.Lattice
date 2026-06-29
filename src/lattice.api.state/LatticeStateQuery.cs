@@ -562,6 +562,18 @@ internal sealed class LatticeStateQuery(
             _apiOptions.SingleEntryValuePreviewBytes,
             ResolveCrdtShape(treeId));
 
+        // For a typed CRDT entry, decode the full folded state into its current
+        // member set so the consumer (the Explorer Data tab) can render the
+        // materialised value instead of an opaque blob. Decoded off the full
+        // value bytes the read returned, before the preview clip; an LWW value,
+        // a minimal deployment without the CRDT shape registry, or a decode
+        // failure all degrade to no members rather than failing the read.
+        var members = DecodeCurrentStateMembers(treeId, versioned.Value, record.CrdtShape);
+        if (members.Count > 0)
+        {
+            record = record with { CurrentMembers = members };
+        }
+
         return EntryDetailResult.Found(treeId, record);
     }
 
@@ -728,6 +740,59 @@ internal sealed class LatticeStateQuery(
         }
 
         return Array.Empty<CrdtMemberChange>();
+    }
+
+    /// <summary>
+    /// Decodes the element-level members of a typed CRDT entry's <em>current</em>
+    /// folded state for the single-entry detail path, mirroring the wiring
+    /// <see cref="DecodeMemberChanges"/> uses for a history full-state snapshot.
+    /// Returns an empty list for an opaque last-writer-wins value
+    /// (<paramref name="crdtShape"/> is <see langword="null"/>), a minimal
+    /// deployment that did not register the <see cref="CrdtShapeRegistry"/> or
+    /// the tree's shape, an unregistered shape, or a decode failure (corrupt or
+    /// forward-incompatible bytes are swallowed rather than failing the read).
+    /// </summary>
+    private IReadOnlyList<CrdtMemberChange> DecodeCurrentStateMembers(
+        string treeId,
+        byte[] value,
+        string? crdtShape)
+    {
+        if (crdtShape is null)
+        {
+            return Array.Empty<CrdtMemberChange>();
+        }
+
+        var shapeRegistry = _services.GetService<CrdtShapeRegistry>();
+        if (shapeRegistry is null)
+        {
+            return Array.Empty<CrdtMemberChange>();
+        }
+
+        var decoderRegistry = _services.GetService<CrdtProvenanceDecoderRegistry>()
+            ?? CrdtProvenanceDecoderRegistry.Default;
+        if (!decoderRegistry.TryGet(crdtShape, out var decoder))
+        {
+            return Array.Empty<CrdtMemberChange>();
+        }
+
+        var shape = shapeRegistry.TryGet(treeId, decoder.Mode);
+        if (shape is null)
+        {
+            return Array.Empty<CrdtMemberChange>();
+        }
+
+        try
+        {
+            var state = shape.DeserializeState(value);
+            return decoder.DecodeState(state);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // A value whose bytes cannot be decoded (corrupt or
+            // forward-incompatible) carries no members rather than failing the
+            // detail read.
+            return Array.Empty<CrdtMemberChange>();
+        }
     }
 
     /// <summary>Maps the backing history substrate and truncation flag onto the public bound classification.</summary>

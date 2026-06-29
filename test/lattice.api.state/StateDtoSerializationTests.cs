@@ -252,6 +252,16 @@ public sealed class StateDtoSerializationTests
             IsTombstone = false,
             ExpiresAtTicks = 123456,
             CrdtShape = "OrSet",
+            CurrentMembers = new[]
+            {
+                new CrdtMemberChange
+                {
+                    Element = new byte[] { 7, 8 },
+                    Kind = CrdtMemberChangeKind.Added,
+                    ReplicaId = "rA",
+                    Ordinal = 9,
+                },
+            },
         };
 
         var copy = RoundTrip(original);
@@ -261,6 +271,11 @@ public sealed class StateDtoSerializationTests
         Assert.That(copy.Truncated, Is.True);
         Assert.That(copy.ExpiresAtTicks, Is.EqualTo(123456));
         Assert.That(copy.CrdtShape, Is.EqualTo("OrSet"));
+        Assert.That(copy.CurrentMembers, Has.Count.EqualTo(1));
+        Assert.That(copy.CurrentMembers[0].Element, Is.EqualTo(new byte[] { 7, 8 }));
+        Assert.That(copy.CurrentMembers[0].Kind, Is.EqualTo(CrdtMemberChangeKind.Added));
+        Assert.That(copy.CurrentMembers[0].ReplicaId, Is.EqualTo("rA"));
+        Assert.That(copy.CurrentMembers[0].Ordinal, Is.EqualTo(9));
     }
 
     [Test]
