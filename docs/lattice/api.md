@@ -1824,7 +1824,11 @@ double total = await ageByName.GetAggregateDoubleAsync("Alice", cancellationToke
   raw bind, so a direct read could observe a stale or empty generation). Read
   through the `ILatticeView` handle instead, and write to the source tree to change
   a view's contents. `view-` is therefore a reserved tree-name prefix for
-  directly-writable trees.
+  directly-writable trees. The read-only state API inspection surface
+  (`GetTreeStructureAsync`, `ScanEntriesAsync`, `GetEntryAsync`,
+  `GetEntryHistoryAsync`) does expose a view's active generation read-only - so the
+  Explorer can inspect a view's data, topology, and history - while system-tree
+  (`_lattice_*`) ids stay hidden and view writes stay rejected.
 - **Source deletion is guarded.** A source tree that still has one or more
   materialised views cannot be deleted: `DeleteTreeAsync` throws
   `InvalidOperationException` naming the dependent view(s). Tear the view(s) down

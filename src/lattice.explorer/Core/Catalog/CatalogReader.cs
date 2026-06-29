@@ -9,6 +9,15 @@ namespace Orleans.Lattice.Explorer.Core.Catalog;
 /// </summary>
 public sealed class CatalogReader(ILatticeStateClient client) : ICatalogReader
 {
+    /// <summary>
+    /// Reserved tree-name prefix for materialised-view trees, mirrored from
+    /// <c>LatticeConstants.ViewTreePrefix</c>. The explorer's Core project must not
+    /// reference Orleans.Lattice, so the literal is held locally; a view named
+    /// <c>v1</c> is physically the tree <c>view-v1</c>, and the detail tabs query
+    /// that physical id while the list shows the bare name.
+    /// </summary>
+    private const string ViewTreePrefix = "view-";
+
     private readonly ILatticeStateClient _client = client ?? throw new ArgumentNullException(nameof(client));
 
     /// <inheritdoc />
@@ -61,7 +70,8 @@ public sealed class CatalogReader(ILatticeStateClient client) : ICatalogReader
         {
             items.Add(new CatalogItem
             {
-                Id = entry.ViewName,
+                Id = $"{ViewTreePrefix}{entry.ViewName}",
+                DisplayName = entry.ViewName,
                 Kind = CatalogKind.Views,
                 SourceTreeId = entry.SourceTreeId,
                 IsAggregation = entry.IsAggregation,

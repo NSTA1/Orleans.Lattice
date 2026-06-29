@@ -80,7 +80,7 @@
                         <button type="button"
                                 class="explorer-nav-item @(isSelected ? "is-selected" : null)"
                                 @onclick="@(() => SelectAsync(item))">
-                            <span class="explorer-nav-item-id">@(item.Kind == CatalogKind.TagIndexes ? item.IndexName ?? item.Id : item.Id)</span>
+                            <span class="explorer-nav-item-id">@(item.Kind == CatalogKind.TagIndexes ? item.IndexName ?? item.Id : item.Label)</span>
                             <span class="explorer-nav-item-meta">
                                 @if (item.Kind == CatalogKind.Trees)
                                 {
