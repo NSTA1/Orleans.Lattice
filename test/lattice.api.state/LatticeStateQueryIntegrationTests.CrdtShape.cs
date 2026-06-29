@@ -76,6 +76,25 @@ public sealed partial class LatticeStateQueryIntegrationTests
     }
 
     [Test]
+    public async Task GetEntryAsync_orset_tree_excludes_removed_element_from_current_members()
+    {
+        const string treeId = "orset-get-removed-excluded";
+        await _fixture.CreateOrSetTreeWithRemovalAsync(treeId, "focus", liveElement: "keep", removedElement: "drop");
+
+        var result = await _fixture.Query.GetEntryAsync(treeId, "focus");
+
+        Assert.That(result.Status, Is.EqualTo(StateQueryStatus.Found));
+        Assert.That(result.Entry, Is.Not.Null);
+
+        // The removed element's add dot survives under a tombstone in the folded
+        // OR-Set, but the current-state projection must surface only live members.
+        var members = result.Entry!.CurrentMembers;
+        var elements = members.Select(m => System.Text.Encoding.UTF8.GetString(m.Element)).ToArray();
+        Assert.That(elements, Is.EqualTo(new[] { "keep" }),
+            "a fully-removed OR-Set element must not appear in the current folded state");
+    }
+
+    [Test]
     public async Task GetEntryAsync_orset_tree_decodes_current_members()
     {
         const string treeId = "orset-get-current-state";
@@ -88,16 +107,15 @@ public sealed partial class LatticeStateQueryIntegrationTests
 
         // The current folded state surfaces the single live element with its
         // originating replica, decoded server-side rather than left as an opaque
-        // serialized blob.
+        // serialized blob. No add/remove distinction: only present members.
         var members = result.Entry!.CurrentMembers;
         Assert.That(members, Has.Count.EqualTo(1));
-        Assert.That(members[0].Kind, Is.EqualTo(CrdtMemberChangeKind.Added));
         Assert.That(System.Text.Encoding.UTF8.GetString(members[0].Element), Is.EqualTo("member-of-focus"));
         Assert.That(members[0].ReplicaId, Is.EqualTo("replica-a"));
     }
 
     [Test]
-    public async Task GetEntryAsync_pncounter_tree_decodes_current_members()
+    public async Task GetEntryAsync_pncounter_tree_decodes_net_value_member()
     {
         const string treeId = "pncounter-get-current-state";
         await _fixture.CreatePnCounterTreeAsync(treeId, "votes", increment: 5, decrement: 2);
@@ -108,18 +126,14 @@ public sealed partial class LatticeStateQueryIntegrationTests
         Assert.That(result.Entry, Is.Not.Null);
         Assert.That(result.Entry!.CrdtShape, Is.EqualTo("PnCounter"));
 
-        // The folded PN-counter exposes one positive per-replica contribution and
-        // one negative one, surfaced as Added / Removed members carrying the
-        // contribution magnitude as the ordinal.
+        // The folded PN-counter exposes a single current-state member carrying its
+        // net value (increment 5 minus decrement 2 = 3), not per-replica
+        // contributions. The net total is both the element text and the ordinal.
         var members = result.Entry.CurrentMembers;
-        Assert.That(members, Has.Count.EqualTo(2));
-
-        var added = members.Single(m => m.Kind == CrdtMemberChangeKind.Added);
-        var removed = members.Single(m => m.Kind == CrdtMemberChangeKind.Removed);
-        Assert.That(added.ReplicaId, Is.EqualTo("replica-a"));
-        Assert.That(added.Ordinal, Is.EqualTo(5));
-        Assert.That(removed.ReplicaId, Is.EqualTo("replica-b"));
-        Assert.That(removed.Ordinal, Is.EqualTo(2));
+        Assert.That(members, Has.Count.EqualTo(1));
+        Assert.That(System.Text.Encoding.UTF8.GetString(members[0].Element), Is.EqualTo("3"));
+        Assert.That(members[0].Ordinal, Is.EqualTo(3));
+        Assert.That(members[0].ReplicaId, Is.Empty);
     }
 
     [Test]

@@ -62,7 +62,7 @@ public sealed record DataEntry
         };
     }
 
-    private static IReadOnlyList<DataCrdtMember> MapMembers(IReadOnlyList<CrdtMemberChange> members)
+    private static IReadOnlyList<DataCrdtMember> MapMembers(IReadOnlyList<CrdtMemberValue> members)
     {
         if (members.Count == 0)
         {

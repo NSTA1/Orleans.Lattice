@@ -151,4 +151,62 @@ public class MvRegisterProvenanceDecoderTests
 
         Assert.That(Decoder.DecodeState(m).All(e => e.WallClock is null), Is.True);
     }
+
+    // ---- current-value (live entries) path ----
+
+    [Test]
+    public void DecodeCurrentValue_null_throws()
+    {
+        Assert.That(() => Decoder.DecodeCurrentValue(null!), Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void DecodeCurrentValue_empty_register_yields_no_members()
+    {
+        Assert.That(Decoder.DecodeCurrentValue(new MvRegister()), Is.Empty);
+    }
+
+    [Test]
+    public void DecodeCurrentValue_single_value_yields_one_live_member()
+    {
+        var m = new MvRegister();
+        m.Set("r1", X);
+
+        var members = Decoder.DecodeCurrentValue(m);
+
+        Assert.That(members, Has.Count.EqualTo(1));
+        Assert.That(members[0].Element, Is.EqualTo(X));
+        Assert.That(members[0].ReplicaId, Is.EqualTo("r1"));
+    }
+
+    [Test]
+    public void DecodeCurrentValue_concurrent_values_both_present()
+    {
+        var a = new MvRegister();
+        a.Set("r1", X);
+        var b = new MvRegister();
+        b.Set("r2", Y);
+        a.MergeFrom(b);
+
+        var members = Decoder.DecodeCurrentValue(a);
+
+        // Both concurrent live values surface; superseded values do not (this is
+        // the current value, not the provenance timeline).
+        Assert.That(members.Select(e => e.ReplicaId), Is.EquivalentTo(new[] { "r1", "r2" }));
+    }
+
+    [Test]
+    public void DecodeCurrentValue_superseded_value_is_excluded()
+    {
+        var a = new MvRegister();
+        a.Set("r1", X);
+        var b = a.Clone();
+        b.Set("r2", Y); // observes and supersedes (r1,1)
+
+        var members = Decoder.DecodeCurrentValue(b);
+
+        Assert.That(members, Has.Count.EqualTo(1));
+        Assert.That(members[0].ReplicaId, Is.EqualTo("r2"));
+        Assert.That(members[0].Element, Is.EqualTo(Y));
+    }
 }

@@ -254,10 +254,9 @@ public sealed class StateDtoSerializationTests
             CrdtShape = "OrSet",
             CurrentMembers = new[]
             {
-                new CrdtMemberChange
+                new CrdtMemberValue
                 {
                     Element = new byte[] { 7, 8 },
-                    Kind = CrdtMemberChangeKind.Added,
                     ReplicaId = "rA",
                     Ordinal = 9,
                 },
@@ -273,7 +272,6 @@ public sealed class StateDtoSerializationTests
         Assert.That(copy.CrdtShape, Is.EqualTo("OrSet"));
         Assert.That(copy.CurrentMembers, Has.Count.EqualTo(1));
         Assert.That(copy.CurrentMembers[0].Element, Is.EqualTo(new byte[] { 7, 8 }));
-        Assert.That(copy.CurrentMembers[0].Kind, Is.EqualTo(CrdtMemberChangeKind.Added));
         Assert.That(copy.CurrentMembers[0].ReplicaId, Is.EqualTo("rA"));
         Assert.That(copy.CurrentMembers[0].Ordinal, Is.EqualTo(9));
     }

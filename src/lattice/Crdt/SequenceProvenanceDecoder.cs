@@ -142,4 +142,38 @@ public sealed class SequenceProvenanceDecoder : ICrdtProvenanceDecoder
         result.Sort(CrdtMemberChangeCausalComparer.Instance);
         return result;
     }
+
+    /// <summary>
+    /// Projects a folded <see cref="Rga"/> into its live nodes in resolved
+    /// sequence order. Each live (un-tombstoned) node yields one
+    /// <see cref="CrdtMemberValue"/> carrying the node's value bytes and its
+    /// authoring replica and dot counter, in the same insertion-resolved order as
+    /// <see cref="Rga.ToList"/>. Tombstoned nodes are excluded, so unlike
+    /// <see cref="DecodeState(object)"/> (which surfaces tombstoned nodes as
+    /// removed events) the projection is exactly the current sequence contents.
+    /// </summary>
+    /// <param name="state">The <see cref="Rga"/> to project.</param>
+    /// <returns>The live nodes as ordered current-state members.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="state"/> is <see langword="null"/>.</exception>
+    public IReadOnlyList<CrdtMemberValue> DecodeCurrentValue(object state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        var rga = (Rga)state;
+        var live = rga.ToList();
+        if (live.Count == 0) return Array.Empty<CrdtMemberValue>();
+
+        var result = new List<CrdtMemberValue>(live.Count);
+        for (var i = 0; i < live.Count; i++)
+        {
+            var (dot, value) = live[i];
+            result.Add(new CrdtMemberValue
+            {
+                Element = value ?? Array.Empty<byte>(),
+                ReplicaId = dot.ReplicaId,
+                Ordinal = dot.Counter,
+            });
+        }
+
+        return result;
+    }
 }

@@ -124,6 +124,30 @@ internal sealed class StateQueryClusterFixture
     }
 
     /// <summary>
+    /// Registers <paramref name="treeId"/> (declared as an OR-Set tree) and, under
+    /// a single key, adds two elements then removes one, so the folded OR-Set
+    /// retains a tombstoned (fully removed) element alongside one live element.
+    /// Exercises the live-only current-state projection: the removed element's add
+    /// dot survives in the folded state but must not surface as a current member.
+    /// </summary>
+    public async Task<ILattice> CreateOrSetTreeWithRemovalAsync(string treeId, string key, string liveElement, string removedElement)
+    {
+        var registry = Cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        await registry.RegisterAsync(treeId, new TreeRegistryEntry
+        {
+            MaxLeafKeys = MaxLeafKeys,
+            ShardCount = ShardCount,
+        });
+
+        var tree = Cluster.Client.GetGrain<ILattice>(treeId);
+        await tree.OrSet(key).AddAsync(System.Text.Encoding.UTF8.GetBytes(liveElement), "replica-a");
+        await tree.OrSet(key).AddAsync(System.Text.Encoding.UTF8.GetBytes(removedElement), "replica-a");
+        await tree.OrSet(key).RemoveAsync(System.Text.Encoding.UTF8.GetBytes(removedElement));
+
+        return tree;
+    }
+
+    /// <summary>
     /// Registers <paramref name="treeId"/> (declared as an OR-Set tree by the
     /// fixture's merge-mode resolver) and writes one OR-Set element per key in
     /// <paramref name="keys"/>, returning its grain reference.

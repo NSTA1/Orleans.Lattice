@@ -47,17 +47,15 @@ public class DataEntryTests
             CrdtShape = "OrSet",
             CurrentMembers = new[]
             {
-                new CrdtMemberChange
+                new CrdtMemberValue
                 {
                     Element = Encoding.UTF8.GetBytes("apple"),
-                    Kind = CrdtMemberChangeKind.Added,
                     ReplicaId = "eu",
                     Ordinal = 1,
                 },
-                new CrdtMemberChange
+                new CrdtMemberValue
                 {
                     Element = Encoding.UTF8.GetBytes("pear"),
-                    Kind = CrdtMemberChangeKind.Removed,
                     ReplicaId = "us",
                     Ordinal = 2,
                 },
@@ -70,9 +68,9 @@ public class DataEntryTests
         {
             Assert.That(entry.CurrentMembers, Has.Count.EqualTo(2));
             Assert.That(entry.CurrentMembers[0].ElementText, Is.EqualTo("apple"));
-            Assert.That(entry.CurrentMembers[0].Kind, Is.EqualTo(CrdtMemberChangeKind.Added));
+            Assert.That(entry.CurrentMembers[0].ReplicaId, Is.EqualTo("eu"));
             Assert.That(entry.CurrentMembers[1].ElementText, Is.EqualTo("pear"));
-            Assert.That(entry.CurrentMembers[1].Kind, Is.EqualTo(CrdtMemberChangeKind.Removed));
+            Assert.That(entry.CurrentMembers[1].ReplicaId, Is.EqualTo("us"));
         });
     }
 

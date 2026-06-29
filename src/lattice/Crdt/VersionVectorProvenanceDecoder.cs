@@ -96,6 +96,43 @@ public sealed class VersionVectorProvenanceDecoder : ICrdtProvenanceDecoder
         return result;
     }
 
+    /// <summary>
+    /// Projects a folded <see cref="VersionVector"/> into its current causal
+    /// frontier: one <see cref="CrdtMemberValue"/> per replica entry, carrying the
+    /// replica id (as UTF-8 element bytes and as
+    /// <see cref="CrdtMemberValue.ReplicaId"/>) and that replica's high-water
+    /// counter as <see cref="CrdtMemberValue.Ordinal"/>, ordered by replica. A
+    /// version vector has no removals, so its current value is simply its frontier.
+    /// </summary>
+    /// <param name="state">The <see cref="VersionVector"/> to project.</param>
+    /// <returns>One member per replica frontier entry.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="state"/> is <see langword="null"/>.</exception>
+    public IReadOnlyList<CrdtMemberValue> DecodeCurrentValue(object state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        var vector = (VersionVector)state;
+        var entries = vector.Entries;
+        if (entries.Count == 0) return Array.Empty<CrdtMemberValue>();
+
+        var replicas = new List<string>(entries.Count);
+        foreach (var replicaId in entries.Keys) replicas.Add(replicaId);
+        replicas.Sort(StringComparer.Ordinal);
+
+        var result = new List<CrdtMemberValue>(replicas.Count);
+        foreach (var replicaId in replicas)
+        {
+            var clock = entries[replicaId];
+            result.Add(new CrdtMemberValue
+            {
+                Element = Encoding.UTF8.GetBytes(replicaId),
+                ReplicaId = replicaId,
+                Ordinal = clock.Counter,
+            });
+        }
+
+        return result;
+    }
+
     private static void Emit(List<CrdtMemberChange> sink, Dictionary<string, HybridLogicalClock>? entries)
     {
         if (entries is not { Count: > 0 }) return;

@@ -169,19 +169,18 @@
 
                     @if (d.CrdtShape is not null)
                     {
-                        @* A typed CRDT renders its decoded current state - the
-                           surviving member set / per-replica contributions of the
-                           folded value - instead of the opaque serialized blob,
-                           mirroring the History tab's member rows. *@
+                        @* A typed CRDT renders its decoded current state - the live
+                           member set of the folded value - instead of the opaque
+                           serialized blob. Only present members are shown; removed
+                           elements are excluded server-side. *@
                         @if (d.CurrentMembers.Count > 0)
                         {
                             <ul class="explorer-data-members">
                                 @foreach (var member in d.CurrentMembers)
                                 {
-                                    <li class="explorer-data-member explorer-data-member-@MemberClass(member.Kind)">
-                                        <span class="explorer-data-member-kind">@MemberLabel(member.Kind)</span>
+                                    <li class="explorer-data-member">
                                         <code class="explorer-data-member-element">@MemberElementText(member)</code>
-                                        <span class="explorer-data-member-replica">@member.ReplicaId (dot @member.Ordinal)</span>
+                                        <span class="explorer-data-member-replica">@MemberProvenance(member)</span>
                                     </li>
                                 }
                             </ul>
@@ -576,14 +575,11 @@
 
     private void ToggleHistory() => _showHistory = !_showHistory;
 
-    private static string MemberLabel(CrdtMemberChangeKind kind) =>
-        kind == CrdtMemberChangeKind.Added ? "member" : "removed";
-
-    private static string MemberClass(CrdtMemberChangeKind kind) =>
-        kind == CrdtMemberChangeKind.Added ? "added" : "removed";
-
     private static string MemberElementText(DataCrdtMember member) =>
         member.ElementFormat == ValueFormat.Empty ? "(empty)" : member.ElementText;
+
+    private static string MemberProvenance(DataCrdtMember member) =>
+        member.ReplicaId.Length == 0 ? string.Empty : $"{member.ReplicaId} (dot {member.Ordinal})";
 
     private static string FormatHlc(DataEntry entry)
     {

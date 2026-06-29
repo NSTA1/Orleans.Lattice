@@ -95,6 +95,49 @@ public sealed class MvRegisterProvenanceDecoder : ICrdtProvenanceDecoder
         return result;
     }
 
+    /// <summary>
+    /// Projects a folded <see cref="MvRegister"/> into its current value(s). Each
+    /// live entry yields one <see cref="CrdtMemberValue"/> carrying the value
+    /// bytes and the entry's authoring replica and dot counter, ordered by replica
+    /// then counter (matching <see cref="MvRegister.Values"/>). A single-valued
+    /// register projects one member; a register with concurrent writes projects
+    /// every conflicting value. The superseded-value provenance that
+    /// <see cref="DecodeState(object)"/> records (empty-element removed events for
+    /// context replicas without a live entry) is omitted: the current value is the
+    /// set of live entries only.
+    /// </summary>
+    /// <param name="state">The <see cref="MvRegister"/> to project.</param>
+    /// <returns>The current live value(s) as members.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="state"/> is <see langword="null"/>.</exception>
+    public IReadOnlyList<CrdtMemberValue> DecodeCurrentValue(object state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        var register = (MvRegister)state;
+        var entries = register.Entries;
+        if (entries.Count == 0) return Array.Empty<CrdtMemberValue>();
+
+        var ordered = new List<MvRegisterEntry>(entries);
+        ordered.Sort(static (a, b) =>
+        {
+            var byReplica = string.CompareOrdinal(a.ReplicaId, b.ReplicaId);
+            return byReplica != 0 ? byReplica : a.Counter.CompareTo(b.Counter);
+        });
+
+        var result = new List<CrdtMemberValue>(ordered.Count);
+        for (var i = 0; i < ordered.Count; i++)
+        {
+            var e = ordered[i];
+            result.Add(new CrdtMemberValue
+            {
+                Element = e.Value ?? Array.Empty<byte>(),
+                ReplicaId = e.ReplicaId,
+                Ordinal = e.Counter,
+            });
+        }
+
+        return result;
+    }
+
     private static void Emit(
         List<CrdtMemberChange> sink,
         IReadOnlyList<MvRegisterEntry>? entries,

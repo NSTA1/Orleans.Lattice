@@ -50,10 +50,11 @@ public sealed record EntryRecord
     /// The decoded element-level members of the value's <em>current</em> folded
     /// CRDT state, when the entry is a typed CRDT (<see cref="CrdtShape"/> is
     /// non-<see langword="null"/>) and its shape has a registered decoder. This
-    /// is a point-in-time snapshot of the materialised value - the surviving
-    /// member set / per-replica contributions of the current state - not a
-    /// per-revision change timeline. Empty for an opaque last-writer-wins value,
-    /// an empty CRDT, or when no decoder is available for the shape.
+    /// is a point-in-time snapshot of the materialised value - the live members
+    /// presently in the set / map / register / sequence, a counter's net total, or
+    /// a flag's boolean state - with removed elements excluded. It is not a
+    /// per-revision change timeline. Empty for an opaque last-writer-wins value, an
+    /// empty CRDT, or when no decoder is available for the shape.
     /// </summary>
-    [Id(8)] public IReadOnlyList<CrdtMemberChange> CurrentMembers { get; init; } = Array.Empty<CrdtMemberChange>();
+    [Id(8)] public IReadOnlyList<CrdtMemberValue> CurrentMembers { get; init; } = Array.Empty<CrdtMemberValue>();
 }

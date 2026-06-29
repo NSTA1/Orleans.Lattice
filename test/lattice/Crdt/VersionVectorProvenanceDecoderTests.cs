@@ -108,4 +108,33 @@ public class VersionVectorProvenanceDecoderTests
 
         Assert.That(events.Select(e => e.ReplicaId), Is.EqualTo(new[] { "rA", "rB", "rC" }));
     }
+
+    // ---- current-value (frontier per replica) path ----
+
+    [Test]
+    public void DecodeCurrentValue_null_throws()
+    {
+        Assert.That(() => Decoder.DecodeCurrentValue(null!), Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void DecodeCurrentValue_empty_vector_yields_no_members()
+    {
+        Assert.That(Decoder.DecodeCurrentValue(new VersionVector()), Is.Empty);
+    }
+
+    [Test]
+    public void DecodeCurrentValue_yields_one_member_per_replica_ordered()
+    {
+        var vector = new VersionVector();
+        vector.Tick("rC");
+        vector.Tick("rA");
+        vector.Tick("rB");
+
+        var members = Decoder.DecodeCurrentValue(vector);
+
+        Assert.That(members.Select(m => m.ReplicaId), Is.EqualTo(new[] { "rA", "rB", "rC" }));
+        Assert.That(members.Select(m => Encoding.UTF8.GetString(m.Element)),
+            Is.EqualTo(new[] { "rA", "rB", "rC" }));
+    }
 }

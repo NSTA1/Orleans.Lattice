@@ -92,4 +92,22 @@ public sealed class OrFlagProvenanceDecoder : ICrdtProvenanceDecoder
         result.Sort(CrdtMemberChangeCausalComparer.Instance);
         return result;
     }
+
+    /// <summary>
+    /// Projects a folded <see cref="OrFlag"/> into a single current-state member
+    /// carrying its boolean state (<c>"enabled"</c> or <c>"disabled"</c>). A flag
+    /// that has never been enabled or disabled (no dots at all) projects to no
+    /// members. Unlike <see cref="DecodeState(object)"/>, which surfaces every
+    /// enable and disable dot, this returns only the resolved current presence.
+    /// </summary>
+    /// <param name="state">The <see cref="OrFlag"/> to project.</param>
+    /// <returns>A single boolean-state member, or an empty list for an untouched flag.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="state"/> is <see langword="null"/>.</exception>
+    public IReadOnlyList<CrdtMemberValue> DecodeCurrentValue(object state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        var flag = (OrFlag)state;
+        var hasAnyDot = flag.Enables.Count > 0 || flag.Tombstones.Count > 0;
+        return FlagProvenance.CurrentValue(hasAnyDot, flag.IsEnabled);
+    }
 }

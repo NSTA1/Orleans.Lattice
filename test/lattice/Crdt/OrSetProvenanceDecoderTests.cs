@@ -291,4 +291,82 @@ public class OrSetProvenanceDecoderTests
         Assert.That(events, Has.Count.EqualTo(1));
         Assert.That(events[0].Kind, Is.EqualTo(CrdtMemberChangeKind.Removed));
     }
+
+    // ---- current-value (live members only) path ----
+
+    [Test]
+    public void DecodeCurrentValue_null_throws()
+    {
+        Assert.That(() => Decoder.DecodeCurrentValue(null!), Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void DecodeCurrentValue_empty_set_yields_no_members()
+    {
+        Assert.That(Decoder.DecodeCurrentValue(new OrSet()), Is.Empty);
+    }
+
+    [Test]
+    public void DecodeCurrentValue_single_add_yields_one_live_member()
+    {
+        var set = new OrSet();
+        set.Add(Apple, "r1", 5);
+
+        var members = Decoder.DecodeCurrentValue(set);
+
+        Assert.That(members, Has.Count.EqualTo(1));
+        Assert.Multiple(() =>
+        {
+            Assert.That(members[0].Element, Is.EqualTo(Apple));
+            Assert.That(members[0].ReplicaId, Is.EqualTo("r1"));
+            Assert.That(members[0].Ordinal, Is.EqualTo(5L));
+        });
+    }
+
+    [Test]
+    public void DecodeCurrentValue_fully_removed_element_is_excluded()
+    {
+        var set = new OrSet();
+        set.Add(Apple, "r1", 1);
+        set.Add(Banana, "r1", 2);
+        set.Remove(Apple); // tombstones every add dot for Apple
+
+        var members = Decoder.DecodeCurrentValue(set);
+
+        // Only the surviving element remains; the fully-removed one is absent
+        // even though its add dot still lingers under a tombstone.
+        Assert.That(members, Has.Count.EqualTo(1));
+        Assert.That(members[0].Element, Is.EqualTo(Banana));
+    }
+
+    [Test]
+    public void DecodeCurrentValue_removed_then_readded_is_live()
+    {
+        var set = new OrSet();
+        set.Add(Apple, "r1", 1);
+        set.Remove(Apple);       // tombstones dot (r1, 1)
+        set.Add(Apple, "r1", 2); // fresh live dot
+
+        var members = Decoder.DecodeCurrentValue(set);
+
+        Assert.That(members, Has.Count.EqualTo(1));
+        Assert.That(members[0].Element, Is.EqualTo(Apple));
+        Assert.That(members[0].Ordinal, Is.EqualTo(2L),
+            "the representative dot is the surviving (highest-ordinal) add");
+    }
+
+    [Test]
+    public void DecodeCurrentValue_picks_highest_surviving_dot_as_representative()
+    {
+        var set = new OrSet();
+        set.Add(Apple, "r1", 1);
+        set.Add(Apple, "r1", 3);
+        set.Add(Apple, "r2", 2);
+
+        var members = Decoder.DecodeCurrentValue(set);
+
+        Assert.That(members, Has.Count.EqualTo(1));
+        Assert.That(members[0].Ordinal, Is.EqualTo(3L));
+        Assert.That(members[0].ReplicaId, Is.EqualTo("r1"));
+    }
 }

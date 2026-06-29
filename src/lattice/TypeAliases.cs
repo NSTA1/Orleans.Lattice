@@ -232,6 +232,11 @@ internal static class TypeAliases
     internal const string CrdtMemberChange = "ol.cmc";
     internal const string CrdtMemberChangeKind = "ol.cmk";
 
+    // CRDT current-state value projection - a single present member of a CRDT's
+    // folded current state (the live-only counterpart to CrdtMemberChange).
+    // Serializable because the State API surfaces it to clients.
+    internal const string CrdtMemberValue = "ol.cmv";
+
     // Tag index (associate tags with keys and query by tag). The membership
     // rows live in an ordinary sibling Lattice tree resolved as
     // tag-{indexName}; these aliases cover the public value/report types the

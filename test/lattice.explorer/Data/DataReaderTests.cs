@@ -292,10 +292,9 @@ public class DataReaderTests
                     CrdtShape = "OrSet",
                     CurrentMembers = new[]
                     {
-                        new CrdtMemberChange
+                        new CrdtMemberValue
                         {
                             Element = Encoding.UTF8.GetBytes("apple"),
-                            Kind = CrdtMemberChangeKind.Added,
                             ReplicaId = "eu",
                             Ordinal = 1,
                         },
@@ -313,7 +312,7 @@ public class DataReaderTests
             Assert.That(entry!.CrdtShape, Is.EqualTo("OrSet"));
             Assert.That(entry.CurrentMembers, Has.Count.EqualTo(1));
             Assert.That(entry.CurrentMembers[0].ElementText, Is.EqualTo("apple"));
-            Assert.That(entry.CurrentMembers[0].Kind, Is.EqualTo(CrdtMemberChangeKind.Added));
+            Assert.That(entry.CurrentMembers[0].ReplicaId, Is.EqualTo("eu"));
         });
     }
 
