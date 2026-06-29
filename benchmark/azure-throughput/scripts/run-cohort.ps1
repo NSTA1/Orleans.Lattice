@@ -572,7 +572,41 @@ if ($exceptionCount -gt 0 -and (Test-Path -LiteralPath $siloLog)) {
 	$viewDrainShutdownRace = (
 		@(Select-String -Path $siloLog -Pattern 'ViewMaintainerGrain.*(LatticeShuttingDownException|OrleansMessageRejectionException)')
 	).Count
-	$benignShutdownExceptions = $reminderStopRace + $viewDrainShutdownRace
+	# A third + fourth benign shutdown-race class come from background
+	# diagnostic / bookkeeping loops that race ApplicationStopping:
+	#   (3) The WAL storage-usage poller (LatticeWalUsageGrain) fans out a
+	#       read-only retained-byte query per WAL partition on a background
+	#       gauge tick. When the silo stops, in-flight fan-out queries are
+	#       cancelled and logged at warn with an OperationCanceledException
+	#       ("WAL retained-byte fan-out failed ..."). This is a metrics-gauge
+	#       poll, never a foreground read/write, and the cohort still reaches
+	#       a clean FINAL (failed=0). Anchored on the LatticeWalUsageGrain
+	#       logger category + the OperationCanceledException inner type so a
+	#       real storage fault (a different inner exception) still counts.
+	#   (4) The leaf cursor reporter (LeafCursorReporter) persists a durable
+	#       WAL materialiser pin on a checkpoint tick; as the pin grain
+	#       deactivates during shutdown the write is rejected with an
+	#       OrleansMessageRejectionException ("...invalid activation.
+	#       Rejecting now"). It "will retry on next checkpoint" and the
+	#       cohort FINALs clean. Anchored on the LeafCursorReporter logger
+	#       category + OrleansMessageRejectionException.
+	# Unlike the low-volume classes above, the poller class appears in high
+	# volume across the WHOLE run (the storage-usage poller enumerates every
+	# tree ever written to the shared WAL table, so prior cohorts' trees keep
+	# emitting cancellation lines under the current cohort's wall clock).
+	# These MUST be filtered to the current cohort BEFORE subtraction - a
+	# whole-log count would over-subtract a prior cohort's benign poller
+	# noise and could mask a genuine current-cohort exception. Reuse the same
+	# current-tree attribution the verdict tally (Get-CohortExceptionCount)
+	# applies, so only lines provably belonging to this cohort are excluded.
+	$storageUsagePollerShutdownRace = Measure-CohortAttributableMatches `
+		-LogPath $siloLog -CurrentTreeId $treeId `
+		-Pattern 'LatticeWalUsageGrain.*retained-byte fan-out failed.*OperationCanceledException'
+	$materialiserPinShutdownRace = Measure-CohortAttributableMatches `
+		-LogPath $siloLog -CurrentTreeId $treeId `
+		-Pattern 'LeafCursorReporter.*durable WAL materialiser.*pin.*OrleansMessageRejectionException'
+	$benignShutdownExceptions = $reminderStopRace + $viewDrainShutdownRace + `
+		$storageUsagePollerShutdownRace + $materialiserPinShutdownRace
 	if ($benignShutdownExceptions -gt 0) {
 		$exceptionCount = [Math]::Max(0, $exceptionCount - $benignShutdownExceptions)
 	}

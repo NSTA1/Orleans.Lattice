@@ -140,6 +140,51 @@ function Test-CohortLineAttributable {
 
 <#
 .SYNOPSIS
+	Counts log lines matching $Pattern that are attributable to the current
+	cohort.
+
+.DESCRIPTION
+	Used by run-cohort.ps1 to tally a benign-shutdown-race exception class
+	(e.g. the storage-usage poller or materialiser-pin shutdown warnings)
+	while excluding identical lines emitted by prior cohorts' trees that
+	share the run's WAL table. Returns a plain [int].
+
+	The whole Select-String | Where-Object pipeline is wrapped in @() so the
+	subsequent .Count is taken on an array for the 0-match and 1-match cases
+	too. Under `Set-StrictMode -Version Latest` (which run-cohort.ps1 sets),
+	`( <pipeline> ).Count` throws "property 'Count' cannot be found" when the
+	pipeline yields zero or one object, because the result is then $null or a
+	bare MatchInfo rather than an array. The @() wrapper makes the count safe
+	for any match arity.
+
+.PARAMETER LogPath
+	Path to the silo log file.
+
+.PARAMETER Pattern
+	The regex passed to Select-String identifying the benign class.
+
+.PARAMETER CurrentTreeId
+	The current cohort's BENCH_TREE_ID; matches not attributable to it are
+	excluded via Test-CohortLineAttributable.
+#>
+function Measure-CohortAttributableMatches {
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory)] [string] $LogPath,
+		[Parameter(Mandatory)] [string] $Pattern,
+		[Parameter(Mandatory)] [AllowEmptyString()] [string] $CurrentTreeId
+	)
+
+	if (-not (Test-Path -LiteralPath $LogPath)) { return 0 }
+
+	return @(
+		Select-String -Path $LogPath -Pattern $Pattern |
+			Where-Object { Test-CohortLineAttributable -Line $_.Line -CurrentTreeId $CurrentTreeId }
+	).Count
+}
+
+<#
+.SYNOPSIS
 	Formats the verdict summary block that run-cohort.ps1 appends to the
 	silo log so downstream consumers can recover the per-cohort verdict.
 

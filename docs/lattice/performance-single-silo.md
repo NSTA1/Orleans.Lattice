@@ -73,28 +73,28 @@ mechanical and the prose around the marker is hand-editable.
   bdnToolchain=InProcessEmitToolchain
   cohortN=3
   dotnet=10.0.109
-  gitSha=569cafb
+  gitSha=246b2ae1
   host=Standard_D4as_v5
-  rowsMeasured=2026-06-23
+  rowsMeasured=2026-06-29
   methodology=Per-call p50/p75/p90/p99 and allocations reported directly by BenchmarkDotNet (linear-interpolation quantiles over the workload sample). Per-thread call rate = round(1 / p50) * batchSize, reported in keys/s so batched calls (GetMany, SetMany, SetManyAtomic) are directly comparable to single-key calls (Get, Set). Cells are the median across N cohorts of each per-cohort BDN quantile.
   DO-NOT-HAND-EDIT-BETWEEN-MARKERS
 -->
 
 | Operation                                | Per-call p50 | Per-call p75 | Per-call p90 | Per-call p99 | Allocations | Per-thread call rate (1 / p50) |
 |------------------------------------------|-------------:|-------------:|-------------:|-------------:|------------:|-------------------------------:|
-| `GetAsync` (point read) | **1.41 us** | 4.61 us | 9.78 us | 50.8 us | 216 B | **~710.2 k keys/s** |
-| `SetAsync` (point write) | **4.67 us** | 6.18 us | 8.49 us | 30.5 us | 784 B | **~214.3 k keys/s** |
-| `GetManyAsync` (4 keys/call) | **11.76 us** | 15.25 us | 21.17 us | 82.21 us | 6 KB | **~340 k keys/s** |
-| `SetManyAsync` (1,000 keys/call) | **1.07 ms** | 1.12 ms | 1.71 ms | 2.85 ms | 100 KB | **~934.6 k keys/s** |
-| `SetManyAtomicAsync` (16 keys/saga) | **273.27 us** | 333.63 us | 427.49 us | 1.21 ms | 64 KB | **~58.5 k keys/s** |
-| `SetManyAtomicAsync` (2 keys/saga, single-tree) | **164.39 us** | 177.51 us | 181.7 us | 186.36 us | 53 KB | **~12.2 k keys/s** |
-| `SetManyAtomicAsync` (64 keys/saga, single-tree) | **274.28 us** | 296.99 us | 303.46 us | 303.61 us | 104 KB | **~233.3 k keys/s** |
-| `BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees) | **300.38 us** | 332.04 us | 356.22 us | 373.85 us | 124 KB | **~6.7 k keys/s** |
-| `BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees) | **478.58 us** | 497.81 us | 513.12 us | 516.58 us | 187 KB | **~133.7 k keys/s** |
+| `GetAsync` (point read) | **1.44 us** | 5.52 us | 9.21 us | 65.2 us | 216 B | **~692.9 k keys/s** |
+| `SetAsync` (point write) | **5.62 us** | 6.61 us | 8.44 us | 28.53 us | 1 KB | **~177.9 k keys/s** |
+| `GetManyAsync` (4 keys/call) | **12.21 us** | 16.45 us | 22.37 us | 80.9 us | 6 KB | **~327.5 k keys/s** |
+| `SetManyAsync` (1,000 keys/call) | **1.12 ms** | 1.18 ms | 1.69 ms | 2.94 ms | 100 KB | **~893.2 k keys/s** |
+| `SetManyAtomicAsync` (16 keys/saga) | **288.85 us** | 357.88 us | 443.76 us | 1.21 ms | 67 KB | **~55.4 k keys/s** |
+| `SetManyAtomicAsync` (2 keys/saga, single-tree) | **169.53 us** | 192.6 us | 202.14 us | 210.85 us | 56 KB | **~11.8 k keys/s** |
+| `SetManyAtomicAsync` (64 keys/saga, single-tree) | **284.97 us** | 306.62 us | 317.18 us | 334.19 us | 107 KB | **~224.6 k keys/s** |
+| `BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees) | **337.32 us** | 379.96 us | 391.18 us | 416.14 us | 131 KB | **~5.9 k keys/s** |
+| `BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees) | **460.63 us** | 516.25 us | 527.46 us | 528.2 us | 195 KB | **~138.9 k keys/s** |
 
 <!-- perf-table:layer1:end -->
 
-> Measured 2026-06-23 on Standard_D4as_v5 (.NET 10.0.109) at git sha 569cafb, n=3 cohorts (BDN quick).
+> Measured 2026-06-29 on Standard_D4as_v5 (.NET 10.0.109) at git sha 246b2ae1, n=3 cohorts (BDN quick).
 
 **Reading the numbers.** The per-thread call rate is the derived
 `1 / p50` scaled by the per-call batch size (1 for `GetAsync` / `SetAsync`,
@@ -145,11 +145,11 @@ realistic latency the storage provider contributes.
   batchSize=4096
   cohortN=1/2/3
   dotnet=10.0.109
-  gitSha=569cafb
+  gitSha=246b2ae1
   host=Standard_D4as_v5
   region=westus3
   responseTimeoutSec=180
-  rowsMeasured=2026-06-23
+  rowsMeasured=2026-06-29
   rung=4000 vehicles / 5 Hz / 45s
   walMaxPendingBatches=16
   walPartitions=8
@@ -159,19 +159,19 @@ realistic latency the storage provider contributes.
 
 | Operation                                | Sustained throughput | Per-call p50  | Per-call p75  | Per-call p90  | Per-call p99  |
 |------------------------------------------|---------------------:|--------------:|--------------:|--------------:|--------------:|
-| `GetAsync` (point read) | **~20.8 k keys/s** | ~70 us | ~80 us | ~100 us | ~100 us |
-| `SetAsync` (point write, 200 veh/5 Hz) | **~1.2 k keys/s** | ~20.42 ms | ~29.17 ms | ~40.32 ms | ~79.01 ms |
-| `SetAsync` (point write + async materialised view, 200 veh/5 Hz) | **~1.1 k keys/s** | ~19.16 ms | ~30.09 ms | ~43.62 ms | ~267.15 ms |
-| `GetManyAsync` (4,096 keys/call) | **~19.6 k keys/s** | ~3.53 ms | ~3.78 ms | ~5.1 ms | ~8.41 ms |
-| `SetManyAsync` (4,096 keys/call, 1200 veh/5 Hz) | **~7.1 k keys/s** | ~246.65 ms | ~297.74 ms | ~350.52 ms | ~521.39 ms |
-| `SetManyAtomicAsync` (64 keys/saga, 100 veh/5 Hz) | **556 keys/s** | ~34.17 ms | ~71.76 ms | ~182.88 ms | ~591.31 ms |
-| `SetManyAtomicAsync` (2 keys/saga, single-tree, 20 veh/5 Hz) | **159 keys/s** | ~6.96 ms | ~7.18 ms | ~7.58 ms | ~13.38 ms |
-| `BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees, 8 veh/5 Hz) | **60 keys/s** | ~6.15 ms | ~13.92 ms | ~17.64 ms | ~33.59 ms |
-| `BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees, 150 veh/5 Hz) | **775 keys/s** | ~57.43 ms | ~75.08 ms | ~89.97 ms | ~210.36 ms |
+| `GetAsync` (point read) | **~20 k keys/s** | ~70 us | ~100 us | ~130 us | ~540 us |
+| `SetAsync` (point write, 200 veh/5 Hz) | **~1.4 k keys/s** | ~20.54 ms | ~35.68 ms | ~57.36 ms | ~177.07 ms |
+| `SetAsync` (point write + async materialised view, 200 veh/5 Hz) | **~1.4 k keys/s** | ~18.62 ms | ~42.44 ms | ~112.27 ms | ~287.76 ms |
+| `GetManyAsync` (4,096 keys/call) | **~19.7 k keys/s** | ~3.43 ms | ~3.76 ms | ~4.53 ms | ~8.75 ms |
+| `SetManyAsync` (4,096 keys/call, 1200 veh/5 Hz) | **~6.8 k keys/s** | ~276.18 ms | ~721.75 ms | ~773.81 ms | ~773.81 ms |
+| `SetManyAtomicAsync` (64 keys/saga, 100 veh/5 Hz) | **585 keys/s** | ~23.67 ms | ~32.16 ms | ~197.18 ms | ~328.25 ms |
+| `SetManyAtomicAsync` (2 keys/saga, single-tree, 20 veh/5 Hz) | **215 keys/s** | ~8.92 ms | ~9.94 ms | ~12.68 ms | ~514.11 ms |
+| `BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees, 8 veh/5 Hz) | **60 keys/s** | ~7.93 ms | ~17.88 ms | ~21.54 ms | ~32.55 ms |
+| `BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees, 150 veh/5 Hz) | **908 keys/s** | ~80.33 ms | ~114.65 ms | ~149.91 ms | ~2122.7 ms |
 
 <!-- perf-table:layer2:end -->
 
-> Measured 2026-06-23 on Standard_D4as_v5 in westus3 (.NET 10.0.109) at git sha 569cafb, n=1/2/3 cohorts. Read workloads were driven at 4000 vehicles / 5 Hz / 45s; each write workload was driven at a reduced per-row offered load (annotated in its operation label) to hold the single Azure Tables account below saturation.
+> Measured 2026-06-29 on Standard_D4as_v5 in westus3 (.NET 10.0.109) at git sha 246b2ae1, n=1/2/3 cohorts. Read workloads were driven at 4000 vehicles / 5 Hz / 45s; each write workload was driven at a reduced per-row offered load (annotated in its operation label) to hold the single Azure Tables account below saturation.
 
 **Reading the numbers.** The biggest practical lever is **call shape**.
 Batched APIs amortise grain-RPC, WAL, and Azure round-trip cost across
