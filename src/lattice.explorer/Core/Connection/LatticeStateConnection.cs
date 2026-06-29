@@ -10,8 +10,9 @@ namespace Orleans.Lattice.Explorer.Core.Connection;
 /// <summary>
 /// The default <see cref="ILatticeStateConnection"/>. Owns a single gRPC channel
 /// (rebuilt on endpoint change), retries transient failures inline, runs a
-/// background health monitor that auto-recovers a faulted endpoint, and degrades
-/// to a disconnected state once the configured grace window elapses.
+/// background health monitor that auto-recovers a faulted endpoint, resubscribes
+/// live observe streams across a transient drop, and degrades to a disconnected
+/// state once the configured grace window elapses.
 /// </summary>
 public sealed class LatticeStateConnection : ILatticeStateConnection
 {
@@ -275,42 +276,72 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
         Func<ILatticeStateClient, CancellationToken, IAsyncEnumerable<T>> operation,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var client = CurrentClientOrThrow();
-        await using var enumerator = operation(client, cancellationToken).GetAsyncEnumerator(cancellationToken);
+        // A live observe stream is pinned to a single silo for its lifetime, so a
+        // silo failover (or any transient drop) tears it down even though the
+        // unary health probe round-robins onto a healthy silo and reports
+        // Connected. Without resubscription the UI would freeze on a "connected"
+        // channel with dead feeds, so we transparently re-open the stream against
+        // the current client, backing off between attempts, until either the
+        // degrade window elapses (Reconnecting -> Faulted) or the caller cancels.
         while (true)
         {
-            T current;
-            try
+            cancellationToken.ThrowIfCancellationRequested();
+            var client = CurrentClientOrThrow();
+            var lost = false;
+            await using (var enumerator = operation(client, cancellationToken).GetAsyncEnumerator(cancellationToken))
             {
-                if (!await enumerator.MoveNextAsync().ConfigureAwait(false))
+                while (true)
                 {
-                    yield break;
+                    T current;
+                    try
+                    {
+                        if (!await enumerator.MoveNextAsync().ConfigureAwait(false))
+                        {
+                            yield break;
+                        }
+
+                        current = enumerator.Current;
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (RpcException ex)
+                    {
+                        if (IsTransient(ex))
+                        {
+                            EnterReconnecting();
+                            lost = true;
+                            break;
+                        }
+
+                        SetFaulted(Friendly(ex), IsAuthFailure(ex));
+                        throw new LatticeStateApiException(Friendly(ex), ex)
+                        {
+                            IsTransient = false,
+                            RequiresAuthentication = IsAuthFailure(ex),
+                        };
+                    }
+
+                    OnSuccess();
+                    yield return current;
                 }
-
-                current = enumerator.Current;
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+
+            if (!lost)
             {
-                throw;
+                yield break;
             }
-            catch (RpcException ex)
+
+            // EnterReconnecting flips to Faulted once the grace window is spent;
+            // stop resubscribing then so the UI's disconnected banner takes over.
+            if (Status.State is LatticeConnectionState.Faulted or LatticeConnectionState.Disconnected)
             {
-                if (IsTransient(ex))
-                {
-                    EnterReconnecting();
-                    yield break;
-                }
-
-                SetFaulted(Friendly(ex), IsAuthFailure(ex));
-                throw new LatticeStateApiException(Friendly(ex), ex)
-                {
-                    IsTransient = false,
-                    RequiresAuthentication = IsAuthFailure(ex),
-                };
+                yield break;
             }
 
-            OnSuccess();
-            yield return current;
+            var backoff = SnapshotSettings()?.TransientRetryBackoff ?? TimeSpan.FromMilliseconds(250);
+            await Task.Delay(backoff, _timeProvider, cancellationToken).ConfigureAwait(false);
         }
     }
 
