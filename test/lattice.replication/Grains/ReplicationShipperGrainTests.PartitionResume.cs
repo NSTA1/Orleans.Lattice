@@ -147,6 +147,70 @@ public partial class ReplicationShipperGrainTests
         }
     }
 
+    // Receiver-side filtered-only suffix fold -------------------------
+
+    [Test]
+    public async Task PumpOnceAsync_advances_partition_cursor_past_filtered_only_foreign_suffix()
+    {
+        // Receiver-side scenario: every WAL tail entry is foreign-origin
+        // (authored by the peer, applied locally) so ShouldShip filters
+        // the whole drained window and nothing is shipped. The partition
+        // cursor must still advance past the consumed-but-filtered suffix;
+        // otherwise the next pump re-reads the same - ever-growing - range
+        // from WAL storage on every tick (the receiver-side read storm).
+        var (grain, state, feed, transport, _, _, _) = Create();
+        for (var i = 0; i < 4; i++)
+        {
+            feed.Append(MakeEntry($"k{i}", origin: Peer, ticks: i + 1));
+        }
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            // Nothing shippable: all four entries are foreign-origin.
+            transport.DidNotReceive().SendAsync(
+                Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
+            // The partition cursor must point one past the highest
+            // consumed (filtered) sequence so the suffix is not re-read.
+            Assert.That(state.State.PartitionCursors, Contains.Key(0));
+            Assert.That(state.State.PartitionCursors[0], Is.EqualTo(4L),
+                "After consuming four filtered-only entries the partition cursor must fold past them.");
+        });
+    }
+
+    [Test]
+    public async Task PumpOnceAsync_does_not_reread_filtered_only_foreign_suffix_on_next_tick()
+    {
+        // Regression for the receiver-side idle read storm: once a
+        // filtered-only foreign suffix has been folded, a subsequent pump
+        // must resume past it rather than rescanning from sequence 0.
+        var (grain, _, feed, transport, _, _, _) = Create();
+        for (var i = 0; i < 4; i++)
+        {
+            feed.Append(MakeEntry($"k{i}", origin: Peer, ticks: i + 1));
+        }
+
+        await grain.OnDoorbellAsync(CancellationToken.None);
+        var readsAfterFirstTick = feed.ReadFromSequences.Count;
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            transport.DidNotReceive().SendAsync(
+                Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
+            // Every read issued on the second tick must resume at or past
+            // the folded suffix (sequence 4), never re-reading from 0.
+            Assert.That(feed.ReadFromSequences, Has.Count.GreaterThan(readsAfterFirstTick),
+                "The second pump tick must still probe the WAL once to confirm no new tail.");
+            for (var i = readsAfterFirstTick; i < feed.ReadFromSequences.Count; i++)
+            {
+                Assert.That(feed.ReadFromSequences[i], Is.GreaterThanOrEqualTo(4L),
+                    $"Read #{i} on the second tick must resume past the folded foreign suffix, not rescan from 0.");
+            }
+        });
+    }
+
     // HLC cold-start filter ------------------------------------------
 
     [Test]
@@ -465,7 +529,12 @@ public partial class ReplicationShipperGrainTests
     {
         // All entries filtered by KeyPrefixes; the partition cursor
         // must still advance past them so the next pump tick does not
-        // re-read the same exhausted page.
+        // re-read the same exhausted page. Before the receiver-side
+        // filtered-only cursor fold this tick legitimately left the
+        // cursor un-advanced and tolerated a page-bounded re-read; on an
+        // actively-written tree of all-filtered entries that re-read
+        // range grew unbounded, so the fold now advances past the
+        // consumed-but-filtered suffix.
         var opts = new LatticeReplicationOptions
         {
             ClusterId = LocalCluster,
@@ -481,15 +550,12 @@ public partial class ReplicationShipperGrainTests
         // Nothing was sent (every entry filtered).
         await transport.DidNotReceive().SendAsync(
             Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
-        // The partition cursor was NOT advanced because no batch was
-        // shipped - but ReadFromSequences confirms the read happened.
-        // (The batch never reached AdvanceCursorAsync because
-        // _drainBuffer.Count == 0 after filtering.) On the next tick
-        // the read would re-scan from sequence 0 again - this is the
-        // behaviour the partition-resume design tolerates: filtered-only ticks
-        // are bounded by ShipPartitionPageSize, not by the WAL size.
-        Assert.That(state.State.PartitionCursors, Is.Empty,
-            "Filtered-only ticks legitimately do not flush - the page-bounded re-read is acceptable per partition-resume.");
+        // The partition cursor folds past the two consumed-but-filtered
+        // entries so the next tick resumes at sequence 2 instead of
+        // re-reading the exhausted range from WAL storage.
+        Assert.That(state.State.PartitionCursors, Contains.Key(0));
+        Assert.That(state.State.PartitionCursors[0], Is.EqualTo(2L),
+            "Filtered-only ticks must fold the partition cursor past the consumed suffix to avoid the receiver-side re-read storm.");
         Assert.That(feed.ReadFromSequences, Is.Not.Empty);
     }
 
