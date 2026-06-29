@@ -139,31 +139,42 @@
                     {
                         <span class="explorer-data-format">@_rendered.Format.ToString().ToLowerInvariant()</span>
                     }
+                    <button type="button" class="explorer-btn explorer-data-history-btn @(_showHistory ? "is-active" : null)"
+                            @onclick="ToggleHistory">
+                        @(_showHistory ? "Hide history" : "History")
+                    </button>
                 </div>
 
-                <dl class="explorer-data-meta">
-                    <div><dt>Value length</dt><dd>@d.ValueLength.ToString("N0") bytes</dd></div>
-                    <div><dt>Timestamp</dt><dd>@FormatHlc(d)</dd></div>
-                    <div><dt>Tombstone</dt><dd>@(d.IsTombstone ? "yes" : "no")</dd></div>
-                    <div><dt>Expires</dt><dd>@FormatExpiry(d)</dd></div>
-                    @if (d.CrdtShape is not null)
-                    {
-                        <div><dt>CRDT shape</dt><dd>@d.CrdtShape</dd></div>
-                    }
-                </dl>
-
-                @if (_rendered?.Note is not null)
+                @if (_showHistory)
                 {
-                    <p class="explorer-data-note">@_rendered.Note</p>
-                }
-
-                @if (_rendered is null || _rendered.Format == ValueFormat.Empty)
-                {
-                    <p class="explorer-data-muted">No value bytes.</p>
+                    <HistoryTab @key="@($"history:{Selection.Id}:{d.Key}")" Selection="Selection" />
                 }
                 else
                 {
-                    <pre class="explorer-data-value explorer-data-value-@_rendered.Format.ToString().ToLowerInvariant()">@_rendered.Content</pre>
+                    <dl class="explorer-data-meta">
+                        <div><dt>Value length</dt><dd>@d.ValueLength.ToString("N0") bytes</dd></div>
+                        <div><dt>Timestamp</dt><dd>@FormatHlc(d)</dd></div>
+                        <div><dt>Tombstone</dt><dd>@(d.IsTombstone ? "yes" : "no")</dd></div>
+                        <div><dt>Expires</dt><dd>@FormatExpiry(d)</dd></div>
+                        @if (d.CrdtShape is not null)
+                        {
+                            <div><dt>CRDT shape</dt><dd>@d.CrdtShape</dd></div>
+                        }
+                    </dl>
+
+                    @if (_rendered?.Note is not null)
+                    {
+                        <p class="explorer-data-note">@_rendered.Note</p>
+                    }
+
+                    @if (_rendered is null || _rendered.Format == ValueFormat.Empty)
+                    {
+                        <p class="explorer-data-muted">No value bytes.</p>
+                    }
+                    else
+                    {
+                        <pre class="explorer-data-value explorer-data-value-@_rendered.Format.ToString().ToLowerInvariant()">@_rendered.Content</pre>
+                    }
                 }
             }
         </div>
@@ -181,6 +192,10 @@
     private RenderedValue? _rendered;
     private bool _detailLoading;
     private string? _detailError;
+
+    // When true, the selected key's detail panel shows its revision history
+    // instead of the value view. Reset whenever the selected key changes.
+    private bool _showHistory;
 
     private IReadOnlyList<string> _tagIndexes = Array.Empty<string>();
     private string? _selectedIndex;
@@ -499,8 +514,9 @@
         _rendered = null;
         _detailError = null;
         _detailLoading = true;
+        _showHistory = false;
 
-        // Publish the inspected key for the History tab to reuse as its selection.
+        // Publish the inspected key so the History view opens on the same key.
         SessionStore.Set(DataSelection.SelectedKey(Selection.Id), key);
 
         StateHasChanged();
@@ -531,7 +547,10 @@
         _detail = null;
         _rendered = null;
         _detailError = null;
+        _showHistory = false;
     }
+
+    private void ToggleHistory() => _showHistory = !_showHistory;
 
     private static string FormatHlc(DataEntry entry)
     {

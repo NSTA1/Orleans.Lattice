@@ -1,24 +1,27 @@
 @using Orleans.Lattice.Api.State
+@using Orleans.Lattice.Explorer.Core.Connection
 @using Orleans.Lattice.Explorer.Core.Data
 @inherits DetailTabBase
 @inject IHistoryReader HistoryReader
 @inject IHistoryLiveFollower LiveFollower
 @inject IUiSessionStore SessionStore
+@inject ILatticeStateConnection Connection
 
 <div class="explorer-history">
     <div class="explorer-history-toolbar">
-        <div class="explorer-history-keyfield">
-            <input type="text" class="explorer-history-keyinput" placeholder="Key to inspect..."
-                   value="@_keyInput" disabled="@_loading"
-                   @oninput="OnKeyInput" @onkeyup="OnKeyUpAsync" />
-            <button type="button" class="explorer-btn" disabled="@(_loading || string.IsNullOrEmpty(_keyInput))"
-                    @onclick="LoadKeyAsync">Load</button>
-        </div>
         @if (_key is not null)
         {
-            <button type="button" class="explorer-btn" disabled="@_loading" @onclick="ReloadAsync">
-                @(_loading ? "Loading..." : "Refresh")
-            </button>
+            <div class="explorer-history-live">
+                <span class="explorer-history-live-dot explorer-history-live-dot-@LiveDotClass()"></span>
+                <span class="explorer-history-live-label">@LiveLabel()</span>
+                <span class="explorer-history-live-note"
+                      title="The live feed only carries changes emitted while this tab is open: it extends the timeline forward from now and is not a substitute for durable retention of past changes. New rows show kind, time and origin first, then upgrade to the value diff or CRDT members once the durable backfill arrives.">
+                    forward-only
+                </span>
+            </div>
+        }
+        @if (_key is not null)
+        {
             <label class="explorer-history-order">
                 <input type="checkbox" checked="@_newestFirst" @onchange="ToggleOrder" disabled="@_loading" />
                 Newest first
@@ -26,24 +29,6 @@
         }
     </div>
 
-    @if (_key is not null && _following)
-    {
-        <div class="explorer-history-live">
-            <span class="explorer-history-live-dot explorer-history-live-dot-@(_paused ? "paused" : "on")"></span>
-            <span class="explorer-history-live-label">@(_paused ? "Live paused" : "Live")</span>
-            @if (_paused && _pendingLive.Count > 0)
-            {
-                <span class="explorer-history-live-pending">@_pendingLive.Count buffered</span>
-            }
-            <button type="button" class="explorer-btn-link" @onclick="TogglePause">
-                @(_paused ? "Resume" : "Pause")
-            </button>
-            <span class="explorer-history-live-note"
-                  title="The live feed only carries changes emitted while this tab is open: it extends the timeline forward from now and is not a substitute for durable retention of past changes. Live rows show kind, time and origin only - no value diff or CRDT members - pending a durable backfill.">
-                forward-only
-            </span>
-        </div>
-    }
     @if (_liveError is not null)
     {
         <div class="explorer-history-hint explorer-history-error">Live updates stopped: @_liveError</div>
@@ -51,7 +36,7 @@
 
     @if (_key is null)
     {
-        <div class="explorer-history-state">Select a key in the Data tab, or enter one above, to see its revision history.</div>
+        <div class="explorer-history-state">Select a key in the Data tab to see its revision history.</div>
     }
     else if (_loading && _timeline is null)
     {
@@ -61,7 +46,6 @@
     {
         <div class="explorer-history-state explorer-history-error">
             <span>@_error</span>
-            <button type="button" class="explorer-btn-link" @onclick="ReloadAsync">Try again</button>
         </div>
     }
     else if (_timeline is null)
@@ -212,7 +196,6 @@
     private const int PageLimit = 50;
 
     private string? _key;
-    private string _keyInput = string.Empty;
 
     private readonly List<HistoryRevisionRow> _accumulated = new();
     private HistoryTimeline? _timeline;
@@ -229,53 +212,54 @@
     // by the forward change feed; it is torn down on key change and tab dispose
     // by cancelling the linked token, with the linked source disposed in the
     // loop's finally to avoid a dispose/await race.
-    private readonly List<HistoryRevisionRow> _pendingLive = new();
     private CancellationTokenSource? _liveCts;
-    private bool _following;
-    private bool _paused;
+    private CancellationTokenSource? _backfillCts;
     private string? _liveError;
 
     protected override async Task OnInitializedAsync()
     {
+        Connection.StatusChanged += OnConnectionStatusChanged;
+
         // Reuse the Data tab's selection: open the key the user last drilled into.
         var selected = SessionStore.GetOrDefault(DataSelection.SelectedKey(Selection.Id), string.Empty);
         if (!string.IsNullOrEmpty(selected))
         {
             _key = selected;
-            _keyInput = selected;
             await LoadFirstAsync();
         }
     }
 
-    private void OnKeyInput(ChangeEventArgs e) => _keyInput = e.Value?.ToString() ?? string.Empty;
+    // The live indicator mirrors the app's top-right connection state, so a
+    // status change must redraw the toolbar dot/label.
+    private void OnConnectionStatusChanged(LatticeConnectionStatus _) => InvokeAsync(StateHasChanged);
 
-    private async Task OnKeyUpAsync(KeyboardEventArgs e)
+    private string LiveDotClass()
     {
-        if (e.Key == "Enter")
+        var state = Connection.Status.State;
+        return state switch
         {
-            await LoadKeyAsync();
-        }
+            LatticeConnectionState.Connected => "on",
+            LatticeConnectionState.Connecting or LatticeConnectionState.Reconnecting => "warn",
+            _ => "down",
+        };
     }
 
-    private async Task LoadKeyAsync()
+    private string LiveLabel()
     {
-        if (string.IsNullOrEmpty(_keyInput))
+        var state = Connection.Status.State;
+        return state switch
         {
-            return;
-        }
-
-        _key = _keyInput;
-        SessionStore.Set(DataSelection.SelectedKey(Selection.Id), _key);
-        await LoadFirstAsync();
+            LatticeConnectionState.Connected => "Live",
+            LatticeConnectionState.Connecting => "Connecting",
+            LatticeConnectionState.Reconnecting => "Reconnecting",
+            _ => "Offline",
+        };
     }
-
-    private Task ReloadAsync() => LoadFirstAsync();
 
     private async Task LoadFirstAsync()
     {
         StopFollowing();
         _accumulated.Clear();
-        _pendingLive.Clear();
         _liveError = null;
         _continuation = null;
         _timeline = null;
@@ -359,7 +343,6 @@
         var tail = new HistoryLiveTail(_key, _accumulated);
         var cts = CancellationTokenSource.CreateLinkedTokenSource(TabToken);
         _liveCts = cts;
-        _following = true;
         _ = FollowLoopAsync(tail, cts);
     }
 
@@ -377,16 +360,17 @@
                 });
             }
         }
-        catch (OperationCanceledException) when (cts.IsCancellationRequested)
+        catch (Exception) when (cts.IsCancellationRequested)
         {
-            // Expected teardown on key change or tab dispose.
+            // Expected teardown on key change or tab dispose. The cancelled
+            // stream may surface either as OperationCanceledException or as a
+            // transport "Cancelled" status; both are silent teardown, not a fault.
         }
         catch (Exception ex)
         {
             await InvokeAsync(() =>
             {
                 _liveError = ex.Message;
-                _following = false;
                 StateHasChanged();
             });
         }
@@ -396,40 +380,96 @@
         }
     }
 
-    // Appends an accepted live row. While paused, rows are buffered (still
-    // de-duplicated by the tail) and flushed on resume, so no change is lost and
-    // none is double-counted.
+    // Appends an accepted live row; rows are de-duplicated by the tail.
     private void OnLiveRow(HistoryRevisionRow row)
     {
-        if (_paused)
-        {
-            _pendingLive.Add(row);
-            return;
-        }
-
         _accumulated.Add(row);
         Rebuild();
+
+        // A live row is a metadata-only marker. Once the durable history view
+        // records the revision, a silent first-page refetch returns the full
+        // value/diff for the same clock; debounce so a burst coalesces.
+        ScheduleBackfill();
     }
 
-    private void TogglePause()
+    // Debounced silent refetch that upgrades live-tail markers to durable rows
+    // without disrupting the live subscription or showing a spinner.
+    private void ScheduleBackfill()
     {
-        _paused = !_paused;
-        if (_paused || _pendingLive.Count == 0)
+        // Only auto-backfill while a single page is loaded; once the user has
+        // paged older history, a first-page refetch would drop those pages, so
+        // leave the markers until a manual refresh.
+        var durableLoaded = _accumulated.Count(r => !r.IsLiveTail);
+        if (durableLoaded > PageLimit)
         {
             return;
         }
 
-        _accumulated.AddRange(_pendingLive);
-        _pendingLive.Clear();
+        _backfillCts?.Cancel();
+        _backfillCts?.Dispose();
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(TabToken);
+        _backfillCts = cts;
+        _ = BackfillAsync(cts);
+    }
+
+    private async Task BackfillAsync(CancellationTokenSource cts)
+    {
+        try
+        {
+            await Task.Delay(750, cts.Token).ConfigureAwait(false);
+            var page = await HistoryReader.LoadAsync(Selection.Id, _key!, PageLimit, continuationToken: null, cts.Token).ConfigureAwait(false);
+            await InvokeAsync(() => MergeBackfill(page));
+        }
+        catch (Exception) when (cts.IsCancellationRequested)
+        {
+            // Superseded by a newer change or torn down; leave markers in place.
+        }
+        catch
+        {
+            // Backfill is best-effort; the live markers stay until the next try.
+        }
+        finally
+        {
+            if (ReferenceEquals(_backfillCts, cts))
+            {
+                _backfillCts = null;
+            }
+
+            cts.Dispose();
+        }
+    }
+
+    // Replaces the loaded durable revisions with the refetched page, keeping any
+    // live markers whose revision the source has not yet recorded so nothing is
+    // lost while a marker awaits its durable backfill.
+    private void MergeBackfill(HistoryPage page)
+    {
+        if (_key is null)
+        {
+            return;
+        }
+
+        var durable = page.Revisions.Select(r => r.Hlc).ToHashSet();
+        var stillPending = _accumulated.Where(r => r.IsLiveTail && !durable.Contains(r.Hlc)).ToList();
+
+        _accumulated.Clear();
+        _accumulated.AddRange(page.Revisions);
+        _accumulated.AddRange(stillPending);
+        _status = page.Status;
+        _bound = page.Bound;
+        _earliest = page.EarliestAvailable;
+        _continuation = page.ContinuationToken;
+
         Rebuild();
+        StateHasChanged();
     }
 
     private void StopFollowing()
     {
         _liveCts?.Cancel();
         _liveCts = null;
-        _following = false;
-        _paused = false;
+        _backfillCts?.Cancel();
+        _backfillCts = null;
     }
 
     /// <inheritdoc />
@@ -437,6 +477,7 @@
     {
         if (disposing)
         {
+            Connection.StatusChanged -= OnConnectionStatusChanged;
             StopFollowing();
         }
 

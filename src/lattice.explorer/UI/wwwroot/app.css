@@ -1221,6 +1221,15 @@ code, .explorer-mono {
     padding: 0 0.35rem;
 }
 
+.explorer-data-history-btn {
+    margin-left: auto;
+}
+
+.explorer-data-history-btn.is-active {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
 .explorer-data-meta {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -1660,8 +1669,14 @@ code, .explorer-mono {
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--ok) 25%, transparent);
 }
 
-.explorer-history-live-dot-paused {
+.explorer-history-live-dot-warn {
     background: var(--warn);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn) 25%, transparent);
+}
+
+.explorer-history-live-dot-down {
+    background: var(--danger);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 25%, transparent);
 }
 
 .explorer-history-live-label {
