@@ -107,6 +107,33 @@ public sealed class HistoryLatticeViewProjectionTests
     }
 
     [Test]
+    public void Project_crdt_full_state_set_without_delta_keeps_crdt_mode_on_value_row()
+    {
+        // The bootstrap / anti-entropy resync path emits a full-state CRDT row as
+        // Op=Set, Value=<full state>, Delta=null. It must record as a Set row that
+        // still carries the CRDT merge mode, so the explorer can classify it as a
+        // membership snapshot rather than a raw LWW overwrite.
+        var fullState = new byte[] { 7, 7, 7, 7 };
+        var mutation = new LatticeMutation
+        {
+            TreeId = "src",
+            Kind = MutationKind.Set,
+            Key = "set/eu",
+            Value = fullState,
+            Delta = null,
+            Mode = LatticeMergeMode.OrSet,
+            Timestamp = Clock(11),
+        };
+
+        var writes = _projection.Project(mutation).ToList();
+
+        var row = _codec.Decode(writes[0].Value!);
+        Assert.That(row.Kind, Is.EqualTo(HistoryRowKind.Set));
+        Assert.That(row.Value, Is.EqualTo(fullState), "the full state survives so it can be decoded to membership");
+        Assert.That(row.Mode, Is.EqualTo(LatticeMergeMode.OrSet), "merge mode distinguishes a CRDT snapshot from an LWW overwrite");
+    }
+
+    [Test]
     public void Project_delete_emits_delete_revision_not_view_delete()
     {
         var mutation = new LatticeMutation

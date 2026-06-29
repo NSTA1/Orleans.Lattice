@@ -23,6 +23,23 @@ public sealed record HistoryRevisionRow
     /// <summary>The render branch the History tab should take for this row.</summary>
     public HistoryRowRenderMode RenderMode { get; init; }
 
+    /// <summary>
+    /// The declared convergence rule of the source mutation. A
+    /// <see cref="HistoryRowKind.Set"/> row whose <see cref="Mode"/> is not
+    /// <see cref="LatticeMergeMode.LwwRegister"/> is a CRDT full-state snapshot
+    /// (an anti-entropy / bootstrap resync), not a last-writer-wins overwrite, and
+    /// renders as a CRDT membership snapshot rather than a raw value diff.
+    /// </summary>
+    public LatticeMergeMode Mode { get; init; }
+
+    /// <summary>
+    /// Whether this row is a CRDT full-state snapshot (a CRDT-mode
+    /// <see cref="HistoryRowKind.Set"/>) rather than an author delta. A snapshot
+    /// shows the decoded current membership; the UI flags it distinctly from a
+    /// per-write delta so a resync row is not mistaken for a fresh edit.
+    /// </summary>
+    public bool IsSnapshot { get; init; }
+
     /// <summary>Identifier of the cluster that authored the source mutation, or <see langword="null"/> for a local write.</summary>
     public string? OriginClusterId { get; init; }
 
@@ -114,6 +131,8 @@ public sealed record HistoryRevisionRow
             Hlc = record.Hlc,
             Kind = record.Kind,
             RenderMode = renderMode,
+            Mode = record.Mode,
+            IsSnapshot = renderMode == HistoryRowRenderMode.CrdtMembers && record.Kind == HistoryRowKind.Set,
             OriginClusterId = record.OriginClusterId,
             ValueLength = record.ValueLength,
             ValueHash = record.ValueHash,
@@ -168,7 +187,11 @@ public sealed record HistoryRevisionRow
         HistoryRowKind.CrdtDelta => HistoryRowRenderMode.CrdtMembers,
         HistoryRowKind.Delete => HistoryRowRenderMode.Delete,
         HistoryRowKind.RangeTombstone => HistoryRowRenderMode.RangeTombstone,
-        // A Set row renders its value only when the bytes were actually retained;
+        // A CRDT-mode Set is a full-state snapshot (anti-entropy / bootstrap
+        // resync), not an LWW overwrite: render its decoded membership rather than
+        // the raw serialized blob that overflows the value preview cap.
+        HistoryRowKind.Set when record.Mode != LatticeMergeMode.LwwRegister => HistoryRowRenderMode.CrdtMembers,
+        // An LWW Set renders its value only when the bytes were actually retained;
         // otherwise it is a metadata-only row (hash + length, never a diff).
         _ => record.Retention.ValueRetained ? HistoryRowRenderMode.ValueDiff : HistoryRowRenderMode.MetadataOnly,
     };

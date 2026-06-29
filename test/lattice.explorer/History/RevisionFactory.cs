@@ -35,6 +35,28 @@ internal static class RevisionFactory
         };
     }
 
+    public static EntryRevisionRecord CrdtSnapshot(
+        long ticks,
+        LatticeMergeMode mode = LatticeMergeMode.OrSet,
+        IReadOnlyList<CrdtMemberChange>? members = null,
+        bool valueRetained = true,
+        bool truncated = false,
+        int valueLength = 0)
+    {
+        return new EntryRevisionRecord
+        {
+            SourceKey = "k",
+            Hlc = Hlc(ticks),
+            Kind = HistoryRowKind.Set,
+            Mode = mode,
+            ValuePreview = valueRetained ? new byte[] { 1, 2, 3 } : null,
+            ValueLength = valueLength != 0 ? valueLength : 3,
+            Truncated = truncated,
+            MemberChanges = members ?? Array.Empty<CrdtMemberChange>(),
+            Retention = new RevisionRetention { Mode = HistoryRetentionMode.FullValue, ValueRetained = valueRetained },
+        };
+    }
+
     public static EntryRevisionRecord Crdt(
         long ticks,
         IReadOnlyList<CrdtMemberChange>? members = null,
