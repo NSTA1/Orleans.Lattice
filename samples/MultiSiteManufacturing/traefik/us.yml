@@ -90,12 +90,23 @@ http:
         # serves any read. Round-robin spreads explorer load across the
         # two silos. `h2c://` upstream speaks HTTP/2 cleartext to the
         # silo's dedicated :8081 gRPC listener - the same backend pool
-        # us-replicate uses. No health check, for the same reason as
-        # us-replicate: an HTTP/2 probe to the gRPC port has no clean
-        # 200 to assert on, and the gRPC client retries itself.
+        # us-replicate uses. Unlike us-replicate, this pool DOES carry an
+        # active health check (issue #1006): the explorer's gRPC client
+        # does not aggressively re-pick a dead backend, so without
+        # eviction a stopped silo stays in round-robin rotation and ~half
+        # of explorer calls fail, flickering the connection between
+        # connected and reconnecting. The probe targets the silo's :8080
+        # HTTP port (200 on /) rather than the gRPC :8081 port, so a
+        # dead silo is evicted within ~2s and reads ride through on the
+        # survivor.
         servers:
           - url: "h2c://silo-us-a:8081"
           - url: "h2c://silo-us-b:8081"
+        healthCheck:
+          path: "/"
+          port: 8080
+          interval: "2s"
+          timeout: "1s"
 
     us-web:
       loadBalancer:

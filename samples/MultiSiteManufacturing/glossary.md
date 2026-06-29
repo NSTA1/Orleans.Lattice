@@ -99,7 +99,7 @@ and `Orleans.Lattice.Replication.Grpc` (HTTP/2 gRPC push transport).
 | **IReplicationApplier** | Package-side seam invoked once per cross-cluster apply. `BaselineReplicationApplier` (sample-side) decorates the package's singleton to mirror `mfg-facts` writes into the divergence-visualisation backend and raise `FederationRouter.FactReplicated`. |
 | **IReplicationTransport** | Single-method (`SendAsync`) seam between the shipper and the wire. `ChaosReplicationTransport` (sample-side, Tier 4b) decorates it; `GrpcPushTransport` (package-side, internal) is the concrete implementation. |
 | **Opt-in (tree level)** | `LatticeReplicationOptions.ReplicatedTrees` - a tree -> `ReplicationMode` map. The shipper observes only listed trees. |
-| **Traefik** | The HTTP reverse proxy fronting each cluster. Two routers per cluster: sticky-session for the UI, round-robin with active health check for the `/orleans.lattice.replication.*` gRPC service path. |
+| **Traefik** | The HTTP reverse proxy fronting each cluster. Three routers per cluster: sticky-session for the UI, round-robin (no health check) for the `/orleans.lattice.replication.*` gRPC service path, and round-robin with active health check for the `/orleans.lattice.api.state/*` read-only state API browsed by the explorer. |
 | **Multi-homed container** | A container attached to more than one Docker network. In this sample, each Traefik is attached to both cluster networks and is the only cross-cluster bridge. |
 | **Tier-N chaos** | The sample's fault-injection taxonomy (tiers 1-5 + 4b). Each tier models a distinct failure class at a distinct seam. See [`approach.md`](./approach.md) §4. |
 

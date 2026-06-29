@@ -136,12 +136,15 @@ Each silo co-hosts the read-only **Orleans.Lattice.Api.State** gRPC surface on
 its dedicated `:8081` h2c listener - the same one the cross-cluster replication
 service uses. Each cluster's Traefik exposes it through the existing published
 endpoint (`5001` US, `5002` EU) via a non-sticky, round-robin,
-`PathPrefix(`/orleans.lattice.api.state/`)` router, so the
+`PathPrefix(`/orleans.lattice.api.state/`)` router with an active health check,
+so the
 [Orleans.Lattice.Explorer](../../src/lattice.explorer) can browse the running
 cluster's trees, views, metrics, topology, and data with no new host ports. The
-sticky Blazor `/` router that pins each browser tab's SignalR circuit is
-untouched; the state-API router just has a higher-priority, more-specific
-prefix.
+health check probes each silo's `:8080` HTTP port and evicts a stopped silo
+within ~2s, so the explorer transparently fails over to the surviving silo
+instead of flickering. The sticky Blazor `/` router that pins each browser tab's
+SignalR circuit is untouched; the state-API router just has a higher-priority,
+more-specific prefix.
 
 `run-explorer.ps1` launches the explorer pointed at a cluster. It seeds the
 endpoint (and, optionally, a sign-in credential) through the explorer's
