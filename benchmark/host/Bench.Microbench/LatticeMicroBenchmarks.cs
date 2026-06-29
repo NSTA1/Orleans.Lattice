@@ -763,6 +763,7 @@ public class LatticeMicroBenchmarks
         BuildShipFramingFixture();
         BuildVersionVectorFixture();
         BuildOrMapFixture();
+        BuildOrSetFixture();
         BuildLeafQueueFixture();
         BuildCrdtGrowStateFixture();
         BuildCrdtGrowStateWriterFixture();
@@ -3004,6 +3005,8 @@ public class LatticeMicroBenchmarks
     // BENCH_MICROBENCH_ORMAP_KEYS (default 16).
     private OrMap<string, PnCounter> _orMapLeft = null!;
     private OrMap<string, PnCounter> _orMapRight = null!;
+    private OrSet _orSetLeft = null!;
+    private OrSet _orSetRight = null!;
 
     private void BuildShipFramingFixture()
     {
@@ -3364,6 +3367,47 @@ public class LatticeMicroBenchmarks
     /// </summary>
     [Benchmark(Description = "OrMap clone")]
     public OrMap<string, PnCounter> OrMap_Clone() => _orMapLeft.Clone();
+
+    /// <summary>
+    /// Builds the two operand OR-sets for the <see cref="OrSet_Merge"/>
+    /// micro-suite. Both sets carry <c>BENCH_MICROBENCH_ORSET_KEYS</c>
+    /// elements (default 16), each with a single live dot - the common
+    /// 1-2-concurrent-add steady state. The right set shares the upper half
+    /// of its element range with the left (each element a distinct author
+    /// dot, forcing the per-key list-union dedup branch in
+    /// <see cref="OrSet.MergeFrom"/>) and the lower half is fresh (the
+    /// whole-list copy branch). With one dot per element the dot lists stay
+    /// under the linear-scan threshold, so the merge takes the
+    /// HashSet-free path this change exists to measure.
+    /// </summary>
+    private void BuildOrSetFixture()
+    {
+        var keys = ReadIntEnv("BENCH_MICROBENCH_ORSET_KEYS", 16);
+        if (keys < 1) keys = 1;
+
+        _orSetLeft = new OrSet();
+        _orSetRight = new OrSet();
+
+        for (var i = 0; i < keys; i++)
+        {
+            _orSetLeft.Add(new byte[] { (byte)i }, "replica-left", i + 1);
+        }
+        var overlapStart = keys / 2;
+        for (var i = overlapStart; i < overlapStart + keys; i++)
+        {
+            _orSetRight.Add(new byte[] { (byte)i }, "replica-right", i + 1);
+        }
+    }
+
+    /// <summary>
+    /// Allocating lattice merge: <see cref="OrSet.Merge"/> clones the left
+    /// operand and folds the right in. With single-dot elements the per-key
+    /// union takes the linear-scan branch and allocates no transient
+    /// HashSet per element - the allocation surface the replication apply
+    /// path pays on every OR-set reconcile.
+    /// </summary>
+    [Benchmark(Description = "Crdt orset merge")]
+    public OrSet OrSet_Merge() => OrSet.Merge(_orSetLeft, _orSetRight);
 }
 
 /// <summary>

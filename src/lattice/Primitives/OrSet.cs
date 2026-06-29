@@ -18,6 +18,14 @@ namespace Orleans.Lattice;
 [Alias(TypeAliases.OrSet)]
 public sealed class OrSet : ICrdt<OrSet>
 {
+    // Below this many already-present dots a linear scan over the small
+    // list beats allocating and populating a HashSet for the membership
+    // checks. An OR-Set element carries one dot per concurrent add, which
+    // is overwhelmingly 1-2 in practice, so the linear path is the common
+    // case; the set is only built once a key genuinely accumulates many
+    // concurrent dots. Matches the LiveDotCount fast-path threshold.
+    private const int DotLinearScanThreshold = 4;
+
     /// <summary>
     /// Per-element live-add dots, keyed by the base64 encoding of the
     /// element bytes. An element is a member of the set if and only if its
@@ -89,8 +97,17 @@ public sealed class OrSet : ICrdt<OrSet>
             tomb = [];
             Tombstones[key] = tomb;
         }
-        var tombSet = new HashSet<OrSetDot>(tomb);
         var anyAdded = false;
+        if (tomb.Count <= DotLinearScanThreshold)
+        {
+            // Tiny tombstone list: linear Contains beats hashing.
+            foreach (var dot in dots)
+            {
+                if (!tomb.Contains(dot)) { tomb.Add(dot); anyAdded = true; }
+            }
+            return anyAdded;
+        }
+        var tombSet = new HashSet<OrSetDot>(tomb);
         foreach (var dot in dots)
         {
             if (tombSet.Add(dot))
@@ -220,7 +237,7 @@ public sealed class OrSet : ICrdt<OrSet>
     private int LiveDotCount(string key, List<OrSetDot> dots)
     {
         if (!Tombstones.TryGetValue(key, out var tomb) || tomb.Count == 0) return dots.Count;
-        if (tomb.Count <= 4)
+        if (tomb.Count <= DotLinearScanThreshold)
         {
             // Tiny tombstone list: linear scan beats hashing.
             var live = 0;
@@ -246,6 +263,16 @@ public sealed class OrSet : ICrdt<OrSet>
             if (!target.TryGetValue(key, out var existing))
             {
                 target[key] = [.. dots];
+                continue;
+            }
+            if (existing.Count <= DotLinearScanThreshold && dots.Count <= DotLinearScanThreshold)
+            {
+                // Tiny dot list (the common 1-2-concurrent-add case): a
+                // linear Contains is cheaper than allocating a HashSet.
+                foreach (var d in dots)
+                {
+                    if (!existing.Contains(d)) existing.Add(d);
+                }
                 continue;
             }
             // O(n+m) dedup via a transient HashSet - replaces the previous
