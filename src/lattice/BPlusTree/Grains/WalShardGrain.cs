@@ -1105,6 +1105,31 @@ internal sealed class WalShardGrain(
 
         EnsureInitialized();
 
+        // Idle fast-path. The shipper polls every WAL partition on every
+        // pump tick (default 10 Hz); on an idle link the per-partition
+        // cursor already sits at the tail, so the read provably returns
+        // nothing. _nextOffset is the next sequence that will be
+        // assigned, so the highest entry that currently exists is
+        // _nextOffset - 1; any fromSequence at or beyond _nextOffset
+        // cannot match a row. Answer those reads from the in-memory
+        // cursor instead of issuing a storage round-trip (which, against
+        // Azure Table Storage, is a real OData query per partition per
+        // tick). The returned page is identical to the empty result the
+        // provider path produces below, so the shipper's merge/cursor
+        // logic is unaffected. Correctness relies on Orleans turn-based
+        // single-threading: a read turn never interleaves with an append,
+        // and _nextOffset only ever errs high (an optimistic append bump
+        // is resynced down to the durable tail on flush failure), so the
+        // guard can never hide a real entry.
+        if (fromSequence >= _nextOffset)
+        {
+            return new WalShardShippingPage
+            {
+                Entries = Array.Empty<WalShardShippingEntry>(),
+                NextSequence = fromSequence,
+            };
+        }
+
         // Drain the bytes-shaped read seam so providers that natively
         // store encoded payloads (Azure Table Storage) hand the rows
         // through verbatim. Third-party providers fall back to the
