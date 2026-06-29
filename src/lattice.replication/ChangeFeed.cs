@@ -114,7 +114,7 @@ internal sealed class ChangeFeed(
         for (var p = 0; p < partitions; p++)
         {
             var grain = _grainFactory.GetGrain<IWalShardGrain>($"{treeName}/{p}");
-            tasks[p] = grain.GetNextSequenceAsync(cancellationToken);
+            tasks[p] = grain.GetNextSequenceAsync(cancellationToken).AsTask();
         }
         var nextSequences = await Task.WhenAll(tasks).ConfigureAwait(false);
 

@@ -195,7 +195,7 @@ public partial class ReplicationShipperGrainTests
             return Task.FromResult((long)(Entries.Count - 1));
         }
 
-        public Task<WalShardShippingPage> ReadShippingAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
+        public ValueTask<WalShardShippingPage> ReadShippingAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
         {
             ReadCalls++;
             ReadFromSequences.Add(fromSequence);
@@ -206,7 +206,7 @@ public partial class ReplicationShipperGrainTests
             cancellationToken.ThrowIfCancellationRequested();
             if (fromSequence >= Entries.Count)
             {
-                return Task.FromResult(new WalShardShippingPage
+                return ValueTask.FromResult(new WalShardShippingPage
                 {
                     Entries = Array.Empty<WalShardShippingEntry>(),
                     NextSequence = fromSequence,
@@ -224,7 +224,7 @@ public partial class ReplicationShipperGrainTests
                     EncodedPayload = _encoder.EncodeToBytes(Entries[(int)seq]),
                 };
             }
-            return Task.FromResult(new WalShardShippingPage
+            return ValueTask.FromResult(new WalShardShippingPage
             {
                 Entries = entries,
                 NextSequence = endExclusive,
@@ -242,7 +242,7 @@ public partial class ReplicationShipperGrainTests
             return Task.FromResult<IReadOnlyList<long>>(offsets);
         }
 
-        public Task<WalShardPage> ReadAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
+        public ValueTask<WalShardPage> ReadAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
         {
             // ReadCalls / ReadFromSequences are now tracked on the
             // ReadShippingAsync path the shipper actually drives;
@@ -255,7 +255,7 @@ public partial class ReplicationShipperGrainTests
             cancellationToken.ThrowIfCancellationRequested();
             if (fromSequence >= Entries.Count)
             {
-                return Task.FromResult(WalShardPage.Empty(fromSequence));
+                return ValueTask.FromResult(WalShardPage.Empty(fromSequence));
             }
             var endExclusive = (int)Math.Min(Entries.Count, fromSequence + maxEntries);
             var capacity = endExclusive - (int)fromSequence;
@@ -269,15 +269,15 @@ public partial class ReplicationShipperGrainTests
                     Entry = Entries[(int)seq],
                 };
             }
-            return Task.FromResult(new WalShardPage
+            return ValueTask.FromResult(new WalShardPage
             {
                 Entries = entries,
                 NextSequence = endExclusive,
             });
         }
 
-        public Task<long> GetNextSequenceAsync(CancellationToken cancellationToken) =>
-            Task.FromResult((long)Entries.Count);
+        public ValueTask<long> GetNextSequenceAsync(CancellationToken cancellationToken) =>
+            ValueTask.FromResult((long)Entries.Count);
 
         public Task<long> GetLiveEntryCountAsync(CancellationToken cancellationToken) =>
             Task.FromResult((long)Entries.Count);

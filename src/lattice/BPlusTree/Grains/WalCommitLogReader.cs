@@ -79,7 +79,7 @@ internal sealed class WalCommitLogReader(IGrainFactory grainFactory) : ICommitLo
 
         cancellationToken.ThrowIfCancellationRequested();
         var grain = grainFactory.GetGrain<IWalShardGrain>($"{treeId}/{shardIndex}");
-        return grain.GetNextSequenceAsync(cancellationToken);
+        return grain.GetNextSequenceAsync(cancellationToken).AsTask();
     }
 
     /// <inheritdoc />

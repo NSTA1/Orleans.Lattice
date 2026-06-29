@@ -113,7 +113,7 @@ internal interface IWalShardGrain : IGrainWithStringKey
     /// same gate they already use.
     /// </remarks>
     [AlwaysInterleave]
-    Task<WalShardPage> ReadAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken);
+    ValueTask<WalShardPage> ReadAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken);
 
     /// <summary>
     /// Bytes-shaped counterpart to <see cref="ReadAsync"/>. Returns the
@@ -148,14 +148,14 @@ internal interface IWalShardGrain : IGrainWithStringKey
     /// append path.
     /// </remarks>
     [AlwaysInterleave]
-    Task<WalShardShippingPage> ReadShippingAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken);
+    ValueTask<WalShardShippingPage> ReadShippingAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken);
 
     /// <summary>
     /// Returns the next sequence number that will be assigned by the
     /// next successful <see cref="AppendAsync"/>. Equal to the number
     /// of entries currently persisted. <c>0</c> when the WAL is empty.
     /// </summary>
-    Task<long> GetNextSequenceAsync(CancellationToken cancellationToken);
+    ValueTask<long> GetNextSequenceAsync(CancellationToken cancellationToken);
 
     /// <summary>
     /// Returns the number of <i>live</i> entries currently persisted in
