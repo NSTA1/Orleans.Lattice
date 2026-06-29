@@ -302,7 +302,27 @@
         StateHasChanged();
     }
 
-    private void OnSelectionChanged() => InvokeAsync(StateHasChanged);
+    private void OnSelectionChanged() => InvokeAsync(SyncSelectionKindAsync);
+
+    // A selection can be driven from outside the navigation list - for example the
+    // Data tab's "Go to source table" action on a history view selects the source
+    // tree while the Views toggle is active. When the selected item's kind differs
+    // from the kind currently listed, switch the toggle (persisting it like a manual
+    // switch) and reload so the item appears in the list and is highlighted;
+    // otherwise just re-render in place.
+    private async Task SyncSelectionKindAsync()
+    {
+        var selected = Selection.Selected;
+        if (_preferencesApplied && selected is not null && selected.Kind != _kind)
+        {
+            _kind = selected.Kind;
+            await Preferences.SetAsync(KindStateKey, _kind);
+            await ReloadAsync();
+            return;
+        }
+
+        StateHasChanged();
+    }
 
     private void OnConfigurationChanged() => InvokeAsync(async () =>
     {
