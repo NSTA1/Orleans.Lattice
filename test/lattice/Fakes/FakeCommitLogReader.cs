@@ -18,6 +18,14 @@ internal sealed class FakeCommitLogReader : ICommitLogReader
     /// <summary>Records the arguments of every <see cref="ReadAsync"/> call for assertions.</summary>
     public List<(string Tree, int Shard, long From)> Reads { get; } = new();
 
+    /// <summary>Counts <see cref="GetTailOffsetAsync"/> calls, the storage-backed
+    /// fall-off probe a caught-up drain must skip.</summary>
+    public int TailProbes { get; private set; }
+
+    /// <summary>Counts <see cref="GetHeadOffsetAsync"/> calls, the cheap in-memory
+    /// next-sequence read the fall-off guard consults first.</summary>
+    public int HeadProbes { get; private set; }
+
     /// <summary>Appends a mutation to a partition, returning its assigned offset.</summary>
     public long Append(string tree, int shard, LatticeMutation mutation)
     {
@@ -65,6 +73,7 @@ internal sealed class FakeCommitLogReader : ICommitLogReader
     /// <inheritdoc />
     public Task<long> GetHeadOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken = default)
     {
+        HeadProbes++;
         var count = _entries.TryGetValue((treeId, shardIndex), out var list) ? list.Count : 0;
         return Task.FromResult((long)count);
     }
@@ -72,6 +81,7 @@ internal sealed class FakeCommitLogReader : ICommitLogReader
     /// <inheritdoc />
     public Task<long> GetTailOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken = default)
     {
+        TailProbes++;
         var key = (treeId, shardIndex);
         var count = _entries.TryGetValue(key, out var list) ? list.Count : 0;
         var trim = _trimBefore.GetValueOrDefault(key, 0);

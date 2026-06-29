@@ -135,12 +135,12 @@ public class ShipperPersistenceIntegrationTests
             return Task.FromResult((long)(Entries.Count - 1));
         }
 
-        public Task<WalShardShippingPage> ReadShippingAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
+        public ValueTask<WalShardShippingPage> ReadShippingAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (fromSequence >= Entries.Count)
             {
-                return Task.FromResult(new WalShardShippingPage
+                return ValueTask.FromResult(new WalShardShippingPage
                 {
                     Entries = Array.Empty<WalShardShippingEntry>(),
                     NextSequence = fromSequence,
@@ -158,7 +158,7 @@ public class ShipperPersistenceIntegrationTests
                     EncodedPayload = _walEncoder.EncodeToBytes(Entries[(int)seq]),
                 };
             }
-            return Task.FromResult(new WalShardShippingPage
+            return ValueTask.FromResult(new WalShardShippingPage
             {
                 Entries = entries,
                 NextSequence = endExclusive,
@@ -176,11 +176,11 @@ public class ShipperPersistenceIntegrationTests
             return Task.FromResult<IReadOnlyList<long>>(offsets);
         }
 
-        public Task<WalShardPage> ReadAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
+        public ValueTask<WalShardPage> ReadAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
             => throw new NotSupportedException("ReadAsync is not exercised by the framing-only shipper path.");
 
-        public Task<long> GetNextSequenceAsync(CancellationToken cancellationToken) =>
-            Task.FromResult((long)Entries.Count);
+        public ValueTask<long> GetNextSequenceAsync(CancellationToken cancellationToken) =>
+            ValueTask.FromResult((long)Entries.Count);
 
         public Task<long> GetLiveEntryCountAsync(CancellationToken cancellationToken) =>
             Task.FromResult((long)Entries.Count);

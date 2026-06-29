@@ -1006,8 +1006,25 @@ internal sealed class WalShardGrain(
         return offsets;
     }
 
+    /// <summary>
+    /// Idle fast-path predicate shared by the read seams (<see cref="ReadAsync"/>
+    /// and <see cref="ReadShippingAsync"/>). A read that starts at or beyond
+    /// <see cref="_nextOffset"/> - the next sequence that will be assigned, so the
+    /// highest entry that currently exists is <c>_nextOffset - 1</c> - can never
+    /// match a row and is answered from this in-memory cursor instead of a storage
+    /// round-trip. Against a backend such as Azure Table Storage that round-trip is
+    /// a real OData query issued per partition per poll tick, and both the
+    /// replication shipper and every materialised-view maintainer poll every
+    /// partition on a fixed cadence even when the link / source is idle. Correctness
+    /// relies on Orleans turn-based single-threading (a read turn never interleaves
+    /// with an append) and on <see cref="_nextOffset"/> only ever erring high - an
+    /// optimistic append bump is resynced down to the durable tail on flush failure -
+    /// so the guard can never hide a durable entry.
+    /// </summary>
+    private bool IsAtOrBeyondTail(long fromSequence) => fromSequence >= _nextOffset;
+
     /// <inheritdoc />
-    public async Task<WalShardPage> ReadAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
+    public async ValueTask<WalShardPage> ReadAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -1028,6 +1045,22 @@ internal sealed class WalShardGrain(
         }
 
         EnsureInitialized();
+
+        // Idle fast-path: a commit-log read at or beyond the in-memory tail
+        // returns nothing without a storage round-trip (see IsAtOrBeyondTail).
+        // This is the read the materialised-view maintainers and replay
+        // coordinators issue on every drain tick; on a caught-up source the
+        // empty page (a value type, with a cached-singleton Entries array, so no
+        // heap allocation) matches the provider path's empty result below, so
+        // those callers observe no behavioural change.
+        if (IsAtOrBeyondTail(fromSequence))
+        {
+            return new WalShardPage
+            {
+                Entries = Array.Empty<WalShardSequencedEntry>(),
+                NextSequence = fromSequence,
+            };
+        }
 
         var collected = new List<WalShardSequencedEntry>(Math.Min(maxEntries, 64));
         var fromOffsetExclusive = fromSequence - 1;
@@ -1083,7 +1116,7 @@ internal sealed class WalShardGrain(
     }
 
     /// <inheritdoc />
-    public async Task<WalShardShippingPage> ReadShippingAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
+    public async ValueTask<WalShardShippingPage> ReadShippingAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -1105,23 +1138,13 @@ internal sealed class WalShardGrain(
 
         EnsureInitialized();
 
-        // Idle fast-path. The shipper polls every WAL partition on every
-        // pump tick (default 10 Hz); on an idle link the per-partition
-        // cursor already sits at the tail, so the read provably returns
-        // nothing. _nextOffset is the next sequence that will be
-        // assigned, so the highest entry that currently exists is
-        // _nextOffset - 1; any fromSequence at or beyond _nextOffset
-        // cannot match a row. Answer those reads from the in-memory
-        // cursor instead of issuing a storage round-trip (which, against
-        // Azure Table Storage, is a real OData query per partition per
-        // tick). The returned page is identical to the empty result the
-        // provider path produces below, so the shipper's merge/cursor
-        // logic is unaffected. Correctness relies on Orleans turn-based
-        // single-threading: a read turn never interleaves with an append,
-        // and _nextOffset only ever errs high (an optimistic append bump
-        // is resynced down to the durable tail on flush failure), so the
-        // guard can never hide a real entry.
-        if (fromSequence >= _nextOffset)
+        // Idle fast-path: a shipper read at or beyond the in-memory tail
+        // returns nothing without a storage round-trip (see IsAtOrBeyondTail).
+        // The empty page is allocation-free - WalShardShippingPage is a value
+        // type and Array.Empty is a cached singleton - and is identical to the
+        // empty result the provider path produces below, so the shipper's
+        // merge/cursor logic is unaffected.
+        if (IsAtOrBeyondTail(fromSequence))
         {
             return new WalShardShippingPage
             {
@@ -1165,11 +1188,11 @@ internal sealed class WalShardGrain(
     }
 
     /// <inheritdoc />
-    public Task<long> GetNextSequenceAsync(CancellationToken cancellationToken)
+    public ValueTask<long> GetNextSequenceAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         EnsureInitialized();
-        return Task.FromResult(_nextOffset);
+        return ValueTask.FromResult(_nextOffset);
     }
 
     /// <inheritdoc />

@@ -47,7 +47,7 @@ public class ChangeFeedTests
         }
 
         grain.GetNextSequenceAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult((long)sequenced.Length));
+            .Returns(ValueTask.FromResult((long)sequenced.Length));
         grain.ReadAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(call =>
             {
@@ -55,14 +55,14 @@ public class ChangeFeedTests
                 var max = (int)call[1];
                 if (from >= sequenced.Length)
                 {
-                    return Task.FromResult(WalShardPage.Empty(from));
+                    return ValueTask.FromResult(WalShardPage.Empty(from));
                 }
 
                 var available = sequenced.Length - (int)from;
                 var take = Math.Min(max, available);
                 var page = new WalShardSequencedEntry[take];
                 Array.Copy(sequenced, (int)from, page, 0, take);
-                return Task.FromResult(new WalShardPage
+                return ValueTask.FromResult(new WalShardPage
                 {
                     Entries = page,
                     NextSequence = from + take,

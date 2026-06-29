@@ -33,7 +33,7 @@ Follow these rules when writing code:
 - **`readonly record struct`** for Orleans-serialized value types.
 - All public types, interfaces, and members must have `<summary>` XML doc comments.
 - Use `ArgumentNullException.ThrowIfNull` for public API parameter validation.
-- Use `Task.FromResult` over `ValueTask` for synchronous grain returns.
+- Use `Task.FromResult` over `ValueTask` for synchronous grain returns, except on hot read-path grain methods whose synchronous fast path makes `ValueTask`/`ValueTask<T>` save a real same-silo allocation (e.g. `IWalShardGrain.ReadAsync`/`ReadShippingAsync`/`GetNextSequenceAsync`); the upgrade is negligible when a cross-silo hop is needed anyway. Use `.AsTask()` only at fan-out call sites that store the result in a `Task[]`.
 - All serializable types must have `[GenerateSerializer]`, `[Alias(TypeAliases.X)]`, and `[Id(n)]` attributes. Add new aliases to `TypeAliases.cs`.
 - Grain interfaces: prefix `I`, suffix `Grain` (e.g. `IBPlusLeafGrain`). Async methods: suffix `Async`.
 - **Internal visibility**: Non-public grain interfaces (everything other than `ILattice`) must be declared `internal`. The C# type system enforces the boundary at compile time - do not add runtime guard filters.

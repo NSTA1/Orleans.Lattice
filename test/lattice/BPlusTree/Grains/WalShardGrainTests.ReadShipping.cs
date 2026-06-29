@@ -206,6 +206,78 @@ public partial class WalShardGrainTests
         Assert.That(page.NextSequence, Is.EqualTo(3L));
     }
 
+    [Test]
+    public async Task ReadAsync_at_tail_does_not_touch_storage()
+    {
+        // Regression for the idle tail-poll flood on the view-maintainer
+        // drain path: the materialised-view maintainers tail the WAL via
+        // IWalShardGrain.ReadAsync (not ReadShippingAsync), so the same
+        // in-memory tail short-circuit must cover this seam too.
+        var provider = new ReadCountingWalStorageProvider(new InMemoryWalStorageProvider());
+        var grain = await CreateGrainAsync(provider);
+        await grain.AppendAsync(MakeEntry("a"), CancellationToken.None);
+        await grain.AppendAsync(MakeEntry("b"), CancellationToken.None);
+        var tail = await grain.GetNextSequenceAsync(CancellationToken.None);
+        provider.ReadCount = 0;
+
+        var page = await grain.ReadAsync(tail, 256, CancellationToken.None);
+
+        Assert.That(provider.ReadCount, Is.Zero);
+        Assert.That(page.Entries, Is.Empty);
+        Assert.That(page.NextSequence, Is.EqualTo(tail));
+    }
+
+    [Test]
+    public async Task ReadAsync_beyond_tail_does_not_touch_storage()
+    {
+        var provider = new ReadCountingWalStorageProvider(new InMemoryWalStorageProvider());
+        var grain = await CreateGrainAsync(provider);
+        await grain.AppendAsync(MakeEntry("a"), CancellationToken.None);
+        var tail = await grain.GetNextSequenceAsync(CancellationToken.None);
+        provider.ReadCount = 0;
+
+        var page = await grain.ReadAsync(tail + 5, 256, CancellationToken.None);
+
+        Assert.That(provider.ReadCount, Is.Zero);
+        Assert.That(page.Entries, Is.Empty);
+        Assert.That(page.NextSequence, Is.EqualTo(tail + 5));
+    }
+
+    [Test]
+    public async Task ReadAsync_on_empty_wal_does_not_touch_storage()
+    {
+        var provider = new ReadCountingWalStorageProvider(new InMemoryWalStorageProvider());
+        var grain = await CreateGrainAsync(provider);
+        provider.ReadCount = 0;
+
+        var page = await grain.ReadAsync(0L, 256, CancellationToken.None);
+
+        Assert.That(provider.ReadCount, Is.Zero);
+        Assert.That(page.Entries, Is.Empty);
+        Assert.That(page.NextSequence, Is.EqualTo(0L));
+    }
+
+    [Test]
+    public async Task ReadAsync_with_backlog_below_tail_still_reads_storage()
+    {
+        // Guards the short-circuit against over-eager elision: a cursor
+        // behind the tail must still hit storage and return the backlog.
+        var provider = new ReadCountingWalStorageProvider(new InMemoryWalStorageProvider());
+        var grain = await CreateGrainAsync(provider);
+        await grain.AppendAsync(MakeEntry("a"), CancellationToken.None);
+        await grain.AppendAsync(MakeEntry("b"), CancellationToken.None);
+        await grain.AppendAsync(MakeEntry("c"), CancellationToken.None);
+        provider.ReadCount = 0;
+
+        var page = await grain.ReadAsync(1L, 256, CancellationToken.None);
+
+        Assert.That(provider.ReadCount, Is.GreaterThan(0));
+        Assert.That(page.Entries.Count, Is.EqualTo(2));
+        Assert.That(page.Entries[0].Sequence, Is.EqualTo(1L));
+        Assert.That(page.Entries[1].Sequence, Is.EqualTo(2L));
+        Assert.That(page.NextSequence, Is.EqualTo(3L));
+    }
+
     /// <summary>
     /// <see cref="IWalStorageProvider"/> decorator that counts the
     /// storage read calls reaching the inner provider, so a test can
