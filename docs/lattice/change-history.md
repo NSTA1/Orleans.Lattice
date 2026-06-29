@@ -88,7 +88,11 @@ per-tree retention mode:
 | `Hybrid` | Verbatim for a recent window, metadata-only behind it. | A recent full-value tail with an unbounded metadata-only history behind it. |
 
 CRDT revisions are always stored as their compact author delta regardless of mode -
-the delta *is* the history. An optional **age bound** expires revision rows after a
+the delta *is* the history. An anti-entropy or bootstrap resync is the exception: it
+ships the full CRDT state with no delta, so its revision is a CRDT-mode `Set`. The
+explorer decodes that full state into a current-membership snapshot (visually
+distinct from a per-write member diff) rather than rendering the raw serialized blob.
+An optional **age bound** expires revision rows after a
 window; a window of zero means revisions never expire. Set both per tree:
 
 ```csharp verify

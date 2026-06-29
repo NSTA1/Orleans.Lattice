@@ -7,6 +7,74 @@ namespace Orleans.Lattice.Explorer.Tests.History;
 public class HistoryRevisionRowTests
 {
     [Test]
+    public void From_CrdtModeFullStateSet_RendersCrdtMembersSnapshot()
+    {
+        var record = RevisionFactory.CrdtSnapshot(20, LatticeMergeMode.OrSet, new[]
+        {
+            RevisionFactory.Member("apple", CrdtMemberChangeKind.Added, "eu", 1),
+            RevisionFactory.Member("pear", CrdtMemberChangeKind.Added, "eu", 2),
+        });
+
+        var row = HistoryRevisionRow.From(record);
+
+        Assert.Multiple(() =>
+        {
+            // A CRDT full-state resync row classifies as a member snapshot, not a
+            // raw value diff blob, and is flagged distinctly from an author delta.
+            Assert.That(row.RenderMode, Is.EqualTo(HistoryRowRenderMode.CrdtMembers));
+            Assert.That(row.IsSnapshot, Is.True);
+            Assert.That(row.Value, Is.Null);
+            Assert.That(row.MemberChanges, Has.Count.EqualTo(2));
+            Assert.That(row.MemberChanges[0].ElementText, Is.EqualTo("apple"));
+        });
+    }
+
+    [TestCase(LatticeMergeMode.OrSet)]
+    [TestCase(LatticeMergeMode.PnCounter)]
+    [TestCase(LatticeMergeMode.OrMap)]
+    public void From_CrdtModeFullStateSet_ClassifiesAsSnapshotForAllShapes(LatticeMergeMode mode)
+    {
+        var row = HistoryRevisionRow.From(RevisionFactory.CrdtSnapshot(30, mode));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.RenderMode, Is.EqualTo(HistoryRowRenderMode.CrdtMembers));
+            Assert.That(row.IsSnapshot, Is.True);
+            Assert.That(row.Mode, Is.EqualTo(mode));
+        });
+    }
+
+    [Test]
+    public void From_LwwSet_StillRendersValueDiffNotSnapshot()
+    {
+        var row = HistoryRevisionRow.From(RevisionFactory.Set(40, value: "{\"a\":1}", valueRetained: true));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.RenderMode, Is.EqualTo(HistoryRowRenderMode.ValueDiff));
+            Assert.That(row.IsSnapshot, Is.False);
+            Assert.That(row.Mode, Is.EqualTo(LatticeMergeMode.LwwRegister));
+        });
+    }
+
+    [Test]
+    public void From_CrdtDelta_IsNotFlaggedSnapshot()
+    {
+        var record = RevisionFactory.Crdt(50, new[]
+        {
+            RevisionFactory.Member("x", CrdtMemberChangeKind.Added, "eu", 1),
+        });
+
+        var row = HistoryRevisionRow.From(record);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.RenderMode, Is.EqualTo(HistoryRowRenderMode.CrdtMembers));
+            Assert.That(row.IsSnapshot, Is.False);
+        });
+    }
+
+    [Test]
     public void From_SetWithValueRetained_RendersValueDiffMode()
     {
         var row = HistoryRevisionRow.From(RevisionFactory.Set(10, value: "{\"a\":1}", valueRetained: true));
