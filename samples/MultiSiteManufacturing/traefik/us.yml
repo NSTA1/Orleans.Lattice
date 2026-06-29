@@ -98,12 +98,16 @@ http:
         # connected and reconnecting. The probe targets the silo's :8080
         # HTTP port (200 on /) rather than the gRPC :8081 port, so a
         # dead silo is evicted within ~2s and reads ride through on the
-        # survivor.
+        # survivor. scheme: http is REQUIRED: the servers are h2c, which
+        # Traefik would otherwise inherit for the probe and fail against
+        # the plain HTTP/1.1 :8080 listener, evicting BOTH silos and 503-ing
+        # the whole route.
         servers:
           - url: "h2c://silo-us-a:8081"
           - url: "h2c://silo-us-b:8081"
         healthCheck:
           path: "/"
+          scheme: http
           port: 8080
           interval: "2s"
           timeout: "1s"
