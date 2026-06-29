@@ -289,13 +289,20 @@ internal sealed class LatticeStateQuery(
         // hidden everywhere.
         using var viewScope = OpenViewReadScopeIfNeeded(request.TreeId);
 
-        var tree = _grainFactory.GetGrain<ILattice>(request.TreeId);
-        if (IsSystemTree(request.TreeId) || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
+        // A view tree binds to its active generation (a shadow-swap rebuild moves
+        // the live data off the generation-0 alias), so resolve the read id here.
+        var bindTreeId = await ResolveReadTreeIdAsync(request.TreeId, cancellationToken).ConfigureAwait(false);
+        if (IsSystemTree(request.TreeId) || bindTreeId is null)
+        {
+            return TreeStructureResult.NotFound(request.TreeId);
+        }
+        var tree = _grainFactory.GetGrain<ILattice>(bindTreeId);
+        if (!await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
         {
             return TreeStructureResult.NotFound(request.TreeId);
         }
         var registry = _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        var physicalTreeId = await registry.ResolveAsync(request.TreeId).ConfigureAwait(false);
+        var physicalTreeId = await registry.ResolveAsync(bindTreeId).ConfigureAwait(false);
         var depthLimit = request.EffectiveDepthLimit;
         var budget = new NodeBudget { Remaining = request.EffectiveMaxNodes };
 
@@ -334,7 +341,7 @@ internal sealed class LatticeStateQuery(
             return TreeStructureResult.Found(request.TreeId, roots, budget.AnyTruncated);
         }
 
-        var shardCount = await ResolveShardCountAsync(registry, request.TreeId).ConfigureAwait(false);
+        var shardCount = await ResolveShardCountAsync(registry, bindTreeId).ConfigureAwait(false);
         var rootNodes = new List<NodeStateSummary>();
 
         var startShard = request.ShardIndex ?? 0;
@@ -384,7 +391,15 @@ internal sealed class LatticeStateQuery(
         // every page read, so it wraps the whole method.
         using var viewScope = OpenViewReadScopeIfNeeded(request.TreeId);
 
-        var tree = _grainFactory.GetGrain<ILattice>(request.TreeId);
+        // A view tree binds to its active generation (a shadow-swap rebuild moves
+        // the live data off the generation-0 alias), so resolve the read id here.
+        var bindTreeId = await ResolveReadTreeIdAsync(request.TreeId, cancellationToken).ConfigureAwait(false);
+        if (bindTreeId is null)
+        {
+            return EntryScanResult.NotFound(request.TreeId);
+        }
+
+        var tree = _grainFactory.GetGrain<ILattice>(bindTreeId);
 
         var fresh = string.IsNullOrEmpty(request.ContinuationToken);
         string cursorId;
@@ -522,8 +537,11 @@ internal sealed class LatticeStateQuery(
         // hidden everywhere.
         using var viewScope = OpenViewReadScopeIfNeeded(treeId);
 
-        var tree = _grainFactory.GetGrain<ILattice>(treeId);
-        if (IsSystemTree(treeId) || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
+        // A view tree binds to its active generation (a shadow-swap rebuild moves
+        // the live data off the generation-0 alias), so resolve the read id here.
+        var bindTreeId = await ResolveReadTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var tree = bindTreeId is null ? null : _grainFactory.GetGrain<ILattice>(bindTreeId);
+        if (IsSystemTree(treeId) || tree is null || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
         {
             return EntryDetailResult.TreeNotFound(treeId, key);
         }
@@ -561,8 +579,11 @@ internal sealed class LatticeStateQuery(
         // hidden everywhere.
         using var viewScope = OpenViewReadScopeIfNeeded(request.TreeId);
 
-        var tree = _grainFactory.GetGrain<ILattice>(request.TreeId);
-        if (IsSystemTree(request.TreeId) || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
+        // A view tree binds to its active generation (a shadow-swap rebuild moves
+        // the live data off the generation-0 alias), so resolve the read id here.
+        var bindTreeId = await ResolveReadTreeIdAsync(request.TreeId, cancellationToken).ConfigureAwait(false);
+        var tree = bindTreeId is null ? null : _grainFactory.GetGrain<ILattice>(bindTreeId);
+        if (IsSystemTree(request.TreeId) || tree is null || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
         {
             return EntryHistoryResult.TreeNotFound(request.TreeId, request.Key);
         }
@@ -951,6 +972,54 @@ internal sealed class LatticeStateQuery(
     /// </summary>
     private static IDisposable? OpenViewReadScopeIfNeeded(string treeId) =>
         IsViewTree(treeId) ? ViewReadContext.BeginScope() : null;
+
+    /// <summary>
+    /// Resolves the physical tree id to bind for a read. An ordinary tree id is
+    /// returned unchanged; a materialised-view (<c>view-*</c>) tree id is resolved
+    /// through its <see cref="IViewMaintainerGrain"/> to the active generation's
+    /// tree id, so a read follows a shadow-swap rebuild rather than binding the
+    /// stale generation-0 alias. Returns <see langword="null"/> when the view tree
+    /// id carries no recoverable view name.
+    /// </summary>
+    private async Task<string?> ResolveReadTreeIdAsync(string treeId, CancellationToken cancellationToken)
+    {
+        if (!IsViewTree(treeId))
+        {
+            return treeId;
+        }
+
+        var viewName = ViewNameFromTreeId(treeId);
+        if (viewName.Length == 0)
+        {
+            return null;
+        }
+
+        try
+        {
+            var maintainer = _grainFactory.GetGrain<IViewMaintainerGrain>(viewName);
+            return await maintainer.GetActiveTreeIdAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            // No locally-resolvable maintainer (e.g. a ship-view consumer, a view
+            // fronted directly by its stable generation-0 tree, or a transient
+            // activation failure): fall back to the stable "view-{name}" id, which
+            // the caller's existence check still gates.
+            return treeId;
+        }
+    }
+
+    /// <summary>
+    /// Recovers the maintainer key (the bare view name) from a materialised-view
+    /// tree id by stripping the reserved <see cref="LatticeConstants.ViewTreePrefix"/>
+    /// and any explicit <c>#g{N}</c> generation suffix.
+    /// </summary>
+    private static string ViewNameFromTreeId(string treeId)
+    {
+        var name = treeId.AsSpan(LatticeConstants.ViewTreePrefix.Length);
+        var hash = name.IndexOf('#');
+        return (hash >= 0 ? name[..hash] : name).ToString();
+    }
 
     private static bool IsTagIndexTree(string treeId) =>
         treeId.StartsWith(LatticeConstants.TagIndexTreePrefix, StringComparison.Ordinal);
