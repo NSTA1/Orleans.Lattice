@@ -287,14 +287,24 @@ public sealed class LatticeStructureIntegrationTests
     }
 
     [Test]
-    public async Task GetTreeStructure_treats_reserved_tree_as_not_found()
+    public async Task GetTreeStructure_inspects_view_tree_as_read_only()
     {
         await _fixture.RegisterViewBackingTreeAsync("view-struct-probe");
 
         var result = await _fixture.Query.GetTreeStructureAsync(new StructureRequest { TreeId = "view-struct-probe" });
 
+        Assert.That(result.Status, Is.EqualTo(StateQueryStatus.Found),
+            "a materialised view is a read-only tree and must be inspectable");
+        Assert.That(result.Roots, Is.Not.Empty, "an empty view tree still exposes its root leaf");
+    }
+
+    [Test]
+    public async Task GetTreeStructure_treats_system_tree_as_not_found()
+    {
+        var result = await _fixture.Query.GetTreeStructureAsync(new StructureRequest { TreeId = "_lattice_struct-probe" });
+
         Assert.That(result.Status, Is.EqualTo(StateQueryStatus.TreeNotFound),
-            "reserved trees must be invisible to the structure surface");
+            "system trees must stay invisible to the structure surface");
         Assert.That(result.Roots, Is.Empty);
     }
 }

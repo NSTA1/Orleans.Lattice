@@ -338,26 +338,46 @@ public sealed class LatticeEntryInspectionIntegrationTests
     }
 
     [Test]
-    public async Task ScanEntries_treats_reserved_tree_as_not_found()
+    public async Task ScanEntries_inspects_view_tree_as_read_only()
     {
         await _fixture.RegisterViewBackingTreeAsync("view-scan-probe");
 
         var result = await _fixture.Query.ScanEntriesAsync(new EntryScanRequest { TreeId = "view-scan-probe" });
 
-        Assert.That(result.Status, Is.EqualTo(StateQueryStatus.TreeNotFound),
-            "reserved trees must be invisible to the scan surface");
+        Assert.That(result.Status, Is.EqualTo(StateQueryStatus.Found),
+            "a materialised view is a read-only tree and must be inspectable");
         Assert.That(result.Entries, Is.Empty);
     }
 
     [Test]
-    public async Task GetEntry_treats_reserved_tree_as_not_found()
+    public async Task ScanEntries_treats_system_tree_as_not_found()
+    {
+        var result = await _fixture.Query.ScanEntriesAsync(new EntryScanRequest { TreeId = "_lattice_scan-probe" });
+
+        Assert.That(result.Status, Is.EqualTo(StateQueryStatus.TreeNotFound),
+            "system trees must stay invisible to the scan surface");
+        Assert.That(result.Entries, Is.Empty);
+    }
+
+    [Test]
+    public async Task GetEntry_inspects_view_tree_as_read_only()
     {
         await _fixture.RegisterViewBackingTreeAsync("view-detail-probe");
 
         var result = await _fixture.Query.GetEntryAsync("view-detail-probe", "k");
 
+        Assert.That(result.Status, Is.EqualTo(StateQueryStatus.KeyNotFound),
+            "a view tree is inspectable, so a missing key is reported as a key miss, not a tree miss");
+        Assert.That(result.Entry, Is.Null);
+    }
+
+    [Test]
+    public async Task GetEntry_treats_system_tree_as_not_found()
+    {
+        var result = await _fixture.Query.GetEntryAsync("_lattice_detail-probe", "k");
+
         Assert.That(result.Status, Is.EqualTo(StateQueryStatus.TreeNotFound),
-            "reserved trees must be invisible to the detail surface");
+            "system trees must stay invisible to the detail surface");
         Assert.That(result.Entry, Is.Null);
     }
 

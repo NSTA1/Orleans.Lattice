@@ -39,6 +39,8 @@ public class CatalogReaderTests
 
         Assert.That(page.Items, Has.Count.EqualTo(2));
         Assert.That(page.Items[0].Id, Is.EqualTo("alpha"));
+        Assert.That(page.Items[0].DisplayName, Is.Null);
+        Assert.That(page.Items[0].Label, Is.EqualTo("alpha"));
         Assert.That(page.Items[0].Kind, Is.EqualTo(CatalogKind.Trees));
         Assert.That(page.Items[0].ShardCount, Is.EqualTo(4));
         Assert.That(page.Items[0].Lifecycle, Is.EqualTo(nameof(TreeLifecycleState.Active)));
@@ -84,7 +86,11 @@ public class CatalogReaderTests
         var page = await reader.LoadAsync(CatalogKind.Views, pageToken: null, pageSize: 50);
 
         Assert.That(page.Items, Has.Count.EqualTo(2));
-        Assert.That(page.Items[0].Id, Is.EqualTo("v1"));
+        Assert.That(page.Items[0].Id, Is.EqualTo("view-v1"));
+        Assert.That(page.Items[0].DisplayName, Is.EqualTo("v1"));
+        Assert.That(page.Items[0].Label, Is.EqualTo("v1"));
+        Assert.That(page.Items[1].Id, Is.EqualTo("view-v2"));
+        Assert.That(page.Items[1].DisplayName, Is.EqualTo("v2"));
         Assert.That(page.Items[0].Kind, Is.EqualTo(CatalogKind.Views));
         Assert.That(page.Items[0].SourceTreeId, Is.EqualTo("alpha"));
         Assert.That(page.Items[0].IsAggregation, Is.True);

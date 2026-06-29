@@ -162,6 +162,39 @@ public sealed class LatticeCatalogIntegrationTests
     }
 
     [Test]
+    public async Task ScanEntries_inspects_a_materialised_view_through_its_view_tree_id()
+    {
+        await _fixture.CreatePopulatedTreeAsync("tree-view-src", keyCount: 3);
+        var view = _fixture.CreateView("tree-view-src", "orders-inspect");
+        await view.RebuildAsync();
+
+        // The detail tabs query the physical "view-<name>" tree id; the read path
+        // must admit it under an authorised view-read scope and return the
+        // materialised entries rather than "tree not found".
+        var result = await _fixture.Query.ScanEntriesAsync(
+            new EntryScanRequest { TreeId = "view-orders-inspect", PageSize = 100 });
+
+        Assert.That(result.Status, Is.EqualTo(StateQueryStatus.Found),
+            "a materialised view must be inspectable read-only via its view-tree id");
+        Assert.That(result.Entries, Has.Count.EqualTo(3));
+    }
+
+    [Test]
+    public async Task GetTreeStructure_inspects_a_materialised_view_through_its_view_tree_id()
+    {
+        await _fixture.CreatePopulatedTreeAsync("tree-view-struct", keyCount: 3);
+        var view = _fixture.CreateView("tree-view-struct", "orders-struct");
+        await view.RebuildAsync();
+
+        var result = await _fixture.Query.GetTreeStructureAsync(
+            new StructureRequest { TreeId = "view-orders-struct" });
+
+        Assert.That(result.Status, Is.EqualTo(StateQueryStatus.Found),
+            "a materialised view must expose its topology read-only via its view-tree id");
+        Assert.That(result.Roots, Is.Not.Empty);
+    }
+
+    [Test]
     public async Task ListViewsAsync_returns_empty_when_no_views_registered()
     {
         await _fixture.CreatePopulatedTreeAsync("tree-noview", keyCount: 1);

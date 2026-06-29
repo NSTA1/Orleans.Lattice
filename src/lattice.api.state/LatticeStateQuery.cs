@@ -284,12 +284,16 @@ internal sealed class LatticeStateQuery(
         ArgumentException.ThrowIfNullOrEmpty(request.TreeId);
         cancellationToken.ThrowIfCancellationRequested();
 
+        // A materialised view is a read-only tree; permit it on the read path by
+        // binding under an authorised view-read scope, while system trees stay
+        // hidden everywhere.
+        using var viewScope = OpenViewReadScopeIfNeeded(request.TreeId);
+
         var tree = _grainFactory.GetGrain<ILattice>(request.TreeId);
-        if (IsReservedTree(request.TreeId) || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
+        if (IsSystemTree(request.TreeId) || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
         {
             return TreeStructureResult.NotFound(request.TreeId);
         }
-
         var registry = _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         var physicalTreeId = await registry.ResolveAsync(request.TreeId).ConfigureAwait(false);
         var depthLimit = request.EffectiveDepthLimit;
@@ -374,13 +378,19 @@ internal sealed class LatticeStateQuery(
             return await ScanByTagAsync(request, cancellationToken).ConfigureAwait(false);
         }
 
+        // A materialised view is a read-only tree; permit it on the read path by
+        // binding under an authorised view-read scope, while system trees stay
+        // hidden everywhere. The scope must remain active for the cursor open and
+        // every page read, so it wraps the whole method.
+        using var viewScope = OpenViewReadScopeIfNeeded(request.TreeId);
+
         var tree = _grainFactory.GetGrain<ILattice>(request.TreeId);
 
         var fresh = string.IsNullOrEmpty(request.ContinuationToken);
         string cursorId;
         if (fresh)
         {
-            if (IsReservedTree(request.TreeId) || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
+            if (IsSystemTree(request.TreeId) || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
             {
                 return EntryScanResult.NotFound(request.TreeId);
             }
@@ -507,8 +517,13 @@ internal sealed class LatticeStateQuery(
         ArgumentNullException.ThrowIfNull(key);
         cancellationToken.ThrowIfCancellationRequested();
 
+        // A materialised view is a read-only tree; permit it on the read path by
+        // binding under an authorised view-read scope, while system trees stay
+        // hidden everywhere.
+        using var viewScope = OpenViewReadScopeIfNeeded(treeId);
+
         var tree = _grainFactory.GetGrain<ILattice>(treeId);
-        if (IsReservedTree(treeId) || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
+        if (IsSystemTree(treeId) || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
         {
             return EntryDetailResult.TreeNotFound(treeId, key);
         }
@@ -541,8 +556,13 @@ internal sealed class LatticeStateQuery(
         ArgumentNullException.ThrowIfNull(request.Key);
         cancellationToken.ThrowIfCancellationRequested();
 
+        // A materialised view is a read-only tree; permit it on the read path by
+        // binding under an authorised view-read scope, while system trees stay
+        // hidden everywhere.
+        using var viewScope = OpenViewReadScopeIfNeeded(request.TreeId);
+
         var tree = _grainFactory.GetGrain<ILattice>(request.TreeId);
-        if (IsReservedTree(request.TreeId) || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
+        if (IsSystemTree(request.TreeId) || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
         {
             return EntryHistoryResult.TreeNotFound(request.TreeId, request.Key);
         }
@@ -904,6 +924,33 @@ internal sealed class LatticeStateQuery(
     private static bool IsReservedTree(string treeId) =>
         treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal)
         || treeId.StartsWith(LatticeConstants.ViewTreePrefix, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Tests whether <paramref name="treeId"/> names a silo-internal system tree
+    /// (the <see cref="LatticeConstants.SystemTreePrefix"/>). System trees are
+    /// hidden from every public surface; unlike materialised-view trees they are
+    /// never inspectable.
+    /// </summary>
+    private static bool IsSystemTree(string treeId) =>
+        treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Tests whether <paramref name="treeId"/> names a materialised-view tree
+    /// (the <see cref="LatticeConstants.ViewTreePrefix"/>). A view tree is a
+    /// read-only tree that requires an authorised <see cref="ViewReadContext"/>
+    /// scope to read its contents.
+    /// </summary>
+    private static bool IsViewTree(string treeId) =>
+        treeId.StartsWith(LatticeConstants.ViewTreePrefix, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Opens an authorised <see cref="ViewReadContext"/> read scope when
+    /// <paramref name="treeId"/> names a materialised-view (<c>view-*</c>) tree, so
+    /// the read-only inspection paths may read its active generation; returns
+    /// <see langword="null"/> for ordinary trees, which need no scope.
+    /// </summary>
+    private static IDisposable? OpenViewReadScopeIfNeeded(string treeId) =>
+        IsViewTree(treeId) ? ViewReadContext.BeginScope() : null;
 
     private static bool IsTagIndexTree(string treeId) =>
         treeId.StartsWith(LatticeConstants.TagIndexTreePrefix, StringComparison.Ordinal);

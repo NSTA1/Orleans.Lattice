@@ -12,6 +12,18 @@ public sealed record CatalogItem
     /// <summary>The opaque tree or view id, used as-is by the detail panel.</summary>
     public required string Id { get; init; }
 
+    /// <summary>
+    /// The human-friendly label shown in the navigation list and detail header.
+    /// For trees and tag indexes this equals <see cref="Id"/>; for views it is the
+    /// bare view name, while <see cref="Id"/> carries the physical <c>view-</c>
+    /// prefixed tree id the detail tabs query. Defaults to <see cref="Id"/> when
+    /// not set.
+    /// </summary>
+    public string? DisplayName { get; init; }
+
+    /// <summary>The label to render for this item: <see cref="DisplayName"/> when set, otherwise <see cref="Id"/>.</summary>
+    public string Label => DisplayName ?? Id;
+
     /// <summary>Which discovery call produced this item.</summary>
     public required CatalogKind Kind { get; init; }
 
