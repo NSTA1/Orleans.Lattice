@@ -413,6 +413,101 @@ _Assert -Name 'view-drain signature does NOT match an unrelated storage exceptio
 	-Condition (-not ($storageExcLine -match $viewDrainSig)) `
 	-Detail "pattern '$viewDrainSig' wrongly matched a load-time storage exception"
 
+# Benign storage-usage-poller shutdown-race exclusion: the WAL storage-usage
+# poller (LatticeWalUsageGrain) fans out a read-only retained-byte query per
+# partition on a background gauge tick; an in-flight fan-out cancelled at silo
+# stop logs a warn with an OperationCanceledException. The runner folds these
+# (filtered to the current cohort) into BenignShutdownExceptions. Guard the
+# exact signature run-cohort.ps1 uses
+# ('LatticeWalUsageGrain.*retained-byte fan-out failed.*OperationCanceledException'):
+# the shutdown cancellation must match; a genuine storage fault surfaced by the
+# same poller (a DIFFERENT inner exception) must NOT, so it still counts.
+$pollerSig = 'LatticeWalUsageGrain.*retained-byte fan-out failed.*OperationCanceledException'
+$pollerShutLine = '17:40:32 warn: Orleans.Lattice.BPlusTree.Grains.LatticeWalUsageGrain[0] WAL retained-byte fan-out failed for partition 0 in tree cohort-v100-h5-45s-20260629171512Z System.OperationCanceledException: The operation was canceled.'
+$pollerRealFault = '17:40:32 warn: Orleans.Lattice.BPlusTree.Grains.LatticeWalUsageGrain[0] WAL retained-byte fan-out failed for partition 0 in tree cohort-v100-h5-45s-20260629171512Z Azure.RequestFailedException: 503 The server is busy.'
+_Assert -Name 'storage-usage-poller signature matches a shutdown cancellation warning' `
+	-Condition ($pollerShutLine -match $pollerSig) `
+	-Detail "pattern '$pollerSig' did not match the poller shutdown-cancellation line"
+_Assert -Name 'storage-usage-poller signature does NOT match a genuine poller storage fault' `
+	-Condition (-not ($pollerRealFault -match $pollerSig)) `
+	-Detail "pattern '$pollerSig' wrongly matched a non-cancellation storage fault"
+_Assert -Name 'storage-usage-poller signature does NOT match a load-time storage exception' `
+	-Condition (-not ($storageExcLine -match $pollerSig)) `
+	-Detail "pattern '$pollerSig' wrongly matched a load-time storage exception"
+
+# Benign materialiser-pin shutdown-race exclusion: the leaf cursor reporter
+# (LeafCursorReporter) persists a durable WAL materialiser pin on a checkpoint
+# tick; as the pin grain deactivates at shutdown the write is rejected with an
+# OrleansMessageRejectionException ("...invalid activation. Rejecting now").
+# Guard the exact signature run-cohort.ps1 uses
+# ('LeafCursorReporter.*durable WAL materialiser.*pin.*OrleansMessageRejectionException'):
+# both the persist and the seed message variants must match the shutdown
+# rejection; a steady-state pin fault with a different inner exception, and an
+# unrelated load-time storage exception, must NOT.
+$pinSig = 'LeafCursorReporter.*durable WAL materialiser.*pin.*OrleansMessageRejectionException'
+$pinPersistShut = '17:40:30 warn: Orleans.Lattice.BPlusTree.Grains.LeafCursorReporter[0] Failed to persist durable WAL materialiser pin for tree cohort-v150-h5-45s-20260629173850Z consumer _lattice_materialiser__lattice_trees_bplusleaf/f1db at HLC(1:0); will retry on next checkpoint. Orleans.Runtime.OrleansMessageRejectionException: Forwarding failed: tried to forward ... "Unable to create local activation" to invalid activation. Rejecting now.'
+$pinSeedShut = '17:40:30 warn: Orleans.Lattice.BPlusTree.Grains.LeafCursorReporter[0] Failed to seed durable WAL materialiser block pin for tree cohort-v150-h5-45s-20260629173850Z consumer _lattice_materialiser/abcd at HLC(1:0); will re-seed on next checkpoint. Orleans.Runtime.OrleansMessageRejectionException: Forwarding failed: tried to forward to invalid activation. Rejecting now.'
+$pinSteadyFault = '21:40:11 warn: Orleans.Lattice.BPlusTree.Grains.LeafCursorReporter[0] Failed to persist durable WAL materialiser pin for tree cohort-v150-h5-45s-20260629173850Z consumer x at HLC(1:0); will retry on next checkpoint. System.InvalidOperationException: pin codec mismatch'
+_Assert -Name 'materialiser-pin signature matches a persist shutdown rejection' `
+	-Condition ($pinPersistShut -match $pinSig) `
+	-Detail "pattern '$pinSig' did not match the persist shutdown line"
+_Assert -Name 'materialiser-pin signature matches a seed shutdown rejection' `
+	-Condition ($pinSeedShut -match $pinSig) `
+	-Detail "pattern '$pinSig' did not match the seed shutdown line"
+_Assert -Name 'materialiser-pin signature does NOT match a steady-state pin fault' `
+	-Condition (-not ($pinSteadyFault -match $pinSig)) `
+	-Detail "pattern '$pinSig' wrongly matched a non-shutdown pin fault"
+_Assert -Name 'materialiser-pin signature does NOT match a load-time storage exception' `
+	-Condition (-not ($storageExcLine -match $pinSig)) `
+	-Detail "pattern '$pinSig' wrongly matched a load-time storage exception"
+
+# Measure-CohortAttributableMatches arity guard. The runner subtracts these
+# benign classes under `Set-StrictMode -Version Latest`; an earlier inline
+# `( @(Select-String ...) | Where-Object {...} ).Count` threw "property 'Count'
+# cannot be found" for the 0-match and 1-match cases (the pipeline yielded
+# $null or a bare MatchInfo, not an array), which aborted a whole cohort mid
+# Layer-2 run. These assertions run under the file's StrictMode Latest and so
+# reproduce that failure mode directly against the helper.
+$mTree = 'cohort-v8-h5-45s-20260629172841Z'
+$mPattern = 'LeafCursorReporter.*durable WAL materialiser.*pin.*OrleansMessageRejectionException'
+$mLineFor = {
+	param($tree)
+	"17:40:30 warn: Orleans.Lattice.BPlusTree.Grains.LeafCursorReporter[0] Failed to persist durable WAL materialiser pin for tree $tree consumer c at HLC(1:0); will retry on next checkpoint. Orleans.Runtime.OrleansMessageRejectionException: Forwarding failed: tried to forward to invalid activation. Rejecting now."
+}
+$mTmp = New-TemporaryFile
+try {
+	# 0 matches (would throw under the old idiom).
+	Set-Content -Path $mTmp -Encoding utf8 -Value @('nothing benign here')
+	$m0 = Measure-CohortAttributableMatches -LogPath $mTmp -Pattern $mPattern -CurrentTreeId $mTree
+	_Assert -Name 'Measure-CohortAttributableMatches returns 0 for no matches' `
+		-Condition ($m0 -eq 0) -Detail "got $m0"
+
+	# 1 match attributable (the exact StrictMode crash case).
+	Set-Content -Path $mTmp -Encoding utf8 -Value @((& $mLineFor $mTree))
+	$m1 = Measure-CohortAttributableMatches -LogPath $mTmp -Pattern $mPattern -CurrentTreeId $mTree
+	_Assert -Name 'Measure-CohortAttributableMatches returns 1 for a single match' `
+		-Condition ($m1 -eq 1) -Detail "got $m1"
+
+	# 2 matches attributable.
+	Set-Content -Path $mTmp -Encoding utf8 -Value @((& $mLineFor $mTree), (& $mLineFor $mTree))
+	$m2 = Measure-CohortAttributableMatches -LogPath $mTmp -Pattern $mPattern -CurrentTreeId $mTree
+	_Assert -Name 'Measure-CohortAttributableMatches returns 2 for two matches' `
+		-Condition ($m2 -eq 2) -Detail "got $m2"
+
+	# Cross-cohort exclusion: one current-cohort line + one other-cohort line
+	# -> only the current cohort's line counts.
+	Set-Content -Path $mTmp -Encoding utf8 -Value @((& $mLineFor $mTree), (& $mLineFor 'cohort-v8-h5-45s-20260629999999Z'))
+	$mX = Measure-CohortAttributableMatches -LogPath $mTmp -Pattern $mPattern -CurrentTreeId $mTree
+	_Assert -Name 'Measure-CohortAttributableMatches excludes other-cohort matches' `
+		-Condition ($mX -eq 1) -Detail "got $mX"
+}
+finally { Remove-Item -LiteralPath $mTmp -ErrorAction SilentlyContinue }
+
+# Missing log file -> 0 (no throw).
+$mMissing = Measure-CohortAttributableMatches -LogPath (Join-Path ([IO.Path]::GetTempPath()) 'no-such-cohort-log.log') -Pattern $mPattern -CurrentTreeId $mTree
+_Assert -Name 'Measure-CohortAttributableMatches returns 0 for a missing log' `
+	-Condition ($mMissing -eq 0) -Detail "got $mMissing"
+
 # Precedence: an un-quiesced drain tail (WEDGE) outranks a concurrent
 # FINAL failure (FAILED) since WEDGE is the most severe state.
 $wedgeOverFailed = $clean.Clone(); $wedgeOverFailed.DrainTailSamples = 12; $wedgeOverFailed.SiloQuiesced = $false; $wedgeOverFailed.FailedFinal = 10
