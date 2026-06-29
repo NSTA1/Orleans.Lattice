@@ -23,19 +23,15 @@ WORKDIR /src
 COPY src/ ./src/
 COPY samples/MultiSiteManufacturing/src/ ./samples/MultiSiteManufacturing/src/
 
-# A BuildKit cache mount keeps the NuGet global-packages folder on the
-# host between builds; the read-only `nuget-cache` build context mounts
-# the developer's already-warm ~/.nuget/packages as a fallback folder so
-# restore resolves locally instead of re-downloading from nuget.org on a
-# slow connection (run.ps1 wires both and enables BuildKit). The fallback
-# is read-only, so any genuinely missing package still lands in the cache
-# mount. --no-restore on publish skips a redundant second restore.
+# A BuildKit cache mount keeps the NuGet global-packages folder warm on
+# the host between builds, so the first restore downloads from nuget.org
+# but every subsequent build resolves from the local cache - no full
+# context upload, no re-download (run.ps1 enables BuildKit). The cache
+# survives across the four silo builds and across `down`/`up` cycles.
+# --no-restore on publish skips a redundant second restore.
 RUN --mount=type=cache,target=/root/.nuget/packages,id=msmfg-nuget \
-    --mount=type=bind,from=nuget-cache,target=/nuget-fallback,readonly \
     DOTNET_CLI_TELEMETRY_OPTOUT=1 dotnet restore \
-    samples/MultiSiteManufacturing/src/MultiSiteManufacturing.Host/MultiSiteManufacturing.Host.csproj \
-    --packages /root/.nuget/packages \
-    -p:RestoreFallbackFolders=/nuget-fallback
+    samples/MultiSiteManufacturing/src/MultiSiteManufacturing.Host/MultiSiteManufacturing.Host.csproj
 
 RUN --mount=type=cache,target=/root/.nuget/packages,id=msmfg-nuget \
     dotnet publish \

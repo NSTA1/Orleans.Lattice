@@ -191,26 +191,14 @@ try {
     if (-not $NoBuild) {
         Write-Host "Building msmfg-host:dev image (docker compose build)..." -ForegroundColor Cyan
 
-        # Resolve the developer's local NuGet global-packages folder and pass it
-        # as a read-only build context so the in-container restore resolves from
-        # the warm host cache instead of re-downloading from nuget.org. This is a
-        # big win on a slow connection. BuildKit is required for the cache + bind
-        # mounts in the Dockerfile, so enable it explicitly.
-        $nugetCache = $env:NUGET_PACKAGES
-        if ([string]::IsNullOrWhiteSpace($nugetCache)) {
-            $nugetCache = Join-Path $HOME ".nuget/packages"
-        }
-        if (-not (Test-Path $nugetCache)) {
-            # No warm cache to share; create an empty dir so the bind context
-            # still resolves and restore falls back to the network.
-            New-Item -ItemType Directory -Path $nugetCache -Force | Out-Null
-        }
-        Write-Host "  Using local NuGet cache: $nugetCache" -ForegroundColor DarkGray
-
+        # All four silos share the identical msmfg-host:dev image, so build it
+        # once (silo-us-a) instead of letting compose run four identical builds.
+        # BuildKit is required for the Dockerfile's NuGet cache mount, which keeps
+        # the global-packages folder warm between builds so restore only hits
+        # nuget.org on the very first build - the rest resolve locally.
         $env:DOCKER_BUILDKIT = "1"
         $env:COMPOSE_DOCKER_CLI_BUILD = "1"
-        $env:NUGET_CACHE_DIR = $nugetCache
-        & docker compose build
+        & docker compose build silo-us-a
         if ($LASTEXITCODE -ne 0) { throw "docker compose build failed (exit $LASTEXITCODE)." }
     }
 
