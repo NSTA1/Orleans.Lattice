@@ -114,13 +114,44 @@ public sealed class MvRegister : ICrdt<MvRegister>
     /// </summary>
     public IReadOnlyList<byte[]> Values()
     {
-        if (Entries.Count == 0) return Array.Empty<byte[]>();
-        var ordered = Entries
-            .OrderBy(static e => e.ReplicaId, StringComparer.Ordinal)
-            .ThenBy(static e => e.Counter)
-            .Select(static e => e.Value)
-            .ToArray();
+        var count = Entries.Count;
+        if (count == 0) return Array.Empty<byte[]>();
+
+        // Steady-state fast path: a single-valued register needs neither a
+        // sort nor a LINQ pipeline - the lone value is already "ordered".
+        if (count == 1) return new[] { Entries[0].Value };
+
+        // Multi-value (transient concurrent-write) path: copy the entries
+        // out and sort with a single comparer that replicates the former
+        // OrderBy(ReplicaId, Ordinal).ThenBy(Counter) composite key, then
+        // project the now-ordered values. Dots are unique by construction,
+        // so the (ReplicaId, Counter) key is a total order and the result
+        // matches the previous stable LINQ ordering exactly.
+        var entries = new MvRegisterEntry[count];
+        Entries.CopyTo(entries);
+        Array.Sort(entries, EntryOrdering.Instance);
+
+        var ordered = new byte[count][];
+        for (var i = 0; i < count; i++) ordered[i] = entries[i].Value;
         return ordered;
+    }
+
+    /// <summary>
+    /// Total ordering over <see cref="MvRegisterEntry"/> dots that
+    /// replicates the former <c>OrderBy(ReplicaId, Ordinal)</c> then
+    /// <c>ThenBy(Counter)</c> composite key used by <see cref="Values"/>.
+    /// A cached singleton so the multi-value sort path allocates no
+    /// per-call comparer.
+    /// </summary>
+    private sealed class EntryOrdering : IComparer<MvRegisterEntry>
+    {
+        public static readonly EntryOrdering Instance = new();
+
+        public int Compare(MvRegisterEntry x, MvRegisterEntry y)
+        {
+            var byReplica = string.CompareOrdinal(x.ReplicaId, y.ReplicaId);
+            return byReplica != 0 ? byReplica : x.Counter.CompareTo(y.Counter);
+        }
     }
 
     /// <summary>

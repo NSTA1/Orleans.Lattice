@@ -194,4 +194,40 @@ public class MvRegisterTests
         var merged = MvRegister.Merge(MvRegister.Merge(a, b), c);
         Assert.That(ValuesAsStrings(merged), Is.EquivalentTo(new[] { "a", "b", "c" }));
     }
+
+    [Test]
+    public void Values_single_entry_returns_that_value()
+    {
+        var r = new MvRegister();
+        r.Set("rA", B("solo"));
+        Assert.That(ValuesAsStrings(r), Is.EqualTo(new[] { "solo" }));
+    }
+
+    [Test]
+    public void Values_ordering_matches_orderby_replicaid_ordinal_then_counter()
+    {
+        // Hand-build a transient multi-value state with entries deliberately
+        // inserted out of order, including two dots on the same replica (so
+        // the Counter tie-break is exercised) and replica ids whose ordinal
+        // order differs from a culture-aware order. The optimised Array.Sort
+        // path must reproduce the exact composite key the former LINQ chain
+        // (OrderBy ReplicaId ordinal, ThenBy Counter) produced.
+        var r = new MvRegister();
+        r.Entries.AddRange(new[]
+        {
+            new MvRegisterEntry { ReplicaId = "rB", Counter = 2, Value = B("rB-2") },
+            new MvRegisterEntry { ReplicaId = "rA", Counter = 5, Value = B("rA-5") },
+            new MvRegisterEntry { ReplicaId = "rB", Counter = 1, Value = B("rB-1") },
+            new MvRegisterEntry { ReplicaId = "rA", Counter = 1, Value = B("rA-1") },
+        });
+
+        var expected = r.Entries
+            .OrderBy(static e => e.ReplicaId, StringComparer.Ordinal)
+            .ThenBy(static e => e.Counter)
+            .Select(static e => S(e.Value))
+            .ToArray();
+
+        Assert.That(ValuesAsStrings(r), Is.EqualTo(expected));
+        Assert.That(ValuesAsStrings(r), Is.EqualTo(new[] { "rA-1", "rA-5", "rB-1", "rB-2" }));
+    }
 }
