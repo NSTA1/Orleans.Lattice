@@ -9,13 +9,15 @@ namespace Orleans.Lattice.Explorer.Core.Data;
 public static class ExplorerDataServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers the <see cref="IDataReader"/>. Call after <c>AddExplorerCatalog</c>,
-    /// which exposes the state-API client facet the reader depends on.
+    /// Registers the <see cref="IDataReader"/> and the
+    /// <see cref="IEntryLiveFollower"/>. Call after <c>AddExplorerCatalog</c>,
+    /// which exposes the state-API client facet they depend on.
     /// </summary>
     public static IServiceCollection AddExplorerData(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
         services.TryAddSingleton<IDataReader, DataReader>();
+        services.TryAddSingleton<IEntryLiveFollower, EntryLiveFollower>();
         return services;
     }
 }
