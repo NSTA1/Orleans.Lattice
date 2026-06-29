@@ -119,12 +119,15 @@ public partial class LatticeStateConnectionTests
     }
 
     [Test]
-    public async Task ObserveMetricsAsync_TransientFault_StopsStream_AndEntersReconnecting()
+    public async Task ObserveMetricsAsync_TransientFault_Resubscribes_ThenRecovers()
     {
-        var client = new FakeStateClient();
+        var attempt = 0;
+        var client = new FakeStateClient
+        {
+            ObserveMetricsHandler = _ => ++attempt == 1 ? ThrowingMetricStream() : OneMetricStream(),
+        };
         var (connection, _) = NewConnection(_ => client);
         await connection.ConfigureAsync(Settings());
-        client.ObserveMetricsHandler = _ => ThrowingMetricStream();
 
         var received = new List<TreeMetricsSnapshot>();
         await foreach (var snapshot in connection.ObserveMetricsAsync(new TreeMetricsRequest()))
@@ -132,8 +135,9 @@ public partial class LatticeStateConnectionTests
             received.Add(snapshot);
         }
 
-        Assert.That(received, Is.Empty);
-        Assert.That(connection.Status.State, Is.EqualTo(LatticeConnectionState.Reconnecting));
+        Assert.That(attempt, Is.EqualTo(2));
+        Assert.That(received, Has.Count.EqualTo(1));
+        Assert.That(connection.Status.State, Is.EqualTo(LatticeConnectionState.Connected));
     }
 
     private static async IAsyncEnumerable<TreeMetricsSnapshot> ThrowingMetricStream()
@@ -145,5 +149,11 @@ public partial class LatticeStateConnectionTests
         }
 
         yield break;
+    }
+
+    private static async IAsyncEnumerable<TreeMetricsSnapshot> OneMetricStream()
+    {
+        await Task.CompletedTask;
+        yield return new TreeMetricsSnapshot();
     }
 }

@@ -85,11 +85,12 @@ Three host ports are published:
 Silo HTTP (`:8080`), Orleans silo (`:11111`), gateway (`:30000`),
 and Prometheus (`:9090`) ports are internal-only.
 
-Each Traefik runs two routers over the same backend pool:
+Each Traefik runs three routers over the same backend pool:
 
 | Router | Rule | LB |
 |---|---|---|
-| `{cluster}-replicate` | `PathPrefix(/orleans.lattice.replication.)`, priority 100 | round-robin + active health check |
+| `{cluster}-replicate` | `PathPrefix(/orleans.lattice.replication.)`, priority 200 | round-robin, no health check |
+| `{cluster}-state` | `PathPrefix(/orleans.lattice.api.state/)`, priority 200 | round-robin + active health check (probes `:8080`) |
 | `{cluster}-web` | `PathPrefix(/)` | sticky cookie `msmfg_{cluster}_affinity` |
 
 ### Tier-5 partition commands

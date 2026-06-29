@@ -48,12 +48,21 @@ http:
         # No sticky cookie: state-API reads are stateless, cluster-wide
         # aggregates either silo can serve, so round-robin spreads
         # explorer load. h2c upstream to the same dedicated :8081 gRPC
-        # listener eu-replicate uses. No health check, for the same
-        # reason as eu-replicate (no clean 200 on an HTTP/2 probe to the
-        # gRPC port; the gRPC client retries itself).
+        # listener eu-replicate uses. Active health check on the silo's
+        # :8080 HTTP port (issue #1006) evicts a stopped silo within ~2s
+        # so the explorer fails over instead of flickering; the gRPC port
+        # itself has no clean 200 to probe, hence targeting :8080.
+        # scheme: http is required so the probe does not inherit the h2c
+        # server scheme (which fails against the plain HTTP :8080 port).
         servers:
           - url: "h2c://silo-eu-a:8081"
           - url: "h2c://silo-eu-b:8081"
+        healthCheck:
+          path: "/"
+          scheme: http
+          port: 8080
+          interval: "2s"
+          timeout: "1s"
 
     eu-web:
       loadBalancer:

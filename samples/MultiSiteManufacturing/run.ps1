@@ -190,7 +190,15 @@ try {
 
     if (-not $NoBuild) {
         Write-Host "Building msmfg-host:dev image (docker compose build)..." -ForegroundColor Cyan
-        & docker compose build
+
+        # All four silos share the identical msmfg-host:dev image, so build it
+        # once (silo-us-a) instead of letting compose run four identical builds.
+        # BuildKit is required for the Dockerfile's NuGet cache mount, which keeps
+        # the global-packages folder warm between builds so restore only hits
+        # nuget.org on the very first build - the rest resolve locally.
+        $env:DOCKER_BUILDKIT = "1"
+        $env:COMPOSE_DOCKER_CLI_BUILD = "1"
+        & docker compose build silo-us-a
         if ($LASTEXITCODE -ne 0) { throw "docker compose build failed (exit $LASTEXITCODE)." }
     }
 

@@ -23,10 +23,22 @@ WORKDIR /src
 COPY src/ ./src/
 COPY samples/MultiSiteManufacturing/src/ ./samples/MultiSiteManufacturing/src/
 
-RUN dotnet publish \
+# A BuildKit cache mount keeps the NuGet global-packages folder warm on
+# the host between builds, so the first restore downloads from nuget.org
+# but every subsequent build resolves from the local cache - no full
+# context upload, no re-download (run.ps1 enables BuildKit). The cache
+# survives across the four silo builds and across `down`/`up` cycles.
+# --no-restore on publish skips a redundant second restore.
+RUN --mount=type=cache,target=/root/.nuget/packages,id=msmfg-nuget \
+    DOTNET_CLI_TELEMETRY_OPTOUT=1 dotnet restore \
+    samples/MultiSiteManufacturing/src/MultiSiteManufacturing.Host/MultiSiteManufacturing.Host.csproj
+
+RUN --mount=type=cache,target=/root/.nuget/packages,id=msmfg-nuget \
+    dotnet publish \
     samples/MultiSiteManufacturing/src/MultiSiteManufacturing.Host/MultiSiteManufacturing.Host.csproj \
     -c Release \
     -o /app \
+    --no-restore \
     --nologo
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
