@@ -155,6 +155,35 @@ public class LatticeMicroBenchmarks
     private readonly MvRegister _mvRegisterLeft = BuildMvRegister("replica-left", 8);
     private readonly MvRegister _mvRegisterRight = BuildMvRegister("replica-right", 8);
 
+    // ===== MvRegister.Values() read-path instrument =====
+    // Two identity-stable register states for the Values() read path. The
+    // single-valued register is the steady state the optimisation targets:
+    // Values() must short-circuit to a 1-element array with no sort and no
+    // LINQ pipeline. The multi-valued register exercises the Array.Sort
+    // comparer path that replaces the former OrderBy.ThenBy.Select.ToArray
+    // chain. Both are built once and never mutated, so the measured window
+    // isolates the read path's steady-state allocation. Surfaced as
+    // microbench_crdt_mvregister_values_alloc_b.
+    private readonly MvRegister _mvRegisterSingle = BuildMvRegisterWithValues("replica-a", 1);
+    private readonly MvRegister _mvRegisterMulti = BuildMvRegisterWithValues("replica", 8);
+
+    private static MvRegister BuildMvRegisterWithValues(string replicaPrefix, int liveValues)
+    {
+        var register = new MvRegister();
+        for (var i = 0; i < liveValues; i++)
+        {
+            var replicaId = liveValues == 1 ? replicaPrefix : $"{replicaPrefix}-{i:D2}";
+            register.Context[replicaId] = 1;
+            register.Entries.Add(new MvRegisterEntry
+            {
+                ReplicaId = replicaId,
+                Counter = 1,
+                Value = new byte[16],
+            });
+        }
+        return register;
+    }
+
     private static MvRegister BuildMvRegister(string liveReplica, int observedReplicas)
     {
         var register = new MvRegister();
@@ -1187,6 +1216,32 @@ public class LatticeMicroBenchmarks
     [Benchmark(Description = "Crdt mvregister merge")]
     public MvRegister CrdtMvRegisterMerge() =>
         MvRegister.Merge(_mvRegisterLeft, _mvRegisterRight);
+
+    /// <summary>
+    /// Single <see cref="MvRegister.Values"/> read against a single-valued
+    /// register - the steady state the read-path optimisation targets. The
+    /// register is never mutated, so the measured per-iteration allocation
+    /// is the steady-state cost of one Values() read: the optimisation
+    /// short-circuits to a 1-element array, eliminating the former
+    /// OrderBy.ThenBy.Select.ToArray LINQ pipeline (several iterator and
+    /// comparer allocations plus the array). Surfaced as
+    /// <c>microbench_crdt_mvregister_values_alloc_b</c>.
+    /// </summary>
+    [Benchmark(Description = "Crdt mvregister values")]
+    public IReadOnlyList<byte[]> CrdtMvRegisterValues() =>
+        _mvRegisterSingle.Values();
+
+    /// <summary>
+    /// Single <see cref="MvRegister.Values"/> read against an 8-valued
+    /// register - the transient concurrent-write state. Exercises the
+    /// <c>Array.Sort</c> comparer path that replaces the former LINQ chain;
+    /// the register is never mutated, so the measured per-iteration
+    /// allocation is the steady-state cost of one multi-value Values() read.
+    /// Surfaced as <c>microbench_crdt_mvregister_values_multi_alloc_b</c>.
+    /// </summary>
+    [Benchmark(Description = "Crdt mvregister values multi")]
+    public IReadOnlyList<byte[]> CrdtMvRegisterValuesMulti() =>
+        _mvRegisterMulti.Values();
 
     /// <summary>
     /// Single <see cref="PnCounter.Merge(PnCounter, PnCounter)"/> of two
