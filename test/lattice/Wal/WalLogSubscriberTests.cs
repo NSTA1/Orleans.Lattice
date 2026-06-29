@@ -317,6 +317,64 @@ public sealed class WalLogSubscriberTests
     }
 
     [Test]
+    public async Task DrainAsync_caught_up_partition_skips_storage_backed_fall_off_probe()
+    {
+        // Regression for the idle tail-poll flood on the view-maintainer drain
+        // path: a consumer already caught up to the head must not issue the
+        // GetTailOffsetAsync fall-off probe (a storage round-trip). The cheap
+        // in-memory head read is consulted instead, so an idle drain tick costs
+        // no manifest read against the backend.
+        var (subscriber, reader, _) = Create();
+        reader.Append(Tree, 0, Set(10));
+        reader.Append(Tree, 0, Set(20));
+        var handler = new CollectingHandler();
+
+        // Checkpoint at the head (offsets 0,1 applied -> next-to-read is 2 == head).
+        var result = await subscriber.DrainAsync(
+            Context(1, new Dictionary<int, long> { [0] = 1 }), handler, CancellationToken.None);
+
+        Assert.That(reader.TailProbes, Is.Zero, "caught-up drain must not issue the storage-backed fall-off probe");
+        Assert.That(reader.HeadProbes, Is.EqualTo(1), "the cheap in-memory head read replaces the probe");
+        Assert.That(handler.Entries, Is.Empty);
+        Assert.That(result.FellOffLog, Is.False);
+        Assert.That(result.AdvancedOffsets, Is.Empty);
+    }
+
+    [Test]
+    public async Task DrainAsync_behind_partition_still_issues_fall_off_probe()
+    {
+        // Guards the skip against over-eager elision: a partition with unread
+        // entries below the head must still run the fall-off probe so a trimmed
+        // prefix is detected.
+        var (subscriber, reader, _) = Create();
+        for (var i = 0; i < 5; i++)
+        {
+            reader.Append(Tree, 0, Set((i + 1) * 10));
+        }
+        var handler = new CollectingHandler();
+
+        var result = await subscriber.DrainAsync(
+            Context(1, new Dictionary<int, long> { [0] = 1 }), handler, CancellationToken.None);
+
+        Assert.That(reader.TailProbes, Is.EqualTo(1), "a partition behind the head must still probe for fall-off");
+        Assert.That(handler.Entries.Select(e => e.Offset), Is.EqualTo(new long[] { 2, 3, 4 }));
+        Assert.That(result.FellOffLog, Is.False);
+    }
+
+    [Test]
+    public async Task DrainAsync_skips_probe_on_empty_partition()
+    {
+        var (subscriber, reader, _) = Create();
+        var handler = new CollectingHandler();
+
+        var result = await subscriber.DrainAsync(Context(1), handler, CancellationToken.None);
+
+        Assert.That(reader.TailProbes, Is.Zero, "an empty partition is trivially caught up and must not probe storage");
+        Assert.That(result.FellOffLog, Is.False);
+        Assert.That(handler.Entries, Is.Empty);
+    }
+
+    [Test]
     public async Task DrainAsync_throws_on_null_arguments()
     {
         var (subscriber, _, _) = Create();

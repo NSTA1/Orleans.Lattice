@@ -57,7 +57,7 @@ internal sealed class LatticeWalIntrospection(
             // ReadAsync(0, 1) returns the head entry of the shard
             // post-trim: GC trims a contiguous prefix and the next read
             // from sequence 0 yields the oldest entry that survived.
-            pageTasks[partition] = grain.ReadAsync(0, 1, cancellationToken);
+            pageTasks[partition] = grain.ReadAsync(0, 1, cancellationToken).AsTask();
         }
 
         var pages = await Task.WhenAll(pageTasks).ConfigureAwait(false);
@@ -102,7 +102,7 @@ internal sealed class LatticeWalIntrospection(
             // Read a bounded head window so the oldest retained entry
             // of each distinct origin near the trim frontier is seen,
             // not just the single global-oldest head entry.
-            pageTasks[partition] = grain.ReadAsync(0, OriginScanBudget, cancellationToken);
+            pageTasks[partition] = grain.ReadAsync(0, OriginScanBudget, cancellationToken).AsTask();
         }
 
         var pages = await Task.WhenAll(pageTasks).ConfigureAwait(false);

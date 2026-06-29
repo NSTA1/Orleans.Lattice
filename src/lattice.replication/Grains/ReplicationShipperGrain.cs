@@ -796,7 +796,17 @@ internal sealed class ReplicationShipperGrain(
 
         if (_drainBuffer.Count == 0)
         {
-            // No work this tick. Two idle-path responsibilities:
+            // No shippable work this tick. Three idle-path responsibilities:
+            //
+            //   0. Fold any consumed-but-filtered partition cursors. The drain
+            //      may have consumed (and advanced _partitionMaxReadSeq over) a
+            //      run of entries that ShouldShip rejected - on a receiver
+            //      cluster the WAL tail of a peer-authored tree is entirely
+            //      foreign-origin, so every drained entry is filtered and the
+            //      ship buffer ends empty. Without folding those cursors here
+            //      the durable partition cursor never advances past the foreign
+            //      suffix and the next pump re-reads it - and it grows with
+            //      every peer write - from WAL storage on every tick.
             //
             //   1. Force a deferred cursor flush if the time dimension
             //      (ShipCursorWriteMaxDelay) has elapsed. A stream that
@@ -814,6 +824,7 @@ internal sealed class ReplicationShipperGrain(
             //      receiver sees a zero-entry envelope and acks
             //      immediately. Preserves any accumulated backoff by
             //      short-circuiting when one is in flight.
+            await FoldFilteredOnlyConsumedCursorsAsync(options, cancellationToken);
             await TryFlushPendingCursorOnIdleAsync(options, cancellationToken);
             await TryEmitLivenessProbeAsync(options, cancellationToken);
             return;
@@ -1251,6 +1262,57 @@ internal sealed class ReplicationShipperGrain(
 
         await FlushCursorAsync(cancellationToken);
         _ = options; // Reserved for future per-tree report flavours.
+    }
+
+    /// <summary>
+    /// Folds the partition read cursors after a drain that consumed entries
+    /// the merge filtered out before they reached the ship buffer - entries a
+    /// receiver cluster must never ship back (foreign <c>OriginClusterId</c>,
+    /// see <see cref="ShouldShip"/>), entries at or below the HLC cursor, or
+    /// key-filtered entries. The merge advances
+    /// <see cref="_partitionMaxReadSeq"/> / <see cref="_partitionAdvanced"/>
+    /// for every entry it consumes, but when the whole drained window is
+    /// filtered the ship buffer ends empty and the pump bails before
+    /// <see cref="AdvanceCursorAsync"/> runs, so the durable partition cursor
+    /// never moves past the filtered suffix. On an actively-replicated tree
+    /// that suffix grows every time the peer ships another write, so the next
+    /// pump re-reads an ever-larger foreign range from WAL storage on every
+    /// tick - the receiver-side idle read storm. Advancing only the partition
+    /// cursors (the HLC ship cursor stays put - nothing was shipped) lets the
+    /// next pump skip the already-consumed range.
+    /// <para>
+    /// Allocation-aware: the <see cref="AnyPartitionAdvanced"/> guard returns a
+    /// cached completed task on a genuinely idle tail (the merge consumed
+    /// nothing), so the async <see cref="AdvanceCursorAsync"/> state machine is
+    /// entered only when there is a real filtered-only advance to fold; that
+    /// method mutates in-memory state and schedules the existing deferred
+    /// durable write without allocating.
+    /// </para>
+    /// </summary>
+    private Task FoldFilteredOnlyConsumedCursorsAsync(
+        LatticeReplicationOptions options,
+        CancellationToken cancellationToken)
+        => AnyPartitionAdvanced()
+            ? AdvanceCursorAsync(state.State.Cursor, options, cancellationToken)
+            : Task.CompletedTask;
+
+    /// <summary>
+    /// Whether the current tick's merge consumed at least one entry from any
+    /// partition (<see cref="_partitionAdvanced"/>). Used to skip the
+    /// filtered-only cursor fold on a genuinely idle tail without entering an
+    /// async state machine. Allocation-free.
+    /// </summary>
+    private bool AnyPartitionAdvanced()
+    {
+        for (var p = 0; p < _partitionCount; p++)
+        {
+            if (_partitionAdvanced[p])
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -1720,6 +1782,22 @@ internal sealed class ReplicationShipperGrain(
                 }
             }
             _peerStats.RecordInFlight(_treeName, _peerClusterId, 0);
+        }
+
+        // Fold any trailing consumed-but-filtered partition cursors. The final
+        // merge that ended the ship loop with an empty drain buffer may have
+        // consumed (and advanced _partitionMaxReadSeq over) a run of
+        // foreign-origin / already-seen entries that produced no batch; without
+        // folding, the durable partition cursor never advances past that suffix
+        // and the next tick re-reads it from WAL storage. Runs only on the
+        // fully-healthy path (no in-flight failure, no deferred encode failure)
+        // so a mid-pipeline failure's cursor reset is never overridden, and
+        // independently of shippedAny because a trailing filtered-only suffix
+        // can follow successfully-shipped batches in the same tick. See
+        // FoldFilteredOnlyConsumedCursorsAsync.
+        if (!failed && encodeFailure is null)
+        {
+            await FoldFilteredOnlyConsumedCursorsAsync(options, cancellationToken);
         }
 
         // No batch ever shipped this tick (and no encode failure to

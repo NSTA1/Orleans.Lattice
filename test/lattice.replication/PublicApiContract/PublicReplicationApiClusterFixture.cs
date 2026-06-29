@@ -61,27 +61,33 @@ internal sealed class PublicReplicationApiClusterFixture
     /// <summary>Convergence ceiling used by <see cref="WaitForConvergenceAsync"/>.</summary>
     /// <remarks>
     /// Healthy in-process loopback convergence completes in well under
-    /// a second; the ceiling exists only to surface a structured
+    /// a second (the writer-side doorbell wakes the shipper on every
+    /// WAL append, so the full contract suite converges in ~5 s
+    /// locally); the ceiling exists only to surface a structured
     /// failure when delivery is actually broken (e.g. a transport that
-    /// silently drops batches). Keeping the ceiling tight bounds the
-    /// blast radius of a regression: at 30s, 21 broken tests cost
-    /// ~11 minutes; at 20s, the same break costs ~7 minutes and is
-    /// caught faster in the inner dev loop. Individual call sites can
-    /// still pass an explicit longer <paramref name="timeout"/> for
-    /// scenarios that legitimately need more headroom.
+    /// silently drops batches). Individual call sites can still pass an
+    /// explicit longer <paramref name="timeout"/> for scenarios that
+    /// legitimately need more headroom.
     /// <para>
-    /// Sized at 20 s under the multi-partition default
+    /// Sized at 40 s under the multi-partition default
     /// (<see cref="LatticeOptions.WalPartitions"/> = 8 /
     /// <see cref="LatticeReplicationOptions.ReplogPartitions"/> = 8):
-    /// every pump tick now refills 8 per-partition pages instead of
-    /// 1, and on loaded CI runners the wall-clock cost of those
-    /// per-partition grain RPCs can push a healthy convergence past
-    /// the pre-multi-partition 10 s ceiling without indicating a real
-    /// regression. The new ceiling is still tight enough that a
-    /// genuinely-broken transport surfaces quickly.
+    /// every pump tick refills 8 per-partition pages instead of 1, and
+    /// on a contended CI runner the wall-clock cost of those
+    /// per-partition grain RPCs - compounded by one-off cold-start
+    /// cluster warmup and GC/CPU-starvation spikes - can push a healthy
+    /// first convergence past a tighter ceiling without indicating a
+    /// real regression. The ceiling was 10 s, then 20 s; a 20 s
+    /// full-timeout flake observed on 2026-06-29 (initial-seed Set
+    /// convergence on the shared two-cluster fixture, doorbell-driven
+    /// and provably unrelated to the cursor-path change in the PR that
+    /// hit it) prompted the bump to 40 s. That is still tight enough
+    /// that a genuinely-broken transport surfaces well inside a single
+    /// CI job, while absorbing runner-contention jitter on a healthy
+    /// run, where the ceiling is never actually reached.
     /// </para>
     /// </remarks>
-    private static readonly TimeSpan ConvergenceTimeout = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan ConvergenceTimeout = TimeSpan.FromSeconds(40);
 
     /// <summary>The first site's test cluster.</summary>
     public TestCluster SiteA { get; private set; } = null!;

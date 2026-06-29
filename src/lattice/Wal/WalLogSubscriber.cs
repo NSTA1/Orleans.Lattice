@@ -35,6 +35,25 @@ internal sealed class WalLogSubscriber(
         for (var partition = 0; partition < partitions; partition++)
         {
             var checkpoint = checkpoints.GetValueOrDefault(partition, -1);
+
+            // Idle fast-path: a consumer already caught up to the head can never
+            // have fallen off the log. The oldest still-readable offset is always
+            // at or below the head, so once checkpoint + 1 >= head the trailing
+            // edge sits at or behind our cursor and the fall-off probe is provably
+            // unnecessary. GetHeadOffsetAsync is served from the WAL grain's
+            // in-memory next-sequence cursor, whereas GetTailOffsetAsync is a
+            // storage round-trip (a manifest range scan against Azure Table
+            // Storage); skipping it here removes the per-partition read that
+            // otherwise fires on every idle drain tick - the dominant idle load,
+            // since each maintainer polls every partition on a fixed cadence.
+            var head = await commitLogReader
+                .GetHeadOffsetAsync(sourceTreeId, partition, cancellationToken)
+                .ConfigureAwait(false);
+            if (checkpoint + 1 >= head)
+            {
+                continue;
+            }
+
             var tail = await commitLogReader
                 .GetTailOffsetAsync(sourceTreeId, partition, cancellationToken)
                 .ConfigureAwait(false);

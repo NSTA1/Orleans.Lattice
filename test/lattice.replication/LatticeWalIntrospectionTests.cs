@@ -96,7 +96,7 @@ public class LatticeWalIntrospectionTests
         var (intro, factory) = Create(3);
         var grain = Substitute.For<IWalShardGrain>();
         grain.ReadAsync(0, 1, Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(WalShardPage.Empty(0)));
+            .Returns(ValueTask.FromResult(WalShardPage.Empty(0)));
         factory.GetGrain<IWalShardGrain>(Arg.Any<string>()).Returns(grain);
 
         var oldest = await intro.GetOldestAvailableHlcAsync(Tree);
@@ -109,7 +109,7 @@ public class LatticeWalIntrospectionTests
         var (intro, factory) = Create(1);
         var grain = Substitute.For<IWalShardGrain>();
         grain.ReadAsync(0, 1, Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(PageWithHead(42)));
+            .Returns(ValueTask.FromResult(PageWithHead(42)));
         factory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(grain);
 
         var oldest = await intro.GetOldestAvailableHlcAsync(Tree);
@@ -122,13 +122,13 @@ public class LatticeWalIntrospectionTests
         var (intro, factory) = Create(3);
         var p0 = Substitute.For<IWalShardGrain>();
         p0.ReadAsync(0, 1, Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(PageWithHead(100)));
+            .Returns(ValueTask.FromResult(PageWithHead(100)));
         var p1 = Substitute.For<IWalShardGrain>();
         p1.ReadAsync(0, 1, Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(PageWithHead(25)));  // minimum
+            .Returns(ValueTask.FromResult(PageWithHead(25)));  // minimum
         var p2 = Substitute.For<IWalShardGrain>();
         p2.ReadAsync(0, 1, Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(PageWithHead(75)));
+            .Returns(ValueTask.FromResult(PageWithHead(75)));
 
         factory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(p0);
         factory.GetGrain<IWalShardGrain>($"{Tree}/1").Returns(p1);
@@ -144,13 +144,13 @@ public class LatticeWalIntrospectionTests
         var (intro, factory) = Create(3);
         var p0 = Substitute.For<IWalShardGrain>();
         p0.ReadAsync(0, 1, Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(WalShardPage.Empty(0)));
+            .Returns(ValueTask.FromResult(WalShardPage.Empty(0)));
         var p1 = Substitute.For<IWalShardGrain>();
         p1.ReadAsync(0, 1, Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(PageWithHead(99)));
+            .Returns(ValueTask.FromResult(PageWithHead(99)));
         var p2 = Substitute.For<IWalShardGrain>();
         p2.ReadAsync(0, 1, Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(PageWithHead(33)));
+            .Returns(ValueTask.FromResult(PageWithHead(33)));
 
         factory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(p0);
         factory.GetGrain<IWalShardGrain>($"{Tree}/1").Returns(p1);
@@ -166,7 +166,7 @@ public class LatticeWalIntrospectionTests
         var (intro, factory) = Create(2);
         var grain = Substitute.For<IWalShardGrain>();
         grain.ReadAsync(0, 1, Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(PageWithHead(10)));
+            .Returns(ValueTask.FromResult(PageWithHead(10)));
         factory.GetGrain<IWalShardGrain>(Arg.Any<string>()).Returns(grain);
 
         await intro.GetOldestAvailableHlcAsync(Tree);
@@ -188,7 +188,7 @@ public class LatticeWalIntrospectionTests
             .Returns(_ =>
             {
                 cts.Cancel();
-                return Task.FromCanceled<WalShardPage>(cts.Token);
+                return new ValueTask<WalShardPage>(Task.FromCanceled<WalShardPage>(cts.Token));
             });
         factory.GetGrain<IWalShardGrain>(Arg.Any<string>()).Returns(grain);
 
@@ -224,7 +224,7 @@ public class LatticeWalIntrospectionTests
             var ticks = (i + 1) * 10;
             var grain = Substitute.For<IWalShardGrain>();
             grain.ReadAsync(0, 1, Arg.Any<CancellationToken>())
-                .Returns(async _ =>
+                .Returns((Func<NSubstitute.Core.CallInfo, ValueTask<WalShardPage>>)(async _ =>
                 {
                     if (Interlocked.Increment(ref dispatched) == partitions)
                     {
@@ -232,7 +232,7 @@ public class LatticeWalIntrospectionTests
                     }
                     await allDispatched.Task.ConfigureAwait(false);
                     return HeadPage(ticks);
-                });
+                }));
             factory.GetGrain<IWalShardGrain>($"{Tree}/{i}").Returns(grain);
         }
 
@@ -314,7 +314,7 @@ public class LatticeWalIntrospectionTests
         var (intro, factory) = Create(2);
         var grain = Substitute.For<IWalShardGrain>();
         grain.ReadAsync(0, OriginScanBudget, Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(WalShardPage.Empty(0)));
+            .Returns(ValueTask.FromResult(WalShardPage.Empty(0)));
         factory.GetGrain<IWalShardGrain>(Arg.Any<string>()).Returns(grain);
 
         var byOrigin = await intro.GetOldestAvailableHlcByOriginAsync(Tree);
@@ -327,7 +327,7 @@ public class LatticeWalIntrospectionTests
         var (intro, factory) = Create(1);
         var grain = Substitute.For<IWalShardGrain>();
         grain.ReadAsync(0, OriginScanBudget, Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(PageWithOrigins(
+            .Returns(ValueTask.FromResult(PageWithOrigins(
                 (10, "us"), (20, "eu"), (5, "us"), (30, "eu"))));
         factory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(grain);
 
@@ -343,10 +343,10 @@ public class LatticeWalIntrospectionTests
         var (intro, factory) = Create(2);
         var p0 = Substitute.For<IWalShardGrain>();
         p0.ReadAsync(0, OriginScanBudget, Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(PageWithOrigins((100, "us"), (40, "eu"))));
+            .Returns(ValueTask.FromResult(PageWithOrigins((100, "us"), (40, "eu"))));
         var p1 = Substitute.For<IWalShardGrain>();
         p1.ReadAsync(0, OriginScanBudget, Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(PageWithOrigins((50, "us"), (80, "eu"))));
+            .Returns(ValueTask.FromResult(PageWithOrigins((50, "us"), (80, "eu"))));
         factory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(p0);
         factory.GetGrain<IWalShardGrain>($"{Tree}/1").Returns(p1);
 
@@ -366,7 +366,7 @@ public class LatticeWalIntrospectionTests
         var (intro, factory) = Create(1);
         var grain = Substitute.For<IWalShardGrain>();
         grain.ReadAsync(0, OriginScanBudget, Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(PageWithOrigins((7, null), (9, ""))));
+            .Returns(ValueTask.FromResult(PageWithOrigins((7, null), (9, ""))));
         factory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(grain);
 
         var byOrigin = await intro.GetOldestAvailableHlcByOriginAsync(Tree);
@@ -381,7 +381,7 @@ public class LatticeWalIntrospectionTests
         var (intro, factory) = Create(2);
         var grain = Substitute.For<IWalShardGrain>();
         grain.ReadAsync(0, OriginScanBudget, Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(PageWithOrigins((1, "us"))));
+            .Returns(ValueTask.FromResult(PageWithOrigins((1, "us"))));
         factory.GetGrain<IWalShardGrain>(Arg.Any<string>()).Returns(grain);
 
         await intro.GetOldestAvailableHlcByOriginAsync(Tree);

@@ -107,7 +107,7 @@ public class WalShardGrainReadInterleaveTests
             GatingWalStorageProvider.Release();
         }
 
-        var page = await grain.ReadAsync(0, 100, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(15));
+        var page = await grain.ReadAsync(0, 100, CancellationToken.None).AsTask().WaitAsync(TimeSpan.FromSeconds(15));
         Assert.That(page.Entries, Has.Count.GreaterThanOrEqualTo(4),
             "After release the read sees the seeds plus the interleaved append.");
     }

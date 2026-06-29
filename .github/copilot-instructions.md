@@ -31,7 +31,7 @@ Naming rules for every layer (namespaces, public API surface, grains, methods, t
 - **`readonly record struct`** for value types that participate in Orleans serialization.
 - **Partial classes** when a grain has multiple logical concerns (e.g. `ShardRootGrain.cs`, `ShardRootGrain.Lifecycle.cs`, `ShardRootGrain.Traversal.cs`).
 - **Partial classes for large test files** - split test classes that exceed ~400 lines into partial classes by logical concern, following the same `{ClassName}.{Concern}.cs` naming pattern (e.g. `BPlusLeafGrainTests.cs`, `BPlusLeafGrainTests.Split.cs`, `BPlusLeafGrainTests.Query.cs`). Keep the `CreateGrain` helper and core CRUD tests in the main file. Each partial file should have its own `using` directives for only the namespaces it needs. When a test file contains multiple distinct `[TestFixture]` classes, split each class into its own file instead of using partial classes.
-- Prefer `Task.FromResult` over `ValueTask` for synchronous grain returns.
+- Prefer `Task.FromResult` over `ValueTask` for synchronous grain returns. Exception: a hot read-path grain method that has a synchronous fast path may return `ValueTask`/`ValueTask<T>` when that saves a real same-silo allocation (e.g. `IWalShardGrain.ReadAsync`/`ReadShippingAsync`/`GetNextSequenceAsync`, which the shipper and view maintainers poll continuously on co-located activations). The upgrade is negligible when a cross-silo hop is needed anyway, so it is a safe net win; add `.AsTask()` only at fan-out call sites that must store the result in a `Task[]` for `Task.WhenAll`.
 - Use `ArgumentNullException.ThrowIfNull` for public API parameter validation.
 - Keep XML doc comments (`<summary>`) on all public types, interfaces, and members.
 
