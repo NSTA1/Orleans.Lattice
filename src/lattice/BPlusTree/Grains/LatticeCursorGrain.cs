@@ -422,7 +422,7 @@ internal sealed partial class LatticeCursorGrain(
         // keys only (re-applied from the persisted spec on every step, so a
         // post-failover resume sees the identical filter), so the step budget
         // counts and bounds the keys actually tombstoned.
-        var probe = new List<string>(maxToDelete + 1);
+        var probe = new List<string>(PageBufferCapacity(maxToDelete) + 1);
         var probeKeys = predicate is { } pred
             ? lattice.KeysWherePredicateAsync(pred, effStart, effEnd)
             : lattice.KeysAsync(effStart, effEnd);
