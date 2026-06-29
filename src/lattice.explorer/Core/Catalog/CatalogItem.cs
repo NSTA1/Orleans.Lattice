@@ -52,6 +52,14 @@ public sealed record CatalogItem
     public bool IsAggregation { get; init; }
 
     /// <summary>
+    /// For views, <see langword="true"/> when the view is a change-history
+    /// (accumulative) view whose rows back the History tab on its source tree
+    /// rather than holding directly inspectable value data; always
+    /// <see langword="false"/> for trees.
+    /// </summary>
+    public bool IsHistory { get; init; }
+
+    /// <summary>
     /// For tag indexes, the logical index name (the membership tree id with its
     /// reserved <c>tag-</c> prefix removed); <see langword="null"/> otherwise.
     /// </summary>

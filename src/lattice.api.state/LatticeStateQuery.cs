@@ -157,6 +157,7 @@ internal sealed class LatticeStateQuery(
                 Lag = lag,
                 EntryCount = entryCount,
                 IsAggregation = registration.IsAggregation,
+                IsHistory = registration.IsHistory,
             });
         }
 
@@ -1205,7 +1206,8 @@ internal sealed class LatticeStateQuery(
                 byName[registration.ViewName] = new ViewListing(
                     registration.ViewName,
                     registration.SourceTreeId,
-                    registration.IsAggregation);
+                    registration.IsAggregation,
+                    registration.Accumulative);
             }
         }
         catch (Exception) when (!cancellationToken.IsCancellationRequested)
@@ -1222,14 +1224,15 @@ internal sealed class LatticeStateQuery(
                 byName[registration.ViewName] = new ViewListing(
                     registration.ViewName,
                     registration.SourceTreeId,
-                    registration.IsAggregation);
+                    registration.IsAggregation,
+                    registration.Accumulative);
             }
         }
 
         return byName.Values;
     }
 
-    private readonly record struct ViewListing(string ViewName, string SourceTreeId, bool IsAggregation);
+    private readonly record struct ViewListing(string ViewName, string SourceTreeId, bool IsAggregation, bool IsHistory);
 
     private TreeCatalogEntry MapCatalogEntry(string treeId, TreeRegistryEntry? entry, bool isDeleted)
     {

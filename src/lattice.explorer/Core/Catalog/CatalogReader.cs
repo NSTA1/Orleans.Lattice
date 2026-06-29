@@ -75,6 +75,7 @@ public sealed class CatalogReader(ILatticeStateClient client) : ICatalogReader
                 Kind = CatalogKind.Views,
                 SourceTreeId = entry.SourceTreeId,
                 IsAggregation = entry.IsAggregation,
+                IsHistory = entry.IsHistory,
             });
         }
 

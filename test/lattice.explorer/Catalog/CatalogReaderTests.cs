@@ -15,11 +15,12 @@ public class CatalogReaderTests
         Config = new TreeConfigSummary { ShardCount = shards },
     };
 
-    private static ViewStateSummary View(string name, string source, bool aggregation) => new()
+    private static ViewStateSummary View(string name, string source, bool aggregation, bool history = false) => new()
     {
         ViewName = name,
         SourceTreeId = source,
         IsAggregation = aggregation,
+        IsHistory = history,
     };
 
     [Test]
@@ -95,9 +96,38 @@ public class CatalogReaderTests
         Assert.That(page.Items[0].SourceTreeId, Is.EqualTo("alpha"));
         Assert.That(page.Items[0].IsAggregation, Is.True);
         Assert.That(page.Items[1].IsAggregation, Is.False);
+        Assert.That(page.Items[0].IsHistory, Is.False, "a plain projection / aggregation view is not a history view");
+        Assert.That(page.Items[1].IsHistory, Is.False);
         Assert.That(page.Items[0].ShardCount, Is.Null);
         Assert.That(page.Items[0].Lifecycle, Is.Null);
         Assert.That(page.HasMore, Is.False);
+    }
+
+    [Test]
+    public async Task LoadAsync_Views_MapsHistoryFlag()
+    {
+        var client = new FakeStateClientCapture
+        {
+            OnListViews = _ => Task.FromResult(new ViewCatalogPage
+            {
+                Entries = new[]
+                {
+                    View("hist", "mfg-parts-label", aggregation: false, history: true),
+                    View("plain", "orders", aggregation: false, history: false),
+                },
+                NextPageToken = null,
+            }),
+        };
+        var reader = new CatalogReader(client);
+
+        var page = await reader.LoadAsync(CatalogKind.Views, pageToken: null, pageSize: 50);
+
+        var history = page.Items.Single(i => i.DisplayName == "hist");
+        Assert.That(history.IsHistory, Is.True, "a change-history view must surface IsHistory so the Data tab can guide to History");
+        Assert.That(history.SourceTreeId, Is.EqualTo("mfg-parts-label"),
+            "the source tree the Data-tab guidance routes the operator to");
+        var plain = page.Items.Single(i => i.DisplayName == "plain");
+        Assert.That(plain.IsHistory, Is.False);
     }
 
     [Test]

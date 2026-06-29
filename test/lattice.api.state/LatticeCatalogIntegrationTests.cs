@@ -149,6 +149,47 @@ public sealed class LatticeCatalogIntegrationTests
     }
 
     [Test]
+    public async Task ListViewsAsync_marks_plain_projection_view_as_not_history()
+    {
+        await _fixture.CreatePopulatedTreeAsync("tree-plainhist", keyCount: 2);
+        _fixture.CreateView("tree-plainhist", "orders-plain");
+
+        var page = await _fixture.Query.ListViewsAsync(new CatalogRequest());
+
+        var view = page.Entries.Single(e => e.ViewName == "orders-plain");
+        Assert.That(view.IsHistory, Is.False, "a predicate / re-project view is not a history view");
+        Assert.That(view.IsAggregation, Is.False);
+    }
+
+    [Test]
+    public async Task ListViewsAsync_marks_aggregation_view_as_not_history()
+    {
+        await _fixture.CreatePopulatedTreeAsync("tree-agghist", keyCount: 2);
+        _fixture.CreateAggregationView("tree-agghist", "orders-agg-hist");
+
+        var page = await _fixture.Query.ListViewsAsync(new CatalogRequest());
+
+        var view = page.Entries.Single(e => e.ViewName == "orders-agg-hist");
+        Assert.That(view.IsAggregation, Is.True);
+        Assert.That(view.IsHistory, Is.False, "an aggregation view is not a history view");
+    }
+
+    [Test]
+    public async Task ListViewsAsync_marks_history_view_as_history()
+    {
+        await _fixture.CreatePopulatedTreeAsync("tree-histsrc", keyCount: 2);
+        _fixture.CreateHistoryView("tree-histsrc", "orders-history");
+
+        var page = await _fixture.Query.ListViewsAsync(new CatalogRequest());
+
+        var view = page.Entries.Single(e => e.ViewName == "orders-history");
+        Assert.That(view.IsHistory, Is.True, "an accumulative change-history view must be flagged as history");
+        Assert.That(view.IsAggregation, Is.False);
+        Assert.That(view.SourceTreeId, Is.EqualTo("tree-histsrc"),
+            "the history view's source tree backs the History tab the Data tab routes to");
+    }
+
+    [Test]
     public async Task ListViewsAsync_samples_stats_when_requested()
     {
         await _fixture.CreatePopulatedTreeAsync("tree-src2", keyCount: 2);

@@ -107,6 +107,10 @@
                                     {
                                         <span class="explorer-badge" title="Aggregation view">agg</span>
                                     }
+                                    @if (item.IsHistory)
+                                    {
+                                        <span class="explorer-badge" title="Change-history view">history</span>
+                                    }
                                     @if (item.SourceTreeId is not null)
                                     {
                                         <span class="explorer-badge explorer-badge-muted" title="Source tree">@item.SourceTreeId</span>

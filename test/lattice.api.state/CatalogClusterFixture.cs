@@ -97,6 +97,32 @@ internal sealed class CatalogClusterFixture
     }
 
     /// <summary>
+    /// Creates a runtime grouped-reduce (aggregation) view over the given source
+    /// tree, so the catalog reports it with <c>IsAggregation = true</c>.
+    /// </summary>
+    public ILatticeView CreateAggregationView(string sourceTreeId, string viewName)
+    {
+        var factory = SiloServices.GetRequiredService<ILatticeViewFactory>();
+        var source = Cluster.Client.GetGrain<ILattice>(sourceTreeId);
+        var projection = new AggregationLatticeViewProjection(
+            AggregationKind.Count,
+            groupKeySelector: _ => "all",
+            selectorVersion: "v1");
+        return factory.Create(source, viewName, new LatticeViewDefinition(viewName, projection));
+    }
+
+    /// <summary>
+    /// Creates a durable per-key change-history (accumulative) view over the
+    /// given source tree, so the catalog reports it with <c>IsHistory = true</c>.
+    /// </summary>
+    public ILatticeView CreateHistoryView(string sourceTreeId, string viewName)
+    {
+        var factory = SiloServices.GetRequiredService<ILatticeViewFactory>();
+        var source = Cluster.Client.GetGrain<ILattice>(sourceTreeId);
+        return factory.Create(source, viewName, LatticeHistoryView.Definition(viewName, SiloServices));
+    }
+
+    /// <summary>
     /// Registers an OR-Set source tree (its id is prefixed <c>orset</c> so the
     /// fixture's merge-mode resolver declares it an <see cref="LatticeMergeMode.OrSet"/>)
     /// and writes one OR-Set element under <paramref name="key"/>, returning the tree.
