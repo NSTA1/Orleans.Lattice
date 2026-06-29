@@ -2,9 +2,10 @@ namespace Orleans.Lattice.Explorer.Core.Data;
 
 /// <summary>
 /// Shared session-store key naming for the currently inspected entry key, so the
-/// Data tab and the History tab agree on a single selection per tree. The Data
-/// tab writes the key the user drills into; the History tab reads it as the key
-/// whose timeline to open, reusing the same selection model across tabs.
+/// Data tab's value view and its embedded History view agree on a single
+/// selection per tree. The Data tab writes the key the user drills into; the
+/// History view reads it as the key whose timeline to open, reusing the same
+/// selection model.
 /// </summary>
 public static class DataSelection
 {

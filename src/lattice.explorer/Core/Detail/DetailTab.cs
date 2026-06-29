@@ -2,7 +2,9 @@ namespace Orleans.Lattice.Explorer.Core.Detail;
 
 /// <summary>
 /// The three detail tabs shown along the top of the main panel, in display
-/// order. Every tab consumes the selected tree or view id uniformly.
+/// order. Every tab consumes the selected tree or view id uniformly. The per-key
+/// revision timeline is not a tab: it is opened from a History button on the Data
+/// tab's selected-row detail panel.
 /// </summary>
 public enum DetailTab
 {
@@ -14,7 +16,4 @@ public enum DetailTab
 
     /// <summary>Key and value drill-down for the selected tree or view.</summary>
     Data,
-
-    /// <summary>Per-key revision timeline for the selected tree or view.</summary>
-    History,
 }
