@@ -117,9 +117,12 @@ public sealed class StateDtoSerializationTests
             EntryCount = 7,
             LastDigest = "deadbeef",
             IsAggregation = true,
+            IsHistory = true,
         };
 
-        Assert.That(RoundTrip(original), Is.EqualTo(original));
+        var roundTripped = RoundTrip(original);
+        Assert.That(roundTripped, Is.EqualTo(original));
+        Assert.That(roundTripped.IsHistory, Is.True, "the additive IsHistory flag must survive the wire round-trip");
     }
 
     [Test]

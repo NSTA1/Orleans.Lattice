@@ -1374,6 +1374,34 @@ code, .explorer-mono {
     color: var(--danger);
 }
 
+/* Change-history view guidance: shown in the Data tab instead of the value
+   list/detail, routing the operator to the source table's History. */
+.explorer-data-history-guidance {
+    padding: 1rem;
+}
+
+.explorer-data-guidance {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.6rem;
+    max-width: 46rem;
+}
+
+.explorer-data-guidance-title {
+    margin: 0;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.explorer-data-guidance-body {
+    margin: 0;
+    line-height: 1.5;
+}
+
+.explorer-data-guidance-action {
+    align-self: flex-start;
+}
+
 /* Authentication: sign-in button + signed-in identity in the nav header */
 
 .explorer-auth {

@@ -37,4 +37,11 @@ public sealed record ViewStateSummary
     /// view rather than a filter / re-project view.
     /// </summary>
     [Id(5)] public bool IsAggregation { get; init; }
+
+    /// <summary>
+    /// <see langword="true"/> when the view is a change-history (accumulative)
+    /// view whose rows are serialized history blobs backing the History tab on
+    /// its source tree, rather than directly inspectable value / CRDT data.
+    /// </summary>
+    [Id(6)] public bool IsHistory { get; init; }
 }

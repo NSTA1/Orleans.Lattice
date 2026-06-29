@@ -5,7 +5,46 @@
 @inject IUiSessionStore SessionStore
 @inject IUiPreferenceStore Preferences
 @inject IServiceProvider Services
+@inject IExplorerSelection ExplorerSelection
 
+@if (Selection.IsHistory)
+{
+    @* A change-history (accumulative) view stores serialized history records,
+       not directly inspectable value / CRDT data, so rendering its rows here
+       would only show opaque bytes. Route the operator to the source table's
+       per-entry History instead, and skip the value scan and live follow loop
+       entirely for this selection (see OnInitializedAsync). *@
+    <div class="explorer-data explorer-data-history-guidance">
+        <div class="explorer-data-state explorer-data-guidance">
+            <p class="explorer-data-guidance-title">This is a change-history view.</p>
+            <p class="explorer-data-guidance-body">
+                Its rows are serialized history records that back the
+                <strong>History</strong> timeline, not directly inspectable value
+                data. Inspect its timeline from its source table
+                @if (Selection.SourceTreeId is { Length: > 0 } named)
+                {
+                    <code>@named</code>
+                }
+                else
+                {
+                    <span>(unknown)</span>
+                }:
+                select the source table, open a key in its <strong>Data</strong>
+                tab, then choose <strong>History</strong>.
+            </p>
+            @if (Selection.SourceTreeId is { Length: > 0 } sourceTreeId)
+            {
+                <button type="button"
+                        class="explorer-btn explorer-data-guidance-action"
+                        @onclick="@(() => GoToSourceTree(sourceTreeId))">
+                    Go to source table @sourceTreeId
+                </button>
+            }
+        </div>
+    </div>
+}
+else
+{
 <div class="explorer-data">
     <div class="explorer-data-toolbar">
         <button type="button" class="explorer-btn" disabled="@_loading" @onclick="ReloadFirstPageAsync">
@@ -217,6 +256,7 @@
         </div>
     </div>
 </div>
+}
 
 @code {
     private DataPager _pager = default!;
@@ -262,6 +302,14 @@
 
     protected override async Task OnInitializedAsync()
     {
+        // A change-history view renders the guidance panel only: there is no
+        // value scan, no live follower, and no preference seeding to run, so
+        // skip all of it (the markup never touches the pager for this branch).
+        if (Selection.IsHistory)
+        {
+            return;
+        }
+
         _pager = new DataPager(DataReader);
 
         // Resolve the live-follow collaborators best-effort: a minimal host (for
@@ -339,7 +387,7 @@
     // once on the first interactive render and re-seed if anything was retained.
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!firstRender || _seededFromPreferences)
+        if (!firstRender || _seededFromPreferences || Selection.IsHistory)
         {
             return;
         }
@@ -762,6 +810,20 @@
     }
 
     private void ToggleHistory() => _showHistory = !_showHistory;
+
+    // Selects the history view's source table so the operator can open a key's
+    // History from that table's Data tab. This reuses the shared explorer
+    // selection: the detail panel re-mounts on the new selection while keeping
+    // the active (Data) tab, and the navigation list re-highlights by id+kind.
+    // A minimal CatalogItem (id + kind) is sufficient here because the detail
+    // tabs key only off the id; the navigation panel rehydrates the richer
+    // badge metadata from the catalog on its next list render.
+    private void GoToSourceTree(string sourceTreeId) =>
+        ExplorerSelection.Select(new CatalogItem
+        {
+            Id = sourceTreeId,
+            Kind = CatalogKind.Trees,
+        });
 
     private static string MemberElementText(DataCrdtMember member) =>
         member.ElementFormat == ValueFormat.Empty ? "(empty)" : member.ElementText;

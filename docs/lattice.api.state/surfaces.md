@@ -44,7 +44,7 @@ do
 while (pageToken is not null);
 ```
 
-Each `TreeCatalogEntry` carries the tree id, its shard count, and its lifecycle. Set `IncludeSystemTrees` to surface reserved system trees, and `IncludeViewStats` on a `ListViewsAsync` request to populate per-view statistics.
+Each `TreeCatalogEntry` carries the tree id, its shard count, and its lifecycle. Set `IncludeSystemTrees` to surface reserved system trees, and `IncludeViewStats` on a `ListViewsAsync` request to populate per-view statistics. Each `ViewStateSummary` carries the view name, its `SourceTreeId`, and two classification flags: `IsAggregation` (a grouped-reduce view) and `IsHistory` (a change-history / accumulative view whose rows are serialized history records backing the source tree's history timeline rather than directly inspectable value data).
 
 `ListTagIndexesAsync` lists the tag-index membership trees as their own category; set `SourceTreeId` to restrict it to the indexes that cover one tree. `ListTagValuesAsync` then enumerates the distinct tag values carried by a single index over its subject tree, in ascending ordinal order - pass both `SourceTreeId` (the subject tree) and `IndexName` (the index). Both are paged like the other catalogs, so a client can populate a tag picker without scanning the index tree itself.
 
