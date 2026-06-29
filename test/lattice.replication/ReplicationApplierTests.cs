@@ -454,13 +454,13 @@ public partial class ReplicationApplierTests
     private static readonly byte[] OrSetMember = new byte[] { 0xab };
 
     [Test]
-    public async Task ApplyAsync_dispatches_or_set_through_lattice_state_merge()
+    public async Task ApplyAsync_dispatches_or_set_delta_through_crdt_delta_grain_seam()
     {
         var (applier, lattice, apply, _) = CreateTypedCrdtApplier();
         var entry = SetEntry("k", Hlc(10)) with
         {
             Mode = LatticeMergeMode.OrSet,
-            Value = EncodeOrSet(s => s.Add(OrSetMember, "site-b", 1)),
+            Value = null,
             Delta = EncodeOrSetDelta(a => a.Add(new OrSetDeltaDot { Element = OrSetMember, ReplicaId = "site-b", Counter = 1 })),
         };
 
@@ -468,67 +468,58 @@ public partial class ReplicationApplierTests
 
         Assert.That(result.Applied, Is.True);
         await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
-        await lattice.Received(1).GetWithVersionAsync("k", Arg.Any<CancellationToken>());
-        await lattice.Received(1).SetIfVersionAsync(
-            "k",
-            Arg.Is<byte[]>(b => JsonLatticeSerializer<OrSet>.Default.Deserialize(b).Contains(OrSetMember)),
-            Arg.Any<HybridLogicalClock>(),
-            Arg.Any<CancellationToken>());
+        // Steady-state delta-present writes record a CrdtDelta (member diff +
+        // origin) rather than a full-value Set; no read-merge-write fold.
+        await lattice.Received(1).ApplyCrdtDeltaAsync("k", LatticeMergeMode.OrSet, Arg.Any<byte[]>(), Arg.Any<CancellationToken>());
+        await lattice.DidNotReceiveWithAnyArgs().GetWithVersionAsync(default!, default);
+        await lattice.DidNotReceiveWithAnyArgs().SetIfVersionAsync(default!, default!, default, default);
     }
 
     [Test]
-    public async Task ApplyAsync_dispatches_pn_counter_through_lattice_state_merge()
+    public async Task ApplyAsync_dispatches_pn_counter_delta_through_crdt_delta_grain_seam()
     {
         var (applier, lattice, apply, _) = CreateTypedCrdtApplier();
         var entry = SetEntry("k", Hlc(11)) with
         {
             Mode = LatticeMergeMode.PnCounter,
-            Value = EncodePnCounter(c => c.Increment("site-b", 5)),
+            Value = null,
             Delta = EncodePnCounterDelta(d => d["site-b"] = 5),
         };
 
         var result = await applier.ApplyAsync(entry);
 
         Assert.That(result.Applied, Is.True);
-        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
-        await lattice.Received(1).SetIfVersionAsync(
-            "k",
-            Arg.Is<byte[]>(b => JsonLatticeSerializer<PnCounter>.Default.Deserialize(b).Value == 5),
-            Arg.Any<HybridLogicalClock>(),
-            Arg.Any<CancellationToken>());
+        await lattice.Received(1).ApplyCrdtDeltaAsync("k", LatticeMergeMode.PnCounter, Arg.Any<byte[]>(), Arg.Any<CancellationToken>());
+        await lattice.DidNotReceiveWithAnyArgs().SetIfVersionAsync(default!, default!, default, default);
     }
 
     [Test]
-    public async Task ApplyAsync_dispatches_version_vector_through_lattice_state_merge()
+    public async Task ApplyAsync_dispatches_version_vector_delta_through_crdt_delta_grain_seam()
     {
         var (applier, lattice, apply, _) = CreateTypedCrdtApplier();
         var remoteHlc = Hlc(42, 3);
         var entry = SetEntry("k", Hlc(12)) with
         {
             Mode = LatticeMergeMode.VersionVector,
-            Value = EncodeVersionVector(v => v.Entries["site-b"] = remoteHlc),
+            Value = null,
             Delta = EncodeVersionVectorDelta(d => d["site-b"] = remoteHlc),
         };
 
         var result = await applier.ApplyAsync(entry);
 
         Assert.That(result.Applied, Is.True);
-        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
-        await lattice.Received(1).SetIfVersionAsync(
-            "k",
-            Arg.Is<byte[]>(b => JsonLatticeSerializer<VersionVector>.Default.Deserialize(b).GetClock("site-b") == remoteHlc),
-            Arg.Any<HybridLogicalClock>(),
-            Arg.Any<CancellationToken>());
+        await lattice.Received(1).ApplyCrdtDeltaAsync("k", LatticeMergeMode.VersionVector, Arg.Any<byte[]>(), Arg.Any<CancellationToken>());
+        await lattice.DidNotReceiveWithAnyArgs().SetIfVersionAsync(default!, default!, default, default);
     }
 
     [Test]
-    public async Task ApplyAsync_dispatches_mv_register_through_lattice_state_merge()
+    public async Task ApplyAsync_dispatches_mv_register_delta_through_crdt_delta_grain_seam()
     {
         var (applier, lattice, apply, _) = CreateTypedCrdtApplier();
         var entry = SetEntry("k", Hlc(17)) with
         {
             Mode = LatticeMergeMode.MvRegister,
-            Value = EncodeMvRegister(r => r.Set("site-b", new byte[] { 0xab })),
+            Value = null,
             Delta = EncodeMvRegisterDelta((entries, ctx) =>
             {
                 entries.Add(new MvRegisterEntry
@@ -544,13 +535,8 @@ public partial class ReplicationApplierTests
         var result = await applier.ApplyAsync(entry);
 
         Assert.That(result.Applied, Is.True);
-        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
-        await lattice.Received(1).SetIfVersionAsync(
-            "k",
-            Arg.Is<byte[]>(b =>
-                JsonLatticeSerializer<MvRegister>.Default.Deserialize(b).Context.ContainsKey("site-b")),
-            Arg.Any<HybridLogicalClock>(),
-            Arg.Any<CancellationToken>());
+        await lattice.Received(1).ApplyCrdtDeltaAsync("k", LatticeMergeMode.MvRegister, Arg.Any<byte[]>(), Arg.Any<CancellationToken>());
+        await lattice.DidNotReceiveWithAnyArgs().SetIfVersionAsync(default!, default!, default, default);
     }
 
     [Test]
@@ -613,16 +599,13 @@ public partial class ReplicationApplierTests
     }
 
     [Test]
-    public async Task ApplyAsync_state_merge_applies_when_value_is_null_but_delta_is_present()
+    public async Task ApplyAsync_applies_when_value_is_null_but_delta_is_present()
     {
         // The canonical wire/storage shape for a CRDT-mode Set is
         // Value == null + Delta != null. The applier must accept that
-        // shape and route through the typed-delta merge path; it must
-        // not require Value just because the legacy shape happened to
-        // carry both slots.
-        var (applier, lattice, _, _) = CreateTypedCrdtApplier();
-        lattice.SetIfVersionAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
-            .Returns(true);
+        // shape and route the delta through the CrdtDelta grain seam (not
+        // require Value just because the legacy shape carried both slots).
+        var (applier, lattice, apply, _) = CreateTypedCrdtApplier();
         var entry = SetEntry("k", Hlc(1)) with
         {
             Mode = LatticeMergeMode.OrSet,
@@ -633,11 +616,8 @@ public partial class ReplicationApplierTests
         var result = await applier.ApplyAsync(entry);
 
         Assert.That(result.Applied, Is.True);
-        await lattice.Received(1).SetIfVersionAsync(
-            "k",
-            Arg.Any<byte[]>(),
-            Arg.Any<HybridLogicalClock>(),
-            Arg.Any<CancellationToken>());
+        await lattice.Received(1).ApplyCrdtDeltaAsync("k", LatticeMergeMode.OrSet, Arg.Any<byte[]>(), Arg.Any<CancellationToken>());
+        await lattice.DidNotReceiveWithAnyArgs().SetIfVersionAsync(default!, default!, default, default);
     }
 
     [Test]
@@ -658,30 +638,6 @@ public partial class ReplicationApplierTests
     }
 
     [Test]
-    public async Task ApplyAsync_state_merge_retries_on_cas_failure()
-    {
-        var (applier, lattice, _, _) = CreateTypedCrdtApplier();
-        // First two CAS attempts lose the race; third succeeds.
-        lattice.SetIfVersionAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
-            .Returns(false, false, true);
-        var entry = SetEntry("k", Hlc(7)) with
-        {
-            Mode = LatticeMergeMode.OrSet,
-            Value = EncodeOrSet(s => s.Add(OrSetMember, "site-b", 1)),
-            Delta = EncodeOrSetDelta(a => a.Add(new OrSetDeltaDot { Element = OrSetMember, ReplicaId = "site-b", Counter = 1 })),
-        };
-
-        var result = await applier.ApplyAsync(entry);
-
-        Assert.That(result.Applied, Is.True);
-        await lattice.Received(3).SetIfVersionAsync(
-            "k",
-            Arg.Any<byte[]>(),
-            Arg.Any<HybridLogicalClock>(),
-            Arg.Any<CancellationToken>());
-    }
-
-    [Test]
     public void ApplyAsync_throws_for_unrecognised_replication_mode()
     {
         var (applier, _, _, _) = CreateTypedCrdtApplier();
@@ -697,23 +653,22 @@ public partial class ReplicationApplierTests
     }
 
     [Test]
-    public async Task ApplyAsync_state_merge_does_not_invoke_apply_grain_for_set()
+    public async Task ApplyAsync_crdt_delta_bypasses_apply_set_grain_seam()
     {
-        var (applier, _, apply, _) = CreateTypedCrdtApplier();
+        var (applier, lattice, apply, _) = CreateTypedCrdtApplier();
         var entry = SetEntry("k", Hlc(1)) with
         {
             Mode = LatticeMergeMode.OrSet,
-            Value = EncodeOrSet(),
-            Delta = EncodeOrSetDelta(),
+            Value = null,
+            Delta = EncodeOrSetDelta(a => a.Add(new OrSetDeltaDot { Element = OrSetMember, ReplicaId = "site-b", Counter = 1 })),
         };
 
         await applier.ApplyAsync(entry);
 
-        // Typed CRDT Set must bypass IReplicationApplyGrain.ApplySetAsync -
-        // that path stamps the source HLC verbatim, which is wrong for
-        // state-merge semantics where the persisted HLC is a fresh local
-        // tick representing the merge point.
+        // Typed CRDT Set rides the CrdtDelta seam, never ApplySetAsync
+        // (which would flatten the merge to a full-value Set in history).
         await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
+        await lattice.Received(1).ApplyCrdtDeltaAsync("k", LatticeMergeMode.OrSet, Arg.Any<byte[]>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -1010,3 +965,4 @@ public partial class ReplicationApplierTests
         });
     }
 }
+

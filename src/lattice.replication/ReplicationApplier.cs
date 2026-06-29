@@ -709,42 +709,28 @@ internal sealed partial class ReplicationApplier(
                     entry.OriginClusterId!,
                     sourceVectorClock: null,
                     entry.ExpiresAtTicks),
-                LatticeMergeMode.OrSet => ApplyTypedDeltaAsync<OrSet, OrSetDelta>(
+                LatticeMergeMode.OrSet => ApplyTypedDeltaAsync<OrSet>(
                     entry,
-                    static (state, delta) => state.MergeDelta(delta),
-                    static (state, other) => state.MergeFrom(other),
-                    static () => new OrSet()),
-                LatticeMergeMode.PnCounter => ApplyTypedDeltaAsync<PnCounter, PnCounterDelta>(
+                    static (state, other) => state.MergeFrom(other)),
+                LatticeMergeMode.PnCounter => ApplyTypedDeltaAsync<PnCounter>(
                     entry,
-                    static (state, delta) => state.MergeDelta(delta),
-                    static (state, other) => state.MergeFrom(other),
-                    static () => new PnCounter()),
-                LatticeMergeMode.VersionVector => ApplyTypedDeltaAsync<VersionVector, VersionVectorDelta>(
+                    static (state, other) => state.MergeFrom(other)),
+                LatticeMergeMode.VersionVector => ApplyTypedDeltaAsync<VersionVector>(
                     entry,
-                    static (state, delta) => state.MergeDelta(delta),
-                    static (state, other) => state.MergeFrom(other),
-                    static () => new VersionVector()),
-                LatticeMergeMode.MvRegister => ApplyTypedDeltaAsync<MvRegister, MvRegisterDelta>(
+                    static (state, other) => state.MergeFrom(other)),
+                LatticeMergeMode.MvRegister => ApplyTypedDeltaAsync<MvRegister>(
                     entry,
-                    static (state, delta) => state.MergeDelta(delta),
-                    static (state, other) => state.MergeFrom(other),
-                    static () => new MvRegister()),
+                    static (state, other) => state.MergeFrom(other)),
                 LatticeMergeMode.OrMap => ApplyOrMapDeltaAsync(entry),
-                LatticeMergeMode.Sequence => ApplyTypedDeltaAsync<Rga, RgaDelta>(
+                LatticeMergeMode.Sequence => ApplyTypedDeltaAsync<Rga>(
                     entry,
-                    static (state, delta) => state.MergeDelta(delta),
-                    static (state, other) => state.MergeFrom(other),
-                    static () => new Rga()),
-                LatticeMergeMode.OrFlag => ApplyTypedDeltaAsync<OrFlag, OrFlagDelta>(
+                    static (state, other) => state.MergeFrom(other)),
+                LatticeMergeMode.OrFlag => ApplyTypedDeltaAsync<OrFlag>(
                     entry,
-                    static (state, delta) => state.MergeDelta(delta),
-                    static (state, other) => state.MergeFrom(other),
-                    static () => new OrFlag()),
-                LatticeMergeMode.RwFlag => ApplyTypedDeltaAsync<RwFlag, RwFlagDelta>(
+                    static (state, other) => state.MergeFrom(other)),
+                LatticeMergeMode.RwFlag => ApplyTypedDeltaAsync<RwFlag>(
                     entry,
-                    static (state, delta) => state.MergeDelta(delta),
-                    static (state, other) => state.MergeFrom(other),
-                    static () => new RwFlag()),
+                    static (state, other) => state.MergeFrom(other)),
                 _ => throw new InvalidOperationException(
                     $"WalRecord on tree '{entry.TreeId}' carries unrecognised replication mode '{entry.Mode}' "
                     + "(value="
@@ -938,15 +924,16 @@ internal sealed partial class ReplicationApplier(
     /// carries a typed <see cref="WalRecord.Delta"/>.
     /// <para>
     /// <b>Steady-state incremental path (Delta present).</b> The producer
-    /// authored a public typed delta DTO (<typeparamref name="TDelta"/>)
-    /// into <see cref="WalRecord.Delta"/> via the typed accessor's
-    /// <see cref="LatticeDeltaContext"/> stamp. The receiver deserialises
-    /// the DTO, loads the existing primitive (creating an empty one when
-    /// the key is absent), folds the delta in via <paramref name="mergeDelta"/>,
-    /// and CAS-writes the merged state back. The full-state bytes in
-    /// <see cref="WalRecord.Value"/> are intentionally ignored on this
-    /// path; the wire contract carries them only for change-feed
-    /// back-compat.
+    /// authored a typed delta into <see cref="WalRecord.Delta"/>. The
+    /// receiver forwards the delta verbatim through the same
+    /// <see cref="IReplicationApplyGrain.ApplyCrdtDeltaManyAsync"/> grain
+    /// seam the batch path uses (<see cref="ApplyCrdtDeltaThroughGrainAsync"/>),
+    /// so the merged write is recorded as a <c>CrdtDelta</c> with member
+    /// changes plus the source <see cref="WalRecord.OriginClusterId"/> -
+    /// identical history fidelity to a locally-authored CRDT write -
+    /// rather than the full-value <see cref="MutationKind.Set"/> the old
+    /// read-merge-write fold produced. The state-merge
+    /// <paramref name="mergeState"/> is unused on this path.
     /// </para>
     /// <para>
     /// <b>Bootstrap committed-projection path (Delta absent).</b> A
@@ -959,14 +946,13 @@ internal sealed partial class ReplicationApplier(
     /// <paramref name="mergeState"/> (a commutative, associative,
     /// idempotent join that preserves both the receiver's concurrent
     /// local contributions and the sender's observed-remove history). See
-    /// <see cref="ApplyFullStateMergeAsync{TState}"/>.
+    /// <see cref="ApplyFullStateMergeAsync{TState}"/>. Bootstrap rows have
+    /// no per-delta shape, so they stay full-state <c>Set</c>.
     /// </para>
     /// </summary>
-    private Task ApplyTypedDeltaAsync<TState, TDelta>(
+    private Task ApplyTypedDeltaAsync<TState>(
         WalRecord entry,
-        Action<TState, TDelta> mergeDelta,
-        Action<TState, TState> mergeState,
-        Func<TState> emptyFactory)
+        Action<TState, TState> mergeState)
         where TState : class
     {
         if (entry.Delta is null)
@@ -974,47 +960,30 @@ internal sealed partial class ReplicationApplier(
             return ApplyFullStateMergeAsync(entry, mergeState);
         }
 
-        return ApplyTypedDeltaCoreAsync(entry, mergeDelta, emptyFactory);
+        return ApplyCrdtDeltaThroughGrainAsync(entry);
     }
 
-    private async Task ApplyTypedDeltaCoreAsync<TState, TDelta>(
-        WalRecord entry,
-        Action<TState, TDelta> mergeDelta,
-        Func<TState> emptyFactory)
-        where TState : class
+    /// <summary>
+    /// Forwards a steady-state delta-carrying CRDT entry through the public
+    /// <see cref="ILattice.ApplyCrdtDeltaAsync"/> seam - the same path a
+    /// locally-authored CRDT write takes - so the receiver records a
+    /// <c>CrdtDelta</c> revision (member changes + origin) instead of
+    /// flattening the merge to a full-value <see cref="MutationKind.Set"/>.
+    /// The remote origin is stamped via an ambient
+    /// <see cref="LatticeOriginContext"/> scope so the receiver's commit-time
+    /// observer publishes the foreign origin and the producer's ship loop
+    /// filters the entry back out; the merge point gets a fresh local HLC,
+    /// matching the legacy read-merge-write semantics, so an older-clocked
+    /// remote delta still folds (CRDT joins are commutative) rather than
+    /// being dropped by a stamp gate. Allocations are one origin-scope token;
+    /// this per-entry path is the off-batch fallback so the steady-state hot
+    /// path stays on the folded batch seam.
+    /// </summary>
+    private async Task ApplyCrdtDeltaThroughGrainAsync(WalRecord entry)
     {
         var lattice = grainFactory.GetGrain<ILattice>(entry.TreeId);
-        var stateSerializer = JsonLatticeSerializer<TState>.Default;
-        var deltaSerializer = JsonLatticeSerializer<TDelta>.Default;
-        var incomingDelta = deltaSerializer.Deserialize(entry.Delta!);
-
-        // Stamp the remote origin onto the receiver-side mutation so the
-        // outbound change-feed observer publishes the foreign origin and
-        // the producer's outbound ship loop filters the resulting entry
-        // back out (the durable, async-boundary-safe successor to the
-        // legacy thread-local replay flag).
         using var scope = LatticeOriginContext.With(entry.OriginClusterId);
-
-        for (var attempt = 0; attempt < StateMergeMaxAttempts; attempt++)
-        {
-            var versioned = await lattice.GetWithVersionAsync(entry.Key);
-            var existing = versioned.Value is null
-                ? emptyFactory()
-                : stateSerializer.Deserialize(versioned.Value);
-            mergeDelta(existing, incomingDelta);
-            var bytes = stateSerializer.Serialize(existing);
-            var ok = await lattice.SetIfVersionAsync(entry.Key, bytes, versioned.Version);
-            if (ok)
-            {
-                return;
-            }
-        }
-
-        throw new InvalidOperationException(
-            $"Replication typed-delta CAS budget exhausted after {StateMergeMaxAttempts} attempts on tree "
-            + $"'{entry.TreeId}', key '{entry.Key}', mode '{entry.Mode}'. The receiver could not install the "
-            + "merged state under optimistic concurrency; reduce contention on this key or increase the "
-            + "budget in a future configuration knob.");
+        await lattice.ApplyCrdtDeltaAsync(entry.Key, entry.Mode, entry.Delta!).ConfigureAwait(true);
     }
 
     /// <summary>
@@ -1116,31 +1085,13 @@ internal sealed partial class ReplicationApplier(
             return;
         }
 
-        var incomingDelta = shape.DeserializeDelta(entry.Delta);
-        var lattice = grainFactory.GetGrain<ILattice>(entry.TreeId);
-
-        using var scope = LatticeOriginContext.With(entry.OriginClusterId);
-
-        for (var attempt = 0; attempt < StateMergeMaxAttempts; attempt++)
-        {
-            var versioned = await lattice.GetWithVersionAsync(entry.Key);
-            var existing = versioned.Value is null
-                ? shape.CreateEmpty()
-                : shape.DeserializeState(versioned.Value);
-            shape.MergeDelta(existing, incomingDelta);
-            var bytes = shape.SerializeState(existing);
-            var ok = await lattice.SetIfVersionAsync(entry.Key, bytes, versioned.Version);
-            if (ok)
-            {
-                return;
-            }
-        }
-
-        throw new InvalidOperationException(
-            $"Replication OrMap typed-delta CAS budget exhausted after {StateMergeMaxAttempts} attempts on tree "
-            + $"'{entry.TreeId}', key '{entry.Key}'. The receiver could not install the merged state under "
-            + "optimistic concurrency; reduce contention on this key or increase the budget in a future "
-            + "configuration knob.");
+        // Steady-state delta-present OrMap entry: forward the delta verbatim
+        // through the CrdtDelta grain seam so the receiver records member
+        // changes + origin, identical to the typed-delta modes and to a
+        // locally-authored OrMap write. The shape lookup above still runs so
+        // an OrMap tree with no registered (TKey, TValue) shape faults here
+        // rather than silently deferring the misconfiguration to the grain.
+        await ApplyCrdtDeltaThroughGrainAsync(entry).ConfigureAwait(true);
     }
 
     /// <summary>
