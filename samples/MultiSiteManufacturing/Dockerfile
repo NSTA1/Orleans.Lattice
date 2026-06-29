@@ -23,10 +23,26 @@ WORKDIR /src
 COPY src/ ./src/
 COPY samples/MultiSiteManufacturing/src/ ./samples/MultiSiteManufacturing/src/
 
-RUN dotnet publish \
+# A BuildKit cache mount keeps the NuGet global-packages folder on the
+# host between builds; the read-only `nuget-cache` build context mounts
+# the developer's already-warm ~/.nuget/packages as a fallback folder so
+# restore resolves locally instead of re-downloading from nuget.org on a
+# slow connection (run.ps1 wires both and enables BuildKit). The fallback
+# is read-only, so any genuinely missing package still lands in the cache
+# mount. --no-restore on publish skips a redundant second restore.
+RUN --mount=type=cache,target=/root/.nuget/packages,id=msmfg-nuget \
+    --mount=type=bind,from=nuget-cache,target=/nuget-fallback,readonly \
+    DOTNET_CLI_TELEMETRY_OPTOUT=1 dotnet restore \
+    samples/MultiSiteManufacturing/src/MultiSiteManufacturing.Host/MultiSiteManufacturing.Host.csproj \
+    --packages /root/.nuget/packages \
+    -p:RestoreFallbackFolders=/nuget-fallback
+
+RUN --mount=type=cache,target=/root/.nuget/packages,id=msmfg-nuget \
+    dotnet publish \
     samples/MultiSiteManufacturing/src/MultiSiteManufacturing.Host/MultiSiteManufacturing.Host.csproj \
     -c Release \
     -o /app \
+    --no-restore \
     --nologo
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime

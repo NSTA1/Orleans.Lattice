@@ -87,6 +87,12 @@ x-silo-common: &silo-common
   build:
     context: ../../
     dockerfile: samples/MultiSiteManufacturing/Dockerfile
+    # Mount the developer's warm NuGet global-packages folder as a read-only
+    # build context so the in-container restore resolves from the local cache
+    # instead of re-downloading from nuget.org. run.ps1 sets NUGET_CACHE_DIR;
+    # it defaults to ~/.nuget/packages so a plain `docker compose build` works.
+    additional_contexts:
+      nuget-cache: ${NUGET_CACHE_DIR:-.}
   image: msmfg-host:dev
   restart: unless-stopped
   # Optional state-API auth credentials (issue #886). run.ps1 -Username/-Password
