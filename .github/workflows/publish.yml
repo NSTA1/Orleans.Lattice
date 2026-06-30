@@ -10,12 +10,16 @@ on:
       #   lattice.replication.grpc-v3.3.0
       #   lattice.storage.azuretable-v3.3.0
       #   lattice.dashboards-v3.3.0
+      #   lattice.api.state-v3.3.0
+      #   lattice.api.state.grpc-v3.3.0
       # The tag prefix is the literal folder name under src/, dots and all.
       - 'lattice-v*'
       - 'lattice.replication-v*'
       - 'lattice.replication.grpc-v*'
       - 'lattice.storage.azuretable-v*'
       - 'lattice.dashboards-v*'
+      - 'lattice.api.state-v*'
+      - 'lattice.api.state.grpc-v*'
 
 jobs:
   publish:

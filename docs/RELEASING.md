@@ -13,6 +13,8 @@ The package family ships from this repository:
 | `Orleans.Lattice.Replication.Grpc` | `src/lattice.replication.grpc/Orleans.Lattice.Replication.Grpc.csproj` |
 | `Orleans.Lattice.Storage.AzureTable` | `src/lattice.storage.azuretable/Orleans.Lattice.Storage.AzureTable.csproj` |
 | `Orleans.Lattice.Dashboards` | `src/lattice.dashboards/Orleans.Lattice.Dashboards.csproj` |
+| `Orleans.Lattice.Api.State` | `src/lattice.api.state/Orleans.Lattice.Api.State.csproj` |
+| `Orleans.Lattice.Api.State.Grpc` | `src/lattice.api.state.grpc/Orleans.Lattice.Api.State.Grpc.csproj` |
 
 Major and minor digits move in lockstep across the family. Patch digits may advance independently per package.
 
@@ -27,6 +29,8 @@ The publish workflow's per-tag trigger globs match these tag shapes:
 | `Orleans.Lattice.Replication.Grpc` | `lattice.replication.grpc-v<X.Y.Z>` |
 | `Orleans.Lattice.Storage.AzureTable` | `lattice.storage.azuretable-v<X.Y.Z>` |
 | `Orleans.Lattice.Dashboards` | `lattice.dashboards-v<X.Y.Z>` |
+| `Orleans.Lattice.Api.State` | `lattice.api.state-v<X.Y.Z>` |
+| `Orleans.Lattice.Api.State.Grpc` | `lattice.api.state.grpc-v<X.Y.Z>` |
 
 For historical compatibility, the `v<X.Y.Z>` family tag (e.g. `v3.2.0`) is reserved for "the whole family at this version". When the family moves in lockstep, push **both** the family tag *and* each per-package tag - the publish workflow keys off the per-package tags.
 
