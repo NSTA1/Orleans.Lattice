@@ -42,6 +42,10 @@ public static class SizeParameterDiscovery
             "batchSize",
             "maxCount",
             "maxResults",
+            "maxNodes",
+            "valuePreviewBudget",
+            "previewBudget",
+            "budget",
         };
 
     /// <summary>
@@ -105,6 +109,119 @@ public static class SizeParameterDiscovery
             .ThenBy(t => t.Method.Name, StringComparer.Ordinal)
             .ThenBy(t => t.Parameter.Name, StringComparer.Ordinal)
             .ToArray();
+    }
+
+    /// <summary>
+    /// Enumerates every public method on <paramref name="apiTypes"/> and, for
+    /// each parameter that is a request DTO (a non-<see cref="string"/> reference
+    /// type, for example a paging-request record), yields one
+    /// <see cref="RequestSizePropertyTarget"/> per settable <see cref="int"/>
+    /// property whose name matches <paramref name="sizeParameterNames"/>. This is
+    /// the request-object analogue of <see cref="Discover"/>: a read facade whose
+    /// caller-influenced sizes live on request records rather than on bare method
+    /// parameters (such as the State-API <c>ILatticeStateQuery</c> surface, whose
+    /// <c>CatalogRequest.PageSize</c> / <c>EntryScanRequest.PageSize</c> /
+    /// <c>EntryHistoryRequest.Limit</c> sizes are properties) is audited by the
+    /// same reflection-driven guard. Computed (get-only) properties such as a
+    /// clamped <c>EffectivePageSize</c> carry no caller value and are skipped.
+    /// Results are de-duplicated and ordered deterministically so the produced
+    /// test table is stable across runs.
+    /// </summary>
+    /// <param name="apiTypes">The interfaces or classes whose request DTOs are audited.</param>
+    /// <param name="sizeParameterNames">
+    /// The size/limit property names to match, or <see langword="null"/> to use
+    /// <see cref="DefaultSizeParameterNames"/>.
+    /// </param>
+    public static IReadOnlyList<RequestSizePropertyTarget> DiscoverRequestSizeProperties(
+        IEnumerable<Type> apiTypes,
+        IReadOnlySet<string>? sizeParameterNames = null)
+    {
+        ArgumentNullException.ThrowIfNull(apiTypes);
+        var names = sizeParameterNames ?? DefaultSizeParameterNames;
+
+        var targets = new List<RequestSizePropertyTarget>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var apiType in apiTypes)
+        {
+            ArgumentNullException.ThrowIfNull(apiType, nameof(apiTypes));
+
+            foreach (var method in EnumerateMethods(apiType))
+            {
+                if (method.IsSpecialName)
+                {
+                    continue;
+                }
+
+                foreach (var parameter in method.GetParameters())
+                {
+                    var requestType = parameter.ParameterType;
+                    if (!IsRequestType(requestType))
+                    {
+                        continue;
+                    }
+
+                    foreach (var property in EnumerateSizeProperties(requestType, names))
+                    {
+                        // De-dupe on the full path: the same request type reached
+                        // through two methods is two distinct targets (each method
+                        // is exercised), but the same (method, request, property)
+                        // triple appears once.
+                        var key = $"{apiType.FullName}|{method}|{parameter.Name}|{requestType.FullName}|{property.Name}";
+                        if (seen.Add(key))
+                        {
+                            targets.Add(new RequestSizePropertyTarget(apiType, method, parameter, requestType, property));
+                        }
+                    }
+                }
+            }
+        }
+
+        return targets
+            .OrderBy(t => t.ApiType.FullName, StringComparer.Ordinal)
+            .ThenBy(t => t.Method.Name, StringComparer.Ordinal)
+            .ThenBy(t => t.RequestType.FullName, StringComparer.Ordinal)
+            .ThenBy(t => t.SizeProperty.Name, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    /// <summary>
+    /// Whether <paramref name="type"/> is treated as a request DTO worth
+    /// reflecting size properties out of: a reference type that is not
+    /// <see cref="string"/> and not an array. Value types (for example
+    /// <see cref="System.Threading.CancellationToken"/>) and strings carry no
+    /// size-named <see cref="int"/> properties, so excluding them keeps discovery
+    /// off framework noise; any other class that happens to have none simply
+    /// yields no targets.
+    /// </summary>
+    private static bool IsRequestType(Type type) =>
+        type.IsClass && type != typeof(string) && !type.IsArray;
+
+    /// <summary>
+    /// Yields the public instance <see cref="int"/> properties of
+    /// <paramref name="requestType"/> that have a public setter (an
+    /// <see langword="init"/> accessor counts) and whose name matches
+    /// <paramref name="names"/>. A get-only computed property has no setter and
+    /// is skipped, so a clamped <c>Effective*</c> projection is never mistaken
+    /// for a caller-supplied size.
+    /// </summary>
+    private static IEnumerable<PropertyInfo> EnumerateSizeProperties(
+        Type requestType,
+        IReadOnlySet<string> names)
+    {
+        const BindingFlags flags = BindingFlags.Public | BindingFlags.Instance;
+
+        foreach (var property in requestType.GetProperties(flags))
+        {
+            if (property.PropertyType == typeof(int)
+                && property.Name is not null
+                && names.Contains(property.Name)
+                && property.GetMethod is not null
+                && property.SetMethod is { IsPublic: true })
+            {
+                yield return property;
+            }
+        }
     }
 
     /// <summary>
