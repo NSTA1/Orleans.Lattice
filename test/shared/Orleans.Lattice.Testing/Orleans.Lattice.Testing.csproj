@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Library-agnostic shared test-support library. It deliberately does NOT
+    reference Orleans.Lattice (or any product assembly): it works purely against
+    System.Reflection types handed to it by a consuming test project. Each test
+    project references this library and adds a thin concrete subclass of
+    PublicApiSizeContractTestsBase that names its API types and supplies a live
+    instance, so the reflection-driven size/limit contract checks are reused by
+    construction rather than copy-pasted per project.
+
+    It is a plain library (not a test project): it carries the NUnit attribute and
+    assertion surface but no test SDK / adapter. The abstract base fixture is never
+    discovered here; it is discovered through the concrete subclass that lives in
+    the consuming test assembly.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NUnit" Version="4.6.1" />
+  </ItemGroup>
+
+</Project>
