@@ -3043,11 +3043,22 @@ internal sealed class AtomicWriteGrain(
         var startTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
-            await ReminderRegistry.RegisterOrUpdateReminder(
-                callingGrainId: GrainContext.GrainId,
-                reminderName: KeepaliveReminderName,
-                dueTime: TimeSpan.FromMinutes(1),
-                period: TimeSpan.FromMinutes(1));
+            // The keepalive reminder is the saga's crash-recovery anchor, so its
+            // registration is essential - unlike the best-effort first-write
+            // bootstraps on LatticeGrain that defer on the same transient. Orleans'
+            // reminder service initialises asynchronously after the silo reaches
+            // Active, so a saga that starts inside that startup window (or just
+            // after a partition/restart, as the cross-cluster chaos suite drives)
+            // can see a transient "Reminder Service is still initializing"
+            // OrleansException. Wait it out with a bounded retry rather than
+            // failing the user's atomic write; a genuinely stuck service still
+            // surfaces once the retry budget is exhausted.
+            await ReminderServiceReadiness.RetryWhileInitializingAsync(() =>
+                ReminderRegistry.RegisterOrUpdateReminder(
+                    callingGrainId: GrainContext.GrainId,
+                    reminderName: KeepaliveReminderName,
+                    dueTime: TimeSpan.FromMinutes(1),
+                    period: TimeSpan.FromMinutes(1)));
         }
         finally
         {
