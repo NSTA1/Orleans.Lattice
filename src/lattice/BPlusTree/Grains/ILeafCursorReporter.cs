@@ -8,17 +8,24 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// has durably applied so the per-shard write-ahead-log GC can pin its
 /// trim point under the slowest local consumer.
 /// <para>
-/// The core <c>Orleans.Lattice</c> assembly intentionally does not depend
-/// on <c>Orleans.Lattice.Replication</c> (the dependency direction is the
-/// other way around). This interface is the bridge: the replication
-/// package registers an adapter that forwards to its
-/// <c>IWalCursorRegistry</c>, so a host that has not added
-/// replication leaves the registration absent and the leaf grain becomes
-/// a no-op on the cursor-report path. The implementation is resolved
-/// from <see cref="IGrainContext.ActivationServices"/> via
-/// <see cref="Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetService{T}"/>
-/// - a missing registration returns <see langword="null"/> and is
-/// expected.
+/// The core <c>Orleans.Lattice</c> assembly registers a lightweight
+/// <see cref="InMemoryLeafCursorReporter"/> by default (via
+/// <c>AddLattice</c>), so every host reports leaf cursors into the
+/// always-on in-memory <c>IWalCursorRegistry</c> and the WAL saturation
+/// sampler's materialiser drain-lag back-pressure is live for every write
+/// workload out of the box. That default does only the cheap in-memory
+/// work and treats every durable-pin method below as a no-op. The durable
+/// cross-restart trim-floor backstop (the sharded cluster-wide
+/// <see cref="IWalMaterialiserPinGrain"/> store) is the opt-in layer:
+/// <c>AddWalCursorRegistry</c> (called directly, or transitively by the
+/// WAL GC / views / replication / Azure-table storage packages) replaces
+/// the lightweight default with the durable-pin-aware
+/// <see cref="LeafCursorReporter"/>. The implementation is resolved from
+/// <see cref="IGrainContext.ActivationServices"/> via
+/// <see cref="Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetService{T}"/>;
+/// a host that has somehow not registered any reporter returns
+/// <see langword="null"/> and the leaf grain becomes a no-op on the
+/// cursor-report path.
 /// </para>
 /// </summary>
 internal interface ILeafCursorReporter
@@ -141,5 +148,30 @@ internal interface ILeafCursorReporter
         string treeName,
         string consumerId,
         HybridLogicalClock frontier,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Batched form of <see cref="SeedDurableMaterialiserBlockAsync"/>: durably
+    /// seeds every pin in <paramref name="reports"/> for
+    /// <paramref name="treeName"/> and <b>awaits</b> the writes. A leaf at birth
+    /// calls this once with one report per WAL partition instead of issuing one
+    /// awaited seed per partition; the implementation groups the reports by their
+    /// routed durable-pin shard and issues a single batched durable write per
+    /// distinct shard concurrently, collapsing what was
+    /// <c>O(partitions)</c> serialized round-trips through one hot grain into
+    /// at most <c>O(shards)</c> concurrent batched writes. Same idempotency,
+    /// crash-safety, and failure-swallowing contract as the single-pin seed:
+    /// the block pins must be durable before the caller lets the new leaf's data
+    /// become reachable in the WAL, a Zero seed is a no-op once a real frontier
+    /// has landed, and transient durable-write failures are swallowed so the
+    /// foreground birth path is never blocked. A no-op when the host has no
+    /// durable backing.
+    /// </summary>
+    /// <param name="treeName">Logical tree id whose leaf is being seeded.</param>
+    /// <param name="reports">One block pin per WAL partition; each report's consumer id must not be <see langword="null"/> or whitespace.</param>
+    /// <param name="cancellationToken">Cancellation token observed before the durable writes.</param>
+    Task SeedDurableMaterialiserBlockManyAsync(
+        string treeName,
+        IReadOnlyList<MaterialiserPinReport> reports,
         CancellationToken cancellationToken);
 }

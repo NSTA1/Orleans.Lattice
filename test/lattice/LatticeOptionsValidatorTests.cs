@@ -127,6 +127,60 @@ public class LatticeOptionsValidatorTests
         Assert.That(result.Succeeded, Is.True);
     }
 
+    // --- issue #1030: WAL replay throttles ------------------------------
+
+    [TestCase(-1)]
+    [TestCase(-8)]
+    public void WalMaterialiserMaxConcurrentReplays_negative_fails(int value)
+    {
+        var result = Validate(o => o.WalMaterialiserMaxConcurrentReplays = value);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage,
+            Does.Contain(nameof(LatticeOptions.WalMaterialiserMaxConcurrentReplays)));
+    }
+
+    [TestCase(0)]
+    [TestCase(1)]
+    [TestCase(32)]
+    public void WalMaterialiserMaxConcurrentReplays_non_negative_passes(int value)
+    {
+        var result = Validate(o => o.WalMaterialiserMaxConcurrentReplays = value);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalMaterialiserMaxConcurrentReplays_default_is_auto()
+    {
+        Assert.That(new LatticeOptions().WalMaterialiserMaxConcurrentReplays, Is.EqualTo(0));
+        Assert.That(LatticeOptions.DefaultWalMaterialiserMaxConcurrentReplays, Is.EqualTo(0));
+    }
+
+    [TestCase(-1)]
+    [TestCase(-256)]
+    public void WalReplayMaxRecordsPerTurn_negative_fails(int value)
+    {
+        var result = Validate(o => o.WalReplayMaxRecordsPerTurn = value);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage,
+            Does.Contain(nameof(LatticeOptions.WalReplayMaxRecordsPerTurn)));
+    }
+
+    [TestCase(0)]
+    [TestCase(1)]
+    [TestCase(256)]
+    public void WalReplayMaxRecordsPerTurn_non_negative_passes(int value)
+    {
+        var result = Validate(o => o.WalReplayMaxRecordsPerTurn = value);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalReplayMaxRecordsPerTurn_default_is_256()
+    {
+        Assert.That(new LatticeOptions().WalReplayMaxRecordsPerTurn, Is.EqualTo(256));
+        Assert.That(LatticeOptions.DefaultWalReplayMaxRecordsPerTurn, Is.EqualTo(256));
+    }
+
     [TestCase(-1)]
     [TestCase(-100)]
     public void LeafSnapshotReClassifyEveryNCheckpoints_must_be_non_negative(int value)
@@ -679,5 +733,36 @@ public class LatticeOptionsValidatorTests
         var result = Validate(o => o.WalAdmissionSaturationWaitBudget = TimeSpan.FromSeconds(-1));
         Assert.That(result.Failed, Is.True);
         Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalAdmissionSaturationWaitBudget)));
+    }
+
+    [Test]
+    public void WalThrottledAdmissionPace_default_is_twenty_five_milliseconds()
+    {
+        Assert.That(new LatticeOptions().WalThrottledAdmissionPace, Is.EqualTo(TimeSpan.FromMilliseconds(25)));
+        Assert.That(LatticeOptions.DefaultWalThrottledAdmissionPace, Is.EqualTo(TimeSpan.FromMilliseconds(25)));
+    }
+
+    [Test]
+    public void WalThrottledAdmissionPace_positive_passes()
+    {
+        var result = Validate(o => o.WalThrottledAdmissionPace = TimeSpan.FromMilliseconds(50));
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalThrottledAdmissionPace_zero_passes()
+    {
+        // Zero is the documented operator opt-out: local pacing is
+        // disabled entirely.
+        var result = Validate(o => o.WalThrottledAdmissionPace = TimeSpan.Zero);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalThrottledAdmissionPace_negative_fails()
+    {
+        var result = Validate(o => o.WalThrottledAdmissionPace = TimeSpan.FromSeconds(-1));
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalThrottledAdmissionPace)));
     }
 }

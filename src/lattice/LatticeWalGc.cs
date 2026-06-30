@@ -335,9 +335,7 @@ public sealed class LatticeWalGc(
         IReadOnlyDictionary<string, HybridLogicalClock> pins;
         try
         {
-            pins = await factory.GetGrain<IWalMaterialiserPinGrain>(treeName)
-                .GetPinsAsync()
-                .ConfigureAwait(false);
+            pins = await ReadDurablePinsAsync(factory, treeName).ConfigureAwait(false);
         }
         catch
         {
@@ -388,7 +386,54 @@ public sealed class LatticeWalGc(
     }
 
     /// <summary>
-    /// Emits the byte-pressure reclaim and over-threshold signals after a
+    /// Reads and unions the durable leaf-materialiser pins for
+    /// <paramref name="treeName"/> across every shard activation plus the legacy
+    /// unsuffixed key. Sharding spreads the pin-store write fan-in across
+    /// <see cref="LatticeOptions.WalMaterialiserPinShards"/> grains; the GC must
+    /// reconstruct the full floor by reading all of them. The dual-read of the
+    /// legacy key keeps pins written before the upgrade counted. Shards are read
+    /// concurrently; per consumer id the lowest (most conservative) pin wins so a
+    /// stale duplicate can only retain more WAL.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<string, HybridLogicalClock>> ReadDurablePinsAsync(
+        IGrainFactory factory,
+        string treeName)
+    {
+        var shardCount = WalMaterialiserPinRouting.ResolveShardCount(optionsMonitor);
+        var keys = WalMaterialiserPinRouting.EnumerateReadKeys(treeName, shardCount);
+        if (keys.Count == 1)
+        {
+            return await factory.GetGrain<IWalMaterialiserPinGrain>(keys[0]).GetPinsAsync().ConfigureAwait(false);
+        }
+
+        var reads = new Task<IReadOnlyDictionary<string, HybridLogicalClock>>[keys.Count];
+        for (var i = 0; i < keys.Count; i++)
+        {
+            reads[i] = factory.GetGrain<IWalMaterialiserPinGrain>(keys[i]).GetPinsAsync();
+        }
+
+        var results = await Task.WhenAll(reads).ConfigureAwait(false);
+        var union = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
+        for (var i = 0; i < results.Length; i++)
+        {
+            foreach (var (consumerId, pin) in results[i])
+            {
+                if (union.TryGetValue(consumerId, out var existing))
+                {
+                    if (pin < existing)
+                    {
+                        union[consumerId] = pin;
+                    }
+                }
+                else
+                {
+                    union[consumerId] = pin;
+                }
+            }
+        }
+
+        return union;
+    }
     /// trim pass and returns whether the post-trim footprint still breaches
     /// the ceiling. When a byte-pressure trigger reclaimed bytes
     /// (<paramref name="retainedBefore"/> &gt; <paramref name="retainedAfter"/>),

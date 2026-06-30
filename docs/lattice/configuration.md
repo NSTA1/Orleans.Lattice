@@ -116,18 +116,25 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`WalFlushPreflightTimeout`](#walflushpreflighttimeout) | `TimeSpan` | 5 seconds | Yes |
 | [`WalFlushTimeout`](#walflushtimeout) | `TimeSpan` | 15 seconds | Yes |
 | [`WalGcInterval`](#walgcinterval) | `TimeSpan` | 1 hour (enabled) | No (global; read from the default options) |
+| [`WalMaterialiserMaxConcurrentReplays`](#walmaterialisermaxconcurrentreplays) | `int` | `0` (auto = `Environment.ProcessorCount`) | Yes |
+| [`WalMaterialiserPinFlushIntervalMs`](#walmaterialiserpinflushintervalms) | `int` | 250 | Yes |
+| [`WalMaterialiserPinShards`](#walmaterialiserpinshards) | `int` | 8 | No (durable-store migration; see below) |
 | [`WalMaxPendingBatches`](#walmaxpendingbatches) | `int` | 16 | Yes |
 | [`WalMaxRetainedBytes`](#walmaxretainedbytes) | `long?` | `null` (disabled) | Yes |
 | [`WalPartitions`](#walpartitions) | `int` | 8 | No (per-tree, pinned on first WAL write) |
 | [`WalRetention`](#walretention) | `TimeSpan?` | `null` (disabled) | Yes |
+| [`WalReplayMaxRecordsPerTurn`](#walreplaymaxrecordsperturn) | `int` | 256 | Yes |
 | [`WalSaturationDispatchTimeoutThreshold`](#walsaturationdispatchtimeoutthreshold) | `int` | 1 | Yes |
 | [`WalSaturationFlushLatencySampleWindows`](#walsaturationflushlatencysamplewindows) | `int` | 3 | Yes |
 | [`WalSaturationFlushLatencyThreshold`](#walsaturationflushlatencythreshold) | `TimeSpan?` | `null` (disabled) | Yes |
+| [`WalSaturationMaterialiserLagSampleWindows`](#walsaturationmaterialiserlagsamplewindows) | `int` | 3 | Yes |
+| [`WalSaturationMaterialiserLagThreshold`](#walsaturationmaterialiserlagthreshold) | `TimeSpan?` | 30 seconds | Yes |
 | [`WalSaturationProviderFailureRateThreshold`](#walsaturationproviderfailureratethreshold) | `int` | 1 | Yes |
 | [`WalSaturationRecoveryWindow`](#walsaturationrecoverywindow) | `TimeSpan` | 1 second | Yes |
 | [`WalSaturationSampleInterval`](#walsaturationsampleinterval) | `TimeSpan` | 200 milliseconds | Yes |
 | [`WalSaturationThrottledRatio`](#walsaturationthrottledratio) | `double` | 0.75 | Yes |
 | [`WalAdmissionSaturationWaitBudget`](#waladmissionsaturationwaitbudget) | `TimeSpan` | 5 seconds | Yes |
+| [`WalThrottledAdmissionPace`](#walthrottledadmissionpace) | `TimeSpan` | 25 milliseconds | Yes |
 | [`WalStorageProvider`](wal-storage-providers.md) | `Func<string, IWalStorageProvider>?` | `null` (DI default) | Yes |
 
 ### Structural sizing (registry-pinned)
@@ -693,6 +700,24 @@ Set lower (minimum 1) to make the input more sensitive at the cost of more trans
 
 This option can be changed freely at any time. The new value takes effect on the next sampler tick.
 
+### `WalSaturationMaterialiserLagThreshold`
+
+Leaf-materialiser drain-lag duration at or above which the saturation sampler records a pressure level that feeds the classifier (default: 30 seconds; set to `null` to disable the input entirely). On every sampler tick (default 200 ms) the sampler measures the drain lag directly from in-memory state as the WAL head wall-clock timestamp (the newest routed entry's HLC, tracked by the commit-log writer) minus the slowest in-memory leaf-materialiser cursor frontier (the cursor-registry minimum), clamped at zero - a head-relative measure, so an idle but caught-up tree (the frontier reaches the head) reads zero and never trips, and a never-checkpointed block pin is treated as zero lag rather than the full head age. Because the lag is recomputed live each tick rather than at a WAL GC pass, the input engages immediately on a write spike instead of waiting for the next collection. When the lag stays at or above this threshold for `WalSaturationMaterialiserLagSampleWindows` consecutive sampler windows the tree is held at `WalSaturationState.Throttled`. Unlike the dispatch-timeout, provider-failure, and flush-latency inputs, the drain-lag input never escalates to `Saturated`: it is a pure back-off that slows callers without ever tripping the writer admission gate's `LatticeSaturatedException` fast-fail. The resulting `Throttled` state engages the local WAL writer's per-append pacing (`WalThrottledAdmissionPace`) on the single-silo write path and the replication receiver flow control when a replicating peer exists, so upstream writers slow before the drain backlog grows unbounded.
+
+Captures the **drain-path blind spot** the flush-latency and admission inputs cannot see: a write burst can be accepted and flushed quickly (healthy flush latency, shallow admission depth) yet outrun the rate at which leaf materialisers project committed WAL entries into the tree, so the durable backlog and its pin floor grow while every other saturation input reads healthy. Sizing guidance: pick a threshold a few times your steady-state materialiser drain lag so the observation stays quiet during healthy traffic and only fires when projection genuinely falls behind ingest.
+
+The input is purely additive. Leaving the threshold at its default `null` is a zero-cost no-op: the sampler skips the lag computation and the classifier behaves exactly as before. Must be positive when set; the validator rejects `TimeSpan.Zero` and any negative value.
+
+This option can be changed freely at any time. The new value takes effect on the next sampler tick.
+
+### `WalSaturationMaterialiserLagSampleWindows`
+
+Number of consecutive saturation-sampler windows that must each observe a materialiser drain-lag level at or above `WalSaturationMaterialiserLagThreshold` before the classifier holds the tree at `WalSaturationState.Throttled` (default: 3). Acts as the noise floor for the drain-lag input, mirroring `WalSaturationFlushLatencySampleWindows`, so a single sampler tick cannot flip the regime.
+
+Set lower (minimum 1) to make the input more sensitive at the cost of more transient classifier flaps; set higher to lengthen the sustained-lag regime the classifier requires before flagging. Has no effect when `WalSaturationMaterialiserLagThreshold` is set to `null`. The validator rejects values less than 1.
+
+This option can be changed freely at any time. The new value takes effect on the next sampler tick.
+
 ### `WalSaturationRecoveryWindow`
 
 Window after the most-recently observed `WalSaturationState.Saturated` transition during which the classifier holds a tree at or above `Throttled` even if the current sampler tick's per-partition depth observation would otherwise classify it as `Healthy` (default: 1 second). Defends against bursty per-partition WAL drain where one partition fills to cap, drains entirely in the next tick, and the next partition fills - the per-tick `max(depth_ratio)` across partitions oscillates between `~1.0` and `~0.0` within a single sampler period and the classifier would otherwise flap `Healthy <-> Saturated` at the sampler cadence with `Throttled` never observed as a stable state. With the window in effect, callers see `Throttled` persist as the natural lead-up and fall-back regime around saturation episodes; the canonical TCP / queue ingest reader pattern can take the advisory `Throttled` action (yield-per-line, lower-priority dispatch) for measurable durations rather than seeing only the binary pause-or-go pattern.
@@ -714,6 +739,16 @@ The budget should be shorter than `WalAppendDispatchTimeout` (so the saturation 
 Set to `TimeSpan.Zero` to disable the admission-gate saturation check entirely (the historical pre-admission-gate behaviour). Set to `Timeout.InfiniteTimeSpan` to wait forever on `WaitForHealthyAsync`. The validator rejects any other negative value.
 
 This option can be changed freely at any time. The new value takes effect on the next admission acquire (which is per-dispatch on the WAL writer hot path).
+
+### `WalThrottledAdmissionPace`
+
+Per-append pacing delay the WAL writer applies on the local admission path while the per-tree saturation signal reports `WalSaturationState.Throttled` (default: 25 milliseconds; set to `TimeSpan.Zero` to disable local pacing). This is what gives the drain-lag (and any other `Throttled`-mapped) back-pressure teeth on the **single-silo local-write path**, where there is no remote replication sender to drip-feed and the Saturated-only `WalAdmissionSaturationWaitBudget` gate never engages. Before each dispatch admits into the per-partition admission semaphore the writer reads the signal once; on `Throttled` it awaits a single bounded `Task.Delay` of this duration, pacing the local producer so the materialiser drain can catch up.
+
+It is a pure back-off: it never throws, and it never escalates to `LatticeSaturatedException` - a `Throttled` tree slows callers, it does not fault them. The pacing is a no-op when no saturation signal is registered (single-node / unit-test writers), when the signal reports `Healthy` (a single concurrent-dictionary lookup, no await), and on `Saturated` (the separate admission gate already governs the dispatch, so the pace is skipped to avoid double-charging the caller). Caller-supplied cancellation surfaces as `OperationCanceledException`; a writer drain request short-circuits the pace silently so shutdown is never slowed.
+
+Sizing guidance: the delay is applied per accepted append while the tree is `Throttled`, so it bounds the local single-silo append rate to roughly `1 / WalThrottledAdmissionPace` per partition during back-pressure (the default 25 ms caps a back-pressured partition at ~40 appends/second). Raise it to slow producers harder when the materialiser drain is the bottleneck; lower it (or set `TimeSpan.Zero`) when you would rather rely solely on the replication-side flow control. The validator rejects negative values.
+
+This option can be changed freely at any time. The new value takes effect on the next admission acquire (per-dispatch on the WAL writer hot path).
 
 ### `WalMaxPendingBatches`
 
@@ -738,6 +773,32 @@ This option can be changed freely at any time. The new value takes effect on the
 **Activation-time replay is partition-aware.** The leaf grain's activation-time materialiser iterates `[0, WalPartitions)` and runs an independent fall-off-log classification, slice read, and projection-checkpoint advance per partition. Per-partition checkpoints persist into the `LeafNodeState.ProjectionCheckpointOffsetsByPartition` slot (`long[]?`, additive `[Id]`), with partition 0 also mirrored into the legacy scalar `ProjectionCheckpointOffset` slot so a downgrade to a host that has never observed multi-partition state still reads a valid single-partition shape. Per-partition cursor consumer ids take the form `_lattice_materialiser_{treeId}_{leafGrainId}_{partition}` so the per-shard WAL GC trims each partition independently against its own slowest consumer; on `WalPartitions = 1` the legacy unsuffixed shape `_lattice_materialiser_{treeId}_{leafGrainId}` is preserved for wire compatibility with hosts that have never enabled multi-partition replay.
 
 Must be `>= 1`. Values below 1 fail option validation at silo start.
+
+### `WalMaterialiserPinShards`
+
+Number of durable-pin grain activations the per-tree leaf-materialiser checkpoint floor is spread across (default: 8). Each active leaf reports its per-WAL-partition projection frontier as a durable pin so the WAL garbage collector never trims past an entry a leaf has not yet projected. Historically every leaf in a tree funnelled its pin into a single per-tree grain, so a leaf-birth or split storm serialized `O(leaves x partitions)` durable writes through one activation and that activation became the bottleneck that wedged the drain path. Sharding spreads the load: each `consumerId` deterministically maps to one shard so the monotonic-max merge stays correct, and the WAL GC fans its read across every shard (plus the legacy single-key shape) so no trim floor is lost.
+
+Set to `1` to restore the historical single-activation shape. Changing this value is a **durable-store migration**: pins written under the previous shard count remain readable because the GC dual-reads every shard activation plus the legacy unsharded key during the transition, but a deliberate rollout (drain, change, redeploy) is recommended rather than flipping it on a hot cluster. Must be `>= 1`; the validator rejects values below 1.
+
+### `WalMaterialiserPinFlushIntervalMs`
+
+Debounce window, in milliseconds, over which a shard's durable pin writes are coalesced behind a grain-timer flush (default: 250 ms). Within the window the shard advances its in-memory monotonic-max frontier on every advancing report but persists at most one durable `WriteStateAsync`, collapsing a report burst into one durable write per shard per window. The coalescing only ever retains **more** WAL than an immediate write would (the persisted floor lags the in-memory floor by at most one window), so it is always GC-safe.
+
+Set to `0` to disable coalescing so every advancing report persists synchronously, matching the historical shape. Must be `>= 0`; the validator rejects negative values.
+
+This option can be changed freely at any time. The new value takes effect on the next pin report.
+
+### `WalMaterialiserMaxConcurrentReplays`
+
+Per-silo ceiling on the number of leaf grains that may run their activation-time WAL replay concurrently (default: `0`, which resolves to `Environment.ProcessorCount` at runtime). A mass reactivation (for example after a `docker restart` or a silo rejoin) can otherwise stampede the scheduler as every reactivating leaf replays its WAL backlog at once; the ceiling makes the surplus queue on a process-wide gate and drain in waves instead. A no-op activation (a leaf with no tree binding) consumes no permit.
+
+Set to a positive value to pin the ceiling explicitly. Must be `>= 0`; the validator rejects negative values.
+
+### `WalReplayMaxRecordsPerTurn`
+
+Number of WAL records a single activation-time replay projects before yielding the Orleans turn cooperatively (`await Task.Yield()`), so a long replay does not monopolise the activation's turn and starve other grain calls on the same activation (default: 256). This is distinct from the cross-RPC `ReplaySliceBudget` slicing; it bounds the synchronous run length **within** a single replay turn.
+
+Set to `0` to disable the cooperative yield so replay runs to completion without voluntarily yielding (the historical shape). Must be `>= 0`; the validator rejects negative values.
 
 ### `WalGcInterval`
 

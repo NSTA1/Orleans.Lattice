@@ -1,4 +1,6 @@
+using Microsoft.Extensions.Options;
 using NSubstitute;
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Tests.Fakes;
@@ -22,12 +24,17 @@ public sealed class WalMaterialiserPinGrainTests
         new() { WallClockTicks = ticks, Counter = counter };
 
     private static (WalMaterialiserPinGrain grain, FakePersistentState<WalMaterialiserPinState> state) CreateGrain(
-        FakePersistentState<WalMaterialiserPinState>? existing = null)
+        FakePersistentState<WalMaterialiserPinState>? existing = null,
+        int flushIntervalMs = 0)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("wal-materialiser-pin", "tree-1"));
         var state = existing ?? new FakePersistentState<WalMaterialiserPinState>();
-        return (new WalMaterialiserPinGrain(context, state), state);
+        var options = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        // Drive the synchronous (no-coalescing) write path so the per-call
+        // WriteCount assertions are deterministic without a grain timer runtime.
+        options.Get(Arg.Any<string>()).Returns(new LatticeOptions { WalMaterialiserPinFlushIntervalMs = flushIntervalMs });
+        return (new WalMaterialiserPinGrain(context, state, options), state);
     }
 
     [Test]
@@ -186,6 +193,76 @@ public sealed class WalMaterialiserPinGrainTests
         await grain.ClearAsync();
 
         Assert.That(state.WriteCount, Is.EqualTo(0));
+    }
+
+    [Test]
+    public async Task ReportManyAsync_merges_all_pins_in_a_single_write()
+    {
+        var (grain, state) = CreateGrain();
+
+        await grain.ReportManyAsync(new[]
+        {
+            new MaterialiserPinReport(Consumer, Hlc(100)),
+            new MaterialiserPinReport("_lattice_materialiser_tree-1_leaf-8", Hlc(50)),
+        });
+
+        Assert.Multiple(() =>
+        {
+            // The whole batch coalesces into one durable write.
+            Assert.That(state.WriteCount, Is.EqualTo(1));
+            Assert.That(state.State.Pins[Consumer], Is.EqualTo(Hlc(100)));
+            Assert.That(state.State.Pins["_lattice_materialiser_tree-1_leaf-8"], Is.EqualTo(Hlc(50)));
+        });
+    }
+
+    [Test]
+    public async Task ReportManyAsync_all_coalesced_writes_nothing()
+    {
+        var (grain, state) = CreateGrain();
+        await grain.ReportAsync(Consumer, Hlc(200));
+
+        await grain.ReportManyAsync(new[]
+        {
+            new MaterialiserPinReport(Consumer, Hlc(100)),
+            new MaterialiserPinReport(Consumer, HybridLogicalClock.Zero),
+        });
+
+        Assert.That(state.WriteCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task SeedManyAsync_persists_block_pins_durably()
+    {
+        var (grain, state) = CreateGrain();
+
+        await grain.SeedManyAsync(new[]
+        {
+            new MaterialiserPinReport(Consumer, HybridLogicalClock.Zero),
+            new MaterialiserPinReport("_lattice_materialiser_tree-1_leaf-8", HybridLogicalClock.Zero),
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.WriteCount, Is.EqualTo(1));
+            Assert.That(state.State.Pins[Consumer], Is.EqualTo(HybridLogicalClock.Zero));
+            Assert.That(state.State.Pins["_lattice_materialiser_tree-1_leaf-8"], Is.EqualTo(HybridLogicalClock.Zero));
+        });
+    }
+
+    [Test]
+    public async Task SeedManyAsync_zero_after_real_frontier_is_noop()
+    {
+        var (grain, state) = CreateGrain();
+        await grain.ReportAsync(Consumer, Hlc(100));
+
+        await grain.SeedManyAsync(new[] { new MaterialiserPinReport(Consumer, HybridLogicalClock.Zero) });
+
+        Assert.Multiple(() =>
+        {
+            // The real frontier is retained and no redundant write is issued.
+            Assert.That(state.WriteCount, Is.EqualTo(1));
+            Assert.That(state.State.Pins[Consumer], Is.EqualTo(Hlc(100)));
+        });
     }
 
     [Test]

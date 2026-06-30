@@ -74,7 +74,7 @@ public partial class BPlusLeafGrainTests
 
         var pinContext = Substitute.For<IGrainContext>();
         pinContext.GrainId.Returns(GrainId.Create("wal-materialiser-pin", PinSeamTreeId));
-        var pinGrain = new WalMaterialiserPinGrain(pinContext, new FakePersistentState<WalMaterialiserPinState>());
+        var pinGrain = new WalMaterialiserPinGrain(pinContext, new FakePersistentState<WalMaterialiserPinState>(), PinOptionsMonitor());
 
         var factory = Substitute.For<IGrainFactory>();
         factory.GetGrain<IWalMaterialiserPinGrain>(Arg.Any<string>()).Returns(pinGrain);

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
 
@@ -35,6 +36,7 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
 {
     private readonly WalSaturationSignal _signal;
     private readonly WalSaturationObserverDispatcher _dispatcher;
+    private readonly IWalCursorRegistry _cursors;
     private readonly IOptionsMonitor<LatticeOptions> _options;
     private readonly ILogger<WalSaturationSampler> _logger;
     private readonly TimeProvider _time;
@@ -101,6 +103,39 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
     private readonly Dictionary<string, int> _consecutiveFlushLatencyWindows
         = new(StringComparer.Ordinal);
 
+    // Per-tree consecutive-window counter for the drain-lag classifier
+    // input. Incremented on every sampler tick whose freshly-computed drain-lag
+    // is over the threshold and reset to zero on every tick whose fresh lag is
+    // at/under it. The classifier holds the tree at Throttled via the drain-lag
+    // branch when the counter reaches
+    // LatticeOptions.WalSaturationMaterialiserLagSampleWindows. Drain lag is a
+    // sustained-pressure signal, so it drives Throttled (a pure back-off) rather
+    // than Saturated - it never engages the admission gate's
+    // LatticeSaturatedException fast-fail.
+    private readonly Dictionary<string, int> _consecutiveMaterialiserDrainLagWindows
+        = new(StringComparer.Ordinal);
+
+    // Reusable per-tick accumulator map and a small free-list of accumulator
+    // objects. The sampler is single-threaded (each tick awaits the previous
+    // tick's fan-out before the next is scheduled), so the map and the pooled
+    // accumulators can be reused across ticks instead of allocating a fresh
+    // Dictionary plus one TreeAccumulator per active tree on every 200 ms tick.
+    // Both are bounded by the per-tick live-tree cardinality. Single-threaded
+    // access only - no concurrency primitives needed.
+    private readonly Dictionary<string, TreeAccumulator> _perTree
+        = new(StringComparer.Ordinal);
+    private readonly Stack<TreeAccumulator> _accumulatorPool = new();
+
+    // Rents a zeroed accumulator for the tree from the pool (or allocates one
+    // when the pool is empty) and stores it in the reusable per-tick map.
+    private TreeAccumulator RentAccumulator(string treeId)
+    {
+        var acc = _accumulatorPool.Count > 0 ? _accumulatorPool.Pop() : new TreeAccumulator();
+        acc.Reset(treeId);
+        _perTree[treeId] = acc;
+        return acc;
+    }
+
     private CancellationTokenSource? _loopCts;
     private Task? _loopTask;
 
@@ -108,8 +143,9 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
         WalSaturationSignal signal,
         WalSaturationObserverDispatcher dispatcher,
         IOptionsMonitor<LatticeOptions> options,
-        ILogger<WalSaturationSampler> logger)
-        : this(signal, dispatcher, options, logger, TimeProvider.System)
+        ILogger<WalSaturationSampler> logger,
+        IWalCursorRegistry cursors)
+        : this(signal, dispatcher, options, logger, TimeProvider.System, cursors)
     {
     }
 
@@ -123,15 +159,18 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
         WalSaturationObserverDispatcher dispatcher,
         IOptionsMonitor<LatticeOptions> options,
         ILogger<WalSaturationSampler> logger,
-        TimeProvider time)
+        TimeProvider time,
+        IWalCursorRegistry cursors)
     {
         ArgumentNullException.ThrowIfNull(signal);
         ArgumentNullException.ThrowIfNull(dispatcher);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(time);
+        ArgumentNullException.ThrowIfNull(cursors);
         _signal = signal;
         _dispatcher = dispatcher;
+        _cursors = cursors;
         _options = options;
         _logger = logger;
         _time = time;
@@ -187,6 +226,13 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
 
     private async Task SampleLoopAsync(CancellationToken cancellationToken)
     {
+        // The sample interval is a silo-global option (read off the empty-key
+        // default), so it is hoisted out of the loop and read once: re-reading
+        // it on every tick bought nothing but an IOptionsMonitor.Get per tick.
+        // A change to the cadence takes effect on the next silo start, matching
+        // the Infinite-disables guard already applied once in StartAsync.
+        var interval = _options.Get(string.Empty).WalSaturationSampleInterval;
+
         while (!cancellationToken.IsCancellationRequested)
         {
             try
@@ -207,9 +253,6 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
 
             try
             {
-                // Re-read the interval every tick so a per-tree override
-                // change takes effect on the next sample boundary.
-                var interval = _options.Get(string.Empty).WalSaturationSampleInterval;
                 if (interval == Timeout.InfiniteTimeSpan)
                 {
                     break;
@@ -235,14 +278,23 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
         // allocation-bounded by the live (tree, partition) cardinality.
         // We aggregate into a small per-tree accumulator to derive each
         // tree's worst-case depth ratio + parked-callers flag.
-        var perTree = new Dictionary<string, TreeAccumulator>(StringComparer.Ordinal);
+        // Reclaim the previous tick's accumulators into the free-list and clear
+        // the reusable per-tick map. Done at the START of the tick (not in a
+        // finally) so every early-return path below leaves the map populated for
+        // inspection yet still gets cleaned up before the next tick reuses it.
+        // The sampler is single-threaded, so no instance can be in flight here.
+        foreach (var pooled in _perTree.Values)
+        {
+            _accumulatorPool.Push(pooled);
+        }
+        _perTree.Clear();
+        var perTree = _perTree;
         foreach (var kv in WalCommitLogWriter._trackers)
         {
             var snap = kv.Value.SnapshotDepth();
             if (!perTree.TryGetValue(snap.TreeId, out var acc))
             {
-                acc = new TreeAccumulator { TreeId = snap.TreeId };
-                perTree[snap.TreeId] = acc;
+                acc = RentAccumulator(snap.TreeId);
             }
             // Ratio is 0 when the semaphore is in the unbounded shape
             // (cap == 0); a tree using opt-out admission cannot be
@@ -283,8 +335,7 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
 
             if (!perTree.TryGetValue(treeId, out var acc))
             {
-                acc = new TreeAccumulator { TreeId = treeId };
-                perTree[treeId] = acc;
+                acc = RentAccumulator(treeId);
             }
             acc.DispatchTimeoutDeltaInWindow += delta;
             acc.AttributedShard ??= shard;
@@ -310,8 +361,7 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
 
             if (!perTree.TryGetValue(treeId, out var acc))
             {
-                acc = new TreeAccumulator { TreeId = treeId };
-                perTree[treeId] = acc;
+                acc = RentAccumulator(treeId);
             }
             acc.ProviderFailureDeltaInWindow += delta;
             acc.AttributedShard ??= shard;
@@ -340,12 +390,12 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
 
             if (!perTree.TryGetValue(treeId, out var acc))
             {
-                acc = new TreeAccumulator { TreeId = treeId };
-                perTree[treeId] = acc;
+                acc = RentAccumulator(treeId);
             }
             acc.FlushLatencyTripDeltaInWindow += delta;
             acc.AttributedShard ??= shard;
         }
+
         _priorInitialised = true;
 
         var opts = _options.Get(string.Empty);
@@ -355,7 +405,68 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
         var recoveryWindow = opts.WalSaturationRecoveryWindow;
         var flushLatencyEnabled = opts.WalSaturationFlushLatencyThreshold is not null;
         var flushLatencySampleWindows = opts.WalSaturationFlushLatencySampleWindows;
+        var drainLagEnabled = opts.WalSaturationMaterialiserLagThreshold is not null;
+        var drainLagSampleWindows = opts.WalSaturationMaterialiserLagSampleWindows;
+        var drainLagThreshold = opts.WalSaturationMaterialiserLagThreshold;
         var observedAt = _time.GetUtcNow();
+
+        // Drain-lag is computed live every tick from two in-memory sources, so
+        // the signal engages immediately on a write spike instead of waiting for
+        // a WAL GC pass (which runs only at WalGcInterval - an hour by default -
+        // on a non-replicated tree). For each tree that has accepted a write,
+        // the lag is the WAL head wall clock (the newest routed entry's HLC,
+        // tracked in WalCommitLogWriter._walHeadWallClockTicks) minus the slowest
+        // in-memory materialiser cursor (the IWalCursorRegistry min). It is
+        // head-relative, so it reads zero once the materialiser catches up -
+        // including on a quiescent tree whose head stops advancing while the
+        // cursor drains forward - so an idle-but-healthy tree never trips. A
+        // null / Zero frontier (no consumer has reported a real checkpoint, or a
+        // block pin disabled the cursor branch) is treated as zero lag rather
+        // than the absolute head, so a never-checkpointed leaf never pins the
+        // regime - exactly as the block-pin contract requires. Every checked
+        // tree seeds a perTree accumulator (even at zero lag) so a recovered
+        // tree is reclassified back to Healthy even when it has no live tracker.
+        //
+        // The IWalCursorRegistry is always present: AddLattice registers the
+        // in-memory default as a guaranteed fallback (a host that opts into a
+        // materialiser/replication stack may replace it via AddWalCursorRegistry,
+        // which also wires the leaf cursor reporter). A core-only host with no
+        // materialiser reports a null frontier and therefore zero lag - the
+        // signal reads correctly idle rather than being silently disabled.
+        if (drainLagEnabled && drainLagThreshold is { } lagThreshold)
+        {
+            foreach (var headEntry in WalCommitLogWriter._walHeadWallClockTicks)
+            {
+                var treeId = headEntry.Key;
+                var headWallTicks = headEntry.Value;
+
+                long lagTicks = 0;
+                var frontier = await _cursors
+                    .GetMinCursorAsync(treeId, cancellationToken)
+                    .ConfigureAwait(false);
+                if (frontier is { } cursor && cursor > HybridLogicalClock.Zero
+                    && headWallTicks > cursor.WallClockTicks)
+                {
+                    lagTicks = headWallTicks - cursor.WallClockTicks;
+                }
+
+                // Emit the drain-lag gauge for every checked tree, not only the
+                // over-threshold ones, so the metric reflects the full lag
+                // distribution leading up to a trip.
+                LatticeMetrics.MaterialiserDrainLag.Record(
+                    TimeSpan.FromTicks(lagTicks).TotalMilliseconds,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId));
+
+                if (!perTree.TryGetValue(treeId, out var acc))
+                {
+                    acc = RentAccumulator(treeId);
+                }
+                if (lagTicks > lagThreshold.Ticks)
+                {
+                    acc.MaterialiserDrainLagOverThreshold = true;
+                }
+            }
+        }
 
         // Reset the per-tree consecutive-window counter for every tree
         // whose flush-latency delta this tick was zero, so the
@@ -387,6 +498,27 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
             }
         }
 
+        // Same stale-reset sweep for the drain-lag consecutive-window counter.
+        if (drainLagEnabled && _consecutiveMaterialiserDrainLagWindows.Count > 0)
+        {
+            var staleKeys = default(List<string>);
+            foreach (var treeId in _consecutiveMaterialiserDrainLagWindows.Keys)
+            {
+                if (!perTree.TryGetValue(treeId, out var acc) || !acc.MaterialiserDrainLagOverThreshold)
+                {
+                    staleKeys ??= new List<string>();
+                    staleKeys.Add(treeId);
+                }
+            }
+            if (staleKeys is not null)
+            {
+                foreach (var treeId in staleKeys)
+                {
+                    _consecutiveMaterialiserDrainLagWindows[treeId] = 0;
+                }
+            }
+        }
+
         if (perTree.Count == 0) return;
 
         foreach (var acc in perTree.Values)
@@ -409,13 +541,30 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                 ? cw
                 : 0;
 
+            // Maintain the per-tree drain-lag consecutive-window counter. The
+            // input is a standing LEVEL: increment on every tick whose fresh
+            // observation is over the threshold; the stale-reset sweep above
+            // already zeroed trees whose fresh level was at/under the threshold
+            // this tick or whose observation went stale.
+            if (drainLagEnabled && acc.MaterialiserDrainLagOverThreshold)
+            {
+                var prior = _consecutiveMaterialiserDrainLagWindows.TryGetValue(acc.TreeId, out var d) ? d : 0;
+                _consecutiveMaterialiserDrainLagWindows[acc.TreeId] = prior + 1;
+            }
+            var drainLagConsecutiveWindows = drainLagEnabled
+                && _consecutiveMaterialiserDrainLagWindows.TryGetValue(acc.TreeId, out var dw)
+                ? dw
+                : 0;
+
             var newState = Classify(
                 acc,
                 throttledRatio,
                 dispatchThreshold,
                 providerFailureThreshold,
                 flushLatencyConsecutiveWindows,
-                flushLatencyEnabled ? flushLatencySampleWindows : 0);
+                flushLatencyEnabled ? flushLatencySampleWindows : 0,
+                drainLagConsecutiveWindows,
+                drainLagEnabled ? drainLagSampleWindows : 0);
 
             // Apply the recovery-window upgrade. When the current-
             // tick classification is Healthy but the tree was observed
@@ -508,7 +657,7 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
     /// Classifies a tree's per-tick accumulator into the three-state
     /// <see cref="WalSaturationState"/> regime. Saturated wins over
     /// Throttled which wins over Healthy. Saturated is triggered by
-    /// any of four independent signals (in the order they are
+    /// any of four independent acute signals (in the order they are
     /// evaluated, but the choice is symmetric):
     /// dispatch-timeout-rate, provider-failure-rate, sustained
     /// flush-latency, or admission semaphore at-cap with parked
@@ -519,6 +668,19 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
     /// internal sentinel used when
     /// <see cref="LatticeOptions.WalSaturationFlushLatencyThreshold"/>
     /// is <c>null</c>).
+    /// <para>
+    /// The drain-lag input is deliberately NOT a Saturated trigger. A
+    /// materialiser falling behind the WAL head is a sustained-pressure
+    /// condition the system should ride out by slowing producers, not an
+    /// acute storage fault the admission gate should fast-fail. It therefore
+    /// drives <see cref="WalSaturationState.Throttled"/> (a pure back-off),
+    /// so it never engages the writer admission gate's
+    /// <c>LatticeSaturatedException</c> path. The drain-lag trigger is
+    /// disabled when <paramref name="drainLagSampleWindows"/> is zero (the
+    /// internal sentinel used when
+    /// <see cref="LatticeOptions.WalSaturationMaterialiserLagThreshold"/> is
+    /// <c>null</c>).
+    /// </para>
     /// </summary>
     private static WalSaturationState Classify(
         TreeAccumulator acc,
@@ -526,7 +688,9 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
         int dispatchThreshold,
         int providerFailureThreshold,
         int flushLatencyConsecutiveWindows,
-        int flushLatencySampleWindows)
+        int flushLatencySampleWindows,
+        int drainLagConsecutiveWindows,
+        int drainLagSampleWindows)
     {
         // Saturated wins: dispatch-timeout threshold crossed OR
         // provider-failure threshold crossed (when enabled) OR
@@ -539,8 +703,11 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
         {
             return WalSaturationState.Saturated;
         }
-        // Throttled: depth ratio at-or-above the throttled threshold.
-        if (acc.MaxDepthRatio >= throttledRatio)
+        // Throttled: depth ratio at-or-above the throttled threshold OR a
+        // sustained drain-lag consecutive-window run (when enabled). Drain lag
+        // is a back-off, not a fault, so it stops here rather than escalating.
+        if (acc.MaxDepthRatio >= throttledRatio
+            || (drainLagSampleWindows > 0 && drainLagConsecutiveWindows >= drainLagSampleWindows))
         {
             return WalSaturationState.Throttled;
         }
@@ -555,7 +722,24 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
         public long DispatchTimeoutDeltaInWindow;
         public long ProviderFailureDeltaInWindow;
         public long FlushLatencyTripDeltaInWindow;
+        public bool MaterialiserDrainLagOverThreshold;
         public int? AttributedPartition;
         public int? AttributedShard;
+
+        // Zeroes every field so a pooled instance carries no state from the
+        // tick it was last used on. Must clear ALL fields - a missed field
+        // would leak a prior tree's reading into the next tick's classification.
+        public void Reset(string treeId)
+        {
+            TreeId = treeId;
+            MaxDepthRatio = 0.0;
+            HasParkedCallers = false;
+            DispatchTimeoutDeltaInWindow = 0;
+            ProviderFailureDeltaInWindow = 0;
+            FlushLatencyTripDeltaInWindow = 0;
+            MaterialiserDrainLagOverThreshold = false;
+            AttributedPartition = null;
+            AttributedShard = null;
+        }
     }
 }
