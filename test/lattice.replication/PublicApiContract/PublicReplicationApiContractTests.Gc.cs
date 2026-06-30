@@ -62,8 +62,6 @@ public partial class PublicReplicationApiContractTests
             .ServicesFor(PublicReplicationApiClusterFixture.SiteAClusterId);
         var gc = siteAServices.GetRequiredService<ILatticeWalGc>();
         var grainFactory = siteAServices.GetRequiredService<Orleans.IGrainFactory>();
-        var pinGrain = grainFactory
-            .GetGrain<Orleans.Lattice.BPlusTree.Grains.IWalMaterialiserPinGrain>(treeId);
 
         // A data-capable leaf seeds a HybridLogicalClock.Zero materialiser
         // "block" pin at birth (issue #947), which deliberately holds the WAL
@@ -76,6 +74,14 @@ public partial class PublicReplicationApiContractTests
         // through the tree on each attempt. The leaf grain ids are recovered
         // from the durable pin store's per-leaf consumer ids.
         //
+        // The durable pin store is sharded across
+        // WalMaterialiserPinShards grains keyed {treeId}#s{shard} (the GC reads
+        // every shard plus the legacy {treeId} key via
+        // WalMaterialiserPinRouting.EnumerateReadKeys). The data-leaf discovery
+        // here must read the same shard set, otherwise it sees an empty legacy
+        // grain, finds no leaves, and the loop below can never lift the block
+        // pin.
+        //
         // ForceDeactivateAsync is fire-and-forget: it calls DeactivateOnIdle,
         // which only *schedules* deactivation after the current turn. The prior
         // shape issued the deactivation and then immediately read with no gap,
@@ -87,7 +93,7 @@ public partial class PublicReplicationApiContractTests
         // apply before reading, so the read deterministically drives a cold
         // reactivation, replay, and checkpoint flush. The shared convergence
         // timeout is sufficient; no per-call override is needed.
-        var dataLeaves = await DataLeavesFromPinsAsync(pinGrain, grainFactory);
+        var dataLeaves = await DataLeavesFromPinsAsync(siteAServices, grainFactory, treeId);
 
         LatticeWalGcReport report = default;
         await PublicReplicationApiClusterFixture.WaitForConvergenceAsync(
@@ -113,37 +119,51 @@ public partial class PublicReplicationApiContractTests
 
     /// <summary>
     /// Recovers the distinct data-leaf grain references for the tree from the
-    /// durable materialiser pin store. Each pin's consumer id has the shape
+    /// durable materialiser pin store. The store is sharded across
+    /// <see cref="LatticeOptions.WalMaterialiserPinShards"/> grains, so this
+    /// reads the full shard set (plus the legacy unsuffixed key) via
+    /// <see cref="Orleans.Lattice.BPlusTree.Grains.WalMaterialiserPinRouting.EnumerateReadKeys"/>
+    /// and unions their pins. Each pin's consumer id has the shape
     /// <c>_lattice_materialiser_{treeId}_{leafGrainId}_{partition}</c>; the
     /// embedded <c>bplusleaf/{guid}</c> grain id is extracted and de-duplicated
-    /// across partitions so each leaf is deactivated once.
+    /// across partitions and shards so each leaf is deactivated once.
     /// </summary>
     private static async Task<IReadOnlyList<Orleans.Lattice.BPlusTree.IBPlusLeafGrain>> DataLeavesFromPinsAsync(
-        Orleans.Lattice.BPlusTree.Grains.IWalMaterialiserPinGrain pinGrain,
-        Orleans.IGrainFactory grainFactory)
+        IServiceProvider services,
+        Orleans.IGrainFactory grainFactory,
+        string treeId)
     {
         const string marker = "bplusleaf/";
-        var pins = await pinGrain.GetPinsAsync();
+        var options = services.GetService<Microsoft.Extensions.Options.IOptionsMonitor<LatticeOptions>>();
+        var shardCount = Orleans.Lattice.BPlusTree.Grains.WalMaterialiserPinRouting.ResolveShardCount(options);
+        var pinKeys = Orleans.Lattice.BPlusTree.Grains.WalMaterialiserPinRouting.EnumerateReadKeys(treeId, shardCount);
+
         var leaves = new List<Orleans.Lattice.BPlusTree.IBPlusLeafGrain>();
         var seen = new HashSet<Guid>();
-        foreach (var consumerId in pins.Keys)
+        foreach (var pinKey in pinKeys)
         {
-            var start = consumerId.IndexOf(marker, StringComparison.Ordinal);
-            if (start < 0)
+            var pinGrain = grainFactory
+                .GetGrain<Orleans.Lattice.BPlusTree.Grains.IWalMaterialiserPinGrain>(pinKey);
+            var pins = await pinGrain.GetPinsAsync();
+            foreach (var consumerId in pins.Keys)
             {
-                continue;
-            }
+                var start = consumerId.IndexOf(marker, StringComparison.Ordinal);
+                if (start < 0)
+                {
+                    continue;
+                }
 
-            start += marker.Length;
-            var end = consumerId.LastIndexOf('_');
-            if (end <= start)
-            {
-                continue;
-            }
+                start += marker.Length;
+                var end = consumerId.LastIndexOf('_');
+                if (end <= start)
+                {
+                    continue;
+                }
 
-            if (Guid.TryParseExact(consumerId[start..end], "N", out var leafId) && seen.Add(leafId))
-            {
-                leaves.Add(grainFactory.GetGrain<Orleans.Lattice.BPlusTree.IBPlusLeafGrain>(leafId));
+                if (Guid.TryParseExact(consumerId[start..end], "N", out var leafId) && seen.Add(leafId))
+                {
+                    leaves.Add(grainFactory.GetGrain<Orleans.Lattice.BPlusTree.IBPlusLeafGrain>(leafId));
+                }
             }
         }
 
