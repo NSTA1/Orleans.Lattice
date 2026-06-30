@@ -34,6 +34,7 @@ public class WalSaturationSamplerTests
         WalCommitLogWriter._trackers.Clear();
         WalCommitLogWriter._dispatchTimeoutCounts.Clear();
         WalCommitLogWriter._providerFailureCounts.Clear();
+        WalCommitLogWriter._walHeadWallClockTicks.Clear();
         _treeId = $"tree-sampler-{Interlocked.Increment(ref _treeIdSeed)}";
     }
 
@@ -100,7 +101,8 @@ public class WalSaturationSamplerTests
             signal,
             dispatcher,
             monitor,
-            NullLogger<WalSaturationSampler>.Instance);
+            NullLogger<WalSaturationSampler>.Instance,
+            new InMemoryWalCursorRegistry());
     }
 
     /// <summary>
@@ -517,7 +519,7 @@ public class WalSaturationSamplerTests
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         monitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
         Assert.That(
-            () => new WalSaturationSampler(null!, dispatcher, monitor, NullLogger<WalSaturationSampler>.Instance),
+            () => new WalSaturationSampler(null!, dispatcher, monitor, NullLogger<WalSaturationSampler>.Instance, new InMemoryWalCursorRegistry()),
             Throws.ArgumentNullException);
     }
 
@@ -528,7 +530,7 @@ public class WalSaturationSamplerTests
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         monitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
         Assert.That(
-            () => new WalSaturationSampler(signal, null!, monitor, NullLogger<WalSaturationSampler>.Instance),
+            () => new WalSaturationSampler(signal, null!, monitor, NullLogger<WalSaturationSampler>.Instance, new InMemoryWalCursorRegistry()),
             Throws.ArgumentNullException);
     }
 
@@ -540,7 +542,7 @@ public class WalSaturationSamplerTests
             Array.Empty<IWalSaturationObserver>(),
             NullLogger<WalSaturationObserverDispatcher>.Instance);
         Assert.That(
-            () => new WalSaturationSampler(signal, dispatcher, null!, NullLogger<WalSaturationSampler>.Instance),
+            () => new WalSaturationSampler(signal, dispatcher, null!, NullLogger<WalSaturationSampler>.Instance, new InMemoryWalCursorRegistry()),
             Throws.ArgumentNullException);
     }
 
@@ -554,7 +556,21 @@ public class WalSaturationSamplerTests
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         monitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
         Assert.That(
-            () => new WalSaturationSampler(signal, dispatcher, monitor, null!),
+            () => new WalSaturationSampler(signal, dispatcher, monitor, null!, new InMemoryWalCursorRegistry()),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void Ctor_throws_on_null_cursors()
+    {
+        var signal = new WalSaturationSignal();
+        var dispatcher = new WalSaturationObserverDispatcher(
+            Array.Empty<IWalSaturationObserver>(),
+            NullLogger<WalSaturationObserverDispatcher>.Instance);
+        var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        monitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
+        Assert.That(
+            () => new WalSaturationSampler(signal, dispatcher, monitor, NullLogger<WalSaturationSampler>.Instance, null!),
             Throws.ArgumentNullException);
     }
 
@@ -645,7 +661,8 @@ public class WalSaturationSamplerTests
             dispatcher,
             monitor,
             NullLogger<WalSaturationSampler>.Instance,
-            clock);
+            clock,
+            new InMemoryWalCursorRegistry());
         return (sampler, signal, clock);
     }
 

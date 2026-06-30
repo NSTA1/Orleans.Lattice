@@ -127,28 +127,39 @@ internal sealed class WalCommitLogWriter(
     internal static readonly ConcurrentDictionary<(string TreeId, int Shard), long> _flushLatencyTripCounts
         = new();
 
-    // Per-tree leaf-materialiser drain-lag LEVEL, written by the WAL GC
-    // every pass as the standing head-relative lag (the WAL head HLC's
-    // wall clock minus the slowest durable leaf-materialiser checkpoint's
-    // wall clock, clamped at zero) alongside the wall-clock tick the GC
-    // observed it. This is the direct "the materialiser is not draining the
-    // WAL fast enough" surface that the depth-ratio, dispatch-timeout, and
-    // flush-latency inputs only approximate; it is what carries back-pressure
-    // to a downstream replication receiver when a write burst outruns the
-    // local drain. It is a LEVEL (not a cumulative edge counter): the GC
-    // refreshes it at its own cadence (seconds for replicated trees) and the
-    // 200 ms saturation sampler re-reads the standing value on every tick, so
-    // a lag that persists between GC refreshes is counted on every
-    // intervening sampler window rather than appearing as a single edge that
-    // the consecutive-window check could never accumulate. Keyed by tree
-    // (drain lag is a per-tree property the GC measures once per pass, not per
-    // partition). The sampler treats an observation older than its staleness
-    // window as absent so a stale "lagging" reading cannot pin the regime once
-    // the GC stops refreshing it. Same static-singleton shape as
-    // _flushLatencyTripCounts so the sampler reads every classifier-input map
-    // off a fixed root regardless of grain activation lifetime in tests.
-    internal static readonly ConcurrentDictionary<string, MaterialiserDrainLagLevel> _materialiserDrainLagLevels
+    // Per-tree in-memory WAL head wall-clock, the larger half of the live
+    // leaf-materialiser drain-lag measure. Updated on every routed append with
+    // the wall clock of the entry's HLC (the producer stamps the HLC upstream;
+    // the writer only ever advances this monotonically via a max). This is the
+    // freshest possible "newest offered WAL entry" reading - more timely than a
+    // storage head read because it reflects the write the instant it is routed,
+    // before admission and dispatch. The 200 ms saturation sampler subtracts
+    // the slowest in-memory materialiser cursor (the IWalCursorRegistry min)
+    // from this head every tick to derive the standing drain lag live, so the
+    // signal engages immediately on a write spike rather than waiting for a WAL
+    // GC pass. Keyed by tree (drain lag is a per-tree property). Same
+    // static-singleton shape as _flushLatencyTripCounts so the sampler reads
+    // every classifier-input source off a fixed root regardless of grain /
+    // writer activation lifetime in tests.
+    internal static readonly ConcurrentDictionary<string, long> _walHeadWallClockTicks
         = new(StringComparer.Ordinal);
+
+    // Advances the per-tree WAL head wall clock to <paramref name="wallClockTicks"/>
+    // when it is newer than the current reading. A non-positive tick (e.g. a
+    // range-delete entry carrying HybridLogicalClock.Zero) is ignored so it
+    // cannot lower the head. Lock-free monotonic max.
+    internal static void RecordWalHead(string treeId, long wallClockTicks)
+    {
+        if (wallClockTicks <= 0)
+        {
+            return;
+        }
+        _walHeadWallClockTicks.AddOrUpdate(
+            treeId,
+            static (_, incoming) => incoming,
+            static (_, prev, incoming) => incoming > prev ? incoming : prev,
+            wallClockTicks);
+    }
 
     // Per-instance drain CTS. Each WalCommitLogWriter owns its own
     // token; DrainAsync cancels it; AcquireAsync observes it alongside
@@ -1070,6 +1081,13 @@ internal sealed class WalCommitLogWriter(
             VectorClock = capturedFrontier,
             DependencySummary = capturedFrontier,
         };
+
+        // Record the live WAL head wall clock for the drain-lag signal. Done
+        // here, at the single route chokepoint for both the single-entry and
+        // batched append paths, so the saturation sampler sees a write spike
+        // the instant it is offered. RecordWalHead is a monotonic max and
+        // ignores HLC.Zero (range-delete) entries.
+        WalCommitLogWriter.RecordWalHead(stamped.TreeId, stamped.Timestamp.WallClockTicks);
 
         int partition;
         if (stamped.Op is MutationKind.TxCommit or MutationKind.TxAbort)

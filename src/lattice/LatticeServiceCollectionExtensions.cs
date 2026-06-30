@@ -118,6 +118,20 @@ public static class LatticeServiceCollectionExtensions
         builder.Services.TryAddSingleton<BPlusTree.Grains.WalSaturationSignal>();
         builder.Services.TryAddSingleton<IWalSaturationSignal>(sp => sp.GetRequiredService<BPlusTree.Grains.WalSaturationSignal>());
         builder.Services.TryAddSingleton<BPlusTree.Grains.WalSaturationObserverDispatcher>();
+        // Always-on in-memory consumer-cursor registry. The WAL is integral to
+        // every Lattice deployment, so the registry that the saturation sampler
+        // reads to compute materialiser drain lag must never be silently absent:
+        // a missing registry would turn the drain-lag back-pressure input off
+        // without any signal. We register the process-local
+        // InMemoryWalCursorRegistry here as a guaranteed fallback so the sampler
+        // can take a hard dependency on IWalCursorRegistry. Hosts that opt into
+        // a materialiser/replication stack call AddWalCursorRegistry, which
+        // layers in the leaf cursor reporter (and may replace this default with
+        // a host-supplied factory); core-only hosts still get a live registry
+        // that reports a null frontier (no reporters) - correctly yielding zero
+        // drain lag rather than a disabled signal. TryAdd so a downstream
+        // package or host registration still wins.
+        builder.Services.TryAddSingleton<IWalCursorRegistry, InMemoryWalCursorRegistry>();
         builder.Services.AddSingleton<IHostedService, BPlusTree.Grains.WalSaturationSampler>();
         // WAL byte-budget encoder: the canonical Orleans-binary
         // implementation produces the exact serialised bytes for each
@@ -380,9 +394,12 @@ public static class LatticeServiceCollectionExtensions
     /// re-activated and re-reported after a restart. Forward consumers (for
     /// example the replication shipper) still re-report their own
     /// durably-persisted cursors on restart, and the fall-off-log seam handles
-    /// any genuine retention gap. Idempotent: a host-supplied registration via
-    /// <paramref name="factory"/> takes precedence and a second call is a
-    /// no-op.
+    /// any genuine retention gap. The default <see cref="InMemoryWalCursorRegistry"/>
+    /// is already registered by <see cref="AddLattice"/> as an always-on
+    /// fallback, so calling this without a <paramref name="factory"/> only adds
+    /// the leaf reporter and tailing subscriber. A host-supplied
+    /// <paramref name="factory"/> takes precedence over that core default
+    /// (registered via <c>Replace</c>); a repeated default call is a no-op.
     /// </summary>
     public static ISiloBuilder AddWalCursorRegistry(
         this ISiloBuilder builder,
@@ -395,7 +412,10 @@ public static class LatticeServiceCollectionExtensions
         }
         else
         {
-            builder.Services.TryAddSingleton<IWalCursorRegistry>(factory);
+            // Replace (not TryAdd) so a host-supplied factory wins even though
+            // AddLattice has already registered the in-memory default - TryAdd
+            // would silently drop the host's registry.
+            builder.Services.Replace(ServiceDescriptor.Singleton<IWalCursorRegistry>(factory));
         }
 
         // Opting into the cursor registry implies opting into

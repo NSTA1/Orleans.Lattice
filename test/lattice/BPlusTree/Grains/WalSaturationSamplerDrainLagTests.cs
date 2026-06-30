@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -10,11 +11,13 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// Unit tests for the leaf-materialiser drain-lag classifier input
 /// (<see cref="LatticeOptions.WalSaturationMaterialiserLagThreshold"/> +
 /// <see cref="LatticeOptions.WalSaturationMaterialiserLagSampleWindows"/>)
-/// that <see cref="WalSaturationSampler"/> reads off
-/// <see cref="WalCommitLogWriter._materialiserDrainLagLevels"/> - the direct
-/// leaf-materialiser drain-lag back-pressure surface (issue #1030). The input
-/// is a standing LEVEL (the WAL GC refreshes a per-tree lag observation at its
-/// own cadence; the sampler re-reads it every tick), and a sustained run drives
+/// that <see cref="WalSaturationSampler"/> computes live every tick from the
+/// in-memory WAL head wall clock
+/// (<see cref="WalCommitLogWriter._walHeadWallClockTicks"/>) minus the slowest
+/// in-memory materialiser cursor (the <see cref="IWalCursorRegistry"/> min) -
+/// the direct leaf-materialiser drain-lag back-pressure surface (issue #1030).
+/// The lag is recomputed fresh each tick (no GC dependency, no staleness
+/// window), and a sustained run drives
 /// <see cref="WalSaturationState.Throttled"/> - a pure back-off - rather than
 /// Saturated, so it never engages the writer admission gate's fast-fail.
 /// </summary>
@@ -23,6 +26,8 @@ public class WalSaturationSamplerDrainLagTests
 {
     private static int _treeIdSeed;
     private string _treeId = null!;
+    private IWalCursorRegistry _cursors = null!;
+    private long _headTicks;
 
     [SetUp]
     public void SetUp()
@@ -31,7 +36,9 @@ public class WalSaturationSamplerDrainLagTests
         WalCommitLogWriter._dispatchTimeoutCounts.Clear();
         WalCommitLogWriter._providerFailureCounts.Clear();
         WalCommitLogWriter._flushLatencyTripCounts.Clear();
-        WalCommitLogWriter._materialiserDrainLagLevels.Clear();
+        WalCommitLogWriter._walHeadWallClockTicks.Clear();
+        _cursors = Substitute.For<IWalCursorRegistry>();
+        _headTicks = DateTimeOffset.UtcNow.UtcTicks;
         _treeId = $"tree-drain-lag-{Interlocked.Increment(ref _treeIdSeed)}";
     }
 
@@ -54,13 +61,22 @@ public class WalSaturationSamplerDrainLagTests
             signal,
             dispatcher,
             monitor,
-            NullLogger<WalSaturationSampler>.Instance);
+            NullLogger<WalSaturationSampler>.Instance,
+            _cursors);
     }
 
-    // Writes a fresh standing drain-lag level observation (observed now).
-    private void SetLevel(TimeSpan lag, string? tree = null) =>
-        WalCommitLogWriter._materialiserDrainLagLevels[tree ?? _treeId] =
-            new MaterialiserDrainLagLevel(lag.Ticks, DateTimeOffset.UtcNow.UtcTicks);
+    // Drives a fresh per-tick drain-lag of exactly <paramref name="lag"/> for the
+    // tree by recording the WAL head wall clock and a materialiser frontier
+    // cursor that trails it by that amount. A zero lag places the frontier at the
+    // head (the materialiser has caught up).
+    private void SetLevel(TimeSpan lag, string? tree = null)
+    {
+        var t = tree ?? _treeId;
+        WalCommitLogWriter._walHeadWallClockTicks[t] = _headTicks;
+        var frontier = new HybridLogicalClock { WallClockTicks = _headTicks - lag.Ticks, Counter = 0 };
+        _cursors.GetMinCursorAsync(t, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<HybridLogicalClock?>(frontier));
+    }
 
     [Test]
     public async Task Disabled_threshold_never_escalates_regardless_of_level()
@@ -164,36 +180,6 @@ public class WalSaturationSamplerDrainLagTests
     }
 
     [Test]
-    public async Task Stale_observation_does_not_escalate()
-    {
-        var sampler = CreateSampler(
-            new LatticeOptions
-            {
-                WalSaturationMaterialiserLagThreshold = TimeSpan.FromSeconds(5),
-                WalSaturationMaterialiserLagSampleWindows = 1,
-            },
-            out var signal);
-
-        await sampler.SampleOnceAsync(CancellationToken.None); // baseline
-
-        // An over-threshold lag observed far in the past (older than the
-        // staleness window): the GC has stopped refreshing it, so it must be
-        // treated as absent and never escalate.
-        WalCommitLogWriter._materialiserDrainLagLevels[_treeId] =
-            new MaterialiserDrainLagLevel(
-                TimeSpan.FromMinutes(10).Ticks,
-                DateTimeOffset.UtcNow.AddHours(-1).UtcTicks);
-
-        for (var i = 0; i < 5; i++)
-        {
-            await sampler.SampleOnceAsync(CancellationToken.None);
-        }
-
-        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Healthy),
-            "a stale level observation must not pin the regime once the GC stops refreshing it");
-    }
-
-    [Test]
     public async Task Single_window_threshold_escalates_on_first_over_threshold_window()
     {
         var sampler = CreateSampler(
@@ -238,5 +224,35 @@ public class WalSaturationSamplerDrainLagTests
             "tree A had 2 consecutive over-threshold windows");
         Assert.That(signal.GetCurrentState(otherTree), Is.EqualTo(WalSaturationState.Healthy),
             "tree B's counter was reset by the under-threshold window");
+    }
+
+    [Test]
+    public async Task Null_frontier_is_treated_as_zero_lag_and_never_escalates()
+    {
+        var sampler = CreateSampler(
+            new LatticeOptions
+            {
+                WalSaturationMaterialiserLagThreshold = TimeSpan.FromSeconds(5),
+                WalSaturationMaterialiserLagSampleWindows = 1,
+            },
+            out var signal);
+
+        await sampler.SampleOnceAsync(CancellationToken.None); // baseline
+
+        // A tree with an advancing WAL head but no materialiser cursor reported
+        // (e.g. a never-checkpointed leaf, or a block pin disabling the cursor
+        // branch): the registry returns null. We cannot measure a head-relative
+        // lag, so the block-pin contract requires zero lag - never a trip.
+        WalCommitLogWriter._walHeadWallClockTicks[_treeId] = _headTicks;
+        _cursors.GetMinCursorAsync(_treeId, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<HybridLogicalClock?>(null));
+
+        for (var i = 0; i < 5; i++)
+        {
+            await sampler.SampleOnceAsync(CancellationToken.None);
+        }
+
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Healthy),
+            "a never-checkpointed leaf (null frontier) must never pin the regime, even with an advancing head");
     }
 }

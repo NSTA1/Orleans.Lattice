@@ -183,6 +183,44 @@ public class LatticeServiceCollectionExtensionsTests
     }
 
     [Test]
+    public void AddLattice_registers_in_memory_cursor_registry_as_fallback()
+    {
+        var services = new ServiceCollection();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLattice((_, _) => { });
+
+        var provider = services.BuildServiceProvider();
+        var registry = provider.GetService<IWalCursorRegistry>();
+        Assert.That(
+            registry,
+            Is.InstanceOf<InMemoryWalCursorRegistry>(),
+            "AddLattice must register the in-memory cursor registry as an always-on fallback so the saturation sampler's drain-lag input is never silently absent");
+
+        // Singleton lifetime: same instance resolved twice.
+        Assert.That(provider.GetService<IWalCursorRegistry>(), Is.SameAs(registry));
+    }
+
+    [Test]
+    public void AddWalCursorRegistry_factory_wins_over_core_default()
+    {
+        var custom = Substitute.For<IWalCursorRegistry>();
+        var services = new ServiceCollection();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        // AddLattice registers the in-memory default first; a host that then
+        // opts into a materialiser stack via AddWalCursorRegistry(factory) must
+        // still win - the factory overload uses Replace, not TryAdd.
+        builder.AddLattice((_, _) => { });
+        builder.AddWalCursorRegistry(_ => custom);
+
+        var provider = services.BuildServiceProvider();
+        Assert.That(provider.GetRequiredService<IWalCursorRegistry>(), Is.SameAs(custom));
+    }
+
+    [Test]
     public void AddLattice_registers_IWalSaturationSignal_singleton()
     {
         var services = new ServiceCollection();

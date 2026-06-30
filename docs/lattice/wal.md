@@ -652,11 +652,14 @@ await registry.ReportCursorAsync(
 await registry.UnregisterAsync("orders", "peer:site-b", cancellationToken);
 ```
 
-The default `InMemoryWalCursorRegistry` is process-local and loses
-its state on silo restart. A host that needs cross-restart durability
-registers its own `IWalCursorRegistry` implementation via DI
-before calling `AddWalCursorRegistry(...)` (or `AddLatticeReplication(...)`,
-which calls it transitively).
+`AddLattice` always registers the default `InMemoryWalCursorRegistry`
+as a fallback, so the registry the GC and the saturation sampler read
+is never absent; it is process-local and loses its state on silo
+restart. A host that needs cross-restart durability supplies its own
+`IWalCursorRegistry` implementation through the
+`AddWalCursorRegistry(factory)` overload, which replaces that in-memory
+default regardless of registration order (or through
+`AddLatticeReplication(...)`, which wires the registry transitively).
 
 ### Causal-stable frontier
 
