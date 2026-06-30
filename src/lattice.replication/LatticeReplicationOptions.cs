@@ -1265,9 +1265,11 @@ public class LatticeReplicationOptions
     /// Controller state is in-memory and activation-scoped (per
     /// <c>(tree, peer)</c> shipper activation); a grain re-activation
     /// resets the effective size to <see cref="ShipBatchSize"/> and the
-    /// controller re-learns from the live link. Off by default until the
-    /// adaptive path has been validated against the replication chaos
-    /// fixtures.
+    /// controller re-learns from the live link. Enabled by default so a
+    /// repeated apply failure (such as a receiver phase-2 commit timeout
+    /// under burst load) shrinks the batch and recovers automatically rather
+    /// than re-shipping the identical oversized batch indefinitely; set the
+    /// flag to <see langword="false"/> to restore the static-sizing path.
     /// </para>
     /// </summary>
     public bool AdaptiveBatchSizingEnabled { get; set; } = DefaultAdaptiveBatchSizingEnabled;
@@ -1937,12 +1939,17 @@ public class LatticeReplicationOptions
 
     /// <summary>
     /// Default value for <see cref="AdaptiveBatchSizingEnabled"/>:
-    /// <see langword="false"/>. Sender-side adaptive batch sizing is a
-    /// dark-launched opt-in: with the flag off the shipper sizes every
-    /// batch exactly as the static path does today, so a host that never
-    /// touches the option gets byte-identical steady-state behaviour.
+    /// <see langword="true"/>. Sender-side adaptive batch sizing is on by
+    /// default so the shipper's multiplicative-decrease back-off shrinks the
+    /// effective batch size on a repeated apply failure (for example a
+    /// receiver phase-2 manifest-commit timeout under burst load) instead of
+    /// re-shipping the identical oversized batch forever; the additive
+    /// increase rebuilds the batch toward <see cref="ShipBatchSize"/> once the
+    /// link recovers. A healthy link whose ack latency stays at or below
+    /// <see cref="AdaptiveBatchLatencyThreshold"/> sits pinned at the
+    /// configured ceiling, so steady-state behaviour matches the static path.
     /// </summary>
-    public const bool DefaultAdaptiveBatchSizingEnabled = false;
+    public const bool DefaultAdaptiveBatchSizingEnabled = true;
 
     /// <summary>
     /// Default value for <see cref="AdaptiveBatchIncrement"/>: <c>8</c>

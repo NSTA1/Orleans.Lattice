@@ -99,7 +99,7 @@ A window greater than `1` issues concurrent `IReplicationTransport.SendAsync` ca
 
 The receiver hint described above only ever pushes the batch size *down*, and only once the receiver is already feeling pressure. With pipelining in place the sender has its own local signal - per-batch ack latency and error rate - so it can self-tune the batch size *before* the receiver has to raise a hint. That is the AIMD (additive-increase / multiplicative-decrease) controller behind `LatticeReplicationOptions.AdaptiveBatchSizingEnabled`.
 
-The flag **defaults to `false`**. With it off, the shipper chooses the per-tick batch size exactly as it always has - at `ShipBatchSize`, modulated only downward by an active receiver hint - so steady-state behaviour is byte-identical to the static path until an operator opts in.
+The flag **defaults to `true`**. A healthy link whose window-mean ack latency stays at or below `AdaptiveBatchLatencyThreshold` sits pinned at the `ShipBatchSize` ceiling (modulated only downward by an active receiver hint), so steady-state behaviour matches the static path; the controller earns its keep on a degraded link, where its multiplicative decrease shrinks the batch on a repeated send/apply failure (such as a receiver phase-2 commit timeout under burst load) so the stream recovers instead of re-shipping the identical oversized batch forever. Set the flag to `false` to restore the static-sizing path.
 
 ```csharp verify
 var options = new LatticeReplicationOptions

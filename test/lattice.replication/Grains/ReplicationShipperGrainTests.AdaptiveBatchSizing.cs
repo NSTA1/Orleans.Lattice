@@ -82,6 +82,65 @@ public partial class ReplicationShipperGrainTests
     }
 
     /// <summary>
+    /// Regression for issue #1047. With adaptive batch sizing left at its
+    /// default (now enabled), a failed send drives the controller's
+    /// multiplicative decrease, so the next retry ships a strictly smaller
+    /// batch rather than re-shipping the identical oversized batch forever.
+    /// This is the automatic recovery from a deterministic apply failure
+    /// (such as a receiver phase-2 manifest-commit timeout under burst load).
+    /// </summary>
+    [Test]
+    public async Task PumpOnceAsync_default_adaptive_shrinks_batch_after_send_failure()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = LocalCluster,
+            ShipCursorWriteInterval = 1,
+            ShipBatchSize = 8,
+            // AdaptiveBatchSizingEnabled is intentionally left unset: the
+            // default-on posture is the behaviour under test. A high latency
+            // threshold keeps a healthy ack from triggering the latency-based
+            // decrease so the only shrink signal is the send failure.
+            AdaptiveBatchLatencyThreshold = TimeSpan.FromSeconds(5),
+            ShipBackoffInitial = TimeSpan.FromMilliseconds(1),
+            ShipBackoffMax = TimeSpan.FromMilliseconds(1),
+            ShipBackoffJitter = 0.0,
+        };
+        var (grain, _, feed, transport, _, _, _) = Create(opts);
+
+        var calls = 0;
+        transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                calls++;
+                if (calls == 1)
+                {
+                    throw new InvalidOperationException("apply-timeout");
+                }
+
+                return new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero };
+            });
+
+        for (var i = 1; i <= 8; i++)
+        {
+            feed.Append(MakeEntry($"k{i}", ticks: i));
+        }
+
+        // Tick 1: drains the full ceiling of 8 and the send throws, so the
+        // controller halves the effective size (8 -> 4) and backs off.
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        // Let the 1 ms backoff window elapse before retrying.
+        await Task.Delay(30);
+
+        // Tick 2: the shrunk effective size caps the drain at 4 entries.
+        await grain.OnDoorbellAsync(CancellationToken.None);
+
+        Assert.That(LastShippedEntryCount(transport), Is.EqualTo(4),
+            "a send failure shrinks the default-on adaptive batch size so the retry ships a smaller batch");
+    }
+
+    /// <summary>
     /// The receiver flow-control hint is the hard ceiling and always wins:
     /// even with adaptive sizing enabled (and the controller's effective
     /// size at the full ShipBatchSize), an active
@@ -165,7 +224,7 @@ public partial class ReplicationShipperGrainTests
         Assert.Multiple(() =>
         {
             Assert.That(batchSample.Value, Is.EqualTo(4),
-                "the effective cap with no hint and adaptive off is the configured ShipBatchSize");
+                "the effective cap with no hint and a healthy link is the configured ShipBatchSize ceiling");
             Assert.That(batchSample.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
                 t.Key == "tree" && (string?)t.Value == Tree));
             Assert.That(batchSample.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>

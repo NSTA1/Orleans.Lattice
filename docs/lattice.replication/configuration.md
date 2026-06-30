@@ -143,7 +143,7 @@ siloBuilder.ConfigureLatticeReplication("orders", o =>
 | [`WireVersionNegotiationEnabled`](#wireversionnegotiationenabled) | `bool` | `false` |
 | [`MinimumSupportedWireVersion`](#minimumsupportedwireversion) | `int` | 1 |
 | [`UnknownPeerWireVersionFloor`](#unknownpeerwireversionfloor) | `int` | `EncodedBatchHeader.CurrentWireVersion` |
-| [`AdaptiveBatchSizingEnabled`](#adaptivebatchsizingenabled) | `bool` | `false` |
+| [`AdaptiveBatchSizingEnabled`](#adaptivebatchsizingenabled) | `bool` | `true` |
 | [`AdaptiveBatchIncrement`](#adaptivebatchincrement) | `int` | 8 |
 | [`AdaptiveBatchDecreaseFactor`](#adaptivebatchdecreasefactor) | `double` | 0.5 |
 | [`AdaptiveBatchLatencyThreshold`](#adaptivebatchlatencythreshold) | `TimeSpan` | 50 ms |
@@ -389,7 +389,7 @@ Effective version floor assumed before a peer reports capabilities.
 
 ### `AdaptiveBatchSizingEnabled`
 
-Enables sender-side adaptive batch size changes based on receiver latency and hints.
+Enables sender-side adaptive batch size changes based on receiver latency and hints. Enabled by default: the controller's multiplicative decrease shrinks the batch on a repeated send/apply failure (such as a receiver phase-2 commit timeout under burst load) so the stream recovers automatically instead of re-shipping the identical oversized batch, and the additive increase rebuilds toward `ShipBatchSize` once the link is healthy. Set to `false` to restore static sizing.
 
 ### `AdaptiveBatchIncrement`
 
