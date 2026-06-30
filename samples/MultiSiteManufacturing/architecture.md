@@ -306,7 +306,11 @@ Access patterns:
   `mfg-part-summary`. The broadcaster keeps the tree warm from the
   fact stream (one coalesced fold per dirty part per rebuild window),
   so a dashboard load reads one row per part in a single pass instead
-  of re-folding every part's `mfg-facts` prefix on every load.
+  of re-folding every part's `mfg-facts` prefix on every load. While a
+  dashboard is being watched, a bounded background pass also reconciles
+  the view against the `mfg-facts` tree, so parts written directly -
+  bypassing `FederationRouter`, which raises no fact-stream event - still
+  converge onto the dashboard within a few cadences.
 
 Cross-cluster shipping and WAL compaction are package concerns - see
 [`docs/lattice.replication/`](../../docs/lattice.replication/) for
