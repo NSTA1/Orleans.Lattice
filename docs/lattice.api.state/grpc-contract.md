@@ -4,7 +4,7 @@
 
 ## Service
 
-The service name on the wire is `orleans.lattice.api.state` (so each method's full path is `/orleans.lattice.api.state/<Rpc>`). It exposes twelve RPCs: ten unary and two server-streaming. Each maps one-to-one onto a facade verb.
+The service name on the wire is `orleans.lattice.api.state` (so each method's full path is `/orleans.lattice.api.state/<Rpc>`). It exposes a set of unary and server-streaming RPCs, each mapping one-to-one onto a facade verb.
 
 | RPC | Kind | Request | Response | Surface |
 |---|---|---|---|---|
@@ -15,9 +15,10 @@ The service name on the wire is `orleans.lattice.api.state` (so each method's fu
 | `GetTreeStructure` | unary | `StructureRequest` | `StructureResponse` | [Structure](surfaces.md#structure) |
 | `ScanEntries` | unary | `EntryScanRequest` | `EntryScanResponse` | [Entries](surfaces.md#entries) |
 | `GetEntry` | unary | `EntryGetRequest` | `EntryGetResponse` | [Entries](surfaces.md#entries) |
+| `GetEntryHistory` | unary | `EntryHistoryRequest` | `EntryHistoryResponse` | [Change history](surfaces.md#change-history) |
 | `CancelScan` | unary | `EntryScanCancelRequest` | `EntryScanCancelResponse` | [Entries](surfaces.md#entries) |
 | `GetMetricsSnapshot` | unary | `TreeMetricsRequest` | `TreeMetricsSnapshot` | [Metrics](surfaces.md#metrics) |
-| `GetClusterInfo` | unary | `ClusterInfoRequest` | `ClusterInfo` | Cluster info |
+| `GetClusterInfo` | unary | `ClusterInfoRequest` | `ClusterInfo` | [Cluster info](surfaces.md#cluster-info) |
 | `ObserveChanges` | server-streaming | `StateObserveRequest` | `StateChangeNotification` | [Change observation](surfaces.md#change-observation) |
 | `ObserveMetrics` | server-streaming | `TreeMetricsRequest` | `TreeMetricsSnapshot` | [Metrics](surfaces.md#metrics) |
 
@@ -44,6 +45,6 @@ using var channel = GrpcChannel.ForAddress("https://cluster.example:5001");
 var stateClient = LatticeStateApiGrpcClient.Create(channel.CreateCallInvoker(), serializerProvider);
 ```
 
-The client carries **no transport policy of its own**. Address, TLS, retries, deadlines, and call credentials live on the `CallInvoker` / `GrpcChannel` the caller supplies; the client only adds the per-RPC marshalling. Unary RPCs return a `Task<TResponse>`; the two streaming RPCs return an `IAsyncEnumerable<TResponse>` you consume with `await foreach`.
+The client carries **no transport policy of its own**. Address, TLS, retries, deadlines, and call credentials live on the `CallInvoker` / `GrpcChannel` the caller supplies; the client only adds the per-RPC marshalling. Unary RPCs return a `Task<TResponse>`; the streaming RPCs return an `IAsyncEnumerable<TResponse>` you consume with `await foreach`.
 
 See [Client](client.md) for the full set of calls and [Surfaces](surfaces.md) for what each request and response carries.

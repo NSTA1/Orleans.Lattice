@@ -1,6 +1,6 @@
 # Surfaces
 
-The state API exposes five read-only surfaces: discovery, structure, entry inspection, change observation, and metrics. Each is a facade verb with a one-to-one gRPC RPC. The examples below drive them through `LatticeStateApiGrpcClient`; the same request/response records flow when you consume the facade in-process.
+The state API exposes read-only surfaces: discovery, structure, entry inspection, change history, change observation, metrics, and cluster info. Each is a facade verb with a one-to-one gRPC RPC. The examples below drive them through `LatticeStateApiGrpcClient`; the same request/response records flow when you consume the facade in-process.
 
 Every example assumes a client built like this (see [Client](client.md)):
 
@@ -196,3 +196,20 @@ foreach (var tree in snapshot.Trees)
 ```
 
 Many subscribers requesting the same metrics share a single underlying sampling loop, and a cluster with no metric subscribers samples nothing - see [Efficiency](efficiency.md).
+
+## Cluster info
+
+`GetClusterInfoAsync` returns a single `ClusterInfo` record identifying the cluster the client is connected to - its Orleans `ClusterId` (the deployment's logical cluster identity) and `ServiceId` (stable across rolling deployments of the same logical service). Either field is empty when the host did not configure it. The request envelope (`ClusterInfoRequest`) carries no fields today; it exists so the RPC can grow additive projection options later without changing the method signature. A consumer such as the explorer header uses it to show which cluster it is looking at.
+
+```csharp verify
+using Grpc.Net.Client;
+using Microsoft.Extensions.DependencyInjection;
+using Orleans.Serialization;
+
+var serializerProvider = new ServiceCollection().AddSerializer().BuildServiceProvider();
+using var channel = GrpcChannel.ForAddress("https://cluster.example:5001");
+var stateClient = LatticeStateApiGrpcClient.Create(channel.CreateCallInvoker(), serializerProvider);
+
+var info = await stateClient.GetClusterInfoAsync(new ClusterInfoRequest(), cancellationToken);
+Console.WriteLine($"cluster={info.ClusterId}  service={info.ServiceId}");
+```
