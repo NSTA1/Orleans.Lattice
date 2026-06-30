@@ -104,7 +104,7 @@ public abstract class PublicApiSizeContractTestsBase<TSelf>
             foreach (var boundary in probe.BoundaryValues)
             {
                 yield return new TestCaseData(target, boundary)
-                    .SetName($"Size_param_tolerates_{target.DisplayName}_{Describe(boundary)}");
+                    .SetName($"Size_param_tolerates_{target.DisplayName}_{SizeContractAssertions.Describe(boundary)}");
             }
         }
     }
@@ -127,15 +127,15 @@ public abstract class PublicApiSizeContractTestsBase<TSelf>
         try
         {
             var result = target.Method.Invoke(instance, arguments);
-            await AwaitResultAsync(result);
+            await SizeContractAssertions.AwaitResultAsync(result);
         }
         catch (TargetInvocationException ex) when (ex.InnerException is not null)
         {
-            AssertNotOutOfMemory(ex.InnerException, target, boundaryValue);
+            SizeContractAssertions.AssertNoOutOfMemory(ex.InnerException, target.DisplayName, boundaryValue);
         }
         catch (Exception ex)
         {
-            AssertNotOutOfMemory(ex, target, boundaryValue);
+            SizeContractAssertions.AssertNoOutOfMemory(ex, target.DisplayName, boundaryValue);
         }
     }
 
@@ -165,87 +165,10 @@ public abstract class PublicApiSizeContractTestsBase<TSelf>
 
             var supplied = await ResolveArgumentAsync(target, parameter, instance);
             arguments[i] = ReferenceEquals(supplied, ContractArgument.UseDefault)
-                ? DefaultFor(parameter)
+                ? SizeContractAssertions.DefaultFor(parameter)
                 : supplied;
         }
 
         return arguments;
     }
-
-    /// <summary>The declared optional default of a parameter, otherwise the runtime default for its type.</summary>
-    private static object? DefaultFor(ParameterInfo parameter)
-    {
-        if (parameter.HasDefaultValue)
-        {
-            return parameter.DefaultValue;
-        }
-
-        var type = parameter.ParameterType;
-        return type.IsValueType ? Activator.CreateInstance(type) : null;
-    }
-
-    /// <summary>
-    /// Awaits the value returned by a reflected invocation, supporting
-    /// <see cref="Task"/> / <see cref="Task{TResult}"/>,
-    /// <see cref="ValueTask"/> / <see cref="ValueTask{TResult}"/>, and plain
-    /// synchronous returns.
-    /// </summary>
-    private static async Task AwaitResultAsync(object? result)
-    {
-        switch (result)
-        {
-            case null:
-                return;
-            case Task task:
-                await task.ConfigureAwait(false);
-                return;
-            case ValueTask valueTask:
-                await valueTask.ConfigureAwait(false);
-                return;
-        }
-
-        // ValueTask<T> is a distinct generic struct; bridge it to Task via its
-        // AsTask() method so a single await path covers every awaitable shape.
-        var resultType = result.GetType();
-        if (resultType.IsGenericType
-            && resultType.GetGenericTypeDefinition() == typeof(ValueTask<>))
-        {
-            var asTask = resultType.GetMethod(nameof(ValueTask<int>.AsTask));
-            if (asTask?.Invoke(result, null) is Task bridged)
-            {
-                await bridged.ConfigureAwait(false);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Fails the test when <paramref name="exception"/> is, or wraps, an
-    /// <see cref="OutOfMemoryException"/>; otherwise the exception is an
-    /// acceptable rejection of the pathological input and the test passes.
-    /// </summary>
-    private static void AssertNotOutOfMemory(
-        Exception exception,
-        SizeParameterTarget target,
-        int boundaryValue)
-    {
-        for (var current = exception; current is not null; current = current.InnerException)
-        {
-            if (current is OutOfMemoryException || current is AggregateException aggregate
-                && aggregate.Flatten().InnerExceptions.Any(e => e is OutOfMemoryException))
-            {
-                Assert.Fail(
-                    $"{target.DisplayName} threw OutOfMemoryException for "
-                    + $"{Describe(boundaryValue)}; the size parameter must be clamped before "
-                    + "allocating so a pathological caller value cannot fault the host.");
-            }
-        }
-    }
-
-    /// <summary>A readable name for a boundary value, used in test-case names and messages.</summary>
-    private static string Describe(int value) => value switch
-    {
-        int.MaxValue => "int.MaxValue",
-        int.MinValue => "int.MinValue",
-        _ => value.ToString(System.Globalization.CultureInfo.InvariantCulture),
-    };
 }

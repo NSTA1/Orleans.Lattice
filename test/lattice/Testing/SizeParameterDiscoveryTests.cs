@@ -133,4 +133,129 @@ public sealed class SizeParameterDiscoveryTests
     {
         Assert.That(ContractArgument.UseDefault, Is.SameAs(ContractArgument.UseDefault));
     }
+
+    private sealed record SampleRequest
+    {
+        public required string TreeId { get; init; }
+
+        public int PageSize { get; init; }
+
+        public int Limit { get; init; }
+
+        // Not a size-like name -> ignored.
+        public int ShardIndex { get; init; }
+
+        // Not an int -> ignored.
+        public string? Token { get; init; }
+
+        // Get-only computed projection (no setter) -> ignored, so a clamped
+        // Effective* projection is never mistaken for a caller-supplied size.
+        public int EffectivePageSize => PageSize < 1 ? 100 : PageSize;
+    }
+
+    private interface ISampleService
+    {
+        // Request-DTO parameter -> its size properties are discovered.
+        Task QueryAsync(SampleRequest request, CancellationToken cancellationToken);
+
+        // No request DTO (string + token only) -> nothing discovered.
+        Task PointAsync(string treeId, CancellationToken cancellationToken);
+    }
+
+    [Test]
+    public void DiscoverRequestSizeProperties_finds_size_properties_on_request_dtos()
+    {
+        var targets = SizeParameterDiscovery.DiscoverRequestSizeProperties([typeof(ISampleService)]);
+
+        var found = targets
+            .Select(t => $"{t.Method.Name}.{t.RequestType.Name}.{t.SizeProperty.Name}")
+            .ToArray();
+
+        Assert.That(found, Is.EquivalentTo(new[]
+        {
+            "QueryAsync.SampleRequest.PageSize",
+            "QueryAsync.SampleRequest.Limit",
+        }));
+    }
+
+    [Test]
+    public void DiscoverRequestSizeProperties_ignores_computed_non_size_and_non_int_properties()
+    {
+        var targets = SizeParameterDiscovery.DiscoverRequestSizeProperties([typeof(ISampleService)]);
+
+        var names = targets.Select(t => t.SizeProperty.Name).ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(names, Does.Not.Contain("EffectivePageSize"),
+                "a get-only computed projection has no setter and must be ignored.");
+            Assert.That(names, Does.Not.Contain("ShardIndex"),
+                "ShardIndex is not a size-like name and must be ignored.");
+            Assert.That(names, Does.Not.Contain("Token"),
+                "a string property is not an int and must be ignored.");
+        });
+    }
+
+    [Test]
+    public void DiscoverRequestSizeProperties_ignores_methods_without_a_request_dto()
+    {
+        var targets = SizeParameterDiscovery.DiscoverRequestSizeProperties([typeof(ISampleService)]);
+
+        Assert.That(targets.Any(t => t.Method.Name == "PointAsync"), Is.False,
+            "a method with only string and token parameters carries no request-DTO size property.");
+    }
+
+    [Test]
+    public void DiscoverRequestSizeProperties_honours_a_custom_size_name_set()
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "shardIndex" };
+
+        var targets = SizeParameterDiscovery.DiscoverRequestSizeProperties([typeof(ISampleService)], names);
+
+        Assert.That(
+            targets.Select(t => t.SizeProperty.Name),
+            Is.EqualTo(new[] { "ShardIndex" }));
+    }
+
+    [Test]
+    public void DiscoverRequestSizeProperties_is_deterministically_ordered()
+    {
+        var first = SizeParameterDiscovery.DiscoverRequestSizeProperties([typeof(ISampleService)]);
+        var second = SizeParameterDiscovery.DiscoverRequestSizeProperties([typeof(ISampleService)]);
+
+        Assert.That(
+            first.Select(t => t.DisplayName),
+            Is.EqualTo(second.Select(t => t.DisplayName)));
+    }
+
+    [Test]
+    public void DiscoverRequestSizeProperties_throws_for_null_api_types()
+    {
+        Assert.That(
+            () => SizeParameterDiscovery.DiscoverRequestSizeProperties(null!),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public void RequestSizePropertyTarget_DisplayName_is_type_method_request_property()
+    {
+        var method = typeof(ISampleService).GetMethod(nameof(ISampleService.QueryAsync))!;
+        var parameter = method.GetParameters().Single(p => p.Name == "request");
+        var property = typeof(SampleRequest).GetProperty(nameof(SampleRequest.PageSize))!;
+        var target = new RequestSizePropertyTarget(
+            typeof(ISampleService), method, parameter, typeof(SampleRequest), property);
+
+        Assert.That(target.DisplayName, Is.EqualTo("ISampleService.QueryAsync(SampleRequest.PageSize)"));
+        Assert.That(target.ToString(), Is.EqualTo("ISampleService.QueryAsync(SampleRequest.PageSize)"));
+    }
+
+    [Test]
+    public void DefaultSizeParameterNames_include_request_budget_names()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(SizeParameterDiscovery.DefaultSizeParameterNames.Contains("maxNodes"), Is.True);
+            Assert.That(SizeParameterDiscovery.DefaultSizeParameterNames.Contains("valuePreviewBudget"), Is.True);
+        });
+    }
 }
