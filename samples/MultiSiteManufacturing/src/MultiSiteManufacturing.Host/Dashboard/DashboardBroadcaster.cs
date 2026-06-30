@@ -2,9 +2,11 @@ using System.Collections.Concurrent;
 using System.Threading.Channels;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using MultiSiteManufacturing.Host.Domain;
 using MultiSiteManufacturing.Host.Federation;
 using MultiSiteManufacturing.Host.Lattice;
+using Orleans.Lattice;
 using Orleans.Runtime;
 using Orleans.Streams;
 
@@ -117,14 +119,34 @@ public sealed partial class DashboardBroadcaster : IHostedService
     public static readonly StreamId DefaultPartChangeStreamId =
         StreamId.Create(PartChangeStreamNamespace, "broadcast");
 
+    /// <summary>
+    /// Default coalescing window for per-part summary rebuilds. Stream
+    /// handlers only mark a serial dirty; the background loop rebuilds each
+    /// dirty part at most once per window, collapsing a burst of facts (or
+    /// replication re-delivery) for the same part into a single fact-tree
+    /// scan. The issue calls out ~1/sec as ample for the live dashboard.
+    /// Tests inject a shorter window via the internal ctor for fast,
+    /// deterministic assertions.
+    /// </summary>
+    private static readonly TimeSpan DefaultPartRebuildInterval = TimeSpan.FromSeconds(1);
+
     private readonly FederationRouter _router;
     private readonly IClusterClient _client;
     private readonly IGrainFactory _grainFactory;
     private readonly PartCrdtStore _crdtStore;
+    private readonly PartSummaryView _summaryView;
     private readonly ILogger<DashboardBroadcaster> _logger;
+    private readonly TimeSpan _partRebuildInterval;
+    private readonly TimeSpan _snapshotCacheTtl;
     private readonly StreamId _streamId;
     private readonly StreamId _partChangeStreamId;
     private readonly CancellationTokenSource _shutdownCts = new();
+
+    // Serials whose summary needs rebuilding, coalesced across the rebuild
+    // window. The byte value is unused - this is a concurrent set keyed by
+    // serial so repeated marks for the same part collapse to one rebuild.
+    private readonly ConcurrentDictionary<PartSerialNumber, byte> _dirtyParts = new();
+    private Task? _rebuildLoop;
     private readonly ConcurrentDictionary<Guid, Channel<PartSummaryUpdate>> _partSubs = new();
     private readonly ConcurrentDictionary<Guid, Channel<ChaosOverview>> _chaosSubs = new();
     private readonly ConcurrentDictionary<Guid, Channel<DivergenceEvent>> _divSubs = new();
@@ -166,11 +188,11 @@ public sealed partial class DashboardBroadcaster : IHostedService
         FederationRouter router,
         IClusterClient client,
         PartCrdtStore crdtStore,
+        PartSummaryView summaryView,
         ILogger<DashboardBroadcaster> logger)
-        : this(router, client, crdtStore, logger, DefaultBroadcastStreamId)
+        : this(router, client, crdtStore, summaryView, logger, DefaultBroadcastStreamId)
     {
     }
-
     /// <summary>
     /// Test-only ctor overload accepting a custom broadcast
     /// <see cref="StreamId"/>. Used by the test fixtures to scope
@@ -181,16 +203,50 @@ public sealed partial class DashboardBroadcaster : IHostedService
         FederationRouter router,
         IClusterClient client,
         PartCrdtStore crdtStore,
+        PartSummaryView summaryView,
         ILogger<DashboardBroadcaster> logger,
-        StreamId streamId)
+        StreamId streamId,
+        TimeSpan? partRebuildInterval = null,
+        TimeSpan? snapshotCacheTtl = null)
     {
         _router = router;
         _client = client;
         _grainFactory = client;
         _crdtStore = crdtStore;
+        _summaryView = summaryView;
         _logger = logger;
+        _partRebuildInterval = partRebuildInterval ?? DefaultPartRebuildInterval;
+        _snapshotCacheTtl = snapshotCacheTtl ?? DefaultSnapshotCacheTtl;
         _streamId = streamId;
         _partChangeStreamId = DerivePartChangeStreamId(streamId);
+    }
+
+    /// <summary>
+    /// Test-only ctor overload that auto-provisions a private
+    /// <see cref="PartSummaryView"/> over a unique tree id, so existing
+    /// fixtures that don't exercise the materialised view can construct a
+    /// broadcaster without wiring one. Each broadcaster gets an isolated
+    /// summary tree, matching the per-test isolation the lattice / stream
+    /// ids already provide.
+    /// </summary>
+    internal DashboardBroadcaster(
+        FederationRouter router,
+        IClusterClient client,
+        PartCrdtStore crdtStore,
+        ILogger<DashboardBroadcaster> logger,
+        StreamId streamId,
+        TimeSpan? partRebuildInterval = null,
+        TimeSpan? snapshotCacheTtl = null)
+        : this(
+            router,
+            client,
+            crdtStore,
+            new PartSummaryView(client, NullLogger<PartSummaryView>.Instance, $"mfg-part-summary-{Guid.NewGuid():N}"),
+            logger,
+            streamId,
+            partRebuildInterval,
+            snapshotCacheTtl)
+    {
     }
 
     /// <summary>
@@ -237,12 +293,29 @@ public sealed partial class DashboardBroadcaster : IHostedService
         // (a page reload falls back to the initial snapshot path).
         await SubscribeWithRetryAsync(cancellationToken);
         await SubscribePartChangeWithRetryAsync(cancellationToken);
+
+        // Start the coalescing rebuild loop last, once the streams are wired.
+        _rebuildLoop = Task.Run(() => RunPartRebuildLoopAsync(_shutdownCts.Token));
     }
 
     /// <inheritdoc />
     public async Task StopAsync(CancellationToken cancellationToken)
     {
         _shutdownCts.Cancel();
+
+        if (_rebuildLoop is not null)
+        {
+            try
+            {
+                await _rebuildLoop.WaitAsync(cancellationToken);
+            }
+            catch (Exception ex) when (ex is OperationCanceledException or TimeoutException)
+            {
+                // Best-effort drain on shutdown; the loop observes the cancel.
+            }
+            _rebuildLoop = null;
+        }
+        _dirtyParts.Clear();
 
         _router.FactRouted -= OnFactForBroadcast;
         _router.FactReplicated -= OnFactForBroadcast;
@@ -284,6 +357,19 @@ public sealed partial class DashboardBroadcaster : IHostedService
         if (!_shutdownCts.IsCancellationRequested)
         {
             _shutdownCts.Cancel();
+        }
+
+        if (_rebuildLoop is not null)
+        {
+            try
+            {
+                await _rebuildLoop;
+            }
+            catch
+            {
+                // Best-effort: loop is cancellation-driven.
+            }
+            _rebuildLoop = null;
         }
 
         // Detach stream subscription so a broadcaster disposed outside
@@ -341,6 +427,7 @@ public sealed partial class DashboardBroadcaster : IHostedService
         _divSubs.Clear();
         _activitySubs.Clear();
         _lastStates.Clear();
+        _dirtyParts.Clear();
         _shutdownCts.Dispose();
     }
 }
