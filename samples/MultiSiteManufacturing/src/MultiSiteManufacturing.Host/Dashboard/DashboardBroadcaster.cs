@@ -130,6 +130,17 @@ public sealed partial class DashboardBroadcaster : IHostedService
     /// </summary>
     private static readonly TimeSpan DefaultPartRebuildInterval = TimeSpan.FromSeconds(1);
 
+    /// <summary>
+    /// Hard cap on any single best-effort teardown step (waiting out the
+    /// rebuild loop, unsubscribing a cluster stream) during
+    /// <see cref="StopAsync"/> / <see cref="DisposeAsync"/>. A stream
+    /// <c>UnsubscribeAsync</c> talks to the Orleans streaming pub-sub runtime,
+    /// which may already be tearing down when the host stops; without a bound
+    /// that call can hang indefinitely and wedge host shutdown, leaking the
+    /// silo. Capping each step lets shutdown always make progress.
+    /// </summary>
+    private static readonly TimeSpan ShutdownStepTimeout = TimeSpan.FromSeconds(5);
+
     private readonly FederationRouter _router;
     private readonly IClusterClient _client;
     private readonly IGrainFactory _grainFactory;
@@ -303,18 +314,7 @@ public sealed partial class DashboardBroadcaster : IHostedService
     {
         _shutdownCts.Cancel();
 
-        if (_rebuildLoop is not null)
-        {
-            try
-            {
-                await _rebuildLoop.WaitAsync(cancellationToken);
-            }
-            catch (Exception ex) when (ex is OperationCanceledException or TimeoutException)
-            {
-                // Best-effort drain on shutdown; the loop observes the cancel.
-            }
-            _rebuildLoop = null;
-        }
+        await StopRebuildLoopAsync();
         _dirtyParts.Clear();
 
         _router.FactRouted -= OnFactForBroadcast;
@@ -322,31 +322,64 @@ public sealed partial class DashboardBroadcaster : IHostedService
         _router.ChaosConfigChanged -= OnChaosConfigChanged;
         _crdtStore.PartChanged -= OnPartCrdtChanged;
 
-        if (_broadcastSubscription is not null)
+        _broadcastSubscription = await TryUnsubscribeAsync(_broadcastSubscription, "broadcast");
+        _partChangeSubscription = await TryUnsubscribeAsync(_partChangeSubscription, "part-change");
+    }
+
+    /// <summary>
+    /// Waits out the background rebuild loop on shutdown, capped at
+    /// <see cref="ShutdownStepTimeout"/> so a loop iteration that is mid-grain
+    /// call when the cancel arrives can never wedge teardown. The loop has
+    /// already been signalled to stop via <c>_shutdownCts</c>.
+    /// </summary>
+    private async Task StopRebuildLoopAsync()
+    {
+        if (_rebuildLoop is null)
         {
-            try
-            {
-                await _broadcastSubscription.UnsubscribeAsync();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to unsubscribe from dashboard broadcast stream");
-            }
-            _broadcastSubscription = null;
+            return;
         }
 
-        if (_partChangeSubscription is not null)
+        try
         {
-            try
-            {
-                await _partChangeSubscription.UnsubscribeAsync();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to unsubscribe from dashboard part-change stream");
-            }
-            _partChangeSubscription = null;
+            await _rebuildLoop.WaitAsync(ShutdownStepTimeout);
         }
+        catch (Exception ex) when (ex is OperationCanceledException or TimeoutException)
+        {
+            // Best-effort drain on shutdown; the loop observes the cancel.
+        }
+        _rebuildLoop = null;
+    }
+
+    /// <summary>
+    /// Best-effort unsubscribe from a cluster stream, capped at
+    /// <see cref="ShutdownStepTimeout"/>. <c>UnsubscribeAsync</c> reaches the
+    /// Orleans streaming pub-sub runtime, which may already be tearing down on
+    /// host shutdown; an unbounded await there hangs <see cref="StopAsync"/>
+    /// and leaks the silo (the contract-test host-teardown deadlock). Always
+    /// returns <see langword="null"/> so the caller can clear its handle.
+    /// </summary>
+    private async Task<StreamSubscriptionHandle<T>?> TryUnsubscribeAsync<T>(
+        StreamSubscriptionHandle<T>? subscription,
+        string streamLabel)
+    {
+        if (subscription is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            await subscription.UnsubscribeAsync().WaitAsync(ShutdownStepTimeout);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to unsubscribe from dashboard {Stream} stream within {Timeout}",
+                streamLabel,
+                ShutdownStepTimeout);
+        }
+        return null;
     }
 
     /// <inheritdoc />
@@ -359,47 +392,14 @@ public sealed partial class DashboardBroadcaster : IHostedService
             _shutdownCts.Cancel();
         }
 
-        if (_rebuildLoop is not null)
-        {
-            try
-            {
-                await _rebuildLoop;
-            }
-            catch
-            {
-                // Best-effort: loop is cancellation-driven.
-            }
-            _rebuildLoop = null;
-        }
+        await StopRebuildLoopAsync();
 
         // Detach stream subscription so a broadcaster disposed outside
         // the IHostedService lifecycle (e.g. `await using` in tests)
-        // doesn't keep fanning out into completed channels.
-        if (_broadcastSubscription is not null)
-        {
-            try
-            {
-                await _broadcastSubscription.UnsubscribeAsync();
-            }
-            catch
-            {
-                // Best-effort: cluster may already be shutting down.
-            }
-            _broadcastSubscription = null;
-        }
-
-        if (_partChangeSubscription is not null)
-        {
-            try
-            {
-                await _partChangeSubscription.UnsubscribeAsync();
-            }
-            catch
-            {
-                // Best-effort: cluster may already be shutting down.
-            }
-            _partChangeSubscription = null;
-        }
+        // doesn't keep fanning out into completed channels. Bounded so a
+        // pub-sub runtime that is already tearing down can't wedge disposal.
+        _broadcastSubscription = await TryUnsubscribeAsync(_broadcastSubscription, "broadcast");
+        _partChangeSubscription = await TryUnsubscribeAsync(_partChangeSubscription, "part-change");
 
         _router.FactRouted -= OnFactForBroadcast;
         _router.FactReplicated -= OnFactForBroadcast;

@@ -12,7 +12,7 @@ public sealed class SiteControlContractTests
     public void SetUp() => _fixture = new GrpcContractFixture();
 
     [TearDown]
-    public void TearDown() => _fixture.Dispose();
+    public async Task TearDown() => await _fixture.DisposeAsync();
 
     [Test]
     public async Task ListSites_returns_seven_sites_with_nominal_config()

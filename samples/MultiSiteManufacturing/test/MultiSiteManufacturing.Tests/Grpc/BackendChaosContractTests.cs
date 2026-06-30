@@ -18,7 +18,7 @@ public sealed class BackendChaosContractTests
     public void SetUp() => _fixture = new GrpcContractFixture();
 
     [TearDown]
-    public void TearDown() => _fixture.Dispose();
+    public async Task TearDown() => await _fixture.DisposeAsync();
 
     [Test]
     public async Task ListBackends_returns_baseline_and_lattice_with_nominal_config()
