@@ -127,6 +127,40 @@ internal sealed class WalCommitLogWriter(
     internal static readonly ConcurrentDictionary<(string TreeId, int Shard), long> _flushLatencyTripCounts
         = new();
 
+    // Per-tree in-memory WAL head wall-clock, the larger half of the live
+    // leaf-materialiser drain-lag measure. Updated on every routed append with
+    // the wall clock of the entry's HLC (the producer stamps the HLC upstream;
+    // the writer only ever advances this monotonically via a max). This is the
+    // freshest possible "newest offered WAL entry" reading - more timely than a
+    // storage head read because it reflects the write the instant it is routed,
+    // before admission and dispatch. The 200 ms saturation sampler subtracts
+    // the slowest in-memory materialiser cursor (the IWalCursorRegistry min)
+    // from this head every tick to derive the standing drain lag live, so the
+    // signal engages immediately on a write spike rather than waiting for a WAL
+    // GC pass. Keyed by tree (drain lag is a per-tree property). Same
+    // static-singleton shape as _flushLatencyTripCounts so the sampler reads
+    // every classifier-input source off a fixed root regardless of grain /
+    // writer activation lifetime in tests.
+    internal static readonly ConcurrentDictionary<string, long> _walHeadWallClockTicks
+        = new(StringComparer.Ordinal);
+
+    // Advances the per-tree WAL head wall clock to <paramref name="wallClockTicks"/>
+    // when it is newer than the current reading. A non-positive tick (e.g. a
+    // range-delete entry carrying HybridLogicalClock.Zero) is ignored so it
+    // cannot lower the head. Lock-free monotonic max.
+    internal static void RecordWalHead(string treeId, long wallClockTicks)
+    {
+        if (wallClockTicks <= 0)
+        {
+            return;
+        }
+        _walHeadWallClockTicks.AddOrUpdate(
+            treeId,
+            static (_, incoming) => incoming,
+            static (_, prev, incoming) => incoming > prev ? incoming : prev,
+            wallClockTicks);
+    }
+
     // Per-instance drain CTS. Each WalCommitLogWriter owns its own
     // token; DrainAsync cancels it; AcquireAsync observes it alongside
     // the caller's CT. Because the token lives on the writer instance
@@ -368,6 +402,70 @@ internal sealed class WalCommitLogWriter(
     }
 
     /// <summary>
+    /// Local-path Throttled pacing: when the optional
+    /// <see cref="IWalSaturationSignal"/> reports
+    /// <see cref="WalSaturationState.Throttled"/> for
+    /// <paramref name="treeId"/>, applies a single bounded
+    /// <see cref="Task.Delay(TimeSpan, CancellationToken)"/> of
+    /// <paramref name="pace"/> before the caller admits into the
+    /// per-partition admission semaphore. This gives the Throttled
+    /// drain-lag back-pressure teeth on the single-silo local-write
+    /// path, where no remote replication sender exists to drip-feed and
+    /// the Saturated-only admission gate never engages. It is a pure
+    /// back-off: it never throws a saturation fault.
+    /// <para>
+    /// <b>Fast paths.</b> No-op when no signal is registered, when
+    /// <paramref name="pace"/> is <see cref="TimeSpan.Zero"/>, or when
+    /// the signal reports anything other than
+    /// <see cref="WalSaturationState.Throttled"/> (Healthy is the common
+    /// case - a single dictionary lookup, no await; Saturated is left to
+    /// the admission gate so the caller is not double-charged).
+    /// </para>
+    /// <para>
+    /// <b>Cancellation.</b> Caller cancellation surfaces as
+    /// <see cref="OperationCanceledException"/> as expected. A drain
+    /// request short-circuits the pace silently (the delay is abandoned
+    /// and the caller proceeds straight into admission, which then
+    /// observes the drain token itself) so shutdown is never slowed by
+    /// the pace.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">Tree id whose saturation signal to consult.</param>
+    /// <param name="pace">Per-append pacing delay applied while Throttled.</param>
+    /// <param name="cancellationToken">Caller-supplied cancellation.</param>
+    /// <param name="drainToken">Writer-supplied drain token.</param>
+    private async ValueTask PaceOnThrottleAsync(
+        string treeId,
+        TimeSpan pace,
+        CancellationToken cancellationToken,
+        CancellationToken drainToken)
+    {
+        if (saturationSignal is null) return;
+        if (pace <= TimeSpan.Zero) return;
+        if (saturationSignal.GetCurrentState(treeId) != WalSaturationState.Throttled) return;
+
+        CancellationTokenSource? linkedCts = null;
+        try
+        {
+            linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, drainToken);
+            await Task.Delay(pace, linkedCts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // Caller cancellation propagates; drain cancellation is a
+            // silent short-circuit (proceed straight into admission).
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+        }
+        finally
+        {
+            linkedCts?.Dispose();
+        }
+    }
+
+    /// <summary>
     /// Writer-side drain entry: releases every parked admission caller
     /// this writer dispatched through, then returns. Idempotent; the
     /// second call is a no-op.
@@ -452,6 +550,13 @@ internal sealed class WalCommitLogWriter(
         // WalAppendDispatchTimeout. No-op when no signal is registered
         // or the budget is Zero.
         await GateOnSaturationAsync(stamped.TreeId, partition, perTree.WalAdmissionSaturationWaitBudget, cancellationToken, _drainCts.Token);
+
+        // Local-path Throttled pacing. Gives the drain-lag back-pressure
+        // teeth on the single-silo write path by applying a bounded
+        // per-append delay while the tree is Throttled. Pure back-off:
+        // never throws. No-op when no signal is registered, the pace is
+        // Zero, or the tree is not Throttled.
+        await PaceOnThrottleAsync(stamped.TreeId, perTree.WalThrottledAdmissionPace, cancellationToken, _drainCts.Token);
 
         // Writer-side admission: cap PartitionTracker._inFlight at
         // WalMaxPendingBatches so the writer back-pressures honestly
@@ -749,6 +854,10 @@ internal sealed class WalCommitLogWriter(
         // Same shape as the single-entry overload above.
         await GateOnSaturationAsync(treeId, partition, perTree.WalAdmissionSaturationWaitBudget, cancellationToken, _drainCts.Token);
 
+        // Local-path Throttled pacing (batched path); same shape as the
+        // single-entry overload above.
+        await PaceOnThrottleAsync(treeId, perTree.WalThrottledAdmissionPace, cancellationToken, _drainCts.Token);
+
         // Writer-side admission (batched path): same shape as the
         // single-entry overload above. The acquire bound is the same
         // WalAppendDispatchTimeout that bounds the shard RPC below.
@@ -972,6 +1081,13 @@ internal sealed class WalCommitLogWriter(
             VectorClock = capturedFrontier,
             DependencySummary = capturedFrontier,
         };
+
+        // Record the live WAL head wall clock for the drain-lag signal. Done
+        // here, at the single route chokepoint for both the single-entry and
+        // batched append paths, so the saturation sampler sees a write spike
+        // the instant it is offered. RecordWalHead is a monotonic max and
+        // ignores HLC.Zero (range-delete) entries.
+        WalCommitLogWriter.RecordWalHead(stamped.TreeId, stamped.Timestamp.WallClockTicks);
 
         int partition;
         if (stamped.Op is MutationKind.TxCommit or MutationKind.TxAbort)

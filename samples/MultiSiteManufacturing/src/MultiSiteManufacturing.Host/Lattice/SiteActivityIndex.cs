@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Threading.Channels;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using MultiSiteManufacturing.Host.Domain;
@@ -47,9 +48,12 @@ namespace MultiSiteManufacturing.Host.Lattice;
 /// <para>
 /// Every silo runs its own copy of the hosted service, so both silo A
 /// and silo B append to the shared trees (the lattice trees themselves
-/// are cluster-wide). Write failures are logged and swallowed - a
-/// transient storage hiccup on the index must not break the main fact
-/// pipeline.
+/// are cluster-wide). Routed facts are enqueued onto a bounded
+/// single-consumer ingest queue rather than written fire-and-forget, so
+/// a burst applies back-pressure (the newest fact is shed and counted
+/// once the queue is full) instead of stampeding the lattice write path.
+/// Write failures are logged and swallowed - a transient storage hiccup
+/// on the index must not break the main fact pipeline.
 /// </para>
 /// </remarks>
 public sealed class SiteActivityIndex(
@@ -71,18 +75,58 @@ public sealed class SiteActivityIndex(
 
     private ILatticeTagIndex Index => tagIndexFactory.Create(Tree, IndexName);
 
+    // Bounded ingest queue. Facts route in on the synchronous router
+    // event, but the index write must not run unbounded fire-and-forget:
+    // a write burst would otherwise spawn one append task per fact and
+    // stampede the lattice write path (the very failure mode that wedged
+    // the drain path). A bounded single-consumer channel applies
+    // back-pressure - the producer enqueues without blocking, the single
+    // drain loop serializes the writes, and once the queue is full the
+    // index sheds the new fact (it is best-effort) and counts the drop.
+    private const int IngestQueueCapacity = 1024;
+
+    private readonly Channel<Fact> _ingest = Channel.CreateBounded<Fact>(
+        new BoundedChannelOptions(IngestQueueCapacity)
+        {
+            SingleReader = true,
+            SingleWriter = false,
+            FullMode = BoundedChannelFullMode.Wait,
+        });
+
+    private CancellationTokenSource? _drainCts;
+    private Task? _drainLoop;
+    private long _droppedAppends;
+
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
     {
+        _drainCts = new CancellationTokenSource();
+        _drainLoop = Task.Run(() => DrainAsync(_drainCts.Token), CancellationToken.None);
         router.FactRouted += OnFactRouted;
         return Task.CompletedTask;
     }
 
     /// <inheritdoc />
-    public Task StopAsync(CancellationToken cancellationToken)
+    public async Task StopAsync(CancellationToken cancellationToken)
     {
         router.FactRouted -= OnFactRouted;
-        return Task.CompletedTask;
+        _ingest.Writer.TryComplete();
+        if (_drainCts is not null)
+        {
+            await _drainCts.CancelAsync().ConfigureAwait(false);
+        }
+        if (_drainLoop is not null)
+        {
+            try
+            {
+                await _drainLoop.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected on shutdown.
+            }
+        }
+        _drainCts?.Dispose();
     }
 
     /// <summary>
@@ -146,9 +190,35 @@ public sealed class SiteActivityIndex(
 
     private void OnFactRouted(object? sender, Fact fact)
     {
-        // Fire-and-forget write. The index is best-effort; we don't
-        // want to block the router's fan-out on storage latency here.
-        _ = SafeAppendAsync(fact);
+        // Non-blocking enqueue onto the bounded ingest queue. The single
+        // drain loop serializes the actual lattice writes, so a fact burst
+        // queues (and sheds the newest past the cap) instead of spawning an
+        // unbounded fan-out of concurrent append tasks.
+        if (!_ingest.Writer.TryWrite(fact))
+        {
+            var dropped = Interlocked.Increment(ref _droppedAppends);
+            if (dropped % 256 == 1)
+            {
+                logger.LogWarning(
+                    "SiteActivityIndex ingest queue saturated; shed {Dropped} best-effort index appends so far",
+                    dropped);
+            }
+        }
+    }
+
+    private async Task DrainAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await foreach (var fact in _ingest.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            {
+                await SafeAppendAsync(fact).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected on shutdown.
+        }
     }
 
     private async Task SafeAppendAsync(Fact fact)

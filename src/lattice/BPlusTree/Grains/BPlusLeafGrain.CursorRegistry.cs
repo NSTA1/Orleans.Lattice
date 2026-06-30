@@ -13,11 +13,17 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <para>
 /// Lazy and zero-cost when nothing drives the projection: the helper is a
 /// branch check + early return when <see cref="LeafNodeState.Clock"/> is
-/// still <see cref="HybridLogicalClock.Zero"/>, and the
-/// <see cref="ILeafCursorReporter"/> resolution itself is short-circuited
-/// when the host has not added <c>Orleans.Lattice.Replication</c>. Pre-WAL
-/// hosts therefore never register a cursor and the WAL GC behaves
-/// identically to its pre-promotion baseline.
+/// still <see cref="HybridLogicalClock.Zero"/>. The
+/// <see cref="ILeafCursorReporter"/> is registered by default (an in-memory
+/// reporter wired by <c>AddLattice</c>), so the leaf reports its applied
+/// frontier into the always-on cursor registry on every host and the WAL
+/// saturation sampler's drain-lag back-pressure is live for every write
+/// workload. The durable-pin mirror on
+/// <see cref="ILeafCursorReporter.NoteDurableMaterialiserFrontier"/> is a
+/// no-op until the host opts into <c>AddWalCursorRegistry</c> (directly or
+/// via the WAL GC / views / replication / storage packages), which swaps in
+/// the durable-pin-aware reporter; until then the in-memory report still
+/// flows and the WAL GC behaves identically to its pre-promotion baseline.
 /// </para>
 /// <para>
 /// Failures to advance the cursor are logged-and-swallowed at warning
@@ -31,8 +37,9 @@ internal sealed partial class BPlusLeafGrain
     /// <summary>
     /// Cached <see cref="ILeafCursorReporter"/> resolved from
     /// <see cref="IGrainContext.ActivationServices"/> on first use.
-    /// <c>null</c> when the host has not added the replication package
-    /// (the registration is absent), in which case the cursor-report
+    /// Normally non-<c>null</c>: <c>AddLattice</c> registers an in-memory
+    /// reporter by default. <c>null</c> only on a host that has stripped
+    /// even that default registration, in which case the cursor-report
     /// path is a no-op.
     /// </summary>
     private ILeafCursorReporter? _cursorReporter;
@@ -194,12 +201,15 @@ internal sealed partial class BPlusLeafGrain
         var treeId = state.State.TreeId!;
         var options = await GetOptionsAsync();
         var partitionCount = Math.Max(1, options.WalPartitions);
+        var reports = new MaterialiserPinReport[partitionCount];
         for (var partition = 0; partition < partitionCount; partition++)
         {
             var consumerId = BuildConsumerId(idBase, partition, partitionCount);
-            await reporter.SeedDurableMaterialiserBlockAsync(
-                treeId, consumerId, HybridLogicalClock.Zero, CancellationToken.None);
+            reports[partition] = new MaterialiserPinReport(consumerId, HybridLogicalClock.Zero);
         }
+
+        await reporter.SeedDurableMaterialiserBlockManyAsync(
+            treeId, reports, CancellationToken.None);
     }
 
     private ILeafCursorReporter? ResolveCursorReporter()

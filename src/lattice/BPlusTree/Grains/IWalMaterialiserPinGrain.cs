@@ -45,6 +45,31 @@ internal interface IWalMaterialiserPinGrain : IGrainWithStringKey
     Task ReportAsync(string consumerId, HybridLogicalClock frontier);
 
     /// <summary>
+    /// Coalesced batch form of <see cref="ReportAsync"/>: records a
+    /// monotonic-max merge for every report in <paramref name="reports"/> in a
+    /// single grain round-trip. Each report is merged exactly as
+    /// <see cref="ReportAsync"/> would merge it (a frontier not strictly
+    /// greater than the stored value is coalesced). The durable write is
+    /// debounced through the pin store's coalescing window, so a burst of
+    /// reports collapses to at most one <c>WriteStateAsync</c> per window.
+    /// </summary>
+    /// <param name="reports">The pin reports to merge. Each report's consumer id must not be <see langword="null"/> or whitespace.</param>
+    Task ReportManyAsync(IReadOnlyList<MaterialiserPinReport> reports);
+
+    /// <summary>
+    /// Durable batch seed: records a monotonic-max merge for every report in
+    /// <paramref name="reports"/> and <b>awaits</b> a single
+    /// <c>WriteStateAsync</c> covering the whole batch (and any pending
+    /// coalesced advances). Used by a leaf at birth to plant
+    /// <see cref="HybridLogicalClock.Zero"/> "block" pins for all of its WAL
+    /// partitions <em>before</em> its data becomes reachable in the WAL,
+    /// collapsing what was one awaited durable write per partition into one
+    /// awaited write for the batch routed to this shard.
+    /// </summary>
+    /// <param name="reports">The pin reports to seed durably. Each report's consumer id must not be <see langword="null"/> or whitespace.</param>
+    Task SeedManyAsync(IReadOnlyList<MaterialiserPinReport> reports);
+
+    /// <summary>
     /// Returns a snapshot of every durable leaf-materialiser pin for this
     /// tree, keyed by consumer id. The WAL GC reads this to floor its trim
     /// point under the slowest durable leaf frontier for consumers absent

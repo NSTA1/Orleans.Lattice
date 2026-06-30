@@ -30,6 +30,7 @@ public class WalSaturationSamplerFlushLatencyTests
         WalCommitLogWriter._dispatchTimeoutCounts.Clear();
         WalCommitLogWriter._providerFailureCounts.Clear();
         WalCommitLogWriter._flushLatencyTripCounts.Clear();
+        WalCommitLogWriter._walHeadWallClockTicks.Clear();
         _treeId = $"tree-flush-latency-{Interlocked.Increment(ref _treeIdSeed)}";
     }
 
@@ -56,7 +57,8 @@ public class WalSaturationSamplerFlushLatencyTests
             signal,
             dispatcher,
             monitor,
-            NullLogger<WalSaturationSampler>.Instance);
+            NullLogger<WalSaturationSampler>.Instance,
+            new InMemoryWalCursorRegistry());
     }
 
     [Test]

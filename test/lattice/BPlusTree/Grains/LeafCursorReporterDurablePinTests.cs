@@ -174,6 +174,21 @@ public sealed class LeafCursorReporterDurablePinTests
             return Task.CompletedTask;
         }
 
+        public Task ReportManyAsync(IReadOnlyList<MaterialiserPinReport> reports)
+        {
+            for (var i = 0; i < reports.Count; i++)
+            {
+                Reports.Add((reports[i].ConsumerId, reports[i].Frontier));
+                lock (_gate)
+                {
+                    _pins[reports[i].ConsumerId] = reports[i].Frontier;
+                }
+            }
+            return Task.CompletedTask;
+        }
+
+        public Task SeedManyAsync(IReadOnlyList<MaterialiserPinReport> reports) => ReportManyAsync(reports);
+
         public Task<IReadOnlyDictionary<string, HybridLogicalClock>> GetPinsAsync()
         {
             lock (_gate)

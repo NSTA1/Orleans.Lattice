@@ -120,6 +120,23 @@ public class LatticeOptionsResolverPropagationGuardTests
             "WalSaturationRecoveryWindow",
             "WalSaturationFlushLatencyThreshold",
             "WalSaturationFlushLatencySampleWindows",
+            "WalSaturationMaterialiserLagThreshold",
+            "WalSaturationMaterialiserLagSampleWindows",
+            // Durable leaf-materialiser pin store knobs: the pin grain and the
+            // LeafCursorReporter read these directly via
+            // IOptionsMonitor.Get(...) (the flush cadence is a silo-wide grain
+            // timer interval; the shard count is a cluster-wide structural
+            // fan-out). Neither is a per-tree gate routed through the
+            // ResolvedLatticeOptions hot path.
+            "WalMaterialiserPinShards",
+            "WalMaterialiserPinFlushIntervalMs",
+            // WAL replay throttles (issue #1030): the per-silo concurrent-leaf-
+            // replay ceiling is a process-wide semaphore bound, and the per-turn
+            // replay record budget is read directly off the leaf's resolved
+            // options inside the activation hook. Neither flows through a per-
+            // tree ResolvedLatticeOptions gate.
+            "WalMaterialiserMaxConcurrentReplays",
+            "WalReplayMaxRecordsPerTurn",
         };
 
     private sealed record TransformExpectation(Func<object?, object?> Expected);

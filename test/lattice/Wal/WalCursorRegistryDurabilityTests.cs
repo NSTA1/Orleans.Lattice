@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 using Orleans.Hosting;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
@@ -275,20 +276,42 @@ public sealed class WalCursorRegistryDurabilityTests
         return (lowest, highest);
     }
 
+    /// <summary>
+    /// Reads the durable pins for <paramref name="treeId"/> by fanning in across
+    /// every shard grain plus the legacy unsuffixed key, mirroring the WAL GC's
+    /// own read path (<see cref="WalMaterialiserPinRouting.EnumerateReadKeys"/>).
+    /// Pin writes are sharded by consumer id (issue #1030 fan-in hotspot fix), so
+    /// a reader that probes only the bare tree-keyed grain would miss pins routed
+    /// to a sibling shard. Each consumer routes to exactly one shard, so the union
+    /// keeps the lowest frontier should a stale legacy pin coexist.
+    /// </summary>
     private async Task<IReadOnlyDictionary<string, HybridLogicalClock>> GetPinsAsync(string treeId)
     {
         var factory = RequireSiloServices().GetRequiredService<IGrainFactory>();
-        return await factory.GetGrain<IWalMaterialiserPinGrain>(treeId).GetPinsAsync();
+        var options = RequireSiloServices().GetRequiredService<IOptionsMonitor<LatticeOptions>>();
+        var shardCount = WalMaterialiserPinRouting.ResolveShardCount(options);
+        var merged = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
+        foreach (var key in WalMaterialiserPinRouting.EnumerateReadKeys(treeId, shardCount))
+        {
+            var pins = await factory.GetGrain<IWalMaterialiserPinGrain>(key).GetPinsAsync();
+            foreach (var (consumerId, frontier) in pins)
+            {
+                if (!merged.TryGetValue(consumerId, out var existing) || frontier < existing)
+                {
+                    merged[consumerId] = frontier;
+                }
+            }
+        }
+
+        return merged;
     }
 
     private async Task<IReadOnlyDictionary<string, HybridLogicalClock>> WaitForAnyRealPinAsync(string treeId)
     {
-        var factory = RequireSiloServices().GetRequiredService<IGrainFactory>();
-        var pinGrain = factory.GetGrain<IWalMaterialiserPinGrain>(treeId);
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
         while (DateTime.UtcNow < deadline)
         {
-            var pins = await pinGrain.GetPinsAsync();
+            var pins = await GetPinsAsync(treeId);
             if (pins.Count > 0 && pins.Values.All(v => v > HybridLogicalClock.Zero))
             {
                 return pins;
@@ -296,19 +319,17 @@ public sealed class WalCursorRegistryDurabilityTests
             await Task.Delay(50);
         }
 
-        return await pinGrain.GetPinsAsync();
+        return await GetPinsAsync(treeId);
     }
 
     private async Task<IReadOnlyDictionary<string, HybridLogicalClock>> WaitForPinAsync(string treeId, string consumerId)
     {
-        var factory = RequireSiloServices().GetRequiredService<IGrainFactory>();
-        var pinGrain = factory.GetGrain<IWalMaterialiserPinGrain>(treeId);
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-        IReadOnlyDictionary<string, HybridLogicalClock> pins = await pinGrain.GetPinsAsync();
+        IReadOnlyDictionary<string, HybridLogicalClock> pins = await GetPinsAsync(treeId);
         while (DateTime.UtcNow < deadline && !pins.ContainsKey(consumerId))
         {
             await Task.Delay(50);
-            pins = await pinGrain.GetPinsAsync();
+            pins = await GetPinsAsync(treeId);
         }
 
         return pins;
