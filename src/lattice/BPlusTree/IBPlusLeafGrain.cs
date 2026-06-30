@@ -318,6 +318,18 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task SetKeyRangeAsync(string? lowKeyInclusive, string? highKeyExclusive);
 
     /// <summary>
+    /// Returns this leaf's persisted owned-key-range bounds
+    /// (<see cref="State.LeafNodeState.LowKeyInclusive"/> /
+    /// <see cref="State.LeafNodeState.HighKeyExclusive"/>) as a
+    /// <see cref="LeafKeyRange"/>. The shard-root coordinator consults these
+    /// bounds to terminate a paged range-scan sibling walk as soon as it
+    /// provably leaves the requested range, instead of reading every remaining
+    /// leaf to the end of the tree. A cheap in-memory read - it does not scan
+    /// the leaf's entries.
+    /// </summary>
+    Task<LeafKeyRange> GetKeyRangeAsync();
+
+    /// <summary>
     /// Stamps an initial projection-checkpoint offset on a freshly
     /// created leaf so its first activation can skip replaying WAL
     /// entries that were already materialised into its
