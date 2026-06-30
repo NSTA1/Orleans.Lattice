@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Dashboards</PackageId>
-    <Version>7.5.0</Version>
+    <Version>7.6.0</Version>
     <Description>Pre-built Grafana dashboards and provisioning templates for Orleans.Lattice and Orleans.Lattice.Replication telemetry. Bundles ready-to-import JSON dashboards covering every instrument on the orleans.lattice and orleans.lattice.replication meters.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
