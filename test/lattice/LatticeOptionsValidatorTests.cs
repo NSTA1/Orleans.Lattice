@@ -734,4 +734,35 @@ public class LatticeOptionsValidatorTests
         Assert.That(result.Failed, Is.True);
         Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalAdmissionSaturationWaitBudget)));
     }
+
+    [Test]
+    public void WalThrottledAdmissionPace_default_is_twenty_five_milliseconds()
+    {
+        Assert.That(new LatticeOptions().WalThrottledAdmissionPace, Is.EqualTo(TimeSpan.FromMilliseconds(25)));
+        Assert.That(LatticeOptions.DefaultWalThrottledAdmissionPace, Is.EqualTo(TimeSpan.FromMilliseconds(25)));
+    }
+
+    [Test]
+    public void WalThrottledAdmissionPace_positive_passes()
+    {
+        var result = Validate(o => o.WalThrottledAdmissionPace = TimeSpan.FromMilliseconds(50));
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalThrottledAdmissionPace_zero_passes()
+    {
+        // Zero is the documented operator opt-out: local pacing is
+        // disabled entirely.
+        var result = Validate(o => o.WalThrottledAdmissionPace = TimeSpan.Zero);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void WalThrottledAdmissionPace_negative_fails()
+    {
+        var result = Validate(o => o.WalThrottledAdmissionPace = TimeSpan.FromSeconds(-1));
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalThrottledAdmissionPace)));
+    }
 }

@@ -186,15 +186,15 @@ if (options.WalSaturationMaterialiserLagThreshold is { } materialiserLagThreshol
     return ValidateOptionsResult.Fail(
         $"{nameof(LatticeOptions.WalSaturationMaterialiserLagThreshold)} must be positive when set "
         + "(null disables the materialiser drain-lag classifier input entirely; a positive value sets the "
-        + "leaf-materialiser drain lag - now minus the slowest durable checkpoint - above which the per-tree "
-        + "trip counter is incremented).");
+        + "leaf-materialiser drain lag - WAL head wall-clock minus the slowest durable checkpoint frontier - above "
+        + "which the per-tree standing lag level counts as over-threshold for the consecutive-window classifier).");
 }
 if (options.WalSaturationMaterialiserLagSampleWindows < 1)
 {
     return ValidateOptionsResult.Fail(
         $"{nameof(LatticeOptions.WalSaturationMaterialiserLagSampleWindows)} must be greater than or equal to 1 "
-        + "(the number of consecutive WAL GC passes the tree's drain lag must exceed the threshold "
-        + "before the classifier escalates to Saturated via the drain-lag branch).");
+        + "(the number of consecutive saturation-sampler windows the tree's drain-lag level must exceed the threshold "
+        + "before the classifier holds the tree at Throttled via the drain-lag branch).");
 }
 if (options.WalMaterialiserMaxConcurrentReplays < 0)
 {
@@ -216,6 +216,12 @@ if (options.WalAdmissionSaturationWaitBudget < TimeSpan.Zero
     return ValidateOptionsResult.Fail(
         $"{nameof(LatticeOptions.WalAdmissionSaturationWaitBudget)} must be non-negative or {nameof(Timeout.InfiniteTimeSpan)} "
         + "(the admission-gate budget the WAL writer waits on WaitForHealthyAsync under Saturated before refusing the dispatch with LatticeSaturatedException; zero disables the gate, infinite waits forever for recovery).");
+}
+if (options.WalThrottledAdmissionPace < TimeSpan.Zero)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.WalThrottledAdmissionPace)} must be non-negative "
+        + "(the per-append local-path pacing delay the WAL writer applies while the tree is Throttled; zero disables local pacing).");
 }
 return ValidateOptionsResult.Success;
     }

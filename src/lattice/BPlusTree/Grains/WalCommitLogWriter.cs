@@ -127,26 +127,28 @@ internal sealed class WalCommitLogWriter(
     internal static readonly ConcurrentDictionary<(string TreeId, int Shard), long> _flushLatencyTripCounts
         = new();
 
-    // Per-(tree, shard 0) cumulative leaf-materialiser drain-lag trip
-    // counter, incremented by the WAL GC every pass on which a tree's
-    // drain lag (now minus the slowest durable leaf-materialiser
-    // checkpoint, after the durable pin floor is applied) exceeded the
-    // per-tree LatticeOptions.WalSaturationMaterialiserLagThreshold.
-    // This is the direct "the materialiser is not draining the WAL fast
-    // enough" surface that the depth-ratio, dispatch-timeout, and
-    // flush-latency inputs only approximate; it is what carries
-    // back-pressure to a downstream replication receiver when a write
-    // burst outruns the local drain. Shard is fixed at 0 because drain
-    // lag is a per-tree property (the GC measures it once per pass from
-    // the registry/pin floor, not per partition). The silo-scoped
-    // saturation sampler subtracts the previous tick's reading to derive
-    // the per-window trip delta and applies the consecutive-window check
-    // on LatticeOptions.WalSaturationMaterialiserLagSampleWindows. Same
-    // static-singleton shape as _flushLatencyTripCounts so the sampler
-    // reads every classifier-input map off a fixed root regardless of
-    // grain activation lifetime in tests.
-    internal static readonly ConcurrentDictionary<(string TreeId, int Shard), long> _materialiserDrainLagTripCounts
-        = new();
+    // Per-tree leaf-materialiser drain-lag LEVEL, written by the WAL GC
+    // every pass as the standing head-relative lag (the WAL head HLC's
+    // wall clock minus the slowest durable leaf-materialiser checkpoint's
+    // wall clock, clamped at zero) alongside the wall-clock tick the GC
+    // observed it. This is the direct "the materialiser is not draining the
+    // WAL fast enough" surface that the depth-ratio, dispatch-timeout, and
+    // flush-latency inputs only approximate; it is what carries back-pressure
+    // to a downstream replication receiver when a write burst outruns the
+    // local drain. It is a LEVEL (not a cumulative edge counter): the GC
+    // refreshes it at its own cadence (seconds for replicated trees) and the
+    // 200 ms saturation sampler re-reads the standing value on every tick, so
+    // a lag that persists between GC refreshes is counted on every
+    // intervening sampler window rather than appearing as a single edge that
+    // the consecutive-window check could never accumulate. Keyed by tree
+    // (drain lag is a per-tree property the GC measures once per pass, not per
+    // partition). The sampler treats an observation older than its staleness
+    // window as absent so a stale "lagging" reading cannot pin the regime once
+    // the GC stops refreshing it. Same static-singleton shape as
+    // _flushLatencyTripCounts so the sampler reads every classifier-input map
+    // off a fixed root regardless of grain activation lifetime in tests.
+    internal static readonly ConcurrentDictionary<string, MaterialiserDrainLagLevel> _materialiserDrainLagLevels
+        = new(StringComparer.Ordinal);
 
     // Per-instance drain CTS. Each WalCommitLogWriter owns its own
     // token; DrainAsync cancels it; AcquireAsync observes it alongside
@@ -389,6 +391,70 @@ internal sealed class WalCommitLogWriter(
     }
 
     /// <summary>
+    /// Local-path Throttled pacing: when the optional
+    /// <see cref="IWalSaturationSignal"/> reports
+    /// <see cref="WalSaturationState.Throttled"/> for
+    /// <paramref name="treeId"/>, applies a single bounded
+    /// <see cref="Task.Delay(TimeSpan, CancellationToken)"/> of
+    /// <paramref name="pace"/> before the caller admits into the
+    /// per-partition admission semaphore. This gives the Throttled
+    /// drain-lag back-pressure teeth on the single-silo local-write
+    /// path, where no remote replication sender exists to drip-feed and
+    /// the Saturated-only admission gate never engages. It is a pure
+    /// back-off: it never throws a saturation fault.
+    /// <para>
+    /// <b>Fast paths.</b> No-op when no signal is registered, when
+    /// <paramref name="pace"/> is <see cref="TimeSpan.Zero"/>, or when
+    /// the signal reports anything other than
+    /// <see cref="WalSaturationState.Throttled"/> (Healthy is the common
+    /// case - a single dictionary lookup, no await; Saturated is left to
+    /// the admission gate so the caller is not double-charged).
+    /// </para>
+    /// <para>
+    /// <b>Cancellation.</b> Caller cancellation surfaces as
+    /// <see cref="OperationCanceledException"/> as expected. A drain
+    /// request short-circuits the pace silently (the delay is abandoned
+    /// and the caller proceeds straight into admission, which then
+    /// observes the drain token itself) so shutdown is never slowed by
+    /// the pace.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">Tree id whose saturation signal to consult.</param>
+    /// <param name="pace">Per-append pacing delay applied while Throttled.</param>
+    /// <param name="cancellationToken">Caller-supplied cancellation.</param>
+    /// <param name="drainToken">Writer-supplied drain token.</param>
+    private async ValueTask PaceOnThrottleAsync(
+        string treeId,
+        TimeSpan pace,
+        CancellationToken cancellationToken,
+        CancellationToken drainToken)
+    {
+        if (saturationSignal is null) return;
+        if (pace <= TimeSpan.Zero) return;
+        if (saturationSignal.GetCurrentState(treeId) != WalSaturationState.Throttled) return;
+
+        CancellationTokenSource? linkedCts = null;
+        try
+        {
+            linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, drainToken);
+            await Task.Delay(pace, linkedCts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // Caller cancellation propagates; drain cancellation is a
+            // silent short-circuit (proceed straight into admission).
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+        }
+        finally
+        {
+            linkedCts?.Dispose();
+        }
+    }
+
+    /// <summary>
     /// Writer-side drain entry: releases every parked admission caller
     /// this writer dispatched through, then returns. Idempotent; the
     /// second call is a no-op.
@@ -473,6 +539,13 @@ internal sealed class WalCommitLogWriter(
         // WalAppendDispatchTimeout. No-op when no signal is registered
         // or the budget is Zero.
         await GateOnSaturationAsync(stamped.TreeId, partition, perTree.WalAdmissionSaturationWaitBudget, cancellationToken, _drainCts.Token);
+
+        // Local-path Throttled pacing. Gives the drain-lag back-pressure
+        // teeth on the single-silo write path by applying a bounded
+        // per-append delay while the tree is Throttled. Pure back-off:
+        // never throws. No-op when no signal is registered, the pace is
+        // Zero, or the tree is not Throttled.
+        await PaceOnThrottleAsync(stamped.TreeId, perTree.WalThrottledAdmissionPace, cancellationToken, _drainCts.Token);
 
         // Writer-side admission: cap PartitionTracker._inFlight at
         // WalMaxPendingBatches so the writer back-pressures honestly
@@ -769,6 +842,10 @@ internal sealed class WalCommitLogWriter(
         // Pre-admission saturation gate (batched path).
         // Same shape as the single-entry overload above.
         await GateOnSaturationAsync(treeId, partition, perTree.WalAdmissionSaturationWaitBudget, cancellationToken, _drainCts.Token);
+
+        // Local-path Throttled pacing (batched path); same shape as the
+        // single-entry overload above.
+        await PaceOnThrottleAsync(treeId, perTree.WalThrottledAdmissionPace, cancellationToken, _drainCts.Token);
 
         // Writer-side admission (batched path): same shape as the
         // single-entry overload above. The acquire bound is the same

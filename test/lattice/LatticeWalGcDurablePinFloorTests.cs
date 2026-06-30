@@ -52,6 +52,20 @@ public sealed class LatticeWalGcDurablePinFloorTests
         return provider;
     }
 
+    // Seeds a single-partition WAL whose head entry sits at headTicks wall
+    // clock (the prior entry at half that), so a drain-lag test can place the
+    // materialiser frontier a controlled distance behind the head.
+    private static async Task<InMemoryWalStorageProvider> SeededProviderWithHeadAsync(long headTicks)
+    {
+        var provider = new InMemoryWalStorageProvider();
+        await provider.AppendBatchAsync(
+            Tree,
+            0,
+            new[] { Entry(0, Hlc(headTicks / 2)), Entry(1, Hlc(headTicks)) },
+            CancellationToken.None);
+        return provider;
+    }
+
     private static IOptionsMonitor<LatticeOptions> Monitor()
     {
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
@@ -262,16 +276,18 @@ public sealed class LatticeWalGcDurablePinFloorTests
     }
 
     [Test]
-    public async Task RunOnceAsync_drain_lag_beyond_threshold_trips_saturation_counter()
+    public async Task RunOnceAsync_drain_lag_beyond_threshold_records_over_threshold_level()
     {
-        // The registry min sits at a tiny HLC wall-clock (Hlc 30), so the
-        // GC's now-minus-cursor lag is effectively the whole epoch - far past
-        // any positive threshold - and the per-tree drain-lag trip counter
-        // must advance once for this pass (issue #1030 back-pressure surface).
-        WalCommitLogWriter._materialiserDrainLagTripCounts.Clear();
-        var provider = await SeededProviderAsync();
+        // The WAL head sits ~9s of wall clock ahead of the materialiser
+        // frontier (registry min), so the head-relative drain lag exceeds the
+        // 5s threshold and the GC records an over-threshold standing level for
+        // the sampler to read (issue #1030 back-pressure surface).
+        WalCommitLogWriter._materialiserDrainLagLevels.Clear();
+        var headTicks = TimeSpan.FromSeconds(100).Ticks;
+        var frontierTicks = TimeSpan.FromSeconds(91).Ticks;
+        var provider = await SeededProviderWithHeadAsync(headTicks);
         var registry = new InMemoryWalCursorRegistry();
-        await registry.ReportCursorAsync(Tree, "shipper", Hlc(30));
+        await registry.ReportCursorAsync(Tree, "shipper", Hlc(frontierTicks));
 
         var sut = new LatticeWalGc(
             Services(provider, durablePins: null),
@@ -281,18 +297,51 @@ public sealed class LatticeWalGcDurablePinFloorTests
         await sut.RunOnceAsync(Tree);
 
         Assert.That(
-            WalCommitLogWriter._materialiserDrainLagTripCounts.TryGetValue((Tree, 0), out var trips) ? trips : 0L,
-            Is.EqualTo(1L),
-            "A pass whose drain lag exceeds the threshold must trip the per-tree counter exactly once.");
+            WalCommitLogWriter._materialiserDrainLagLevels.TryGetValue(Tree, out var level),
+            Is.True,
+            "An enabled drain-lag input must record a standing level every pass.");
+        Assert.That(
+            level.LagTicks,
+            Is.GreaterThan(TimeSpan.FromSeconds(5).Ticks),
+            "A pass whose head-relative drain lag exceeds the threshold must record an over-threshold level.");
     }
 
     [Test]
-    public async Task RunOnceAsync_drain_lag_disabled_never_trips_counter()
+    public async Task RunOnceAsync_caught_up_frontier_records_zero_lag_level()
     {
-        WalCommitLogWriter._materialiserDrainLagTripCounts.Clear();
-        var provider = await SeededProviderAsync();
+        // The frontier has reached the WAL head: head-relative lag is zero, so
+        // the GC records a zero standing level - no false positive on a
+        // caught-up / idle tree (the historical now-minus-cursor measure would
+        // have reported the whole epoch as lag here).
+        WalCommitLogWriter._materialiserDrainLagLevels.Clear();
+        var headTicks = TimeSpan.FromSeconds(100).Ticks;
+        var provider = await SeededProviderWithHeadAsync(headTicks);
         var registry = new InMemoryWalCursorRegistry();
-        await registry.ReportCursorAsync(Tree, "shipper", Hlc(30));
+        await registry.ReportCursorAsync(Tree, "shipper", Hlc(headTicks));
+
+        var sut = new LatticeWalGc(
+            Services(provider, durablePins: null),
+            registry,
+            MonitorWithLagThreshold(TimeSpan.FromSeconds(5)));
+
+        await sut.RunOnceAsync(Tree);
+
+        Assert.That(
+            WalCommitLogWriter._materialiserDrainLagLevels.TryGetValue(Tree, out var level),
+            Is.True);
+        Assert.That(
+            level.LagTicks,
+            Is.EqualTo(0L),
+            "A frontier caught up to the WAL head must record zero lag - no idle-tree false positive.");
+    }
+
+    [Test]
+    public async Task RunOnceAsync_drain_lag_disabled_records_no_level()
+    {
+        WalCommitLogWriter._materialiserDrainLagLevels.Clear();
+        var provider = await SeededProviderWithHeadAsync(TimeSpan.FromSeconds(100).Ticks);
+        var registry = new InMemoryWalCursorRegistry();
+        await registry.ReportCursorAsync(Tree, "shipper", Hlc(TimeSpan.FromSeconds(10).Ticks));
 
         var sut = new LatticeWalGc(
             Services(provider, durablePins: null),
@@ -302,8 +351,8 @@ public sealed class LatticeWalGcDurablePinFloorTests
         await sut.RunOnceAsync(Tree);
 
         Assert.That(
-            WalCommitLogWriter._materialiserDrainLagTripCounts.ContainsKey((Tree, 0)),
+            WalCommitLogWriter._materialiserDrainLagLevels.ContainsKey(Tree),
             Is.False,
-            "With the drain-lag input disabled (threshold null), no pass may trip the counter.");
+            "With the drain-lag input disabled (threshold null), no pass may record a level.");
     }
 }

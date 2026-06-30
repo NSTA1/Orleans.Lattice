@@ -211,7 +211,8 @@ public sealed class LatticeWalGc(
         // without this floor the GC would trim past a leaf's durable
         // checkpoint and lose its committed-but-not-yet-checkpointed WAL tail.
         minCursor = await ApplyDurableMaterialiserFloorAsync(treeName, minCursor, cancellationToken).ConfigureAwait(false);
-        ObserveMaterialiserDrainLag(treeName, resolved, minCursor);
+        await ObserveMaterialiserDrainLagAsync(
+            treeName, resolved, minCursor, ResolvePartitionProvider, partitions, cancellationToken).ConfigureAwait(false);
         var causalStable = await cursors.GetCausalStableAsync(treeName, cancellationToken).ConfigureAwait(false);
         var blockedFloor = await cursors.GetBlockedFloorAsync(treeName, cancellationToken).ConfigureAwait(false);
         HybridLogicalClock? ttlCeiling = null;
@@ -397,50 +398,111 @@ public sealed class LatticeWalGc(
     /// stale duplicate can only retain more WAL.
     /// </summary>
     /// <summary>
-    /// Trips the per-tree leaf-materialiser drain-lag saturation counter when
-    /// the slowest durable checkpoint (<paramref name="minCursor"/>, after the
-    /// durable pin floor) has fallen more than
-    /// <see cref="LatticeOptions.WalSaturationMaterialiserLagThreshold"/> behind
-    /// wall-clock time. A no-op when the input is disabled (threshold null) or
-    /// when there is no measurable lag: a null cursor (no consumer reported, or
-    /// a block pin disabled the cursor branch) is not treated as infinite lag,
-    /// so a never-checkpointed leaf never pins the regime at Saturated. Not
-    /// tripping leaves the cumulative counter unchanged, which the sampler reads
-    /// as a zero per-window delta and resets the consecutive-window counter -
-    /// the escalation therefore requires the lag to persist across consecutive
-    /// GC passes.
+    /// Records the per-tree leaf-materialiser drain-lag LEVEL for the
+    /// saturation sampler to re-read every tick. The lag is measured
+    /// head-relative: the WAL head HLC's wall clock minus the slowest durable
+    /// checkpoint (<paramref name="minCursor"/>, after the durable pin floor),
+    /// clamped at zero. Because it is head-relative it reads zero once the
+    /// materialiser catches up (including on a quiescent tree), so an
+    /// idle-but-healthy tree never trips. A no-op when the input is disabled
+    /// (threshold null); a null / Zero cursor (no consumer reported, or a block
+    /// pin disabled the cursor branch) is recorded as zero lag rather than the
+    /// absolute WAL-head wall clock, so a never-checkpointed leaf never pins the
+    /// regime. The standing level (including the zero "caught up" reading) is
+    /// written every pass so the sampler can both escalate when the lag persists
+    /// across its windows and release when it clears.
     /// </summary>
-    private void ObserveMaterialiserDrainLag(
+    private async Task ObserveMaterialiserDrainLagAsync(
         string treeName,
         LatticeOptions resolved,
-        HybridLogicalClock? minCursor)
+        HybridLogicalClock? minCursor,
+        Func<int, IWalStorageProvider?> resolveProvider,
+        int partitions,
+        CancellationToken cancellationToken)
     {
-        if (resolved.WalSaturationMaterialiserLagThreshold is not { } threshold)
+        // Explicit opt-out: a null threshold disables the input entirely, so we
+        // skip the WAL-head read as well as the level write.
+        if (resolved.WalSaturationMaterialiserLagThreshold is null)
         {
             return;
         }
 
-        if (minCursor is not { } cursor || cursor <= HybridLogicalClock.Zero)
+        long lagTicks = 0;
+
+        // The materialiser frontier is the slowest durable leaf-materialiser
+        // checkpoint after the durable pin floor. A null / Zero frontier means
+        // no consumer reported a real checkpoint (e.g. a block pin disabled the
+        // cursor branch); we cannot measure a meaningful head-relative lag
+        // against it, so we leave lagTicks at zero rather than treating the
+        // absolute WAL-head wall clock as the lag (which would massively
+        // over-report). A never-checkpointed leaf therefore never trips this
+        // input - exactly as the block-pin contract requires.
+        if (minCursor is { } frontier && frontier > HybridLogicalClock.Zero)
         {
-            return;
+            var headWallTicks = await ReadWalHeadWallClockTicksAsync(
+                treeName, resolveProvider, partitions, cancellationToken).ConfigureAwait(false);
+            if (headWallTicks > frontier.WallClockTicks)
+            {
+                lagTicks = headWallTicks - frontier.WallClockTicks;
+            }
         }
 
-        var lagTicks = _time.GetUtcNow().UtcTicks - cursor.WallClockTicks;
-
-        // Emit the drain-lag gauge for every sampled pass with a real
-        // materialiser frontier, not only the over-threshold passes, so the
-        // metric reflects the full lag distribution leading up to a trip.
+        // Emit the drain-lag gauge for every sampled pass with the input
+        // enabled, not only the over-threshold passes, so the metric reflects
+        // the full lag distribution leading up to a trip.
         LatticeMetrics.MaterialiserDrainLag.Record(
-            TimeSpan.FromTicks(Math.Max(0L, lagTicks)).TotalMilliseconds,
+            TimeSpan.FromTicks(lagTicks).TotalMilliseconds,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeName));
 
-        if (lagTicks <= threshold.Ticks)
+        WalCommitLogWriter._materialiserDrainLagLevels[treeName] =
+            new MaterialiserDrainLagLevel(lagTicks, _time.GetUtcNow().UtcTicks);
+    }
+
+    /// <summary>
+    /// Reads the maximum WAL head HLC wall clock across <paramref name="partitions"/>
+    /// partitions: for each partition with a non-empty log, recovers the HLC of
+    /// the single highest-offset entry without scanning the log. Partitions this
+    /// silo cannot resolve a provider for (pinned elsewhere) are skipped. Returns
+    /// zero when every partition is empty or unresolved.
+    /// </summary>
+    private static async Task<long> ReadWalHeadWallClockTicksAsync(
+        string treeName,
+        Func<int, IWalStorageProvider?> resolveProvider,
+        int partitions,
+        CancellationToken cancellationToken)
+    {
+        long headWallTicks = 0;
+        for (var partition = 0; partition < partitions; partition++)
         {
-            return;
+            cancellationToken.ThrowIfCancellationRequested();
+            var provider = resolveProvider(partition);
+            if (provider is null)
+            {
+                continue;
+            }
+
+            var highest = await provider.GetHighestOffsetAsync(treeName, partition, cancellationToken).ConfigureAwait(false);
+            if (highest < 0)
+            {
+                continue;
+            }
+
+            // Read just the head entry (the one strictly greater than
+            // highest - 1) to recover its HLC wall clock without scanning.
+            await foreach (var entry in provider
+                .ReadAsync(treeName, partition, highest - 1, 1, cancellationToken)
+                .ConfigureAwait(false))
+            {
+                var wall = entry.Mutation.Timestamp.WallClockTicks;
+                if (wall > headWallTicks)
+                {
+                    headWallTicks = wall;
+                }
+                break;
+            }
         }
 
-        WalCommitLogWriter._materialiserDrainLagTripCounts.AddOrUpdate(
-            (treeName, 0), 1, static (_, prior) => prior + 1);
+        return headWallTicks;
     }
 
     private async Task<IReadOnlyDictionary<string, HybridLogicalClock>> ReadDurablePinsAsync(

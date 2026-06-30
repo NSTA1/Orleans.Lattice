@@ -7,14 +7,16 @@ using Orleans.Lattice.BPlusTree.Grains;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
-/// Unit tests for the fifth Saturated classifier input
+/// Unit tests for the leaf-materialiser drain-lag classifier input
 /// (<see cref="LatticeOptions.WalSaturationMaterialiserLagThreshold"/> +
 /// <see cref="LatticeOptions.WalSaturationMaterialiserLagSampleWindows"/>)
 /// that <see cref="WalSaturationSampler"/> reads off
-/// <see cref="WalCommitLogWriter._materialiserDrainLagTripCounts"/> - the
-/// direct leaf-materialiser drain-lag back-pressure surface (issue #1030).
-/// Mirrors <see cref="WalSaturationSamplerFlushLatencyTests"/> by driving the
-/// sampler one tick at a time and asserting the tree's resolved state.
+/// <see cref="WalCommitLogWriter._materialiserDrainLagLevels"/> - the direct
+/// leaf-materialiser drain-lag back-pressure surface (issue #1030). The input
+/// is a standing LEVEL (the WAL GC refreshes a per-tree lag observation at its
+/// own cadence; the sampler re-reads it every tick), and a sustained run drives
+/// <see cref="WalSaturationState.Throttled"/> - a pure back-off - rather than
+/// Saturated, so it never engages the writer admission gate's fast-fail.
 /// </summary>
 [TestFixture]
 public class WalSaturationSamplerDrainLagTests
@@ -29,7 +31,7 @@ public class WalSaturationSamplerDrainLagTests
         WalCommitLogWriter._dispatchTimeoutCounts.Clear();
         WalCommitLogWriter._providerFailureCounts.Clear();
         WalCommitLogWriter._flushLatencyTripCounts.Clear();
-        WalCommitLogWriter._materialiserDrainLagTripCounts.Clear();
+        WalCommitLogWriter._materialiserDrainLagLevels.Clear();
         _treeId = $"tree-drain-lag-{Interlocked.Increment(ref _treeIdSeed)}";
     }
 
@@ -55,8 +57,13 @@ public class WalSaturationSamplerDrainLagTests
             NullLogger<WalSaturationSampler>.Instance);
     }
 
+    // Writes a fresh standing drain-lag level observation (observed now).
+    private void SetLevel(TimeSpan lag, string? tree = null) =>
+        WalCommitLogWriter._materialiserDrainLagLevels[tree ?? _treeId] =
+            new MaterialiserDrainLagLevel(lag.Ticks, DateTimeOffset.UtcNow.UtcTicks);
+
     [Test]
-    public async Task Disabled_threshold_never_escalates_regardless_of_trip_count()
+    public async Task Disabled_threshold_never_escalates_regardless_of_level()
     {
         var sampler = CreateSampler(
             new LatticeOptions { WalSaturationMaterialiserLagThreshold = null },
@@ -64,7 +71,7 @@ public class WalSaturationSamplerDrainLagTests
 
         await sampler.SampleOnceAsync(CancellationToken.None); // baseline
 
-        WalCommitLogWriter._materialiserDrainLagTripCounts[(_treeId, 0)] = 100;
+        SetLevel(TimeSpan.FromMinutes(5));
 
         for (var i = 0; i < 10; i++)
         {
@@ -72,11 +79,11 @@ public class WalSaturationSamplerDrainLagTests
         }
 
         Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Healthy),
-            "with the drain-lag input disabled (threshold null), trip counts must never escalate the regime");
+            "with the drain-lag input disabled (threshold null), a standing lag level must never escalate the regime");
     }
 
     [Test]
-    public async Task Escalates_to_Saturated_after_consecutive_windows()
+    public async Task Escalates_to_Throttled_after_consecutive_windows()
     {
         var sampler = CreateSampler(
             new LatticeOptions
@@ -88,50 +95,24 @@ public class WalSaturationSamplerDrainLagTests
 
         await sampler.SampleOnceAsync(CancellationToken.None); // baseline
 
-        WalCommitLogWriter._materialiserDrainLagTripCounts[(_treeId, 0)] = 1;
+        // A single standing over-threshold level persists across ticks (this is
+        // the whole point of the level model): each tick re-reads it and
+        // increments the consecutive-window counter.
+        SetLevel(TimeSpan.FromSeconds(30));
+
         await sampler.SampleOnceAsync(CancellationToken.None);
         Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Healthy));
 
-        WalCommitLogWriter._materialiserDrainLagTripCounts[(_treeId, 0)] = 2;
         await sampler.SampleOnceAsync(CancellationToken.None);
         Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Healthy));
 
-        WalCommitLogWriter._materialiserDrainLagTripCounts[(_treeId, 0)] = 3;
         await sampler.SampleOnceAsync(CancellationToken.None);
-        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Saturated),
-            "after 3 consecutive non-zero windows the drain-lag input escalates the regime");
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Throttled),
+            "after 3 consecutive over-threshold windows the drain-lag input holds the tree at Throttled");
     }
 
     [Test]
-    public async Task Resets_consecutive_counter_when_a_window_has_no_trips()
-    {
-        var sampler = CreateSampler(
-            new LatticeOptions
-            {
-                WalSaturationMaterialiserLagThreshold = TimeSpan.FromSeconds(5),
-                WalSaturationMaterialiserLagSampleWindows = 3,
-            },
-            out var signal);
-
-        await sampler.SampleOnceAsync(CancellationToken.None); // baseline
-
-        WalCommitLogWriter._materialiserDrainLagTripCounts[(_treeId, 0)] = 1;
-        await sampler.SampleOnceAsync(CancellationToken.None);
-        WalCommitLogWriter._materialiserDrainLagTripCounts[(_treeId, 0)] = 2;
-        await sampler.SampleOnceAsync(CancellationToken.None);
-
-        // Tick with no new trip: counter must reset to 0.
-        await sampler.SampleOnceAsync(CancellationToken.None);
-        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Healthy));
-
-        WalCommitLogWriter._materialiserDrainLagTripCounts[(_treeId, 0)] = 3;
-        await sampler.SampleOnceAsync(CancellationToken.None);
-        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Healthy),
-            "after the counter reset, a single trip window must not immediately re-escalate");
-    }
-
-    [Test]
-    public async Task Single_window_threshold_escalates_on_first_trip_after_baseline()
+    public async Task Drain_lag_never_escalates_to_Saturated()
     {
         var sampler = CreateSampler(
             new LatticeOptions
@@ -142,10 +123,92 @@ public class WalSaturationSamplerDrainLagTests
             out var signal);
 
         await sampler.SampleOnceAsync(CancellationToken.None); // baseline
-        WalCommitLogWriter._materialiserDrainLagTripCounts[(_treeId, 0)] = 1;
+
+        SetLevel(TimeSpan.FromMinutes(10));
+        for (var i = 0; i < 20; i++)
+        {
+            await sampler.SampleOnceAsync(CancellationToken.None);
+        }
+
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Throttled),
+            "drain lag is a pure back-off: even an extreme, sustained lag holds at Throttled and never escalates to Saturated");
+    }
+
+    [Test]
+    public async Task Resets_consecutive_counter_when_a_window_is_under_threshold()
+    {
+        var sampler = CreateSampler(
+            new LatticeOptions
+            {
+                WalSaturationMaterialiserLagThreshold = TimeSpan.FromSeconds(5),
+                WalSaturationMaterialiserLagSampleWindows = 3,
+            },
+            out var signal);
+
+        await sampler.SampleOnceAsync(CancellationToken.None); // baseline
+
+        SetLevel(TimeSpan.FromSeconds(30));
+        await sampler.SampleOnceAsync(CancellationToken.None);
         await sampler.SampleOnceAsync(CancellationToken.None);
 
-        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Saturated));
+        // A fresh at/under-threshold observation (the materialiser caught up):
+        // counter must reset to 0.
+        SetLevel(TimeSpan.Zero);
+        await sampler.SampleOnceAsync(CancellationToken.None);
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Healthy));
+
+        SetLevel(TimeSpan.FromSeconds(30));
+        await sampler.SampleOnceAsync(CancellationToken.None);
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Healthy),
+            "after the counter reset, a single over-threshold window must not immediately re-escalate");
+    }
+
+    [Test]
+    public async Task Stale_observation_does_not_escalate()
+    {
+        var sampler = CreateSampler(
+            new LatticeOptions
+            {
+                WalSaturationMaterialiserLagThreshold = TimeSpan.FromSeconds(5),
+                WalSaturationMaterialiserLagSampleWindows = 1,
+            },
+            out var signal);
+
+        await sampler.SampleOnceAsync(CancellationToken.None); // baseline
+
+        // An over-threshold lag observed far in the past (older than the
+        // staleness window): the GC has stopped refreshing it, so it must be
+        // treated as absent and never escalate.
+        WalCommitLogWriter._materialiserDrainLagLevels[_treeId] =
+            new MaterialiserDrainLagLevel(
+                TimeSpan.FromMinutes(10).Ticks,
+                DateTimeOffset.UtcNow.AddHours(-1).UtcTicks);
+
+        for (var i = 0; i < 5; i++)
+        {
+            await sampler.SampleOnceAsync(CancellationToken.None);
+        }
+
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Healthy),
+            "a stale level observation must not pin the regime once the GC stops refreshing it");
+    }
+
+    [Test]
+    public async Task Single_window_threshold_escalates_on_first_over_threshold_window()
+    {
+        var sampler = CreateSampler(
+            new LatticeOptions
+            {
+                WalSaturationMaterialiserLagThreshold = TimeSpan.FromSeconds(5),
+                WalSaturationMaterialiserLagSampleWindows = 1,
+            },
+            out var signal);
+
+        await sampler.SampleOnceAsync(CancellationToken.None); // baseline
+        SetLevel(TimeSpan.FromSeconds(30));
+        await sampler.SampleOnceAsync(CancellationToken.None);
+
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Throttled));
     }
 
     [Test]
@@ -162,17 +225,18 @@ public class WalSaturationSamplerDrainLagTests
 
         await sampler.SampleOnceAsync(CancellationToken.None); // baseline
 
-        WalCommitLogWriter._materialiserDrainLagTripCounts[(_treeId, 0)] = 1;
-        WalCommitLogWriter._materialiserDrainLagTripCounts[(otherTree, 0)] = 1;
+        SetLevel(TimeSpan.FromSeconds(30));
+        SetLevel(TimeSpan.FromSeconds(30), otherTree);
         await sampler.SampleOnceAsync(CancellationToken.None);
 
-        WalCommitLogWriter._materialiserDrainLagTripCounts[(_treeId, 0)] = 2;
-        // otherTree: no new trip (delta = 0) -> counter resets.
+        // tree A stays over threshold; tree B catches up (under threshold) -> resets.
+        SetLevel(TimeSpan.FromSeconds(30));
+        SetLevel(TimeSpan.Zero, otherTree);
         await sampler.SampleOnceAsync(CancellationToken.None);
 
-        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Saturated),
-            "tree A had 2 consecutive non-zero windows");
+        Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Throttled),
+            "tree A had 2 consecutive over-threshold windows");
         Assert.That(signal.GetCurrentState(otherTree), Is.EqualTo(WalSaturationState.Healthy),
-            "tree B's counter was reset by the zero-delta window between trips");
+            "tree B's counter was reset by the under-threshold window");
     }
 }

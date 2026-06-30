@@ -1811,45 +1811,64 @@ public class LatticeOptions
     public const int DefaultWalSaturationFlushLatencySampleWindows = 3;
 
     /// <summary>
-    /// Opt-in WAL saturation input that escalates a tree to
-    /// <see cref="Orleans.Lattice.WalSaturationState.Saturated"/> when its
-    /// leaf-materialiser drain frontier falls more than this far behind
-    /// wall-clock time - the direct "the materialiser is not keeping up with
-    /// the write rate" surface that the indirect admission-depth and
-    /// flush-latency inputs only approximate. The WAL GC measures the lag on
-    /// each pass as <c>now - minCursor</c> (the age of the slowest durable
-    /// leaf-materialiser checkpoint, after the durable pin floor is applied);
-    /// when the lag exceeds this threshold it trips a per-tree counter the
-    /// saturation sampler reads with the same consecutive-window escalation as
-    /// the flush-latency input.
+    /// WAL saturation input that escalates a tree to
+    /// <see cref="Orleans.Lattice.WalSaturationState.Throttled"/> when its
+    /// leaf-materialiser drain frontier falls more than this far behind the
+    /// WAL head - the direct "the materialiser is not keeping up with the
+    /// write rate" surface that the indirect admission-depth and flush-latency
+    /// inputs only approximate. The WAL GC measures the lag on each pass as
+    /// <c>walHead.WallClockTicks - materialiserFrontier.WallClockTicks</c>
+    /// (clamped at zero): the age of the oldest WAL entry the slowest durable
+    /// leaf-materialiser checkpoint has not yet drained. Because the measure is
+    /// head-relative rather than wall-clock-relative it reads zero on an
+    /// idle-but-caught-up tree (the frontier reaches the head), so a quiescent
+    /// tree never trips. The GC records the standing lag as a per-tree level
+    /// that the saturation sampler re-reads every tick; once the level stays
+    /// above this threshold for
+    /// <see cref="WalSaturationMaterialiserLagSampleWindows"/> consecutive
+    /// sampler windows the tree is held at Throttled.
     /// <para>
     /// This is the back-pressure surface that protects a downstream
     /// replication receiver. When a write burst outruns the materialiser drain
-    /// the resulting Saturated state flows automatically through
-    /// <c>IWalSaturationSignal</c> to the writer admission gate, the atomic-write
-    /// quiesce path, the replication receiver flow-control policy (throttling
-    /// the upstream sender), and the Azure retry policy - so a modest burst can
-    /// no longer peg every silo before the drain catches up.
+    /// the resulting Throttled state flows automatically through
+    /// <c>IWalSaturationSignal</c> to the replication receiver flow-control
+    /// policy (which drip-feeds and pauses the upstream sender) and to the
+    /// writer admission path (which rides its natural bounded-semaphore
+    /// back-pressure) - so a modest burst slows the producers rather than
+    /// pegging every silo before the drain catches up. Throttled is a pure
+    /// back-off: unlike the acute dispatch-timeout, provider-failure, and
+    /// flush-latency inputs the drain-lag input never escalates to Saturated
+    /// and so never trips the admission gate's
+    /// <c>LatticeSaturatedException</c> fast-fail - a sustained drain lag
+    /// slows callers, it does not fault them.
     /// </para>
     /// <para>
-    /// Set to <c>null</c> (the default) to disable the input entirely; the
-    /// classifier observes its historical behaviour exactly. A block pin (a
-    /// never-checkpointed leaf, which disables the cursor trim branch) is not
-    /// treated as infinite lag and never trips this input. The registered
-    /// options validator rejects any non-positive value when the option is set.
+    /// Defaults to <see cref="DefaultWalSaturationMaterialiserLagThreshold"/>
+    /// (30 seconds); set to <c>null</c> to disable the input entirely (the
+    /// classifier then ignores drain lag and the GC skips the WAL-head read). A
+    /// block pin (a never-checkpointed leaf, which disables the cursor trim
+    /// branch) is not treated as lag and never trips this input. The registered
+    /// options validator rejects a non-positive value when the option is set.
+    /// The level observation refreshes at the WAL GC cadence (the replication
+    /// maintenance interval for replicated trees, <see cref="WalGcInterval"/>
+    /// otherwise), so the input engages for trees whose GC runs frequently
+    /// enough to keep the observation fresh.
     /// </para>
     /// </summary>
-    public TimeSpan? WalSaturationMaterialiserLagThreshold { get; set; }
+    public TimeSpan? WalSaturationMaterialiserLagThreshold { get; set; } = DefaultWalSaturationMaterialiserLagThreshold;
+
+    /// <summary>Default value for <see cref="WalSaturationMaterialiserLagThreshold"/> (30 seconds).</summary>
+    public static readonly TimeSpan DefaultWalSaturationMaterialiserLagThreshold = TimeSpan.FromSeconds(30);
 
     /// <summary>
-    /// Number of consecutive WAL GC passes during which a tree's
-    /// leaf-materialiser drain lag must exceed
+    /// Number of consecutive saturation-sampler windows during which a tree's
+    /// leaf-materialiser drain lag must stay above
     /// <see cref="WalSaturationMaterialiserLagThreshold"/> before the
-    /// saturation classifier escalates the tree to
-    /// <see cref="Orleans.Lattice.WalSaturationState.Saturated"/> via the
+    /// saturation classifier holds the tree at
+    /// <see cref="Orleans.Lattice.WalSaturationState.Throttled"/> via the
     /// drain-lag branch. Defaults to
     /// <see cref="DefaultWalSaturationMaterialiserLagSampleWindows"/> (3),
-    /// mirroring the flush-latency input so a single slow GC pass cannot flip
+    /// mirroring the flush-latency input so a single sampler tick cannot flip
     /// the regime. Has no effect when
     /// <see cref="WalSaturationMaterialiserLagThreshold"/> is <c>null</c>. Must
     /// be greater than or equal to 1.
@@ -1930,6 +1949,44 @@ public class LatticeOptions
 
     /// <summary>Default value for <see cref="WalAdmissionSaturationWaitBudget"/> (5 seconds).</summary>
     public static readonly TimeSpan DefaultWalAdmissionSaturationWaitBudget = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Per-append pacing delay the WAL writer applies on the local admission
+    /// path while the per-tree saturation signal reports
+    /// <see cref="Orleans.Lattice.WalSaturationState.Throttled"/>. This is what
+    /// gives the drain-lag (and any other Throttled-mapped) back-pressure input
+    /// teeth on the single-silo local-write path, where there is no remote
+    /// replication sender to drip-feed and the
+    /// <see cref="WalAdmissionSaturationWaitBudget"/> gate (Saturated-only)
+    /// never engages. Before each dispatch admits into the per-partition
+    /// admission semaphore the writer reads the signal once; on
+    /// <see cref="Orleans.Lattice.WalSaturationState.Throttled"/> it awaits a
+    /// single bounded <see cref="System.Threading.Tasks.Task.Delay(System.TimeSpan, System.Threading.CancellationToken)"/>
+    /// of this duration, pacing the local producer so the materialiser drain can
+    /// catch up. It is a pure back-off: it never throws, and it never escalates
+    /// to <see cref="Orleans.Lattice.LatticeSaturatedException"/> - a Throttled
+    /// tree slows callers, it does not fault them.
+    /// <para>
+    /// <b>Fast paths.</b> No-op when no saturation signal is registered
+    /// (single-node / unit-test writers). No-op when the signal reports
+    /// <see cref="Orleans.Lattice.WalSaturationState.Healthy"/> (a single
+    /// concurrent-dictionary lookup, no await). No-op when set to
+    /// <see cref="System.TimeSpan.Zero"/> (the operator opted out of local
+    /// pacing). On <see cref="Orleans.Lattice.WalSaturationState.Saturated"/>
+    /// the separate admission gate already governs the dispatch, so the pace is
+    /// skipped to avoid double-charging the caller.
+    /// </para>
+    /// <para>
+    /// Defaults to <see cref="DefaultWalThrottledAdmissionPace"/> (25
+    /// milliseconds), enabled out of the box so the local write path obeys the
+    /// signal by default. The registered options validator rejects a negative
+    /// value at first-resolve time.
+    /// </para>
+    /// </summary>
+    public TimeSpan WalThrottledAdmissionPace { get; set; } = DefaultWalThrottledAdmissionPace;
+
+    /// <summary>Default value for <see cref="WalThrottledAdmissionPace"/> (25 milliseconds).</summary>
+    public static readonly TimeSpan DefaultWalThrottledAdmissionPace = TimeSpan.FromMilliseconds(25);
 
     /// <summary>
     /// Optional caller-controlled retry policy applied at the boundary
