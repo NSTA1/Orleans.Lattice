@@ -221,6 +221,66 @@ public class LatticeServiceCollectionExtensionsTests
     }
 
     [Test]
+    public void AddLattice_registers_in_memory_leaf_cursor_reporter_by_default()
+    {
+        var services = new ServiceCollection();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLattice((_, _) => { });
+
+        var provider = services.BuildServiceProvider();
+        var reporter = provider.GetService<ILeafCursorReporter>();
+        Assert.That(
+            reporter,
+            Is.InstanceOf<InMemoryLeafCursorReporter>(),
+            "AddLattice must register the lightweight in-memory leaf cursor reporter by default so every leaf publishes its applied frontier into the registry and drain-lag back-pressure is live for every write workload, not only on hosts that opt into the durable pin store");
+    }
+
+    [Test]
+    public void AddWalCursorRegistry_replaces_in_memory_reporter_with_durable_reporter()
+    {
+        var services = new ServiceCollection();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        // AddLattice registers the in-memory default first; opting into the
+        // cursor registry must Replace it with the durable-pin-aware reporter.
+        builder.AddLattice((_, _) => { });
+        builder.AddWalCursorRegistry();
+
+        Assert.That(
+            services.Count(d => d.ServiceType == typeof(ILeafCursorReporter)),
+            Is.EqualTo(1),
+            "Replace must not stack reporter descriptors.");
+
+        var provider = services.BuildServiceProvider();
+        Assert.That(
+            provider.GetRequiredService<ILeafCursorReporter>(),
+            Is.InstanceOf<LeafCursorReporter>(),
+            "AddWalCursorRegistry must replace the in-memory default with the durable-pin-aware LeafCursorReporter.");
+    }
+
+    [Test]
+    public void AddWalCursorRegistry_preserves_a_host_supplied_custom_reporter()
+    {
+        var services = new ServiceCollection();
+        var custom = Substitute.For<ILeafCursorReporter>();
+        services.AddSingleton(custom);
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        // A host that registered its own reporter (before or after AddLattice's
+        // default) must keep it: AddWalCursorRegistry only upgrades the core
+        // in-memory default, never clobbers a custom reporter.
+        builder.AddLattice((_, _) => { });
+        builder.AddWalCursorRegistry();
+
+        var provider = services.BuildServiceProvider();
+        Assert.That(provider.GetRequiredService<ILeafCursorReporter>(), Is.SameAs(custom));
+    }
+
+    [Test]
     public void AddLattice_registers_IWalSaturationSignal_singleton()
     {
         var services = new ServiceCollection();

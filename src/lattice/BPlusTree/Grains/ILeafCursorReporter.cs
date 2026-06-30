@@ -8,17 +8,24 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// has durably applied so the per-shard write-ahead-log GC can pin its
 /// trim point under the slowest local consumer.
 /// <para>
-/// The core <c>Orleans.Lattice</c> assembly intentionally does not depend
-/// on <c>Orleans.Lattice.Replication</c> (the dependency direction is the
-/// other way around). This interface is the bridge: the replication
-/// package registers an adapter that forwards to its
-/// <c>IWalCursorRegistry</c>, so a host that has not added
-/// replication leaves the registration absent and the leaf grain becomes
-/// a no-op on the cursor-report path. The implementation is resolved
-/// from <see cref="IGrainContext.ActivationServices"/> via
-/// <see cref="Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetService{T}"/>
-/// - a missing registration returns <see langword="null"/> and is
-/// expected.
+/// The core <c>Orleans.Lattice</c> assembly registers a lightweight
+/// <see cref="InMemoryLeafCursorReporter"/> by default (via
+/// <c>AddLattice</c>), so every host reports leaf cursors into the
+/// always-on in-memory <c>IWalCursorRegistry</c> and the WAL saturation
+/// sampler's materialiser drain-lag back-pressure is live for every write
+/// workload out of the box. That default does only the cheap in-memory
+/// work and treats every durable-pin method below as a no-op. The durable
+/// cross-restart trim-floor backstop (the sharded cluster-wide
+/// <see cref="IWalMaterialiserPinGrain"/> store) is the opt-in layer:
+/// <c>AddWalCursorRegistry</c> (called directly, or transitively by the
+/// WAL GC / views / replication / Azure-table storage packages) replaces
+/// the lightweight default with the durable-pin-aware
+/// <see cref="LeafCursorReporter"/>. The implementation is resolved from
+/// <see cref="IGrainContext.ActivationServices"/> via
+/// <see cref="Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetService{T}"/>;
+/// a host that has somehow not registered any reporter returns
+/// <see langword="null"/> and the leaf grain becomes a no-op on the
+/// cursor-report path.
 /// </para>
 /// </summary>
 internal interface ILeafCursorReporter

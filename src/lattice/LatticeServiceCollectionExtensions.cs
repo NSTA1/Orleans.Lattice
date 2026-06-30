@@ -132,6 +132,20 @@ public static class LatticeServiceCollectionExtensions
         // drain lag rather than a disabled signal. TryAdd so a downstream
         // package or host registration still wins.
         builder.Services.TryAddSingleton<IWalCursorRegistry, InMemoryWalCursorRegistry>();
+        // Always-on leaf cursor reporting. Registering the registry alone is not
+        // enough: the registry is the container, and the leaf cursor reporter is
+        // the producer that publishes each leaf's applied checkpoint frontier
+        // into it. Without a reporter the registry stays empty, GetMinCursorAsync
+        // returns null, and the sampler's drain-lag input reads zero forever -
+        // the same silent-off failure mode one layer down. We register the
+        // lightweight InMemoryLeafCursorReporter here so every leaf reports its
+        // in-memory cursor by default and drain-lag back-pressure is live for
+        // every write workload. It does only the cheap in-memory work; the
+        // durable cross-restart pin store (real write amplification) stays
+        // opt-in, layered in by AddWalCursorRegistry, which Replaces this
+        // default with the durable-pin-aware LeafCursorReporter. TryAdd so an
+        // opt-in registration still wins.
+        builder.Services.TryAddSingleton<BPlusTree.Grains.ILeafCursorReporter, BPlusTree.Grains.InMemoryLeafCursorReporter>();
         builder.Services.AddSingleton<IHostedService, BPlusTree.Grains.WalSaturationSampler>();
         // WAL byte-budget encoder: the canonical Orleans-binary
         // implementation produces the exact serialised bytes for each
@@ -418,13 +432,27 @@ public static class LatticeServiceCollectionExtensions
             builder.Services.Replace(ServiceDescriptor.Singleton<IWalCursorRegistry>(factory));
         }
 
-        // Opting into the cursor registry implies opting into
-        // leaf-as-materialiser cursor reporting: register the leaf-facing
-        // reporter so BPlusLeafGrain.CursorRegistry pulls a non-null
-        // ILeafCursorReporter from DI and starts pinning the WAL GC
-        // against its applied frontier. Hosts that do not call
-        // AddWalCursorRegistry leave both registrations absent and the
-        // leaf grain no-ops on the report path.
+        // Opting into the cursor registry implies opting into the durable
+        // leaf-as-materialiser cursor reporting: upgrade the always-on
+        // lightweight InMemoryLeafCursorReporter (registered by AddLattice)
+        // to the durable-pin-aware LeafCursorReporter so BPlusLeafGrain
+        // .CursorRegistry not only reports its applied frontier in-memory but
+        // also mirrors it into the sharded cluster-wide IWalMaterialiserPinGrain
+        // store, pinning the WAL GC trim floor across restarts. We drop only
+        // the core in-memory default and then TryAdd the durable reporter: a
+        // host that registered its own custom ILeafCursorReporter (in either
+        // order) keeps it - matching the extensibility contract that
+        // AddWalCursorRegistry never clobbers a host-supplied reporter - and a
+        // host that never opts in keeps the lightweight in-memory default with
+        // its drain-lag signal still live.
+        var coreDefaultReporter = builder.Services.FirstOrDefault(d =>
+            d.ServiceType == typeof(ILeafCursorReporter) &&
+            d.ImplementationType == typeof(InMemoryLeafCursorReporter));
+        if (coreDefaultReporter is not null)
+        {
+            builder.Services.Remove(coreDefaultReporter);
+        }
+
         builder.Services.TryAddSingleton<ILeafCursorReporter, LeafCursorReporter>();
 
         // Reusable per-shard WAL tailing loop shared by every log consumer

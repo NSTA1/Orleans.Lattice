@@ -229,9 +229,16 @@ alone and trim the WAL past the leaf's durable checkpoint, discarding
 the committed-but-not-yet-checkpointed tail the leaf still needs to
 replay.
 
-To close that window each leaf also mirrors its checkpoint frontier
-into a cluster-wide durable pin grain (one activation per tree, keyed by
-the tree id, persisted through the configured grain storage). The
+In-memory cursor reporting is always on (the lightweight
+`InMemoryLeafCursorReporter` wired by `AddLattice`), but the durable
+backstop below is the opt-in layer: it engages only when the host adds
+the durable-pin-aware reporter through `AddWalCursorRegistry` (directly,
+or transitively via durable WAL storage / views / replication). To close
+that window each leaf then also mirrors its checkpoint frontier
+into a sharded cluster-wide durable pin store (`WalMaterialiserPinShards`
+grain activations per tree, each persisted through the configured grain
+storage; the GC dual-reads every shard plus the legacy unsuffixed key
+during the migration window so no trim floor is lost). The
 mirror is fire-and-forget and coalesced off the checkpoint path - a
 debounce keeps a busy every-write-checkpoint leaf from issuing a durable
 write per write - and because a too-low durable pin only ever retains
@@ -652,9 +659,12 @@ await registry.ReportCursorAsync(
 await registry.UnregisterAsync("orders", "peer:site-b", cancellationToken);
 ```
 
-`AddLattice` always registers the default `InMemoryWalCursorRegistry`
-as a fallback, so the registry the GC and the saturation sampler read
-is never absent; it is process-local and loses its state on silo
+`AddLattice` always registers both the default `InMemoryWalCursorRegistry`
+and a lightweight `InMemoryLeafCursorReporter`, so the registry the GC and
+the saturation sampler read is never absent *and* every leaf publishes its
+applied frontier into it - the materialiser drain-lag back-pressure is live
+for every write workload out of the box, not only on materialiser /
+replication hosts. The registry is process-local and loses its state on silo
 restart. A host that needs cross-restart durability supplies its own
 `IWalCursorRegistry` implementation through the
 `AddWalCursorRegistry(factory)` overload, which replaces that in-memory
