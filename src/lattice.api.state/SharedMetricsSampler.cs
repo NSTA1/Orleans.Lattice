@@ -118,6 +118,7 @@ internal sealed class SharedMetricsSampler(
             }
 
             loop.Subscribers.Add(subscriber);
+            loop.RefreshSnapshot();
         }
 
         return subscriber;
@@ -128,6 +129,7 @@ internal sealed class SharedMetricsSampler(
         lock (_gate)
         {
             loop.Subscribers.Remove(subscriber);
+            loop.RefreshSnapshot();
             subscriber.Channel.Writer.TryComplete();
 
             if (loop.Subscribers.Count == 0 && _loops.TryGetValue(signature, out var current) && ReferenceEquals(current, loop))
@@ -163,13 +165,9 @@ internal sealed class SharedMetricsSampler(
                     continue;
                 }
 
-                Subscriber[] subscribers;
-                lock (_gate)
-                {
-                    subscribers = loop.Subscribers.ToArray();
-                }
-
-                foreach (var subscriber in subscribers)
+                // Lock-free, allocation-free in steady state: the snapshot is
+                // only rebuilt when subscriber membership changes.
+                foreach (var subscriber in loop.CurrentSubscribers)
                 {
                     subscriber.Channel.Writer.TryWrite(map);
                 }
@@ -187,6 +185,7 @@ internal sealed class SharedMetricsSampler(
                 }
 
                 loop.Subscribers.Clear();
+                loop.RefreshSnapshot();
             }
         }
     }
@@ -332,9 +331,20 @@ internal sealed class SharedMetricsSampler(
 
     private static string BuildSignature(TreeMetricsRequest request, TimeSpan interval)
     {
-        var ids = request.TreeIds is { Count: > 0 }
-            ? string.Join(',', request.TreeIds.Distinct(StringComparer.Ordinal).OrderBy(static x => x, StringComparer.Ordinal))
-            : "*";
+        string ids;
+        if (request.TreeIds is { Count: > 0 } treeIds)
+        {
+            // Sort the de-duplicated ids in place rather than via OrderBy's
+            // deferred iterator, so the signature is canonical (order-insensitive)
+            // without the extra LINQ sort-buffer allocation.
+            var distinct = treeIds.Distinct(StringComparer.Ordinal).ToArray();
+            Array.Sort(distinct, StringComparer.Ordinal);
+            ids = string.Join(',', distinct);
+        }
+        else
+        {
+            ids = "*";
+        }
 
         return string.Create(
             System.Globalization.CultureInfo.InvariantCulture,
@@ -361,6 +371,8 @@ internal sealed class SharedMetricsSampler(
 
     private sealed class SamplerLoop(TreeMetricsRequest request, TimeSpan interval)
     {
+        private Subscriber[] _snapshot = Array.Empty<Subscriber>();
+
         public TreeMetricsRequest Request { get; } = request;
 
         public TimeSpan Interval { get; } = interval;
@@ -370,5 +382,16 @@ internal sealed class SharedMetricsSampler(
         public CancellationTokenSource Cancellation { get; } = new();
 
         public Task? Task { get; set; }
+
+        /// <summary>
+        /// A copy-on-write snapshot of <see cref="Subscribers"/>, rebuilt under
+        /// the sampler gate whenever membership changes. The per-tick fan-out
+        /// reads it lock-free (see <see cref="CurrentSubscribers"/>), so the
+        /// steady-state sampling loop neither locks nor allocates per tick.
+        /// </summary>
+        public Subscriber[] CurrentSubscribers => Volatile.Read(ref _snapshot);
+
+        /// <summary>Rebuilds the lock-free snapshot. Must be called under the gate.</summary>
+        public void RefreshSnapshot() => Volatile.Write(ref _snapshot, Subscribers.ToArray());
     }
 }

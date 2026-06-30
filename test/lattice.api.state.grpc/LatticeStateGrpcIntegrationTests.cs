@@ -248,6 +248,26 @@ public class LatticeStateGrpcIntegrationTests
     }
 
     [Test]
+    public async Task disabled_authorization_bypasses_even_a_denying_authorizer()
+    {
+        // With RequireAuthorization=false an outer boundary owns access control,
+        // so the per-call authorizer must not run at all: a deny-all recorder is
+        // never consulted and the call proceeds. This is the documented
+        // "outer boundary guards the endpoint" escape hatch.
+        var recorder = new RecordingStateApiAuthorizer(allow: false);
+        await using var host = await _fixture.CreateGrpcHostAsync(recorder, requireAuthorization: false);
+
+        var page = await CallAsync(host.Channel, host.Methods.ListTrees,
+            new CatalogRequest { PageSize = 10 });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(page, Is.Not.Null);
+            Assert.That(recorder.Count, Is.Zero, "the authorizer must not be consulted when enforcement is off");
+        });
+    }
+
+    [Test]
     public async Task authorizer_receives_scan_operation_and_target_tree()
     {
         var treeId = $"grpc-authz-scan-{Guid.NewGuid():N}";
@@ -404,13 +424,18 @@ public class LatticeStateGrpcIntegrationTests
 internal sealed class RecordingStateApiAuthorizer(bool allow) : ILatticeStateApiAuthorizer
 {
     private LatticeStateApiAuthorizationContext _last;
+    private int _count;
 
     public LatticeStateApiAuthorizationContext Last => _last;
+
+    /// <summary>Number of times the authorizer was consulted. A test probe.</summary>
+    public int Count => Volatile.Read(ref _count);
 
     public Task<bool> IsAuthorizedAsync(
         LatticeStateApiAuthorizationContext authorizationContext,
         CancellationToken cancellationToken)
     {
+        Interlocked.Increment(ref _count);
         _last = authorizationContext;
         return Task.FromResult(allow);
     }
