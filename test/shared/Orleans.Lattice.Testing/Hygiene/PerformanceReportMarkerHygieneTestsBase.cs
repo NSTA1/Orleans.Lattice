@@ -1,8 +1,9 @@
 using System.Globalization;
 using System.IO;
 using System.Text.RegularExpressions;
+using NUnit.Framework;
 
-namespace Orleans.Lattice.Tests;
+namespace Orleans.Lattice.Testing.Hygiene;
 
 /// <summary>
 /// Regression: <c>docs/lattice/performance-single-silo.md</c> contains
@@ -16,31 +17,11 @@ namespace Orleans.Lattice.Tests;
 /// <see href="https://github.com/NSTA1/Orleans.Lattice/issues/598"/>
 /// for the full contract.
 /// <para>
-/// The rules:
-/// <list type="number">
-///   <item>Every <c>:start</c> marker has a matching <c>:end</c>; markers
-///         are non-overlapping; the file's marker count is even.</item>
-///   <item>Every <c>:start</c> block contains a <c>schema=</c> key and the
-///         <c>DO-NOT-HAND-EDIT-BETWEEN-MARKERS</c> notice.</item>
-///   <item>The required per-layer keys are present:
-///         <list type="bullet">
-///           <item>layer1: <c>host</c>, <c>dotnet</c>, <c>cohortN</c>,
-///                 <c>bdnFidelity</c>, <c>bdnToolchain</c>,
-///                 <c>rowsMeasured</c>, <c>methodology</c></item>
-///           <item>layer2: <c>host</c>, <c>region</c>, <c>dotnet</c>,
-///                 <c>walPartitions</c>, <c>walMaxPendingBatches</c>,
-///                 <c>rung</c>, <c>responseTimeoutSec</c>, <c>cohortN</c>,
-///                 <c>rowsMeasured</c>, <c>methodology</c></item>
-///         </list></item>
-///   <item><c>rowsMeasured</c> parses as ISO-8601 and is not in the future.</item>
-///   <item>The first non-blank line between the closing <c>--&gt;</c> and the
-///         <c>:end</c> marker is a markdown table header (starts with
-///         <c>|</c>), and the layer's expected column count matches.</item>
-/// </list>
+/// The doc is a repo-level file owned by exactly one fixture (the core test
+/// project), so this base is subclassed only there.
 /// </para>
 /// </summary>
-[TestFixture]
-public class PerformanceReportMarkerHygieneTests
+public abstract class PerformanceReportMarkerHygieneTestsBase
 {
     private const string DocRelativePath = "docs/lattice/performance-single-silo.md";
 
@@ -264,18 +245,7 @@ public class PerformanceReportMarkerHygieneTests
 
     /// <summary>
     /// Validates the script-managed provenance note ("&gt; Measured ...") that
-    /// appears immediately after every perf-table :end marker. The note is
-    /// rendered by <c>benchmark/performance-report.ps1</c> and carries the
-    /// host SKU, .NET version, git sha, cohort N, and (per layer) BDN
-    /// fidelity or VM region + rung. The contract:
-    /// <list type="number">
-    ///   <item>Every <c>:end</c> marker is followed (modulo a single blank
-    ///         line) by a <c>&gt; Measured </c> line.</item>
-    ///   <item>The note line carries the full prefix (date, host, git sha,
-    ///         cohort N).</item>
-    ///   <item>No <c>&gt; Measured </c> orphans exist elsewhere in the file
-    ///         (i.e. every note is anchored to a :end marker).</item>
-    /// </list>
+    /// appears immediately after every perf-table :end marker.
     /// </summary>
     [Test]
     public void Performance_single_silo_provenance_notes_are_well_formed()

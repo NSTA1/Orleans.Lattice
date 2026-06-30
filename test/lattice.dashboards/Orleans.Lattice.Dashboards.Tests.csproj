@@ -23,6 +23,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\lattice.dashboards\Orleans.Lattice.Dashboards.csproj" />
+    <ProjectReference Include="..\shared\Orleans.Lattice.Testing\Orleans.Lattice.Testing.csproj" />
     <ProjectReference Include="..\..\src\lattice.replication\Orleans.Lattice.Replication.csproj" />
   </ItemGroup>
 
