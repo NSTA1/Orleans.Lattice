@@ -28,7 +28,17 @@ public class LwwRegisterConvergenceChaosTests
     private const int SiteCount = 3;
     private const int WritesPerSite = 40;
     private static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan ConvergenceTimeout = TimeSpan.FromSeconds(30);
+
+    // Post-drain settle budget for the background pumps to finish gossip
+    // re-emission. On an unloaded machine convergence is sub-second (the
+    // local suite settles in well under a second); the generous budget only
+    // absorbs CI-runner CPU starvation, where the per-50ms-poll pumps and the
+    // silos' grain RPCs can crawl. It does not mask a real divergence: LWW
+    // convergence is deterministic on the original (HLC, origin), and sites 0
+    // and 2 are never partitioned from each other, so a genuinely stuck state
+    // stays divergent until the budget elapses and still fails the assertion
+    // below - a larger budget only widens the starvation tolerance.
+    private static readonly TimeSpan ConvergenceTimeout = TimeSpan.FromSeconds(60);
 
     [Test]
     public async Task Concurrent_writes_across_three_sites_under_partition_pick_lexicographic_max()
@@ -78,16 +88,48 @@ public class LwwRegisterConvergenceChaosTests
         // does not mask a real divergence.
         var states = await SampleUntilConvergedAsync(fixture, ConvergenceTimeout);
 
+        // On a convergence failure the bare value mismatch is hard to triage
+        // after the fact: a genuine stuck state and a starved-runner timeout
+        // look identical in the assertion. Surface any errors the background
+        // pumps swallowed (grain RPC timeouts under starvation, apply faults)
+        // so a future failure carries the evidence to tell them apart.
+        var pumpDiagnostics = DescribePumpErrors(pump);
+
         for (var i = 1; i < SiteCount; i++)
         {
             Assert.Multiple(() =>
             {
                 Assert.That(states[i].Value, Is.EqualTo(states[0].Value),
-                    $"Site {i} value diverges from site 0.");
+                    $"Site {i} value diverges from site 0.{pumpDiagnostics}");
                 Assert.That(states[i].Version, Is.EqualTo(states[0].Version),
-                    $"Site {i} HLC diverges from site 0.");
+                    $"Site {i} HLC diverges from site 0.{pumpDiagnostics}");
             });
         }
+    }
+
+    /// <summary>
+    /// Summarises the errors the background pumps surfaced to
+    /// <see cref="ChaosDeliveryPump.PumpErrors"/> during the run, for
+    /// inclusion in a convergence-failure message. Returns an empty string
+    /// when no pump errors occurred (the common case for a clean
+    /// starvation-only timeout), or a leading-newline block naming the error
+    /// count and the first few distinct messages otherwise.
+    /// </summary>
+    private static string DescribePumpErrors(ChaosDeliveryPump pump)
+    {
+        var errors = pump.PumpErrors.ToArray();
+        if (errors.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        var distinct = errors
+            .Select(e => $"{e.GetType().Name}: {e.Message}")
+            .Distinct()
+            .Take(3);
+
+        return $" Pump surfaced {errors.Length} error(s); first distinct: "
+            + string.Join(" | ", distinct);
     }
 
     /// <summary>
