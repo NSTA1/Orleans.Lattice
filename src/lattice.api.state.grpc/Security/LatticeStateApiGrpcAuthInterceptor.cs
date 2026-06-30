@@ -125,20 +125,35 @@ internal sealed class LatticeStateApiGrpcAuthInterceptor : Interceptor
 
     /// <summary>
     /// Decodes the inbound call's operation (from the gRPC method name) and the
-    /// tree it targets (from the request payload). Catalog requests are not
-    /// scoped to a single tree, so they carry a <see langword="null"/> target.
+    /// tree it targets (from the request payload), so the authorizer receives a
+    /// faithful per-operation, per-tree description of every state-API RPC.
+    /// Operations that are not scoped to a single tree - the cluster-wide
+    /// catalog discovery RPCs, <c>GetClusterInfo</c>, and a multi-tree or
+    /// unscoped metrics request - carry a <see langword="null"/> target. An
+    /// unrecognised method maps to <see cref="LatticeStateApiOperation.Unknown"/>
+    /// (never a permissive default) so a deny-by-default policy refuses it.
     /// </summary>
-    private static (LatticeStateApiOperation Operation, string? TargetTreeId) DescribeCall<TRequest>(string fullMethodName, TRequest request)
+    /// <remarks>Exposed as <c>internal</c> so the operation/target mapping can be
+    /// asserted directly in unit tests without standing up a gRPC server.</remarks>
+    internal static (LatticeStateApiOperation Operation, string? TargetTreeId) DescribeCall<TRequest>(string fullMethodName, TRequest request)
     {
         var methodName = fullMethodName[(fullMethodName.LastIndexOf('/') + 1)..];
         var operation = methodName switch
         {
+            LatticeStateGrpcMethods.ListTreesMethodName => LatticeStateApiOperation.ListTrees,
             LatticeStateGrpcMethods.ListViewsMethodName => LatticeStateApiOperation.ListViews,
+            LatticeStateGrpcMethods.ListTagIndexesMethodName => LatticeStateApiOperation.ListTagIndexes,
+            LatticeStateGrpcMethods.ListTagValuesMethodName => LatticeStateApiOperation.ListTagValues,
             LatticeStateGrpcMethods.GetTreeStructureMethodName => LatticeStateApiOperation.GetTreeStructure,
             LatticeStateGrpcMethods.ScanEntriesMethodName => LatticeStateApiOperation.ScanEntries,
             LatticeStateGrpcMethods.GetEntryMethodName => LatticeStateApiOperation.GetEntry,
             LatticeStateGrpcMethods.GetEntryHistoryMethodName => LatticeStateApiOperation.GetEntryHistory,
-            _ => LatticeStateApiOperation.ListTrees,
+            LatticeStateGrpcMethods.CancelScanMethodName => LatticeStateApiOperation.CancelScan,
+            LatticeStateGrpcMethods.ObserveChangesMethodName => LatticeStateApiOperation.ObserveChanges,
+            LatticeStateGrpcMethods.ObserveMetricsMethodName => LatticeStateApiOperation.ObserveMetrics,
+            LatticeStateGrpcMethods.GetMetricsSnapshotMethodName => LatticeStateApiOperation.GetMetricsSnapshot,
+            LatticeStateGrpcMethods.GetClusterInfoMethodName => LatticeStateApiOperation.GetClusterInfo,
+            _ => LatticeStateApiOperation.Unknown,
         };
 
         var targetTreeId = request switch
@@ -147,6 +162,14 @@ internal sealed class LatticeStateApiGrpcAuthInterceptor : Interceptor
             EntryScanRequest s => s.TreeId,
             EntryGetRequest g => g.TreeId,
             EntryHistoryRequest h => h.TreeId,
+            EntryScanCancelRequest c => c.TreeId,
+            StateObserveRequest o => o.TreeId,
+            // The tag-catalog RPCs scope to a subject tree via SourceTreeId; the
+            // cluster-wide ListTrees / ListViews leave it null.
+            CatalogRequest cat => cat.SourceTreeId,
+            // A metrics request can name many trees (or none); present a target
+            // only when it is scoped to exactly one.
+            TreeMetricsRequest m => m.TreeIds is { Count: 1 } ? m.TreeIds[0] : null,
             _ => null,
         };
 
