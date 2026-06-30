@@ -141,6 +141,29 @@ public sealed partial class DashboardBroadcaster : IHostedService
     /// </summary>
     private static readonly TimeSpan ShutdownStepTimeout = TimeSpan.FromSeconds(5);
 
+    /// <summary>
+    /// Default cadence for the background view-vs-tree reconciliation pass.
+    /// While a dashboard subscriber is attached, the rebuild loop periodically
+    /// diffs the fact tree (truth) against the materialised
+    /// <see cref="PartSummaryView"/> and queues any parts the view is missing
+    /// for a rebuild. This is what makes writes that bypass
+    /// <see cref="FederationRouter"/> (e.g. a direct <c>SetMany</c> seed, which
+    /// raises no <c>FactRouted</c> event) eventually appear on the dashboard
+    /// (issue #1048). Kept slower than the rebuild interval so steady-state
+    /// reconciliation costs at most one key-scan per cadence, and only when a
+    /// dashboard is actually being watched. Tests inject a custom value.
+    /// </summary>
+    private static readonly TimeSpan DefaultReconcileInterval = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Default maximum number of missing parts queued per reconciliation pass.
+    /// Bounds the catch-up rate so a large backfill (e.g. a 10,000-part seed)
+    /// converges over several cadences instead of folding every discovered part
+    /// in a single burst - which would reintroduce a scan spike. Tests inject a
+    /// custom value.
+    /// </summary>
+    private const int DefaultReconcileBudget = 512;
+
     private readonly FederationRouter _router;
     private readonly IClusterClient _client;
     private readonly IGrainFactory _grainFactory;
@@ -149,6 +172,9 @@ public sealed partial class DashboardBroadcaster : IHostedService
     private readonly ILogger<DashboardBroadcaster> _logger;
     private readonly TimeSpan _partRebuildInterval;
     private readonly TimeSpan _snapshotCacheTtl;
+    private readonly TimeSpan _reconcileInterval;
+    private readonly int _reconcileBudget;
+    private DateTime _nextReconcileUtc = DateTime.MinValue;
     private readonly StreamId _streamId;
     private readonly StreamId _partChangeStreamId;
     private readonly CancellationTokenSource _shutdownCts = new();
@@ -218,7 +244,9 @@ public sealed partial class DashboardBroadcaster : IHostedService
         ILogger<DashboardBroadcaster> logger,
         StreamId streamId,
         TimeSpan? partRebuildInterval = null,
-        TimeSpan? snapshotCacheTtl = null)
+        TimeSpan? snapshotCacheTtl = null,
+        TimeSpan? reconcileInterval = null,
+        int? reconcileBudget = null)
     {
         _router = router;
         _client = client;
@@ -228,6 +256,8 @@ public sealed partial class DashboardBroadcaster : IHostedService
         _logger = logger;
         _partRebuildInterval = partRebuildInterval ?? DefaultPartRebuildInterval;
         _snapshotCacheTtl = snapshotCacheTtl ?? DefaultSnapshotCacheTtl;
+        _reconcileInterval = reconcileInterval ?? DefaultReconcileInterval;
+        _reconcileBudget = reconcileBudget ?? DefaultReconcileBudget;
         _streamId = streamId;
         _partChangeStreamId = DerivePartChangeStreamId(streamId);
     }
@@ -247,7 +277,9 @@ public sealed partial class DashboardBroadcaster : IHostedService
         ILogger<DashboardBroadcaster> logger,
         StreamId streamId,
         TimeSpan? partRebuildInterval = null,
-        TimeSpan? snapshotCacheTtl = null)
+        TimeSpan? snapshotCacheTtl = null,
+        TimeSpan? reconcileInterval = null,
+        int? reconcileBudget = null)
         : this(
             router,
             client,
@@ -256,7 +288,9 @@ public sealed partial class DashboardBroadcaster : IHostedService
             logger,
             streamId,
             partRebuildInterval,
-            snapshotCacheTtl)
+            snapshotCacheTtl,
+            reconcileInterval,
+            reconcileBudget)
     {
     }
 
