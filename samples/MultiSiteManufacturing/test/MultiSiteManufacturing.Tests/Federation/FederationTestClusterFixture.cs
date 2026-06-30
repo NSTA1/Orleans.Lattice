@@ -71,6 +71,14 @@ public sealed class FederationTestClusterFixture
         new(GrainFactory, NullLogger<LatticeFactBackend>.Instance, $"mfg-facts-{Guid.NewGuid():N}");
 
     /// <summary>
+    /// Convenience: a <see cref="PartSummaryView"/> over a unique tree id so
+    /// each broadcaster under test materialises into an isolated summary tree
+    /// (the in-memory Lattice state is shared across all tests in the fixture).
+    /// </summary>
+    public PartSummaryView NewPartSummaryView() =>
+        new(GrainFactory, NullLogger<PartSummaryView>.Instance, $"mfg-part-summary-{Guid.NewGuid():N}");
+
+    /// <summary>
     /// Convenience: a <see cref="PartCrdtStore"/> wired to the
     /// cluster's grain factory under silo identity
     /// <c>("a", primary=true, cluster="us")</c> - matching

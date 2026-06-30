@@ -209,7 +209,10 @@ public sealed partial class DashboardBroadcaster
     {
         try
         {
-            await PublishPartAsync(fact.Serial);
+            // Coalesce the summary rebuild: mark the part dirty and let the
+            // background loop rebuild it at most once per window. Site-activity
+            // is cheap (no tree scan) so it stays immediate.
+            MarkPartDirty(fact.Serial);
             FanOutSiteActivity(fact);
         }
         catch (Exception ex)
@@ -219,6 +222,8 @@ public sealed partial class DashboardBroadcaster
                 "Dashboard fan-out threw for fact {FactId}; dropping to protect stream agent",
                 fact.FactId);
         }
+
+        await Task.CompletedTask;
     }
 
     /// <summary>
@@ -374,7 +379,9 @@ public sealed partial class DashboardBroadcaster
     {
         try
         {
-            await PublishPartAsync(serial);
+            // Coalesce via the same dirty-set as the fact stream so a CRDT
+            // mutation and a fact for the same part collapse into one rebuild.
+            MarkPartDirty(serial);
         }
         catch (Exception ex)
         {
@@ -383,5 +390,7 @@ public sealed partial class DashboardBroadcaster
                 "Dashboard part-change fan-out threw for {Serial}; dropping to protect stream agent",
                 serial.Value);
         }
+
+        await Task.CompletedTask;
     }
 }

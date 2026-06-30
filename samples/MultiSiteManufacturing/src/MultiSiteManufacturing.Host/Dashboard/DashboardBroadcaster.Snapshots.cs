@@ -1,5 +1,6 @@
 using MultiSiteManufacturing.Host.Domain;
 using MultiSiteManufacturing.Host.Federation;
+using Microsoft.Extensions.Logging;
 
 namespace MultiSiteManufacturing.Host.Dashboard;
 
@@ -14,20 +15,102 @@ namespace MultiSiteManufacturing.Host.Dashboard;
 public sealed partial class DashboardBroadcaster
 {
     /// <summary>
+    /// Default time-to-live for the memoised initial-parts snapshot. Tests
+    /// inject a custom value via the internal ctor for deterministic
+    /// memoisation / refresh assertions.
+    /// </summary>
+    private static readonly TimeSpan DefaultSnapshotCacheTtl = TimeSpan.FromSeconds(1);
+
+    private readonly object _snapshotGate = new();
+    private Task<IReadOnlyList<PartSummaryUpdate>>? _cachedSnapshot;
+    private DateTime _snapshotExpiresUtc = DateTime.MinValue;
+
+    /// <summary>
     /// Builds a fresh snapshot for every part in the lattice backend.
     /// Components call this in <c>OnInitializedAsync</c> before starting
-    /// their live subscription.
+    /// their live subscription. The result is memoised for the configured
+    /// snapshot TTL so concurrent / reconnecting consumers share one build
+    /// instead of each re-folding the fact tree; callers still observe their
+    /// own <paramref name="cancellationToken"/> while sharing the underlying
+    /// build.
     /// </summary>
-    public async Task<IReadOnlyList<PartSummaryUpdate>> GetInitialPartsAsync(CancellationToken cancellationToken = default)
+    public Task<IReadOnlyList<PartSummaryUpdate>> GetInitialPartsAsync(CancellationToken cancellationToken = default)
     {
-        var lattice = _router.GetBackend("lattice");
-        var serials = await lattice.ListPartsAsync(cancellationToken);
+        Task<IReadOnlyList<PartSummaryUpdate>> snapshot;
+        lock (_snapshotGate)
+        {
+            // Never launch an overlapping build: while a build is in flight,
+            // every caller shares it regardless of expiry. Only once it has
+            // completed and the TTL has elapsed does the next caller start a
+            // fresh one. Expiry is stamped on successful completion (not on
+            // start), so a slow build is never treated as instantly stale -
+            // which previously let concurrent callers stack up overlapping
+            // full rebuilds and saturate the fact tree.
+            if (_cachedSnapshot is null ||
+                (_cachedSnapshot.IsCompleted && DateTime.UtcNow >= _snapshotExpiresUtc))
+            {
+                // Bind the shared build to the broadcaster lifetime, not one
+                // caller's token, so an abandoning caller can't cancel the
+                // build for everyone sharing it.
+                var build = BuildAllPartsAsync(_shutdownCts.Token);
+                _cachedSnapshot = build;
+                _ = build.ContinueWith(
+                    static (_, state) =>
+                    {
+                        var self = (DashboardBroadcaster)state!;
+                        lock (self._snapshotGate)
+                        {
+                            self._snapshotExpiresUtc = DateTime.UtcNow + self._snapshotCacheTtl;
+                        }
+                    },
+                    this,
+                    CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnRanToCompletion | TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+            }
+            snapshot = _cachedSnapshot;
+        }
+        return snapshot.WaitAsync(cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<PartSummaryUpdate>> BuildAllPartsAsync(CancellationToken cancellationToken)
+    {
+        // Fast path: read the materialised per-part summary view in a single
+        // contiguous scan (~one row per part). The rebuild loop keeps the view
+        // current from the fact stream, so the dashboard snapshot no longer
+        // re-folds the whole fact tree per render - the idle scan-storm fix.
+        var rows = await _summaryView.ReadAllAsync(cancellationToken);
+        if (rows.Count > 0)
+        {
+            return rows;
+        }
+
+        // Bootstrap path: the view has no rows yet (cold start before any fact
+        // has been folded, or a freshly-provisioned view tree). Fall back to a
+        // one-time full per-part fold and seed the view so every later read
+        // takes the fast path. The snapshot TTL cache guarantees this runs at
+        // most once per TTL even under a burst of reconnecting consumers.
+        var serials = await ResolvePartSerialsAsync(cancellationToken);
         var results = new List<PartSummaryUpdate>(serials.Count);
         foreach (var serial in serials)
         {
-            results.Add(await BuildSummaryAsync(serial, cancellationToken));
+            var summary = await BuildSummaryAsync(serial, cancellationToken);
+            results.Add(summary);
+            await _summaryView.UpsertAsync(summary, cancellationToken);
         }
         return results;
+    }
+
+    /// <summary>
+    /// Resolves the part directory for the snapshot by scanning the fact tree
+    /// directly. The result is memoised by <see cref="GetInitialPartsAsync"/>
+    /// for the snapshot TTL, so concurrent / reconnecting consumers share one
+    /// scan rather than each re-walking the tree.
+    /// </summary>
+    private async Task<IReadOnlyList<PartSerialNumber>> ResolvePartSerialsAsync(CancellationToken cancellationToken)
+    {
+        var lattice = _router.GetBackend("lattice");
+        return await lattice.ListPartsAsync(cancellationToken);
     }
 
     /// <summary>Reads the current chaos overview (used by the banner on initial render).</summary>

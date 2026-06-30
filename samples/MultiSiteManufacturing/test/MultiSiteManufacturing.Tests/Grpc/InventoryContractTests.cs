@@ -12,7 +12,7 @@ public sealed class InventoryContractTests
     public void SetUp() => _fixture = new GrpcContractFixture();
 
     [TearDown]
-    public void TearDown() => _fixture.Dispose();
+    public async Task TearDown() => await _fixture.DisposeAsync();
 
     [Test]
     public async Task CreatePart_returns_formatted_serial()

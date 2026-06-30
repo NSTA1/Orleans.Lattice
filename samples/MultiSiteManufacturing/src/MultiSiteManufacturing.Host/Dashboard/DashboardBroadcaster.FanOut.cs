@@ -18,6 +18,96 @@ public sealed partial class DashboardBroadcaster
     private void OnChaosConfigChanged(object? sender, EventArgs e) => _ = PublishChaosAsync();
 
     /// <summary>
+    /// Marks a part's summary as needing a rebuild. The actual rebuild is
+    /// performed by <see cref="RunPartRebuildLoopAsync"/> at most once per
+    /// the configured rebuild interval, coalescing a burst of facts for the
+    /// same serial into a single fact-tree scan.
+    /// <para>
+    /// Marks unconditionally - the per-part rebuild maintains the
+    /// materialised <see cref="PartSummaryView"/> (one row per part) that the
+    /// dashboard snapshot reads, so the view must stay current from the fact
+    /// stream even when no circuit is attached; otherwise a later dashboard
+    /// open would read stale rows. The per-circuit channel fan-out is still
+    /// gated on having subscribers inside <see cref="PublishPartAsync"/>, so
+    /// no channel work is done for an idle dashboard. At true idle (no facts
+    /// arriving) nothing is marked, so the rebuild loop simply sleeps.
+    /// </para>
+    /// </summary>
+    private void MarkPartDirty(PartSerialNumber serial)
+    {
+        _dirtyParts[serial] = 0;
+    }
+
+    /// <summary>
+    /// Test seam: number of parts currently queued for a coalesced rebuild.
+    /// Lets a test assert the coalescing-set behaviour deterministically
+    /// without depending on stream-delivery timing.
+    /// </summary>
+    internal int PendingRebuildCount => _dirtyParts.Count;
+
+    /// <summary>
+    /// Test seam: invokes the same dirty-marking path the stream handlers use,
+    /// so a test can exercise the coalescing-set behaviour directly.
+    /// </summary>
+    internal void MarkPartDirtyForTest(PartSerialNumber serial) => MarkPartDirty(serial);
+
+    /// <summary>
+    /// Test seam: drains the dirty set once on the caller's task, rebuilding
+    /// each queued part's summary (and materialising it into
+    /// <see cref="PartSummaryView"/>) synchronously. Lets a test deterministically
+    /// materialise the view without waiting on the background rebuild interval.
+    /// </summary>
+    internal Task DrainDirtyForTestAsync() => DrainDirtyAsync(CancellationToken.None);
+
+    /// <summary>
+    /// Background loop that drains <see cref="_dirtyParts"/> once per
+    /// the configured rebuild interval, rebuilding each dirty part's summary
+    /// exactly once per window. Replaces the previous per-fact, per-stream
+    /// synchronous <see cref="PublishPartAsync"/> call that turned every fact
+    /// (and every replication re-delivery of it) into an immediate fact-tree
+    /// scan on every silo - the scan-storm fixed here.
+    /// </summary>
+    private async Task RunPartRebuildLoopAsync(CancellationToken token)
+    {
+        while (!token.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(_partRebuildInterval, token);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+
+            if (_dirtyParts.IsEmpty)
+            {
+                continue;
+            }
+
+            await DrainDirtyAsync(token);
+        }
+    }
+
+    /// <summary>
+    /// Drains the dirty set once: snapshots the queued serials, clears each as
+    /// it is taken, and rebuilds its summary. Marks that arrive during the
+    /// drain are picked up on the next tick.
+    /// </summary>
+    private async Task DrainDirtyAsync(CancellationToken token)
+    {
+        foreach (var serial in _dirtyParts.Keys.ToArray())
+        {
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+            _dirtyParts.TryRemove(serial, out _);
+            await PublishPartAsync(serial);
+        }
+    }
+
+    /// <summary>
     /// Subscribed to <see cref="PartCrdtStore.PartChanged"/> in
     /// <see cref="StartAsync"/>. Forwards the carried serial onto the
     /// cluster-wide part-change stream so every silo's broadcaster -
@@ -63,6 +153,16 @@ public sealed partial class DashboardBroadcaster
         try
         {
             var update = await BuildSummaryAsync(serial, CancellationToken.None);
+
+            // Maintain the materialised per-part summary view regardless of
+            // subscribers, so the dashboard snapshot (which reads this view in
+            // a single scan) is always current. This is the read-model that
+            // replaces the old per-render full re-fold of the fact tree.
+            await _summaryView.UpsertAsync(update, CancellationToken.None);
+
+            // Per-circuit channel fan-out is gated on having watchers: no
+            // summary subscriber means the TryWrite loop below would no-op
+            // anyway, so skip it.
             foreach (var sub in _partSubs.Values)
             {
                 sub.Writer.TryWrite(update);

@@ -290,6 +290,7 @@ flowchart LR
 | `tag-mfg-site` | tag-index membership (`tag \0 treeId \0 key`) | Posting list mapping each `ProcessSite` to its `{serial}/{site}` keys; powers `ListAtSiteAsync` via `WithAnyTags(site)`. | Yes |
 | `mfg-part-labels` | `{serial}` (one OrSet per serial) | Per-part label set (`damaged`, `awaiting-mrb`, `awaiting-rework`, `accepted`, `scrapped`, …). | Yes - `ReplicationMode.OrSet` (typed CRDT delta shipping) |
 | `mfg-part-operator` | `{serial}` (one LWW register per serial) | Per-part current operator id. | No (cluster-local) - LWW across clusters with disjoint HLCs is meaningless |
+| `mfg-part-summary` | `{serial}` (one summary row per serial) | Materialised per-part dashboard summary (family, latest stage, baseline/lattice compliance state, fact count). The broadcaster folds each dirty part once per coalesced rebuild window and upserts its row; the dashboard snapshot reads the whole tree in a single scan instead of re-folding every part on each load. | No (cluster-local) - each region rebuilds its own copy from its routed + replicated facts |
 
 Access patterns:
 
@@ -300,6 +301,12 @@ Access patterns:
   matched `{serial}/{site}` key's value from `mfg-site-activity`.
   The site is deliberately the key *suffix*, so a range scan cannot
   answer this query - the tag index is the access path.
+
+- All-parts dashboard snapshot → single full scan of
+  `mfg-part-summary`. The broadcaster keeps the tree warm from the
+  fact stream (one coalesced fold per dirty part per rebuild window),
+  so a dashboard load reads one row per part in a single pass instead
+  of re-folding every part's `mfg-facts` prefix on every load.
 
 Cross-cluster shipping and WAL compaction are package concerns - see
 [`docs/lattice.replication/`](../../docs/lattice.replication/) for

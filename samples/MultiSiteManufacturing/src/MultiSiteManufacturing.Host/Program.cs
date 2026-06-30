@@ -530,6 +530,12 @@ builder.Services.AddHostedService<PartitionHealHostedService>();
 builder.Services.AddSingleton<SiteActivityIndex>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SiteActivityIndex>());
 
+// Materialised per-part dashboard summary (one row per part, keyed by
+// serial) in its own Lattice tree. The broadcaster keeps it fresh from
+// the fact stream so the dashboard snapshot reads it in a single scan
+// instead of re-folding mfg-facts per render (issue #1038).
+builder.Services.AddSingleton<MultiSiteManufacturing.Host.Lattice.PartSummaryView>();
+
 builder.Services.AddSingleton<DashboardBroadcaster>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<DashboardBroadcaster>());
 

@@ -11,7 +11,7 @@ public sealed class FactIngressContractTests
     public void SetUp() => _fixture = new GrpcContractFixture();
 
     [TearDown]
-    public void TearDown() => _fixture.Dispose();
+    public async Task TearDown() => await _fixture.DisposeAsync();
 
     [Test]
     public async Task EmitFact_accepts_process_step_completed()

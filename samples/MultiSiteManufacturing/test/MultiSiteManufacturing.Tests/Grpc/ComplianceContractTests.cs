@@ -26,7 +26,7 @@ public sealed class ComplianceContractTests
     public void SetUp() => _fixture = new GrpcContractFixture();
 
     [TearDown]
-    public void TearDown() => _fixture.Dispose();
+    public async Task TearDown() => await _fixture.DisposeAsync();
 
     [Test]
     public async Task GetPartCompliance_reports_nominal_for_agreed_part()
