@@ -373,11 +373,22 @@ public sealed partial class DashboardBroadcaster : IHostedService
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(
-                ex,
-                "Failed to unsubscribe from dashboard {Stream} stream within {Timeout}",
-                streamLabel,
-                ShutdownStepTimeout);
+            // Best-effort log: during late host teardown the logging
+            // providers (e.g. the Windows EventLog provider) may already be
+            // disposed, so writing the warning can itself throw (wrapped in an
+            // AggregateException by the logger). Swallow any logging failure so
+            // a best-effort unsubscribe never fails host shutdown.
+            try
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Failed to unsubscribe from dashboard {Stream} stream within {Timeout}",
+                    streamLabel,
+                    ShutdownStepTimeout);
+            }
+            catch
+            {
+            }
         }
         return null;
     }

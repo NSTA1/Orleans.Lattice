@@ -111,22 +111,31 @@ public sealed class SiteActivityIndex(
     {
         router.FactRouted -= OnFactRouted;
         _ingest.Writer.TryComplete();
-        if (_drainCts is not null)
+
+        // Idempotent: StopAsync can be invoked more than once across host
+        // shutdown + disposal. Capture and null the fields so a second call
+        // doesn't touch the already-disposed CancellationTokenSource.
+        var drainCts = _drainCts;
+        _drainCts = null;
+        var drainLoop = _drainLoop;
+        _drainLoop = null;
+
+        if (drainCts is not null)
         {
-            await _drainCts.CancelAsync().ConfigureAwait(false);
+            await drainCts.CancelAsync().ConfigureAwait(false);
         }
-        if (_drainLoop is not null)
+        if (drainLoop is not null)
         {
             try
             {
-                await _drainLoop.ConfigureAwait(false);
+                await drainLoop.ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
                 // Expected on shutdown.
             }
         }
-        _drainCts?.Dispose();
+        drainCts?.Dispose();
     }
 
     /// <summary>
