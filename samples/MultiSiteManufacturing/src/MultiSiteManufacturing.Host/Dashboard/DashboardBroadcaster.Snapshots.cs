@@ -75,37 +75,25 @@ public sealed partial class DashboardBroadcaster
 
     private async Task<IReadOnlyList<PartSummaryUpdate>> BuildAllPartsAsync(CancellationToken cancellationToken)
     {
-        // Fast path: read the materialised per-part summary view in a single
-        // contiguous scan (~one row per part). The rebuild loop keeps the view
-        // current from the fact stream, so the dashboard snapshot no longer
-        // re-folds the whole fact tree per render - the idle scan-storm fix.
-        var rows = await _summaryView.ReadAllAsync(cancellationToken);
-        if (rows.Count > 0)
-        {
-            return rows;
-        }
-
-        // Bootstrap path: the view has no rows yet (cold start before any fact
-        // has been folded, or a freshly-provisioned view tree). Fall back to a
-        // one-time full per-part fold and seed the view so every later read
-        // takes the fast path. The snapshot TTL cache guarantees this runs at
-        // most once per TTL even under a burst of reconnecting consumers.
-        var serials = await ResolvePartSerialsAsync(cancellationToken);
-        var results = new List<PartSummaryUpdate>(serials.Count);
-        foreach (var serial in serials)
-        {
-            var summary = await BuildSummaryAsync(serial, cancellationToken);
-            results.Add(summary);
-            await _summaryView.UpsertAsync(summary, cancellationToken);
-        }
-        return results;
+        // Pure read of the materialised per-part summary view in a single
+        // contiguous scan (~one row per part). The background rebuild loop keeps
+        // the view current two ways: incrementally from the fact stream, and -
+        // for writes that bypass FederationRouter (e.g. a direct SetMany seed,
+        // which raises no FactRouted) - via the periodic tree-vs-view
+        // reconciliation pass. The snapshot therefore never re-folds the whole
+        // fact tree on the request path (the idle scan-storm fix, issue #1038)
+        // and never blocks on a large backfill (issue #1048); a freshly-seeded
+        // cluster converges in the background within a few reconcile cadences of
+        // a dashboard attaching.
+        return await _summaryView.ReadAllAsync(cancellationToken);
     }
 
     /// <summary>
-    /// Resolves the part directory for the snapshot by scanning the fact tree
-    /// directly. The result is memoised by <see cref="GetInitialPartsAsync"/>
-    /// for the snapshot TTL, so concurrent / reconnecting consumers share one
-    /// scan rather than each re-walking the tree.
+    /// Resolves the full part directory by scanning the fact tree (keys only,
+    /// deduped by serial prefix). Used by the background view-vs-tree
+    /// reconciliation pass to discover parts written directly to the tree
+    /// (bypassing <see cref="FederationRouter"/>) that the materialised view has
+    /// not yet folded.
     /// </summary>
     private async Task<IReadOnlyList<PartSerialNumber>> ResolvePartSerialsAsync(CancellationToken cancellationToken)
     {

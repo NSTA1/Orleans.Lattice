@@ -80,6 +80,15 @@ public sealed partial class DashboardBroadcaster
                 return;
             }
 
+            // Reconcile the materialised view against tree truth on its own
+            // (slower) cadence, but only while a dashboard is attached. This is
+            // what surfaces parts written by a path that bypasses
+            // FederationRouter (a direct SetMany seed raises no FactRouted, so
+            // the stream never marks those serials dirty): the pass diffs the
+            // tree against the view and queues the missing serials, which the
+            // drain below then folds and fans out live (issue #1048).
+            await MaybeReconcileViewWithTreeAsync(token);
+
             if (_dirtyParts.IsEmpty)
             {
                 continue;
@@ -87,6 +96,100 @@ public sealed partial class DashboardBroadcaster
 
             await DrainDirtyAsync(token);
         }
+    }
+
+    /// <summary>
+    /// True when at least one circuit is watching a feed that the per-part
+    /// summary view backs (the part-summary grid or the divergence stream).
+    /// Reconciliation is gated on this so an idle silo - or one serving only
+    /// health-check prerenders - does no periodic tree scans at all.
+    /// </summary>
+    private bool HasPartWatchers => !_partSubs.IsEmpty || !_divSubs.IsEmpty;
+
+    /// <summary>
+    /// Runs a reconciliation pass at most once per <see cref="_reconcileInterval"/>,
+    /// and only while a dashboard subscriber is attached. Failures are logged and
+    /// swallowed so a transient tree-scan error never tears down the rebuild loop.
+    /// </summary>
+    private async Task MaybeReconcileViewWithTreeAsync(CancellationToken token)
+    {
+        if (!HasPartWatchers || DateTime.UtcNow < _nextReconcileUtc)
+        {
+            return;
+        }
+
+        try
+        {
+            await ReconcileViewWithTreeAsync(token);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Dashboard view reconciliation pass failed");
+        }
+        finally
+        {
+            _nextReconcileUtc = DateTime.UtcNow + _reconcileInterval;
+        }
+    }
+
+    /// <summary>
+    /// Diffs the fact tree (the source of truth) against the materialised
+    /// <see cref="PartSummaryView"/> and marks any part present in the tree but
+    /// absent from the view dirty, up to <see cref="_reconcileBudget"/> per pass.
+    /// The bounded budget spreads a large backfill (e.g. a fresh bulk seed) over
+    /// several cadences rather than folding every discovered part in one burst.
+    /// Returns the number of parts newly queued.
+    /// </summary>
+    private async Task<int> ReconcileViewWithTreeAsync(CancellationToken token)
+    {
+        var treeParts = await ResolvePartSerialsAsync(token);
+        if (treeParts.Count == 0)
+        {
+            return 0;
+        }
+
+        var viewRows = await _summaryView.ReadAllAsync(token);
+        var known = new HashSet<PartSerialNumber>(viewRows.Count);
+        foreach (var row in viewRows)
+        {
+            known.Add(row.Serial);
+        }
+
+        var marked = 0;
+        foreach (var serial in treeParts)
+        {
+            if (token.IsCancellationRequested || marked >= _reconcileBudget)
+            {
+                break;
+            }
+
+            // Skip parts already materialised in the view or already queued by
+            // the fact stream - reconciliation only fills the gap left by
+            // non-routed writers.
+            if (known.Contains(serial) || _dirtyParts.ContainsKey(serial))
+            {
+                continue;
+            }
+
+            MarkPartDirty(serial);
+            marked++;
+        }
+
+        return marked;
+    }
+
+    /// <summary>
+    /// Test seam: runs one reconciliation pass (bypassing the subscriber gate
+    /// and cadence) and then drains, so a test can deterministically converge
+    /// the view to tree truth for parts written directly to the tree (bypassing
+    /// <see cref="FederationRouter"/>). Returns the number of parts the pass
+    /// newly discovered.
+    /// </summary>
+    internal async Task<int> ReconcileViewWithTreeForTestAsync()
+    {
+        var marked = await ReconcileViewWithTreeAsync(CancellationToken.None);
+        await DrainDirtyAsync(CancellationToken.None);
+        return marked;
     }
 
     /// <summary>

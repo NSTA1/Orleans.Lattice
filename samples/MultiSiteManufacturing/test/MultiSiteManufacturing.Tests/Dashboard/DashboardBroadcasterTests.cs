@@ -286,6 +286,11 @@ public sealed class DashboardBroadcasterTests
         // Bury a Critical NC in the lattice backend only.
         await lattice.EmitAsync(Nc(serial, tick: 1, "NC-2", NcSeverity.Critical, ProcessSite.ToulouseNdtLab), CancellationToken.None);
 
+        // The fact was written directly to the tree (no FactRouted), so the
+        // materialised view the snapshot reads only learns about it via the
+        // background tree-vs-view reconciliation pass. Drive one deterministically.
+        await broadcaster.ReconcileViewWithTreeForTestAsync();
+
         var initial = await broadcaster.GetInitialDivergenceAsync();
 
         Assert.That(initial, Has.Count.GreaterThanOrEqualTo(1));
