@@ -10,6 +10,7 @@
   <Project Path="src/lattice.explorer/UI/Orleans.Lattice.Explorer.UI.csproj" />
   <Project Path="src/lattice.explorer/Web/Orleans.Lattice.Explorer.Web.csproj" />
   <Project Path="benchmark/host/Bench.Microbench/Orleans.Lattice.Benchmark.Microbench.csproj" />
+  <Project Path="test/shared/Orleans.Lattice.Testing/Orleans.Lattice.Testing.csproj" />
   <Project Path="test/lattice/Orleans.Lattice.Tests.csproj" />
   <Project Path="test/lattice.api.state/Orleans.Lattice.Api.State.Tests.csproj" />
   <Project Path="test/lattice.api.state.grpc/Orleans.Lattice.Api.State.Grpc.Tests.csproj" />
