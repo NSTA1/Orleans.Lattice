@@ -37,12 +37,15 @@ using var channel = GrpcChannel.ForAddress("https://cluster.example:5001", new G
 
 ## Calling the surface
 
-The six unary RPCs return a `Task<TResponse>`; the two streaming RPCs return an `IAsyncEnumerable<TResponse>` consumed with `await foreach`. The full set, with the request and response each carries, is in [Surfaces](surfaces.md):
+The unary RPCs return a `Task<TResponse>`; the streaming RPCs return an `IAsyncEnumerable<TResponse>` consumed with `await foreach`. The full set, with the request and response each carries, is in [Surfaces](surfaces.md):
 
-- `ListTreesAsync` / `ListViewsAsync` - paged discovery catalog.
+- `ListTreesAsync` / `ListViewsAsync` / `ListTagIndexesAsync` / `ListTagValuesAsync` - paged discovery catalog.
 - `GetTreeStructureAsync` - shard-root node graph.
 - `ScanEntriesAsync` / `GetEntryAsync` - snapshot-isolated entry inspection.
+- `GetEntryHistoryAsync` - per-key change-history timeline.
+- `CancelScanAsync` - release a server-side scan cursor early.
 - `GetMetricsSnapshotAsync` - one-shot metrics.
+- `GetClusterInfoAsync` - connected-cluster identity (cluster id, service id).
 - `ObserveChangesAsync` - server-streamed live mutations.
 - `ObserveMetricsAsync` - server-streamed live metric deltas.
 

@@ -94,8 +94,8 @@ For a complete, runnable journey - silo + gRPC host, discovery, structure, snaps
 For day-to-day use:
 
 - [Setup](setup.md) - registering the facade, the gRPC binding, and mapping the endpoint routes.
-- [gRPC Contract](grpc-contract.md) - the code-first service, the eight RPCs, the wire records, and the public client.
-- [Surfaces](surfaces.md) - discovery, structure, entry inspection, change observation, and metrics, request by request.
+- [gRPC Contract](grpc-contract.md) - the code-first service, its RPCs, the wire records, and the public client.
+- [Surfaces](surfaces.md) - discovery, structure, entry inspection, change history, change observation, metrics, and cluster info, request by request.
 - [Security](security.md) - the fail-closed authorization seam, the default-deny posture, and the transport story.
 - [Efficiency](efficiency.md) - shared sampling, reader-less zero cost, and the overhead guardrails.
 - [Client](client.md) - building and driving `LatticeStateApiGrpcClient`, and reusing the facade in-process for an MCP bridge.
