@@ -80,4 +80,110 @@ public class ReminderServiceReadinessTests
     {
         Assert.That(ReminderServiceReadiness.IsStillInitializing(null), Is.False);
     }
+
+    // -------------------------------------------------------------------------
+    // RetryWhileInitializingAsync - the bounded wait-out retry essential
+    // reminders (the atomic-write saga keepalive) use instead of deferring. It
+    // retries only the "still initializing" transient, rethrows the last one on
+    // budget exhaustion, and propagates any unrelated exception immediately. A
+    // zero/short injected backoff keeps these tests instant.
+    // -------------------------------------------------------------------------
+
+    private static readonly TimeSpan[] InstantBackoff =
+        [TimeSpan.Zero, TimeSpan.Zero];
+
+    [Test]
+    public async Task RetryWhileInitializing_invokes_operation_once_when_first_attempt_succeeds()
+    {
+        var calls = 0;
+        await ReminderServiceReadiness.RetryWhileInitializingAsync(
+            () => { calls++; return Task.CompletedTask; },
+            InstantBackoff);
+
+        Assert.That(calls, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task RetryWhileInitializing_retries_through_transient_then_succeeds()
+    {
+        var calls = 0;
+        await ReminderServiceReadiness.RetryWhileInitializingAsync(
+            () =>
+            {
+                calls++;
+                if (calls == 1) throw new InvalidOperationException(RealOrleansMessage);
+                return Task.CompletedTask;
+            },
+            InstantBackoff);
+
+        Assert.That(calls, Is.EqualTo(2),
+            "Envelope did not retry the transient reminder-service-initializing fault.");
+    }
+
+    [Test]
+    public void RetryWhileInitializing_rethrows_last_transient_when_budget_exhausted()
+    {
+        var calls = 0;
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await ReminderServiceReadiness.RetryWhileInitializingAsync(
+                () =>
+                {
+                    calls++;
+                    throw new InvalidOperationException($"{RealOrleansMessage} attempt-{calls}");
+                },
+                InstantBackoff));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(calls, Is.EqualTo(InstantBackoff.Length + 1),
+                "Envelope did not exhaust the full retry budget before propagating.");
+            Assert.That(ex!.Message, Does.EndWith($"attempt-{InstantBackoff.Length + 1}"),
+                "Envelope rethrew the wrong attempt's exception (must be the last, not the first).");
+        });
+    }
+
+    [Test]
+    public void RetryWhileInitializing_propagates_unrelated_exception_without_retry()
+    {
+        var calls = 0;
+        Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await ReminderServiceReadiness.RetryWhileInitializingAsync(
+                () => { calls++; throw new InvalidOperationException("writing to a deleted tree"); },
+                InstantBackoff));
+
+        Assert.That(calls, Is.EqualTo(1),
+            "Envelope must not retry on exceptions other than the still-initializing transient.");
+    }
+
+    [Test]
+    public void RetryWhileInitializing_with_empty_backoff_makes_a_single_attempt()
+    {
+        var calls = 0;
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await ReminderServiceReadiness.RetryWhileInitializingAsync(
+                () => { calls++; throw new InvalidOperationException(RealOrleansMessage); },
+                Array.Empty<TimeSpan>()));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(calls, Is.EqualTo(1),
+                "An empty backoff list must mean exactly one attempt with no retry.");
+            Assert.That(ReminderServiceReadiness.IsStillInitializing(ex), Is.True);
+        });
+    }
+
+    [Test]
+    public void RetryWhileInitializing_throws_for_null_operation()
+    {
+        Assert.ThrowsAsync<ArgumentNullException>(async () =>
+            await ReminderServiceReadiness.RetryWhileInitializingAsync(null!, InstantBackoff));
+    }
+
+    [Test]
+    public void RetryWhileInitializing_default_backoff_yields_five_attempts()
+    {
+        // Pins the production retry budget so a change to the default backoff is
+        // a deliberate, reviewed edit rather than an accidental regression.
+        Assert.That(ReminderServiceReadiness.DefaultRegistrationBackoff.Length + 1, Is.EqualTo(5));
+    }
 }
