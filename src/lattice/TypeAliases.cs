@@ -110,6 +110,9 @@ internal static class TypeAliases
     // Range delete
     internal const string RangeDeleteResult = "ol.rdr";
 
+    // Leaf owned-key-range bounds (used to terminate paged range-scan sibling walks)
+    internal const string LeafKeyRange = "ol.lkr";
+
     // Conditional bulk write (guard predicate against existing value)
     internal const string ConditionalSetManyResult = "ol.csm";
 

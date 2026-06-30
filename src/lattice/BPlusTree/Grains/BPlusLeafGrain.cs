@@ -1923,6 +1923,13 @@ internal sealed partial class BPlusLeafGrain(
         }
     }
 
+    public Task<LeafKeyRange> GetKeyRangeAsync() =>
+        Task.FromResult(new LeafKeyRange
+        {
+            LowKeyInclusive = state.State.LowKeyInclusive,
+            HighKeyExclusive = state.State.HighKeyExclusive,
+        });
+
     public Task SetCheckpointOffsetHintAsync(long offset)
     {
         // Routes through the existing ILeafProjection seam so the
