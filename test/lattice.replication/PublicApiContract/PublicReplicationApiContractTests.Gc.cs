@@ -66,40 +66,46 @@ public partial class PublicReplicationApiContractTests
             .GetGrain<Orleans.Lattice.BPlusTree.Grains.IWalMaterialiserPinGrain>(treeId);
 
         // A data-capable leaf seeds a HybridLogicalClock.Zero materialiser
-        // "block" pin at birth (issue #947), which deliberately holds the
-        // WAL GC's cursor-trim floor at null until that leaf produces its
-        // first durable checkpoint and advances the pin past Zero. A leaf
-        // advances its checkpoint by replaying its WAL on activation, so
-        // force the site-A data leaf to deactivate and then reactivate it
-        // with a read: the reactivation replay flushes the leaf's first
-        // checkpoint, lifts the block pin, and lets the shipper's reported
-        // cursor surface as MinCursor. The leaf grain ids are recovered
+        // "block" pin at birth (issue #947), which deliberately holds the WAL
+        // GC's cursor-trim floor at null until that leaf produces its first
+        // durable checkpoint and advances the pin past Zero. A leaf advances
+        // its checkpoint by replaying its WAL on a *cold* activation: only a
+        // read that lands on a freshly-reactivated leaf replays the Set and
+        // flushes the first checkpoint. A read against an already-warm leaf
+        // does nothing, so the data leaves must be deactivated and then read
+        // through the tree on each attempt. The leaf grain ids are recovered
         // from the durable pin store's per-leaf consumer ids.
+        //
+        // ForceDeactivateAsync is fire-and-forget: it calls DeactivateOnIdle,
+        // which only *schedules* deactivation after the current turn. The prior
+        // shape issued the deactivation and then immediately read with no gap,
+        // so the read frequently raced the not-yet-applied deactivation and hit
+        // the still-warm leaf (no replay, pin stays Zero). That is a lockstep
+        // race, not slow I/O, which is why widening the timeout (40 s, then
+        // 90 s) never helped: the read simply never landed on a cold leaf.
+        // The fix deactivates, then waits for the scheduled deactivation to
+        // apply before reading, so the read deterministically drives a cold
+        // reactivation, replay, and checkpoint flush. The shared convergence
+        // timeout is sufficient; no per-call override is needed.
+        var dataLeaves = await DataLeavesFromPinsAsync(pinGrain, grainFactory);
+
         LatticeWalGcReport report = default;
         await PublicReplicationApiClusterFixture.WaitForConvergenceAsync(
             async () =>
             {
-                foreach (var leaf in await DataLeavesFromPinsAsync(pinGrain, grainFactory))
+                foreach (var leaf in dataLeaves)
                 {
                     await leaf.ForceDeactivateAsync();
                 }
 
+                // Let the scheduled DeactivateOnIdle apply before the read so
+                // the read lands on a cold leaf and drives the replay.
+                await Task.Delay(250);
                 await treeOnA.GetAsync("k");
                 report = await gc.RunOnceAsync(treeId);
                 return report.MinCursor is not null;
             },
-            "GC run to observe a non-null MinCursor after the leaf checkpoints",
-            // This probe is far heavier than the simple convergence probes the
-            // shared 40 s ceiling is sized for: every poll iteration force-
-            // deactivates each data leaf, reactivates one with a read (driving a
-            // full WAL-replay checkpoint flush), and runs a complete GC pass over
-            // the tree. On a contended CI runner a single iteration's worth of
-            // grain RPCs can already approach the shared ceiling, so a healthy
-            // run was observed to time out at 40 s (2026-06-30). Give this one
-            // call site explicit headroom - a genuinely stuck block-pin stays
-            // null and still fails at the larger deadline, so it cannot mask a
-            // real regression.
-            timeout: TimeSpan.FromSeconds(90));
+            "GC run to observe a non-null MinCursor after the leaf checkpoints");
 
         Assert.That(report.MinCursor, Is.Not.Null);
         Assert.That(report.MinCursor!.Value.CompareTo(HybridLogicalClock.Zero), Is.GreaterThanOrEqualTo(0));
