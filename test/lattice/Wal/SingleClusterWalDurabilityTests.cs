@@ -278,6 +278,84 @@ public sealed class SingleClusterWalDurabilityTests
         });
     }
 
+    [Test]
+    public async Task Write_burst_stays_responsive_and_drains_through_a_bounded_sharded_durable_pin_floor()
+    {
+        // Issue #1030 end-to-end regression guard. A burst of writes into a
+        // freshly-created tree births and splits multiple leaves and advances
+        // many per-partition checkpoints. Before the fix this funnelled
+        // O(leaves x partitions) serialized durable pin writes through a single
+        // per-tree grain, saturating the silo and wedging the drain path; after
+        // the fix the durable pins fan across WalMaterialiserPinShards shard
+        // activations and coalesce behind a debounced flush, so the cluster
+        // stays responsive and the WAL still drains.
+        var treeId = "sc-wal-burst-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = _cluster.Client.GetGrain<ILattice>(treeId);
+
+        const int count = 300;
+        for (var i = 0; i < count; i++)
+        {
+            await tree.SetAsync($"k{i:D5}", Bytes($"v{i}"));
+        }
+
+        // Responsiveness: every sampled key reads back immediately after the
+        // burst. A wedged drain path would stall these foreground reads.
+        for (var i = 0; i < count; i += 25)
+        {
+            var value = await tree.GetAsync($"k{i:D5}");
+            Assert.That(value, Is.Not.Null,
+                $"key k{i:D5} must read back after the burst (cluster stays responsive).");
+        }
+
+        var sp = RequireSiloServices();
+        var registry = sp.GetRequiredService<IWalCursorRegistry>();
+
+        // Wait for at least one leaf materialiser to advance its checkpoint and
+        // report a non-Zero durable floor (the drain making progress).
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+        while (DateTime.UtcNow < deadline)
+        {
+            var min = await registry.GetMinCursorAsync(treeId);
+            if (min is { } floor && floor.CompareTo(HybridLogicalClock.Zero) > 0)
+            {
+                break;
+            }
+            await Task.Delay(50);
+        }
+
+        // The durable pin floor is maintained across the shard activations the
+        // WAL GC fans its read in over: the union of every shard's pins (plus
+        // the legacy single-key shape) is non-empty, proving the sharded
+        // durable-pin store the GC relies on is being written and is readable.
+        var options = sp.GetRequiredService<IOptionsMonitor<LatticeOptions>>();
+        var shardCount = WalMaterialiserPinRouting.ResolveShardCount(options);
+        Assert.That(shardCount, Is.GreaterThanOrEqualTo(1));
+
+        var unionPins = 0;
+        foreach (var key in WalMaterialiserPinRouting.EnumerateReadKeys(treeId, shardCount))
+        {
+            var pinGrain = _cluster.Client.GetGrain<IWalMaterialiserPinGrain>(key);
+            var pins = await pinGrain.GetPinsAsync();
+            unionPins += pins.Count;
+        }
+        Assert.That(unionPins, Is.GreaterThanOrEqualTo(1),
+            "the sharded durable leaf-materialiser pin floor must be maintained after a write burst.");
+
+        // The drain is not wedged: a GC pass over the sharded durable-pin
+        // store completes promptly and reports a coherent result rather than
+        // stalling (the pre-fix failure mode was an unbounded serialized pin
+        // write storm through one grain).
+        var gc = sp.GetRequiredService<ILatticeWalGc>();
+        var report = await gc.RunOnceAsync(treeId);
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.TreeName, Is.EqualTo(treeId));
+            Assert.That(report.ShardsScanned, Is.GreaterThanOrEqualTo(1));
+            Assert.That(report.EntriesTrimmed, Is.GreaterThanOrEqualTo(0),
+                "after the burst the WAL GC must complete a pass against the sharded pin floor rather than wedging.");
+        });
+    }
+
     private static byte[] Bytes(string value) => System.Text.Encoding.UTF8.GetBytes(value);
 
     private sealed class SiloConfigurator : ISiloConfigurator

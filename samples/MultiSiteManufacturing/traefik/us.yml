@@ -109,8 +109,15 @@ http:
           path: "/"
           scheme: http
           port: 8080
-          interval: "2s"
-          timeout: "1s"
+          interval: "5s"
+          # Generous timeout (issue #1030): under a write burst the silo's
+          # :8080 listener can take well over a second to answer the probe
+          # while still being perfectly alive. A 1s timeout evicted BOTH
+          # live silos and 503-ed the state route, dropping the explorer
+          # connection. 4s gives a loaded-but-live silo room to answer
+          # before eviction, while a genuinely dead silo is still removed
+          # within ~5s and reads ride through on the survivor.
+          timeout: "4s"
 
     us-web:
       loadBalancer:
@@ -129,8 +136,11 @@ http:
         # Active health check: evict a silo from rotation if it errors
         # out, re-probe frequently so a restarted silo rejoins quickly
         # and a silently-dead silo is taken out of sticky rotation
-        # within a couple of seconds rather than ten.
+        # within a few seconds. The timeout is generous (issue #1030): a
+        # silo busy serving a write burst can answer the probe slowly
+        # while still being alive, and a 1s timeout would evict a live
+        # silo and tear down its Blazor circuits under load.
         healthCheck:
           path: "/"
-          interval: "2s"
-          timeout: "1s"
+          interval: "5s"
+          timeout: "4s"

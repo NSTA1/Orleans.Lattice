@@ -641,6 +641,64 @@ public static class LatticeMetrics
         Meter.CreateCounter<long>("orleans.lattice.wal.entries_trimmed", unit: "{entry}",
             description: "WAL entries removed by the per-tree garbage collector, tagged by tree.");
 
+    // --- Leaf-materialiser durable pin instruments (issue #1030) ------------
+
+    /// <summary>
+    /// Counter of durable writes to the leaf-materialiser pin store, emitted by
+    /// <c>WalMaterialiserPinGrain</c> on every <c>WriteStateAsync</c>. Tagged
+    /// with <see cref="TagOutcome"/> = <c>birth</c> (a synchronous through-write
+    /// seeded by a new leaf's block pin) or <c>coalesced</c> (a debounced flush
+    /// draining one or more advancing reports). The pre-#1030 shape wrote once
+    /// per advancing report through a single per-tree grain; coalescing collapses
+    /// a report burst to one write per shard per flush window, so a sustained
+    /// <c>coalesced</c> rate far below the report rate confirms the fan-in
+    /// hotspot fix is engaged.
+    /// </summary>
+    public static readonly Counter<long> MaterialiserPinDurableWrites =
+        Meter.CreateCounter<long>("orleans.lattice.materialiser.pin.durable_writes", unit: "{write}",
+            description: "Durable writes to the leaf-materialiser pin store, tagged by birth/coalesced outcome.");
+
+    /// <summary>
+    /// Histogram of leaf-materialiser drain lag, in milliseconds, sampled by the
+    /// per-tree WAL GC pass as <c>now - slowest durable materialiser checkpoint</c>.
+    /// A rising drain lag is the back-pressure signal (issue #1030): when it
+    /// exceeds <see cref="LatticeOptions.WalSaturationMaterialiserLagThreshold"/>
+    /// for <see cref="LatticeOptions.WalSaturationMaterialiserLagSampleWindows"/>
+    /// consecutive passes the tree escalates to Saturated. Tagged with
+    /// <see cref="TagTree"/>. Only emitted when a non-zero materialiser frontier
+    /// exists (a never-checkpointed tree produces no measurement).
+    /// </summary>
+    public static readonly Histogram<double> MaterialiserDrainLag =
+        Meter.CreateHistogram<double>("orleans.lattice.materialiser.drain_lag", unit: "ms",
+            description: "Leaf-materialiser drain lag sampled by the WAL GC pass, tagged by tree.");
+
+    /// <summary>
+    /// Counter of activation-time leaf materialiser replays started, emitted by
+    /// <c>BPlusLeafGrain.OnActivateAsync</c> once a per-silo replay permit
+    /// (<see cref="LatticeOptions.WalMaterialiserMaxConcurrentReplays"/>) is
+    /// acquired. Tagged with <see cref="TagTree"/>. A reactivation storm (issue
+    /// #1030) shows as a spike in this counter; pairing it with
+    /// <see cref="LeafReplayDuration"/> reveals whether the per-silo concurrency
+    /// ceiling is queueing replays under load.
+    /// </summary>
+    public static readonly Counter<long> LeafActivationReplays =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.activation_replays", unit: "{replay}",
+            description: "Activation-time leaf materialiser replays started, tagged by tree.");
+
+    /// <summary>
+    /// Counter of activation-time eager cursor-publish failures, emitted by
+    /// <c>BPlusLeafGrain.OnActivateAsync</c> when the post-replay cursor report
+    /// throws (a non-fatal failure the next foreground flush recovers from).
+    /// Under a reactivation storm against a saturated silo (issue #1030) these
+    /// failures fan out across every reactivating leaf; the warning log is
+    /// rate-limited per silo to avoid a self-amplifying log flood, but this
+    /// counter records every occurrence so the true rate stays observable.
+    /// Tagged with <see cref="TagTree"/>.
+    /// </summary>
+    public static readonly Counter<long> LeafActivationCursorPublishFailures =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.activation_cursor_publish_failures", unit: "{failure}",
+            description: "Activation-time eager cursor-publish failures, tagged by tree.");
+
     // --- Storage-usage instruments (byte-accurate retained footprint) ------
     //
     // The four byte gauges and the over-threshold gauge are observable gauges

@@ -142,4 +142,29 @@ internal interface ILeafCursorReporter
         string consumerId,
         HybridLogicalClock frontier,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Batched form of <see cref="SeedDurableMaterialiserBlockAsync"/>: durably
+    /// seeds every pin in <paramref name="reports"/> for
+    /// <paramref name="treeName"/> and <b>awaits</b> the writes. A leaf at birth
+    /// calls this once with one report per WAL partition instead of issuing one
+    /// awaited seed per partition; the implementation groups the reports by their
+    /// routed durable-pin shard and issues a single batched durable write per
+    /// distinct shard concurrently, collapsing what was
+    /// <c>O(partitions)</c> serialized round-trips through one hot grain into
+    /// at most <c>O(shards)</c> concurrent batched writes. Same idempotency,
+    /// crash-safety, and failure-swallowing contract as the single-pin seed:
+    /// the block pins must be durable before the caller lets the new leaf's data
+    /// become reachable in the WAL, a Zero seed is a no-op once a real frontier
+    /// has landed, and transient durable-write failures are swallowed so the
+    /// foreground birth path is never blocked. A no-op when the host has no
+    /// durable backing.
+    /// </summary>
+    /// <param name="treeName">Logical tree id whose leaf is being seeded.</param>
+    /// <param name="reports">One block pin per WAL partition; each report's consumer id must not be <see langword="null"/> or whitespace.</param>
+    /// <param name="cancellationToken">Cancellation token observed before the durable writes.</param>
+    Task SeedDurableMaterialiserBlockManyAsync(
+        string treeName,
+        IReadOnlyList<MaterialiserPinReport> reports,
+        CancellationToken cancellationToken);
 }

@@ -211,6 +211,7 @@ public sealed class LatticeWalGc(
         // without this floor the GC would trim past a leaf's durable
         // checkpoint and lose its committed-but-not-yet-checkpointed WAL tail.
         minCursor = await ApplyDurableMaterialiserFloorAsync(treeName, minCursor, cancellationToken).ConfigureAwait(false);
+        ObserveMaterialiserDrainLag(treeName, resolved, minCursor);
         var causalStable = await cursors.GetCausalStableAsync(treeName, cancellationToken).ConfigureAwait(false);
         var blockedFloor = await cursors.GetBlockedFloorAsync(treeName, cancellationToken).ConfigureAwait(false);
         HybridLogicalClock? ttlCeiling = null;
@@ -335,9 +336,7 @@ public sealed class LatticeWalGc(
         IReadOnlyDictionary<string, HybridLogicalClock> pins;
         try
         {
-            pins = await factory.GetGrain<IWalMaterialiserPinGrain>(treeName)
-                .GetPinsAsync()
-                .ConfigureAwait(false);
+            pins = await ReadDurablePinsAsync(factory, treeName).ConfigureAwait(false);
         }
         catch
         {
@@ -388,7 +387,101 @@ public sealed class LatticeWalGc(
     }
 
     /// <summary>
-    /// Emits the byte-pressure reclaim and over-threshold signals after a
+    /// Reads and unions the durable leaf-materialiser pins for
+    /// <paramref name="treeName"/> across every shard activation plus the legacy
+    /// unsuffixed key. Sharding spreads the pin-store write fan-in across
+    /// <see cref="LatticeOptions.WalMaterialiserPinShards"/> grains; the GC must
+    /// reconstruct the full floor by reading all of them. The dual-read of the
+    /// legacy key keeps pins written before the upgrade counted. Shards are read
+    /// concurrently; per consumer id the lowest (most conservative) pin wins so a
+    /// stale duplicate can only retain more WAL.
+    /// </summary>
+    /// <summary>
+    /// Trips the per-tree leaf-materialiser drain-lag saturation counter when
+    /// the slowest durable checkpoint (<paramref name="minCursor"/>, after the
+    /// durable pin floor) has fallen more than
+    /// <see cref="LatticeOptions.WalSaturationMaterialiserLagThreshold"/> behind
+    /// wall-clock time. A no-op when the input is disabled (threshold null) or
+    /// when there is no measurable lag: a null cursor (no consumer reported, or
+    /// a block pin disabled the cursor branch) is not treated as infinite lag,
+    /// so a never-checkpointed leaf never pins the regime at Saturated. Not
+    /// tripping leaves the cumulative counter unchanged, which the sampler reads
+    /// as a zero per-window delta and resets the consecutive-window counter -
+    /// the escalation therefore requires the lag to persist across consecutive
+    /// GC passes.
+    /// </summary>
+    private void ObserveMaterialiserDrainLag(
+        string treeName,
+        LatticeOptions resolved,
+        HybridLogicalClock? minCursor)
+    {
+        if (resolved.WalSaturationMaterialiserLagThreshold is not { } threshold)
+        {
+            return;
+        }
+
+        if (minCursor is not { } cursor || cursor <= HybridLogicalClock.Zero)
+        {
+            return;
+        }
+
+        var lagTicks = _time.GetUtcNow().UtcTicks - cursor.WallClockTicks;
+
+        // Emit the drain-lag gauge for every sampled pass with a real
+        // materialiser frontier, not only the over-threshold passes, so the
+        // metric reflects the full lag distribution leading up to a trip.
+        LatticeMetrics.MaterialiserDrainLag.Record(
+            TimeSpan.FromTicks(Math.Max(0L, lagTicks)).TotalMilliseconds,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeName));
+
+        if (lagTicks <= threshold.Ticks)
+        {
+            return;
+        }
+
+        WalCommitLogWriter._materialiserDrainLagTripCounts.AddOrUpdate(
+            (treeName, 0), 1, static (_, prior) => prior + 1);
+    }
+
+    private async Task<IReadOnlyDictionary<string, HybridLogicalClock>> ReadDurablePinsAsync(
+        IGrainFactory factory,
+        string treeName)
+    {
+        var shardCount = WalMaterialiserPinRouting.ResolveShardCount(optionsMonitor);
+        var keys = WalMaterialiserPinRouting.EnumerateReadKeys(treeName, shardCount);
+        if (keys.Count == 1)
+        {
+            return await factory.GetGrain<IWalMaterialiserPinGrain>(keys[0]).GetPinsAsync().ConfigureAwait(false);
+        }
+
+        var reads = new Task<IReadOnlyDictionary<string, HybridLogicalClock>>[keys.Count];
+        for (var i = 0; i < keys.Count; i++)
+        {
+            reads[i] = factory.GetGrain<IWalMaterialiserPinGrain>(keys[i]).GetPinsAsync();
+        }
+
+        var results = await Task.WhenAll(reads).ConfigureAwait(false);
+        var union = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
+        for (var i = 0; i < results.Length; i++)
+        {
+            foreach (var (consumerId, pin) in results[i])
+            {
+                if (union.TryGetValue(consumerId, out var existing))
+                {
+                    if (pin < existing)
+                    {
+                        union[consumerId] = pin;
+                    }
+                }
+                else
+                {
+                    union[consumerId] = pin;
+                }
+            }
+        }
+
+        return union;
+    }
     /// trim pass and returns whether the post-trim footprint still breaches
     /// the ceiling. When a byte-pressure trigger reclaimed bytes
     /// (<paramref name="retainedBefore"/> &gt; <paramref name="retainedAfter"/>),

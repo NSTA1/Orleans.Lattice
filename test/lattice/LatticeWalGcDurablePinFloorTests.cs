@@ -247,4 +247,63 @@ public sealed class LatticeWalGcDurablePinFloorTests
             Assert.That(report.EntriesTrimmed, Is.EqualTo(2));
         });
     }
+
+    private static IOptionsMonitor<LatticeOptions> MonitorWithLagThreshold(TimeSpan? threshold)
+    {
+        var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        var options = new LatticeOptions
+        {
+            WalPartitions = 1,
+            WalSaturationMaterialiserLagThreshold = threshold,
+        };
+        monitor.CurrentValue.Returns(options);
+        monitor.Get(Arg.Any<string>()).Returns(options);
+        return monitor;
+    }
+
+    [Test]
+    public async Task RunOnceAsync_drain_lag_beyond_threshold_trips_saturation_counter()
+    {
+        // The registry min sits at a tiny HLC wall-clock (Hlc 30), so the
+        // GC's now-minus-cursor lag is effectively the whole epoch - far past
+        // any positive threshold - and the per-tree drain-lag trip counter
+        // must advance once for this pass (issue #1030 back-pressure surface).
+        WalCommitLogWriter._materialiserDrainLagTripCounts.Clear();
+        var provider = await SeededProviderAsync();
+        var registry = new InMemoryWalCursorRegistry();
+        await registry.ReportCursorAsync(Tree, "shipper", Hlc(30));
+
+        var sut = new LatticeWalGc(
+            Services(provider, durablePins: null),
+            registry,
+            MonitorWithLagThreshold(TimeSpan.FromSeconds(5)));
+
+        await sut.RunOnceAsync(Tree);
+
+        Assert.That(
+            WalCommitLogWriter._materialiserDrainLagTripCounts.TryGetValue((Tree, 0), out var trips) ? trips : 0L,
+            Is.EqualTo(1L),
+            "A pass whose drain lag exceeds the threshold must trip the per-tree counter exactly once.");
+    }
+
+    [Test]
+    public async Task RunOnceAsync_drain_lag_disabled_never_trips_counter()
+    {
+        WalCommitLogWriter._materialiserDrainLagTripCounts.Clear();
+        var provider = await SeededProviderAsync();
+        var registry = new InMemoryWalCursorRegistry();
+        await registry.ReportCursorAsync(Tree, "shipper", Hlc(30));
+
+        var sut = new LatticeWalGc(
+            Services(provider, durablePins: null),
+            registry,
+            MonitorWithLagThreshold(null));
+
+        await sut.RunOnceAsync(Tree);
+
+        Assert.That(
+            WalCommitLogWriter._materialiserDrainLagTripCounts.ContainsKey((Tree, 0)),
+            Is.False,
+            "With the drain-lag input disabled (threshold null), no pass may trip the counter.");
+    }
 }

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -29,6 +30,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 internal sealed class LeafCursorReporter(
     IWalCursorRegistry registry,
     IGrainFactory? grainFactory = null,
+    IOptionsMonitor<LatticeOptions>? options = null,
     ILogger<LeafCursorReporter>? logger = null) : ILeafCursorReporter
 {
     /// <summary>
@@ -94,19 +96,26 @@ internal sealed class LeafCursorReporter(
         // Clear the durable pin store for this tree regardless of the
         // in-memory snapshot: a leaf whose durable pin outlived its
         // in-memory registration (post-restart, never re-activated) is
-        // only visible in the durable grain.
+        // only visible in the durable grain. Clear every shard plus the
+        // legacy unsuffixed key so no orphaned pin survives the purge.
         if (grainFactory is not null)
         {
-            try
+            var shardCount = WalMaterialiserPinRouting.ResolveShardCount(options);
+            var keys = WalMaterialiserPinRouting.EnumerateReadKeys(treeName, shardCount);
+            for (var i = 0; i < keys.Count; i++)
             {
-                await grainFactory.GetGrain<IWalMaterialiserPinGrain>(treeName).ClearAsync().ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                logger?.LogWarning(
-                    ex,
-                    "Failed to clear durable WAL materialiser pins for tree {TreeId} during tree-deletion purge.",
-                    treeName);
+                try
+                {
+                    await grainFactory.GetGrain<IWalMaterialiserPinGrain>(keys[i]).ClearAsync().ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    logger?.LogWarning(
+                        ex,
+                        "Failed to clear durable WAL materialiser pins for tree {TreeId} shard key {GrainKey} during tree-deletion purge.",
+                        treeName,
+                        keys[i]);
+                }
             }
         }
 
@@ -203,7 +212,7 @@ internal sealed class LeafCursorReporter(
             // reachable in the WAL. The pin store's monotonic-max merge makes a
             // Zero (or stale) seed a no-op once a real frontier has landed, so
             // this is idempotent and safe on a recovery-path re-call.
-            await grainFactory.GetGrain<IWalMaterialiserPinGrain>(treeName)
+            await PinGrain(treeName, consumerId)
                 .ReportAsync(consumerId, frontier)
                 .ConfigureAwait(false);
 
@@ -240,11 +249,108 @@ internal sealed class LeafCursorReporter(
         }
     }
 
+    /// <inheritdoc />
+    public async Task SeedDurableMaterialiserBlockManyAsync(
+        string treeName,
+        IReadOnlyList<MaterialiserPinReport> reports,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(reports);
+        if (grainFactory is null || reports.Count == 0)
+        {
+            // No durable backing (pre-WAL host / bare-IServiceProvider) or
+            // nothing to seed: no-op.
+            return;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var shardCount = WalMaterialiserPinRouting.ResolveShardCount(options);
+
+        // Group the per-partition pins by their routed shard key so each
+        // distinct shard takes a single batched durable write. A single leaf's
+        // partition-consumers can hash to several shards; issuing one
+        // SeedManyAsync per shard concurrently spreads the birth-seed load that
+        // was previously O(partitions) serialized writes through one hot grain.
+        Dictionary<string, List<MaterialiserPinReport>>? byShard = null;
+        for (var i = 0; i < reports.Count; i++)
+        {
+            var report = reports[i];
+            ArgumentException.ThrowIfNullOrWhiteSpace(report.ConsumerId);
+            var key = WalMaterialiserPinRouting.ShardKey(treeName, report.ConsumerId, shardCount);
+            byShard ??= new Dictionary<string, List<MaterialiserPinReport>>(StringComparer.Ordinal);
+            if (!byShard.TryGetValue(key, out var bucket))
+            {
+                bucket = new List<MaterialiserPinReport>();
+                byShard[key] = bucket;
+            }
+
+            bucket.Add(report);
+
+            // Pre-seed the debounce state so a subsequent
+            // NoteDurableMaterialiserFrontier treats this consumer as already
+            // seeded rather than issuing a redundant durable write of the seed.
+            var debounceKey = (treeName, report.ConsumerId);
+            if (_durableDebounce.TryGetValue(debounceKey, out var current))
+            {
+                if (report.Frontier > current.LastWritten)
+                {
+                    _durableDebounce[debounceKey] = (report.Frontier, Environment.TickCount64);
+                }
+            }
+            else
+            {
+                _durableDebounce[debounceKey] = (report.Frontier, Environment.TickCount64);
+            }
+        }
+
+        if (byShard is null)
+        {
+            return;
+        }
+
+        var seeds = new List<Task>(byShard.Count);
+        foreach (var (key, bucket) in byShard)
+        {
+            seeds.Add(SeedShardAsync(key, bucket));
+        }
+
+        try
+        {
+            await Task.WhenAll(seeds).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // Swallow-and-log: the birth/create path must not fail because the
+            // durable pin store had a transient hiccup on one shard. A missed
+            // seed only narrows the protection window; the leaf's first
+            // checkpoint flush re-seeds via NoteDurableMaterialiserFrontier.
+            logger?.LogWarning(
+                ex,
+                "Failed to seed one or more durable WAL materialiser block pins for tree {TreeId}; will re-seed on next checkpoint.",
+                treeName);
+        }
+    }
+
+    private Task SeedShardAsync(string grainKey, IReadOnlyList<MaterialiserPinReport> bucket) =>
+        grainFactory!.GetGrain<IWalMaterialiserPinGrain>(grainKey).SeedManyAsync(bucket);
+
+    /// <summary>
+    /// under <paramref name="treeName"/>. Routing is by a stable hash of the
+    /// consumer id so the same consumer always reads and writes the same shard.
+    /// </summary>
+    private IWalMaterialiserPinGrain PinGrain(string treeName, string consumerId)
+    {
+        var shardCount = WalMaterialiserPinRouting.ResolveShardCount(options);
+        var key = WalMaterialiserPinRouting.ShardKey(treeName, consumerId, shardCount);
+        return grainFactory!.GetGrain<IWalMaterialiserPinGrain>(key);
+    }
+
     private async Task WriteDurablePinAsync(string treeName, string consumerId, HybridLogicalClock frontier)
     {
         try
         {
-            await grainFactory!.GetGrain<IWalMaterialiserPinGrain>(treeName)
+            await PinGrain(treeName, consumerId)
                 .ReportAsync(consumerId, frontier)
                 .ConfigureAwait(false);
         }
@@ -280,7 +386,7 @@ internal sealed class LeafCursorReporter(
         cancellationToken.ThrowIfCancellationRequested();
         try
         {
-            await grainFactory.GetGrain<IWalMaterialiserPinGrain>(treeName).RemoveAsync(consumerId).ConfigureAwait(false);
+            await PinGrain(treeName, consumerId).RemoveAsync(consumerId).ConfigureAwait(false);
             _durableDebounce.TryRemove((treeName, consumerId), out _);
         }
         catch (Exception ex)

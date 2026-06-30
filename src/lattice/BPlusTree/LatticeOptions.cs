@@ -929,6 +929,92 @@ public class LatticeOptions
     public const int DefaultWalPartitions = 8;
 
     /// <summary>
+    /// Number of shard activations the cluster-wide durable leaf-materialiser
+    /// pin store is spread across, per tree. The durable pin store backs the
+    /// WAL GC's restart-safe trim floor; every active leaf mirrors its
+    /// per-partition checkpoint frontier into it. A single per-tree activation
+    /// becomes a fan-in hotspot under a burst that activates or splits many
+    /// leaves (every leaf birth and checkpoint funnels durable writes through
+    /// the one grain). Re-keying the store across
+    /// <see cref="WalMaterialiserPinShards"/> activations spreads that load:
+    /// each <c>consumerId</c> deterministically maps to one shard, so the
+    /// monotonic-max merge stays correct, and the WAL GC fans its read in
+    /// across every shard and unions the result. Defaults to
+    /// <see cref="DefaultWalMaterialiserPinShards"/> (8). Set to <c>1</c> to
+    /// restore the historical single-activation shape. Changing this value is
+    /// a durable-store migration: pins written under the previous shard count
+    /// are re-seeded on the next leaf activation / checkpoint, and the WAL GC
+    /// also dual-reads the legacy single-activation key during the transition
+    /// so no trim floor is lost.
+    /// </summary>
+    public int WalMaterialiserPinShards { get; set; } = DefaultWalMaterialiserPinShards;
+
+    /// <summary>Default value for <see cref="WalMaterialiserPinShards"/> (8).</summary>
+    public const int DefaultWalMaterialiserPinShards = 8;
+
+    /// <summary>
+    /// Coalescing window, in milliseconds, for durable writes to the
+    /// leaf-materialiser pin store. A non-birth pin report (the per-checkpoint
+    /// frontier mirror) advances the in-memory pin immediately and schedules a
+    /// single <c>WriteStateAsync</c> at most once per window, so a burst of
+    /// reports from many leaves collapses to one durable write per shard per
+    /// window instead of one write per report. The in-memory snapshot the WAL
+    /// GC reads is always current; only the durable restart-backstop is
+    /// debounced, and a durable pin that lags the in-memory frontier only ever
+    /// retains more WAL (always GC-safe). Birth "block" pin seeds bypass the
+    /// window and write through durably, preserving the crash-safety guarantee
+    /// that a new leaf's pin is durable before its data becomes reachable.
+    /// Defaults to <see cref="DefaultWalMaterialiserPinFlushIntervalMs"/>
+    /// (250 ms). Set to <c>0</c> to disable coalescing (every advancing report
+    /// persists synchronously, matching the historical shape).
+    /// </summary>
+    public int WalMaterialiserPinFlushIntervalMs { get; set; } = DefaultWalMaterialiserPinFlushIntervalMs;
+
+    /// <summary>Default value for <see cref="WalMaterialiserPinFlushIntervalMs"/> (250 ms).</summary>
+    public const int DefaultWalMaterialiserPinFlushIntervalMs = 250;
+
+    /// <summary>
+    /// Maximum number of leaf-materialiser WAL replays a single silo runs
+    /// concurrently. The activation hook
+    /// (<see cref="State.LeafNodeState"/> projection rebuild) replays the WAL
+    /// tail to bring a cold leaf online; under a burst that activates or splits
+    /// many leaves at once, an unbounded fan-out of those replays can saturate
+    /// every silo thread and starve the foreground request path (the wedge
+    /// reproduced in issue #1030). A per-silo semaphore caps how many leaf
+    /// replays run at once so a reactivation storm degrades into a queue rather
+    /// than a thread-pool stampede; replays release the permit as soon as the
+    /// tail is drained. Defaults to
+    /// <see cref="DefaultWalMaterialiserMaxConcurrentReplays"/> (<c>0</c>),
+    /// which resolves to <see cref="Environment.ProcessorCount"/> at runtime.
+    /// Set to a positive value to pin the ceiling explicitly.
+    /// </summary>
+    public int WalMaterialiserMaxConcurrentReplays { get; set; } = DefaultWalMaterialiserMaxConcurrentReplays;
+
+    /// <summary>
+    /// Default value for <see cref="WalMaterialiserMaxConcurrentReplays"/>
+    /// (<c>0</c>, resolved to <see cref="Environment.ProcessorCount"/>).
+    /// </summary>
+    public const int DefaultWalMaterialiserMaxConcurrentReplays = 0;
+
+    /// <summary>
+    /// Maximum number of WAL records the activation-time leaf replay applies in
+    /// one scheduler turn before yielding cooperatively
+    /// (<c>await Task.Yield()</c>). A long-tailed WAL would otherwise let a
+    /// single leaf replay monopolise its activation turn, blocking the silo
+    /// scheduler from interleaving other ready work (foreground reads, health
+    /// probes) for the full duration of the replay. Bounding the per-turn record
+    /// count keeps a large replay cooperative so the silo stays responsive while
+    /// it drains. Defaults to
+    /// <see cref="DefaultWalReplayMaxRecordsPerTurn"/> (256). Set to <c>0</c> to
+    /// disable the cooperative yield (replay runs to completion without
+    /// voluntarily yielding, the historical shape).
+    /// </summary>
+    public int WalReplayMaxRecordsPerTurn { get; set; } = DefaultWalReplayMaxRecordsPerTurn;
+
+    /// <summary>Default value for <see cref="WalReplayMaxRecordsPerTurn"/> (256).</summary>
+    public const int DefaultWalReplayMaxRecordsPerTurn = 256;
+
+    /// <summary>
     /// Maximum number of entries the WAL grain will batch into a single
     /// storage flush. Defaults to <see cref="DefaultWalMaxBatchEntries"/>
     /// (100). Lower values reduce flush latency at the cost of throughput.
@@ -1723,6 +1809,55 @@ public class LatticeOptions
 
     /// <summary>Default value for <see cref="WalSaturationFlushLatencySampleWindows"/> (3).</summary>
     public const int DefaultWalSaturationFlushLatencySampleWindows = 3;
+
+    /// <summary>
+    /// Opt-in WAL saturation input that escalates a tree to
+    /// <see cref="Orleans.Lattice.WalSaturationState.Saturated"/> when its
+    /// leaf-materialiser drain frontier falls more than this far behind
+    /// wall-clock time - the direct "the materialiser is not keeping up with
+    /// the write rate" surface that the indirect admission-depth and
+    /// flush-latency inputs only approximate. The WAL GC measures the lag on
+    /// each pass as <c>now - minCursor</c> (the age of the slowest durable
+    /// leaf-materialiser checkpoint, after the durable pin floor is applied);
+    /// when the lag exceeds this threshold it trips a per-tree counter the
+    /// saturation sampler reads with the same consecutive-window escalation as
+    /// the flush-latency input.
+    /// <para>
+    /// This is the back-pressure surface that protects a downstream
+    /// replication receiver. When a write burst outruns the materialiser drain
+    /// the resulting Saturated state flows automatically through
+    /// <c>IWalSaturationSignal</c> to the writer admission gate, the atomic-write
+    /// quiesce path, the replication receiver flow-control policy (throttling
+    /// the upstream sender), and the Azure retry policy - so a modest burst can
+    /// no longer peg every silo before the drain catches up.
+    /// </para>
+    /// <para>
+    /// Set to <c>null</c> (the default) to disable the input entirely; the
+    /// classifier observes its historical behaviour exactly. A block pin (a
+    /// never-checkpointed leaf, which disables the cursor trim branch) is not
+    /// treated as infinite lag and never trips this input. The registered
+    /// options validator rejects any non-positive value when the option is set.
+    /// </para>
+    /// </summary>
+    public TimeSpan? WalSaturationMaterialiserLagThreshold { get; set; }
+
+    /// <summary>
+    /// Number of consecutive WAL GC passes during which a tree's
+    /// leaf-materialiser drain lag must exceed
+    /// <see cref="WalSaturationMaterialiserLagThreshold"/> before the
+    /// saturation classifier escalates the tree to
+    /// <see cref="Orleans.Lattice.WalSaturationState.Saturated"/> via the
+    /// drain-lag branch. Defaults to
+    /// <see cref="DefaultWalSaturationMaterialiserLagSampleWindows"/> (3),
+    /// mirroring the flush-latency input so a single slow GC pass cannot flip
+    /// the regime. Has no effect when
+    /// <see cref="WalSaturationMaterialiserLagThreshold"/> is <c>null</c>. Must
+    /// be greater than or equal to 1.
+    /// </summary>
+    public int WalSaturationMaterialiserLagSampleWindows { get; set; } = DefaultWalSaturationMaterialiserLagSampleWindows;
+
+    /// <summary>Default value for <see cref="WalSaturationMaterialiserLagSampleWindows"/> (3).</summary>
+    public const int DefaultWalSaturationMaterialiserLagSampleWindows = 3;
 
     /// <summary>
     /// Wall-clock budget the WAL writer admission gate

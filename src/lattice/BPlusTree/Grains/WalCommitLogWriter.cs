@@ -127,6 +127,27 @@ internal sealed class WalCommitLogWriter(
     internal static readonly ConcurrentDictionary<(string TreeId, int Shard), long> _flushLatencyTripCounts
         = new();
 
+    // Per-(tree, shard 0) cumulative leaf-materialiser drain-lag trip
+    // counter, incremented by the WAL GC every pass on which a tree's
+    // drain lag (now minus the slowest durable leaf-materialiser
+    // checkpoint, after the durable pin floor is applied) exceeded the
+    // per-tree LatticeOptions.WalSaturationMaterialiserLagThreshold.
+    // This is the direct "the materialiser is not draining the WAL fast
+    // enough" surface that the depth-ratio, dispatch-timeout, and
+    // flush-latency inputs only approximate; it is what carries
+    // back-pressure to a downstream replication receiver when a write
+    // burst outruns the local drain. Shard is fixed at 0 because drain
+    // lag is a per-tree property (the GC measures it once per pass from
+    // the registry/pin floor, not per partition). The silo-scoped
+    // saturation sampler subtracts the previous tick's reading to derive
+    // the per-window trip delta and applies the consecutive-window check
+    // on LatticeOptions.WalSaturationMaterialiserLagSampleWindows. Same
+    // static-singleton shape as _flushLatencyTripCounts so the sampler
+    // reads every classifier-input map off a fixed root regardless of
+    // grain activation lifetime in tests.
+    internal static readonly ConcurrentDictionary<(string TreeId, int Shard), long> _materialiserDrainLagTripCounts
+        = new();
+
     // Per-instance drain CTS. Each WalCommitLogWriter owns its own
     // token; DrainAsync cancels it; AcquireAsync observes it alongside
     // the caller's CT. Because the token lives on the writer instance

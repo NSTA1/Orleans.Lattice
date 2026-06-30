@@ -180,6 +180,36 @@ if (options.WalSaturationFlushLatencySampleWindows < 1)
         + "(the number of consecutive sampler ticks the per-tree flush-latency trip delta must be non-zero "
         + "before the classifier escalates to Saturated via the flush-latency branch).");
 }
+if (options.WalSaturationMaterialiserLagThreshold is { } materialiserLagThreshold
+    && materialiserLagThreshold <= TimeSpan.Zero)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.WalSaturationMaterialiserLagThreshold)} must be positive when set "
+        + "(null disables the materialiser drain-lag classifier input entirely; a positive value sets the "
+        + "leaf-materialiser drain lag - now minus the slowest durable checkpoint - above which the per-tree "
+        + "trip counter is incremented).");
+}
+if (options.WalSaturationMaterialiserLagSampleWindows < 1)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.WalSaturationMaterialiserLagSampleWindows)} must be greater than or equal to 1 "
+        + "(the number of consecutive WAL GC passes the tree's drain lag must exceed the threshold "
+        + "before the classifier escalates to Saturated via the drain-lag branch).");
+}
+if (options.WalMaterialiserMaxConcurrentReplays < 0)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.WalMaterialiserMaxConcurrentReplays)} must be greater than or equal to 0 "
+        + "(zero resolves the per-silo concurrent-leaf-replay ceiling to Environment.ProcessorCount; a positive "
+        + "value pins it explicitly).");
+}
+if (options.WalReplayMaxRecordsPerTurn < 0)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.WalReplayMaxRecordsPerTurn)} must be greater than or equal to 0 "
+        + "(zero disables the cooperative activation-replay yield; a positive value bounds the number of WAL "
+        + "records applied per scheduler turn before the replay yields).");
+}
 if (options.WalAdmissionSaturationWaitBudget < TimeSpan.Zero
     && options.WalAdmissionSaturationWaitBudget != Timeout.InfiniteTimeSpan)
 {

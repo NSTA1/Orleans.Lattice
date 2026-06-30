@@ -61,8 +61,11 @@ http:
           path: "/"
           scheme: http
           port: 8080
-          interval: "2s"
-          timeout: "1s"
+          interval: "5s"
+          # Generous timeout (issue #1030): a live silo busy serving a
+          # write burst can answer the :8080 probe slowly; a 1s timeout
+          # evicted both live silos and 503-ed the state route.
+          timeout: "4s"
 
     eu-web:
       loadBalancer:
@@ -76,5 +79,8 @@ http:
           - url: "http://silo-eu-b:8080"
         healthCheck:
           path: "/"
-          interval: "2s"
-          timeout: "1s"
+          interval: "5s"
+          # Generous timeout (issue #1030): a live silo under a write
+          # burst can answer the probe slowly; a 1s timeout would evict a
+          # live silo and tear down its Blazor circuits under load.
+          timeout: "4s"

@@ -373,6 +373,7 @@ internal static class TypeAliases
     // in-memory cursor registry.
     internal const string IWalMaterialiserPinGrain = "ol.wpi";
     internal const string WalMaterialiserPinState = "ol.wps";
+    internal const string WalMaterialiserPinReport = "ol.wpr";
 
     // Materialised views (Phase 1): the projected-write value type and its
     // effect-kind enum are the core serializable surface; the view

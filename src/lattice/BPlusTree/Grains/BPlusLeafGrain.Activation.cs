@@ -97,6 +97,64 @@ internal sealed partial class BPlusLeafGrain
     private const int ReplayWalPartition = 0;
 
     /// <summary>
+    /// Per-silo (process-wide) ceiling on concurrent activation-time leaf
+    /// materialiser replays, lazily sized from
+    /// <see cref="LatticeOptions.WalMaterialiserMaxConcurrentReplays"/> on the
+    /// first activation that resolves options. A reactivation storm (issue
+    /// #1030) would otherwise fan out an unbounded number of WAL replays and
+    /// starve the foreground request path; this semaphore bounds the in-flight
+    /// replay count so the storm queues instead of stampeding the thread pool.
+    /// </summary>
+    private static SemaphoreSlim? _replayConcurrencyGate;
+
+    /// <summary>Initialisation guard for <see cref="_replayConcurrencyGate"/>.</summary>
+    private static readonly object _replayConcurrencyGateLock = new();
+
+    /// <summary>
+    /// Lazily resolves the per-silo replay concurrency gate from
+    /// <paramref name="options"/>. A non-positive
+    /// <see cref="LatticeOptions.WalMaterialiserMaxConcurrentReplays"/> resolves
+    /// to <see cref="Environment.ProcessorCount"/>. The gate is sized once on
+    /// first use and is a process-wide structural constant thereafter.
+    /// </summary>
+    private static SemaphoreSlim ResolveReplayConcurrencyGate(LatticeOptions options)
+    {
+        var existing = Volatile.Read(ref _replayConcurrencyGate);
+        if (existing is not null)
+            return existing;
+
+        lock (_replayConcurrencyGateLock)
+        {
+            if (_replayConcurrencyGate is null)
+            {
+                var max = options.WalMaterialiserMaxConcurrentReplays;
+                if (max <= 0)
+                    max = Environment.ProcessorCount;
+                _replayConcurrencyGate = new SemaphoreSlim(max, max);
+            }
+
+            return _replayConcurrencyGate;
+        }
+    }
+
+    /// <summary>
+    /// Acquires a permit from the per-silo replay concurrency gate, returning
+    /// the semaphore so the caller can release it once the replay completes.
+    /// Returns <c>null</c> for a leaf with no tree id (a no-op activation that
+    /// does no replay and must not consume a permit).
+    /// </summary>
+    private async Task<SemaphoreSlim?> AcquireReplayPermitAsync(CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(state.State.TreeId))
+            return null;
+
+        var options = await GetOptionsAsync();
+        var gate = ResolveReplayConcurrencyGate(options);
+        await gate.WaitAsync(cancellationToken);
+        return gate;
+    }
+
+    /// <summary>
     /// Activation hook. Runs the WAL materialiser to bring the
     /// in-memory projection (the per-activation runtime entry cache
     /// plus the per-leaf saga pending-tx map) up to the WAL head, then
@@ -151,7 +209,30 @@ internal sealed partial class BPlusLeafGrain
         // reader-isolation contract, and the host's grain activation
         // pipeline will retry the activation rather than serve reads
         // from a half-applied state.
-        var advanced = await ReplayWalSinceCheckpointAsync(replayCheckpointOverride, cancellationToken);
+        //
+        // The replay runs under a per-silo concurrency permit (issue
+        // #1030): under a burst that reactivates or splits many leaves
+        // at once, an unbounded fan-out of WAL replays saturates every
+        // silo thread and starves the foreground request path. The
+        // permit caps how many leaf replays run concurrently so a
+        // reactivation storm degrades into a bounded queue. A no-op
+        // activation (no tree id) takes no permit.
+        bool advanced;
+        var replayPermit = await AcquireReplayPermitAsync(cancellationToken);
+        if (replayPermit is not null)
+        {
+            LatticeMetrics.LeafActivationReplays.Add(
+                1,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId));
+        }
+        try
+        {
+            advanced = await ReplayWalSinceCheckpointAsync(replayCheckpointOverride, cancellationToken);
+        }
+        finally
+        {
+            replayPermit?.Release();
+        }
 
         // Step 1.5 - if the fall-off-log detector raised the
         // SnapshotPending advisory while classifying the replay path,
@@ -208,14 +289,55 @@ internal sealed partial class BPlusLeafGrain
             // catches up via the lazy-on-flush path. Materialiser
             // failures, in contrast, are fatal (they propagate above)
             // because correctness - not progress - is at stake.
-            var logger = context.ActivationServices?
-                .GetService<ILoggerFactory>()?
-                .CreateLogger<BPlusLeafGrain>();
-            logger?.LogWarning(
-                ex,
-                "Eager cursor registration failed during activation for leaf {GrainId}; will retry on next checkpoint flush.",
-                context.GrainId);
+            //
+            // Always count the failure (issue #1030: keep the true rate
+            // observable), but rate-limit the warning log to at most one per
+            // silo per CursorFailLogIntervalTicks so a reactivation storm
+            // against a saturated silo cannot self-amplify into a log flood.
+            LatticeMetrics.LeafActivationCursorPublishFailures.Add(
+                1,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId));
+
+            if (ShouldLogCursorPublishFailure())
+            {
+                var logger = context.ActivationServices?
+                    .GetService<ILoggerFactory>()?
+                    .CreateLogger<BPlusLeafGrain>();
+                logger?.LogWarning(
+                    ex,
+                    "Eager cursor registration failed during activation for leaf {GrainId}; will retry on next checkpoint flush.",
+                    context.GrainId);
+            }
         }
+    }
+
+    /// <summary>
+    /// Minimum interval, in ticks, between activation cursor-publish-failure
+    /// warning logs across the whole silo. Bounds the log rate during a
+    /// reactivation storm (issue #1030) while every failure is still counted by
+    /// <see cref="LatticeMetrics.LeafActivationCursorPublishFailures"/>.
+    /// </summary>
+    private static readonly long CursorFailLogIntervalTicks = TimeSpan.FromSeconds(1).Ticks;
+
+    /// <summary>Last UTC tick a cursor-publish-failure warning was logged (silo-wide).</summary>
+    private static long _lastCursorFailLogTicks;
+
+    /// <summary>
+    /// Per-silo token check for the cursor-publish-failure warning: returns
+    /// <c>true</c> at most once per <see cref="CursorFailLogIntervalTicks"/>.
+    /// Uses an interlocked compare-and-swap so concurrent reactivations never
+    /// race past the gate together.
+    /// </summary>
+    private static bool ShouldLogCursorPublishFailure()
+    {
+        var now = DateTime.UtcNow.Ticks;
+        var last = Volatile.Read(ref _lastCursorFailLogTicks);
+        if (now - last < CursorFailLogIntervalTicks)
+        {
+            return false;
+        }
+
+        return Interlocked.CompareExchange(ref _lastCursorFailLogTicks, now, last) == last;
     }
 
     /// <summary>
@@ -404,7 +526,7 @@ internal sealed partial class BPlusLeafGrain
                 }
             }
 
-            var (advanced, maxApplied) = await ReplayPartitionAsync(treeId, partition, checkpoint, projection, deferredTerminals, replayShardMap, cancellationToken);
+            var (advanced, maxApplied) = await ReplayPartitionAsync(treeId, partition, checkpoint, projection, deferredTerminals, replayShardMap, resolvedOptions.WalReplayMaxRecordsPerTurn, cancellationToken);
             if (advanced)
                 anyAdvanced = true;
             if (maxApplied > perPartitionMaxApplied[partition])
@@ -533,6 +655,7 @@ internal sealed partial class BPlusLeafGrain
         ILeafProjection projection,
         List<DeferredTerminal> deferredTerminals,
         ShardMap? replayShardMap,
+        int maxRecordsPerTurn,
         CancellationToken cancellationToken)
     {
         var coordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
@@ -544,6 +667,14 @@ internal sealed partial class BPlusLeafGrain
 
         var fromExclusive = checkpoint;
         long maxApplied = checkpoint;
+
+        // Cooperative-yield budget (issue #1030): a long-tailed WAL would let
+        // this replay monopolise its activation turn and block the silo
+        // scheduler from interleaving other ready work (foreground reads,
+        // health probes). Counting processed records and yielding every
+        // maxRecordsPerTurn keeps a large replay cooperative. A non-positive
+        // budget disables the yield (replay runs to completion uninterrupted).
+        var recordsSinceYield = 0;
 
         while (fromExclusive < head)
         {
@@ -609,6 +740,12 @@ internal sealed partial class BPlusLeafGrain
 
                 if (entry.Offset > maxApplied)
                     maxApplied = entry.Offset;
+
+                if (maxRecordsPerTurn > 0 && ++recordsSinceYield >= maxRecordsPerTurn)
+                {
+                    recordsSinceYield = 0;
+                    await Task.Yield();
+                }
             }
 
             var lastOffset = slice[^1].Offset;

@@ -194,12 +194,15 @@ internal sealed partial class BPlusLeafGrain
         var treeId = state.State.TreeId!;
         var options = await GetOptionsAsync();
         var partitionCount = Math.Max(1, options.WalPartitions);
+        var reports = new MaterialiserPinReport[partitionCount];
         for (var partition = 0; partition < partitionCount; partition++)
         {
             var consumerId = BuildConsumerId(idBase, partition, partitionCount);
-            await reporter.SeedDurableMaterialiserBlockAsync(
-                treeId, consumerId, HybridLogicalClock.Zero, CancellationToken.None);
+            reports[partition] = new MaterialiserPinReport(consumerId, HybridLogicalClock.Zero);
         }
+
+        await reporter.SeedDurableMaterialiserBlockManyAsync(
+            treeId, reports, CancellationToken.None);
     }
 
     private ILeafCursorReporter? ResolveCursorReporter()

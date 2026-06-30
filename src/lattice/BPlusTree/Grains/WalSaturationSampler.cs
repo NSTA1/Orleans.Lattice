@@ -101,6 +101,24 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
     private readonly Dictionary<string, int> _consecutiveFlushLatencyWindows
         = new(StringComparer.Ordinal);
 
+    // Per-(tree, shard 0) prior reading of the cumulative leaf-
+    // materialiser drain-lag trip counter; same per-tick delta-from-prior
+    // pattern as the flush-latency counter above. Feeds the fifth Saturated
+    // branch (the materialiser is not draining the WAL fast enough, the
+    // direct surface that carries back-pressure to a downstream replication
+    // receiver). First-tick deltas are skipped for the same baseline reason.
+    private readonly ConcurrentDictionary<(string TreeId, int Shard), long> _priorMaterialiserDrainLagTripCounts
+        = new();
+
+    // Per-tree consecutive-window counter for the drain-lag classifier
+    // input. Mirrors _consecutiveFlushLatencyWindows exactly: incremented on
+    // every tick whose per-window drain-lag trip delta is non-zero and reset
+    // to zero on every tick whose delta is zero. The classifier escalates the
+    // tree to Saturated via the drain-lag branch when the counter reaches
+    // LatticeOptions.WalSaturationMaterialiserLagSampleWindows.
+    private readonly Dictionary<string, int> _consecutiveMaterialiserDrainLagWindows
+        = new(StringComparer.Ordinal);
+
     private CancellationTokenSource? _loopCts;
     private Task? _loopTask;
 
@@ -346,6 +364,33 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
             acc.FlushLatencyTripDeltaInWindow += delta;
             acc.AttributedShard ??= shard;
         }
+
+        // Snapshot the per-tree cumulative drain-lag trip counts and compute
+        // the per-window delta. Mirrors the flush-latency loop above; the
+        // increment site (the WAL GC's ObserveMaterialiserDrainLag) is gated on
+        // LatticeOptions.WalSaturationMaterialiserLagThreshold being non-null,
+        // so when the input is disabled the map stays empty and this loop is a
+        // no-op. Feeds the fifth Saturated branch in Classify via the per-tree
+        // consecutive-window counter on _consecutiveMaterialiserDrainLagWindows.
+        foreach (var kv in WalCommitLogWriter._materialiserDrainLagTripCounts)
+        {
+            var (treeId, shard) = kv.Key;
+            var current = kv.Value;
+            var prior = _priorMaterialiserDrainLagTripCounts.TryGetValue(kv.Key, out var p) ? p : 0L;
+            _priorMaterialiserDrainLagTripCounts[kv.Key] = current;
+            if (!_priorInitialised) continue;
+
+            var delta = current - prior;
+            if (delta <= 0) continue;
+
+            if (!perTree.TryGetValue(treeId, out var acc))
+            {
+                acc = new TreeAccumulator { TreeId = treeId };
+                perTree[treeId] = acc;
+            }
+            acc.MaterialiserDrainLagDeltaInWindow += delta;
+            acc.AttributedShard ??= shard;
+        }
         _priorInitialised = true;
 
         var opts = _options.Get(string.Empty);
@@ -355,6 +400,8 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
         var recoveryWindow = opts.WalSaturationRecoveryWindow;
         var flushLatencyEnabled = opts.WalSaturationFlushLatencyThreshold is not null;
         var flushLatencySampleWindows = opts.WalSaturationFlushLatencySampleWindows;
+        var drainLagEnabled = opts.WalSaturationMaterialiserLagThreshold is not null;
+        var drainLagSampleWindows = opts.WalSaturationMaterialiserLagSampleWindows;
         var observedAt = _time.GetUtcNow();
 
         // Reset the per-tree consecutive-window counter for every tree
@@ -387,6 +434,27 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
             }
         }
 
+        // Same stale-reset sweep for the drain-lag consecutive-window counter.
+        if (drainLagEnabled && _consecutiveMaterialiserDrainLagWindows.Count > 0)
+        {
+            var staleKeys = default(List<string>);
+            foreach (var treeId in _consecutiveMaterialiserDrainLagWindows.Keys)
+            {
+                if (!perTree.TryGetValue(treeId, out var acc) || acc.MaterialiserDrainLagDeltaInWindow == 0)
+                {
+                    staleKeys ??= new List<string>();
+                    staleKeys.Add(treeId);
+                }
+            }
+            if (staleKeys is not null)
+            {
+                foreach (var treeId in staleKeys)
+                {
+                    _consecutiveMaterialiserDrainLagWindows[treeId] = 0;
+                }
+            }
+        }
+
         if (perTree.Count == 0) return;
 
         foreach (var acc in perTree.Values)
@@ -409,13 +477,27 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                 ? cw
                 : 0;
 
+            // Maintain the per-tree drain-lag consecutive-window counter,
+            // mirroring the flush-latency input above.
+            if (drainLagEnabled && acc.MaterialiserDrainLagDeltaInWindow > 0)
+            {
+                var prior = _consecutiveMaterialiserDrainLagWindows.TryGetValue(acc.TreeId, out var d) ? d : 0;
+                _consecutiveMaterialiserDrainLagWindows[acc.TreeId] = prior + 1;
+            }
+            var drainLagConsecutiveWindows = drainLagEnabled
+                && _consecutiveMaterialiserDrainLagWindows.TryGetValue(acc.TreeId, out var dw)
+                ? dw
+                : 0;
+
             var newState = Classify(
                 acc,
                 throttledRatio,
                 dispatchThreshold,
                 providerFailureThreshold,
                 flushLatencyConsecutiveWindows,
-                flushLatencyEnabled ? flushLatencySampleWindows : 0);
+                flushLatencyEnabled ? flushLatencySampleWindows : 0,
+                drainLagConsecutiveWindows,
+                drainLagEnabled ? drainLagSampleWindows : 0);
 
             // Apply the recovery-window upgrade. When the current-
             // tick classification is Healthy but the tree was observed
@@ -526,15 +608,19 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
         int dispatchThreshold,
         int providerFailureThreshold,
         int flushLatencyConsecutiveWindows,
-        int flushLatencySampleWindows)
+        int flushLatencySampleWindows,
+        int drainLagConsecutiveWindows,
+        int drainLagSampleWindows)
     {
         // Saturated wins: dispatch-timeout threshold crossed OR
         // provider-failure threshold crossed (when enabled) OR
         // flush-latency consecutive-window threshold crossed (when
-        // enabled) OR semaphore at cap with parked callers.
+        // enabled) OR drain-lag consecutive-window threshold crossed
+        // (when enabled) OR semaphore at cap with parked callers.
         if (acc.DispatchTimeoutDeltaInWindow >= dispatchThreshold
             || (providerFailureThreshold > 0 && acc.ProviderFailureDeltaInWindow >= providerFailureThreshold)
             || (flushLatencySampleWindows > 0 && flushLatencyConsecutiveWindows >= flushLatencySampleWindows)
+            || (drainLagSampleWindows > 0 && drainLagConsecutiveWindows >= drainLagSampleWindows)
             || acc.HasParkedCallers)
         {
             return WalSaturationState.Saturated;
@@ -555,6 +641,7 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
         public long DispatchTimeoutDeltaInWindow;
         public long ProviderFailureDeltaInWindow;
         public long FlushLatencyTripDeltaInWindow;
+        public long MaterialiserDrainLagDeltaInWindow;
         public int? AttributedPartition;
         public int? AttributedShard;
     }

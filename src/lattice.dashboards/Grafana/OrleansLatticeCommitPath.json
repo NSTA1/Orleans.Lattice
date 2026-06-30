@@ -664,6 +664,33 @@
         { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_shard_root_reshard_in_flight_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95" },
         { "refId": "C", "expr": "histogram_quantile(1.0, sum by (le) (rate(orleans_lattice_shard_root_reshard_in_flight_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "max" }
       ]
+    },
+    {
+      "id": 124,
+      "title": "Leaf-materialiser durable pin path (rate) - issue #1030",
+      "description": "Health of the durable leaf-materialiser pin store (issue #1030 fan-in hotspot fix). durable_writes by outcome (birth = synchronous through-write at leaf birth; coalesced = debounced flush draining advancing reports) - a coalesced rate far below the activation_replays rate confirms write coalescing is collapsing the report burst. activation_replays is the per-silo leaf reactivation rate; cursor_publish_failures should stay flat-zero (a non-zero rate signals reactivation-storm pressure).",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 142 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (outcome) (rate(orleans_lattice_materialiser_pin_durable_writes_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "pin writes {{outcome}}/s" },
+        { "refId": "B", "expr": "sum by (tree) (rate(orleans_lattice_leaf_activation_replays_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "activation replays {{tree}}/s" },
+        { "refId": "C", "expr": "sum (rate(orleans_lattice_leaf_activation_cursor_publish_failures_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "cursor publish failures/s" }
+      ]
+    },
+    {
+      "id": 125,
+      "title": "Leaf-materialiser drain lag p50/p95 (ms) - issue #1030 back-pressure",
+      "description": "Distribution of leaf-materialiser drain lag (orleans.lattice.materialiser.drain_lag), sampled by each per-tree WAL GC pass as now minus the slowest durable materialiser checkpoint. This is the drain-lag back-pressure signal: when it exceeds WalSaturationMaterialiserLagThreshold for WalSaturationMaterialiserLagSampleWindows consecutive passes the tree escalates to Saturated and the writer admission gate plus replication flow control throttle. A sustained climb here is the early warning the wedge is forming.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 142 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le, tree) (rate(orleans_lattice_materialiser_drain_lag_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50 {{tree}}" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le, tree) (rate(orleans_lattice_materialiser_drain_lag_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 {{tree}}" }
+      ]
     }
   ]
 }
