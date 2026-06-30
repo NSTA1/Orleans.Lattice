@@ -88,7 +88,18 @@ public partial class PublicReplicationApiContractTests
                 report = await gc.RunOnceAsync(treeId);
                 return report.MinCursor is not null;
             },
-            "GC run to observe a non-null MinCursor after the leaf checkpoints");
+            "GC run to observe a non-null MinCursor after the leaf checkpoints",
+            // This probe is far heavier than the simple convergence probes the
+            // shared 40 s ceiling is sized for: every poll iteration force-
+            // deactivates each data leaf, reactivates one with a read (driving a
+            // full WAL-replay checkpoint flush), and runs a complete GC pass over
+            // the tree. On a contended CI runner a single iteration's worth of
+            // grain RPCs can already approach the shared ceiling, so a healthy
+            // run was observed to time out at 40 s (2026-06-30). Give this one
+            // call site explicit headroom - a genuinely stuck block-pin stays
+            // null and still fails at the larger deadline, so it cannot mask a
+            // real regression.
+            timeout: TimeSpan.FromSeconds(90));
 
         Assert.That(report.MinCursor, Is.Not.Null);
         Assert.That(report.MinCursor!.Value.CompareTo(HybridLogicalClock.Zero), Is.GreaterThanOrEqualTo(0));
