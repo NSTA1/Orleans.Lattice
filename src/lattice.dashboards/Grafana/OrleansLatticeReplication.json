@@ -840,7 +840,7 @@
     {
       "id": 26,
       "title": "Effective ship batch size (adaptive)",
-      "description": "Per-tick outbound batch cap the shipper actually used, distribution p50/p95/p99. With adaptive sizing off (AdaptiveBatchSizingEnabled=false, the default) this sits flat at the configured ShipBatchSize; with it on, the AIMD controller raises it toward ShipBatchSize on a healthy link and backs it off on rising ack latency or send errors. The receiver flow-control hint is always the hard ceiling.",
+      "description": "Per-tick outbound batch cap the shipper actually used, distribution p50/p95/p99. With adaptive sizing on (AdaptiveBatchSizingEnabled=true, the default) the AIMD controller keeps it at the configured ShipBatchSize on a healthy link and backs it off on rising ack latency or send errors, so a sustained dip flags a degraded peer or repeated apply failures; with it off it sits flat at ShipBatchSize. The receiver flow-control hint is always the hard ceiling.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 56 },

@@ -833,8 +833,8 @@ public class LatticeReplicationOptionsTests
     // ------------------------------------------------------------------
 
     [Test]
-    public void DefaultAdaptiveBatchSizingEnabled_is_false() =>
-        Assert.That(LatticeReplicationOptions.DefaultAdaptiveBatchSizingEnabled, Is.False);
+    public void DefaultAdaptiveBatchSizingEnabled_is_true() =>
+        Assert.That(LatticeReplicationOptions.DefaultAdaptiveBatchSizingEnabled, Is.True);
 
     [Test]
     public void DefaultAdaptiveBatchIncrement_is_eight() =>
@@ -853,11 +853,11 @@ public class LatticeReplicationOptionsTests
         Assert.That(LatticeReplicationOptions.DefaultAdaptiveBatchWindowLength, Is.EqualTo(16));
 
     [Test]
-    public void New_instance_has_adaptive_batch_sizing_disabled_by_default()
+    public void New_instance_has_adaptive_batch_sizing_enabled_by_default()
     {
         var opts = new LatticeReplicationOptions();
         Assert.That(opts.AdaptiveBatchSizingEnabled, Is.EqualTo(LatticeReplicationOptions.DefaultAdaptiveBatchSizingEnabled));
-        Assert.That(opts.AdaptiveBatchSizingEnabled, Is.False);
+        Assert.That(opts.AdaptiveBatchSizingEnabled, Is.True);
     }
 
     [Test]
@@ -891,8 +891,8 @@ public class LatticeReplicationOptionsTests
     [Test]
     public void AdaptiveBatchSizingEnabled_is_settable()
     {
-        var opts = new LatticeReplicationOptions { AdaptiveBatchSizingEnabled = true };
-        Assert.That(opts.AdaptiveBatchSizingEnabled, Is.True);
+        var opts = new LatticeReplicationOptions { AdaptiveBatchSizingEnabled = false };
+        Assert.That(opts.AdaptiveBatchSizingEnabled, Is.False);
     }
 
     [Test]
