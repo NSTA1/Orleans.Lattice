@@ -11,6 +11,18 @@ The state API is a read-only surface, but read-only is not the same as public. T
 
 `AddLatticeStateApiGrpc` registers `DenyAllStateApiAuthorizer` via `TryAddSingleton`, so a custom authorizer registered before or after it wins.
 
+The seam describes each call faithfully: the `LatticeStateApiAuthorizationContext` carries the specific `LatticeStateApiOperation` (every RPC maps to its own member) and the `TargetTreeId` the call acts on, so a policy can scope by operation and by tree. A method the binding does not recognise maps to `LatticeStateApiOperation.Unknown` rather than a benign default, so a deny-by-default policy refuses anything unmapped instead of letting it pass as a catalog read.
+
+### Turnkey credential authorizer
+
+`AddEnvVarCredentialAuthorizer` registers a reference `EnvVarCredentialAuthorizer` that validates an inbound `authorization: Basic base64(user:pass)` header against environment-variable-backed PBKDF2-SHA256 password hashes, with a per-username failed-attempt lockout. Because it reads a `Basic` credential off the wire, it **must run behind TLS** - terminate TLS at the channel (or an outer boundary) so the credential is never sent in clear text. It is an authentication front door, not a per-tree authorization policy: it does not consult the call's operation or target tree.
+
+## Visibility boundaries
+
+Silo-internal **system trees** (the reserved `_lattice_*` prefix) are hidden from every public surface. The read facade refuses them (`GetEntry`, `ScanEntries`, `GetTreeStructure`, `GetEntryHistory`) and the change feed (`ObserveChanges`) refuses a subscription to one, so internal WAL keys, change kinds, and HLC timestamps never leak through the API. Materialised-view (`view-*`) trees stay readable and observable, mirroring the read paths.
+
+`CatalogRequest.IncludeSystemTrees` is an **operator-convenience filter, not a security boundary**: it only adds reserved trees to a `ListTrees` catalog listing for diagnostics. It does not unlock reading or observing their contents - those paths reject system trees regardless of the flag - and it must not be relied on to gate access.
+
 ## Default-deny posture
 
 With `AddLatticeStateApiGrpc` and nothing else, `LatticeStateApiGrpcOptions.RequireAuthorization` is at its default and the default-deny authorizer is in place, so the endpoint rejects all traffic. You open it one of two ways:

@@ -1,4 +1,5 @@
 using System.Text;
+using Orleans.Lattice.BPlusTree;
 
 namespace Orleans.Lattice.Api.State.Tests;
 
@@ -229,6 +230,27 @@ public class LatticeChangeObservationIntegrationTests
             using var cts = new CancellationTokenSource(Timeout);
             await foreach (var _ in _fixture.Observer.ObserveAsync(
                 new StateObserveRequest { TreeId = $"missing-{Guid.NewGuid():N}" }, cts.Token))
+            {
+                break;
+            }
+        });
+    }
+
+    [Test]
+    public void observing_a_system_tree_throws_not_found()
+    {
+        // The change feed must enforce the same visibility boundary as the read
+        // facade: silo-internal "_lattice_*" system trees are hidden, so a
+        // subscription to one is refused with the not-found contract rather than
+        // streaming an internal tree's WAL keys and HLC timestamps. The tree need
+        // not even exist - the prefix guard short-circuits before any lookup.
+        var systemTreeId = $"{LatticeConstants.SystemTreePrefix}wal-internal";
+
+        Assert.ThrowsAsync<KeyNotFoundException>(async () =>
+        {
+            using var cts = new CancellationTokenSource(Timeout);
+            await foreach (var _ in _fixture.Observer.ObserveAsync(
+                new StateObserveRequest { TreeId = systemTreeId }, cts.Token))
             {
                 break;
             }

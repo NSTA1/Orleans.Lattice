@@ -47,6 +47,20 @@ internal sealed class LatticeStateObserver(
         ArgumentNullException.ThrowIfNull(request);
         ArgumentException.ThrowIfNullOrEmpty(request.TreeId);
 
+        // Match the read facade's visibility boundary: silo-internal system
+        // trees (the "_lattice_*" prefix) are hidden from every public read
+        // surface - GetEntry / ScanEntries / GetTreeStructure / GetEntryHistory
+        // all refuse them. The change feed must refuse them too; otherwise an
+        // authorised caller could subscribe to an internal tree's write-ahead
+        // log and observe its keys, change kinds, and HLC timestamps - the same
+        // internal structure the rest of the surface deliberately hides.
+        // Materialised-view ("view-*") trees stay observable, mirroring the
+        // reads, which admit them read-only.
+        if (IsSystemTree(request.TreeId))
+        {
+            throw new KeyNotFoundException($"Tree '{request.TreeId}' was not found.");
+        }
+
         var tree = _grainFactory.GetGrain<ILattice>(request.TreeId);
         if (!await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -122,6 +136,15 @@ internal sealed class LatticeStateObserver(
             }
         }
     }
+
+    /// <summary>
+    /// Tests whether <paramref name="treeId"/> names a silo-internal system tree
+    /// (the reserved <see cref="LatticeConstants.SystemTreePrefix"/>). System
+    /// trees are hidden from every public state-API surface, including the
+    /// change feed.
+    /// </summary>
+    private static bool IsSystemTree(string treeId) =>
+        treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal);
 
     private async Task<long[]> SeedCursorAsync(
         string physicalTreeId,
