@@ -1832,6 +1832,38 @@ internal sealed partial class ShardRootGrain(
         }
     }
 
+    // Terminate a forward paged range-scan sibling walk as soon as it provably
+    // leaves the [startInclusive, endExclusive) range. A leaf owns exactly
+    // [LowKeyInclusive, HighKeyExclusive), and HighKeyExclusive equals the next
+    // sibling's LowKeyInclusive, so once the current leaf's HighKeyExclusive is
+    // at/after endExclusive every subsequent leaf is entirely out of range and
+    // need not be read. Bounds are predicate-independent, so unlike an empty
+    // result this is a safe stop signal even when a predicate filtered every
+    // in-range row on a leaf (issue 1046). A null bound (outermost leaf, or
+    // legacy state that pre-dates the slot) means "no constraint" so the walk
+    // falls back to its prior end-of-tree behaviour.
+    private async Task<bool> ForwardWalkLeftRangeAsync(IBPlusLeafGrain leafGrain, string? endExclusive)
+    {
+        if (endExclusive is null)
+            return false;
+        var bounds = await leafGrain.GetKeyRangeAsync();
+        return bounds.HighKeyExclusive is not null
+            && string.CompareOrdinal(bounds.HighKeyExclusive, endExclusive) >= 0;
+    }
+
+    // Reverse counterpart of <see cref="ForwardWalkLeftRangeAsync"/>: a backward
+    // walk has left the range once the current leaf's LowKeyInclusive is
+    // at/before startInclusive, since every previous sibling holds only keys
+    // strictly below that bound (issue 1046).
+    private async Task<bool> ReverseWalkLeftRangeAsync(IBPlusLeafGrain leafGrain, string? startInclusive)
+    {
+        if (startInclusive is null)
+            return false;
+        var bounds = await leafGrain.GetKeyRangeAsync();
+        return bounds.LowKeyInclusive is not null
+            && string.CompareOrdinal(bounds.LowKeyInclusive, startInclusive) <= 0;
+    }
+
     public async Task<KeysPage> GetSortedKeysBatchAsync(
         string? startInclusive,
         string? endExclusive,
@@ -1888,6 +1920,14 @@ internal sealed partial class ShardRootGrain(
 
             if (keys.Count >= pageSize)
                 break;
+
+            if (await ForwardWalkLeftRangeAsync(leafGrain, endExclusive))
+                return new KeysPage
+                {
+                    Keys = keys,
+                    HasMore = false,
+                    MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
+                };
 
             var nextSibling = await leafGrain.GetNextSiblingAsync();
             if (nextSibling is null)
@@ -1970,6 +2010,14 @@ internal sealed partial class ShardRootGrain(
             if (keys.Count >= pageSize)
                 break;
 
+            if (await ReverseWalkLeftRangeAsync(leafGrain, startInclusive))
+                return new KeysPage
+                {
+                    Keys = keys,
+                    HasMore = false,
+                    MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
+                };
+
             var prevSibling = await leafGrain.GetPrevSiblingAsync();
             if (prevSibling is null)
                 return new KeysPage
@@ -2046,6 +2094,14 @@ internal sealed partial class ShardRootGrain(
 
             if (entries.Count >= pageSize)
                 break;
+
+            if (await ForwardWalkLeftRangeAsync(leafGrain, endExclusive))
+                return new EntriesPage
+                {
+                    Entries = entries,
+                    HasMore = false,
+                    MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
+                };
 
             var nextSibling = await leafGrain.GetNextSiblingAsync();
             if (nextSibling is null)
@@ -2124,6 +2180,14 @@ internal sealed partial class ShardRootGrain(
             if (entries.Count >= pageSize)
                 break;
 
+            if (await ReverseWalkLeftRangeAsync(leafGrain, startInclusive))
+                return new EntriesPage
+                {
+                    Entries = entries,
+                    HasMore = false,
+                    MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
+                };
+
             var prevSibling = await leafGrain.GetPrevSiblingAsync();
             if (prevSibling is null)
                 return new EntriesPage
@@ -2200,6 +2264,9 @@ internal sealed partial class ShardRootGrain(
 
             if (keys.Count >= pageSize) break;
 
+            if (await ForwardWalkLeftRangeAsync(leafGrain, endExclusive))
+                return new KeysPage { Keys = keys, HasMore = false };
+
             var nextSibling = await leafGrain.GetNextSiblingAsync();
             if (nextSibling is null)
                 return new KeysPage { Keys = keys, HasMore = false };
@@ -2265,6 +2332,9 @@ internal sealed partial class ShardRootGrain(
             }
 
             if (entries.Count >= pageSize) break;
+
+            if (await ForwardWalkLeftRangeAsync(leafGrain, endExclusive))
+                return new EntriesPage { Entries = entries, HasMore = false };
 
             var nextSibling = await leafGrain.GetNextSiblingAsync();
             if (nextSibling is null)
