@@ -82,6 +82,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`MaxConcurrentAutoSplits`](#maxconcurrentautosplits) | `int` | 2 | Yes |
 | [`MaxConcurrentDrains`](#maxconcurrentdrains) | `int` | 4 | Yes |
 | [`MaxConcurrentMigrations`](#maxconcurrentmigrations) | `int` | 4 | Yes |
+| [`MaxConcurrentSnapshotCaptures`](#maxconcurrentsnapshotcaptures) | `int` | 4 | Yes |
 | [`MaxCursorSnapshotPinTtl`](#maxcursorsnapshotpinttl) | `TimeSpan` | 7 days | Yes |
 | [`MaxKeyLength`](#maxkeylength) | `int?` | `null` (unbounded) | Yes |
 | [`MaxLeafEntriesBeforeForcedCompaction`](tombstone-compaction.md) | `int` | 0 (disabled) | Yes |
@@ -339,6 +340,12 @@ This option can be changed freely at any time.
 Maximum number of concurrent active-tombstone migrations per tree (default: 4). Helps limit the burst I/O load during bulk-deletes. Each migration drains a tombstone's shadow-write in the background.
 
 This option can be changed freely at any time.
+
+### `MaxConcurrentSnapshotCaptures`
+
+Maximum number of shard roots that opening a snapshot-isolated (point-in-time) cursor may block on their per-shard baseline capture at once (default: 4). Opening such a cursor freezes a baseline on every physical shard root; each capture walks that shard's whole leaf chain and materialises its rows on the shard root's non-reentrant turn, so fanning the capture out to every shard simultaneously blocks every shard root at once - starving cross-cluster replication applies and reads queued on those same roots. Bounding the fan-out keeps all but this many shard roots free while the open proceeds in waves. Lower values reduce the per-open blast radius at the cost of a longer open; higher values open faster but block more shard roots at once. The captured baseline and its point-in-time consistency are identical under any cap - only the dispatch schedule changes. Values below 1 are clamped to 1.
+
+This option can be changed freely at any time; a new value applies to the next snapshot-cursor open.
 
 ### `MaxCursorSnapshotPinTtl`
 

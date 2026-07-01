@@ -205,14 +205,24 @@ internal sealed partial class LatticeGrain
         // bug this fixes). Per-shard ShardActivationRetry wrap: a single
         // shard's cold-start seed-timeout retries only that shard, not the
         // whole fan-out.
+        //
+        // The fan-out is bounded to MaxConcurrentSnapshotCaptures shards at a
+        // time (via captureGate). Each capture blocks its shard root's
+        // non-reentrant turn for the full leaf walk, so an unbounded fan-out
+        // across a wide tree blocks every shard root at once, starving
+        // replication applies and reads queued on those same roots. Bounding
+        // it keeps all but the in-flight shards free; the captured baseline
+        // and its point-in-time consistency are unchanged - only the dispatch
+        // schedule differs (see issue #1054).
         var baselineToken = Guid.NewGuid();
+        var captureConcurrency = Math.Max(1, Options.MaxConcurrentSnapshotCaptures);
+        using var captureGate = new SemaphoreSlim(captureConcurrency);
         var captureTasks = new Task<SnapshotBaselineCaptureResult>[physicalShards.Count];
         for (var i = 0; i < physicalShards.Count; i++)
         {
             var shard = GetShardGrainByIndex(physicalTreeId, physicalShards[i]);
-            captureTasks[i] = ShardActivationRetry.RunAsync(
-                () => shard.CaptureSnapshotBaselineAsync(baselineToken, cancellationToken),
-                cancellationToken);
+            captureTasks[i] = CaptureShardBaselineGatedAsync(
+                shard, baselineToken, captureGate, cancellationToken);
         }
         await Task.WhenAll(captureTasks);
         cancellationToken.ThrowIfCancellationRequested();
@@ -291,6 +301,35 @@ internal sealed partial class LatticeGrain
             Predicate = predicate,
         }, coordinate);
         return cursorId;
+    }
+
+    /// <summary>
+    /// Captures one shard's snapshot baseline while holding a slot in
+    /// <paramref name="gate"/>, so no more than
+    /// <see cref="LatticeOptions.MaxConcurrentSnapshotCaptures"/> shard roots
+    /// are blocked on <see cref="IShardRootGrain.CaptureSnapshotBaselineAsync"/>
+    /// at once. The per-shard <see cref="ShardActivationRetry"/> wrap is
+    /// preserved so a single shard's cold-start seed-timeout retries only that
+    /// shard. The slot is released once the capture completes (or throws) so
+    /// the remaining queued captures can drain their waits.
+    /// </summary>
+    private static async Task<SnapshotBaselineCaptureResult> CaptureShardBaselineGatedAsync(
+        IShardRootGrain shard,
+        Guid baselineToken,
+        SemaphoreSlim gate,
+        CancellationToken cancellationToken)
+    {
+        await gate.WaitAsync(cancellationToken);
+        try
+        {
+            return await ShardActivationRetry.RunAsync(
+                () => shard.CaptureSnapshotBaselineAsync(baselineToken, cancellationToken),
+                cancellationToken);
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     /// <summary>

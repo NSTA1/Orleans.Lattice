@@ -42,7 +42,13 @@ returning the cursor ID:
    durably at capture - see [Lazy baseline persistence](#lazy-baseline-persistence)
    below. The uniform `capturedHead` (each shard's per-partition WAL
    head, read after every leaf has frozen) is the bound recorded on the
-   coordinate.
+   coordinate. To avoid blocking every shard root at once (each capture
+   runs on the shard root's non-reentrant turn, contending with
+   replication applies and reads), the fan-out is bounded to
+   [`LatticeOptions.MaxConcurrentSnapshotCaptures`](configuration.md#maxconcurrentsnapshotcaptures)
+   shard captures at a time (default 4); the open then proceeds in waves.
+   The captured baseline is identical under any cap - only the dispatch
+   schedule changes.
 3. **Registry HLC capture.** The current `IWalCursorRegistry` snapshot
    HLC pins the WAL retention floor.
 
