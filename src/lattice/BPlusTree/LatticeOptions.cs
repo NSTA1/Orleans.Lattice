@@ -385,6 +385,28 @@ public class LatticeOptions
     public const int DefaultMaxConcurrentDrains = 4;
 
     /// <summary>
+    /// Maximum number of parallel per-shard baseline captures that opening a
+    /// snapshot-isolated (point-in-time) cursor may dispatch concurrently.
+    /// Opening such a cursor freezes a per-shard baseline on every physical
+    /// shard root; each capture walks that shard's whole leaf chain and
+    /// materialises its rows on the shard root's non-reentrant turn. Fanning
+    /// the capture out to every shard at once therefore blocks every shard
+    /// root simultaneously, starving replication applies and reads queued on
+    /// those same shard roots. Bounding the fan-out keeps all but
+    /// <see cref="MaxConcurrentSnapshotCaptures"/> shard roots free to serve
+    /// other work while the open proceeds in waves. Lower values reduce the
+    /// per-open blast radius at the cost of a longer open; higher values open
+    /// faster but block more shard roots at once. The captured baseline and
+    /// its point-in-time consistency are identical under any cap - only the
+    /// dispatch schedule changes. Must be at least 1; values below 1 are
+    /// clamped to 1 at the open site.
+    /// </summary>
+    public int MaxConcurrentSnapshotCaptures { get; set; } = DefaultMaxConcurrentSnapshotCaptures;
+
+    /// <summary>Default value for <see cref="MaxConcurrentSnapshotCaptures"/> (4).</summary>
+    public const int DefaultMaxConcurrentSnapshotCaptures = 4;
+
+    /// <summary>
     /// Maximum number of moved-slot entries the split coordinator accumulates
     /// in a single <see cref="IShardRootGrain.MergeManyAsync"/> call to the
     /// target shard during drain. Larger values reduce per-call overhead;
