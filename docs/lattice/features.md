@@ -171,7 +171,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 
 ### Planned / open
 
-_None currently tracked._
+- [FX-074](https://github.com/NSTA1/Orleans.Lattice/issues/1067) - WAL saturation-state gauge leaves stale elevated series (redundant state label) so dashboards show trees as saturated long after load stops
 
 ### Shipped
 

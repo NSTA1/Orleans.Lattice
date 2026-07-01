@@ -1,3 +1,4 @@
+using System.Diagnostics.Metrics;
 using Orleans.Lattice.BPlusTree.Grains;
 
 namespace Orleans.Lattice.Tests;
@@ -175,5 +176,91 @@ public class WalSaturationSignalTests
         Assert.That(waitA.Wait(TimeSpan.FromSeconds(2)), Is.True);
         Assert.That(waitB.IsCompleted, Is.False,
             "recovering tree A must not complete a wait registered against tree B");
+    }
+
+    [Test]
+    public void StateGauge_emits_one_series_per_tree_with_no_state_label()
+    {
+        var signal = new WalSaturationSignal();
+        signal.ResetForTesting();
+        var tree = "gauge-tree-" + Guid.NewGuid().ToString("N");
+        signal.UpdateState(tree, WalSaturationState.Saturated);
+
+        using var capture = new GaugeCapture();
+        var measurements = capture.RecordFor(tree);
+
+        Assert.That(measurements, Has.Count.EqualTo(1),
+            "the gauge must publish exactly one series per tree");
+        var only = measurements[0];
+        Assert.That(only.Value, Is.EqualTo((long)WalSaturationState.Saturated));
+        Assert.That(only.Tags.Any(t => t.Key == LatticeMetrics.TagWalSaturationState), Is.False,
+            "the gauge must not carry the redundant state label - the ordinal value already encodes the regime, and the label fragments the series across transitions");
+        Assert.That(only.Tags.Any(t => t.Key == LatticeMetrics.TagTree && (string?)t.Value == tree), Is.True,
+            "the gauge series is identified by the tree tag alone");
+    }
+
+    [Test]
+    public void StateGauge_reflects_latest_value_after_recovery_without_leaving_stale_series()
+    {
+        var signal = new WalSaturationSignal();
+        signal.ResetForTesting();
+        var tree = "gauge-recover-" + Guid.NewGuid().ToString("N");
+
+        signal.UpdateState(tree, WalSaturationState.Saturated);
+        signal.UpdateState(tree, WalSaturationState.Healthy);
+
+        using var capture = new GaugeCapture();
+        var measurements = capture.RecordFor(tree);
+
+        // Because the series identity never changes across transitions
+        // (no state label), a recovered tree collapses to a single
+        // Healthy series rather than leaving an orphaned Saturated one
+        // lingering at its last value.
+        Assert.That(measurements, Has.Count.EqualTo(1),
+            "a recovered tree must not leave a second, stale elevated series behind");
+        Assert.That(measurements[0].Value, Is.EqualTo((long)WalSaturationState.Healthy),
+            "the single series must report the current (recovered) regime");
+    }
+
+    /// <summary>
+    /// Records the process-wide WAL saturation-state observable gauge on
+    /// demand. The gauge reads the most-recently-constructed
+    /// <see cref="WalSaturationSignal"/> (<c>_current</c>), which the
+    /// caller has just constructed, so scoping the returned measurements
+    /// to a unique tree id isolates them from any residual series.
+    /// </summary>
+    private sealed class GaugeCapture : IDisposable
+    {
+        private readonly MeterListener _listener;
+        private readonly List<(long Value, KeyValuePair<string, object?>[] Tags)> _records = new();
+
+        public GaugeCapture()
+        {
+            _listener = new MeterListener
+            {
+                InstrumentPublished = (inst, l) =>
+                {
+                    if (ReferenceEquals(inst.Meter, LatticeMetrics.Meter)
+                        && inst.Name == LatticeMetrics.WalSaturationStateGaugeName)
+                    {
+                        l.EnableMeasurementEvents(inst);
+                    }
+                },
+            };
+            _listener.SetMeasurementEventCallback<long>(
+                (_, value, tags, _) => _records.Add((value, tags.ToArray())));
+            _listener.Start();
+        }
+
+        public List<(long Value, KeyValuePair<string, object?>[] Tags)> RecordFor(string tree)
+        {
+            _records.Clear();
+            _listener.RecordObservableInstruments();
+            return _records
+                .Where(r => r.Tags.Any(t => t.Key == LatticeMetrics.TagTree && (string?)t.Value == tree))
+                .ToList();
+        }
+
+        public void Dispose() => _listener.Dispose();
     }
 }
