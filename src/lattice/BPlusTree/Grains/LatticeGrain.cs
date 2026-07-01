@@ -260,6 +260,27 @@ internal sealed partial class LatticeGrain(
         return _lifetime;
     }
 
+    private IWalSaturationSignal? _saturationSignal;
+    private bool _saturationSignalResolved;
+
+    /// <summary>
+    /// Resolves the optional <see cref="IWalSaturationSignal"/> from the
+    /// activation's service provider. Cached after first lookup. Returns
+    /// <see langword="null"/> on non-hosted test activations (which do not
+    /// register the signal), in which case snapshot-open admission control
+    /// (<see cref="LatticeOptions.ShedSnapshotOpensWhenSaturated"/>) is a no-op.
+    /// Mirrors <see cref="ResolveLifetime"/> and the atomic-write saga's lazy
+    /// signal resolve. The cached instance reads the current regime live, so a
+    /// later transition is observed without re-resolving.
+    /// </summary>
+    private IWalSaturationSignal? ResolveSaturationSignal()
+    {
+        if (_saturationSignalResolved) return _saturationSignal;
+        _saturationSignalResolved = true;
+        _saturationSignal = services.GetService<IWalSaturationSignal>();
+        return _saturationSignal;
+    }
+
     /// <summary>
     /// Fast-fails a public write entry point with
     /// <see cref="LatticeShuttingDownException"/> when the host has begun

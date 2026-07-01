@@ -105,7 +105,9 @@ do
 while (continuation is not null);
 ```
 
-`GetEntryAsync` returns the full record for a single key as an `EntryGetResponse`, including whether the key was found and the value when present.
+Because the scan opens a snapshot-isolated cursor, its per-shard baseline capture is heavier than a single read. When the target tree is WAL-saturated (writes are being back-pressured), the server sheds the open at admission rather than piling that capture onto shard roots that are already collapsing: `ScanEntriesAsync` then fails with gRPC status `ResourceExhausted` and no cursor is created. This is a transient, retryable back-pressure signal (mapped from the core `LatticeSaturatedException` and gated by [`LatticeOptions.ShedSnapshotOpensWhenSaturated`](../lattice/configuration.md#shedsnapshotopenswhensaturated), on by default) - back off briefly and retry once the tree drains. The Explorer surfaces it as a plain "this table is very busy, try again" notice and leaves the rest of the connection usable.
+
+GetEntryAsync returns the full record for a single key as an EntryGetResponse, including whether the key was found and the value when present.
 
 Every `EntryRecord` carries a `CrdtShape` tag: the name of the tree's declared CRDT merge mode (for example `"OrSet"`) when the tree is a typed CRDT, or `null` for an opaque last-writer-wins tree. The shape is the same for every entry on a tree because the merge mode is declared per tree, so a consumer can tell a CRDT entry apart from opaque bytes without decoding the value.
 

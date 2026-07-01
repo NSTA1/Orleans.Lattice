@@ -99,6 +99,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`QueueCapacity`](queues.md) | `int?` | `null` (unbounded) | Yes |
 | [`RetryPolicy`](retry-policy.md) | `ILatticeRetryPolicy?` | `null` (no retry) | Yes |
 | [`ShardForwardTimeout`](#shardforwardtimeout) | `TimeSpan` | 15 seconds | Yes (on next forward) |
+| [`ShedSnapshotOpensWhenSaturated`](#shedsnapshotopenswhensaturated) | `bool` | `true` | Yes |
 | [`SnapshotBaselineTtl`](snapshot-cursors.md#baseline-ttl-leak-guard) | `TimeSpan` | 6 hours | Yes |
 | [`SnapshotLeafIdleTtl`](snapshot-cursors.md) | `TimeSpan` | 30 minutes | Yes |
 | [`SoftDeleteDuration`](#softdeleteduration) | `TimeSpan` | 72 hours | Yes |
@@ -344,6 +345,12 @@ This option can be changed freely at any time.
 ### `MaxConcurrentSnapshotCaptures`
 
 Maximum number of shard roots that opening a snapshot-isolated (point-in-time) cursor may block on their per-shard baseline capture at once (default: 4). Opening such a cursor freezes a baseline on every physical shard root; each capture walks that shard's whole leaf chain and materialises its rows on the shard root's non-reentrant turn, so fanning the capture out to every shard simultaneously blocks every shard root at once - starving cross-cluster replication applies and reads queued on those same roots. Bounding the fan-out keeps all but this many shard roots free while the open proceeds in waves. Lower values reduce the per-open blast radius at the cost of a longer open; higher values open faster but block more shard roots at once. The captured baseline and its point-in-time consistency are identical under any cap - only the dispatch schedule changes. Values below 1 are clamped to 1.
+
+This option can be changed freely at any time; a new value applies to the next snapshot-cursor open.
+
+### `ShedSnapshotOpensWhenSaturated`
+
+Whether opening a snapshot-isolated (point-in-time) cursor is shed fast with a retryable `LatticeSaturatedException` when the tree's per-silo WAL saturation signal reports `Saturated` at the moment of the open, before the per-shard baseline capture is fanned out (default: `true`). A snapshot open freezes and materialises every shard's leaf chain on the non-reentrant shard roots - heavier than a single write - so admitting one into an already-saturated tree piles that work onto roots collapsing under write back-pressure, starving replication applies and reads queued on the same roots, and a client that retries on the resulting timeout sustains a scan storm. With the option enabled the open is refused at admission: the caller receives a typed, retryable back-pressure error and the fan-out never starts. Only `Saturated` (the "pause new appends" regime) sheds; a `Throttled` tree is unaffected and stays browsable, mirroring the atomic-write saga's quiesce gate. Over the state-API / Explorer surface the refusal is mapped to gRPC `ResourceExhausted` and the Explorer surfaces a plain "this table is very busy, try again" message rather than the raw fault. Set to `false` to restore the prior behaviour where a snapshot open always proceeds regardless of the saturation regime. See [Snapshot Cursors](snapshot-cursors.md).
 
 This option can be changed freely at any time; a new value applies to the next snapshot-cursor open.
 

@@ -168,6 +168,14 @@ shard's baseline exceeds this budget,
 `LatticeSnapshotReplayBudgetExceededException` and no snapshot leaf is
 materialised.
 
+## Admission control under saturation
+
+A snapshot open is heavier than a single write: it freezes and materialises every shard's leaf chain on the non-reentrant shard roots. Admitting one into a tree that is already WAL-saturated piles that work onto roots collapsing under write back-pressure, starving replication applies and reads queued on the same roots, and a client that retries on the resulting timeout sustains a scan storm.
+
+To prevent that, when [`LatticeOptions.ShedSnapshotOpensWhenSaturated`](configuration.md#shedsnapshotopenswhensaturated) is enabled (the default) and the tree's per-silo WAL saturation signal reports `Saturated` at the moment of the open, `OpenSnapshot*CursorAsync` sheds the open at admission - before any per-shard baseline capture is fanned out - by throwing a retryable [`LatticeSaturatedException`](../../src/lattice/LatticeSaturatedException.cs) carrying the tree id. Only `Saturated` (the "pause new appends" regime) sheds; a `Throttled` tree is unaffected and stays browsable. The caller contract is the same as every other `LatticeSaturatedException` source: back off briefly and retry once the tree drains.
+
+Over the read-only state API this refusal is mapped to gRPC `ResourceExhausted`; the Explorer catches that code, leaves the connection connected (other trees stay browsable), does not auto-retry (which would amplify the storm), and shows a plain, non-expert "this table is very busy right now, try again in a few seconds" message with a **Try again** action. Set the option to `false` to restore the prior always-open behaviour.
+
 ## Observability
 
 | Instrument | Kind | Tags | Description |

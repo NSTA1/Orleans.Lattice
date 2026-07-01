@@ -156,4 +156,48 @@ public partial class LatticeStateConnectionTests
         await Task.CompletedTask;
         yield return new TreeMetricsSnapshot();
     }
+
+    [Test]
+    public async Task BusyScan_ResourceExhausted_SurfacesFriendlyError_WithoutRetryOrFault()
+    {
+        // A saturated tree sheds a snapshot-cursor open (issue #1053), which the
+        // state API maps to gRPC ResourceExhausted. The Explorer must NOT auto-
+        // retry it (retrying re-issues the expensive open and amplifies the
+        // storm the shed exists to stop), must NOT fault the whole connection
+        // (other trees stay browsable), and must surface a non-expert message
+        // rather than the raw gRPC status code.
+        var attempts = 0;
+        var client = new FakeStateClient
+        {
+            ScanEntriesHandler = _ =>
+            {
+                attempts++;
+                throw new RpcException(new Status(StatusCode.ResourceExhausted, "tree 't' saturated"));
+            },
+        };
+        var (connection, _) = NewConnection(_ => client);
+        await connection.ConfigureAsync(Settings());
+
+        LatticeStateApiException? captured = null;
+        try
+        {
+            await connection.ScanEntriesAsync(new EntryScanRequest { TreeId = "t" });
+        }
+        catch (LatticeStateApiException ex)
+        {
+            captured = ex;
+        }
+
+        Assert.That(captured, Is.Not.Null);
+        Assert.That(attempts, Is.EqualTo(1),
+            "a saturation shed must not be auto-retried - retrying amplifies the storm the shed exists to stop");
+        Assert.That(connection.Status.State, Is.EqualTo(LatticeConnectionState.Connected),
+            "a per-tree busy shed must not fault the whole connection");
+        Assert.That(captured!.IsTransient, Is.True,
+            "the error is user-retryable once the tree drains");
+        Assert.That(captured.Message, Does.Contain("busy"),
+            "the message must be a non-expert explanation");
+        Assert.That(captured.Message, Does.Not.Contain("ResourceExhausted"),
+            "the raw gRPC status code must not leak to the user");
+    }
 }

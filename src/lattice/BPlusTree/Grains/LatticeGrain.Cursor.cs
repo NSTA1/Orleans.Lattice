@@ -180,6 +180,31 @@ internal sealed partial class LatticeGrain
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
 
+        // Admission control (issue #1053): a snapshot open freezes and
+        // materialises every shard's leaf chain on the non-reentrant shard roots
+        // - heavier than a single write. When the tree is already WAL-saturated,
+        // fanning that capture out piles work onto roots collapsing under write
+        // back-pressure, starving replication applies and reads queued on those
+        // same roots and feeding a client-retry storm on the resulting timeout.
+        // Shed the open here - before GetRoutingAsync and the capture fan-out -
+        // with a typed, retryable back-pressure error, so a saturated tree
+        // refuses the expensive open cheaply instead of amplifying its own
+        // collapse. Only Saturated sheds (a Throttled tree is normal moderate
+        // load and stays browsable), mirroring the atomic-write saga's quiesce
+        // gate. Gated by the default-on ShedSnapshotOpensWhenSaturated option.
+        // The signal is silo-local and best-effort: on a non-hosted test
+        // activation it is absent and the check is a no-op.
+        if (Options.ShedSnapshotOpensWhenSaturated &&
+            ResolveSaturationSignal() is { } saturationSignal &&
+            saturationSignal.GetCurrentState(TreeId) == WalSaturationState.Saturated)
+        {
+            throw new LatticeSaturatedException(
+                $"Snapshot cursor open for tree '{TreeId}' refused: the tree is saturated " +
+                "(WAL back-pressure); the per-shard baseline capture was not started. " +
+                "Retry the open after backing off until the tree drains.",
+                TreeId);
+        }
+
         // Capture the routing map fresh from the registry (force-refresh)
         // rather than trusting this activation's cached map. A snapshot is a
         // frozen replay: unlike the live scan path it cannot dynamically

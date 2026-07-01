@@ -409,6 +409,18 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
         {
             throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
         }
+        catch (LatticeSaturatedException)
+        {
+            // The tree is WAL-saturated and shed the operation (e.g. a snapshot
+            // cursor open refused at admission, issue #1053). Map to the canonical
+            // gRPC "resource exhausted / busy, retry later" code so the client can
+            // back off and retry rather than treating it as a hard failure - and
+            // so it is never re-thrown as an opaque Internal 500. The user-facing
+            // wording stays non-expert; callers key off the ResourceExhausted code.
+            throw new RpcException(new Status(
+                StatusCode.ResourceExhausted,
+                "The requested tree is busy (storage back-pressure) and the operation was refused. Retry after a short backoff."));
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Api.State: gRPC call to {Method} failed.", context.Method);
