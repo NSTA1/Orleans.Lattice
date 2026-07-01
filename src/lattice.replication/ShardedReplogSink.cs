@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.Replication.Grains;
@@ -36,6 +37,24 @@ namespace Orleans.Lattice.Replication;
 /// doorbell only delays the affected peer by one timer tick (~200ms).
 /// </para>
 /// <para>
+/// <b>Writer-side coalescing.</b> A doorbell is an idempotent,
+/// edge-triggered "there is work" signal, so the sink collapses a burst
+/// of per-write rings for the same <c>(tree, peer)</c> into <b>at most
+/// one in-flight ring plus one pending follow-up</b>. A ring requested
+/// while one is already in flight sets a single pending flag instead of
+/// dispatching its own <see cref="IReplicationShipperGrain.OnDoorbellAsync"/>
+/// grain call, and the in-flight ring loop fires exactly one more ring
+/// once it drains - so the last write in a burst still wakes the shipper.
+/// This bounds the doorbell message rate the non-reentrant shipper
+/// activation sees to a small constant regardless of write throughput,
+/// preventing the activation's turn queue from blowing up, doorbell
+/// messages from being dropped as expired, and the keepalive reminder
+/// tick that drives shipping from being starved behind a backlog. The
+/// coalescing ratio is observable via
+/// <see cref="LatticeReplicationMetrics.DoorbellRung"/> and
+/// <see cref="LatticeReplicationMetrics.DoorbellCoalesced"/>.
+/// </para>
+/// <para>
 /// The peer list driving the doorbell fan-out is read from
 /// <see cref="IReplicationTopology.CurrentPeers"/>, not from
 /// <see cref="LatticeReplicationOptions.ReplicationPeers"/> directly.
@@ -59,6 +78,11 @@ internal sealed class ShardedReplogSink(
 {
     private readonly IReplicationTopology _topology =
         topology ?? throw new ArgumentNullException(nameof(topology));
+
+    // Per-(tree, peer) doorbell coalescers. Bounded by the number of
+    // (tree, peer) pairs this silo commits for, never by write volume.
+    private readonly ConcurrentDictionary<string, DoorbellCoalescer> _doorbells =
+        new(StringComparer.Ordinal);
 
     /// <inheritdoc />
     public Task WriteAsync(string treeId, CancellationToken cancellationToken)
@@ -88,7 +112,7 @@ internal sealed class ShardedReplogSink(
                     {
                         continue;
                     }
-                    _ = RingDoorbellAsync(doorbellTreeId, peer);
+                    RequestDoorbell(doorbellTreeId, peer);
                 }
             }
         }
@@ -97,23 +121,126 @@ internal sealed class ShardedReplogSink(
     }
 
     /// <summary>
-    /// Best-effort per-peer doorbell ring. Any failure (silo loss,
-    /// transient network fault, missing activation) is logged at
-    /// <c>Trace</c> level and swallowed so the producer-side commit
-    /// path never fails on a doorbell ring failure.
+    /// Requests a doorbell ring for a <c>(tree, peer)</c>, coalescing against
+    /// any ring already in flight. If no ring is running the caller starts the
+    /// ring loop; otherwise the request collapses into the single pending
+    /// follow-up and is counted as coalesced.
     /// </summary>
-    private async Task RingDoorbellAsync(string treeId, string peerClusterId)
+    private void RequestDoorbell(string treeId, string peerClusterId)
     {
-        try
+        var key = $"{treeId}/{peerClusterId}";
+        var coalescer = _doorbells.GetOrAdd(key, static _ => new DoorbellCoalescer());
+
+        if (coalescer.Request())
         {
-            var shipper = grainFactory.GetGrain<IReplicationShipperGrain>($"{treeId}/{peerClusterId}");
-            await shipper.OnDoorbellAsync(CancellationToken.None).ConfigureAwait(false);
+            // We transitioned idle -> in-flight, so we own the ring loop.
+            _ = RingLoopAsync(treeId, peerClusterId, coalescer);
         }
-        catch (Exception ex)
+        else
         {
-            logger.LogTrace(ex,
-                "Doorbell ring failed for shipper ({Tree}, {Peer})",
-                treeId, peerClusterId);
+            // A ring is already in flight; this request folded into the
+            // single pending follow-up rather than enqueuing its own
+            // grain call on the non-reentrant shipper activation.
+            LatticeReplicationMetrics.DoorbellCoalesced.Add(
+                1,
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeId),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peerClusterId));
+        }
+    }
+
+    /// <summary>
+    /// Drains the coalesced doorbell state for a <c>(tree, peer)</c>: rings the
+    /// shipper, then rings exactly once more if a request arrived while the ring
+    /// was in flight, and so on until no request is pending. At most one loop
+    /// runs per <c>(tree, peer)</c> at a time. Every ring failure (silo loss,
+    /// transient network fault, missing activation) is logged at <c>Trace</c>
+    /// and swallowed so the producer-side commit path never fails on a doorbell
+    /// ring failure.
+    /// </summary>
+    private async Task RingLoopAsync(string treeId, string peerClusterId, DoorbellCoalescer coalescer)
+    {
+        var shipper = grainFactory.GetGrain<IReplicationShipperGrain>($"{treeId}/{peerClusterId}");
+        while (true)
+        {
+            try
+            {
+                LatticeReplicationMetrics.DoorbellRung.Add(
+                    1,
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeId),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peerClusterId));
+                await shipper.OnDoorbellAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                logger.LogTrace(ex,
+                    "Doorbell ring failed for shipper ({Tree}, {Peer})",
+                    treeId, peerClusterId);
+            }
+
+            if (!coalescer.CompleteAndCheckPending())
+            {
+                // No request arrived during the ring; the loop is idle.
+                return;
+            }
+
+            // A request coalesced in while the ring was in flight; fire the
+            // single follow-up so the last write in a burst is not lost.
+        }
+    }
+
+    /// <summary>
+    /// Coalesces doorbell ring requests for one <c>(tree, peer)</c> into at most
+    /// one in-flight ring and one pending follow-up. Edge-triggered and
+    /// idempotent: an arbitrary number of requests during an in-flight ring
+    /// collapse to a single follow-up.
+    /// </summary>
+    private sealed class DoorbellCoalescer
+    {
+        private readonly object _gate = new();
+        private bool _inFlight;
+        private bool _pending;
+
+        /// <summary>
+        /// Records a ring request. Returns <see langword="true"/> when the
+        /// caller must start the ring loop (the state was idle); returns
+        /// <see langword="false"/> when a ring is already in flight and the
+        /// request was folded into the single pending follow-up.
+        /// </summary>
+        public bool Request()
+        {
+            lock (_gate)
+            {
+                if (_inFlight)
+                {
+                    _pending = true;
+                    return false;
+                }
+
+                _inFlight = true;
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// Called by the ring loop after a ring completes. Returns
+        /// <see langword="true"/> when a request coalesced in during the ring
+        /// (consume it and ring once more, staying in flight); returns
+        /// <see langword="false"/> when nothing is pending, clearing the
+        /// in-flight state so the next request starts a fresh loop.
+        /// </summary>
+        public bool CompleteAndCheckPending()
+        {
+            lock (_gate)
+            {
+                if (_pending)
+                {
+                    _pending = false;
+                    return true;
+                }
+
+                _inFlight = false;
+                return false;
+            }
         }
     }
 }

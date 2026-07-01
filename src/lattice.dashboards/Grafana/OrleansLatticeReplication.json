@@ -1454,6 +1454,47 @@
         { "refId": "A", "expr": "sum(rate(orleans_lattice_wal_shard_dispatch_entries_sum{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "appended (leaf WAL)" },
         { "refId": "S", "expr": "sum(rate(orleans_lattice_replication_wal_entries_shipped_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "shipped" }
       ]
+    },
+    {
+      "id": 61,
+      "title": "Shipper doorbell coalescing (rate)",
+      "description": "Rate of commit-time shipper-doorbell rings, split by whether each ring reached the shipper or was coalesced at the source. 'rung/s' (orleans.lattice.replication.doorbell.rung) counts rings actually dispatched to the non-reentrant shipper activation (the in-flight ring plus any trailing follow-up); 'coalesced/s' (orleans.lattice.replication.doorbell.coalesced) counts per-commit ring requests folded into the single pending follow-up because a ring for the same (tree, peer) was already in flight. Both fire when ShipDoorbellEnabled is true (the default). Under a sustained write burst 'coalesced/s' dominates while 'rung/s' stays near the small constant the shipper needs to stay awake - a high coalesced-to-rung ratio is the storm the coalescer is absorbing, keeping the shipper's turn queue from blowing up. A near-zero coalesced/s with rung/s tracking the commit rate means writes arrive slower than the shipper drains - no storm to absorb.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 162
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byFrameRefID", "options": "COALESCED" },
+            "properties": [
+              { "id": "custom.axisLabel", "value": "coalesced rings/s" }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "RUNG",
+          "expr": "sum by (tree, peer) (rate(orleans_lattice_replication_doorbell_rung_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
+          "legendFormat": "rung/s {{tree}}/{{peer}}"
+        },
+        {
+          "refId": "COALESCED",
+          "expr": "sum by (tree, peer) (rate(orleans_lattice_replication_doorbell_coalesced_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
+          "legendFormat": "coalesced/s {{tree}}/{{peer}}"
+        }
+      ]
     }
   ]
 }

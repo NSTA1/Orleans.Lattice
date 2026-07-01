@@ -130,6 +130,26 @@ jobs:
             echo "No package-scoped changes detected; testing all packages."
           fi
 
+          # Always test lattice.dashboards. The bundled Grafana dashboards chart
+          # metric instruments owned by OTHER packages' meters (the core
+          # `orleans.lattice` meter and the `orleans.lattice.replication` meter),
+          # and its drift guards in test/lattice.dashboards/DashboardJsonTests.cs
+          # assert BOTH directions: every live instrument is referenced by at
+          # least one panel, and every panel token resolves to a live instrument.
+          # Those guards must therefore run whenever any meter could have changed
+          # - e.g. adding a counter in src/lattice.replication/ - not only when a
+          # dashboards-owned file changes. Under the package-scoped matrix a new
+          # unpaneled counter in another package would otherwise never trip the
+          # guard (the dashboards suite is not in `matched`), which is exactly how
+          # such a gap can reach main. The suite is tiny and fast, so always
+          # including it costs negligibly while closing the cross-package hole.
+          if [ -d "test/lattice.dashboards" ]; then
+            case " ${matched[*]} " in
+              *" lattice.dashboards "*) ;;
+              *) matched+=("lattice.dashboards") ;;
+            esac
+          fi
+
           echo "to_test=${matched[*]}" >> "$GITHUB_OUTPUT"
           echo "Packages to test: ${matched[*]}"
 
