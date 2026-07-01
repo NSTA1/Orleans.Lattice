@@ -1970,12 +1970,14 @@ public class LatticeReplicationOptions
 
     /// <summary>
     /// Default value for <see cref="AdaptiveBatchLatencyThreshold"/>:
-    /// 50 ms. Sits above the canonical in-cluster ack round-trip yet low
-    /// enough that a sustained climb into the tens-of-milliseconds range
-    /// trips the controller's back-off before the receiver's
-    /// WAL-saturation hint engages. Tune per link.
+    /// 1 second. Sits above the per-batch ack round-trip a realistic
+    /// cross-cluster link (or a durable-storage-backed transport such as
+    /// Azurite / Azure Table) sustains under load, so the controller only
+    /// backs the batch off on a genuine sustained climb rather than
+    /// collapsing it on the ordinary hundreds-of-milliseconds round-trip.
+    /// A lower value suits a fast in-cluster link; tune per link.
     /// </summary>
-    public static readonly TimeSpan DefaultAdaptiveBatchLatencyThreshold = TimeSpan.FromMilliseconds(50);
+    public static readonly TimeSpan DefaultAdaptiveBatchLatencyThreshold = TimeSpan.FromSeconds(1);
 
     /// <summary>
     /// Default value for <see cref="AdaptiveBatchWindowLength"/>: <c>16</c>

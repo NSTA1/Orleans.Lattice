@@ -845,8 +845,8 @@ public class LatticeReplicationOptionsTests
         Assert.That(LatticeReplicationOptions.DefaultAdaptiveBatchDecreaseFactor, Is.EqualTo(0.5));
 
     [Test]
-    public void DefaultAdaptiveBatchLatencyThreshold_is_fifty_milliseconds() =>
-        Assert.That(LatticeReplicationOptions.DefaultAdaptiveBatchLatencyThreshold, Is.EqualTo(TimeSpan.FromMilliseconds(50)));
+    public void DefaultAdaptiveBatchLatencyThreshold_is_one_second() =>
+        Assert.That(LatticeReplicationOptions.DefaultAdaptiveBatchLatencyThreshold, Is.EqualTo(TimeSpan.FromSeconds(1)));
 
     [Test]
     public void DefaultAdaptiveBatchWindowLength_is_sixteen() =>

@@ -146,7 +146,7 @@ siloBuilder.ConfigureLatticeReplication("orders", o =>
 | [`AdaptiveBatchSizingEnabled`](#adaptivebatchsizingenabled) | `bool` | `true` |
 | [`AdaptiveBatchIncrement`](#adaptivebatchincrement) | `int` | 8 |
 | [`AdaptiveBatchDecreaseFactor`](#adaptivebatchdecreasefactor) | `double` | 0.5 |
-| [`AdaptiveBatchLatencyThreshold`](#adaptivebatchlatencythreshold) | `TimeSpan` | 50 ms |
+| [`AdaptiveBatchLatencyThreshold`](#adaptivebatchlatencythreshold) | `TimeSpan` | 1 s |
 | [`AdaptiveBatchWindowLength`](#adaptivebatchwindowlength) | `int` | 16 |
 
 ## Option guidance
@@ -401,7 +401,7 @@ Multiplicative factor used when decreasing an adaptive batch cap after slow or p
 
 ### `AdaptiveBatchLatencyThreshold`
 
-Latency threshold that marks a send as slow for adaptive sizing.
+Latency threshold that marks a send as slow for adaptive sizing. Defaults to 1 second - above the per-batch ack round-trip a realistic cross-cluster or durable-storage-backed link sustains under load, so the controller only backs off on a genuine sustained climb. Lower it for a fast in-cluster link.
 
 ### `AdaptiveBatchWindowLength`
 
