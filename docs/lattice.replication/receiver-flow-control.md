@@ -109,7 +109,7 @@ var options = new LatticeReplicationOptions
     // Optional tuning (defaults shown):
     AdaptiveBatchIncrement = 8,                                  // additive step per healthy ack
     AdaptiveBatchDecreaseFactor = 0.5,                           // multiplicative back-off
-    AdaptiveBatchLatencyThreshold = TimeSpan.FromMilliseconds(50),
+    AdaptiveBatchLatencyThreshold = TimeSpan.FromSeconds(1),
     AdaptiveBatchWindowLength = 16,                              // sliding-window length
 };
 ```
