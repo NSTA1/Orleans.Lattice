@@ -199,6 +199,10 @@ foreach (var tree in snapshot.Trees)
 
 Many subscribers requesting the same metrics share a single underlying sampling loop, and a cluster with no metric subscribers samples nothing - see [Efficiency](efficiency.md).
 
+### Detail paused under saturation
+
+Each per-tree snapshot is assembled from a single per-shard diagnostics walk that backs both the tile aggregates and the per-shard hotness rows. When a tree is reporting WAL saturation, the sampler deliberately **skips that walk** so the metrics surface never piles read load onto shard roots that are already contended by the write backlog. Such a snapshot sets `DetailPaused = true`: the registry-sourced fields (`Lifecycle`, `ShardCount`) and any requested view lag are still populated, but the live counts (`LiveKeys`, `Tombstones`, `MinDepth`/`MaxDepth`, `ShardsSplitting`) are reported as zero and `ShardHotness` is empty. This is a transient, best-effort state, not an error - the detail returns automatically on the next sample once the tree settles. A consumer should surface it as a "paused - tree is busy" note (the explorer metrics tab does exactly this) rather than treating the zeros as real counts.
+
 ## Cluster info
 
 `GetClusterInfoAsync` returns a single `ClusterInfo` record identifying the cluster the client is connected to - its Orleans `ClusterId` (the deployment's logical cluster identity) and `ServiceId` (stable across rolling deployments of the same logical service). Either field is empty when the host did not configure it. The request envelope (`ClusterInfoRequest`) carries no fields today; it exists so the RPC can grow additive projection options later without changing the method signature. A consumer such as the explorer header uses it to show which cluster it is looking at.

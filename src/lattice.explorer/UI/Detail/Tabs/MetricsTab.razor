@@ -35,13 +35,20 @@
     else
     {
         var m = _metrics;
+        @if (m.DetailPaused)
+        {
+            <div class="explorer-metrics-state explorer-metrics-paused">
+                Live counts and per-shard hotness are paused while this table is very busy.
+                They will return automatically once it settles.
+            </div>
+        }
         <div class="explorer-tiles">
             <MetricTile Label="Lifecycle" Value="@m.Lifecycle.ToString()" />
             <MetricTile Label="Shards" Value="@m.ShardCount.ToString()" />
-            <MetricTile Label="Live keys" Value="@m.LiveKeys.ToString("N0")" />
-            <MetricTile Label="Tombstones" Value="@m.Tombstones.ToString("N0")" />
-            <MetricTile Label="Depth (min/max)" Value="@($"{m.MinDepth} / {m.MaxDepth}")" />
-            <MetricTile Label="Shards splitting" Value="@m.ShardsSplitting.ToString()" />
+            <MetricTile Label="Live keys" Value="@(m.DetailPaused ? PausedValue : m.LiveKeys.ToString("N0"))" />
+            <MetricTile Label="Tombstones" Value="@(m.DetailPaused ? PausedValue : m.Tombstones.ToString("N0"))" />
+            <MetricTile Label="Depth (min/max)" Value="@(m.DetailPaused ? PausedValue : $"{m.MinDepth} / {m.MaxDepth}")" />
+            <MetricTile Label="Shards splitting" Value="@(m.DetailPaused ? PausedValue : m.ShardsSplitting.ToString())" />
             @if (m.ViewCount is int views)
             {
                 <MetricTile Label="Views" Value="@views.ToString()" />
@@ -54,7 +61,11 @@
 
         <section class="explorer-hotness">
             <h3 class="explorer-section-title">Per-shard hotness</h3>
-            @if (m.ShardHotness.Count == 0)
+            @if (m.DetailPaused)
+            {
+                <p class="explorer-metrics-muted">Per-shard hotness is paused while this table is very busy.</p>
+            }
+            else if (m.ShardHotness.Count == 0)
             {
                 <p class="explorer-metrics-muted">No per-shard hotness reported.</p>
             }
@@ -87,6 +98,8 @@
 </div>
 
 @code {
+    private const string PausedValue = "Paused";
+
     private TreeMetrics? _metrics;
     private DateTimeOffset _sampledAt;
     private bool _loading;
