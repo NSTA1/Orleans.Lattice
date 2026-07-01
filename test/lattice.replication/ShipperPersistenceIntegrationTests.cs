@@ -264,10 +264,13 @@ public class ShipperPersistenceIntegrationTests
     [Test]
     public async Task Crash_inside_deferred_persist_window_does_not_lose_entries()
     {
-        // Arrange: 8 entries in the WAL; interval=4 so the first
-        // activation flushes once (after 4 acks), then the next 3 acks
-        // are pending when the crash happens.
+        // Arrange: 8 entries reach the WAL, but only 7 are durable before the
+        // crash. interval=4 so the single continuous-drain pump flushes once
+        // (after 4 acks), leaving acks 5,6,7 pending in the deferred-persist
+        // window. The 8th entry lands after the crash so it only ships on the
+        // recovered activation.
         const int totalEntries = 8;
+        const int preCrashEntries = 7;
         const int interval = 4;
         var opts = new LatticeReplicationOptions
         {
@@ -278,7 +281,7 @@ public class ShipperPersistenceIntegrationTests
         };
         var walEncoder = new StubWalRecordEncoder();
         var shards = new[] { new WalShardStub(walEncoder) };
-        for (var i = 1; i <= totalEntries; i++)
+        for (var i = 1; i <= preCrashEntries; i++)
         {
             shards[0].Append(MakeEntry($"k{i}", ticks: i));
         }
@@ -289,19 +292,21 @@ public class ShipperPersistenceIntegrationTests
         var grainA = BuildGrain(persistent, transport, encoder, walEncoder, registry,
             FactoryFor(shards, Tree), Monitor(opts));
 
-        // Pump 7 times - first flush at tick 4, then 3 pending writes
-        // (5/6/7) sit in the deferred-persist window.
-        for (var i = 0; i < 7; i++)
-        {
-            await grainA.PumpForTestingAsync(CancellationToken.None);
-        }
+        // A single pump now drains the whole available backlog back-to-back:
+        // the 7 pre-crash entries ship as 7 capped batches, flushing once at
+        // the 4th ack, with acks 5,6,7 pending in the deferred-persist window.
+        await grainA.PumpForTestingAsync(CancellationToken.None);
 
         // Pre-crash invariant: durable state reflects exactly one flush.
         Assert.That(persistent.WriteCount, Is.EqualTo(1),
-            "Pre-crash: only one flush expected (interval=4 reached on tick 4 and once again only at tick 8).");
+            "Pre-crash: only one flush expected (interval=4 reached at the 4th ack; acks 5,6,7 remain pending).");
         var preCrashCursor = persistent.State.Cursor;
         var preCrashPartitionCursor = persistent.State.PartitionCursors.TryGetValue(0, out var pc) ? pc : 0L;
         var preCrashSent = transport.SentHlcSequence.Count;
+
+        // The 8th entry arrives after the pre-crash flush window, so it is
+        // present in the shared WAL for the recovered activation to ship.
+        shards[0].Append(MakeEntry($"k{totalEntries}", ticks: totalEntries));
 
         // Simulate crash: bypass OnDeactivateAsync entirely. The new
         // grain inherits ONLY the durable persistent state (which is

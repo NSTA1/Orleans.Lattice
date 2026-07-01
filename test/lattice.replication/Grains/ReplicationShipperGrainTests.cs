@@ -95,6 +95,31 @@ public partial class ReplicationShipperGrainTests
     }
 
     /// <summary>
+    /// Returns the largest entry count among every
+    /// <see cref="ReplicationBatch"/> handed to <paramref name="transport"/>.
+    /// The serial ship path now drains a backlog as several capped batches
+    /// back-to-back in one pump tick, so the last batch is often a short tail;
+    /// tests that assert "the effective cap was N" therefore check the maximum
+    /// batch size (no batch may exceed the cap, and a full backlog produces at
+    /// least one batch at the cap) rather than the last batch's size.
+    /// </summary>
+    private static int MaxShippedEntryCount(IReplicationTransport transport)
+    {
+        var calls = transport.ReceivedCalls()
+            .Where(c => c.GetMethodInfo().Name == nameof(IReplicationTransport.SendAsync))
+            .ToList();
+        Assert.That(calls, Is.Not.Empty,
+            "the shipper must have invoked the transport at least once before this assertion");
+        return calls.Max(c =>
+        {
+            var batch = (ReplicationBatch)c.GetArguments()[0]!;
+            Assert.That(batch.EncodedEnvelope, Is.Not.Null,
+                "the shipper must populate EncodedEnvelope on every batch on the framing-only path");
+            return batch.EncodedEnvelope!.Value.EncodedEntries.Length;
+        });
+    }
+
+    /// <summary>
     /// Builds an options monitor that always returns <paramref name="options"/>.
     /// When <paramref name="options"/> is null, defaults to a fresh
     /// instance with <see cref="LatticeReplicationOptions.ShipCursorWriteInterval"/>=1
@@ -1285,9 +1310,21 @@ public partial class ReplicationShipperGrainTests
 
         await grain.PumpForTestingAsync(CancellationToken.None);
 
-        // Single pump tick ships at most ShipBatchSize entries; the
-        // remaining entries wait for the next pump.
-        Assert.That(captured, Has.Count.EqualTo(1));
+        // A single pump tick now drains the whole backlog back-to-back, but
+        // every batch is still capped at ShipBatchSize: ten entries at a cap
+        // of two ship as five batches of two within the tick.
+        Assert.Multiple(() =>
+        {
+            Assert.That(captured, Has.Count.EqualTo(5));
+            Assert.That(
+                captured.Select(b => b.EncodedEnvelope!.Value.EncodedEntries.Length),
+                Has.All.LessThanOrEqualTo(opts.ShipBatchSize),
+                "no batch may exceed the configured ShipBatchSize");
+            Assert.That(
+                captured.Sum(b => b.EncodedEnvelope!.Value.EncodedEntries.Length),
+                Is.EqualTo(10),
+                "the full backlog ships within the single tick");
+        });
     }
 
     // --- Routing metadata correctness on the batch ---
@@ -1511,7 +1548,18 @@ public partial class ReplicationShipperGrainTests
             ShipCursorWriteInterval = 1,
             ShipBatchSize = 2,
         };
-        var (grain, feed, _, stats) = CreateWithStats(opts);
+        var (grain, feed, transport, stats) = CreateWithStats(opts);
+        // A strictly-positive receiver hint stops the drain loop after the
+        // first capped batch, so the backlog gauge is sampled while the stream
+        // is still behind - exactly the "at least one full batch past the
+        // cursor" lower-bound signal this test asserts.
+        transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
+            .Returns(new ReplicationAck
+            {
+                Accepted = true,
+                HighestAppliedHlc = HybridLogicalClock.Zero,
+                SuggestedBatchSize = 2,
+            });
         // Three entries forces the drain to fill the buffer to the
         // ShipBatchSize cap - _drainBuffer.Count >= maxPerBatch is
         // the lower-bound signal that the WAL has at least one full

@@ -129,7 +129,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntry("k5", ticks: 5));
         await grain.PumpForTestingAsync(CancellationToken.None);
 
-        Assert.That(LastShippedEntryCount(transport), Is.EqualTo(opts.ShipBatchSize),
+        Assert.That(MaxShippedEntryCount(transport), Is.EqualTo(opts.ShipBatchSize),
             "a zero hint must collapse back to the configured ShipBatchSize");
     }
 
@@ -189,7 +189,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntry("k10", ticks: 10));
         await grain.PumpForTestingAsync(CancellationToken.None);
 
-        Assert.That(LastShippedEntryCount(transport), Is.EqualTo(opts.ShipBatchSize),
+        Assert.That(MaxShippedEntryCount(transport), Is.EqualTo(opts.ShipBatchSize),
             "recovered receiver returning null hint must restore full ShipBatchSize");
     }
 
