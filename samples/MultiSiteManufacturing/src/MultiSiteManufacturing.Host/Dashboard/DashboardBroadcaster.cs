@@ -56,7 +56,7 @@ namespace MultiSiteManufacturing.Host.Dashboard;
 /// stream
 /// (<see cref="StreamProviderName"/> · <see cref="PartChangeStreamNamespace"/>)
 /// and re-runs the same per-circuit fan-out
-/// (<see cref="PublishPartAsync"/>) on receipt.
+/// (<see cref="MarkPartDirty"/>) on receipt.
 /// </para>
 /// <para>
 /// Implementation is split across partial files for readability:
@@ -211,9 +211,9 @@ public sealed partial class DashboardBroadcaster : IHostedService
     private readonly ConcurrentDictionary<Guid, Channel<SiteActivityIndexEntry>> _activitySubs = new();
 
     // Remembers the last-published (baseline, lattice) state per part so
-    // PublishPartAsync can decide whether a fresh summary should also
+    // FanOutPartUpdate can decide whether a fresh summary should also
     // raise a DivergenceEvent. Concurrent access is fine - the fan-out
-    // is serialised per fact inside PublishPartAsync.
+    // is serialised per part inside FanOutPartUpdate.
     private readonly ConcurrentDictionary<PartSerialNumber, (ComplianceState Baseline, ComplianceState Lattice)> _lastStates = new();
 
     private IAsyncStream<Fact>? _broadcastStream;

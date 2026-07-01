@@ -76,6 +76,38 @@ public sealed class PartSummaryView(
     }
 
     /// <summary>
+    /// Upserts a batch of materialised summary rows in a single
+    /// <see cref="ILattice.SetManyAsync(List{KeyValuePair{string, byte[]}}, CancellationToken)"/>
+    /// call. Called from the broadcaster's coalesced rebuild loop, which folds
+    /// a whole window of dirty parts and flushes them together: one batched
+    /// write lets the WAL layer pack the rows into far fewer Azure Table
+    /// transactions than one <see cref="UpsertAsync"/> (single
+    /// <c>SetAsync</c>) per part - the dominant durable-write cost when a bulk
+    /// seed marks thousands of parts dirty at once. Keyed by part serial, so
+    /// repeated rows for the same part overwrite in place. A <c>null</c> or
+    /// empty batch is a no-op.
+    /// </summary>
+    public async Task UpsertManyAsync(IReadOnlyList<PartSummaryUpdate> summaries, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(summaries);
+        if (summaries.Count == 0)
+        {
+            return;
+        }
+
+        var entries = new List<KeyValuePair<string, byte[]>>(summaries.Count);
+        foreach (var summary in summaries)
+        {
+            ArgumentNullException.ThrowIfNull(summary);
+            entries.Add(new KeyValuePair<string, byte[]>(summary.Serial.Value, Encode(summary)));
+        }
+
+        await Tree.SetManyAsync(entries, cancellationToken);
+
+        logger.LogDebug("Materialised {Count} summary rows in one batch", entries.Count);
+    }
+
+    /// <summary>
     /// Reads every materialised summary row in a single contiguous tree scan
     /// and rehydrates the <see cref="PartSummaryUpdate"/> list. Returns an
     /// empty list when the view has not been populated yet (cold start before

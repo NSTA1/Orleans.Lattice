@@ -192,7 +192,7 @@ public sealed partial class DashboardBroadcaster
     /// Runs on every subscribed silo, so per-circuit fan-out happens
     /// locally wherever the Blazor session is attached, regardless of
     /// which silo originated the fact. Combines the part-summary /
-    /// divergence fan-out (<see cref="PublishPartAsync"/>) with the
+    /// divergence fan-out (<see cref="FanOutPartUpdate"/>) with the
     /// site-activity fan-out in a single entry point so the two paths
     /// can't drift (e.g. one wired to the stream and the other still
     /// local-only).
