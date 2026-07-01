@@ -287,6 +287,39 @@ rings the doorbell after every commit for the affected
 The doorbell is
 best-effort - a missed call only delays the next ship by one timer tick (default 100 ms).
 
+#### Writer-side coalescing
+
+A doorbell is an idempotent, edge-triggered "there is work" signal, so the
+sink does not dispatch one grain call per commit. Because the shipper
+activation is non-reentrant, an unbounded per-commit fan-out under a write
+burst would grow its turn queue without bound: fresh doorbells would be
+dropped as expired before they run, and the keepalive reminder that drives
+shipping would be starved behind the backlog - so shipping stalls exactly
+when the peer has the most to ship.
+
+`ShardedReplogSink` therefore coalesces at the source. It keeps a per-`(tree,
+peer)` coalescer and collapses a burst of ring requests into **at most one
+in-flight ring plus one pending follow-up**:
+
+- The first request transitions the coalescer from idle to in-flight and
+  starts a ring loop that calls `OnDoorbellAsync`.
+- A request that arrives while a ring is in flight sets a single pending
+  flag instead of dispatching its own grain call, and is counted as
+  coalesced.
+- When the in-flight ring completes, the loop fires exactly one trailing
+  ring if the pending flag was set (then clears it), and otherwise settles
+  to idle.
+
+The trailing ring guarantees the last write in a burst still wakes the
+shipper (no missed wake), while the doorbell message rate the shipper sees
+is bounded to a small constant regardless of write throughput. The base
+phase-timer and keepalive-reminder safety net still drive shipping
+independently of doorbells, so a coalesced (elided) ring never delays
+delivery beyond one timer tick. The coalescing ratio is observable via the
+`orleans.lattice.replication.doorbell.rung` (rings dispatched) and
+`orleans.lattice.replication.doorbell.coalesced` (rings elided) counters,
+both tagged by tree and peer.
+
 ### Backoff schedule
 
 Transient failures (drain throw, transport throw, ack rejected) feed an

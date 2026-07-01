@@ -468,6 +468,43 @@ public static class LatticeReplicationMetrics
     /// </summary>
     public const string CoalesceBytesElidedName = "orleans.lattice.replication.coalesce.bytes_elided";
 
+    // --- Writer-side doorbell coalescing counters -------------------------------
+
+    /// <summary>
+    /// Counter of shipper doorbell rings actually dispatched to a
+    /// <c>(tree, peer)</c> shipper after writer-side coalescing. A doorbell
+    /// is an edge-triggered "there is work" wake, so the commit-time sink
+    /// collapses a burst of per-write rings for the same <c>(tree, peer)</c>
+    /// into at most one in-flight ring plus one pending follow-up; this
+    /// counter fires once per ring that reaches the grain. Read together with
+    /// <see cref="DoorbellCoalesced"/> it gives the coalescing ratio -
+    /// a burst of thousands of writes should dispatch only a couple of rings.
+    /// Tagged by <see cref="TagTree"/> and <see cref="TagPeer"/>.
+    /// </summary>
+    public static readonly Counter<long> DoorbellRung =
+        Meter.CreateCounter<long>("orleans.lattice.replication.doorbell.rung", unit: "{ring}",
+            description: "Shipper doorbell rings dispatched to a (tree, peer) shipper after writer-side coalescing, tagged by tree and peer.");
+
+    /// <summary>
+    /// Counter of shipper doorbell rings elided by writer-side coalescing -
+    /// a per-write ring request that arrived while a ring for the same
+    /// <c>(tree, peer)</c> was already in flight, and was collapsed into the
+    /// single pending follow-up rather than dispatched as its own grain call.
+    /// This is the storm the coalescer absorbs: without it every such request
+    /// would enqueue a fresh <c>OnDoorbellAsync</c> message on the
+    /// non-reentrant shipper activation. Tagged by <see cref="TagTree"/> and
+    /// <see cref="TagPeer"/>.
+    /// </summary>
+    public static readonly Counter<long> DoorbellCoalesced =
+        Meter.CreateCounter<long>("orleans.lattice.replication.doorbell.coalesced", unit: "{ring}",
+            description: "Shipper doorbell rings elided by writer-side coalescing (collapsed into an in-flight or pending ring), tagged by tree and peer.");
+
+    /// <summary>Canonical name of the <see cref="DoorbellRung"/> counter.</summary>
+    public const string DoorbellRungName = "orleans.lattice.replication.doorbell.rung";
+
+    /// <summary>Canonical name of the <see cref="DoorbellCoalesced"/> counter.</summary>
+    public const string DoorbellCoalescedName = "orleans.lattice.replication.doorbell.coalesced";
+
     /// <summary>
     /// Counter of source CRDT deltas folded into a combined delta by the
     /// CRDT branch of pre-ship coalescing - the number of same-key typed
