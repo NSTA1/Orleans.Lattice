@@ -57,7 +57,24 @@ public sealed partial class DashboardBroadcaster
     /// <see cref="PartSummaryView"/>) synchronously. Lets a test deterministically
     /// materialise the view without waiting on the background rebuild interval.
     /// </summary>
-    internal Task DrainDirtyForTestAsync() => DrainDirtyAsync(CancellationToken.None);
+    internal Task<int> DrainDirtyForTestAsync() => DrainDirtyAsync(CancellationToken.None);
+
+    /// <summary>
+    /// Test seam: current consecutive-failed-drain streak (readable) and a way
+    /// to feed a synthetic drain outcome, so a test can drive the back-off
+    /// state machine deterministically without a genuinely failing storage tier
+    /// (which cannot be reproduced in the in-memory test cluster).
+    /// </summary>
+    internal int ConsecutiveFailedDrainsForTest => _consecutiveFailedDrains;
+
+    /// <summary>Test seam: applies one drain outcome to the back-off counter.</summary>
+    internal void RecordDrainOutcomeForTest(int failures) => RecordDrainOutcome(failures);
+
+    /// <summary>Test seam: the delay the loop would wait before its next cycle.</summary>
+    internal TimeSpan ComputeRebuildDelayForTest() => ComputeRebuildDelay();
+
+    /// <summary>Test seam: the configured ceiling on the rebuild back-off delay.</summary>
+    internal static TimeSpan MaxRebuildBackoffForTest => MaxRebuildBackoff;
 
     /// <summary>
     /// Background loop that drains <see cref="_dirtyParts"/> once per
@@ -73,7 +90,7 @@ public sealed partial class DashboardBroadcaster
         {
             try
             {
-                await Task.Delay(_partRebuildInterval, token);
+                await Task.Delay(ComputeRebuildDelay(), token);
             }
             catch (OperationCanceledException)
             {
@@ -87,15 +104,59 @@ public sealed partial class DashboardBroadcaster
             // the stream never marks those serials dirty): the pass diffs the
             // tree against the view and queues the missing serials, which the
             // drain below then folds and fans out live (issue #1048).
-            await MaybeReconcileViewWithTreeAsync(token);
+            //
+            // Skipped while backing off from upsert failures: re-queuing parts
+            // we demonstrably cannot persist yet would only pour more load onto
+            // the failing storage partition and defeat the back-pressure. The
+            // still-dirty parts keep retrying (at the backed-off cadence); once
+            // the storage tier recovers and a drain succeeds the counter resets
+            // and reconciliation resumes.
+            if (_consecutiveFailedDrains == 0)
+            {
+                await MaybeReconcileViewWithTreeAsync(token);
+            }
 
             if (_dirtyParts.IsEmpty)
             {
+                // Nothing pending: clear any accumulated back-off so the next
+                // cycle reconciles and re-probes at the normal cadence.
+                _consecutiveFailedDrains = 0;
                 continue;
             }
 
-            await DrainDirtyAsync(token);
+            var failures = await DrainDirtyAsync(token);
+            RecordDrainOutcome(failures);
         }
+    }
+
+    /// <summary>
+    /// Updates the consecutive-failed-drain counter from one drain's failure
+    /// count: any failure grows the streak (driving further back-off), a clean
+    /// drain resets it so the loop returns to its normal cadence.
+    /// </summary>
+    private void RecordDrainOutcome(int failures) =>
+        _consecutiveFailedDrains = failures > 0 ? _consecutiveFailedDrains + 1 : 0;
+
+    /// <summary>
+    /// Computes the delay before the next rebuild cycle. Returns the base
+    /// <see cref="_partRebuildInterval"/> in steady state; while summary
+    /// upserts are failing it grows the delay exponentially (doubling per
+    /// consecutive failed cycle) up to <see cref="MaxRebuildBackoff"/>, so a
+    /// saturated storage tier is not hammered by a full-rate retry storm.
+    /// </summary>
+    private TimeSpan ComputeRebuildDelay()
+    {
+        if (_consecutiveFailedDrains == 0)
+        {
+            return _partRebuildInterval;
+        }
+
+        // Cap the exponent so the shift cannot overflow, then clamp the scaled
+        // delay at the configured ceiling.
+        var exponent = Math.Min(_consecutiveFailedDrains, 16);
+        var scaledMs = _partRebuildInterval.TotalMilliseconds * Math.Pow(2, exponent);
+        var cappedMs = Math.Min(scaledMs, MaxRebuildBackoff.TotalMilliseconds);
+        return TimeSpan.FromMilliseconds(cappedMs);
     }
 
     /// <summary>
@@ -197,17 +258,22 @@ public sealed partial class DashboardBroadcaster
     /// it is taken, and rebuilds its summary. Marks that arrive during the
     /// drain are picked up on the next tick.
     /// </summary>
-    private async Task DrainDirtyAsync(CancellationToken token)
+    private async Task<int> DrainDirtyAsync(CancellationToken token)
     {
+        var failures = 0;
         foreach (var serial in _dirtyParts.Keys.ToArray())
         {
             if (token.IsCancellationRequested)
             {
-                return;
+                return failures;
             }
             _dirtyParts.TryRemove(serial, out _);
-            await PublishPartAsync(serial);
+            if (!await PublishPartAsync(serial))
+            {
+                failures++;
+            }
         }
+        return failures;
     }
 
     /// <summary>
@@ -251,7 +317,14 @@ public sealed partial class DashboardBroadcaster
         }
     }
 
-    private async Task PublishPartAsync(PartSerialNumber serial)
+    /// <summary>
+    /// Rebuilds and fans out one part's summary. Returns <c>true</c> when the
+    /// summary was folded and the materialised view row upserted successfully,
+    /// and <c>false</c> when the attempt failed (the exception is logged and
+    /// swallowed). The boolean lets the rebuild loop detect a struggling
+    /// storage tier and apply back-pressure instead of retrying at full rate.
+    /// </summary>
+    private async Task<bool> PublishPartAsync(PartSerialNumber serial)
     {
         try
         {
@@ -286,7 +359,7 @@ public sealed partial class DashboardBroadcaster
 
             if (!nowDiverges && !wasDiverging)
             {
-                return;
+                return true;
             }
 
             DivergenceEvent? evt = null;
@@ -318,10 +391,13 @@ public sealed partial class DashboardBroadcaster
                     sub.Writer.TryWrite(evt);
                 }
             }
+
+            return true;
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to build dashboard update for serial {Serial}", serial.Value);
+            return false;
         }
     }
 

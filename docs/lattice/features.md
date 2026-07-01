@@ -172,6 +172,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 ### Planned / open
 
 - [FX-074](https://github.com/NSTA1/Orleans.Lattice/issues/1067) - WAL saturation-state gauge leaves stale elevated series (redundant state label) so dashboards show trees as saturated long after load stops
+- [FX-075](https://github.com/NSTA1/Orleans.Lattice/issues/1069) - MultiSiteManufacturing dashboard summary-view rebuild loop congestion-collapses under a large seed: swallowed summary-upsert failures let it retry at full rate, pegging silo CPU and starving the co-located replication shipper; the loop is now failure-aware with exponential back-off and reconciliation shed while backing off
 
 ### Shipped
 
