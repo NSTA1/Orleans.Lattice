@@ -164,6 +164,20 @@ public sealed partial class DashboardBroadcaster : IHostedService
     /// </summary>
     private const int DefaultReconcileBudget = 512;
 
+    /// <summary>
+    /// Upper bound on the exponential back-off the rebuild loop applies while
+    /// summary upserts are failing (e.g. the WAL storage is saturated and
+    /// phase-2 commits are timing out). Without this back-pressure the loop
+    /// retries the whole dirty backlog every <see cref="DefaultPartRebuildInterval"/>
+    /// and the reconcile pass keeps re-queuing the same parts, so a failing
+    /// hot partition never drains - the retries pile more load on it, pin the
+    /// silo CPU at 100%, and starve every other grain on the silo (including
+    /// the cross-cluster replication shipper). Backing off lets the storage
+    /// tier catch up, then the loop resumes its normal cadence once upserts
+    /// succeed again.
+    /// </summary>
+    private static readonly TimeSpan MaxRebuildBackoff = TimeSpan.FromSeconds(30);
+
     private readonly FederationRouter _router;
     private readonly IClusterClient _client;
     private readonly IGrainFactory _grainFactory;
@@ -175,6 +189,13 @@ public sealed partial class DashboardBroadcaster : IHostedService
     private readonly TimeSpan _reconcileInterval;
     private readonly int _reconcileBudget;
     private DateTime _nextReconcileUtc = DateTime.MinValue;
+
+    // Number of consecutive rebuild cycles whose drain saw at least one
+    // failed summary upsert. Drives the rebuild loop's exponential back-off
+    // (see MaxRebuildBackoff) so a saturated / failing storage tier sheds load
+    // instead of congestion-collapsing under a full-rate retry storm. Reset to
+    // zero as soon as a drain completes cleanly or the dirty set empties.
+    private int _consecutiveFailedDrains;
     private readonly StreamId _streamId;
     private readonly StreamId _partChangeStreamId;
     private readonly CancellationTokenSource _shutdownCts = new();
