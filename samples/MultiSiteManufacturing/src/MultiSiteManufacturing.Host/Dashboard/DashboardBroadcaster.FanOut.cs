@@ -28,7 +28,7 @@ public sealed partial class DashboardBroadcaster
     /// dashboard snapshot reads, so the view must stay current from the fact
     /// stream even when no circuit is attached; otherwise a later dashboard
     /// open would read stale rows. The per-circuit channel fan-out is still
-    /// gated on having subscribers inside <see cref="PublishPartAsync"/>, so
+    /// gated on having subscribers inside <see cref="FanOutPartUpdate"/>, so
     /// no channel work is done for an idle dashboard. At true idle (no facts
     /// arriving) nothing is marked, so the rebuild loop simply sleeps.
     /// </para>
@@ -80,7 +80,7 @@ public sealed partial class DashboardBroadcaster
     /// Background loop that drains <see cref="_dirtyParts"/> once per
     /// the configured rebuild interval, rebuilding each dirty part's summary
     /// exactly once per window. Replaces the previous per-fact, per-stream
-    /// synchronous <see cref="PublishPartAsync"/> call that turned every fact
+    /// synchronous rebuild-and-publish call that turned every fact
     /// (and every replication re-delivery of it) into an immediate fact-tree
     /// scan on every silo - the scan-storm fixed here.
     /// </summary>
@@ -254,26 +254,104 @@ public sealed partial class DashboardBroadcaster
     }
 
     /// <summary>
+    /// Maximum number of summary rows folded and flushed to the materialised
+    /// view in a single <see cref="PartSummaryView.UpsertManyAsync"/> batch.
+    /// Coalescing the drain's upserts into batched writes (instead of one
+    /// <c>SetAsync</c> per part) collapses N per-part WAL appends into a few
+    /// larger appends the WAL layer packs into fewer Azure Table transactions -
+    /// the dominant durable-write cost when a bulk seed marks thousands of
+    /// parts dirty at once. Bounded so a very large dirty set flushes
+    /// incrementally rather than materialising every payload in memory at once.
+    /// </summary>
+    private const int SummaryUpsertBatchSize = 256;
+
+    /// <summary>
     /// Drains the dirty set once: snapshots the queued serials, clears each as
-    /// it is taken, and rebuilds its summary. Marks that arrive during the
-    /// drain are picked up on the next tick.
+    /// it is taken, folds its summary, and flushes the folded rows to the
+    /// materialised view in <see cref="SummaryUpsertBatchSize"/>-sized batched
+    /// writes (see <see cref="FlushSummaryBatchAsync"/>). Marks that arrive
+    /// during the drain are picked up on the next tick. Returns the number of
+    /// parts whose fold or durable write failed, so the rebuild loop can apply
+    /// back-pressure.
     /// </summary>
     private async Task<int> DrainDirtyAsync(CancellationToken token)
     {
+        var serials = _dirtyParts.Keys.ToArray();
+        if (serials.Length == 0)
+        {
+            return 0;
+        }
+
         var failures = 0;
-        foreach (var serial in _dirtyParts.Keys.ToArray())
+        var batch = new List<PartSummaryUpdate>(Math.Min(serials.Length, SummaryUpsertBatchSize));
+        foreach (var serial in serials)
         {
             if (token.IsCancellationRequested)
             {
                 return failures;
             }
+
             _dirtyParts.TryRemove(serial, out _);
-            if (!await PublishPartAsync(serial))
+
+            PartSummaryUpdate update;
+            try
             {
+                update = await BuildSummaryAsync(serial, token);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to build dashboard update for serial {Serial}", serial.Value);
                 failures++;
+                continue;
+            }
+
+            batch.Add(update);
+            if (batch.Count >= SummaryUpsertBatchSize)
+            {
+                failures += await FlushSummaryBatchAsync(batch, token);
+                batch.Clear();
             }
         }
+
+        if (batch.Count > 0)
+        {
+            failures += await FlushSummaryBatchAsync(batch, token);
+        }
+
         return failures;
+    }
+
+    /// <summary>
+    /// Durably upserts one batch of folded summaries into the materialised
+    /// <see cref="PartSummaryView"/> in a single batched write, then fans each
+    /// row out to the in-memory part / divergence channels. A failed durable
+    /// write re-queues the batch's serials (so a later cycle retries - the
+    /// same self-healing the reconciliation pass provides) and reports the
+    /// batch size as failures so the rebuild loop's back-off engages; the
+    /// in-memory fan-out is skipped for a batch that did not persist.
+    /// </summary>
+    private async Task<int> FlushSummaryBatchAsync(List<PartSummaryUpdate> batch, CancellationToken token)
+    {
+        try
+        {
+            await _summaryView.UpsertManyAsync(batch, token);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to upsert {Count} dashboard summary rows", batch.Count);
+            foreach (var update in batch)
+            {
+                MarkPartDirty(update.Serial);
+            }
+            return batch.Count;
+        }
+
+        foreach (var update in batch)
+        {
+            FanOutPartUpdate(update);
+        }
+
+        return 0;
     }
 
     /// <summary>
@@ -281,7 +359,7 @@ public sealed partial class DashboardBroadcaster
     /// <see cref="StartAsync"/>. Forwards the carried serial onto the
     /// cluster-wide part-change stream so every silo's broadcaster -
     /// including this one - re-runs the per-circuit fan-out
-    /// (<see cref="PublishPartAsync"/>) for whichever Blazor sessions
+    /// (<see cref="FanOutPartUpdate"/>) for whichever Blazor sessions
     /// it hosts. Without this stream hop a CRDT mutation handled on
     /// silo A would be invisible to a circuit pinned to silo B,
     /// because <see cref="PartCrdtStore.PartChanged"/> fires only on
@@ -318,24 +396,19 @@ public sealed partial class DashboardBroadcaster
     }
 
     /// <summary>
-    /// Rebuilds and fans out one part's summary. Returns <c>true</c> when the
-    /// summary was folded and the materialised view row upserted successfully,
-    /// and <c>false</c> when the attempt failed (the exception is logged and
-    /// swallowed). The boolean lets the rebuild loop detect a struggling
-    /// storage tier and apply back-pressure instead of retrying at full rate.
+    /// Fans one already-folded, already-persisted <see cref="PartSummaryUpdate"/>
+    /// out to the in-memory per-circuit channels: the part-summary subscribers
+    /// and any derived divergence transition. Pure in-memory work (no I/O) -
+    /// the durable materialised-view write is done once per batch by
+    /// <see cref="FlushSummaryBatchAsync"/> before this is called, so a bulk
+    /// drain collapses N per-part durable writes into a few batched appends.
+    /// Never throws: a channel write failure is logged and swallowed so one
+    /// bad subscriber cannot stall the drain.
     /// </summary>
-    private async Task<bool> PublishPartAsync(PartSerialNumber serial)
+    private void FanOutPartUpdate(PartSummaryUpdate update)
     {
         try
         {
-            var update = await BuildSummaryAsync(serial, CancellationToken.None);
-
-            // Maintain the materialised per-part summary view regardless of
-            // subscribers, so the dashboard snapshot (which reads this view in
-            // a single scan) is always current. This is the read-model that
-            // replaces the old per-render full re-fold of the fact tree.
-            await _summaryView.UpsertAsync(update, CancellationToken.None);
-
             // Per-circuit channel fan-out is gated on having watchers: no
             // summary subscriber means the TryWrite loop below would no-op
             // anyway, so skip it.
@@ -359,7 +432,7 @@ public sealed partial class DashboardBroadcaster
 
             if (!nowDiverges && !wasDiverging)
             {
-                return true;
+                return;
             }
 
             DivergenceEvent? evt = null;
@@ -391,13 +464,10 @@ public sealed partial class DashboardBroadcaster
                     sub.Writer.TryWrite(evt);
                 }
             }
-
-            return true;
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to build dashboard update for serial {Serial}", serial.Value);
-            return false;
+            _logger.LogWarning(ex, "Failed to fan out dashboard update for serial {Serial}", update.Serial.Value);
         }
     }
 

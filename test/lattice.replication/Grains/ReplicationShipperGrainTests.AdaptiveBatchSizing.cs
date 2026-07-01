@@ -39,8 +39,11 @@ public partial class ReplicationShipperGrainTests
 
         await grain.PumpForTestingAsync(CancellationToken.None);
 
-        Assert.That(LastShippedEntryCount(transport), Is.EqualTo(4),
-            "with adaptive sizing off the shipper drains exactly ShipBatchSize entries");
+        // The tick drains the whole backlog back-to-back (10 entries as
+        // 4 + 4 + 2), but with adaptive sizing off no batch exceeds the
+        // configured ShipBatchSize, so the effective cap fills to exactly 4.
+        Assert.That(MaxShippedEntryCount(transport), Is.EqualTo(4),
+            "with adaptive sizing off the shipper fills each batch to exactly ShipBatchSize");
     }
 
     /// <summary>

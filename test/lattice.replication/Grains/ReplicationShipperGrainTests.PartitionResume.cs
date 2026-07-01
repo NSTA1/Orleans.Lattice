@@ -605,10 +605,6 @@ public partial class ReplicationShipperGrainTests
             ShipBatchSize = 1,
         };
         var (grain, state, feed, transport, _, _, _) = Create(opts);
-        for (var i = 0; i < 5; i++)
-        {
-            feed.Append(MakeEntry($"k{i}", ticks: i + 1));
-        }
         // Return ack frontier matching each shipped entry's HLC so the
         // defensive HLC filter does not drop subsequent entries.
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
@@ -624,11 +620,17 @@ public partial class ReplicationShipperGrainTests
                 };
             });
 
-        // Advance 1, 2 - no flush yet. Advance 3 - first flush.
+        // The serial path now drains all available backlog in one tick, so to
+        // accrue acks one-per-tick (the granularity the deferred-persist
+        // interval counts) exactly one entry is made available before each
+        // pump. Advance 1, 2 - no flush yet. Advance 3 - first flush.
+        feed.Append(MakeEntry("k0", ticks: 1));
         await grain.PumpForTestingAsync(CancellationToken.None);
         Assert.That(state.WriteCount, Is.EqualTo(0));
+        feed.Append(MakeEntry("k1", ticks: 2));
         await grain.PumpForTestingAsync(CancellationToken.None);
         Assert.That(state.WriteCount, Is.EqualTo(0));
+        feed.Append(MakeEntry("k2", ticks: 3));
         await grain.PumpForTestingAsync(CancellationToken.None);
         Assert.That(state.WriteCount, Is.EqualTo(1),
             "The third successful ack at interval=3 must trigger the durable write.");

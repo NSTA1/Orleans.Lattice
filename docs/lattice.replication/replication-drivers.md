@@ -270,6 +270,22 @@ Every phase tick (default 100 ms, `LatticeReplicationOptions.ShipPhaseTimerPerio
 A successful round-trip resets `ConsecutiveFailures` to `0` and clears
 the backoff budget.
 
+**Continuous drain within a tick.** A tick does not stop after shipping a
+single batch. Once a partition has been primed (step 2 onwards), steps 2-6
+repeat in a loop, shipping batch after batch back-to-back until the backlog
+is exhausted - a merge that yields fewer than `ShipBatchSize` entries (the
+final short tail) ends the tick, as does a receiver flow-control signal (a
+positive `SuggestedBatchSize` hint or a just-applied `PauseForMs`) or a
+transport / ack failure. This mirrors the pipelined path (`ShipMaxInFlight
+> 1`), which already drained to exhaustion per tick, and prevents a backlog
+larger than one batch from draining one batch per 100 ms tick - the defect
+that made a large write burst trickle across the link over many seconds even
+though the receiver had headroom. The single per-tick partition prime (below)
+is amortised across every batch shipped in the loop; the cursor is advanced
+and durably folded per shipped batch (deferred-persisted on the
+`ShipCursorWriteInterval` cadence), so incremental progress survives a crash
+mid-tick.
+
 At the start of every tick the pump primes one shipping page per WAL
 partition before the k-way HLC merge (the change feed is sharded into
 `ReplogPartitions` partitions per tree). These priming reads are issued

@@ -798,20 +798,24 @@ internal sealed class ReplicationShipperGrain(
     }
 
     /// <summary>
-    /// Drains one batch from the change feed, applies producer-side
-    /// filters, calls the transport, advances the cursor on positive
-    /// ack, and applies backoff on transient failure. Schema-shaped
-    /// failures during encode park every offending entry on the
-    /// per-tree dead-letter queue (reason
-    /// <see cref="LatticeReplicationMetrics.ReasonSchema"/>) and then
-    /// advance the cursor past the batch so a single poison entry
-    /// never stalls the stream forever; operators inspect / replay /
-    /// discard via <see cref="ILatticeReplicationDeadLetters"/>.
+    /// Primes the per-tick partition merge state once, then drains and ships
+    /// successive batches back-to-back until the WAL tail is exhausted for
+    /// this tick, applying producer-side filters, calling the transport,
+    /// advancing the cursor on each positive ack, and applying backoff on
+    /// transient failure. Schema-shaped failures during encode park every
+    /// offending entry on the per-tree dead-letter queue (reason
+    /// <see cref="LatticeReplicationMetrics.ReasonSchema"/>) and then advance
+    /// the cursor past the batch so a single poison entry never stalls the
+    /// stream forever; operators inspect / replay / discard via
+    /// <see cref="ILatticeReplicationDeadLetters"/>.
     /// <para>
-    /// This is the strict-serial path: ship one batch, await its ack,
-    /// advance the cursor, ship the next. It runs whenever the
-    /// effective pipelining window is one (the default
-    /// <see cref="LatticeReplicationOptions.ShipMaxInFlight"/> of
+    /// This is the strict-serial path: ship one batch, await its ack, advance
+    /// the cursor, then immediately carve and ship the next from the same
+    /// primed pages - a single prime amortised across every batch the tick
+    /// ships. It stops early only when a batch comes up short (the WAL tail is
+    /// reached) or the receiver applies flow control (a shrink hint or a
+    /// pause). It runs whenever the effective pipelining window is one (the
+    /// default <see cref="LatticeReplicationOptions.ShipMaxInFlight"/> of
     /// <c>1</c>, or a higher configured window collapsed by receiver
     /// flow-control).
     /// </para>
@@ -824,9 +828,25 @@ internal sealed class ReplicationShipperGrain(
         // headroom beneath it. With adaptive sizing off and no active hint
         // this is byte-identical to the static path's max(1, ShipBatchSize).
         var maxPerBatch = ComputeMaxPerBatch(options);
+
+        // Prime each partition's shipping page once for the whole tick, then
+        // carve and ship successive batches back-to-back until the WAL tail is
+        // drained (or the receiver applies flow control). Historically this
+        // path shipped exactly one batch per phase-timer tick and returned, so
+        // a backlog larger than one batch drained at only one batch per
+        // ShipPhaseTimerPeriod - leaving multi-second gaps between batches
+        // arriving at the peer under a slow storage tier, even though the
+        // receiver had ample headroom and more entries were already durable.
+        // Draining within the tick (mirroring the bounded-pipelining path's
+        // single-prime, many-batch structure) closes those gaps and amortises
+        // the per-tick partition prime across every batch it feeds. The drain
+        // reuses the same activation-scoped scratch buffers each iteration, so
+        // it allocates nothing per batch. Per-batch acks still advance and
+        // (deferred-)persist the durable cursor in strict HLC order exactly as
+        // before, so crash-replay bounds are unchanged.
         try
         {
-            await DrainBatchAsync(options, maxPerBatch, cancellationToken);
+            await InitializeDrainTickAsync(options, cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -835,42 +855,117 @@ internal sealed class ReplicationShipperGrain(
             return;
         }
 
-        if (_drainBuffer.Count == 0)
+        // Wire-version capability negotiation and shared-dictionary
+        // convergence / negotiation run once per tick (before the first
+        // batch), mirroring the bounded-pipelining path: every batch the drain
+        // loop ships this tick encodes at the negotiated version / dictionary.
+        // Fail fast when the peer is older than the sender's minimum-supported
+        // floor. All three are no-ops when their options are off, so the
+        // default path is byte-identical to before.
+        if (options.WireVersionNegotiationEnabled && !TryNegotiateWireVersion(options))
         {
-            // No shippable work this tick. Three idle-path responsibilities:
-            //
-            //   0. Fold any consumed-but-filtered partition cursors. The drain
-            //      may have consumed (and advanced _partitionMaxReadSeq over) a
-            //      run of entries that ShouldShip rejected - on a receiver
-            //      cluster the WAL tail of a peer-authored tree is entirely
-            //      foreign-origin, so every drained entry is filtered and the
-            //      ship buffer ends empty. Without folding those cursors here
-            //      the durable partition cursor never advances past the foreign
-            //      suffix and the next pump re-reads it - and it grows with
-            //      every peer write - from WAL storage on every tick.
-            //
-            //   1. Force a deferred cursor flush if the time dimension
-            //      (ShipCursorWriteMaxDelay) has elapsed. A stream that
-            //      shipped a partial batch and then quiesced would
-            //      otherwise leave its last advances un-flushed until the
-            //      next advance - which may never come on an idle link -
-            //      keeping the crash-replay window open and pinning the
-            //      WAL GC trim frontier. The empty-drain tick is the only
-            //      place the time dimension can fire when no new acks are
-            //      arriving.
-            //   2. Consider firing an empty liveness probe so the
-            //      outbound peer.last_contact_seconds gauge does not climb
-            //      unbounded on a healthy idle link. The probe rides the
-            //      same transport ack contract as a normal batch; the
-            //      receiver sees a zero-entry envelope and acks
-            //      immediately. Preserves any accumulated backoff by
-            //      short-circuiting when one is in flight.
-            await FoldFilteredOnlyConsumedCursorsAsync(options, cancellationToken);
-            await TryFlushPendingCursorOnIdleAsync(options, cancellationToken);
-            await TryEmitLivenessProbeAsync(options, cancellationToken);
             return;
         }
+        await MaybeConvergeSharedDictionariesAsync(options, cancellationToken);
+        TryNegotiateSharedDictionary(options);
 
+        var shippedAny = false;
+        while (true)
+        {
+            try
+            {
+                await MergeOneBatchAsync(options, maxPerBatch, cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                ApplyBackoff(options, ex, "drain");
+                return;
+            }
+
+            if (_drainBuffer.Count == 0)
+            {
+                // WAL tail exhausted for this tick. Fold any consumed-but-
+                // filtered partition cursors. The drain may have consumed (and
+                // advanced _partitionMaxReadSeq over) a run of entries that
+                // ShouldShip rejected - on a receiver cluster the WAL tail of a
+                // peer-authored tree is entirely foreign-origin, so every
+                // drained entry is filtered and the ship buffer ends empty.
+                // Without folding those cursors here the durable partition
+                // cursor never advances past the foreign suffix and the next
+                // pump re-reads it - and it grows with every peer write - from
+                // WAL storage on every tick.
+                //
+                // When nothing shipped this tick the two idle-only
+                // responsibilities also run:
+                //
+                //   1. Force a deferred cursor flush if the time dimension
+                //      (ShipCursorWriteMaxDelay) has elapsed. A stream that
+                //      shipped a partial batch and then quiesced would
+                //      otherwise leave its last advances un-flushed until the
+                //      next advance - which may never come on an idle link -
+                //      keeping the crash-replay window open and pinning the
+                //      WAL GC trim frontier. The empty-drain tick is the only
+                //      place the time dimension can fire when no new acks are
+                //      arriving.
+                //   2. Consider firing an empty liveness probe so the outbound
+                //      peer.last_contact_seconds gauge does not climb unbounded
+                //      on a healthy idle link. The probe rides the same
+                //      transport ack contract as a normal batch; the receiver
+                //      sees a zero-entry envelope and acks immediately.
+                //      Preserves any accumulated backoff by short-circuiting
+                //      when one is in flight.
+                await FoldFilteredOnlyConsumedCursorsAsync(options, cancellationToken);
+                if (!shippedAny)
+                {
+                    await TryFlushPendingCursorOnIdleAsync(options, cancellationToken);
+                    await TryEmitLivenessProbeAsync(options, cancellationToken);
+                }
+                return;
+            }
+
+            // Whether this batch filled the cap is captured *before* the ship
+            // body runs any content-hash elision (which can shrink the drain
+            // buffer): a full batch means the WAL may hold more and the loop
+            // keeps draining; a short batch means the tail is exhausted for
+            // this tick.
+            var hitBatchCap = _drainBuffer.Count >= maxPerBatch;
+
+            if (await ShipMergedSerialBatchAsync(options, maxPerBatch, cancellationToken))
+            {
+                // Hard stop for this tick: a transient failure parked a backoff
+                // or the receiver asked the sender to pause / shrink via flow
+                // control. The next pump tick re-evaluates.
+                return;
+            }
+            shippedAny = true;
+            if (!hitBatchCap)
+            {
+                // Short batch shipped: WAL tail drained for this tick.
+                return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Ships the single already-merged batch currently held in
+    /// <see cref="_drainBuffer"/> down the strict-serial path: optional
+    /// content-hash elision, framing-header encode, transport send, ack
+    /// handling, and durable cursor advance. Assumes the caller has already
+    /// primed the tick (<see cref="InitializeDrainTickAsync"/>), negotiated
+    /// the wire version / shared dictionary once, and carved this batch
+    /// (<see cref="MergeOneBatchAsync"/>). Reuses the activation-scoped scratch
+    /// buffers, so it allocates nothing per batch beyond the per-page DTOs the
+    /// WAL grain returns. Returns <see langword="true"/> when the caller's
+    /// drain loop must stop for this tick (a transient failure parked a
+    /// backoff, or the receiver requested a pause / smaller batch via flow
+    /// control) and <see langword="false"/> when the batch was handled and the
+    /// loop may carve and ship the next batch.
+    /// </summary>
+    private async Task<bool> ShipMergedSerialBatchAsync(
+        LatticeReplicationOptions options,
+        int maxPerBatch,
+        CancellationToken cancellationToken)
+    {
         var sourceHlc = _drainBuffer[^1].Timestamp;
 
         // Content-hash payload elision (opt-in, default off). When enabled
@@ -896,34 +991,8 @@ internal sealed class ReplicationShipperGrain(
             _nextRetryAtUtc = DateTime.MinValue;
             _peerStats.RecordSuccess(_treeName, _peerClusterId);
             _lastSuccessfulContactUtc = DateTime.UtcNow;
-            return;
+            return false;
         }
-
-        // Wire-version capability negotiation (opt-in). Compute the
-        // version to encode at against the peer's most recently
-        // advertised capability, publish the negotiated / downgrade
-        // telemetry, and fail fast when the peer is older than the
-        // sender's minimum-supported floor (the genuinely-unsupported
-        // case). When the option is off this is skipped entirely and
-        // the batch ships at the current wire version exactly as
-        // before.
-        if (options.WireVersionNegotiationEnabled && !TryNegotiateWireVersion(options))
-        {
-            return;
-        }
-
-        // Self-distributing shared-dictionary convergence (opt-in): adopt
-        // any peer-advertised dictionary this sender does not yet hold
-        // before negotiating, so a freshly trained peer dictionary becomes
-        // immediately usable. A no-op when the option is off.
-        await MaybeConvergeSharedDictionariesAsync(options, cancellationToken);
-
-        // Per-peer shared-dictionary capability negotiation (opt-in).
-        // Resolves the effective dictionary id for this peer against its
-        // advertised capability; a no-op when the option is off. Never
-        // fails fast - an unmatched or unknown peer falls back to
-        // dictionary-less compression at the stamp site.
-        TryNegotiateSharedDictionary(options);
 
         // Build the framing-only EncodedEnvelope. The drain has
         // already populated _drainEncodedSegments with the
@@ -1001,7 +1070,7 @@ internal sealed class ReplicationShipperGrain(
                 _drainBuffer.Count, LogContext, sourceHlc);
             await RouteBatchToDeadLetterAsync(ex, cancellationToken);
             await AdvanceCursorAsync(sourceHlc, options, cancellationToken);
-            return;
+            return false;
         }
 
         ReplicationAck ack;
@@ -1045,7 +1114,7 @@ internal sealed class ReplicationShipperGrain(
         {
             OnShipErrorObserved(options);
             ApplyBackoff(options, ex, "transport");
-            return;
+            return true;
         }
 
         if (!ack.Accepted)
@@ -1054,7 +1123,7 @@ internal sealed class ReplicationShipperGrain(
             // sender's cursor stays put and we retry after backoff).
             OnShipErrorObserved(options);
             ApplyBackoff(options, exception: null, reason: "ack-rejected");
-            return;
+            return true;
         }
 
         // Trust the receiver's ack frontier. A receiver that fully
@@ -1133,6 +1202,18 @@ internal sealed class ReplicationShipperGrain(
         // ack latency, and feed the latency to the AIMD controller (when
         // enabled) so it grows / backs off on the next tick.
         OnShipAckObserved(options, maxPerBatch, ackLatency);
+
+        // Stop the drain loop for this tick when the receiver applied flow
+        // control: a strictly-positive SuggestedBatchSize (shrink hint, the
+        // same condition ComputeMaxPerBatch treats as an active ceiling - a
+        // null or zero hint means "re-accelerate" and must not halt the drain)
+        // or a PauseForMs that pushed the per-peer retry deadline into the
+        // future. The success path above cleared _nextRetryAtUtc to MinValue,
+        // so a future deadline here can only be a pause just applied.
+        // Otherwise report no stop so the caller ships the next batch
+        // back-to-back.
+        return (_receiverSuggestedBatchSize is { } suggested && suggested > 0)
+            || _nextRetryAtUtc > DateTime.UtcNow;
     }
 
     /// <summary>
@@ -2032,24 +2113,6 @@ internal sealed class ReplicationShipperGrain(
         var copy = new bool[_partitionCount];
         Array.Copy(_partitionAdvanced, copy, _partitionCount);
         return copy;
-    }
-
-    /// <summary>
-    /// Serial-path drain: initialises the per-tick partition resume
-    /// state and carves a single batch of up to
-    /// <paramref name="maxPerBatch"/> entries out of it. Convenience
-    /// composition of <see cref="InitializeDrainTickAsync"/> followed
-    /// by one <see cref="MergeOneBatchAsync"/>; the bounded-pipelining
-    /// path calls those two helpers directly so it can carve several
-    /// batches from a single primed merge state.
-    /// </summary>
-    private async Task DrainBatchAsync(
-        LatticeReplicationOptions options,
-        int maxPerBatch,
-        CancellationToken cancellationToken)
-    {
-        await InitializeDrainTickAsync(options, cancellationToken);
-        await MergeOneBatchAsync(options, maxPerBatch, cancellationToken);
     }
 
     /// <summary>
