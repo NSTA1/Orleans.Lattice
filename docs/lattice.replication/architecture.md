@@ -42,10 +42,10 @@ flowchart LR
    `SetAsync` / `DeleteAsync` reports success, so an append failure surfaces to the
    caller rather than silently dropping a change. The replication subsystem attaches
    to the `observe` step only as a low-latency nudge - it rings the per-peer
-   shipper doorbells so the background log-tailing loop drains immediately; it
-   maintains no producer-side vector clock state, performs no second WAL write,
-   and is best-effort. The causal frontier the shipper sends is read from the
-   leaf WAL it tails, never from an in-memory commit-time mirror.
+   shipper doorbells so an idle or deactivated shipper is woken to drain the
+   fresh append; it maintains no producer-side vector clock state, performs no
+   second WAL write, and is best-effort. The causal frontier the shipper sends
+   is read from the leaf WAL it tails, never from an in-memory commit-time mirror.
 
 2. **Per-shard replication WAL.** Each commit is appended by the leaf's commit-log
    writer to a per-tree,
@@ -66,7 +66,9 @@ flowchart LR
    to each configured
    peer, advancing the resume cursor as acknowledgements arrive. It is the sole ship
    driver; the commit-time observer does not ship, it only rings the worker's doorbell
-   so it drains immediately instead of waiting for its next timer tick. Redundant
+   as an edge-triggered wake so an idle or deactivated shipper is (re)activated and
+   its steady-state phase timer - the sole drain+ship driver, armed on activation -
+   picks the new work up on its next tick. Redundant
    per-key versions are coalesced off the wire before shipping, and the framing
    tail is compressed; both are convergent transforms over what the ship loop
    reads, never a mutation of the durable WAL. The efficiency posture is

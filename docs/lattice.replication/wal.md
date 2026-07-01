@@ -33,7 +33,7 @@ Routing of a mutation to a partition is deterministic and process-independent: a
                       ▼
                ShardedReplogSink
         commit-time nudge: ring each peer
-        shipper's doorbell so it drains the leaf WAL now
+        shipper's doorbell to wake it if idle
 ```
 
 The leaf commit-log writer is the single WAL appender: every commit reaches the per-shard `IWalShardGrain` exactly once through it. The commit-time `ShardedReplogSink` does **not** write the WAL and maintains no producer-side vector clock state - it is reduced to a low-latency tree-id doorbell nudge that rings each per-`(tree, peer)` shipper's doorbell. The shipper is the log-first replication producer: it tails the same leaf WAL from a durable per-partition cursor and ships to peers. The causal frontier the shipper sends is read from the leaf WAL itself, not from any in-memory commit-time mirror.

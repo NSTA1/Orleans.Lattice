@@ -159,6 +159,10 @@ A receiver whose per-origin high-water mark is older than the sender's oldest WA
 
 ## Follow-up fixes
 
+### Planned / open
+
+- [FX-073](https://github.com/NSTA1/Orleans.Lattice/issues/1065) - Cross-cluster replication throughput collapses under a write burst: stuck receiver saturation clamp, inline-doorbell pump, and per-pump all-partition durable re-prime
+
 ### Shipped
 
 - [FX-015](https://github.com/NSTA1/Orleans.Lattice/issues/436) - Per-partition resume cursor on outbound shipper

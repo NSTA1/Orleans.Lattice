@@ -345,7 +345,7 @@ Byte budget for fallback snapshot repair.
 
 ### `ShipDoorbellEnabled`
 
-When enabled, the commit-time nudge rings the log-tailing shipper's doorbell so a new local write wakes shipping promptly instead of waiting for the next cadence tick. There is no separate inline ship path - the shipper that tails the WAL is the only producer; the doorbell only short-circuits its timer wait.
+When enabled, the commit-time nudge rings the log-tailing shipper's doorbell so a new local write wakes the shipper if it had been deactivated, instead of waiting up to the keepalive reminder for it to re-activate. There is no separate inline ship path - the shipper that tails the WAL is the only producer, and its phase timer (armed on every activation) is the sole drain-and-ship driver. The doorbell is a cheap, edge-triggered wake: it does **not** run the ship pump inline; its only effect is to (re)activate an idle shipper, whose timer then drains on its next tick. A doorbell to an already-active shipper is a no-op, and a missed or coalesced doorbell only delays the next ship by one timer tick.
 
 ### `FramingCompression`
 
