@@ -46,7 +46,7 @@ internal sealed partial class ShardRootGrain
 {
     /// <summary>
     /// Most-recent HLC stamped onto a dirty-leaf entry. Seeded lazily
-    /// from <see cref="State.ShardRootState.LastDirtyAdvance"/> on first
+    /// from <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.LastDirtyAdvance"/> on first
     /// use so that marks in the post-restart window strictly monotonically
     /// advance past the persisted watermark.
     /// </summary>
@@ -56,7 +56,7 @@ internal sealed partial class ShardRootGrain
     /// <summary>
     /// In-memory flag toggled by <see cref="MarkLeafDirtyAsync"/> and
     /// cleared by <see cref="FlushPendingDirtyMarksAsync"/>. When
-    /// <see langword="true"/>, <see cref="state"/>.State has accumulated
+    /// <see langword="true"/>, <c>state</c>.State has accumulated
     /// dirty-leaf marks that have not yet been persisted by the flush
     /// timer. The flag itself is the only synchronisation primitive
     /// the hot path needs - Orleans' single-threaded reentrancy model
@@ -85,7 +85,7 @@ internal sealed partial class ShardRootGrain
 
     /// <summary>
     /// Records <paramref name="leafId"/> as dirty by max-merging a
-    /// freshly-ticked HLC into <see cref="state"/>.State and arming the
+    /// freshly-ticked HLC into <c>state</c>.State and arming the
     /// coalescing flush timer. Returns synchronously - the storage
     /// write is performed off-path by the timer callback.
     /// <para>

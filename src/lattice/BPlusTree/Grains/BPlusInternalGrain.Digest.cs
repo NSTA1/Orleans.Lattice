@@ -26,7 +26,7 @@ internal sealed partial class BPlusInternalGrain
     /// <c>NextDigestPublishSequence</c>. Lets the grandparent's fold drop a stale
     /// out-of-order publish for a still-owned child the same way the
     /// leaf-to-parent path does. The high-water mark is persisted in
-    /// <see cref="InternalNodeState.DigestPublishSequence"/> and the counter is
+    /// <see cref="Orleans.Lattice.BPlusTree.State.InternalNodeState.DigestPublishSequence"/> and the counter is
     /// seeded from the larger of that value and the current wall clock, so the
     /// sequence stays monotonic across reactivations and silo relocation even
     /// under wall-clock skew - a fresh activation can never seed below a stamp this

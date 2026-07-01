@@ -4,7 +4,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
 /// Default <see cref="ICommitLogReader"/> registered by
-/// <see cref="LatticeServiceCollectionExtensions.AddLattice(ISiloBuilder, System.Action{LatticeOptions}?)"/>.
+/// <see cref="Orleans.Lattice.LatticeServiceCollectionExtensions.AddLattice"/>.
 /// Wraps <see cref="IWalShardGrain.ReadAsync"/> with paginated
 /// streaming and translates each <see cref="WalRecord"/> back to the
 /// public <see cref="LatticeMutation"/> shape via

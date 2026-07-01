@@ -28,7 +28,7 @@ internal sealed class AtomicPreValue
     /// The absolute UTC <c>DateTimeOffset.UtcTicks</c> at which the pre-saga
     /// entry was set to expire ( TTL), or <c>0</c> if the entry had no
     /// TTL. Defaulting to <c>0</c> keeps persisted pre-saga state from earlier
-    /// versions wire-compatible (a missing <see cref="Id"/>-3 field decodes
+    /// versions wire-compatible (a missing <c>[Id]</c>-3 field decodes
     /// to <c>0</c>, matching a no-TTL entry).
     /// </summary>
     [Id(3)] public long ExpiresAtTicks { get; set; }
@@ -83,7 +83,7 @@ internal sealed class AtomicWriteState
     [Id(2)] public List<KeyValuePair<string, byte[]>> Entries { get; set; } = [];
 
     /// <summary>
-    /// Pre-saga snapshots keyed by the same order as <see cref="Entries"/>.
+    /// Pre-saga snapshots keyed by the same order as <c>Entries</c>.
     /// Populated during <see cref="AtomicWritePhase.Prepare"/>.
     /// </summary>
     [Id(3)] public List<AtomicPreValue> PreValues { get; set; } = [];
@@ -181,7 +181,7 @@ internal sealed class AtomicWriteState
     /// <summary>
     /// Total entry count of the enclosing atomic transaction, captured
     /// once on the first <see cref="AtomicWritePhase.Prepare"/> from
-    /// <see cref="Entries"/>'s <c>Count</c> and re-stamped - together
+    /// <c>Entries</c>'s <c>Count</c> and re-stamped - together
     /// with each per-key index - onto Orleans
     /// <see cref="Runtime.RequestContext"/> via
     /// <see cref="LatticeAtomicBatchContext.With"/> on every per-key
@@ -207,7 +207,7 @@ internal sealed class AtomicWriteState
     /// <see cref="ILattice.GetRoutingAsync"/>. Drives the post-execute
     /// terminal broadcast loop in
     /// <see cref="Grains.AtomicWriteGrain"/>: one
-    /// <see cref="IShardRootGrain.AppendTxTerminalAsync(Guid, bool, CancellationToken)"/>
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.AppendTxTerminalAsync"/>
     /// call per index - never per key - produces the saga's per-shard
     /// linearization point. Persisted so a crash-resume re-broadcasts
     /// terminals to the same shard set; the leaf-side
@@ -215,7 +215,7 @@ internal sealed class AtomicWriteState
     /// Wire-compatible: missing field on legacy persisted state decodes
     /// to an empty list, in which case the saga falls back to
     /// re-resolving the touched-shard set from the persisted
-    /// <see cref="Entries"/> against a freshly fetched routing snapshot.
+    /// <c>Entries</c> against a freshly fetched routing snapshot.
     /// </summary>
     [Id(16)] public List<int> TouchedShards { get; set; } = [];
 
@@ -280,7 +280,7 @@ internal sealed class AtomicWriteState
 
     /// <summary>
     /// Optional per-entry author-delta carry aligned 1:1 with
-    /// <see cref="Entries"/>: <c>EntryDeltas[i]</c> is the opaque,
+    /// <c>Entries</c>: <c>EntryDeltas[i]</c> is the opaque,
     /// Orleans-serialised typed CRDT delta the producer staged for
     /// <c>Entries[i]</c>, or <see langword="null"/> for that slot when the
     /// entry was staged as a plain last-writer-wins value write (the common
@@ -326,7 +326,7 @@ internal sealed class AtomicWriteState
 
     /// <summary>
     /// Optional per-entry delete (tombstone) channel aligned 1:1 with
-    /// <see cref="Entries"/>: <c>EntryDeletes[i]</c> is <see langword="true"/>
+    /// <c>Entries</c>: <c>EntryDeletes[i]</c> is <see langword="true"/>
     /// when <c>Entries[i]</c> is a retraction delete that rides the
     /// all-or-nothing batch as a prepared tombstone
     /// (<see cref="MutationKind.Delete"/>) rather than a prepared value write,

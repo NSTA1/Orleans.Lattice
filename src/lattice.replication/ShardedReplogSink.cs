@@ -15,7 +15,7 @@ namespace Orleans.Lattice.Replication;
 /// <para>
 /// The write-ahead log is the single per-shard <c>IWalShardGrain</c>
 /// keyed <c>{treeId}/{partition}</c> that the foreground commit-log
-/// writer (<see cref="WalCommitLogWriter"/>) appends to on every commit,
+/// writer (<see cref="Orleans.Lattice.BPlusTree.Grains.WalCommitLogWriter"/>) appends to on every commit,
 /// stamping the durable origin cluster id and vector clock. The
 /// <see cref="Grains.IReplicationShipperGrain"/> tails that same log in
 /// the background - it is the durable, log-first replication producer

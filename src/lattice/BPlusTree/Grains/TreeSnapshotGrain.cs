@@ -412,14 +412,14 @@ internal sealed class TreeSnapshotGrain(
     /// zero-expiry entry.
     /// <para>
     /// For offline snapshots, the source shards are quiesced via
-    /// <see cref="IShardRootGrain.MarkDeletedAsync"/> before drain begins,
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.MarkDeletedAsync"/> before drain begins,
     /// so the destination shard is guaranteed empty and we can use the
-    /// efficient bottom-up <see cref="IShardRootGrain.BulkLoadRawAsync"/>
+    /// efficient bottom-up <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.BulkLoadRawAsync"/>
     /// path. For online snapshots, shadow-forwarding is active on every
     /// source shard before drain starts, so concurrent writes land on the
     /// destination shard via
-    /// <see cref="IShardRootGrain.MergeManyAsync"/> before drain's batch
-    /// arrives. We therefore use <see cref="IShardRootGrain.MergeManyAsync"/>
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.MergeManyAsync"/> before drain's batch
+    /// arrives. We therefore use <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.MergeManyAsync"/>
     /// for online mode too - its LWW semantics guarantee convergence
     /// regardless of which write wins the race: whichever carries the
     /// higher HLC is observable in the final destination state.

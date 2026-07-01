@@ -15,10 +15,10 @@ namespace Orleans.Lattice;
 /// associative, idempotent: late or duplicate delivery is a no-op.
 /// </para>
 /// <para>
-/// Emitters always populate <see cref="Entries"/> (use an empty
+/// Emitters always populate <c>Entries</c> (use an empty
 /// <see cref="Dictionary{TKey, TValue}"/> for a no-op delta); use
 /// <see cref="Empty"/> to author one without allocating a fresh
-/// dictionary. The <see cref="default"/> instance has a <c>null</c>
+/// dictionary. The <see langword="default"/> instance has a <c>null</c>
 /// map and is intended only as the zero-value of the struct.
 /// </para>
 /// </summary>
@@ -35,7 +35,7 @@ public readonly record struct VersionVectorDelta
 
     /// <summary>
     /// A reusable no-op delta with an empty (but non-null)
-    /// <see cref="Entries"/> map. The backing dictionary is shared -
+    /// <c>Entries</c> map. The backing dictionary is shared -
     /// callers must not mutate it.
     /// </summary>
     public static VersionVectorDelta Empty { get; } = new()

@@ -11,7 +11,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <see cref="LatticeConstants.RegistryTreeId"/> Lattice tree.
 /// <para>
 /// Each user tree ID is stored as a key; the value is a JSON-serialized
-/// <see cref="TreeRegistryEntry"/>. The registry tree itself uses the
+/// <see cref="Orleans.Lattice.BPlusTree.State.TreeRegistryEntry"/>. The registry tree itself uses the
 /// <see cref="LatticeConstants.SystemTreePrefix"/> and is excluded from
 /// self-registration to avoid circular bootstrap.
 /// </para>
@@ -347,7 +347,7 @@ internal sealed class LatticeRegistryGrain(
 }
 
 /// <summary>
-/// Source-generated JSON context for <see cref="TreeRegistryEntry"/> serialization.
+/// Source-generated JSON context for <see cref="Orleans.Lattice.BPlusTree.State.TreeRegistryEntry"/> serialization.
 /// </summary>
 [JsonSerializable(typeof(TreeRegistryEntry))]
 internal sealed partial class RegistryEntryContext : JsonSerializerContext;

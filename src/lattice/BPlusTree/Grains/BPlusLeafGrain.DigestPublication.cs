@@ -80,7 +80,7 @@ internal sealed partial class BPlusLeafGrain
     /// publish - the <c>[AlwaysInterleave]</c> mutation surface lets the two
     /// interleave and arrive out of order - can never overwrite the fresher count
     /// for a child the parent still owns. The high-water mark is persisted in
-    /// <see cref="LeafNodeState.DigestPublishSequence"/> and the counter is seeded
+    /// <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.DigestPublishSequence"/> and the counter is seeded
     /// from the larger of that persisted value and the current wall clock, so the
     /// sequence stays monotonic across reactivations and silo relocation even when
     /// wall clocks differ - a fresh activation can never seed below a stamp this

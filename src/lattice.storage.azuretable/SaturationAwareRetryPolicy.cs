@@ -31,7 +31,7 @@ namespace Orleans.Lattice.Storage.AzureTable;
 /// consults the silo-scoped <see cref="IWalSaturationSignal"/>. When
 /// the aggregate state across every observed tree is
 /// <see cref="WalSaturationState.Saturated"/>, the policy abandons the
-/// retry by stamping a synthetic 503 <see cref="Response"/> with a
+/// retry by stamping a synthetic 503 <see cref="Azure.Response"/> with a
 /// zero <c>Retry-After</c> onto the message and returning without
 /// invoking the rest of the pipeline. The Azure SDK's outer retry
 /// loop observes the 503 + <c>Retry-After</c> and exits the retry
@@ -240,7 +240,7 @@ public sealed class SaturationAwareRetryPolicy : HttpPipelinePolicy
     private static readonly object BoxedTrue = true;
 
     /// <summary>
-    /// Synthetic <see cref="Response"/> stamped onto a saturated retry.
+    /// Synthetic <see cref="Azure.Response"/> stamped onto a saturated retry.
     /// Carries a 503 status with an empty content stream and a
     /// <c>Retry-After: 0</c> header so the SDK's outer retry policy
     /// observes a deterministic "service unavailable, do not retry

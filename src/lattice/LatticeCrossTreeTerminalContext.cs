@@ -100,7 +100,7 @@ internal static class LatticeCrossTreeTerminalContext
 /// Carried as a value on the per-call <see cref="RequestContext"/>, so it
 /// must be Orleans-serializable: Orleans deep-copies the request context on
 /// every (even same-silo) grain call, and an unregistered type faults the
-/// copier. <see cref="Immutable"/> is safe because the struct is never
+/// copier. <c>Immutable</c> is safe because the struct is never
 /// mutated after construction.
 /// </remarks>
 [GenerateSerializer]

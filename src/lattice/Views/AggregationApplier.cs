@@ -32,7 +32,8 @@ namespace Orleans.Lattice.Views;
 /// double-count. <c>min</c> / <c>max</c> / <c>set-union</c> mutate their inverse
 /// map by <c>map[sourceKey]=entry</c> / <c>map.Remove(sourceKey)</c>, which is
 /// already idempotent on replay, so they keep the simpler separate-write path.
-/// </para> Each group is sharded into <see cref="_fanout"/> accumulators
+/// </para>
+/// <para>Each group is sharded into <see cref="_fanout"/> accumulators
 /// hashed on the source key; a group's materialised value merges the shards. A
 /// fanout of 1 is a single accumulator (identical result).
 /// </para>

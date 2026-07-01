@@ -1,7 +1,7 @@
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// Stable hash function used by <see cref="ShardedReplogSink"/> to map
+/// Stable hash function used by <c>ShardedReplogSink</c> to map
 /// a <see cref="WalRecord.Key"/> to a WAL partition index.
 /// <para>
 /// Stability across silos and processes is required: two activations

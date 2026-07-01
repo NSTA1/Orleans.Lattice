@@ -6,7 +6,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// Apply-side seam used by <c>Orleans.Lattice.Replication</c>. Routes a
 /// remote mutation to the owning shard with the source HLC and origin
 /// cluster id preserved verbatim, so the persisted
-/// <see cref="LwwValue{T}"/> matches the authoring cluster's metadata
+/// <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/> matches the authoring cluster's metadata
 /// exactly.
 /// </summary>
 internal sealed partial class LatticeGrain
@@ -148,7 +148,7 @@ internal sealed partial class LatticeGrain
     }
 
     /// <summary>
-    /// Routes a single LWW entry through <see cref="IShardRootGrain.MergeManyAsync"/>
+    /// Routes a single LWW entry through <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.MergeManyAsync"/>
     /// - the only entry point that preserves the source HLC end-to-end -
     /// retrying once for each of the three transient routing-staleness
     /// classes the public write paths handle (stale shard map, stale tree
@@ -284,7 +284,7 @@ internal sealed partial class LatticeGrain
     }
 
     /// <summary>
-    /// Reconstructs the persisted <see cref="LwwValue{T}"/> for an
+    /// Reconstructs the persisted <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/> for an
     /// <see cref="ApplyMergeItem"/>. Mirrors the per-entry shape used by
     /// <see cref="ApplySetAsync"/> (Set) and <see cref="ApplyDeleteAsync"/>
     /// (tombstone) so the batched path is bit-identical to the per-entry

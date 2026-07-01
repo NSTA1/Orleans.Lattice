@@ -6,7 +6,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
 /// <see cref="System.Diagnostics.Metrics"/> instrumentation for
-/// <see cref="BPlusLeafGrain"/>, plus the lazy DI resolvers shared by
+/// <see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain"/>, plus the lazy DI resolvers shared by
 /// every partial of the class. Houses (a) <see cref="PersistAsync"/>,
 /// which wraps the leaf's <c>IPersistentState.WriteStateAsync</c> in a
 /// latency-capturing helper so the <see cref="LatticeMetrics.LeafWriteDuration"/>
@@ -87,8 +87,8 @@ internal sealed partial class BPlusLeafGrain
     /// Diagnostic gate for the c2-vi etag-race probe. Set
     /// <c>LATTICE_BENCH_TRACE_PERSIST=1</c> in the silo environment to
     /// emit one stdout line per <see cref="PersistAsync"/> call with
-    /// the activation id, <see cref="IPersistentState{TState}.RecordExists"/>,
-    /// <see cref="IPersistentState{TState}.Etag"/>, and a short caller-
+    /// the activation id, <c>RecordExists</c>,
+    /// <c>Etag</c>, and a short caller-
     /// supplied tag. Read once at process start; flipping the env var
     /// mid-run has no effect. Default <c>false</c> so production and
     /// the unit-test harness pay zero cost.
@@ -245,7 +245,7 @@ internal sealed partial class BPlusLeafGrain
     /// Lazily resolves the commit-log writer from the activation's
     /// service provider. Returns <see langword="null"/> when no adapter
     /// has been registered (the legacy-only commit path) <em>or</em>
-    /// while the leaf's <see cref="LeafNodeState.TreeId"/> is still
+    /// while the leaf's <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.TreeId"/> is still
     /// unset - a leaf created without going through
     /// <see cref="ILattice"/> (e.g. a unit-test harness that grabs a
     /// leaf grain by raw <see cref="Guid"/>) cannot dispatch to a WAL
@@ -300,10 +300,10 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="BPlusLeafGrain.CompleteSplitAsync"/>.
     /// <para>
     /// The leaf's mutation surface
-    /// (<see cref="IBPlusLeafGrain.SetAsync(string, byte[])"/>,
-    /// <see cref="IBPlusLeafGrain.SetManyAsync"/>,
-    /// <see cref="IBPlusLeafGrain.DeleteAsync"/>,
-    /// <see cref="IBPlusLeafGrain.MergeManyAsync"/>) is marked
+    /// (<see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.SetAsync(string, byte[])"/>,
+    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.SetManyAsync"/>,
+    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.DeleteAsync"/>,
+    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.MergeManyAsync"/>) is marked
     /// <c>[AlwaysInterleave]</c> so multiple producer turns can run on
     /// the same activation concurrently (U9p c2-iii). Orleans serialises
     /// synchronous code between awaits, so the per-key LWW merge,
@@ -338,8 +338,8 @@ internal sealed partial class BPlusLeafGrain
     /// midway through the commit cannot leak depth.
     /// <para>
     /// Under the shipping non-reentrant scheduling of
-    /// <see cref="IBPlusLeafGrain.SetAsync(string, byte[])"/> /
-    /// <see cref="IBPlusLeafGrain.SetManyAsync"/> the recorded value
+    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.SetAsync(string, byte[])"/> /
+    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.SetManyAsync"/> the recorded value
     /// is always <c>0</c>: Orleans serialises grain calls and the
     /// next commit cannot enter until the current one returns. The
     /// histogram is a falsifiability instrument for the U9m benchmark

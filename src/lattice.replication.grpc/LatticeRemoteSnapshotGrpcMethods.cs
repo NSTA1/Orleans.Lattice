@@ -20,14 +20,14 @@ namespace Orleans.Lattice.Replication.Grpc;
 /// <see cref="LatticeRemoteSnapshotGrpcMethods"/> singleton so they
 /// share a single method instance across every call - a code-first
 /// gRPC method's identity is its
-/// <see cref="Method.FullName"/>, so a single registration is enough
+/// <c>FullName</c>, so a single registration is enough
 /// for any number of channels and bind hooks.
 /// </remarks>
 internal sealed class LatticeRemoteSnapshotGrpcMethods
 {
     /// <summary>
     /// Logical service name carried in the
-    /// <see cref="Method.ServiceName"/> slot of every snapshot RPC.
+    /// <c>ServiceName</c> slot of every snapshot RPC.
     /// The receiver-side auth interceptor scopes the secret-header
     /// check by this prefix.
     /// </summary>

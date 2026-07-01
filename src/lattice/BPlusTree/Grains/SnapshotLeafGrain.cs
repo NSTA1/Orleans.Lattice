@@ -394,6 +394,7 @@ internal sealed class SnapshotLeafGrain(
         return half < TimeSpan.FromMinutes(1) ? TimeSpan.FromMinutes(1) : half;
     }
 
+    /// <summary>
     /// <see cref="State.SnapshotShardBaseline"/> captured at open time,
     /// filtering each row through the same <see cref="IsKeyOwned"/> donor-orphan
     /// exclusion the scan path applies so a key migrated to a sibling shard by

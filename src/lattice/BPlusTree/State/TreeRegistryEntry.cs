@@ -6,7 +6,7 @@ namespace Orleans.Lattice.BPlusTree.State;
 /// Metadata stored per tree in the internal registry tree.
 /// Serialized as the <c>byte[]</c> value for each tree ID key.
 /// Contains optional <see cref="LatticeOptions"/> overrides that take
-/// priority over <see cref="IOptionsMonitor{LatticeOptions}"/> at runtime.
+/// priority over <c>IOptionsMonitor&lt;LatticeOptions&gt;</c> at runtime.
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.TreeRegistryEntry)]
@@ -77,7 +77,7 @@ internal sealed record TreeRegistryEntry
     /// One-way latch recording that this tree has accepted at least one
     /// mutation while <see cref="LatticeOptions.MaintainProjectionDigest"/>
     /// resolved to <c>false</c>. Stamped lazily by
-    /// <see cref="BPlusLeafGrain"/> on the first trimmed-path mutation
+    /// <see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain"/> on the first trimmed-path mutation
     /// after activation, persists for the lifetime of the tree, and is
     /// never cleared. Once <c>true</c>, the effective resolved value of
     /// <see cref="LatticeOptions.MaintainProjectionDigest"/> for this
@@ -99,8 +99,8 @@ internal sealed record TreeRegistryEntry
     /// Pinned WAL partition count for this tree. Stamped at first
     /// <see cref="ILatticeRegistry.RegisterAsync"/> from the silo's
     /// then-current <see cref="LatticeOptions.WalPartitions"/> value;
-    /// never mutated thereafter. <see cref="LatticeOptionsResolver"/>
-    /// prefers this slot over the live <see cref="IOptionsMonitor{T}"/>
+    /// never mutated thereafter. <see cref="Orleans.Lattice.BPlusTree.LatticeOptionsResolver"/>
+    /// prefers this slot over the live <c>IOptionsMonitor&lt;T&gt;</c>
     /// value so the resolved <c>WalPartitions</c> seen by every grain
     /// is tree-immutable for the lifetime of the tree.
     /// <para>
@@ -116,7 +116,7 @@ internal sealed record TreeRegistryEntry
     /// <para>
     /// <see langword="null"/> on registry rows persisted before this
     /// slot was introduced; the resolver falls back to the live
-    /// <see cref="IOptionsMonitor{T}"/> value in that case, exactly
+    /// <c>IOptionsMonitor&lt;T&gt;</c> value in that case, exactly
     /// matching the legacy pre-pin behaviour. Once any first-class
     /// caller of <see cref="ILatticeRegistry.RegisterAsync"/> runs
     /// against the upgraded library, the slot is stamped and every

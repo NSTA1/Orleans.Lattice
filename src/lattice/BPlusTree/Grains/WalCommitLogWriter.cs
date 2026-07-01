@@ -7,7 +7,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
 /// Default <see cref="ICommitLogWriter"/> registered by
-/// <see cref="LatticeServiceCollectionExtensions.AddLattice(ISiloBuilder, System.Action{LatticeOptions}?)"/>.
+/// <see cref="Orleans.Lattice.LatticeServiceCollectionExtensions.AddLattice"/>.
 /// Routes a producer-built <see cref="WalRecord"/> to the per-shard
 /// <see cref="IWalShardGrain.AppendAsync"/> entry point so the caller
 /// observes the per-shard sequence number.
@@ -1013,7 +1013,7 @@ internal sealed class WalCommitLogWriter(
     /// <c>IOptionsMonitor.Get</c> on the metric path.
     /// <para>
     /// <see cref="LatticeOptions.WalPartitions"/> is sourced from the
-    /// tree-registry pin via <see cref="LatticeOptionsResolver"/>, not
+    /// tree-registry pin via <see cref="Orleans.Lattice.BPlusTree.LatticeOptionsResolver"/>, not
     /// from <see cref="IOptionsMonitor{TOptions}"/>, so the writer-side
     /// routing and the activation-time materialiser always agree on
     /// the partition fan-out shape for the lifetime of the tree -

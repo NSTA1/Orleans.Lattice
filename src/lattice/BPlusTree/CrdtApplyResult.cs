@@ -3,7 +3,7 @@ using Orleans.Lattice.Primitives;
 namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
-/// Result returned by <see cref="Grains.IBPlusLeafGrain.ApplyCrdtDeltaAsync"/>
+/// Result returned by <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.ApplyCrdtDeltaAsync"/>
 /// carrying the <see cref="HybridLogicalClock"/> stamped on the
 /// committed entry plus an optional <see cref="SplitResult"/> when the
 /// post-merge state-row write caused the leaf to exceed its sizing pin

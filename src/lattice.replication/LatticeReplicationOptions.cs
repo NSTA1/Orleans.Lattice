@@ -86,7 +86,7 @@ public class LatticeReplicationOptions
     /// <see langword="null"/> (the default), the DI-registered singleton
     /// <see cref="IWalStorageProvider"/> is used (see
     /// <see cref="LatticeReplicationServiceCollectionExtensions.AddLatticeReplication"/>,
-
+    ///
     /// which registers <see cref="InMemoryWalStorageProvider"/> as the
     /// fallback).
     /// <para>
@@ -541,7 +541,7 @@ public class LatticeReplicationOptions
     /// per-<c>(tree, peer)</c> shipper grain reads per partition per
     /// pump tick when draining the WAL via the partition-resume
     /// hot path. The pump issues one
-    /// <see cref="Grains.IWalShardGrain.ReadAsync"/> call per
+    /// <see cref="Orleans.Lattice.BPlusTree.Grains.IWalShardGrain.ReadAsync(System.Int64,System.Int32,System.Threading.CancellationToken)"/> call per
     /// partition starting from each partition's saved resume cursor,
     /// merges the pages by <see cref="Orleans.Lattice.HybridLogicalClock"/>
     /// ascending, and emits up to <see cref="ShipBatchSize"/> entries
@@ -566,7 +566,7 @@ public class LatticeReplicationOptions
     /// <summary>
     /// Number of successful acks the per-<c>(tree, peer)</c> shipper
     /// grain coalesces between calls to
-    /// <see cref="IPersistentState{TState}.WriteStateAsync"/>. Setting
+    /// <c>IPersistentState&lt;TState&gt;.WriteStateAsync</c>. Setting
     /// this to <c>1</c> persists on every ack (the original behaviour
     /// before this option was introduced); higher values amortize the
     /// storage round-trip across multiple shipped batches at the cost

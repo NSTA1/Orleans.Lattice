@@ -13,18 +13,18 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// Phase machine:
 /// </para>
 /// <list type="number">
-/// <item><description><see cref="ShardSplitPhase.BeginShadowWrite"/> - persist
-/// intent and call <see cref="IShardRootGrain.BeginSplitAsync"/> on the source
+/// <item><description><see cref="Orleans.Lattice.BPlusTree.State.ShardSplitPhase.BeginShadowWrite"/> - persist
+/// intent and call <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.BeginSplitAsync"/> on the source
 /// so that subsequent live writes to moved virtual slots are mirrored to the
 /// target.</description></item>
-/// <item><description><see cref="ShardSplitPhase.Drain"/> - walk the source
+/// <item><description><see cref="Orleans.Lattice.BPlusTree.State.ShardSplitPhase.Drain"/> - walk the source
 /// shard's leaf chain and merge all entries (including tombstones) for moved
-/// virtual slots into the target via <see cref="IShardRootGrain.MergeManyAsync"/>,
+/// virtual slots into the target via <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.MergeManyAsync"/>,
 /// preserving original HLC timestamps.</description></item>
 /// <item><description><see cref="ShardSplitPhase.Swap"/> - atomically update
 /// the persisted <see cref="ShardMap"/> so that moved virtual slots route to
 /// the new target shard.</description></item>
-/// <item><description><see cref="ShardSplitPhase.Reject"/> - flip the source
+/// <item><description><see cref="Orleans.Lattice.BPlusTree.State.ShardSplitPhase.Reject"/> - flip the source
 /// into reject mode so any stale <c>LatticeGrain</c> activations still
 /// targeting the source for moved-slot keys receive
 /// <see cref="StaleShardRoutingException"/> and refresh.</description></item>
@@ -126,7 +126,7 @@ internal sealed class TreeShardSplitGrain(
     }
 
     /// <summary>
-    /// Persists the split intent and invokes <see cref="IShardRootGrain.BeginSplitAsync"/>
+    /// Persists the split intent and invokes <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.BeginSplitAsync"/>
     /// on the source shard so that shadow-writes start immediately.
     /// Exposed as <c>internal</c> for unit testing.
     /// </summary>
@@ -335,7 +335,7 @@ internal sealed class TreeShardSplitGrain(
     /// <summary>
     /// Drains all moved-slot entries from the source shard's leaf chain to the
     /// target shard, preserving HLC timestamps via
-    /// <see cref="IShardRootGrain.MergeManyAsync"/>. Idempotent: re-running
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.MergeManyAsync"/>. Idempotent: re-running
     /// after a crash converges via CRDT LWW. Exposed as <c>internal</c> for unit testing.
     /// </summary>
     internal async Task DrainAsync()
@@ -359,15 +359,15 @@ internal sealed class TreeShardSplitGrain(
     /// route to the target physical shard. Exposed as <c>internal</c> for unit testing.
     /// <para>
     /// <b>Ordering invariant.</b> The source shard root MUST enter
-    /// <see cref="ShardSplitPhase.Reject"/> via
-    /// <see cref="IShardRootGrain.EnterRejectPhaseAsync"/> BEFORE the registry's
+    /// <see cref="Orleans.Lattice.BPlusTree.State.ShardSplitPhase.Reject"/> via
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.EnterRejectPhaseAsync"/> BEFORE the registry's
     /// shard map flips. The reverse order opens a multi-RPC window in which the
     /// registry already routes moved slots to the destination but the source's
     /// hot-path reject gate (<c>ThrowIfRejectedForKey</c>) does not yet fire
-    /// (<see cref="ShardRootState.SplitInProgress"/>.Phase is still pre-Reject
-    /// and <see cref="ShardRootState.MovedAwaySlots"/> is empty until
-    /// <see cref="IShardRootGrain.CompleteSplitAsync"/> runs). A reader whose
-    /// <see cref="LatticeGrain"/> activation holds a stale routing cache then
+    /// (<see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.SplitInProgress"/>.Phase is still pre-Reject
+    /// and <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.MovedAwaySlots"/> is empty until
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.CompleteSplitAsync"/> runs). A reader whose
+    /// <see cref="Orleans.Lattice.BPlusTree.Grains.LatticeGrain"/> activation holds a stale routing cache then
     /// routes the moved-slot key to the source, the source serves the read
     /// (no <see cref="StaleShardRoutingException"/>), and the reader surfaces
     /// the pre-saga <c>Entries</c> value while every other key on a non-stale
@@ -379,7 +379,7 @@ internal sealed class TreeShardSplitGrain(
     /// until the immediately-following <see cref="ILatticeRegistry.SetShardMapAsync"/>
     /// commits. The downstream <see cref="EnterRejectAsync"/> coordinator
     /// phase remains a no-op because
-    /// <see cref="IShardRootGrain.EnterRejectPhaseAsync"/> is idempotent
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.EnterRejectPhaseAsync"/> is idempotent
     /// (returns immediately when the source is already in Reject).
     /// </para>
     /// <para>
@@ -590,14 +590,14 @@ internal sealed class TreeShardSplitGrain(
     /// Walks the source shard's leaf chain and merges every entry whose key
     /// hashes to a moved virtual slot into the target shard, preserving the
     /// original HLC timestamp. Tombstones are forwarded the same way (their
-    /// <see cref="LwwValue{T}.IsTombstone"/> flag is preserved through
-    /// <see cref="IShardRootGrain.MergeManyAsync"/>). Idempotent under retry.
+    /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}.IsTombstone"/> flag is preserved through
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.MergeManyAsync"/>). Idempotent under retry.
     /// <para>
     /// Memory and message size are bounded by
     /// <see cref="LatticeOptions.SplitDrainBatchSize"/>: entries are flushed
     /// to the target whenever the in-flight batch reaches that size, and
     /// each leaf is asked only for moved-slot entries via
-    /// <see cref="IBPlusLeafGrain.GetDeltaSinceForSlotsAsync"/> so unrelated
+    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.GetDeltaSinceForSlotsAsync"/> so unrelated
     /// data is never serialised on the wire.
     /// </para>
     /// </summary>
@@ -645,7 +645,7 @@ internal sealed class TreeShardSplitGrain(
 
     /// <summary>
     /// Retroactive shadow-forward of in-flight prepared
-    /// mutations at the entry of the <see cref="ShardSplitPhase.BeginShadowWrite"/>
+    /// mutations at the entry of the <see cref="Orleans.Lattice.BPlusTree.State.ShardSplitPhase.BeginShadowWrite"/>
     /// phase. Walks the source shard's leaf chain, snapshots every
     /// prepared mutation whose key hashes into a migrating virtual
     /// slot, and replays each snapshot through the destination shard's
@@ -658,18 +658,18 @@ internal sealed class TreeShardSplitGrain(
     /// fan-out
     /// (<see cref="TerminalFanOutResolver.ResolveTransitiveAsync"/>),
     /// which reaches the destination shard via the source's
-    /// <see cref="State.ShardRootState.SplitInProgress"/> /
-    /// <see cref="State.ShardRootState.MovedAwaySlots"/> records.
+    /// <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.SplitInProgress"/> /
+    /// <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.MovedAwaySlots"/> records.
     /// <para>
     /// <b>Idempotence.</b> LWW per <c>(txid, key)</c> on the
     /// destination's pending bucket makes the sweep safe under retry:
     /// a re-replayed snapshot with the same <see cref="HybridLogicalClock"/>
     /// timestamp produces a fixed point in
-    /// <see cref="LwwValue{T}.Merge(LwwValue{T}, LwwValue{T})"/>. A
+    /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}.Merge(LwwValue{T}, LwwValue{T})"/>. A
     /// crash mid-sweep is recovered by the
-    /// <see cref="ShardSplitPhase.BeginShadowWrite"/> branch of
+    /// <see cref="Orleans.Lattice.BPlusTree.State.ShardSplitPhase.BeginShadowWrite"/> branch of
     /// <see cref="RunSplitPassAsync"/> which re-runs the entire sweep
-    /// before transitioning to <see cref="ShardSplitPhase.Drain"/>.
+    /// before transitioning to <see cref="Orleans.Lattice.BPlusTree.State.ShardSplitPhase.Drain"/>.
     /// </para>
     /// <para>
     /// <b>Cost.</b> Bounded by active-saga concurrency at split-begin
@@ -684,13 +684,13 @@ internal sealed class TreeShardSplitGrain(
     /// <para>
     /// <b>Orphan-window closure.</b> Each snapshot's replay races with
     /// the saga's own commit-phase terminal broadcast. The saga calls
-    /// <see cref="ITxRegistryGrain.GetParticipantsAsync"/> once at the
+    /// <see cref="Orleans.Lattice.BPlusTree.ITxRegistryGrain.GetParticipantsAsync"/> once at the
     /// top of the broadcast; if that query returns BEFORE the sweep's
     /// per-snapshot <c>SetAsync</c> registers the destination shard
     /// (via <c>RecordAffectedLeafIfPreparedAsync</c>), the saga's
     /// terminal fan-out goes only to source and the prepared entry we
     /// install on the destination becomes orphaned. After the saga
-    /// runs <see cref="ITxRegistryGrain.ForgetAsync"/>, the registry
+    /// runs <see cref="Orleans.Lattice.BPlusTree.ITxRegistryGrain.ForgetAsync"/>, the registry
     /// status read by a later reader returns <see cref="TxStatus.InFlight"/>
     /// (the default-when-absent fallback), the reader's dial-back
     /// surfaces the orphaned prepared value, and a later saga's value
@@ -881,7 +881,7 @@ internal sealed class TreeShardSplitGrain(
     }
 
     /// <summary>
-    /// Replays a single <see cref="PendingMutationSnapshot"/> through
+    /// Replays a single <see cref="Orleans.Lattice.BPlusTree.PendingMutationSnapshot"/> through
     /// the destination shard's standard write path. The four ambient
     /// scopes - transaction id, prepared flag, origin cluster, vector
     /// clock, HLC override - propagate via Orleans
@@ -892,8 +892,8 @@ internal sealed class TreeShardSplitGrain(
     /// into its own pending-tx map (because <c>LatticePreparedContext.Current</c>
     /// is true) under the original <c>(txid, key)</c> identity.
     /// <para>
-    /// Tombstones are replayed via <see cref="IShardRootGrain.DeleteAsync"/>
-    /// rather than the TTL-aware <see cref="IShardRootGrain.SetAsync(string, byte[], long)"/>
+    /// Tombstones are replayed via <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.DeleteAsync"/>
+    /// rather than the TTL-aware <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.SetAsync(string, byte[], long)"/>
     /// overload, so the destination's <c>CommitDeleteAsync</c> path
     /// stamps the prepared tombstone correctly. Non-tombstone replays
     /// use the TTL-aware Set overload so <c>ExpiresAtTicks</c> is

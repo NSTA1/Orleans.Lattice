@@ -4,7 +4,7 @@ namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
 /// Single item in a batched typed-CRDT delta-apply request submitted via
-/// <see cref="IReplicationApplyGrain.ApplyCrdtDeltaManyAsync"/>. Carries
+/// <see cref="Orleans.Lattice.BPlusTree.IReplicationApplyGrain.ApplyCrdtDeltaManyAsync"/>. Carries
 /// the authoring cluster's metadata (<see cref="SourceHlc"/>,
 /// <see cref="OriginClusterId"/>, <see cref="SourceVectorClock"/>) plus
 /// the typed CRDT delta bytes and the convergence
@@ -32,7 +32,7 @@ internal readonly record struct ApplyCrdtDeltaItem
     /// <summary>
     /// The convergence rule the receiver folds the delta under. Always a
     /// CRDT mode (never <see cref="LatticeMergeMode.LwwRegister"/>); LWW
-    /// writes ride <see cref="IReplicationApplyGrain.ApplyMergeManyAsync"/>
+    /// writes ride <see cref="Orleans.Lattice.BPlusTree.IReplicationApplyGrain.ApplyMergeManyAsync"/>
     /// instead.
     /// </summary>
     [Id(1)] public LatticeMergeMode Mode { get; init; }
@@ -54,7 +54,7 @@ internal readonly record struct ApplyCrdtDeltaItem
     /// The vector-clock frontier captured by the remote cluster at commit
     /// time, or <see langword="null"/> when the producing cluster does not
     /// stamp a frontier. Stamped verbatim onto the persisted
-    /// <see cref="LwwValue{T}.VectorClock"/>.
+    /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}.VectorClock"/>.
     /// </summary>
     [Id(5)] public VersionVector? SourceVectorClock { get; init; }
 }

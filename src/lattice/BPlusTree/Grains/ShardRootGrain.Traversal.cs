@@ -177,13 +177,13 @@ internal sealed partial class ShardRootGrain
 
     /// <summary>
     /// Returns <see langword="true"/> only when this shard's root is BOTH
-    /// flagged as a leaf (<see cref="ShardRootState.RootIsLeaf"/>) AND the
+    /// flagged as a leaf (<see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.RootIsLeaf"/>) AND the
     /// persisted root node id actually addresses a leaf grain. A
     /// baked-inconsistent topology that left the <c>RootIsLeaf</c> bit true over
     /// an internal root (issue 899) returns <see langword="false"/> here, so a
     /// caller's flat-tree fast path is skipped and the internal-rooted branch
     /// runs instead of blind-casting the internal root to
-    /// <see cref="IBPlusLeafGrain"/>. When the root id is unset, or the leaf
+    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain"/>. When the root id is unset, or the leaf
     /// grain type cannot be resolved (a non-runtime test factory, where
     /// <see cref="IsLeafGrainId"/> is always true), this is exactly
     /// <c>RootIsLeaf</c>, so healthy trees and fakes are unaffected.
@@ -204,7 +204,7 @@ internal sealed partial class ShardRootGrain
     /// <see cref="GrainType"/> comparison.
     /// <para>
     /// This guard ensures the scan never blind-casts an internal node id to
-    /// <see cref="IBPlusLeafGrain"/> (the InvalidCastException of issue 899):
+    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain"/> (the InvalidCastException of issue 899):
     /// whether the offending id arrives from a leftmost / rightmost traversal
     /// that trusted a corrupt <c>ChildrenAreLeaves</c> flag, or from a leaf
     /// next / prev sibling pointer that crosses a node level, the scan
@@ -247,7 +247,7 @@ internal sealed partial class ShardRootGrain
     /// comparison.
     /// <para>
     /// This guard ensures a read or write never blind-casts an internal node id
-    /// to <see cref="IBPlusLeafGrain"/> (the InvalidCastException of issue 899)
+    /// to <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain"/> (the InvalidCastException of issue 899)
     /// when a baked-inconsistent topology mislabels an internal node as a leaf -
     /// a persisted <c>RootIsLeaf</c> bit left true over an internal root, or a
     /// routing snapshot whose <c>ChildrenAreLeaves</c> flag is true over internal
@@ -812,7 +812,7 @@ internal sealed partial class ShardRootGrain
     /// This guarantees every caller of <see cref="GetLeftmostLeafIdAsync"/> (the
     /// scan surface, the replication snapshot producer, compaction, merge and
     /// split leaf-chain walkers) receives a leaf-typed id it can safely cast to
-    /// <see cref="IBPlusLeafGrain"/>. No-op for healthy trees and for non-runtime
+    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain"/>. No-op for healthy trees and for non-runtime
     /// test factories, where <see cref="IsLeafGrainId"/> is always true.
     /// </summary>
     private async ValueTask<GrainId> DescendToEdgeLeafTypeGuardAsync(GrainId nodeId, bool leftmost)

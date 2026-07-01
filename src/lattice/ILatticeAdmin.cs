@@ -31,7 +31,7 @@ public interface ILatticeAdmin : IGrainWithStringKey
     /// accounting); the cluster total is then a lower bound.
     /// </para>
     /// <para>
-    /// Marked <see cref="AlwaysInterleaveAttribute"/>: the call is a
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/>: the call is a
     /// read-only cluster-wide fan-out with no per-call shared state on the
     /// admin grain, so a slow tree's deep walk must not block sibling
     /// administrative calls (a concurrent <see cref="PollWalUsageAsync"/>
@@ -61,7 +61,7 @@ public interface ILatticeAdmin : IGrainWithStringKey
     /// deep leaf-walk fan-out and must not be invoked on a polling cadence.
     /// </para>
     /// <para>
-    /// Marked <see cref="AlwaysInterleaveAttribute"/> for the same reason
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> for the same reason
     /// as <see cref="GetTotalStorageUsageAsync"/>: a slow tree under one
     /// poll tick must not stall the next tick, and an operator-driven
     /// <see cref="RefreshStorageUsageAsync"/> must not be parked behind
@@ -83,7 +83,7 @@ public interface ILatticeAdmin : IGrainWithStringKey
     /// long-running deployment's reported figures); the background
     /// storage-usage poller never invokes it.
     /// <para>
-    /// Marked <see cref="AlwaysInterleaveAttribute"/>: read-only
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/>: read-only
     /// cluster-wide fan-out with no per-call shared state on the admin
     /// grain (re-anchor writes happen on the per-shard root, not here).
     /// </para>
@@ -169,7 +169,7 @@ public interface ILatticeAdmin : IGrainWithStringKey
     /// provider key as <paramref name="targetProviderKey"/>.
     /// </para>
     /// <para>
-    /// <b>Not</b> marked <see cref="AlwaysInterleaveAttribute"/>: the move saga
+    /// <b>Not</b> marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/>: the move saga
     /// mutates placement and must run as a non-reentrant turn on the admin
     /// singleton so two concurrent moves of the same partition cannot interleave.
     /// </para>
@@ -205,7 +205,7 @@ public interface ILatticeAdmin : IGrainWithStringKey
     /// when any target key is unresolvable on this silo.
     /// </para>
     /// <para>
-    /// <b>Not</b> marked <see cref="AlwaysInterleaveAttribute"/>: the batch saga
+    /// <b>Not</b> marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/>: the batch saga
     /// mutates placement and must run as a non-reentrant turn on the admin
     /// singleton so two concurrent moves cannot interleave.
     /// </para>

@@ -2,7 +2,7 @@
 namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
-/// Internal per-leaf counter snapshot returned by <see cref="IBPlusLeafGrain.GetStatsAsync"/>.
+/// Internal per-leaf counter snapshot returned by <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.GetStatsAsync"/>.
 /// Used by the diagnostics aggregation path to compute tombstone ratios
 /// without streaming entries across the grain boundary. Never exposed on
 /// <see cref="ILattice"/>; the public diagnostics surface is

@@ -1,7 +1,7 @@
 namespace Orleans.Lattice.BPlusTree.State;
 
 /// <summary>
-/// Persistent state for <see cref="Grains.TxRegistryGrain"/>. Holds the
+/// Persistent state for <see cref="Orleans.Lattice.BPlusTree.Grains.TxRegistryGrain"/>. Holds the
 /// recorded commit/abort decisions for atomic-write sagas on a single
 /// tree, plus the per-saga set of shards that participated in the
 /// saga's prepare phase. Entries are added when the saga grain calls

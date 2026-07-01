@@ -29,7 +29,7 @@ namespace Orleans.Lattice;
 /// </summary>
 public class LatticeOptions
 {
-    /// <summary>Number of keys per page returned by <see cref="IShardRootGrain.GetSortedKeysBatchAsync"/>.</summary>
+    /// <summary>Number of keys per page returned by <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.GetSortedKeysBatchAsync"/>.</summary>
     public int KeysPageSize { get; set; } = DefaultKeysPageSize;
 
     /// <summary>
@@ -157,7 +157,7 @@ public class LatticeOptions
     /// </para>
     /// <para>
     /// Default 64 reproduces pre-batching behaviour exactly on shards
-    /// with <= 64 leaves (the common case). Values below
+    /// with &lt;= 64 leaves (the common case). Values below
     /// <see cref="MinCompactionLeafBatchSize"/> are clamped to the floor
     /// with a one-shot warning per tree per process. Snapshotted at pass
     /// start, so mid-pass option changes do not retroactively reshape an
@@ -230,7 +230,7 @@ public class LatticeOptions
     /// <summary>
     /// Minimum effective value for <see cref="CompactionShardTickInterval"/>
     /// (100 milliseconds). Configured values below this floor are clamped
-    /// up by <see cref="LatticeOptionsResolver"/> with a one-shot warning
+    /// up by <see cref="Orleans.Lattice.BPlusTree.LatticeOptionsResolver"/> with a one-shot warning
     /// per tree per process. The floor exists so a pathological setting
     /// (e.g. 1 ms) cannot starve the rest of the compactor grain's
     /// scheduler quota by yielding too briefly between shard walks.
@@ -250,7 +250,7 @@ public class LatticeOptions
     /// <summary>
     /// Minimum effective value for <see cref="CompactionLeafBatchSize"/>
     /// (<c>1</c> leaf). Configured values below this floor are clamped up
-    /// by <see cref="LatticeOptionsResolver"/> with a one-shot warning per
+    /// by <see cref="Orleans.Lattice.BPlusTree.LatticeOptionsResolver"/> with a one-shot warning per
     /// tree per process. A batch size of zero would stall the pass
     /// indefinitely; a batch size of one is the legitimate "yield after
     /// every leaf" extreme.
@@ -295,7 +295,7 @@ public class LatticeOptions
 
     /// <summary>
     /// When <c>true</c>, the autonomic <c>HotShardMonitorGrain</c> periodically
-    /// polls each physical shard's hotness counters (<see cref="IShardRootGrain.GetHotnessAsync"/>)
+    /// polls each physical shard's hotness counters (<see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.GetHotnessAsync"/>)
     /// and triggers an online adaptive split when the observed
     /// operations-per-second exceeds <see cref="HotShardOpsPerSecondThreshold"/>.
     /// Splits happen fully online via shadow-writing - no shard is ever taken
@@ -310,7 +310,7 @@ public class LatticeOptions
     /// Operations-per-second threshold above which a shard is considered hot
     /// and eligible for an autonomic split. Computed as
     /// <c>(reads + writes) / window.TotalSeconds</c> over the period reported
-    /// by <see cref="ShardHotness.Window"/>. Lower values trigger splits more
+    /// by <see cref="Orleans.Lattice.BPlusTree.ShardHotness.Window"/>. Lower values trigger splits more
     /// aggressively; the default of 200 ops/s is intentionally low so splits
     /// occur well before throughput degrades.
     /// </summary>
@@ -354,7 +354,7 @@ public class LatticeOptions
     public const int DefaultMaxConcurrentAutoSplits = 2;
 
     /// <summary>
-    /// Maximum number of parallel <see cref="ITreeShardSplitGrain"/> splits
+    /// Maximum number of parallel <see cref="Orleans.Lattice.BPlusTree.ITreeShardSplitGrain"/> splits
     /// that an online reshard (<see cref="ILattice.ReshardAsync"/>) may drive
     /// concurrently. Each split drains one physical shard's upper-half
     /// virtual slots into a newly allocated target shard; running several
@@ -438,7 +438,7 @@ public class LatticeOptions
 
     /// <summary>
     /// Maximum number of moved-slot entries the split coordinator accumulates
-    /// in a single <see cref="IShardRootGrain.MergeManyAsync"/> call to the
+    /// in a single <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.MergeManyAsync"/> call to the
     /// target shard during drain. Larger values reduce per-call overhead;
     /// smaller values bound peak memory on the coordinator silo and the size
     /// of the Orleans grain message. The drain phase remains idempotent under
@@ -510,7 +510,7 @@ public class LatticeOptions
 
     /// <summary>
     /// How long a completed saga's commit/abort decision persists in the
-    /// per-tree <see cref="Grains.TxRegistryGrain"/> as a tombstone after
+    /// per-tree <see cref="Orleans.Lattice.BPlusTree.Grains.TxRegistryGrain"/> as a tombstone after
     /// the saga calls <c>ForgetAsync</c>. Covers the race window where a
     /// concurrent <c>TreeShardSplitGrain.RetroactiveSweepPreparedMutationsAsync</c>
     /// installs a pending bucket on a destination shard <i>after</i> the
@@ -534,7 +534,7 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultTxDecisionRetention = TimeSpan.FromSeconds(60);
 
     /// <summary>
-    /// Hard cap on how long the per-tree <see cref="Grains.TxRegistryGrain"/>
+    /// Hard cap on how long the per-tree <see cref="Orleans.Lattice.BPlusTree.Grains.TxRegistryGrain"/>
     /// will retain a point-in-time snapshot pin recorded for a
     /// <see cref="LatticeCursorSpec.PointInTime"/> cursor. The cursor grain
     /// refreshes its pin on every step (<c>Next*Async</c> /
@@ -558,7 +558,7 @@ public class LatticeOptions
     /// <summary>
     /// Absolute footprint cap on the union of saga decisions pinned by all
     /// active <see cref="LatticeCursorSpec.PointInTime"/> cursors against
-    /// the per-tree <see cref="Grains.TxRegistryGrain"/>. A new
+    /// the per-tree <see cref="Orleans.Lattice.BPlusTree.Grains.TxRegistryGrain"/>. A new
     /// <c>OpenAsync(PointInTime: true)</c> whose snapshot would push the
     /// total pinned-decision footprint over this cap throws
     /// <see cref="LatticeCursorRegistryPinExhaustedException"/> rather than
@@ -816,7 +816,7 @@ public class LatticeOptions
     /// <c>(checkpoint - tail) / (head - tail) &lt;= LeafSnapshotMargin</c>
     /// after the three hard triggers have been ruled out; when the
     /// inequality holds the detector returns the
-    /// <see cref="FallOffLogDecision.SnapshotPending"/> advisory and
+    /// <see cref="Orleans.Lattice.BPlusTree.Grains.FallOffLogDecision.SnapshotPending"/> advisory and
     /// the leaf grain itself captures a snapshot of its cache (at
     /// activation, and periodically thereafter while it stays active -
     /// see <see cref="LeafSnapshotReClassifyEveryNCheckpoints"/>). The
@@ -838,7 +838,7 @@ public class LatticeOptions
     /// <summary>
     /// Cadence at which an active leaf grain re-classifies its WAL
     /// gap and, on the
-    /// <see cref="FallOffLogDecision.SnapshotPending"/> advisory,
+    /// <see cref="Orleans.Lattice.BPlusTree.Grains.FallOffLogDecision.SnapshotPending"/> advisory,
     /// drives a proactive snapshot capture. Expressed as the number
     /// of successful checkpoint persists between re-classifications;
     /// the default <c>64</c> means a leaf that has just persisted its
@@ -1028,7 +1028,7 @@ public class LatticeOptions
     /// <summary>
     /// Maximum number of leaf-materialiser WAL replays a single silo runs
     /// concurrently. The activation hook
-    /// (<see cref="State.LeafNodeState"/> projection rebuild) replays the WAL
+    /// (<see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState"/> projection rebuild) replays the WAL
     /// tail to bring a cold leaf online; under a burst that activates or splits
     /// many leaves at once, an unbounded fan-out of those replays can saturate
     /// every silo thread and starve the foreground request path (the wedge
@@ -1536,7 +1536,7 @@ public class LatticeOptions
     /// the activation can finish tearing down. Bounds the host-level
     /// SIGTERM drain so the silo's shutdown accounting (the
     /// benchmark host's <c>FINAL</c> line, an
-    /// <see cref="System.Threading.IHostApplicationLifetime.ApplicationStopping"/>
+    /// <see cref="Microsoft.Extensions.Hosting.IHostApplicationLifetime.ApplicationStopping"/>
     /// cancellation source) always settles within bounded time of the
     /// SIGTERM, regardless of whether the underlying storage provider
     /// is healthy.
@@ -1653,8 +1653,8 @@ public class LatticeOptions
     /// <summary>
     /// Minimum number of provider-side commit failures (any
     /// <see cref="System.Exception"/> surfaced from a downstream
-    /// <see cref="IWalShardGrain.AppendAsync(WalRecord, System.Threading.CancellationToken)"/>
-    /// / <see cref="IWalShardGrain.AppendBatchAsync(System.Collections.Generic.IReadOnlyList{WalRecord}, System.Threading.CancellationToken)"/>
+    /// <see cref="Orleans.Lattice.BPlusTree.Grains.IWalShardGrain.AppendAsync(Orleans.Lattice.WalRecord, System.Threading.CancellationToken)"/>
+    /// / <see cref="Orleans.Lattice.BPlusTree.Grains.IWalShardGrain.AppendBatchAsync(System.Collections.Generic.IReadOnlyList{Orleans.Lattice.WalRecord}, System.Threading.CancellationToken)"/>
     /// dispatch other than the writer-side
     /// <see cref="System.TimeoutException"/> already captured by
     /// <see cref="WalSaturationDispatchTimeoutThreshold"/>) observed

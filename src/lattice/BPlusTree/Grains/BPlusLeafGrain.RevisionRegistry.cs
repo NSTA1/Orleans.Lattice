@@ -5,7 +5,7 @@ using System.Threading;
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// Same-silo revision registry partial for <see cref="BPlusLeafGrain"/>.
+/// Same-silo revision registry partial for <see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain"/>.
 /// <para>
 /// Exposes a process-wide monotonic counter per leaf <see cref="GrainId"/>
 /// that the local <see cref="LeafCacheGrain"/> activation can read
@@ -108,7 +108,7 @@ internal sealed partial class BPlusLeafGrain
     /// against itself; the write uses <see cref="Volatile.Write(ref long, long)"/>
     /// to publish a release-store so the cross-grain reader on a
     /// different scheduler thread observes the bumped value through its
-    /// matching <see cref="Interlocked.Read(ref long)"/>). No dictionary
+    /// matching <c>Interlocked.Read</c>). No dictionary
     /// touch and no atomic increment in the steady-state path keeps tight
     /// write loops (e.g. <see cref="SetManyAsync"/> over a thousand-key
     /// batch) free of both per-call allocations and per-call full barriers.
@@ -160,7 +160,7 @@ internal sealed partial class BPlusLeafGrain
     /// <c>Version.Entries</c> stayed empty. <see cref="Orleans.Lattice.VersionVector.DominatesOrEquals(Orleans.Lattice.VersionVector)"/>
     /// then trivially returned <c>true</c> for any caller (the iteration body
     /// never executes on an empty dictionary), and the fast path in
-    /// <see cref="IBPlusLeafGrain.GetDeltaSinceAsync(Orleans.Lattice.VersionVector)"/>
+    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.GetDeltaSinceAsync(Orleans.Lattice.VersionVector)"/>
     /// returned the empty singleton - hiding the just-written entry from the
     /// cache. Publishing the post-advance stamp (which is strictly greater
     /// than <c>Zero</c> by <see cref="Orleans.Lattice.HybridLogicalClock.Tick(Orleans.Lattice.HybridLogicalClock)"/>'s

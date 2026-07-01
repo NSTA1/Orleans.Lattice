@@ -5,7 +5,7 @@ using Orleans.Lattice.Primitives;
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// Activation-hook partial for <see cref="BPlusLeafGrain"/>. Runs the
+/// Activation-hook partial for <see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain"/>. Runs the
 /// activation-time WAL materialiser that rebuilds the in-memory
 /// projection (the per-activation runtime entry cache and the
 /// per-leaf saga pending-tx machinery) from the durable per-shard
@@ -13,7 +13,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// per-shard WAL GC sees the leaf the moment activation completes.
 /// <para>
 /// The materialiser is the activation-time WAL recovery seam, gated
-/// by the persisted <see cref="State.LeafNodeState.ProjectionCheckpointOffset"/>:
+/// by the persisted <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.ProjectionCheckpointOffset"/>:
 /// every WAL entry strictly after the checkpoint is replayed back
 /// through <see cref="ILeafProjection.Apply(in LatticeMutation)"/>, the
 /// pending-tx map is reconstructed deterministically from prepared
@@ -343,7 +343,7 @@ internal sealed partial class BPlusLeafGrain
     /// <summary>
     /// Drives the dormant <see cref="ILeafProjection.Apply(in LatticeMutation)"/>
     /// seam over every WAL entry strictly after
-    /// <see cref="State.LeafNodeState.ProjectionCheckpointOffset"/>
+    /// <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.ProjectionCheckpointOffset"/>
     /// and at-or-before the WAL head, then advances the persisted
     /// checkpoint via
     /// <see cref="ILeafProjection.SetCheckpointOffsetAsync(long, CancellationToken)"/>.
@@ -366,8 +366,8 @@ internal sealed partial class BPlusLeafGrain
     /// drops entries whose <see cref="LatticeMutation.ShardIndex"/>
     /// does not match this leaf's persisted shard, and entries whose
     /// key falls outside this leaf's persisted
-    /// [<see cref="State.LeafNodeState.LowKeyInclusive"/>,
-    /// <see cref="State.LeafNodeState.HighKeyExclusive"/>) range. The
+    /// [<see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.LowKeyInclusive"/>,
+    /// <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.HighKeyExclusive"/>) range. The
     /// filter is keyed on persisted ownership identity, not on
     /// authorship - a leaf born from a split must apply WAL entries
     /// that fall in its current range even when those entries were
@@ -582,15 +582,13 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
-    /// <summary>
     /// Mutation deferred during pass 1 of the activation-time replay
     /// to be applied in pass 2 once every partition's per-key Set /
     /// Delete entries have been absorbed into the leaf's Cache and
     /// every prepare into <c>_pendingTx</c>. Covers the two mutation
     /// shapes whose apply semantics depend on the global per-shard
     /// state being fully reconstructed:
-    /// <list type="bullet">
-    ///   <item>
+    /// <para>
     ///     <see cref="MutationKind.TxCommit"/> /
     ///     <see cref="MutationKind.TxAbort"/> - the saga's per-key
     ///     prepares fan out across multiple WAL partitions while the
@@ -603,8 +601,8 @@ internal sealed partial class BPlusLeafGrain
     ///     <c>_recentlyTerminal</c> dedup had already accepted the
     ///     txid - leaving the late prepares stranded and silently
     ///     invisible.
-    ///   </item>
-    ///   <item>
+    /// </para>
+    /// <para>
     ///     <see cref="MutationKind.DeleteRange"/> - the tombstone
     ///     mutation iterates the leaf's Cache at apply time to
     ///     tombstone every in-range key. A range tombstone in
@@ -614,8 +612,7 @@ internal sealed partial class BPlusLeafGrain
     ///     before partition <c>P_s</c>), tombstone nothing, and let
     ///     the Sets in <c>P_s</c> become visible. Deferring to pass 2
     ///     restores the tombstone-after-its-targets ordering invariant.
-    ///   </item>
-    /// </list>
+    /// </para>
     /// </summary>
     private readonly record struct DeferredTerminal(
         int Partition,
@@ -776,7 +773,7 @@ internal sealed partial class BPlusLeafGrain
     /// Best-effort resolution of the leaf's current slot-ownership map for the
     /// activation-time replay filter. Returns the routing map published for
     /// <paramref name="treeId"/> when (a) this leaf carries a non-null
-    /// <see cref="State.LeafNodeState.ShardIndex"/> and (b) that shard index is
+    /// <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.ShardIndex"/> and (b) that shard index is
     /// actually referenced by the map's physical shard set. In every other
     /// case - a system tree, a legacy slot-less leaf, a registry lookup that
     /// returns no map or throws, or a map drawn from a foreign physical shard
@@ -830,11 +827,10 @@ internal sealed partial class BPlusLeafGrain
     /// Per-WAL-entry filter for the activation-time materialiser.
     /// Decides whether a given WAL entry should be replayed against
     /// this leaf's projection, keyed on the leaf's slot ownership and on
-    /// the leaf's persisted [<see cref="State.LeafNodeState.LowKeyInclusive"/>,
-    /// <see cref="State.LeafNodeState.HighKeyExclusive"/>) ownership
+    /// the leaf's persisted [<see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.LowKeyInclusive"/>,
+    /// <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.HighKeyExclusive"/>) ownership
     /// range.
-    /// <list type="bullet">
-    ///   <item>
+    /// <para>
     ///     <see cref="MutationKind.Set"/> /
     ///     <see cref="MutationKind.Delete"/> are applied iff the entry's
     ///     <see cref="LatticeMutation.Key"/> is owned by this leaf's
@@ -861,14 +857,14 @@ internal sealed partial class BPlusLeafGrain
     ///     a split has no Entries until replay populates them, and the
     ///     entries that belong to it were authored by the donor sibling
     ///     pre-split. Pre-Option A leaves whose
-    ///     <see cref="State.LeafNodeState.ShardIndex"/> slot is null
+    ///     <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.ShardIndex"/> slot is null
     ///     apply unconditionally on the shard axis; leaves with both
     ///     range bounds null apply unconditionally on the range axis -
     ///     both axes preserve the legacy V1 single-leaf-per-shard
     ///     semantics so a legacy-shaped state must not start dropping
     ///     its own writes after a binary upgrade.
-    ///   </item>
-    ///   <item>
+    /// </para>
+    /// <para>
     ///     <see cref="MutationKind.Tombstone"/> reap envelopes
     ///     authored by <c>CompactTombstonesAsync</c> are gated by the
     ///     same shard-and-range filter as <see cref="MutationKind.Set"/>
@@ -878,28 +874,27 @@ internal sealed partial class BPlusLeafGrain
     ///     <c>ApplyTombstoneReap</c> which physically removes the
     ///     stamped key iff the existing entry is still a tombstone or
     ///     an expired live entry.
-    ///   </item>
-    ///   <item>
+    /// </para>
+    /// <para>
     ///     <see cref="MutationKind.DeleteRange"/> is applied
-    ///     unconditionally. <see cref="BPlusLeafGrain"/>'s replay
+    ///     unconditionally. <see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain"/>'s replay
     ///     handler iterates this leaf's own entries only, so the call
     ///     is naturally a no-op on leaves that own no keys in the
     ///     range.
-    ///   </item>
-    ///   <item>
+    /// </para>
+    /// <para>
     ///     <see cref="MutationKind.TxCommit"/> /
     ///     <see cref="MutationKind.TxAbort"/> are applied
     ///     unconditionally. The terminal's shard scope is enforced by
     ///     the writer-side partition routing, and the per-leaf
     ///     <c>_recentlyTerminal</c> dedup makes a terminal whose
     ///     pending bucket is empty a trivial no-op.
-    ///   </item>
-    ///   <item>
+    /// </para>
+    /// <para>
     ///     Unknown <see cref="MutationKind"/> values are dropped -
     ///     defensive forward-compat against future kinds whose replay
     ///     semantics the materialiser has not been taught.
-    ///   </item>
-    /// </list>
+    /// </para>
     /// </summary>
     internal static bool ShouldApplyDuringReplay(
         in LatticeMutation mutation,

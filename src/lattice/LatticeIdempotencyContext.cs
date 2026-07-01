@@ -5,7 +5,7 @@ namespace Orleans.Lattice;
 
 /// <summary>
 /// Ambient idempotency-key scope used to pin the
-/// <see cref="LwwValue{T}.Timestamp"/> of every mutation authored
+/// <see cref="Orleans.Lattice.Primitives.LwwValue{T}.Timestamp"/> of every mutation authored
 /// inside the scope to a caller-supplied
 /// <see cref="LatticeIdempotencyKey"/>. Authoring cluster identity
 /// is owned exclusively by the silo via
@@ -25,8 +25,8 @@ namespace Orleans.Lattice;
 /// into the existing <see cref="LatticeHlcOverrideContext"/> ambient
 /// scope so the leaf-grain stamping path picks it up via the standard
 /// mechanism. The result is that retries of the same operation under
-/// the same key produce <see cref="LwwValue{T}"/> instances with
-/// identical <see cref="LwwValue{T}.Timestamp"/> values - which the
+/// the same key produce <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/> instances with
+/// identical <see cref="Orleans.Lattice.Primitives.LwwValue{T}.Timestamp"/> values - which the
 /// WAL-append HWM dedup, the LWW merge tie-break, and the
 /// <see cref="PnCounterAccessor"/> counter-side dedup guard collapse
 /// to a single observable mutation.

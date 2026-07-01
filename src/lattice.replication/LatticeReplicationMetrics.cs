@@ -141,7 +141,7 @@ public static class LatticeReplicationMetrics
     /// drawn from <see cref="ReasonDiscarded"/>, <see cref="ReasonReplayed"/>,
     /// <see cref="ReasonEvicted"/>, <see cref="ReasonSchema"/>,
     /// <see cref="ReasonHlcSkew"/>, <see cref="ReasonOversized"/>,
-
+    ///
     /// and <see cref="ReasonUnknown"/>.
     /// </summary>
     public const string TagReason = "reason";

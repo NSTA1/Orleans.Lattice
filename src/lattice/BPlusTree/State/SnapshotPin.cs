@@ -2,7 +2,7 @@ namespace Orleans.Lattice.BPlusTree.State;
 
 /// <summary>
 /// Per-pin tombstone-retention record persisted by
-/// <see cref="Grains.TxRegistryGrain"/> against a point-in-time cursor's
+/// <see cref="Orleans.Lattice.BPlusTree.Grains.TxRegistryGrain"/> against a point-in-time cursor's
 /// saga-decision snapshot. Keeps every txid the snapshot referenced
 /// queryable for the lifetime of the pin even as concurrent sagas call
 /// <c>ForgetAsync</c>, so a cursor's <c>Next*Async</c> step under

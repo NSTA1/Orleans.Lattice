@@ -1,8 +1,8 @@
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// Warm-up surface for <see cref="LatticeGrain"/>. Pre-activates every
-/// physical <see cref="IShardRootGrain"/> for this tree before the first
+/// Warm-up surface for <see cref="Orleans.Lattice.BPlusTree.Grains.LatticeGrain"/>. Pre-activates every
+/// physical <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain"/> for this tree before the first
 /// hot-path write lands, so the placement-directory and grain-storage
 /// first-touch cost is absorbed while the silo is idle rather than against
 /// producer-driven flush concurrency. The dedicated partial keeps the

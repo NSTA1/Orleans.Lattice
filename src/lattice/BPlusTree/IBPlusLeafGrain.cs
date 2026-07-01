@@ -35,7 +35,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// Inserts or updates a key-value pair.
     /// Returns a <see cref="SplitResult"/> if the leaf split as a consequence, otherwise <c>null</c>.
     /// <para>
-    /// Marked <see cref="AlwaysInterleaveAttribute"/> per U9p step 8c-c-iv-c2-iii
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> per U9p step 8c-c-iv-c2-iii
     /// so multiple producer turns can run concurrently on the same
     /// activation. Orleans serialises synchronous code between awaits,
     /// so the per-key LWW merge, HLC tick, and projection-hash updates
@@ -56,7 +56,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// period. Pass <c>0</c> to write a non-expiring entry (equivalent to
     /// <see cref="SetAsync(string, byte[])"/>).
     /// <para>
-    /// Marked <see cref="AlwaysInterleaveAttribute"/> for the same reason
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> for the same reason
     /// as <see cref="SetAsync(string, byte[])"/> - see that overload's
     /// summary for the interleave-safety argument.
     /// </para>
@@ -117,7 +117,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// matching <see cref="CrdtShape"/> from the registered
     /// <see cref="CrdtShapeRegistry"/>, deserialises <paramref name="deltaBytes"/>
     /// into the typed delta DTO, decodes the current state from
-    /// <see cref="State.LeafNodeState.Entries"/> (or constructs an empty
+    /// <c>Entries</c> (or constructs an empty
     /// instance when the key is absent), folds the delta into the state
     /// via the shape's <c>MergeDelta</c>, re-serialises the post-merge
     /// state for the legacy byte[] row, appends a single
@@ -128,7 +128,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// <para>
     /// No CAS - CRDT delta merges are convergent under any interleaving,
     /// so a single-shot apply suffices. The returned HLC equals the
-    /// committed entry's <see cref="LwwValue{T}.Timestamp"/> and is the
+    /// committed entry's <see cref="Orleans.Lattice.Primitives.LwwValue{T}.Timestamp"/> and is the
     /// per-key version observable through the existing read path.
     /// </para>
     /// <para>
@@ -143,7 +143,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// Inserts or updates multiple key-value pairs.
     /// Returns the last <see cref="SplitResult"/> if any split occurred, otherwise <c>null</c>.
     /// <para>
-    /// Marked <see cref="AlwaysInterleaveAttribute"/> per U9p step 8c-c-iv-c2-iii.
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> per U9p step 8c-c-iv-c2-iii.
     /// See <see cref="SetAsync(string, byte[])"/> for the interleave-safety
     /// argument that applies to every mutation-surface method on this
     /// interface (the per-activation <c>_splitGate</c> serialises the
@@ -161,7 +161,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// skipped. Returns a <see cref="ConditionalSetManyResult"/> carrying the
     /// committed key subset and any resulting <see cref="SplitResult"/>.
     /// <para>
-    /// Marked <see cref="AlwaysInterleaveAttribute"/> for the same
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> for the same
     /// interleave-safety reason as <see cref="SetManyAsync"/>.
     /// </para>
     /// </summary>
@@ -172,7 +172,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// Marks <paramref name="key"/> as deleted (tombstone).
     /// Returns <c>true</c> if the key was present and live.
     /// <para>
-    /// Marked <see cref="AlwaysInterleaveAttribute"/> per U9p step 8c-c-iv-c2-iii.
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> per U9p step 8c-c-iv-c2-iii.
     /// See <see cref="SetAsync(string, byte[])"/> for the interleave-safety
     /// argument.
     /// </para>
@@ -305,7 +305,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// <c>CompleteSplitAsync</c> on the donor leaf - the donor stamps
     /// the split key as the sibling's low and the donor's pre-split
     /// high as the sibling's high. Idempotent: subsequent calls are
-    /// no-ops once <see cref="State.LeafNodeState.LowKeyInclusive"/>
+    /// no-ops once <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.LowKeyInclusive"/>
     /// has been seeded. The persisted bounds are consulted at
     /// activation time by the WAL materialiser to filter out records
     /// whose key falls outside this leaf's range (intra-shard
@@ -319,8 +319,8 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
 
     /// <summary>
     /// Returns this leaf's persisted owned-key-range bounds
-    /// (<see cref="State.LeafNodeState.LowKeyInclusive"/> /
-    /// <see cref="State.LeafNodeState.HighKeyExclusive"/>) as a
+    /// (<see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.LowKeyInclusive"/> /
+    /// <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.HighKeyExclusive"/>) as a
     /// <see cref="LeafKeyRange"/>. The shard-root coordinator consults these
     /// bounds to terminate a paged range-scan sibling walk as soon as it
     /// provably leaves the requested range, instead of reading every remaining
@@ -333,7 +333,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// Stamps an initial projection-checkpoint offset on a freshly
     /// created leaf so its first activation can skip replaying WAL
     /// entries that were already materialised into its
-    /// <see cref="State.LeafNodeState.Entries"/> at birth. Called by
+    /// <c>Entries</c> at birth. Called by
     /// <c>CompleteSplitAsync</c> on the donor leaf with the shard's
     /// WAL head offset captured at split time, after the donor has
     /// populated the sibling's entries via
@@ -386,9 +386,9 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// <c>ShardMap.GetVirtualSlot(key, virtualShardCount)</c> falls in
     /// the moved-slot set, sealing the persistent-orphan read path that
     /// the cache-coherence prune pass cannot reach via the
-    /// <see cref="ILeafCacheGrain"/> pending-key delegation hole.
+    /// <see cref="Orleans.Lattice.BPlusTree.ILeafCacheGrain"/> pending-key delegation hole.
     /// <para>
-    /// The implementation does NOT touch <see cref="State.LeafNodeState.Entries"/>
+    /// The implementation does NOT touch <c>Entries</c>
     /// - storage stays inconsistent on the source for moved slots so
     /// the k-way merge ordering invariant in <c>LatticeGrain.KeysAsync</c>
     /// remains intact. Physically removing the entries would re-shape
@@ -454,8 +454,8 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// recorded but the leaf has not yet drained the pending bucket).
     /// Returns an empty list when the leaf has no pending-tx activity.
     /// <para>
-    /// Used by <see cref="ILeafCacheGrain"/> to identify keys whose
-    /// cached <see cref="LwwValue{T}"/> may differ from the strict
+    /// Used by <see cref="Orleans.Lattice.BPlusTree.ILeafCacheGrain"/> to identify keys whose
+    /// cached <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/> may differ from the strict
     /// atomic-visibility outcome - those reads bypass the cache and
     /// dial back to the primary leaf, whose read paths consult the
     /// per-tree <see cref="ITxRegistryGrain"/> for the recorded saga
@@ -476,9 +476,9 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// bucket.
     /// <para>
     /// <paramref name="sortedMovedSlots"/> must be ascending; lookup
-    /// uses <see cref="Array.BinarySearch(int[], int)"/>. The
+    /// uses <c>Array.BinarySearch</c>. The
     /// <paramref name="virtualShardCount"/> is the
-    /// <see cref="State.ShadowForwardState.VirtualShardCount"/>-equivalent
+    /// <see cref="Orleans.Lattice.ShardMap.VirtualShardCount"/>-equivalent
     /// constant from the active <see cref="ShardMap"/> - the same value
     /// every saga-coordinator + shard-split slot calculation already
     /// uses. Returns an empty list when no pending bucket exists, no
@@ -486,7 +486,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// array is empty (steady-state hot path).
     /// </para>
     /// <para>
-    /// The returned <see cref="PendingMutationSnapshot"/> carries the
+    /// The returned <see cref="Orleans.Lattice.BPlusTree.PendingMutationSnapshot"/> carries the
     /// authoring <c>(Timestamp, OriginClusterId, VectorClock)</c> tuple
     /// verbatim so the retroactive shadow-forward sweep can re-stamp each replay through
     /// <see cref="LatticeHlcOverrideContext"/> +
@@ -554,7 +554,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
 
     /// <summary>
     /// Returns all live (non-tombstoned, non-expired) entries in this leaf as
-    /// raw <see cref="LwwValue{T}"/> records, preserving both the source
+    /// raw <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/> records, preserving both the source
     /// <see cref="Orleans.Lattice.HybridLogicalClock"/> version and
     /// the absolute <c>ExpiresAtTicks</c> ( TTL). Used by snapshot /
     /// restore paths that must not lose TTL metadata when transferring entries
@@ -620,7 +620,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// whole-leaf fold, so a separator-key boundary that straddles this leaf
     /// still yields a content-convergent partial digest independent of each
     /// cluster's physical B+ tree layout. Used by the shard-root range-fold
-    /// (<see cref="IShardRootGrain.GetShardProjectionDigestForRangeAsync"/>)
+    /// (<see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.GetShardProjectionDigestForRangeAsync"/>)
     /// that backs the cross-cluster anti-entropy Merkle walk. Strictly
     /// read-only: never mutates data or any cursor.
     /// </summary>
@@ -632,7 +632,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// Returns the persisted projection-checkpoint offset for this leaf -
     /// the highest WAL offset whose mutation has been durably applied to
     /// the in-memory projection via
-    /// <see cref="State.LeafNodeState.ProjectionCheckpointOffset"/>.
+    /// <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.ProjectionCheckpointOffset"/>.
     /// Read-only diagnostic accessor used by the operator-facing
     /// materialiser-lag surface (<c>ILattice.GetMaterialiserLagAsync</c>)
     /// to compute the shard-wide <c>WAL_head - min(leaf.checkpoint)</c>
@@ -642,17 +642,17 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
 
     /// <summary>
     /// Operator-facing projection rebuild seam. Resets this leaf's
-    /// materialised projection (<see cref="State.LeafNodeState.Entries"/>,
-    /// the incremental <see cref="State.LeafNodeState.ProjectionHash"/>,
-    /// the persisted <see cref="State.LeafNodeState.ProjectionCheckpointOffset"/>,
+    /// materialised projection (<c>Entries</c>,
+    /// the incremental <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.ProjectionHash"/>,
+    /// the persisted <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.ProjectionCheckpointOffset"/>,
     /// and the per-leaf saga pending-tx map) to its post-activation
     /// zero state, persists the cleared projection slots in a single
-    /// <see cref="IPersistentState{T}.WriteStateAsync"/> call, and
+    /// <c>WriteStateAsync</c> call, and
     /// deactivates the grain so the next activation replays the
     /// per-shard WAL from offset <c>0</c> through the existing
     /// activation-time materialiser. Topology-bearing slots
-    /// (<see cref="State.LeafNodeState.TreeId"/>,
-    /// <see cref="State.LeafNodeState.ShardIndex"/>, sibling pointers,
+    /// (<see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.TreeId"/>,
+    /// <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.ShardIndex"/>, sibling pointers,
     /// key-range bounds, split markers, parent pointer) are preserved
     /// verbatim so the rebuild observes the same WAL-filter context the
     /// pre-rebuild leaf used. Used after a corrupt-projection incident
@@ -680,7 +680,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// recycling, after which the WAL replay reseeds it).
     /// <para>
     /// Called by the saga coordinator's terminal-broadcast loop via
-    /// <see cref="IShardRootGrain.AppendTxTerminalAsync"/>; not intended
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.AppendTxTerminalAsync"/>; not intended
     /// for direct user invocation.
     /// </para>
     /// <para>
@@ -696,8 +696,8 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// no-op. The backstop stamp is <see cref="Orleans.Lattice.HybridLogicalClock.Tick"/>
     /// of the leaf's current clock, guaranteeing strict-greater HLC ordering
     /// against any stale pre-saga value already in
-    /// <see cref="State.LeafNodeState.Entries"/>. The backstop persists via
-    /// <see cref="IPersistentState{T}.WriteStateAsync"/> so a subsequent
+    /// <c>Entries</c>. The backstop persists via
+    /// <c>WriteStateAsync</c> so a subsequent
     /// reactivation observes the post-saga projection even though the
     /// WAL on this leaf contains no prepare for this saga.
     /// </para>
@@ -721,7 +721,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// <summary>
     /// Returns the leaf's current
     /// <see cref="Orleans.Lattice.HybridLogicalClock"/>. Used by
-    /// <see cref="IShardRootGrain.AppendTxTerminalAsync"/> to compute a
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.AppendTxTerminalAsync"/> to compute a
     /// terminal-mark HLC strictly greater than every prepare's stamp in
     /// the saga, so cross-cluster receivers - which merge inbound
     /// records by HLC across WAL partitions - observe the saga's
@@ -740,7 +740,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// claiming that the source-side saga <paramref name="transactionId"/>
     /// affected each key in <paramref name="keys"/>. The marker is
     /// consulted by the read path whenever an
-    /// <see cref="LwwValue{T}.IsMigrated"/>=<c>true</c> entry is about
+    /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}.IsMigrated"/>=<c>true</c> entry is about
     /// to be surfaced for one of those keys: an in-flight or aborted
     /// saga lets the migrated pre-saga value pass through (strict
     /// isolation), while a saga that has committed at the registry
@@ -750,7 +750,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// the backstop arrives.
     /// <para>
     /// Installed by the split coordinator
-    /// (<see cref="ITreeShardSplitGrain"/>) during the drain and
+    /// (<see cref="Orleans.Lattice.BPlusTree.ITreeShardSplitGrain"/>) during the drain and
     /// retroactive-sweep phases of an online shard split, naming
     /// every in-flight saga whose prepared mutations touched keys
     /// migrating into the destination shard. The marker is cleared
@@ -791,7 +791,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// <para>
     /// Driven by the leaf itself: the activation hook captures once
     /// after tail replay when the fall-off-log detector raises the
-    /// <see cref="Grains.FallOffLogDecision.SnapshotPending"/> advisory,
+    /// <see cref="Orleans.Lattice.BPlusTree.Grains.FallOffLogDecision.SnapshotPending"/> advisory,
     /// and every <see cref="LatticeOptions.LeafSnapshotReClassifyEveryNCheckpoints"/>
     /// successful checkpoint persist re-classifies and (on advisory)
     /// re-captures. The call is a no-op when the leaf has not yet

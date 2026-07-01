@@ -74,7 +74,7 @@ internal sealed class ShardRootState
     /// has been cleared so that stale <c>LatticeGrain</c> activations whose
     /// cached <c>ShardMap</c> still routes to this shard always observe a
     /// <see cref="StaleShardRoutingException"/> and refresh their map. Without
-    /// this, a stale <see cref="StatelessWorkerAttribute"/> activation could
+    /// this, a stale <see cref="Orleans.Concurrency.StatelessWorkerAttribute"/> activation could
     /// indefinitely return orphan data from a slot it no longer owns.
     /// </para>
     /// </summary>
@@ -113,9 +113,9 @@ internal sealed class ShardRootState
     /// marked dirty by a routed <c>Delete</c> mutation. Populated by
     /// <c>ShardRootGrain.MarkLeafDirtyAsync</c> as deletes route through this
     /// shard, and consumed by <c>TombstoneCompactionGrain</c> via
-    /// <see cref="IShardRootGrain.GetDirtyLeavesSinceLastCompactionAsync"/>
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.GetDirtyLeavesSinceLastCompactionAsync"/>
     /// to skip activating leaves with nothing to reap. The per-entry HLC
-    /// gates <see cref="IShardRootGrain.ClearDirtyLeavesUpToAsync"/> so a
+    /// gates <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.ClearDirtyLeavesUpToAsync"/> so a
     /// delete that arrives during the in-flight pass is preserved for the
     /// next pass instead of being silently dropped.
     /// <para>
@@ -128,7 +128,7 @@ internal sealed class ShardRootState
     /// <summary>
     /// HLC watermark below which the dirty-set has been drained. The
     /// compaction coordinator passes this value to
-    /// <see cref="IShardRootGrain.ClearDirtyLeavesUpToAsync"/> after a
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.ClearDirtyLeavesUpToAsync"/> after a
     /// successful shard pass; entries whose mark HLC compares as
     /// less-than-or-equal to the watermark are removed, while entries
     /// marked with a strictly greater HLC are preserved.
@@ -145,7 +145,7 @@ internal sealed class ShardRootState
 /// every dashboard scrape. Activation-scoped (not persisted): a shard root
 /// that reactivates starts with zero totals and converges as leaves
 /// re-publish on their next commit; the operator-driven
-/// <see cref="Grains.IShardRootGrain.RefreshLeafByteFootprintsAsync"/>
+/// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.RefreshLeafByteFootprintsAsync"/>
 /// re-anchors the totals exactly when an authoritative figure is needed.
 /// </summary>
 [GenerateSerializer]

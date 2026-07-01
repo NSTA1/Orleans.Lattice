@@ -4,7 +4,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
 /// Durable per-cursor, per-shard frozen-baseline storage grain. Holds at most
-/// one <see cref="SnapshotShardBaseline"/> per (snapshot cursor, physical
+/// one <see cref="Orleans.Lattice.BPlusTree.State.SnapshotShardBaseline"/> per (snapshot cursor, physical
 /// shard), captured atomically at <c>OpenSnapshot*Async</c> time and served by
 /// the per-shard <see cref="ISnapshotLeafGrain"/> for the cursor's lifetime.
 /// Sibling to <see cref="ILeafSnapshotStorageGrain"/>: where that grain holds

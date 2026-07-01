@@ -40,7 +40,7 @@ internal sealed class GrpcRemoteSnapshotTransportOptions
     /// Optional host hook invoked once per peer channel after the
     /// hardened defaults have been applied but before the channel is
     /// constructed. The host can use it to supply a custom
-    /// <see cref="ChannelCredentials"/> chain, a service-config retry
+    /// <see cref="global::Grpc.Core.ChannelCredentials"/> chain, a service-config retry
     /// policy, or any other channel-level customisation.
     /// </summary>
     public Action<string, GrpcChannelOptions>? ConfigureChannel { get; set; }

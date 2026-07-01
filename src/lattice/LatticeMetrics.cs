@@ -362,8 +362,8 @@ public static class LatticeMetrics
     /// commit concurrency per tree.
     /// <para>
     /// Under the default Orleans non-reentrant grain scheduling - the
-    /// shipping shape of <see cref="IBPlusLeafGrain.SetAsync(string, byte[])"/> /
-    /// <see cref="IBPlusLeafGrain.SetManyAsync"/>, neither marked
+    /// shipping shape of <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.SetAsync(string, byte[])"/> /
+    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.SetManyAsync"/>, neither marked
     /// <c>[AlwaysInterleave]</c> - this histogram pins at <c>0</c>: the
     /// next commit cannot enter until the current one has returned. A
     /// non-zero quantile therefore signals one of two things:
@@ -1194,8 +1194,8 @@ public static class LatticeMetrics
     /// <summary>
     /// Histogram of wall-clock ms spent inside the saga's terminal
     /// decision write: the per-tree
-    /// <see cref="ITxRegistryGrain.MarkCommittedAsync"/> /
-    /// <see cref="ITxRegistryGrain.MarkAbortedAsync"/> call that
+    /// <see cref="Orleans.Lattice.BPlusTree.ITxRegistryGrain.MarkCommittedAsync"/> /
+    /// <see cref="Orleans.Lattice.BPlusTree.ITxRegistryGrain.MarkAbortedAsync"/> call that
     /// records the single tree-wide linearization point before the
     /// per-leaf terminal fan-out. Tagged with <see cref="TagTree"/>
     /// and the per-tree WAL partition count tag.
@@ -1222,7 +1222,7 @@ public static class LatticeMetrics
     /// <para>
     /// Per the c2-xv routing memo this is the highest-prior candidate
     /// for the saga's binding constraint. Each per-shard
-    /// <see cref="IShardRootGrain.AppendTxTerminalAsync"/> appends one
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.AppendTxTerminalAsync"/> appends one
     /// WAL record and drains the leaf-side pending-tx bucket; if
     /// per-shard turn-token contention or per-shard WAL-append
     /// serialisation dominates, the histogram's p50 is the per-saga
@@ -1381,7 +1381,7 @@ public static class LatticeMetrics
     /// <summary>
     /// Count of outbound shard-to-shard write forwards that were abandoned
     /// because they exceeded
-    /// <see cref="Orleans.Lattice.BPlusTree.LatticeOptions.ShardForwardTimeout"/>.
+    /// <see cref="Orleans.Lattice.LatticeOptions.ShardForwardTimeout"/>.
     /// Tagged with <see cref="TagTree"/>. A non-zero value indicates a
     /// forward parked against a sibling shard whose ownership was changing
     /// during a reshard swap - the parked forward was faulted as a
@@ -1398,7 +1398,7 @@ public static class LatticeMetrics
     /// <summary>
     /// Count of <c>ShardRootGrain</c> activation-readiness seeds that were
     /// abandoned because they exceeded
-    /// <see cref="Orleans.Lattice.BPlusTree.LatticeOptions.ActivationReadyTimeout"/>.
+    /// <see cref="Orleans.Lattice.LatticeOptions.ActivationReadyTimeout"/>.
     /// Tagged with <see cref="TagTree"/>. A non-zero value indicates a
     /// first-activation seed (registry registration or root-leaf
     /// initialization) parked - typically because a startup reshard or
@@ -1418,7 +1418,7 @@ public static class LatticeMetrics
     /// Count of internal-node digest publishes (the upward
     /// <c>ChildDigestSnapshot</c> propagation from a <c>BPlusInternalGrain</c>
     /// to its parent) that were abandoned because they exceeded
-    /// <see cref="Orleans.Lattice.BPlusTree.LatticeOptions.DigestPublishTimeout"/>.
+    /// <see cref="Orleans.Lattice.LatticeOptions.DigestPublishTimeout"/>.
     /// Tagged with <see cref="TagTree"/>. A non-zero value indicates a
     /// publish parked against a parent internal node that was mid-mutation -
     /// the parked publish was faulted as a <see cref="TimeoutException"/> so
@@ -1435,14 +1435,14 @@ public static class LatticeMetrics
     /// Count of outbound <c>IWalShardGrain</c> dispatches
     /// (<c>WalCommitLogWriter.AppendForPartitionAsync</c> /
     /// <c>AppendAsync</c>) that were abandoned because they exceeded
-    /// <see cref="Orleans.Lattice.BPlusTree.LatticeOptions.WalAppendDispatchTimeout"/>.
+    /// <see cref="Orleans.Lattice.LatticeOptions.WalAppendDispatchTimeout"/>.
     /// Tagged with <see cref="TagTree"/> and <see cref="TagShard"/>.
     /// The dispatch is the writer-side cross-grain RPC into the per-shard
     /// WAL grain; it was historically unbounded on the writer side, so a
     /// wedged shard activation would hold every caller's dispatch parked
     /// until the Orleans response deadline (default 3 minutes) expired.
     /// A non-zero value attributes the wedge to a specific
-    /// <c>(tree, shard)</c> pair in O(<see cref="Orleans.Lattice.BPlusTree.LatticeOptions.WalAppendDispatchTimeout"/>)
+    /// <c>(tree, shard)</c> pair in O(<see cref="Orleans.Lattice.LatticeOptions.WalAppendDispatchTimeout"/>)
     /// time rather than O(response timeout) time, and the parked dispatch
     /// is faulted as a <see cref="TimeoutException"/> so the request
     /// pipeline releases its slot rather than back-filling behind the
@@ -1458,13 +1458,13 @@ public static class LatticeMetrics
     /// Count of per-shard WAL <c>FlushAsync</c> preflight regions (the
     /// synchronous setup and initial scheduler yield that precede the
     /// bounded provider call) that were abandoned because they exceeded
-    /// <see cref="Orleans.Lattice.BPlusTree.LatticeOptions.WalFlushPreflightTimeout"/>.
+    /// <see cref="Orleans.Lattice.LatticeOptions.WalFlushPreflightTimeout"/>.
     /// Tagged with <see cref="TagTree"/> and <see cref="TagShard"/>.
     /// The preflight region is normally microseconds; a non-zero count
     /// indicates the activation's grain scheduler did not resume the
     /// flush's post-yield continuation within the deadline, leaving the
     /// in-flight slot pinned with no provider-call deadline armed (the
-    /// existing <see cref="Orleans.Lattice.BPlusTree.LatticeOptions.WalFlushTimeout"/>
+    /// existing <see cref="Orleans.Lattice.LatticeOptions.WalFlushTimeout"/>
     /// only covers the provider call itself, which has not yet been
     /// issued). The faulted preflight surfaces as a
     /// <see cref="TimeoutException"/> routed through the normal failure
@@ -1498,7 +1498,7 @@ public static class LatticeMetrics
 
     /// <summary>
     /// Count of per-shard <c>WalShardGrain</c> deactivation drains that
-    /// exceeded <see cref="Orleans.Lattice.BPlusTree.LatticeOptions.WalDrainBudget"/>
+    /// exceeded <see cref="Orleans.Lattice.LatticeOptions.WalDrainBudget"/>
     /// and had to force-fault one or more in-flight slots so the
     /// activation could finish tearing down. Tagged with
     /// <see cref="TagTree"/> and <see cref="TagShard"/>.
@@ -1506,7 +1506,7 @@ public static class LatticeMetrics
     /// Reliability intent: under a saturating-storage-account wedge,
     /// the provider call's await can park behind an SDK retry loop in
     /// pre-attempt back-off where the per-flush
-    /// <see cref="Orleans.Lattice.BPlusTree.LatticeOptions.WalFlushTimeout"/>
+    /// <see cref="Orleans.Lattice.LatticeOptions.WalFlushTimeout"/>
     /// deadline does not fire promptly (the SDK observes cancellation
     /// only between attempts, not during back-off), so a chain with N
     /// in-flight slots could otherwise hold the deactivation
@@ -1525,7 +1525,7 @@ public static class LatticeMetrics
     /// <summary>
     /// Histogram of in-flight slots force-faulted by a per-shard
     /// <c>WalShardGrain</c> deactivation drain after
-    /// <see cref="Orleans.Lattice.BPlusTree.LatticeOptions.WalDrainBudget"/>
+    /// <see cref="Orleans.Lattice.LatticeOptions.WalDrainBudget"/>
     /// expired. Tagged with <see cref="TagTree"/> and <see cref="TagShard"/>.
     /// Recorded exactly once per drain that hit the budget; the value is
     /// the number of slots that had not unlinked when the budget fired and
@@ -2070,7 +2070,7 @@ public static class LatticeMetrics
     /// destination shard at the start of an adaptive split's
     /// <c>BeginShadowWrite</c> phase. Tagged with <see cref="TagTree"/>
     /// and <see cref="TagShard"/> (the source shard index). One
-    /// increment per <see cref="PendingMutationSnapshot"/> replayed.
+    /// increment per <see cref="Orleans.Lattice.BPlusTree.PendingMutationSnapshot"/> replayed.
     /// </summary>
     public static readonly Counter<long> SplitRetroactiveForwardEntries =
         Meter.CreateCounter<long>("orleans.lattice.split.retroactive_forward.entries", unit: "{entry}",

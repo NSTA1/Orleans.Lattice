@@ -56,7 +56,7 @@ internal readonly record struct PendingMutationSnapshot
     /// <summary>
     /// Identifier of the cluster that authored the prepared mutation,
     /// or <c>null</c> for a local write. Round-trips verbatim through
-    /// <see cref="LwwValue{T}.OriginClusterId"/> across the retroactive
+    /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}.OriginClusterId"/> across the retroactive
     /// replay so the destination leaf's pending-tx entry carries the
     /// same origin as the source leaf's.
     /// </summary>
@@ -66,7 +66,7 @@ internal readonly record struct PendingMutationSnapshot
     /// Sparse <c>{originClusterId → HybridLogicalClock}</c> frontier
     /// captured at prepare time, or <c>null</c> when the writer did
     /// not supply one. Round-trips verbatim through
-    /// <see cref="LwwValue{T}.VectorClock"/> across the retroactive
+    /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}.VectorClock"/> across the retroactive
     /// replay so the destination leaf's pending-tx entry carries the
     /// same VC as the source leaf's.
     /// </summary>

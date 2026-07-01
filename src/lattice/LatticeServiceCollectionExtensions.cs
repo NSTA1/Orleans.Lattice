@@ -518,7 +518,7 @@ public static class LatticeServiceCollectionExtensions
     /// The retry policy only takes effect when the caller has also
     /// entered a <see cref="LatticeIdempotencyContext"/> scope so the
     /// retried mutation re-stamps the same
-    /// <see cref="LwwValue{T}.Timestamp"/> and collapses through the
+    /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}.Timestamp"/> and collapses through the
     /// existing dedup paths. Authoring cluster identity is stamped
     /// independently by the silo via
     /// <see cref="LatticeOriginContext"/> /

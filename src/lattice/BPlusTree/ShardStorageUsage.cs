@@ -2,7 +2,7 @@ namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
 /// Internal per-shard byte-accurate storage-usage rollup returned by
-/// <see cref="Grains.IShardRootGrain.GetStorageUsageAsync"/>. Carries the
+/// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.GetStorageUsageAsync"/>. Carries the
 /// summed leaf-state byte footprint and the summed persisted-snapshot byte
 /// footprint across the shard's leaf chain, computed in a single walk so the
 /// tree-level aggregator pays one RPC per shard rather than one per leaf.

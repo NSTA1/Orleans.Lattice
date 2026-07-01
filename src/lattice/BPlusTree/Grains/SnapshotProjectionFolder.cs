@@ -14,7 +14,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </description></item>
 /// <item><description>
 /// the per-leaf capture-time tail fold that builds a
-/// <see cref="SnapshotShardBaseline"/> over
+/// <see cref="Orleans.Lattice.BPlusTree.State.SnapshotShardBaseline"/> over
 /// <c>(leaf_frontier, capturedHead]</c>.
 /// </description></item>
 /// </list>
@@ -126,7 +126,7 @@ internal sealed class SnapshotProjectionFolder(string treeId, CrdtShapeRegistry 
     /// <summary>
     /// Materialises the folded projection into the canonical byte-row list
     /// (including tombstones) for persistence into a
-    /// <see cref="SnapshotShardBaseline"/>.
+    /// <see cref="Orleans.Lattice.BPlusTree.State.SnapshotShardBaseline"/>.
     /// </summary>
     public List<LeafSnapshotRow> Materialize()
     {

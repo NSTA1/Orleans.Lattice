@@ -6,7 +6,7 @@ namespace Orleans.Lattice;
 
 /// <summary>
 /// Ambient vector-clock context used to stamp
-/// <see cref="LwwValue{T}.VectorClock"/> onto mutations authored by the
+/// <see cref="Orleans.Lattice.Primitives.LwwValue{T}.VectorClock"/> onto mutations authored by the
 /// current logical call.
 /// </summary>
 /// <remarks>
@@ -16,13 +16,13 @@ namespace Orleans.Lattice;
 /// forward a remote mutation into a local lattice (for example, an inbound
 /// replication handler) wrap the call in <see cref="With(VersionVector?)"/>
 /// so the grain write path reads the context at commit time and stamps
-/// it onto the freshly-constructed <see cref="LwwValue{T}"/> / tombstone.
+/// it onto the freshly-constructed <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/> / tombstone.
 /// Local writes leave the context unset, producing a <c>null</c> frontier
 /// (which convention treats as <em>empty</em>).
 /// </para>
 /// <para>
 /// The frontier is then preserved end-to-end across every lifecycle path
-/// the library guarantees for <see cref="LwwValue{T}.OriginClusterId"/> -
+/// the library guarantees for <see cref="Orleans.Lattice.Primitives.LwwValue{T}.OriginClusterId"/> -
 /// shard-split shadow-forward, saga prepare / compensate, tree snapshot /
 /// restore, bulk-load, compaction, and merge - so a captured frontier
 /// travels with the value and survives transfer between shards or trees.

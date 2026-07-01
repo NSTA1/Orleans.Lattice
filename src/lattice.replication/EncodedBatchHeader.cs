@@ -6,15 +6,15 @@ namespace Orleans.Lattice.Replication;
 
 /// <summary>
 /// Fixed-shape framing header that prefixes a batch of pre-encoded
-/// <see cref="BPlusTree.Grains.WalRecord"/> bytes when the framing-only
+/// <see cref="Orleans.Lattice.WalRecord"/> bytes when the framing-only
 /// encoder seam
-/// (<see cref="IReplicationBatchEncoder.EncodeFraming(in EncodedBatchHeader, System.ReadOnlyMemory{System.ArraySegment{byte}}, System.Buffers.IBufferWriter{byte})"/>
+/// (<see cref="IReplicationBatchEncoder.EncodeFraming(in EncodedBatchHeader, System.String, System.String, System.ReadOnlyMemory{System.ArraySegment{System.Byte}}, System.Buffers.IBufferWriter{System.Byte})"/>
 /// and
-/// <see cref="IReplicationBatchEncoder.TryDecodeFraming(System.ReadOnlyMemory{byte}, out EncodedBatchHeader, out System.ReadOnlyMemory{System.ArraySegment{byte}})"/>)
+/// <see cref="IReplicationBatchEncoder.TryDecodeFraming(System.ReadOnlyMemory{System.Byte}, out EncodedBatchHeader, out System.String, out System.String, out System.ReadOnlyMemory{System.ArraySegment{System.Byte}})"/>)
 /// is in play. The header carries only batch-level routing metadata;
 /// per-entry fields stay inside each entry's encoded bytes so the
 /// framing layer can advance opaque byte segments without ever
-/// materialising a <see cref="BPlusTree.Grains.WalRecord"/>.
+/// materialising a <see cref="Orleans.Lattice.WalRecord"/>.
 /// <para>
 /// The header has a deliberate fixed 32-byte wire layout (see
 /// <see cref="WireSize"/>) so a receiver can read it with a single
@@ -79,7 +79,7 @@ public readonly record struct EncodedBatchHeader
     /// every entry is pure duplication of ~25-35 bytes per entry for
     /// production tree names. v3 receivers cannot decode v4 entry
     /// segments because the <c>[Id(0)]</c> field tag is absent and
-    /// <see cref="BPlusTree.Grains.WalRecord.TreeId"/> would
+    /// <see cref="Orleans.Lattice.WalRecord.TreeId"/> would
     /// deserialise as the empty string. Version 3 added the
     /// variable-length <c>TreeName</c> + <c>OriginClusterId</c> tail
     /// (each as a 4-byte little-endian length prefix followed by
@@ -138,7 +138,7 @@ public readonly record struct EncodedBatchHeader
     /// shipper sets this to <c>0</c> until the dispatcher is wired in
     /// (the per-entry <c>AtomicBatchSize</c> / <c>AtomicBatchIndex</c>
     /// / <c>TransactionId</c> slots on
-    /// <see cref="BPlusTree.Grains.WalRecord"/> remain the source of
+    /// <see cref="Orleans.Lattice.WalRecord"/> remain the source of
     /// truth in the interim). Validated cap is <c>0xFFFF</c> (16 bits)
     /// since v5 - tightened from 24 bits in v4 to free 8 bits for
     /// <see cref="Mode"/> in the trailing packed slot.

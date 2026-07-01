@@ -15,7 +15,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// <summary>
     /// Returns the value for <paramref name="key"/>, or <c>null</c> if absent or tombstoned.
     /// <para>
-    /// NOT marked <see cref="AlwaysInterleaveAttribute"/>: the original U9h-C
+    /// NOT marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/>: the original U9h-C
     /// attempt to interleave pure reads against in-flight
     /// <see cref="SetManyAsync"/> turns reintroduced a chaos-reshard mid-saga
     /// invariant violation ("key missing mid-chaos"). The reader does multiple
@@ -31,7 +31,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// <summary>
     /// Returns <c>true</c> if <paramref name="key"/> exists and is live.
     /// <para>
-    /// NOT marked <see cref="AlwaysInterleaveAttribute"/> for the same reason
+    /// NOT marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> for the same reason
     /// documented on <see cref="GetAsync"/>: read traversal is composed of
     /// multiple non-atomic shard-root state reads across awaits.
     /// </para>
@@ -50,7 +50,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// tree traversal per distinct leaf and batching reads at each leaf.
     /// Keys that do not exist or are tombstoned are omitted from the result.
     /// <para>
-    /// NOT marked <see cref="AlwaysInterleaveAttribute"/> for the same reason
+    /// NOT marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> for the same reason
     /// documented on <see cref="GetAsync"/>: batch read traversal performs
     /// multiple non-atomic reads of shard-root routing state across awaits.
     /// </para>
@@ -77,7 +77,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// and absolute <c>ExpiresAtTicks</c> ( TTL). Returns <c>null</c>
     /// when the key is absent or tombstoned. Already-expired entries are
     /// returned so callers can introspect expiry metadata; use
-    /// <see cref="LwwValue{T}.IsExpired(long)"/> to filter.
+    /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}.IsExpired(long)"/> to filter.
     /// </summary>
     Task<LwwEntry?> GetRawEntryAsync(string key);
 
@@ -113,7 +113,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// Routes a typed CRDT delta apply for <paramref name="key"/> to the
     /// owning leaf. Returns the <see cref="HybridLogicalClock"/> stamped
     /// on the committed entry. See
-    /// <see cref="Grains.IBPlusLeafGrain.ApplyCrdtDeltaAsync"/> for the
+    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.ApplyCrdtDeltaAsync"/> for the
     /// full apply contract.
     /// </summary>
     Task<HybridLogicalClock> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes);
@@ -121,16 +121,16 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// <summary>
     /// Inserts or updates multiple key-value pairs in a single traversal batch.
     /// <para>
-    /// Marked <see cref="AlwaysInterleaveAttribute"/> so multiple producer
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> so multiple producer
     /// flush slots aimed at the same per-shard activation can pipeline
     /// concurrent batches instead of serialising behind a single in-flight
     /// turn. Background: at <c>shardCount=16</c> and producer
     /// <c>flushConcurrency&gt;8</c>, every flush slot independently routes
-    /// to the same <see cref="ShardRootGrain"/> activation; the
+    /// to the same <see cref="Orleans.Lattice.BPlusTree.Grains.ShardRootGrain"/> activation; the
     /// non-reentrant queue then grows to <c>NonReentrancyQueueSize=FC</c>
     /// and the second-from-front call routinely exceeds Orleans' 30 s
     /// response timeout. The bound is per-shard serial-turn pressure, not
-    /// upstream <see cref="LatticeGrain"/> work or provider commit p50
+    /// upstream <see cref="Orleans.Lattice.BPlusTree.Grains.LatticeGrain"/> work or provider commit p50
     /// (see U9g).
     /// </para>
     /// <para>
@@ -139,7 +139,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// </para>
     /// <list type="bullet">
     ///   <item>The per-activation grain-reference and routing-table caches
-    ///   in <see cref="ShardRootGrain"/>'s traversal partial are
+    ///   in <see cref="Orleans.Lattice.BPlusTree.Grains.ShardRootGrain"/>'s traversal partial are
     ///   <see cref="System.Collections.Concurrent.ConcurrentDictionary{TKey,TValue}"/>
     ///   instances, so two turns can read/write them concurrently.</item>
     ///   <item>The leaf apply path is LWW-convergent: two interleaved
@@ -160,7 +160,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// </list>
     /// <para>
     /// The split-bubble loop in <c>SetManyLocalOnlyAsync</c> calls
-    /// <see cref="Grains.IBPlusInternalGrain.AcceptSplitAsync"/> against
+    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusInternalGrain.AcceptSplitAsync"/> against
     /// parent internals (which remain non-reentrant), so the per-shard
     /// split ordering is still serialised at the parent grain even under
     /// interleaved shard-root turns.
@@ -178,7 +178,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// server-side, at write time; committed entries become ordinary Set
     /// writes that replicate without re-evaluating the predicate.
     /// <para>
-    /// Marked <see cref="AlwaysInterleaveAttribute"/> for the same reason as
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> for the same reason as
     /// <see cref="SetManyAsync"/>.
     /// </para>
     /// </summary>
@@ -285,7 +285,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task BulkLoadAsync(string operationId, List<KeyValuePair<string, byte[]>> sortedEntries);
 
     /// <summary>
-    /// Bulk-loads pre-stamped <see cref="LwwValue{T}"/> entries into an empty
+    /// Bulk-loads pre-stamped <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/> entries into an empty
     /// shard, preserving the original <see cref="Orleans.Lattice.HybridLogicalClock"/>
     /// version and <c>ExpiresAtTicks</c> on every entry. Used by
     /// snapshot / restore so TTL and source HLC metadata survive
@@ -363,7 +363,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// <para>
     /// When <paramref name="isCrossShardMigration"/> is <c>true</c>, the
     /// merge runs the asymmetric migration-vs-foreground rule on the leaf:
-    /// see <see cref="IBPlusLeafGrain.MergeManyAsync"/> for the full
+    /// see <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.MergeManyAsync"/> for the full
     /// contract. The flag is intended for the cross-shard migration
     /// callsites only (the source-shard drain in
     /// <see cref="Orleans.Lattice.BPlusTree.Grains.TreeShardSplitGrain"/>
@@ -379,7 +379,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// Records that ownership of the given <paramref name="sortedMovedSlots"/>
     /// has migrated away from this shard. Walks the leaf chain
     /// (starting from <see cref="GetLeftmostLeafIdAsync"/>) and calls
-    /// <see cref="IBPlusLeafGrain.MarkSlotsMovedAwayAsync"/> on every
+    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.MarkSlotsMovedAwayAsync"/> on every
     /// leaf so the leaf-side read gate and the cache-coherence prune
     /// pass both observe the moved-slot set. Called by
     /// <c>TreeShardSplitGrain.SwapAsync</c> on the source shard
@@ -395,13 +395,13 @@ internal interface IShardRootGrain : IGrainWithStringKey
 
     /// <summary>
     /// Routes <paramref name="keys"/> to their owning leaves and
-    /// invokes <see cref="IBPlusLeafGrain.MarkSagaShadowAsync"/> on
+    /// invokes <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.MarkSagaShadowAsync"/> on
     /// each leaf with the subset of keys it owns. Used by the split
     /// coordinator to install destination-side shadow markers naming
     /// the in-flight source-side saga
     /// <paramref name="transactionId"/> whose prepared mutations
     /// touched migrating keys. See <c>MarkSagaShadowAsync</c> on
-    /// <see cref="IBPlusLeafGrain"/> for the full atomic-visibility
+    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain"/> for the full atomic-visibility
     /// rationale.
     /// <para>
     /// Idempotent on identical input. Empty key lists are a no-op;
@@ -417,12 +417,12 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// track reads and writes since grain activation and reset on deactivation.
     /// Used by split coordinators to detect hot shards without persistence overhead.
     /// <para>
-    /// Marked <see cref="AlwaysInterleaveAttribute"/> because the implementation is a
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> because the implementation is a
     /// pure synchronous read of three private fields wrapped in
     /// <see cref="Task.FromResult{TResult}(TResult)"/> with zero awaits and zero
     /// state mutation - it cannot race any other in-flight turn. Allowing the
     /// hot-shard monitor's sampling RPC to bypass the
-    /// <see cref="IShardRootGrain.SetManyAsync(System.Collections.Generic.List{System.Collections.Generic.KeyValuePair{string, byte[]}})"/>
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.SetManyAsync(System.Collections.Generic.List{System.Collections.Generic.KeyValuePair{string, byte[]}})"/>
     /// reentrancy queue is required so the monitor does not time out (and fire
     /// spurious reshards) when the shard is at sustained producer pressure
     /// (see U9d).
@@ -440,7 +440,6 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// </summary>
     Task<ShardDiagnosticReport> GetDiagnosticsAsync(bool deep);
 
-    /// <summary>
     /// <summary>
     /// Returns this shard's byte-accurate storage-usage rollup - the summed
     /// serialized leaf-state byte footprint and the summed persisted-snapshot
@@ -676,8 +675,8 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// <see cref="MergeManyAsync"/>, preserving HLC timestamps for CRDT-safe
     /// convergence. Reads continue to be served locally.
     /// <para>
-    /// Idempotent: if the shard is already in <see cref="ShardSplitPhase.BeginShadowWrite"/>
-    /// or <see cref="ShardSplitPhase.Drain"/> with a matching
+    /// Idempotent: if the shard is already in <see cref="Orleans.Lattice.BPlusTree.State.ShardSplitPhase.BeginShadowWrite"/>
+    /// or <see cref="Orleans.Lattice.BPlusTree.State.ShardSplitPhase.Drain"/> with a matching
     /// <paramref name="targetShardIndex"/> and <paramref name="movedSlots"/>, the call
     /// is a no-op.
     /// </para>
@@ -685,7 +684,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task BeginSplitAsync(int targetShardIndex, int[] movedSlots, int virtualShardCount);
 
     /// <summary>
-    /// Transitions this shard's in-progress split to the <see cref="ShardSplitPhase.Reject"/>
+    /// Transitions this shard's in-progress split to the <see cref="Orleans.Lattice.BPlusTree.State.ShardSplitPhase.Reject"/>
     /// phase. Subsequent reads and writes to keys in any of the moved virtual slots
     /// throw <see cref="StaleShardRoutingException"/>, which the calling
     /// <c>LatticeGrain</c> catches to refresh its cached <see cref="ShardMap"/> and
@@ -708,7 +707,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// operation that has not yet been fully grafted into the tree. Used by the
     /// auto-split monitor to suppress splits while bulk operations are mid-flight.
     /// <para>
-    /// Marked <see cref="AlwaysInterleaveAttribute"/> because the implementation is a
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> because the implementation is a
     /// pure synchronous read of <c>state.State.PendingBulkGraft</c> wrapped in
     /// <see cref="Task.FromResult{TResult}(TResult)"/> with zero awaits and zero
     /// state mutation - it cannot race any other in-flight turn. Paired with
@@ -915,7 +914,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// <paramref name="committed"/> is <c>true</c>, the shard root groups the
     /// dictionary by leaf grain id (via the per-key traversal used by
     /// <see cref="SetAsync"/>) and passes each leaf its subset to
-    /// <see cref="IBPlusLeafGrain.ApplyTxTerminalAsync"/>. The leaf applies
+    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.ApplyTxTerminalAsync"/>. The leaf applies
     /// the values as a LWW-safe write only when it holds no pending bucket
     /// under <paramref name="transactionId"/> - i.e. when a prepare-phase
     /// shadow-forward was dropped by a mid-saga shard-split / drain race.
@@ -934,7 +933,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// When <c>false</c>, the shard builds the record but does not
     /// write it; the record is returned to the caller, which is
     /// expected to durably persist it (e.g. by batching across every
-    /// touched shard in one <see cref="ICommitLogWriter.AppendManyAsync"/>
+    /// touched shard in one <see cref="Orleans.Lattice.BPlusTree.Grains.ICommitLogWriter.AppendManyAsync"/>
     /// call). Only the saga coordinator
     /// (<see cref="Orleans.Lattice.BPlusTree.Grains.AtomicWriteGrain"/>)
     /// opts out, because it is the unique caller that has every
@@ -961,9 +960,9 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// <summary>
     /// Returns this shard's transitive split-forward destination set -
     /// the union of (a) the in-flight split's
-    /// <see cref="ShardSplitInProgress.ShadowTargetShardIndex"/> when one
+    /// <see cref="Orleans.Lattice.BPlusTree.State.ShardSplitInProgress.ShadowTargetShardIndex"/> when one
     /// is recorded and (b) every distinct value in
-    /// <see cref="State.ShardRootState.MovedAwaySlots"/>, with this shard's
+    /// <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.MovedAwaySlots"/>, with this shard's
     /// own index excluded. Used by the saga's commit-broadcast loop and
     /// by the cross-cluster replication-apply path to pre-resolve the
     /// transitive closure of split destinations before fanning out
@@ -1005,7 +1004,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// mark HLC compares as less-than-or-equal to <paramref name="advance"/>
     /// are removed; entries marked with a strictly greater HLC are
     /// preserved so the next compaction pass picks them up. Persists the
-    /// new <see cref="State.ShardRootState.LastDirtyAdvance"/> watermark
+    /// new <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.LastDirtyAdvance"/> watermark
     /// alongside the trimmed dictionary in a single state write.
     /// Idempotent: a second call with the same or earlier watermark is
     /// a no-op.

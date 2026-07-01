@@ -8,7 +8,7 @@ namespace Orleans.Lattice;
 /// <see cref="ILattice"/> mutation. When carried through the public
 /// API via an ambient <see cref="LatticeIdempotencyContext"/> scope,
 /// every retry of the same logical operation re-stamps the produced
-/// <see cref="LwwValue{T}.Timestamp"/> with this value verbatim so the
+/// <see cref="Orleans.Lattice.Primitives.LwwValue{T}.Timestamp"/> with this value verbatim so the
 /// existing WAL-append HWM dedup, the LWW merge rule, and the
 /// <see cref="PnCounterAccessor"/> counter-side dedup guard collapse
 /// the retries into a single observable mutation.
@@ -62,7 +62,7 @@ public readonly record struct LatticeIdempotencyKey
     /// <summary>
     /// The logical <see cref="HybridLogicalClock"/> every retry of the
     /// operation stamps onto its emitted
-    /// <see cref="LwwValue{T}.Timestamp"/>. Stable across retries so
+    /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}.Timestamp"/>. Stable across retries so
     /// the LWW merge rule treats the second arrival as an exact-tie
     /// duplicate of the first.
     /// </summary>

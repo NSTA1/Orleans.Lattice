@@ -6,7 +6,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// A cluster-local reference to a shard's current B+ tree root node - the
 /// grain identity of the root and whether that root is a leaf (a flat,
 /// single-node shard) or an internal node. Returned by
-/// <see cref="IShardRootGrain.GetRootNodeRefAsync"/> as the entry point for a
+/// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.GetRootNodeRefAsync"/> as the entry point for a
 /// read-only top-down tree walk. A <see langword="null"/> reference denotes an
 /// empty shard with no root yet.
 /// </summary>

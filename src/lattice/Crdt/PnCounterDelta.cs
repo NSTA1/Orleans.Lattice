@@ -18,7 +18,7 @@ namespace Orleans.Lattice;
 /// Emitters always populate both maps (use an empty <see cref="Dictionary{TKey, TValue}"/>
 /// for "no advances on this side"); use <see cref="Empty"/> to author a
 /// no-op delta without allocating fresh dictionaries. The
-/// <see cref="default"/> instance has <c>null</c> maps and is intended
+/// <see langword="default"/> instance has <c>null</c> maps and is intended
 /// only as the zero-value of the struct.
 /// </para>
 /// </summary>

@@ -58,7 +58,7 @@ public readonly record struct LwwRegisterDelta
     /// <summary>
     /// Creates a tombstone delta carrying the supplied <paramref name="timestamp"/>
     /// and <paramref name="originClusterId"/>. Mirrors
-    /// <see cref="LwwValue{T}.Tombstone"/> so receivers and tests have a
+    /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}.Tombstone"/> so receivers and tests have a
     /// single canonical way to author a tombstone delta without leaving
     /// <see cref="Value"/> populated.
     /// </summary>

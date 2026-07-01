@@ -434,6 +434,7 @@ public sealed class LatticeWalGc(
 
         return union;
     }
+    /// <summary>
     /// trim pass and returns whether the post-trim footprint still breaches
     /// the ceiling. When a byte-pressure trigger reclaimed bytes
     /// (<paramref name="retainedBefore"/> &gt; <paramref name="retainedAfter"/>),

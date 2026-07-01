@@ -15,7 +15,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <see cref="PublishAsync"/>. When invoked, the stream provider named
 /// <see cref="LatticeOptions.EventStreamProviderName"/> is resolved via
 /// keyed-service DI and a metadata-only event is pushed on the per-tree
-/// stream (namespace <see cref="LatticeEventConstants.StreamNamespace"/>,
+/// stream (namespace <see cref="LatticeEventConstants.StreamNamespace"/>).
 /// </para>
 /// <para>
 /// <b>Failures are never propagated to the caller.</b> Missing-provider,

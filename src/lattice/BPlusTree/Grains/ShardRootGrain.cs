@@ -113,10 +113,10 @@ internal sealed partial class ShardRootGrain(
 
     /// <summary>
     /// Per-activation gate that serialises every shard-root
-    /// <c>state.WriteStateAsync()</c> call. <see cref="IShardRootGrain.SetManyAsync"/>
-    /// is annotated <see cref="AlwaysInterleaveAttribute"/> for throughput, which
+    /// <c>state.WriteStateAsync()</c> call. <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.SetManyAsync"/>
+    /// is annotated <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> for throughput, which
     /// allows two concurrent <c>SetManyAsync</c> turns on the same activation to
-    /// race the underlying <see cref="IPersistentState{TState}.WriteStateAsync"/>
+    /// race the underlying <c>WriteStateAsync</c>
     /// call. The second writer observes a stale etag and the storage provider
     /// throws <see cref="Orleans.Storage.InconsistentStateException"/> -
     /// the exact "Etag mismatch during Update" signal the U9g real-Azure
@@ -132,10 +132,10 @@ internal sealed partial class ShardRootGrain(
 
     /// <summary>
     /// Per-activation gate that serialises the full root-promotion
-    /// sequence (Phase 1 persist of <see cref="ShardRootState.PendingPromotion"/>
+    /// sequence (Phase 1 persist of <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.PendingPromotion"/>
     /// + cross-grain <c>InitializeAsync</c> on the new root + Phase 2
     /// persist that clears the pending intent). Two interleaved
-    /// <see cref="IShardRootGrain.SetManyAsync"/> turns can both invoke
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.SetManyAsync"/> turns can both invoke
     /// the promotion path on the same activation; without this gate,
     /// turn B's assignment to <c>state.State.PendingPromotion</c> can
     /// overwrite turn A's still-in-flight intent before A's
@@ -151,7 +151,7 @@ internal sealed partial class ShardRootGrain(
     /// <summary>
     /// Per-activation gate that serialises the lazy single-leaf root
     /// seed in <see cref="EnsureRootAsync"/>. Public operations are
-    /// annotated <see cref="AlwaysInterleaveAttribute"/>, so two turns
+    /// annotated <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/>, so two turns
     /// can both observe a null in-memory <c>RootNodeId</c> on a
     /// freshly-activated shard and race into the seed path. Without this
     /// gate, both would re-read storage, both would find it empty, and
@@ -169,7 +169,7 @@ internal sealed partial class ShardRootGrain(
 
     /// <summary>
     /// Serialised replacement for <c>state.WriteStateAsync()</c>. All
-    /// shard-root <see cref="IPersistentState{TState}.WriteStateAsync"/>
+    /// shard-root <c>WriteStateAsync</c>
     /// call sites must route through this helper so the per-activation
     /// <see cref="_stateWriteGate"/> serialises storage writes across
     /// interleaved turns.
@@ -599,9 +599,9 @@ internal sealed partial class ShardRootGrain(
     /// <summary>
     /// Local apply path for <see cref="SetManyAsync"/>. Routes each input
     /// entry to its target leaf, groups the input into per-leaf slices,
-    /// and dispatches one <see cref="IBPlusLeafGrain.SetManyAsync"/> call
+    /// and dispatches one <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.SetManyAsync"/> call
     /// per leaf so the batched commit-log seam
-    /// (<see cref="ICommitLogWriter.AppendManyAsync"/>) collapses the
+    /// (<see cref="Orleans.Lattice.BPlusTree.Grains.ICommitLogWriter.AppendManyAsync"/>) collapses the
     /// per-key WAL grain hops into a single batched dispatch per leaf.
     /// The pre-batched shape called <c>leaf.SetAsync(key, value)</c> once
     /// per entry, which routed through the per-key WAL append path and
@@ -802,7 +802,7 @@ internal sealed partial class ShardRootGrain(
     }
 
     /// <summary>
-    /// Dispatches a single per-leaf batched <see cref="IBPlusLeafGrain.SetManyAsync"/>
+    /// Dispatches a single per-leaf batched <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.SetManyAsync"/>
     /// call with the same transient-exception retry envelope the per-key
     /// <c>SetAsync</c> path uses. The retry is idempotent under LWW: each
     /// retry advances the leaf's HLC, but the dominant per-key value the
@@ -893,7 +893,7 @@ internal sealed partial class ShardRootGrain(
     /// <summary>
     /// Conditional sibling of <see cref="SetManyLocalOnlyAsync"/>: routes each
     /// entry to its owning leaf, dispatches one
-    /// <see cref="IBPlusLeafGrain.SetManyWherePredicateAsync"/> per leaf, walks
+    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.SetManyWherePredicateAsync"/> per leaf, walks
     /// the resulting split promotions, and forwards only the actually-written
     /// entries (those that passed the guard) through the per-key adaptive-split
     /// shadow path. Returns the aggregated written-key set across this shard's
@@ -1026,7 +1026,7 @@ internal sealed partial class ShardRootGrain(
     /// <summary>
     /// Conditional sibling of <see cref="DispatchLeafBatchWithRetryAsync"/>:
     /// dispatches a single per-leaf
-    /// <see cref="IBPlusLeafGrain.SetManyWherePredicateAsync"/> call under the
+    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.SetManyWherePredicateAsync"/> call under the
     /// same transient-exception retry envelope. Idempotent under LWW: a retry
     /// re-evaluates the guard against the same committed values and converges
     /// to the same projection state.

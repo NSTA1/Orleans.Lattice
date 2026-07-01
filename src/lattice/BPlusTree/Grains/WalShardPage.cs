@@ -20,7 +20,7 @@ internal readonly record struct WalShardPage
     /// <summary>
     /// The sequence number to pass to the next
     /// <see cref="IWalShardGrain.ReadAsync"/> call. Equal to the
-    /// requested <c>fromSequence</c> when <see cref="Entries"/> is
+    /// requested <c>fromSequence</c> when <c>Entries</c> is
     /// empty, and to <c>Entries[^1].Sequence + 1</c> otherwise.
     /// </summary>
     [Id(1)] public long NextSequence { get; init; }

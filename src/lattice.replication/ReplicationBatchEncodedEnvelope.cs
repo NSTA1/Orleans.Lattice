@@ -6,13 +6,13 @@ namespace Orleans.Lattice.Replication;
 /// alongside a memory of pre-encoded entry byte segments, so the
 /// shipper can hand a ready-to-frame batch to the transport without
 /// ever materialising the strongly-typed
-/// <see cref="BPlusTree.Grains.WalRecord"/> list.
+/// <see cref="Orleans.Lattice.WalRecord"/> list.
 /// <para>
 /// Like <see cref="ReplicationBatch"/> itself, this value type is
 /// intentionally not Orleans-serialisable: it is the in-process call
 /// shape, not the on-the-wire envelope. The on-the-wire bytes are
 /// produced by
-/// <see cref="IReplicationBatchEncoder.EncodeFraming(in EncodedBatchHeader, System.ReadOnlyMemory{System.ArraySegment{byte}}, System.Buffers.IBufferWriter{byte})"/>
+/// <see cref="IReplicationBatchEncoder.EncodeFraming(in EncodedBatchHeader, System.String, System.String, System.ReadOnlyMemory{System.ArraySegment{System.Byte}}, System.Buffers.IBufferWriter{System.Byte})"/>
 /// and are framed by
 /// <see cref="EncodedBatchHeader"/>'s fixed wire layout followed by
 /// length-prefixed segments.
@@ -41,8 +41,8 @@ public readonly record struct ReplicationBatchEncodedEnvelope
     /// <summary>
     /// Pre-encoded entry segments in commit order. Each segment is the
     /// exact byte output of
-    /// <see cref="IWalRecordEncoder.Encode(in BPlusTree.Grains.WalRecord, System.Buffers.IBufferWriter{byte})"/>
-    /// for one <see cref="BPlusTree.Grains.WalRecord"/>; the framing
+    /// <see cref="Orleans.Lattice.IWalRecordEncoder.Encode"/>
+    /// for one <see cref="Orleans.Lattice.WalRecord"/>; the framing
     /// encoder writes each segment verbatim, preceded only by its
     /// 4-byte little-endian length prefix.
     /// </summary>

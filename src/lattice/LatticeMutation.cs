@@ -81,7 +81,7 @@ public readonly record struct LatticeMutation
     /// <summary>
     /// Sparse vector-clock frontier captured at commit time, or
     /// <c>null</c> when the writer did not supply one. Mirrors
-    /// <see cref="LwwValue{T}.VectorClock"/> on per-key
+    /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}.VectorClock"/> on per-key
     /// <see cref="MutationKind.Set"/> / <see cref="MutationKind.Delete"/>
     /// observations and the ambient
     /// <see cref="LatticeVectorClockContext"/> on

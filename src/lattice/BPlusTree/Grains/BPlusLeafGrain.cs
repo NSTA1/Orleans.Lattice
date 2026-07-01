@@ -7,7 +7,7 @@ using Orleans.Lattice.Primitives;
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// Leaf node grain implementation. Stores key → <see cref="LwwValue{T}"/> entries
+/// Leaf node grain implementation. Stores key → <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/> entries
 /// in a sorted dictionary. Splits when the entry count exceeds the leaf-sizing
 /// pin in the tree registry.
 /// </summary>
@@ -185,7 +185,7 @@ internal sealed partial class BPlusLeafGrain(
     /// <summary>
     /// Advances the leaf's local <see cref="HybridLogicalClock"/> for a
     /// commit and returns the value to persist on the freshly-constructed
-    /// <see cref="LwwValue{T}"/>. When
+    /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/>. When
     /// <see cref="LatticeHlcOverrideContext.Current"/> is <see langword="null"/>
     /// (the foreground-caller default), the local clock advances via
     /// <see cref="HybridLogicalClock.Tick"/> and the same value is
@@ -194,7 +194,7 @@ internal sealed partial class BPlusLeafGrain(
     /// <see cref="HybridLogicalClock.Merge"/> so subsequent foreground
     /// ticks remain strictly greater than the override (preserving local
     /// monotonicity), but the <em>override</em> is returned verbatim so
-    /// the persisted <see cref="LwwValue{T}.Timestamp"/> matches the
+    /// the persisted <see cref="Orleans.Lattice.Primitives.LwwValue{T}.Timestamp"/> matches the
     /// authoring cluster's HLC bit-identically - preserving the
     /// receiver-side LWW resolution invariant.
     /// </summary>
@@ -1015,7 +1015,7 @@ internal sealed partial class BPlusLeafGrain(
 
     /// <summary>
     /// Foreground bulk-write commit path. Collapses the per-key WAL
-    /// round-trip into a single <see cref="ICommitLogWriter.AppendManyAsync"/>
+    /// round-trip into a single <see cref="Orleans.Lattice.BPlusTree.Grains.ICommitLogWriter.AppendManyAsync"/>
     /// call so a N-key batch routed to the same WAL partition pays one
     /// grain RPC instead of N. The per-key in-memory apply, observer
     /// publication, and digest publication still happen, but the
@@ -2759,7 +2759,7 @@ internal sealed partial class BPlusLeafGrain(
 
     /// <summary>
     /// Returns all key-value entries in this leaf including tombstones,
-    /// preserving the original <see cref="LwwValue{T}"/> timestamps.
+    /// preserving the original <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/> timestamps.
     /// Internal method for unit testing - not exposed on the grain interface
     /// to avoid Orleans generic type serialization issues.
     /// </summary>

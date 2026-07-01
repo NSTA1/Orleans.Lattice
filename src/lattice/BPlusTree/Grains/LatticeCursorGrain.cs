@@ -639,7 +639,7 @@ internal sealed partial class LatticeCursorGrain(
     /// Slides the registry-side pin's <c>ExpiresAt</c> forward when
     /// the cursor was opened in point-in-time mode and actually pinned
     /// at least one decision. A <see langword="false"/> result from
-    /// <see cref="ITxRegistryGrain.RefreshPinAsync"/> means the pin
+    /// <see cref="Orleans.Lattice.BPlusTree.ITxRegistryGrain.RefreshPinAsync"/> means the pin
     /// has been evicted (either by an out-of-band
     /// <c>UnpinSnapshotAsync</c> or by expiry past
     /// <see cref="LatticeOptions.MaxCursorSnapshotPinTtl"/>) - the

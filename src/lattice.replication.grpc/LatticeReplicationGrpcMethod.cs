@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Replication.Grpc;
 /// <remarks>
 /// The wire contract is intentionally a single unary RPC:
 /// <c>Push(ReplicationBatchEnvelope) -&gt; ReplicationAck</c>. The
-/// underlying <see cref="GrpcChannel"/> multiplexes every batch over a
+/// underlying <see cref="global::Grpc.Net.Client.GrpcChannel"/> multiplexes every batch over a
 /// long-lived HTTP/2 connection per peer, so the unary shape achieves
 /// the sub-second-latency target without the additional
 /// state machine of a bidi stream. Future iterations may promote the

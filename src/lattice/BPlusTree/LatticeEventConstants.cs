@@ -108,10 +108,10 @@ public static class LatticeEventConstants
     /// to preserve local monotonicity for any subsequent foreground
     /// tick. The supported authoring paths are the receiver-side
     /// cross-cluster atomic-visibility apply seam
-    /// (<see cref="IReplicationApplyGrain.ApplyPreparedSetAsync"/> /
-    /// <see cref="IReplicationApplyGrain.ApplyPreparedDeleteAsync"/>)
+    /// (<see cref="Orleans.Lattice.BPlusTree.IReplicationApplyGrain.ApplyPreparedSetAsync"/> /
+    /// <see cref="Orleans.Lattice.BPlusTree.IReplicationApplyGrain.ApplyPreparedDeleteAsync"/>)
     /// and the per-entry merge apply seam
-    /// (<see cref="IReplicationApplyGrain.ApplyMergeManyAsync"/>).
+    /// (<see cref="Orleans.Lattice.BPlusTree.IReplicationApplyGrain.ApplyMergeManyAsync"/>).
     /// Internal - set through <see cref="LatticeHlcOverrideContext"/>.
     /// </summary>
     internal const string HlcOverrideRequestContextKey = "ol.hlc";

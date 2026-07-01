@@ -3,7 +3,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <summary>
 /// Internal in-process seam exposing a leaf grain's projection as a
 /// deterministic apply-replay surface. Implemented by
-/// <see cref="BPlusLeafGrain"/>; consumed by the in-grain replay path the
+/// <see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain"/>; consumed by the in-grain replay path the
 /// WAL-as-sole-commit-point promotion will introduce so a reactivating
 /// leaf can rebuild its in-memory projection by replaying the
 /// authoritative write-ahead log from a persisted checkpoint.

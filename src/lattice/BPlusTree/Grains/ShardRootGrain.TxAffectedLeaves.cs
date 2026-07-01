@@ -126,7 +126,7 @@ internal sealed partial class ShardRootGrain
     /// <para>
     /// On the first call for a given saga on this shard, this method
     /// also awaits an idempotent
-    /// <see cref="ITxRegistryGrain.RegisterParticipantAsync"/> RPC so
+    /// <see cref="Orleans.Lattice.BPlusTree.ITxRegistryGrain.RegisterParticipantAsync"/> RPC so
     /// the per-tree registry records this shard's participation.
     /// Subsequent calls for the same saga short-circuit on the
     /// per-activation dedup set and complete synchronously.

@@ -10,13 +10,13 @@ using Orleans.Lattice.Views;
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// Stateless worker that routes requests to the correct <see cref="IShardRootGrain"/>
+/// Stateless worker that routes requests to the correct <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain"/>
 /// based on a stable hash of the key.
 /// Key format: <c>{treeId}</c>.
 /// </summary>
 /// <remarks>
 /// <para>
-/// <see cref="StatelessWorkerAttribute.MaxLocalWorkers"/> is set to 32 so the
+/// <c>MaxLocalWorkers</c> is set to 32 so the
 /// per-silo activation pool can absorb 32 concurrent in-flight calls before any
 /// new caller starts queueing on an existing activation's non-reentrancy queue.
 /// The Orleans default (<c>Environment.ProcessorCount</c>) is much smaller on
@@ -73,7 +73,7 @@ internal sealed partial class LatticeGrain(
     /// <para>
     /// Initialised behind a <c>bool</c> flag rather than a
     /// <see cref="Nullable{T}"/> wrapper because the BCL's
-    /// <see cref="Histogram{T}.Record(T, KeyValuePair{string, object?})"/>
+    /// <c>Histogram.Record</c>
     /// overload set takes the tag by value - wrapping it in a
     /// <see cref="Nullable{T}"/> would force a <c>HasValue</c> check +
     /// a struct copy on every read. The flag-based init is the same
@@ -1868,7 +1868,7 @@ internal sealed partial class LatticeGrain(
     /// across the wire on either path.
     /// <para>
     /// This supersedes an earlier design that fanned out via
-    /// <see cref="IShardRootGrain.CountWithMovedAwayAsync"/> and relied on
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.CountWithMovedAwayAsync"/> and relied on
     /// each source shard filtering its moved-slot keys via
     /// <c>SplitInProgress.Phase</c>. That protocol had a gap: the split
     /// coordinator publishes the new <see cref="ShardMap"/> (including the
@@ -2393,7 +2393,7 @@ internal sealed partial class LatticeGrain(
     }
 
     /// <summary>
-    /// Returns an <see cref="IShardRootGrain"/> reference for the given shard
+    /// Returns an <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain"/> reference for the given shard
     /// index against the resolved physical tree id. Reuses the array-keyed
     /// per-activation cache populated by <see cref="GetShardGrainAsync"/>
     /// (cycle 11) so multi-shard fanout sites - bulk batch, cursor, range
@@ -2446,7 +2446,7 @@ internal sealed partial class LatticeGrain(
     /// the same stale physical tree id and the caller would spin
     /// against the same throw indefinitely. External saga coordinators
     /// use this overload to break out of stale-routing retry loops
-    /// that the <see cref="StatelessWorker"/> activation's per-instance
+    /// that the <c>StatelessWorker</c> activation's per-instance
     /// cache would otherwise sustain.
     /// </summary>
     public ValueTask<RoutingInfo> GetRoutingAsync(bool forceRefresh, CancellationToken cancellationToken = default)
@@ -2718,8 +2718,8 @@ internal sealed partial class LatticeGrain(
         LatticeSharding.GetShardIndex(key, shardCount);
 
     /// <summary>
-    /// Pair of <see cref="ITxRegistryGrain.SnapshotAsync"/> result and
-    /// the matching <see cref="ITxRegistryGrain.GetDecisionsRevisionAsync"/>
+    /// Pair of <see cref="Orleans.Lattice.BPlusTree.ITxRegistryGrain.SnapshotAsync"/> result and
+    /// the matching <see cref="Orleans.Lattice.BPlusTree.ITxRegistryGrain.GetDecisionsRevisionAsync"/>
     /// reading captured in the same call window. The revision lets the
     /// double-checked retry replace its snap2 dictionary fetch with the
     /// cheap revision probe (see
@@ -2788,14 +2788,14 @@ internal sealed partial class LatticeGrain(
     /// <summary>
     /// Cheap-probe replacement for the post-fan-out snap2 dictionary
     /// fetch. Issues a single
-    /// <see cref="ITxRegistryGrain.GetDecisionsRevisionAsync"/> RPC and
+    /// <see cref="Orleans.Lattice.BPlusTree.ITxRegistryGrain.GetDecisionsRevisionAsync"/> RPC and
     /// returns <c>true</c> when the returned revision equals the
     /// captured <paramref name="snap1Revision"/> - in that case the
     /// registry's Decisions map provably did not mutate during the
     /// fan-out, so <paramref name="snap1"/> is still authoritative and
     /// no second dictionary serialization is required. On revision
     /// mismatch the method falls through to a full
-    /// <see cref="ITxRegistryGrain.SnapshotAsync"/> fetch and applies
+    /// <see cref="Orleans.Lattice.BPlusTree.ITxRegistryGrain.SnapshotAsync"/> fetch and applies
     /// the existing <see cref="IsSnapshotStable"/> rule, preserving
     /// every legacy correctness guarantee.
     /// <para>

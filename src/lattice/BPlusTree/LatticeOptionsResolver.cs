@@ -8,7 +8,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// <summary>
 /// Resolves the effective <see cref="LatticeOptions"/> for a given tree by
 /// merging the non-structural configuration from
-/// <see cref="IOptionsMonitor{LatticeOptions}"/> with the registry-pinned
+/// <c>IOptionsMonitor&lt;LatticeOptions&gt;</c> with the registry-pinned
 /// structural fields (<c>MaxLeafKeys</c>, <c>MaxInternalChildren</c>,
 /// <c>ShardCount</c>) stored on <see cref="State.TreeRegistryEntry"/>.
 /// <para>
@@ -189,7 +189,7 @@ internal sealed class LatticeOptionsResolver(
     /// <see cref="HistoryRetentionMode.MetadataOnly"/> and no age bound,
     /// matching the documented defaults. The <paramref name="hybridFullValueWindow"/>
     /// is supplied by the caller (the view maintainer reads it from
-    /// <see cref="Views.LatticeViewOptions.HistoryHybridFullValueWindow"/>) and is
+    /// <see cref="Orleans.Lattice.LatticeViewOptions.HistoryHybridFullValueWindow"/>) and is
     /// only consulted under <see cref="HistoryRetentionMode.Hybrid"/>.
     /// </summary>
     /// <param name="treeId">The source tree whose history retention is resolved.</param>

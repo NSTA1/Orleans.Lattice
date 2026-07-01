@@ -9,24 +9,24 @@ namespace Orleans.Lattice.BPlusTree;
 /// id verbatim. Unlike the public <see cref="ILattice"/> write surface -
 /// which always stamps a fresh local HLC at commit time - these methods
 /// route the incoming entry through the LWW-merge path so the persisted
-/// <see cref="LwwValue{T}"/> carries the source HLC and source
-/// <see cref="LwwValue{T}.OriginClusterId"/> exactly as authored on the
+/// <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/> carries the source HLC and source
+/// <see cref="Orleans.Lattice.Primitives.LwwValue{T}.OriginClusterId"/> exactly as authored on the
 /// remote cluster.
 /// </summary>
 /// <remarks>
 /// <para>
 /// Implemented by the per-tree <c>LatticeGrain</c> stateless worker so the
-/// existing routing machinery (<see cref="LatticeOptionsResolver"/>,
+/// existing routing machinery (<see cref="Orleans.Lattice.BPlusTree.LatticeOptionsResolver"/>,
 /// shard-map resolution, system-tree guard) is reused. Apply calls for
 /// system-prefixed trees are rejected for the same reason public writes
 /// are.
 /// </para>
 /// <para>
 /// Set / Delete apply paths route via
-/// <see cref="IShardRootGrain.MergeManyAsync"/> - the same primitive used
+/// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.MergeManyAsync"/> - the same primitive used
 /// by shard-split shadow-forward and tree-merge - because that is the
 /// only entry point that preserves the source HLC end-to-end. Range
-/// applies route via the standard <see cref="IShardRootGrain.DeleteRangeAsync"/>
+/// applies route via the standard <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.DeleteRangeAsync"/>
 /// wrapped in a <see cref="LatticeOriginContext"/> scope so the
 /// receiver-side observer publishes a <see cref="MutationKind.DeleteRange"/>
 /// notification stamped with the remote origin (and is therefore filtered
@@ -41,9 +41,9 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
     /// by <paramref name="originClusterId"/>. The persisted entry carries
     /// <paramref name="sourceHlc"/> as its <see cref="HybridLogicalClock"/>
     /// timestamp, <paramref name="originClusterId"/> as its
-    /// <see cref="LwwValue{T}.OriginClusterId"/>,
+    /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}.OriginClusterId"/>,
     /// <paramref name="sourceVectorClock"/> as its
-    /// <see cref="LwwValue{T}.VectorClock"/>, and
+    /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}.VectorClock"/>, and
     /// <paramref name="expiresAtTicks"/> as its absolute UTC expiry
     /// (<c>0</c> for non-expiring entries).
     /// </summary>
@@ -55,7 +55,7 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
     /// The vector-clock frontier captured by the remote cluster at commit
     /// time, or <c>null</c> when the producing cluster does not stamp a
     /// frontier. Stamped verbatim onto the persisted
-    /// <see cref="LwwValue{T}.VectorClock"/> so receiver-side
+    /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}.VectorClock"/> so receiver-side
     /// causal-consistency checks see exactly the producer's view.
     /// </param>
     /// <param name="expiresAtTicks">Absolute UTC tick expiry; <c>0</c> means no expiry.</param>
@@ -150,7 +150,7 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
     /// <see cref="ApplyMergeItem.OriginClusterId"/>, 
     /// <see cref="ApplyMergeItem.SourceVectorClock"/>, 
     /// <see cref="ApplyMergeItem.ExpiresAtTicks"/>) so the persisted
-    /// <see cref="LwwValue{T}"/> matches the authoring cluster
+    /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/> matches the authoring cluster
     /// bit-identically - semantics are equivalent to invoking
     /// <see cref="ApplySetAsync"/> / <see cref="ApplyDeleteAsync"/> for
     /// each item in order, only with the per-item dictionary allocation
@@ -159,7 +159,7 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
     /// <param name="items">
     /// The remote mutations to install. Items targeting different shards
     /// are dispatched in parallel; items targeting the same shard are
-    /// merged into a single <see cref="IShardRootGrain.MergeManyAsync"/>
+    /// merged into a single <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.MergeManyAsync"/>
     /// call per shard.
     /// </param>
     Task ApplyMergeManyAsync(IReadOnlyList<ApplyMergeItem> items);
@@ -175,7 +175,7 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
     /// <see cref="ApplyCrdtDeltaItem.OriginClusterId"/>,
     /// <see cref="ApplyCrdtDeltaItem.SourceVectorClock"/>) and its typed
     /// delta + <see cref="ApplyCrdtDeltaItem.Mode"/>, so the folded
-    /// <see cref="LwwValue{T}"/> matches the per-entry CRDT apply path
+    /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/> matches the per-entry CRDT apply path
     /// bit-identically.
     /// <para>
     /// Because the grain is single-threaded and non-reentrant, the whole
@@ -281,7 +281,7 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
     /// <see cref="ITxRegistryGrain"/> with the saga outcome (the
     /// tree-wide linearization point readers dial back through) and
     /// driving the per-shard
-    /// <see cref="IShardRootGrain.AppendTxTerminalAsync"/> under a
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.AppendTxTerminalAsync"/> under a
     /// <see cref="LatticeHlcOverrideContext"/> + 
     /// <see cref="LatticeOriginContext"/> stack so the receiver's local
     /// WAL append re-stamps the source cluster's terminal HLC and

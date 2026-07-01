@@ -6,7 +6,7 @@ namespace Orleans.Lattice;
 
 /// <summary>
 /// Ambient hybrid-logical-clock override used by source-HLC-preserving
-/// apply paths to stamp <see cref="LwwValue{T}.Timestamp"/> verbatim
+/// apply paths to stamp <see cref="Orleans.Lattice.Primitives.LwwValue{T}.Timestamp"/> verbatim
 /// onto mutations authored by the current logical call.
 /// </summary>
 /// <remarks>
@@ -19,7 +19,7 @@ namespace Orleans.Lattice;
 /// the override via <see cref="HybridLogicalClock.Merge(HybridLogicalClock, HybridLogicalClock)"/>
 /// (preserving local monotonicity for any subsequent foreground tick)
 /// and persists the <em>override verbatim</em> on the freshly-constructed
-/// <see cref="LwwValue{T}"/>'s timestamp slot so receiver-side LWW
+/// <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/>'s timestamp slot so receiver-side LWW
 /// resolution sees the source-side HLC bit-identically. When the
 /// context is unset (the common case for any direct foreground
 /// caller), the leaf falls back to the standard
@@ -28,10 +28,10 @@ namespace Orleans.Lattice;
 /// <para>
 /// The supported authoring paths are the receiver-side
 /// cross-cluster atomic-visibility apply seam
-/// (<see cref="IReplicationApplyGrain.ApplyPreparedSetAsync"/> /
-/// <see cref="IReplicationApplyGrain.ApplyPreparedDeleteAsync"/>)
+/// (<see cref="Orleans.Lattice.BPlusTree.IReplicationApplyGrain.ApplyPreparedSetAsync"/> /
+/// <see cref="Orleans.Lattice.BPlusTree.IReplicationApplyGrain.ApplyPreparedDeleteAsync"/>)
 /// and the per-entry merge apply seam
-/// (<see cref="IReplicationApplyGrain.ApplyMergeManyAsync"/>),
+/// (<see cref="Orleans.Lattice.BPlusTree.IReplicationApplyGrain.ApplyMergeManyAsync"/>),
 /// where each per-key call is wrapped in a
 /// <see cref="With(HybridLogicalClock?)"/> scope alongside
 /// <see cref="LatticeOriginContext"/> and

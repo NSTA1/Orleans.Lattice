@@ -152,7 +152,7 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
     /// <summary>
     /// Test constructor accepting a custom <see cref="TimeProvider"/>
     /// so unit tests can drive the sampler deterministically through a
-    /// <see cref="Microsoft.Extensions.Time.Testing.FakeTimeProvider"/>.
+    /// <c>FakeTimeProvider</c>.
     /// </summary>
     internal WalSaturationSampler(
         WalSaturationSignal signal,

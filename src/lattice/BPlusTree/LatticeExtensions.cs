@@ -21,9 +21,8 @@ public static class LatticeExtensions
     /// <summary>
     /// Streams sorted key-value pairs into the tree, partitioning by physical
     /// shard and flushing chunks in parallel across shards. Each shard receives
-    /// its entries in key order via <see cref="IShardRootGrain.BulkAppendAsync"/>,
-
-/// which appends to the right edge without splits.
+    /// its entries in key order via <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.BulkAppendAsync"/>,
+    /// which appends to the right edge without splits.
     /// <para>
     /// The input <paramref name="sortedEntries"/> <b>must</b> be in ascending key order.
     /// Per-shard ordering is preserved because hash-partitioning a globally sorted
@@ -31,8 +30,7 @@ public static class LatticeExtensions
     /// </para>
     /// <para>
     /// Routing is resolved up front via <see cref="ILattice.GetRoutingAsync"/>,
-
-/// so entries are correctly partitioned by the tree's persisted
+    /// so entries are correctly partitioned by the tree's persisted
     /// <see cref="ShardMap"/> - including non-default maps produced by adaptive
     /// shard splits.
     /// </para>
@@ -129,9 +127,7 @@ public static class LatticeExtensions
     /// and the client must be connected to a cluster that has the same
     /// stream provider registered. Events are metadata-only - they carry
     /// <see cref="LatticeTreeEvent.Kind"/>, <see cref="LatticeTreeEvent.TreeId"/>,
-
     /// <see cref="LatticeTreeEvent.Key"/>, <see cref="LatticeTreeEvent.ShardIndex"/>,
-
     /// <see cref="LatticeTreeEvent.OperationId"/>, and
     /// <see cref="LatticeTreeEvent.AtUtc"/>. Use
     /// <see cref="ILattice.GetAsync(string, CancellationToken)"/> or

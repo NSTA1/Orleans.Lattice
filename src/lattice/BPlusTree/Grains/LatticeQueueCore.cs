@@ -44,7 +44,7 @@ internal sealed class LatticeQueueCore(
     /// cold start can begin its range scan past already-dequeued ids
     /// rather than re-walking from the head of the prefix. Chosen to sort
     /// strictly before any entry key (a leading <c>_</c> is below the
-    /// printable digits and letters every <see cref="keyPrefix"/> uses), so
+    /// printable digits and letters every <c>keyPrefix</c> uses), so
     /// it is never swept up by the entry range scan.
     /// </summary>
     internal const string HeadCursorKey = "__head";

@@ -17,7 +17,7 @@ namespace Orleans.Lattice.Views;
 /// generation greater than <c>0</c> is the suffixed <c>view-{name}#g{N}</c>. A
 /// rebuild targets generation <c>ActiveGeneration + 1</c>, builds it fully in the
 /// background, then flips the active generation - together with the resume
-/// checkpoint - in a single durable <see cref="IPersistentState{T}.WriteStateAsync"/>:
+/// checkpoint - in a single durable <c>WriteStateAsync</c>:
 /// the atomic swap. Readers resolve the active generation, so they move from the
 /// old fully-built tree to the new fully-built tree with no empty window.
 /// </para>

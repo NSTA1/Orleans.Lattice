@@ -146,7 +146,7 @@ internal sealed partial class LatticeGrain
     /// against for its lifetime.
     /// </description></item>
     /// <item><description>
-    /// Fan out <see cref="IShardRootGrain.CaptureSnapshotBaselineAsync"/>
+    /// Fan out <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.CaptureSnapshotBaselineAsync"/>
     /// across every physical shard to freeze a durable, per-cursor frozen
     /// baseline (each shard's leaf-chain projection at a uniform
     /// per-partition captured WAL head) concurrently. The captured heads
@@ -332,7 +332,7 @@ internal sealed partial class LatticeGrain
     /// Captures one shard's snapshot baseline while holding a slot in
     /// <paramref name="gate"/>, so no more than
     /// <see cref="LatticeOptions.MaxConcurrentSnapshotCaptures"/> shard roots
-    /// are blocked on <see cref="IShardRootGrain.CaptureSnapshotBaselineAsync"/>
+    /// are blocked on <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.CaptureSnapshotBaselineAsync"/>
     /// at once. The per-shard <see cref="ShardActivationRetry"/> wrap is
     /// preserved so a single shard's cold-start seed-timeout retries only that
     /// shard. The slot is released once the capture completes (or throws) so

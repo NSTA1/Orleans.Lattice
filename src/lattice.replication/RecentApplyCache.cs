@@ -97,7 +97,7 @@ internal sealed class RecentApplyCache
     /// The replog entry to dedupe. The cache key is built from
     /// <see cref="WalRecord.OriginClusterId"/>,
     /// <see cref="WalRecord.Timestamp"/>, <see cref="WalRecord.Key"/>,
-
+    ///
     /// and <see cref="WalRecord.Op"/>; other fields are ignored.
     /// </param>
     public bool TryAdd(WalRecord entry)

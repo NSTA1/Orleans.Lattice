@@ -8,7 +8,7 @@ namespace Orleans.Lattice;
 /// distinct dot-tagged value so application code can resolve the
 /// merge itself (e.g. show the user the conflicting candidates).
 /// <para>
-/// State shape: a dot-tagged set of live <see cref="Entries"/> plus a
+/// State shape: a dot-tagged set of live <c>Entries</c> plus a
 /// <see cref="Context"/> mapping each replica id to the highest
 /// counter ever observed for that replica. A write on
 /// <paramref name="replicaId"/> via <see cref="Set(string, byte[])"/>
