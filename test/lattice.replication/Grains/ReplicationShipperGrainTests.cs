@@ -16,10 +16,13 @@ namespace Orleans.Lattice.Replication.Tests.Grains;
 /// Unit coverage of the per-(tree, peer) outbound shipper grain.
 /// Tests bypass <c>StartCoordinatorAsync</c> by constructing the
 /// grain with substituted Orleans dependencies and driving the pump
-/// loop via <see cref="IReplicationShipperGrain.OnDoorbellAsync"/>
-/// (which forwards to the same
+/// loop via <see cref="ReplicationShipperGrain.PumpForTestingAsync"/>,
+/// the test seam that forwards to the same
 /// <see cref="ReplicationShipperGrain.ProcessNextPhaseAsync"/> hook
-/// the steady-state phase timer would invoke).
+/// the steady-state phase timer would invoke. (The production
+/// <see cref="IReplicationShipperGrain.OnDoorbellAsync"/> is a cheap
+/// edge-triggered wake that no longer ships inline, so it is no longer
+/// the pump driver; its contract is covered by dedicated tests below.)
 /// </summary>
 [TestFixture]
 public partial class ReplicationShipperGrainTests
@@ -187,6 +190,15 @@ public partial class ReplicationShipperGrainTests
         public int ReadCalls { get; private set; }
         public List<long> ReadFromSequences { get; } = new();
 
+        /// <summary>
+        /// Optional test hook awaited at the start of every
+        /// <see cref="ReadShippingAsync"/> call. Used by the partition-
+        /// priming concurrency test to gate each partition's read on a
+        /// shared barrier so it can prove the shipper fans the priming
+        /// reads out concurrently rather than serializing them.
+        /// </summary>
+        public Func<CancellationToken, Task>? OnReadShipping { get; set; }
+
         public void Append(WalRecord entry) => Entries.Add(entry);
 
         public Task<long> AppendAsync(WalRecord entry, CancellationToken cancellationToken)
@@ -195,10 +207,14 @@ public partial class ReplicationShipperGrainTests
             return Task.FromResult((long)(Entries.Count - 1));
         }
 
-        public ValueTask<WalShardShippingPage> ReadShippingAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
+        public async ValueTask<WalShardShippingPage> ReadShippingAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
         {
             ReadCalls++;
             ReadFromSequences.Add(fromSequence);
+            if (OnReadShipping is not null)
+            {
+                await OnReadShipping(cancellationToken);
+            }
             if (ThrowOnRead is not null)
             {
                 throw ThrowOnRead;
@@ -206,11 +222,11 @@ public partial class ReplicationShipperGrainTests
             cancellationToken.ThrowIfCancellationRequested();
             if (fromSequence >= Entries.Count)
             {
-                return ValueTask.FromResult(new WalShardShippingPage
+                return new WalShardShippingPage
                 {
                     Entries = Array.Empty<WalShardShippingEntry>(),
                     NextSequence = fromSequence,
-                });
+                };
             }
             var endExclusive = (int)Math.Min(Entries.Count, fromSequence + maxEntries);
             var capacity = endExclusive - (int)fromSequence;
@@ -224,11 +240,11 @@ public partial class ReplicationShipperGrainTests
                     EncodedPayload = _encoder.EncodeToBytes(Entries[(int)seq]),
                 };
             }
-            return ValueTask.FromResult(new WalShardShippingPage
+            return new WalShardShippingPage
             {
                 Entries = entries,
                 NextSequence = endExclusive,
-            });
+            };
         }
 
         public Task<IReadOnlyList<long>> AppendBatchAsync(IReadOnlyList<WalRecord> entries, CancellationToken cancellationToken)
@@ -613,7 +629,32 @@ public partial class ReplicationShipperGrainTests
             Throws.InstanceOf<ArgumentException>());
     }
 
-    // --- OnDoorbellAsync ---
+    // --- Phase pump (test seam over ProcessNextPhaseAsync) ---
+
+    [Test]
+    public void PumpForTesting_observes_pre_cancelled_token()
+    {
+        var (grain, _, _, _, _, _, _) = Create();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        Assert.That(
+            async () => await grain.PumpForTestingAsync(cts.Token),
+            Throws.InstanceOf<OperationCanceledException>());
+    }
+
+    [Test]
+    public async Task Pump_no_op_when_change_feed_empty()
+    {
+        var (grain, state, _, transport, _, _, _) = Create();
+
+        await grain.PumpForTestingAsync(CancellationToken.None);
+
+        Assert.That(state.WriteCount, Is.EqualTo(0));
+        await transport.DidNotReceive().SendAsync(
+            Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
+    }
+
+    // --- OnDoorbellAsync: cheap edge-triggered wake, never ships inline ---
 
     [Test]
     public void OnDoorbellAsync_observes_pre_cancelled_token()
@@ -627,14 +668,38 @@ public partial class ReplicationShipperGrainTests
     }
 
     [Test]
-    public async Task OnDoorbellAsync_no_op_when_change_feed_empty()
+    public void OnDoorbellAsync_returns_synchronously_completed()
     {
-        var (grain, state, _, transport, _, _, _) = Create();
+        var (grain, _, _, _, _, _, _) = Create();
+
+        var task = grain.OnDoorbellAsync(CancellationToken.None);
+
+        Assert.That(task.IsCompletedSuccessfully, Is.True);
+    }
+
+    [Test]
+    public async Task OnDoorbellAsync_does_not_ship_inline_even_with_pending_entries()
+    {
+        // Regression: the doorbell must not run the drain+ship pump on
+        // the activation turn. It is a cheap wake; the phase timer does
+        // the shipping. So even with a pending entry, ringing the
+        // doorbell must not touch the transport or advance the cursor -
+        // only a subsequent pump tick ships.
+        var (grain, state, feed, transport, _, _, _) = Create();
+        feed.Append(MakeEntry("k1", ticks: 10));
 
         await grain.OnDoorbellAsync(CancellationToken.None);
 
-        Assert.That(state.WriteCount, Is.EqualTo(0));
         await transport.DidNotReceive().SendAsync(
+            Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
+        Assert.That(feed.ReadCalls, Is.EqualTo(0),
+            "a cheap doorbell must not even read the WAL feed");
+        Assert.That(state.State.Cursor, Is.EqualTo(HybridLogicalClock.Zero));
+
+        // The pending entry ships on the next pump tick, proving the
+        // wake was not lost - only deferred to the timer path.
+        await grain.PumpForTestingAsync(CancellationToken.None);
+        await transport.Received(1).SendAsync(
             Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
     }
 
@@ -646,7 +711,7 @@ public partial class ReplicationShipperGrainTests
         var (grain, state, feed, transport, _, _, _) = Create();
         feed.Append(MakeEntry("k1", origin: Peer, ticks: 10));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         // Peer-origin entries are filtered before the encode/send;
         // the batch is empty so nothing is sent.
@@ -669,7 +734,7 @@ public partial class ReplicationShipperGrainTests
         var (grain, state, feed, transport, _, _, _) = Create();
         feed.Append(MakeEntry("k1", origin: "site-c", ticks: 10));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         await transport.DidNotReceive().SendAsync(
             Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
@@ -693,7 +758,7 @@ public partial class ReplicationShipperGrainTests
         var (grain, state, feed, transport, _, _, _) = Create();
         feed.Append(MakeEntry("k1", origin: string.Empty, ticks: 10));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         await transport.DidNotReceive().SendAsync(
             Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
@@ -706,7 +771,7 @@ public partial class ReplicationShipperGrainTests
         var (grain, state, feed, transport, _, _, _) = Create();
         feed.Append(MakeEntry("k1", origin: null!, ticks: 10));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         await transport.DidNotReceive().SendAsync(
             Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
@@ -732,7 +797,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntry("k1", origin: string.Empty, ticks: 5));
         feed.Append(MakeEntry("k1", origin: LocalCluster, ticks: 5));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         await transport.Received(1).SendAsync(
             Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
@@ -786,7 +851,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntryWithValue("k1", new byte[] { 7, 7 }, ticks: 1));
         feed.Append(MakeEntryWithValue("k1", new byte[] { 7, 7 }, ticks: 2));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(collector.Measurements, Is.Empty);
     }
@@ -808,7 +873,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntryWithValue("k1", new byte[] { 9, 9 }, ticks: 1));
         feed.Append(MakeEntryWithValue("k1", new byte[] { 9, 9 }, ticks: 2));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(entries.Measurements.Sum(m => m.Value), Is.EqualTo(1));
         Assert.That(bytes.Measurements.Sum(m => m.Value), Is.EqualTo(2));
@@ -833,7 +898,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntryWithValue("k1", new byte[] { 1 }, ticks: 1));
         feed.Append(MakeEntryWithValue("k1", new byte[] { 2 }, ticks: 2));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(collector.Measurements, Is.Empty);
     }
@@ -846,7 +911,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntryWithValue("k1", new byte[] { 5 }, ticks: 1));
         feed.Append(MakeEntryWithValue("k1", new byte[] { 5 }, ticks: 2));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         // The measurement never elides: both byte-identical entries are
         // still framed onto the wire so LWW / HLC convergence is intact.
@@ -892,7 +957,7 @@ public partial class ReplicationShipperGrainTests
             OriginClusterId = LocalCluster,
         });
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         await transport.Received(1).SendAsync(
             Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
@@ -921,7 +986,7 @@ public partial class ReplicationShipperGrainTests
             OriginClusterId = Peer,
         });
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         await transport.DidNotReceive().SendAsync(
             Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
@@ -949,7 +1014,7 @@ public partial class ReplicationShipperGrainTests
             OriginClusterId = string.Empty,
         });
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         await transport.DidNotReceive().SendAsync(
             Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
@@ -969,7 +1034,7 @@ public partial class ReplicationShipperGrainTests
         var (grain, _, feed, transport, _, _, _) = Create(opts);
         feed.Append(MakeEntry("other/x", ticks: 5));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         await transport.DidNotReceive().SendAsync(
             Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
@@ -990,7 +1055,7 @@ public partial class ReplicationShipperGrainTests
             .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = hlc });
         feed.Append(MakeEntry("repl/x", ticks: 5));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         await transport.Received(1).SendAsync(
             Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
@@ -1010,7 +1075,7 @@ public partial class ReplicationShipperGrainTests
         var (grain, _, feed, transport, _, _, _) = Create(opts);
         feed.Append(MakeEntry("other/x", ticks: 5));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         await transport.DidNotReceive().SendAsync(
             Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
@@ -1031,7 +1096,7 @@ public partial class ReplicationShipperGrainTests
             .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = hlc });
         feed.Append(MakeEntry("ops/x", ticks: 5));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         await transport.Received(1).SendAsync(
             Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
@@ -1048,7 +1113,7 @@ public partial class ReplicationShipperGrainTests
             .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = ackHlc });
         feed.Append(MakeEntry("k", ticks: 10));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(state.State.Cursor, Is.EqualTo(ackHlc));
         Assert.That(state.WriteCount, Is.EqualTo(1));
@@ -1070,7 +1135,7 @@ public partial class ReplicationShipperGrainTests
             .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = ackHlc });
         feed.Append(MakeEntry("k", ticks: 5));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(state.State.ConsecutiveFailures, Is.EqualTo(0));
     }
@@ -1086,7 +1151,7 @@ public partial class ReplicationShipperGrainTests
             .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
         feed.Append(MakeEntry("k", ticks: 7));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(state.State.Cursor, Is.EqualTo(new HybridLogicalClock { WallClockTicks = 7, Counter = 0 }));
     }
@@ -1099,7 +1164,7 @@ public partial class ReplicationShipperGrainTests
             .Returns(new ReplicationAck { Accepted = false, HighestAppliedHlc = HybridLogicalClock.Zero });
         feed.Append(MakeEntry("k", ticks: 7));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(state.State.Cursor, Is.EqualTo(HybridLogicalClock.Zero));
         Assert.That(state.State.ConsecutiveFailures, Is.GreaterThan(0));
@@ -1115,7 +1180,7 @@ public partial class ReplicationShipperGrainTests
             .Returns<ReplicationAck>(_ => throw new InvalidOperationException("transport-down"));
         feed.Append(MakeEntry("k", ticks: 7));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(state.State.ConsecutiveFailures, Is.EqualTo(1));
         Assert.That(state.State.Cursor, Is.EqualTo(HybridLogicalClock.Zero));
@@ -1130,9 +1195,9 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntry("k", ticks: 7));
 
         // First call applies backoff.
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
         // Second call within the backoff window must not invoke the transport again.
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         await transport.Received(1).SendAsync(
             Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
@@ -1158,7 +1223,7 @@ public partial class ReplicationShipperGrainTests
         var (grain, state, feed, transport, _, _, _) = Create();
         feed.ThrowOnRead = new InvalidOperationException("feed-down");
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(state.State.ConsecutiveFailures, Is.EqualTo(1));
         await transport.DidNotReceive().SendAsync(
@@ -1184,7 +1249,7 @@ public partial class ReplicationShipperGrainTests
         // report is best-effort and a failure must be logged but not
         // propagated.
         Assert.That(
-            async () => await grain.OnDoorbellAsync(CancellationToken.None),
+            async () => await grain.PumpForTestingAsync(CancellationToken.None),
             Throws.Nothing);
 
         Assert.That(state.State.Cursor, Is.EqualTo(ackHlc));
@@ -1218,7 +1283,7 @@ public partial class ReplicationShipperGrainTests
                 };
             });
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         // Single pump tick ships at most ShipBatchSize entries; the
         // remaining entries wait for the next pump.
@@ -1240,7 +1305,7 @@ public partial class ReplicationShipperGrainTests
             });
         feed.Append(MakeEntry("k", ticks: 3));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(captured, Is.Not.Null);
         Assert.Multiple(() =>
@@ -1284,7 +1349,7 @@ public partial class ReplicationShipperGrainTests
         encoder.ThrowOnEncode = true;
         feed.Append(MakeEntry("k", ticks: 11));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(state.State.Cursor, Is.EqualTo(new HybridLogicalClock { WallClockTicks = 11, Counter = 0 }));
     }
@@ -1345,7 +1410,7 @@ public partial class ReplicationShipperGrainTests
         var (grain, feed, _, stats) = CreateWithStats();
         feed.Append(MakeEntry("k1", ticks: 1));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         var snapshot = stats.Snapshot();
         Assert.That(snapshot, Has.Count.EqualTo(1));
@@ -1371,7 +1436,7 @@ public partial class ReplicationShipperGrainTests
             .Returns<ReplicationAck>(_ => throw new InvalidOperationException("transport-down"));
         feed.Append(MakeEntry("k", ticks: 1));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         var snap = stats.Snapshot().Single();
         Assert.That(snap.ConsecutiveErrors, Is.EqualTo(1));
@@ -1388,7 +1453,7 @@ public partial class ReplicationShipperGrainTests
             .Returns(new ReplicationAck { Accepted = false, HighestAppliedHlc = HybridLogicalClock.Zero });
         feed.Append(MakeEntry("k", ticks: 1));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         var snap = stats.Snapshot().Single();
         Assert.That(snap.ConsecutiveErrors, Is.EqualTo(1));
@@ -1406,7 +1471,7 @@ public partial class ReplicationShipperGrainTests
         var (grain, feed, _, stats) = CreateWithStats();
         feed.ThrowOnRead = new InvalidOperationException("feed-down");
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         // No RecordError, no RecordSuccess: the peer entry is never
         // touched, so Snapshot() returns an empty collection.
@@ -1427,7 +1492,7 @@ public partial class ReplicationShipperGrainTests
         // hitBatchCap is false and the recorded backlog is zero.
         feed.Append(MakeEntry("k", ticks: 1));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         var snap = stats.Snapshot().Single();
         Assert.Multiple(() =>
@@ -1455,7 +1520,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntry("k2", ticks: 2));
         feed.Append(MakeEntry("k3", ticks: 3));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         var snap = stats.Snapshot().Single();
         Assert.Multiple(() =>
@@ -1564,7 +1629,7 @@ public partial class ReplicationShipperGrainTests
             feed.Append(MakeEntry($"k{i}", ticks: i));
         }
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         // 8 entries / ShipBatchSize 2 = 4 batches in one pipelined tick. A
         // collapsed (serial) window would ship exactly one batch per tick.
@@ -1586,7 +1651,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntryWithValue("k3", new byte[] { 3 }, ticks: 3));
         feed.Append(MakeEntryWithValue("k4", new byte[] { 4 }, ticks: 4));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -1622,7 +1687,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntryWithValue("k2", new byte[] { 2 }, ticks: 2));
         feed.Append(MakeEntryWithValue("k3", new byte[] { 3 }, ticks: 3));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -1657,7 +1722,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntryWithValue("k1", new byte[] { 1 }, ticks: 1));
         feed.Append(MakeEntryWithValue("k2", new byte[] { 2 }, ticks: 2));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -1686,7 +1751,7 @@ public partial class ReplicationShipperGrainTests
             feed.Append(MakeEntry($"k{i}", ticks: i));
         }
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -1711,7 +1776,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntryWithValue("k1", new byte[] { 1 }, ticks: 1));
         feed.Append(MakeEntryWithValue("k2", new byte[] { 2 }, ticks: 2));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {

@@ -270,6 +270,18 @@ Every phase tick (default 100 ms, `LatticeReplicationOptions.ShipPhaseTimerPerio
 A successful round-trip resets `ConsecutiveFailures` to `0` and clears
 the backoff budget.
 
+At the start of every tick the pump primes one shipping page per WAL
+partition before the k-way HLC merge (the change feed is sharded into
+`ReplogPartitions` partitions per tree). These priming reads are issued
+**concurrently** and awaited once, not serialized one partition at a
+time: each read is an independent WAL-shard grain call that writes only
+its own partition's scratch slot, so an N-partition tree primes in a
+single read latency. Serializing them would pay N cross-silo/durable WAL
+round-trips every tick - even for partitions that turn out to be idle -
+which is the dominant per-pump cost on a multi-partition tree whose WAL
+shards are activated on a different silo, and is enough on its own to
+collapse steady-state throughput under a write burst.
+
 ### Doorbell
 
 The shipper grain is the log-first replication producer: it tails the
@@ -278,14 +290,25 @@ sole WAL appender) from a durable per-partition cursor and is the only
 ship driver. The commit-time `ShardedReplogSink` does not append to the
 WAL and does not ship; it maintains no producer-side vector clock state
 and is reduced to a low-latency tree-id nudge that rings shipper
-doorbells so the background tailing loop drains immediately.
+doorbells so an idle or deactivated shipper is woken to drain the fresh
+append.
 
 In addition to the phase timer, the shipper exposes
 `OnDoorbellAsync(CancellationToken)`. The producer-side `ShardedReplogSink`
 rings the doorbell after every commit for the affected
-`(tree, peer)` activations, so steady-state ship latency is sub-second.
-The doorbell is
-best-effort - a missed call only delays the next ship by one timer tick (default 100 ms).
+`(tree, peer)` activations. The doorbell is a **cheap, edge-triggered
+wake**: it does not run the drain+ship pump inline. Its sole effect is to
+(re)activate the shipper if it had been deactivated - and the shipper's
+phase timer, which is armed on every activation (`OnActivateCoreAsync`)
+and re-armed by the keepalive reminder, is the single authority that
+drains and ships. Running the pump inline on the doorbell turn would hold
+the non-reentrant activation for a full cross-cluster ship round-trip,
+head-of-line-block the phase timer and every queued doorbell, and - under
+receiver back-pressure - time out at the sink and be dropped, starving the
+very wake it was meant to deliver. Because the timer is the drain driver,
+steady-state ship latency stays sub-second regardless of the doorbell, and
+the doorbell is best-effort: a missed call only delays the next ship by one
+timer tick (default 100 ms).
 
 #### Writer-side coalescing
 

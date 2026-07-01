@@ -62,7 +62,7 @@ public partial class ReplicationShipperGrainTests
             LatticeReplicationMetrics.MeterName,
             LatticeReplicationMetrics.ShipWireVersionDownStampName);
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -108,7 +108,7 @@ public partial class ReplicationShipperGrainTests
             LatticeReplicationMetrics.MeterName,
             LatticeReplicationMetrics.ShipWireVersionDownStampName);
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -147,7 +147,7 @@ public partial class ReplicationShipperGrainTests
             LatticeReplicationMetrics.MeterName,
             LatticeReplicationMetrics.ShipWireVersionDownStampName);
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -186,7 +186,7 @@ public partial class ReplicationShipperGrainTests
             LatticeReplicationMetrics.MeterName,
             LatticeReplicationMetrics.ShipWireVersionDownStampName);
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -221,7 +221,7 @@ public partial class ReplicationShipperGrainTests
             LatticeReplicationMetrics.MeterName,
             LatticeReplicationMetrics.ShipWireVersionDownStampName);
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {

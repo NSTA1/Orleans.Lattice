@@ -293,7 +293,7 @@ public class ShipperPersistenceIntegrationTests
         // (5/6/7) sit in the deferred-persist window.
         for (var i = 0; i < 7; i++)
         {
-            await grainA.OnDoorbellAsync(CancellationToken.None);
+            await grainA.PumpForTestingAsync(CancellationToken.None);
         }
 
         // Pre-crash invariant: durable state reflects exactly one flush.
@@ -325,7 +325,7 @@ public class ShipperPersistenceIntegrationTests
         // generous (12 ticks for at most ~5 remaining entries).
         for (var i = 0; i < 12; i++)
         {
-            await grainB.OnDoorbellAsync(CancellationToken.None);
+            await grainB.PumpForTestingAsync(CancellationToken.None);
         }
 
         // Idempotent delivery: every entry HLC must appear in the
@@ -393,7 +393,7 @@ public class ShipperPersistenceIntegrationTests
         // Pump every entry under interval=100 (no organic flush).
         for (var i = 0; i < totalEntries; i++)
         {
-            await grainA.OnDoorbellAsync(CancellationToken.None);
+            await grainA.PumpForTestingAsync(CancellationToken.None);
         }
         Assert.That(persistent.WriteCount, Is.EqualTo(0),
             "Organic flushes must not have happened (interval=100, only 6 acks).");
@@ -423,7 +423,7 @@ public class ShipperPersistenceIntegrationTests
         // post-flush activation must observe an empty drain.
         for (var i = 0; i < 4; i++)
         {
-            await grainB.OnDoorbellAsync(CancellationToken.None);
+            await grainB.PumpForTestingAsync(CancellationToken.None);
         }
 
         Assert.That(transport.SentHlcSequence.Count, Is.EqualTo(preDeactivateSendCount),
@@ -463,7 +463,7 @@ public class ShipperPersistenceIntegrationTests
 
         for (var i = 0; i < totalEntries; i++)
         {
-            await grainA.OnDoorbellAsync(CancellationToken.None);
+            await grainA.PumpForTestingAsync(CancellationToken.None);
         }
 
         // Arm OnDeactivate's WriteStateAsync to fail - simulate a
@@ -494,7 +494,7 @@ public class ShipperPersistenceIntegrationTests
 
         for (var i = 0; i < totalEntries + 4; i++)
         {
-            await grainB.OnDoorbellAsync(CancellationToken.None);
+            await grainB.PumpForTestingAsync(CancellationToken.None);
         }
 
         // At-least-once: every WAL HLC delivered post-crash too.
@@ -543,7 +543,7 @@ public class ShipperPersistenceIntegrationTests
         // Pre-crash pumps - drain a few batches.
         for (var i = 0; i < 2; i++)
         {
-            await grainA.OnDoorbellAsync(CancellationToken.None);
+            await grainA.PumpForTestingAsync(CancellationToken.None);
         }
         var preCrashSent = transport.SentHlcSequence.Count;
         Assert.That(preCrashSent, Is.GreaterThan(0),
@@ -565,7 +565,7 @@ public class ShipperPersistenceIntegrationTests
         // Drain everything else.
         for (var i = 0; i < 8; i++)
         {
-            await grainB.OnDoorbellAsync(CancellationToken.None);
+            await grainB.PumpForTestingAsync(CancellationToken.None);
         }
 
         // Every WAL HLC delivered at-least-once.

@@ -45,7 +45,7 @@ public partial class ReplicationShipperGrainTests
         });
         feed.Append(MakeEntry("k", ticks: 1));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(CapturedHeaderCompression(transport), Is.EqualTo(LatticeCompression.None));
     }
@@ -65,7 +65,7 @@ public partial class ReplicationShipperGrainTests
         });
         feed.Append(MakeEntry("k", ticks: 1));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(CapturedHeaderCompression(transport), Is.EqualTo(LatticeCompression.Zstd));
     }
@@ -85,7 +85,7 @@ public partial class ReplicationShipperGrainTests
         });
         feed.Append(MakeEntry("k", ticks: 1));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(CapturedHeaderCompression(transport), Is.EqualTo(LatticeCompression.None));
     }

@@ -363,7 +363,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeCrdtSet("k", ticks: 2, PnDelta("A", 2)));
         feed.Append(MakeCrdtSet("k", ticks: 3, PnDelta("A", 3)));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(LastShippedEntryCount(transport), Is.EqualTo(1),
             "the three same-key CRDT deltas merge into a single combined-delta entry");
@@ -379,7 +379,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeCrdtSet("j", ticks: 2, PnDelta("A", 1)));
         feed.Append(MakeCrdtSet("k", ticks: 3, PnDelta("A", 2)));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(LastShippedEntryCount(transport), Is.EqualTo(2),
             "the two 'k' deltas merge to one; 'j' (single delta) ships verbatim");
@@ -396,7 +396,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeCrdtSet("k", ticks: 3, PnDelta("A", 3)));
 
         using var recorder = new CrdtCoalesceMetricRecorder();
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -417,7 +417,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeCrdtSet("j", ticks: 2, PnDelta("A", 1)));
 
         using var recorder = new CrdtCoalesceMetricRecorder();
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -440,7 +440,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeCrdtSet("k", ticks: 3, delta: null));
 
         using var recorder = new CrdtCoalesceMetricRecorder();
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -462,7 +462,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeCrdtSet("k", ticks: 2, delta: null));
         feed.Append(MakeCrdtSet("k", ticks: 3, PnDelta("A", 2)));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(LastShippedEntryCount(transport), Is.EqualTo(3),
             "an opaque entry forces the whole key to ship verbatim");
@@ -480,7 +480,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeCrdtSet("k", ticks: 2, new byte[] { 2 }));
         feed.Append(MakeCrdtSet("k", ticks: 3, new byte[] { 3 }));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(LastShippedEntryCount(transport), Is.EqualTo(3),
             "an unregistered OR-Map tree has no combiner; entries ship individually");
@@ -497,7 +497,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeCrdtSet("k", ticks: 2, OrMapAddDelta("k", "A", 2, "X", 2)));
         feed.Append(MakeCrdtSet("k", ticks: 3, OrMapAddDelta("k", "A", 3, "X", 3)));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(LastShippedEntryCount(transport), Is.EqualTo(1),
             "a registered OR-Map tree folds the three same-key deltas into a single combined-delta entry");
@@ -515,7 +515,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeCrdtSet("k", ticks: 3, OrMapAddDelta("k", "A", 3, "X", 3)));
 
         using var recorder = new CrdtCoalesceMetricRecorder();
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -537,7 +537,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeCrdtSet("j", ticks: 2, OrMapAddDelta("j", "A", 1, "X", 1)));
         feed.Append(MakeCrdtSet("k", ticks: 3, OrMapAddDelta("k", "A", 2, "X", 2)));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(LastShippedEntryCount(transport), Is.EqualTo(2),
             "the two 'k' OR-Map deltas merge to one; 'j' (single delta) ships verbatim");
@@ -556,7 +556,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeCrdtSet("k", ticks: 2, delta: null));
 
         using var recorder = new CrdtCoalesceMetricRecorder();
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -577,7 +577,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeCrdtSet("k", ticks: 2, OrMapAddDelta("k", "A", 2, "X", 2)));
         feed.Append(MakeCrdtSet("k", ticks: 3, OrMapAddDelta("k", "A", 3, "X", 3)));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(LastShippedEntryCount(transport), Is.EqualTo(3),
             "the default-off path is byte-identical even for a registered OR-Map tree: every delta ships");
@@ -593,7 +593,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeCrdtSet("k", ticks: 2, PnDelta("A", 2)));
         feed.Append(MakeCrdtSet("k", ticks: 3, PnDelta("A", 3)));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(LastShippedEntryCount(transport), Is.EqualTo(3),
             "the default-off path is byte-identical: every CRDT delta ships");
@@ -609,7 +609,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakePreparedCrdtSet("k", ticks: 1, PnDelta("A", 1), txId, batchSize: 2, batchIndex: 0));
         feed.Append(MakePreparedCrdtSet("k", ticks: 2, PnDelta("A", 2), txId, batchSize: 2, batchIndex: 1));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(LastShippedEntryCount(transport), Is.EqualTo(2),
             "saga prepare-phase CRDT entries are never coalesced across the atomic-batch boundary");
@@ -629,7 +629,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeCrdtSet("k", ticks: 3, PnDelta("A", 3)));
         feed.Append(MakeCrdtSet("other", ticks: 4, PnDelta("A", 1)));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {

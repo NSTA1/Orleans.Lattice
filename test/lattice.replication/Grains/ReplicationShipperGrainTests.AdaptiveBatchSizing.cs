@@ -37,7 +37,7 @@ public partial class ReplicationShipperGrainTests
             feed.Append(MakeEntry($"k{i}", ticks: i));
         }
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(LastShippedEntryCount(transport), Is.EqualTo(4),
             "with adaptive sizing off the shipper drains exactly ShipBatchSize entries");
@@ -70,12 +70,12 @@ public partial class ReplicationShipperGrainTests
 
         // Drain across several ticks so the controller observes several
         // fast acks; the effective size must never drop below the ceiling.
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
         for (var i = 11; i <= 14; i++)
         {
             feed.Append(MakeEntry($"k{i}", ticks: i));
         }
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(LastShippedEntryCount(transport), Is.EqualTo(4),
             "a healthy link keeps the adaptive size pinned at the ShipBatchSize ceiling");
@@ -128,13 +128,13 @@ public partial class ReplicationShipperGrainTests
 
         // Tick 1: drains the full ceiling of 8 and the send throws, so the
         // controller halves the effective size (8 -> 4) and backs off.
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         // Let the 1 ms backoff window elapse before retrying.
         await Task.Delay(30);
 
         // Tick 2: the shrunk effective size caps the drain at 4 entries.
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(LastShippedEntryCount(transport), Is.EqualTo(4),
             "a send failure shrinks the default-on adaptive batch size so the retry ships a smaller batch");
@@ -169,7 +169,7 @@ public partial class ReplicationShipperGrainTests
 
         // Tick 1: one entry, picks up the hint of 2.
         feed.Append(MakeEntry("k1", ticks: 1));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         // Tick 2: three new entries available - the receiver hint of 2
         // must cap the drain even though the adaptive size is at the
@@ -177,7 +177,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntry("k2", ticks: 2));
         feed.Append(MakeEntry("k3", ticks: 3));
         feed.Append(MakeEntry("k4", ticks: 4));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(LastShippedEntryCount(transport), Is.EqualTo(2),
             "the receiver hint is the hard ceiling and always wins over the adaptive size");
@@ -210,7 +210,7 @@ public partial class ReplicationShipperGrainTests
         var (grain, _, feed, _, _, _, _) = Create(opts);
         feed.Append(MakeEntry("k1", ticks: 1));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {

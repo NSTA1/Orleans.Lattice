@@ -549,6 +549,28 @@ internal sealed class ReplicationShipperGrain(
     }
 
     /// <summary>
+    /// Arms the steady-state phase timer on every activation, however the
+    /// activation arose (the driver's <see cref="EnsureActiveAsync"/>, an
+    /// incoming doorbell, a client call, or a reminder-driven
+    /// reactivation). The shipper is perpetual (<see cref="InProgress"/>
+    /// is always <c>true</c>), so the timer is the single authority for
+    /// draining and shipping; anchoring it here means a coalesced or
+    /// dropped doorbell can never leave the backlog un-drained, and the
+    /// doorbell path can stay a cheap edge-triggered wake (see
+    /// <see cref="OnDoorbellAsync"/>). Registering a grain timer inside
+    /// the activation hook is the supported Orleans pattern; the keepalive
+    /// reminder remains a defence-in-depth re-arm if the activation is
+    /// ever recycled without this hook running.
+    /// </summary>
+    protected override Task OnActivateCoreAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ParseGrainKey();
+        StartPhaseTimer();
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
     /// Flushes any pending deferred-persist cursor on graceful
     /// deactivation. Crash deactivations bypass this hook by design -
     /// the receiver's HLC dedupe bounds the replay cost in that case
@@ -583,13 +605,21 @@ internal sealed class ReplicationShipperGrain(
     public Task OnDoorbellAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        ParseGrainKey();
-        // Drive an immediate pump on the same Orleans turn rather
-        // than waiting for the next 200ms timer tick. Best-effort:
-        // any thrown exception is logged by the base class's tick
-        // handler and does not propagate to the doorbell caller
-        // (the producer-side commit path).
-        return ProcessNextPhaseAsync();
+        // Edge-triggered wake only - deliberately cheap. The steady-state
+        // phase timer (armed on activation in OnActivateCoreAsync and
+        // re-armed by the keepalive reminder) performs the actual
+        // drain+ship, so a doorbell's sole effect is to (re)activate this
+        // grain if it had been deactivated - which the act of delivering
+        // this call has already done. Returning immediately keeps this
+        // non-reentrant activation free for the timer instead of running a
+        // full cross-cluster ship inline: under receiver back-pressure an
+        // inline pump would hold the activation for the whole ship
+        // round-trip, head-of-line-block the timer and every queued
+        // doorbell, and time out at the producer-side caller - dropping
+        // the very wake that was meant to be the shipping safety net. The
+        // next timer tick (at most one ShipPhaseTimerPeriod away) picks up
+        // the freshly-appended work.
+        return Task.CompletedTask;
     }
 
     /// <inheritdoc />
@@ -2062,11 +2092,36 @@ internal sealed class ReplicationShipperGrain(
         // front so the merge loop below is allocation-free apart from
         // page refills triggered when a partition exhausts its page
         // mid-batch.
+        //
+        // Fan the per-partition shipping reads out concurrently rather
+        // than awaiting them one-by-one. Each read is an independent
+        // WAL-shard grain call that writes only its own partition's
+        // scratch slot (TryRefillPartitionAsync touches index [p]
+        // alone), so N partitions prime in a single read latency
+        // instead of N serialized latencies. On a multi-partition tree
+        // whose WAL shards are activated on a different silo this is the
+        // dominant per-pump cost under a write burst: a serial prime of
+        // 8 partitions pays 8 cross-silo/durable round-trips every tick
+        // - even for partitions that turn out to be idle - which stalls
+        // the pump for seconds and collapses steady-state throughput.
+        // Issuing the reads together and awaiting once holds the grain
+        // turn for one latency; Orleans keeps the activation
+        // non-reentrant across the fan-out, and the scratch writes are
+        // index-disjoint, so this is safe. The single-partition case
+        // keeps the direct await to avoid the Task[] allocation.
+        cancellationToken.ThrowIfCancellationRequested();
+        if (partitions == 1)
+        {
+            await TryRefillPartitionAsync(0, pageSize, cancellationToken);
+            return;
+        }
+
+        var primingTasks = new Task[partitions];
         for (var p = 0; p < partitions; p++)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            await TryRefillPartitionAsync(p, pageSize, cancellationToken);
+            primingTasks[p] = TryRefillPartitionAsync(p, pageSize, cancellationToken);
         }
+        await Task.WhenAll(primingTasks);
     }
 
     /// <summary>
@@ -3482,6 +3537,18 @@ internal sealed class ReplicationShipperGrain(
         _treeName = treeName;
         _peerClusterId = peerClusterId;
         _keyParsed = true;
+    }
+
+    /// <summary>
+    /// Test seam: drives a single phase-pump tick synchronously - the
+    /// exact hook the steady-state phase timer invokes. Unit tests use
+    /// this to pump deterministically now that <see cref="OnDoorbellAsync"/>
+    /// is a cheap edge-triggered wake that no longer ships inline.
+    /// </summary>
+    internal Task PumpForTestingAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return ProcessNextPhaseAsync();
     }
 
     /// <summary>
