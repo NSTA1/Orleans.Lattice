@@ -257,18 +257,35 @@ internal sealed class WalSaturationSignal : IWalSaturationSignal
     {
         foreach (var kv in _states)
         {
+            // Emit only the tree tag: the ordinal value already encodes
+            // the regime (0=Healthy, 1=Throttled, 2=Saturated), so a
+            // redundant state-name label would just fragment the series.
+            // With the state carried as a label, every transition changed
+            // the series identity and the callback stopped emitting the
+            // prior state's series without ever driving it back to zero,
+            // so the stale elevated value lingered under Prometheus
+            // staleness and a tree that had recovered still read as
+            // Saturated (and max by (tree) over the orphaned series
+            // returned the worst regime the tree had ever been in). One
+            // series per tree whose value steps 0->1->2->0 keeps the
+            // series identity stable across transitions, so nothing can
+            // linger. The per-state breakdown stays on the
+            // WalSaturationTransitions counter, where the state and
+            // previous_state labels belong.
             yield return new Measurement<long>(
                 (long)kv.Value,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, kv.Key),
-                new KeyValuePair<string, object?>(LatticeMetrics.TagWalSaturationState, StateTagValue(kv.Value)));
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, kv.Key));
         }
     }
 
     /// <summary>
     /// Lowercased tag value for the <see cref="LatticeMetrics.TagWalSaturationState"/>
-    /// dimension on the saturation transitions counter and the
-    /// observable state gauge. Centralised here so the writer-side
-    /// metric site and the sampler agree on the spelling.
+    /// dimension on the saturation transitions counter. Centralised here
+    /// so the writer-side metric site and the sampler agree on the
+    /// spelling. The observable state gauge deliberately does not carry
+    /// this label - its ordinal value already encodes the regime, and a
+    /// redundant state label fragmented the per-tree series across
+    /// transitions.
     /// </summary>
     internal static string StateTagValue(WalSaturationState state) => state switch
     {

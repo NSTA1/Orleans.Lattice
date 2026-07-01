@@ -1808,10 +1808,13 @@ public static class LatticeMetrics
 
     /// <summary>
     /// Tag key for the per-tree saturation state on
-    /// <see cref="WalSaturationTransitions"/> and the
-    /// <see cref="WalSaturationStateGaugeName"/> observable gauge.
-    /// Value is the lowercased state name (<c>healthy</c>,
-    /// <c>throttled</c>, <c>saturated</c>).
+    /// <see cref="WalSaturationTransitions"/>. Value is the lowercased
+    /// state name (<c>healthy</c>, <c>throttled</c>, <c>saturated</c>).
+    /// The <see cref="WalSaturationStateGaugeName"/> observable gauge
+    /// deliberately does not carry this tag - its ordinal value already
+    /// encodes the regime, so labelling it as well would fragment the
+    /// per-tree series on every transition and leave stale elevated
+    /// series behind.
     /// </summary>
     public const string TagWalSaturationState = "state";
 
@@ -1854,11 +1857,16 @@ public static class LatticeMetrics
     /// <summary>
     /// Instrument name of the observable gauge that reports the current
     /// per-tree WAL saturation state. Published with
-    /// <see cref="TagTree"/> and
-    /// <see cref="TagWalSaturationState"/>; the value is the ordinal
+    /// <see cref="TagTree"/> only; the value is the ordinal
     /// of the <see cref="WalSaturationState"/> enum
     /// (<c>0</c> = Healthy, <c>1</c> = Throttled, <c>2</c> = Saturated)
-    /// so dashboards can plot the regime as a step function.
+    /// so dashboards can plot the regime as a step function. The regime
+    /// is intentionally <b>not</b> also carried as a label: the ordinal
+    /// value already encodes it, and adding a redundant state label made
+    /// every transition change the series identity, leaving the prior
+    /// state's series behind at its last (elevated) value under scrape
+    /// staleness - so a recovered tree kept reading as Saturated. The
+    /// per-state breakdown lives on <see cref="WalSaturationTransitions"/>.
     /// <para>
     /// Idle cost is zero - the observable callback only runs on scrape
     /// and reads a concurrent-dictionary cache populated by the silo-
