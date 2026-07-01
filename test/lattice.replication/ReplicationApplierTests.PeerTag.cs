@@ -65,6 +65,7 @@ public partial class ReplicationApplierTests
             LatticeReplicationMetrics.ApplyDurationName);
         var (applier, _, _, hwm) = CreateApplier();
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(100));
+        hwm.GetPinnedFloorAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(100));
 
         await applier.ApplyAsync(SetEntry("k", Hlc(50)));
 

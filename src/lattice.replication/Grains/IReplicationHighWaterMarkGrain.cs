@@ -47,6 +47,30 @@ internal interface IReplicationHighWaterMarkGrain : IGrainWithStringKey
     Task<HybridLogicalClock> GetAsync(string originClusterId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Returns the <em>snapshot-pinned causal floor</em> entry for the
+    /// <c>(this tree, <paramref name="originClusterId"/>)</c> pair, or
+    /// <see cref="HybridLogicalClock.Zero"/> when no snapshot has been
+    /// pinned for that origin. This is the frontier established by the
+    /// most recent <see cref="PinSnapshotAsync"/> and is written
+    /// <em>only</em> by a snapshot pin - never advanced by steady-state
+    /// <see cref="TryAdvanceAsync"/>. The receiver treats an entry as a
+    /// duplicate (and drops it) only when its source HLC is at or below
+    /// this floor, because that is the sole per-origin threshold below
+    /// which every entry is provably contained in a pinned snapshot.
+    /// The incrementally-advanced diagonal from
+    /// <see cref="GetAsync(string, CancellationToken)"/> is NOT a valid
+    /// drop threshold: the per-origin HLC is non-monotonic in
+    /// WAL-append order, so a below-diagonal entry to a distinct key is
+    /// routinely a genuinely-new write (#1060).
+    /// </summary>
+    /// <param name="originClusterId">
+    /// The origin cluster id whose pinned-floor entry to read. Must be
+    /// non-null and non-empty.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<HybridLogicalClock> GetPinnedFloorAsync(string originClusterId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns a snapshot of the full local vector clock for this tree.
     /// The returned instance is a defensive copy; callers may mutate it
     /// without affecting the grain's persistent state.

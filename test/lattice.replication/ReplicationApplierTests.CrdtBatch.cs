@@ -165,10 +165,11 @@ public partial class ReplicationApplierTests
     {
         var (applier, _, apply, hwm) = CreateTypedCrdtApplier();
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(25));
+        hwm.GetPinnedFloorAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(25));
         var entries = new[]
         {
-            OrSetEntry("a", Hlc(10), new byte[] { 1 }), // <= hwm: deduped
-            OrSetEntry("b", Hlc(20), new byte[] { 2 }), // <= hwm: deduped
+            OrSetEntry("a", Hlc(10), new byte[] { 1 }), // <= floor: deduped
+            OrSetEntry("b", Hlc(20), new byte[] { 2 }), // <= floor: deduped
         };
 
         var result = await applier.ApplyBatchAsync(entries);

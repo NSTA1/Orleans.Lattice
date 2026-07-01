@@ -64,10 +64,14 @@ public partial class ReplicationApplierTests
     {
         var (applier, _, apply, hwm) = CreateApplier();
 
-        // Same HWM seed - in the steady state, an entry below the
-        // per-origin HWM must dedup (re-delivery / out-of-order arrival
-        // on the live incremental stream).
+        // Same HWM seed, plus a pinned snapshot floor at HLC=50: in the
+        // steady state an entry below a pinned causal floor must dedup
+        // (re-delivery / below-snapshot backlog on the live incremental
+        // stream). Without a pinned floor a below-HWM point write would
+        // apply (the corrected #1060 semantics), so the floor is what
+        // makes this a dedup - contrast the bootstrap-drain bypass above.
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(50));
+        hwm.GetPinnedFloorAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(50));
 
         var entry = SetEntry("k", Hlc(20, 1));
 
@@ -77,7 +81,7 @@ public partial class ReplicationApplierTests
         Assert.Multiple(() =>
         {
             Assert.That(result.Applied, Is.False,
-                "Outside a bootstrap-drain scope, an entry whose source HLC is at or below the per-origin HWM must be deduped - the producer's incremental WAL stream is HLC-monotonic per origin, so a non-monotonic arrival is a re-delivery and the canonical dedup behaviour must hold.");
+                "Outside a bootstrap-drain scope, an entry whose source HLC is at or below a pinned snapshot floor must be deduped - everything at or below the floor is already contained in the pinned snapshot, so a below-floor arrival is a re-delivery / below-snapshot backlog and the canonical dedup behaviour must hold.");
             Assert.That(result.HighWaterMark, Is.EqualTo(Hlc(50)));
         });
 

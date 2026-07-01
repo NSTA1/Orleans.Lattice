@@ -121,36 +121,45 @@ public partial class ReplicationApplierTests
     }
 
     [Test]
-    public async Task ApplyAsync_dedupes_when_entry_timestamp_equals_hwm()
+    public async Task ApplyAsync_applies_point_write_when_timestamp_equals_hwm()
     {
+        // #1060 regression: the per-origin HLC is non-monotonic in
+        // WAL-append order (per-leaf clocks interleaved by key-hash
+        // partition), so a genuinely-new point write can carry a source
+        // HLC equal to (or below) the current per-origin HWM. The HWM is
+        // no longer a drop gate for point writes - the entry applies and
+        // at-most-once is upheld by the shadow-forward identity cache and
+        // leaf-level LWW.
         var (applier, _, apply, hwm) = CreateApplier();
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(10, 1));
 
         var result = await applier.ApplyAsync(SetEntry("k", Hlc(10, 1)));
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(result.Applied, Is.False);
-            Assert.That(result.HighWaterMark, Is.EqualTo(Hlc(10, 1)));
-        });
-        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
-        await hwm.DidNotReceiveWithAnyArgs().TryAdvanceAsync(default!, default, default);
+        Assert.That(result.Applied, Is.True);
+        await apply.Received(1).ApplySetAsync("k", Arg.Any<byte[]>(), Hlc(10, 1), RemoteCluster, null, Arg.Any<long>());
     }
 
     [Test]
-    public async Task ApplyAsync_dedupes_when_entry_timestamp_below_hwm()
+    public async Task ApplyAsync_applies_point_write_when_timestamp_below_hwm()
     {
+        // #1060 regression: a below-HWM point write to a distinct key is a
+        // real write under non-monotonic per-origin HLC, not a duplicate.
+        // It applies; the HWM does not regress (TryAdvanceAsync rejects the
+        // lower candidate, so the reported frontier stays at the current
+        // HWM).
         var (applier, _, apply, hwm) = CreateApplier();
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(50));
+        hwm.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
+            .Returns(false);
 
         var result = await applier.ApplyAsync(DeleteEntry("k", Hlc(20)));
 
         Assert.Multiple(() =>
         {
-            Assert.That(result.Applied, Is.False);
+            Assert.That(result.Applied, Is.True);
             Assert.That(result.HighWaterMark, Is.EqualTo(Hlc(50)));
         });
-        await apply.DidNotReceiveWithAnyArgs().ApplyDeleteAsync(default!, default, default!, default);
+        await apply.Received(1).ApplyDeleteAsync("k", Hlc(20), RemoteCluster, null);
     }
 
     [Test]
@@ -564,6 +573,7 @@ public partial class ReplicationApplierTests
     {
         var (applier, lattice, _, hwm) = CreateTypedCrdtApplier();
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(50));
+        hwm.GetPinnedFloorAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(50));
         var entry = SetEntry("k", Hlc(20)) with
         {
             Mode = LatticeMergeMode.OrSet,
@@ -754,14 +764,16 @@ public partial class ReplicationApplierTests
         using var collector = new MeterCollector<double>(
             LatticeReplicationMetrics.MeterName,
             LatticeReplicationMetrics.ApplyLagName);
-        var (applier, _, _, hwm) = CreateApplier();
-        hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(100));
+        var (applier, _, _, _) = CreateApplier();
 
-        // Entry timestamp <= HWM so the apply path short-circuits before
-        // RecordApplyLag is reached.
-        await applier.ApplyAsync(SetEntry("k", Hlc(50)));
+        // First delivery applies and records apply-lag; the second is an
+        // exact (origin, hlc, key, op) re-delivery deduped by the
+        // shadow-forward identity cache before RecordApplyLag is reached.
+        var entry = SetEntry("k", Hlc(50));
+        await applier.ApplyAsync(entry);
+        await applier.ApplyAsync(entry);
 
-        Assert.That(collector.Measurements, Is.Empty);
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
     }
 
     // ------------------------------------------------------------------
@@ -815,25 +827,26 @@ public partial class ReplicationApplierTests
     }
 
     [Test]
-    public async Task ApplyAsync_records_apply_duration_with_dedup_outcome_for_hwm_short_circuit()
+    public async Task ApplyAsync_records_apply_duration_with_dedup_outcome_for_identity_cache()
     {
         using var collector = new MeterCollector<double>(
             LatticeReplicationMetrics.MeterName,
             LatticeReplicationMetrics.ApplyDurationName);
-        var (applier, _, _, hwm) = CreateApplier();
-        hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(100));
+        var (applier, _, _, _) = CreateApplier();
 
-        // Entry timestamp <= HWM so the apply path short-circuits before
-        // merge with outcome=dedup.
-        await applier.ApplyAsync(SetEntry("k", Hlc(50)));
+        // First delivery applies; the exact re-delivery is deduped by the
+        // shadow-forward identity cache and records a dedup-outcome sample.
+        var entry = SetEntry("k", Hlc(50));
+        await applier.ApplyAsync(entry);
+        await applier.ApplyAsync(entry);
 
-        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
-        var only = collector.Measurements.Single();
+        Assert.That(collector.Measurements, Has.Count.EqualTo(2));
+        var dedup = collector.Measurements.Last();
         Assert.Multiple(() =>
         {
-            Assert.That(only.Value, Is.GreaterThanOrEqualTo(0.0));
-            Assert.That(HasTree(only.Tags, Tree), Is.True);
-            Assert.That(HasOutcome(only.Tags, LatticeReplicationMetrics.OutcomeDedup), Is.True);
+            Assert.That(dedup.Value, Is.GreaterThanOrEqualTo(0.0));
+            Assert.That(HasTree(dedup.Tags, Tree), Is.True);
+            Assert.That(HasOutcome(dedup.Tags, LatticeReplicationMetrics.OutcomeShadowForwardDedup), Is.True);
         });
     }
 
