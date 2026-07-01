@@ -17,10 +17,10 @@ internal sealed class TreeResizeState
     /// <summary>The current phase of the resize operation.</summary>
     [Id(1)] public ResizePhase Phase { get; set; }
 
-    /// <summary>The new <see cref="LatticeOptions.MaxLeafKeys"/> value to apply.</summary>
+    /// <summary>The new <see cref="Orleans.Lattice.BPlusTree.ResolvedLatticeOptions.MaxLeafKeys"/> value to apply.</summary>
     [Id(2)] public int NewMaxLeafKeys { get; set; }
 
-    /// <summary>The new <see cref="LatticeOptions.MaxInternalChildren"/> value to apply.</summary>
+    /// <summary>The new <see cref="Orleans.Lattice.BPlusTree.ResolvedLatticeOptions.MaxInternalChildren"/> value to apply.</summary>
     [Id(3)] public int NewMaxInternalChildren { get; set; }
 
     /// <summary>

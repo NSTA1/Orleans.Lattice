@@ -3,12 +3,12 @@ using Orleans.Lattice.Primitives;
 namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
-/// A single (<c>Key</c>, <see cref="LwwValue{T}"/>) pair used by
+/// A single (<c>Key</c>, <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/>) pair used by
 /// snapshot / restore bulk-load paths so TTL metadata and source
 /// <see cref="Orleans.Lattice.HybridLogicalClock"/> version survive transfer
 /// between shards or trees.
 /// <para>
-/// The <see cref="LwwValue{T}"/> fields are stored flat (rather than as
+/// The <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/> fields are stored flat (rather than as
 /// a nested <c>LwwValue&lt;byte[]&gt;</c> property) because the Orleans
 /// type-alias encoder has a codec-generation race when a DTO used in a
 /// grain-interface signature embeds <c>LwwValue&lt;byte[]&gt;</c> as a
@@ -44,7 +44,7 @@ internal readonly record struct LwwEntry
     /// <summary>
     /// Identifier of the cluster that authored the mutation the entry
     /// represents, or <c>null</c> for a local write. Round-trips verbatim
-    /// through <see cref="LwwValue{T}.OriginClusterId"/> across every raw
+    /// through <see cref="Orleans.Lattice.Primitives.LwwValue{T}.OriginClusterId"/> across every raw
     /// bulk-load / snapshot / saga-pre-value path. Wire-compatible: legacy
     /// persisted state decodes to <c>null</c>.
     /// </summary>
@@ -54,7 +54,7 @@ internal readonly record struct LwwEntry
     /// Sparse <c>{originClusterId → HybridLogicalClock}</c> frontier
     /// captured at commit time, or <c>null</c> when the writer did not
     /// supply one. Round-trips verbatim through
-    /// <see cref="LwwValue{T}.VectorClock"/> across every raw bulk-load /
+    /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}.VectorClock"/> across every raw bulk-load /
     /// snapshot / saga-pre-value path so the frontier survives transfer
     /// between shards or trees. Wire-compatible: legacy persisted state
     /// decodes to <c>null</c>.
@@ -62,8 +62,7 @@ internal readonly record struct LwwEntry
     [Id(6)] public VersionVector? VectorClock { get; init; }
 
     /// <summary>
-    /// Constructs an <see cref="LwwEntry"/> from a <see cref="LwwValue{T}"/>,
-
+    /// Constructs an <see cref="LwwEntry"/> from a <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/>,
     /// preserving all LWW metadata (value, timestamp, tombstone flag,
     /// expiry, origin cluster id, and vector clock).
     /// </summary>
@@ -79,7 +78,7 @@ internal readonly record struct LwwEntry
     }
 
     /// <summary>
-    /// Rehydrates the flattened fields back into an <see cref="LwwValue{T}"/>.
+    /// Rehydrates the flattened fields back into an <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/>.
     /// </summary>
     public LwwValue<byte[]> ToLwwValue() => new()
     {

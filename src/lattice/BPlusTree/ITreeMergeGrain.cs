@@ -8,7 +8,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// <para>
 /// Merge works shard-by-shard: each source shard's leaf chain is drained
 /// into memory (including tombstones with LWW metadata) and then merged
-/// into the target tree's shards via <see cref="IShardRootGrain.MergeManyAsync"/>.
+/// into the target tree's shards via <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.MergeManyAsync"/>.
 /// Entries are re-hashed to the correct target shard since source and target
 /// trees may have different shard counts.
 /// </para>

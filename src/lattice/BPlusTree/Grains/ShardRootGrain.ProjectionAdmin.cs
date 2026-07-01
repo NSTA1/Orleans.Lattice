@@ -4,7 +4,7 @@ using Orleans.Lattice.Primitives;
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// Operator-tooling partial for <see cref="ShardRootGrain"/>. Fans the
+/// Operator-tooling partial for <see cref="Orleans.Lattice.BPlusTree.Grains.ShardRootGrain"/>. Fans the
 /// leaf-projection rebuild and materialiser-lag queries across this
 /// shard's leaf chain, mirroring the existing chain-walk used by
 /// <see cref="ShardRootGrain.GetDiagnosticsAsync"/>.

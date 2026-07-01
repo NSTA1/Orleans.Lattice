@@ -21,7 +21,7 @@ public static class LatticeReplicationSecurityServiceCollectionExtensions
     /// activated through DI and registered as a singleton, so it can
     /// declare constructor dependencies on any other service in the
     /// container (an Azure Key Vault client, an
-    /// <see cref="IHttpClientFactory"/>, etc.).
+    /// <c>IHttpClientFactory</c>, etc.).
     /// </summary>
     /// <typeparam name="TSource">The custom secret source type.</typeparam>
     public static ISiloBuilder AddLatticeReplicationSecrets<TSource>(this ISiloBuilder builder)

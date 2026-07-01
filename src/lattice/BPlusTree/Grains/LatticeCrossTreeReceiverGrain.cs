@@ -40,7 +40,7 @@ internal sealed class LatticeCrossTreeReceiverGrain(
     /// In-memory marker, <c>true</c> only while a freshly-computed decision is
     /// mid-flight in <see cref="NotifyTerminalAsync"/> and therefore not yet
     /// durable (the in-memory <see cref="CrossTreeReceiverState.Decided"/> has
-    /// been set but <see cref="IStorage.WriteStateAsync"/> has not yet
+    /// been set but <c>WriteStateAsync</c> has not yet
     /// completed). The <c>[AlwaysInterleave]</c> <see cref="GetDecisionAsync"/>
     /// and the redelivery early-return must <b>not</b> publish a decision in
     /// this window: the caller (<c>TxRegistryGrain.ResolveReceiverDelegatedAsync</c>)

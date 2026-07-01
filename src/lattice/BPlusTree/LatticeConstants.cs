@@ -79,7 +79,7 @@ internal static class LatticeConstants
     /// The tree ID of the internal registry tree that stores tree metadata
     /// (existence and per-tree <see cref="LatticeOptions"/> overrides).
     /// Each key is a user tree ID; each value is the serialized
-    /// <see cref="TreeRegistryEntry"/>.
+    /// <see cref="Orleans.Lattice.BPlusTree.State.TreeRegistryEntry"/>.
     /// </summary>
     public const string RegistryTreeId = "_lattice_trees";
 

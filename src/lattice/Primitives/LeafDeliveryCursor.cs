@@ -50,7 +50,7 @@ internal readonly record struct LeafDeliveryCursor
 
     /// <summary>
     /// Monotonically increasing per-activation write sequence. Bumped
-    /// once per <see cref="LwwValue{T}"/> store / remove inside the
+    /// once per <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/> store / remove inside the
     /// leaf, regardless of the value's LWW HLC. The cache stores the
     /// highest sequence it has consumed; a key whose sequence is
     /// strictly greater is part of the cache's pending delivery.

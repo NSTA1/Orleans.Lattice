@@ -37,12 +37,12 @@ internal sealed class CrossTreeParticipant
 
     /// <summary>
     /// Optional per-entry author-delta carry aligned 1:1 with
-    /// <see cref="Entries"/>: <c>EntryDeltas[i]</c> is the opaque,
+    /// <c>Entries</c>: <c>EntryDeltas[i]</c> is the opaque,
     /// Orleans-serialised typed CRDT delta to stamp onto the per-key emit for
     /// <c>Entries[i]</c>, or <see langword="null"/> for a plain
     /// last-writer-wins value write. The whole list is <see langword="null"/>
     /// when no entry on this slice carries a delta (the common case). A
-    /// defensive copy taken by the coordinator alongside <see cref="Entries"/>,
+    /// defensive copy taken by the coordinator alongside <c>Entries</c>,
     /// then forwarded to the per-tree sub-saga's
     /// <see cref="Grains.AtomicWriteGrain.PrepareForCoordinatorAsync"/> so each
     /// flag-CRDT membership row converges by replaying the author's enable-dot
@@ -53,12 +53,12 @@ internal sealed class CrossTreeParticipant
 
     /// <summary>
     /// Optional per-entry delete (tombstone) channel aligned 1:1 with
-    /// <see cref="Entries"/>: <c>EntryDeletes[i]</c> is <see langword="true"/>
+    /// <c>Entries</c>: <c>EntryDeletes[i]</c> is <see langword="true"/>
     /// when <c>Entries[i]</c> is a retraction delete that rides the
     /// all-or-nothing batch alongside the upserts, or <see langword="false"/>
     /// for a value upsert. The whole list is <see langword="null"/> when the
     /// slice carries only upserts (the common case). A defensive copy taken by
-    /// the coordinator alongside <see cref="Entries"/>, then forwarded to the
+    /// the coordinator alongside <c>Entries</c>, then forwarded to the
     /// per-tree sub-saga's
     /// <see cref="Grains.AtomicWriteGrain.PrepareForCoordinatorAsync"/> so the
     /// mixed set+delete batch flips visible (or rolls back) on the same

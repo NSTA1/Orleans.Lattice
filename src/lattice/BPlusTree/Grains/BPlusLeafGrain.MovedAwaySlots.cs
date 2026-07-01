@@ -6,7 +6,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <summary>
 /// Read-side and persistence-side support for moved-away slot tracking
 /// at the leaf layer. Companion to the shard-side coordinator on
-/// <see cref="IShardRootGrain"/>.
+/// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain"/>.
 /// </summary>
 internal sealed partial class BPlusLeafGrain
 {
@@ -116,12 +116,12 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>
     /// Returns <c>true</c> when <paramref name="key"/> hashes into a virtual
-    /// slot recorded in <see cref="State.LeafNodeState.MovedAwaySlots"/>.
+    /// slot recorded in <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.MovedAwaySlots"/>.
     /// <para>
     /// Read entrypoints on this leaf (<see cref="GetAsync"/>,
     /// <see cref="GetWithVersionAsync"/>, <see cref="ExistsAsync"/>,
     /// <see cref="GetManyAsync"/>) consult this guard before any pending-tx
-    /// or <see cref="State.LeafNodeState.Entries"/> probe so the source-side
+    /// or <c>Entries</c> probe so the source-side
     /// orphan snapshot left after a slot migration is not surfaced through
     /// any read path - including the <see cref="LeafCacheGrain"/>
     /// pending-key delegation hole that bypasses the shard front door.

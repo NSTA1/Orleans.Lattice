@@ -21,7 +21,7 @@ internal sealed record SplitResult
     /// <summary>
     /// Whether <see cref="NewSiblingId"/> identifies a leaf grain (<c>true</c>)
     /// or an internal-node grain (<c>false</c>). Self-describes the sibling's
-    /// node type so a deferred <see cref="ShardRootState.PendingPromotion"/>
+    /// node type so a deferred <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.PendingPromotion"/>
     /// resume path can construct the new internal root with the correct
     /// <c>childrenAreLeaves</c> value without re-reading <c>RootIsLeaf</c>
     /// from shard-root state - a value an interleaved peer

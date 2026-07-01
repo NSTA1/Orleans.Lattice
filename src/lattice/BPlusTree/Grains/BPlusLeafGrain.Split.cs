@@ -21,10 +21,10 @@ internal sealed partial class BPlusLeafGrain
     /// mirroring the no-split branch of the foreground commit paths.
     /// <para>
     /// Why non-blocking: the mutation surface
-    /// (<see cref="IBPlusLeafGrain.SetAsync(string, byte[])"/>,
-    /// <see cref="IBPlusLeafGrain.SetManyAsync"/>,
-    /// <see cref="IBPlusLeafGrain.DeleteAsync"/>,
-    /// <see cref="IBPlusLeafGrain.MergeManyAsync"/>) is marked
+    /// (<see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.SetAsync(string, byte[])"/>,
+    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.SetManyAsync"/>,
+    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.DeleteAsync"/>,
+    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.MergeManyAsync"/>) is marked
     /// <c>[AlwaysInterleave]</c>, so under a write burst many interleaved
     /// turns observe overflow on the same hot leaf at once. Each turn's
     /// data is already durable (WAL append + projection apply both run
@@ -80,8 +80,8 @@ internal sealed partial class BPlusLeafGrain
     /// only if the in-progress state is still observed. Returns
     /// <see langword="null"/> when a concurrent turn already finished
     /// the recovery; the caller still has stable
-    /// <see cref="State.LeafNodeState.SplitKey"/> /
-    /// <see cref="State.LeafNodeState.SplitSiblingId"/> fields to
+    /// <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.SplitKey"/> /
+    /// <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.SplitSiblingId"/> fields to
     /// route its own write across the donor / sibling boundary, so
     /// the post-gate routing in the caller is correct either way.
     /// <para>

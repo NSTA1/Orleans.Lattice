@@ -156,7 +156,7 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// RPC turn itself).
     /// </para>
     /// <para>
-    /// Marked <see cref="AlwaysInterleaveAttribute"/> so the probe
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> so the probe
     /// bypasses the registry's per-turn token entirely. Under heavy
     /// saga workloads the registry's main RPCs
     /// (<c>MarkCommittedAsync</c> / <c>MarkAbortedAsync</c> /
@@ -264,7 +264,7 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// Records the arrival of a single cross-cluster terminal record
     /// for the saga identified by <paramref name="txid"/>. Used by the
     /// receiver-side replication apply path
-    /// (<see cref="IReplicationApplyGrain.ApplyTxTerminalAsync"/>) to
+    /// (<see cref="Orleans.Lattice.BPlusTree.IReplicationApplyGrain.ApplyTxTerminalAsync"/>) to
     /// gate the per-tree linearization mark until every per-source-shard
     /// terminal of the saga has been observed, so a reader concurrent
     /// with cross-cluster replication of a multi-shard
@@ -375,7 +375,7 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
 
 /// <summary>
 /// Outcome of a single
-/// <see cref="ITxRegistryGrain.RecordTerminalArrivalAsync(Guid, int, bool, int)"/>
+/// <see cref="Orleans.Lattice.BPlusTree.ITxRegistryGrain.RecordTerminalArrivalAsync(Guid, int, bool, int)"/>
 /// call: did this arrival complete the saga's per-source-shard tally,
 /// and (when it did) what outcome should the receiver flip the per-tree
 /// linearization mark to. Pure value type - the registry has already
@@ -410,8 +410,8 @@ internal readonly record struct TerminalTallyResult
     /// <see cref="TxStatus.InFlight"/> when no arrival has been
     /// recorded. Meaningful only when <see cref="IsFinal"/> is
     /// <c>true</c> - the caller flips
-    /// <see cref="ITxRegistryGrain.MarkCommittedAsync(Guid)"/> /
-    /// <see cref="ITxRegistryGrain.MarkAbortedAsync(Guid)"/> from this
+    /// <see cref="Orleans.Lattice.BPlusTree.ITxRegistryGrain.MarkCommittedAsync(Guid)"/> /
+    /// <see cref="Orleans.Lattice.BPlusTree.ITxRegistryGrain.MarkAbortedAsync(Guid)"/> from this
     /// value.
     /// </summary>
     [Id(1)] public TxStatus FinalOutcome { get; init; }
@@ -455,7 +455,7 @@ internal enum TxStatus
     /// saga is either still preparing (no <c>MarkCommittedAsync</c> /
     /// <c>MarkAbortedAsync</c> has been issued yet), or its decision
     /// was previously recorded and has been forgotten by
-    /// <see cref="ITxRegistryGrain.ForgetAsync(Guid)"/> long enough ago
+    /// <see cref="Orleans.Lattice.BPlusTree.ITxRegistryGrain.ForgetAsync(Guid)"/> long enough ago
     /// that the registry's tombstone TTL
     /// (<see cref="LatticeOptions.TxDecisionRetention"/>) has elapsed
     /// and the entry has been pruned. A decision that was forgotten

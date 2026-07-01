@@ -1,20 +1,20 @@
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// Operator-tooling partial for <see cref="BPlusLeafGrain"/>. Exposes the
+/// Operator-tooling partial for <see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain"/>. Exposes the
 /// read-only projection-checkpoint accessor consumed by the public
 /// materialiser-lag surface and the destructive projection-rebuild seam
 /// that resets the leaf's materialised projection so the next activation
 /// re-replays the per-shard WAL from offset <c>0</c>.
 /// <para>
 /// The rebuild seam is intentionally narrow: it clears only the
-/// projection slots (<see cref="State.LeafNodeState.Entries"/>, the
-/// incremental <see cref="State.LeafNodeState.ProjectionHash"/>, the
-/// persisted <see cref="State.LeafNodeState.ProjectionCheckpointOffset"/>,
+/// projection slots (<c>Entries</c>, the
+/// incremental <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.ProjectionHash"/>, the
+/// persisted <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.ProjectionCheckpointOffset"/>,
 /// and the per-leaf saga pending-tx map) and preserves every
 /// topology-bearing slot (tree id, shard index, sibling pointers, key
 /// range, parent pointer, split state). The activation-time materialiser
-/// in <see cref="BPlusLeafGrain"/>.<c>OnActivateAsync</c> already keys
+/// in <see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain"/>.<c>OnActivateAsync</c> already keys
 /// every WAL-filter decision on those topology slots, so the rebuild
 /// observes the same routing context the pre-rebuild leaf used. The
 /// operator surface deliberately does not expose

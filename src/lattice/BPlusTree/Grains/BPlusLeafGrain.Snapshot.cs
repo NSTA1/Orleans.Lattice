@@ -6,8 +6,8 @@ using Orleans.Lattice.Primitives;
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// Snapshot-capture partial for <see cref="BPlusLeafGrain"/>. Adds the
-/// <see cref="IBPlusLeafGrain.CaptureSnapshotAsync"/> seam that copies
+/// Snapshot-capture partial for <see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain"/>. Adds the
+/// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.CaptureSnapshotAsync"/> seam that copies
 /// the per-activation entry cache into a canonical byte-row
 /// <see cref="LeafSnapshotBlob"/> and persists it through the dedicated
 /// <see cref="ILeafSnapshotStorageGrain"/> keyed by this leaf's grain
@@ -17,7 +17,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <para>
 /// Capture is driven by the leaf itself (not by the maintenance
 /// grain): when the fall-off-log detector raises the
-/// <see cref="FallOffLogDecision.SnapshotPending"/> advisory at
+/// <see cref="Orleans.Lattice.BPlusTree.Grains.FallOffLogDecision.SnapshotPending"/> advisory at
 /// activation time, the leaf latches <see cref="_activationSnapshotPending"/>
 /// and captures once the tail replay has completed. While the leaf
 /// stays active, every
@@ -34,7 +34,7 @@ internal sealed partial class BPlusLeafGrain
 {
     /// <summary>
     /// Latched at activation when the fall-off-log detector returns
-    /// <see cref="FallOffLogDecision.SnapshotPending"/>. The activation
+    /// <see cref="Orleans.Lattice.BPlusTree.Grains.FallOffLogDecision.SnapshotPending"/>. The activation
     /// hook reads-and-clears the flag after the tail replay so a
     /// proactive capture fires exactly once per advisory-firing
     /// activation.
@@ -189,7 +189,7 @@ internal sealed partial class BPlusLeafGrain
     /// counter; when the counter reaches
     /// <see cref="LatticeOptions.LeafSnapshotReClassifyEveryNCheckpoints"/>
     /// it resets, re-classifies the leaf's WAL gap, and (on
-    /// <see cref="FallOffLogDecision.SnapshotPending"/>) drives a
+    /// <see cref="Orleans.Lattice.BPlusTree.Grains.FallOffLogDecision.SnapshotPending"/>) drives a
     /// capture. Returns synchronously when the option is <c>0</c>
     /// (disabled) or the threshold has not yet been reached.
     /// </summary>
@@ -279,7 +279,7 @@ internal sealed partial class BPlusLeafGrain
     /// Activation-time rehydration seam. Consults the dedicated
     /// snapshot storage grain for a persisted blob and, when the blob
     /// is newer than the leaf's persisted
-    /// <see cref="State.LeafNodeState.ProjectionCheckpointOffset"/>,
+    /// <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.ProjectionCheckpointOffset"/>,
     /// repopulates the in-memory entry cache from the canonical byte
     /// rows and advances the persisted checkpoint to the snapshot's
     /// offset. The projection digest is invalidated (set to <c>null</c>)

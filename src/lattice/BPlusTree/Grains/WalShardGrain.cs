@@ -197,7 +197,7 @@ internal sealed class WalShardGrain(
 
     /// <summary>
     /// Per-grain free-list of recycled ack-TCS buffers. Same shape and
-    /// invariants as <see cref="_batchListPool"/>. The lists themselves
+    /// invariants as <c>_batchListPool</c>. The lists themselves
     /// only ever hold strong references to TCSs that have been moved
     /// elsewhere (into an in-flight slot's <c>Acks</c>) before the list
     /// is returned, so recycling does not extend TCS lifetimes.

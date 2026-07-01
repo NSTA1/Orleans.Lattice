@@ -2,8 +2,8 @@
 namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
-/// A grain responsible for resizing a tree by changing its <see cref="LatticeOptions.MaxLeafKeys"/>
-/// and/or <see cref="LatticeOptions.MaxInternalChildren"/>. One activation exists per tree,
+/// A grain responsible for resizing a tree by changing its <see cref="Orleans.Lattice.BPlusTree.ResolvedLatticeOptions.MaxLeafKeys"/>
+/// and/or <see cref="Orleans.Lattice.BPlusTree.ResolvedLatticeOptions.MaxInternalChildren"/>. One activation exists per tree,
 /// keyed by <c>{treeId}</c>
 /// <para>
 /// Resize uses an online snapshot to create a new physical tree with the desired sizing,

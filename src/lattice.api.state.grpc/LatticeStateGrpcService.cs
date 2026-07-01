@@ -16,7 +16,7 @@ namespace Orleans.Lattice.Api.State.Grpc;
 /// produces for a <c>.proto</c> service: the base type bears the binding
 /// metadata the binder discovers, and the derived type is the concrete
 /// implementation resolved from DI per request. <c>Grpc.AspNetCore</c> calls
-/// <see cref="BindService"/> once at startup with a <see langword="null"/>
+/// <see cref="LatticeStateGrpcServiceBase.BindService"/> once at startup with a <see langword="null"/>
 /// instance to record method metadata, then resolves the actual instance per
 /// request.
 /// </remarks>
@@ -139,7 +139,7 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
     /// forces the DI container to build the <see cref="LatticeStateGrpcMethods"/>
     /// singleton (whose factory populates
     /// <see cref="LatticeStateGrpcMethodsHolder.Current"/>) before this service
-    /// resolves, so the static <see cref="BindService"/> hook always observes a
+    /// resolves, so the static <see cref="LatticeStateGrpcServiceBase.BindService"/> hook always observes a
     /// populated holder.
     /// </summary>
     public LatticeStateGrpcService(

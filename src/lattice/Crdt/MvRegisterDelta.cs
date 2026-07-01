@@ -25,7 +25,7 @@ namespace Orleans.Lattice;
 /// Emitters always populate both collections (use empty arrays /
 /// dictionaries for "no entries" / "empty context"); use
 /// <see cref="Empty"/> to author a no-op delta without allocating
-/// fresh empty collections. The <see cref="default"/> instance has
+/// fresh empty collections. The <see langword="default"/> instance has
 /// <c>null</c> collections and is intended only as the zero-value of
 /// the struct - consumers should either treat <c>null</c> as empty or
 /// assert non-null at the apply boundary.
@@ -51,7 +51,7 @@ public readonly record struct MvRegisterDelta
 
     /// <summary>
     /// A reusable no-op delta with empty (but non-null)
-    /// <see cref="Entries"/> and <see cref="Context"/> collections.
+    /// <c>Entries</c> and <see cref="Context"/> collections.
     /// Backed by <see cref="Array.Empty{T}"/> and an empty dictionary
     /// so repeated access does not allocate.
     /// </summary>

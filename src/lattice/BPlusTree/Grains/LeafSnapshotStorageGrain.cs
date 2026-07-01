@@ -11,7 +11,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <para>
 /// The implementation is intentionally minimal: one read, one write,
 /// one clear. No projection-side logic lives here; capture and
-/// rehydrate logic is owned by <see cref="BPlusLeafGrain"/> and the
+/// rehydrate logic is owned by <see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain"/> and the
 /// maintenance grain that schedules captures.
 /// </para>
 /// </summary>

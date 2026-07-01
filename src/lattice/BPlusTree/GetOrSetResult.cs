@@ -3,9 +3,9 @@ using Orleans.Lattice;
 namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
-/// Result returned by <see cref=""IBPlusLeafGrain.GetOrSetAsync""/> containing
+/// Result returned by <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.GetOrSetAsync"/> containing
 /// the existing value (if the key was already live) and an optional
-/// <see cref=""SplitResult""/> when a write triggered a leaf split.
+/// <see cref="Orleans.Lattice.BPlusTree.SplitResult"/> when a write triggered a leaf split.
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.GetOrSetResult)]
@@ -19,7 +19,7 @@ internal sealed record GetOrSetResult
 
     /// <summary>
     /// A split result if the write caused the leaf to split, otherwise <c>null</c>.
-    /// Always <c>null</c> when <see cref=""ExistingValue""/> is not <c>null</c>
+    /// Always <c>null</c> when <see cref="ExistingValue"/> is not <c>null</c>
     /// (no write occurred).
     /// </summary>
     [Id(1)] public SplitResult? Split { get; init; }

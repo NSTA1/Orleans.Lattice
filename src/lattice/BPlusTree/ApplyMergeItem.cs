@@ -4,19 +4,19 @@ namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
 /// Single item in a batched LWW apply request submitted via
-/// <see cref="IReplicationApplyGrain.ApplyMergeManyAsync"/>. Carries the
+/// <see cref="Orleans.Lattice.BPlusTree.IReplicationApplyGrain.ApplyMergeManyAsync"/>. Carries the
 /// authoring cluster's metadata (<see cref="SourceHlc"/>,
 /// <see cref="OriginClusterId"/>, <see cref="SourceVectorClock"/>,
 /// <see cref="ExpiresAtTicks"/>) verbatim so the persisted
-/// <see cref="LwwValue{T}"/> matches the authoring cluster bit-identically,
+/// <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/> matches the authoring cluster bit-identically,
 /// the same contract as the per-entry
-/// <see cref="IReplicationApplyGrain.ApplySetAsync"/> /
-/// <see cref="IReplicationApplyGrain.ApplyDeleteAsync"/> methods.
+/// <see cref="Orleans.Lattice.BPlusTree.IReplicationApplyGrain.ApplySetAsync"/> /
+/// <see cref="Orleans.Lattice.BPlusTree.IReplicationApplyGrain.ApplyDeleteAsync"/> methods.
 /// <para>
 /// <see cref="IsTombstone"/> distinguishes a remote Set from a remote
 /// Delete: tombstone items have a <see langword="null"/>
 /// <see cref="Value"/> and are persisted as a tombstone
-/// <see cref="LwwValue{T}"/>; non-tombstone items carry the committed
+/// <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/>; non-tombstone items carry the committed
 /// payload bytes. The <see cref="ExpiresAtTicks"/> slot is preserved
 /// for non-tombstone items only and must be <c>0</c> on tombstones -
 /// the apply path mirrors the per-entry behaviour where deletes never
@@ -48,7 +48,7 @@ internal readonly record struct ApplyMergeItem
     /// The vector-clock frontier captured by the remote cluster at commit
     /// time, or <see langword="null"/> when the producing cluster does not
     /// stamp a frontier. Stamped verbatim onto the persisted
-    /// <see cref="LwwValue{T}.VectorClock"/>.
+    /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}.VectorClock"/>.
     /// </summary>
     [Id(4)] public VersionVector? SourceVectorClock { get; init; }
 
@@ -60,7 +60,7 @@ internal readonly record struct ApplyMergeItem
 
     /// <summary>
     /// <see langword="true"/> when this item represents a remote Delete
-    /// (the persisted entry is a tombstone <see cref="LwwValue{T}"/>);
+    /// (the persisted entry is a tombstone <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/>);
     /// <see langword="false"/> when it represents a remote Set.
     /// </summary>
     [Id(6)] public bool IsTombstone { get; init; }

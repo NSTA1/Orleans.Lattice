@@ -27,7 +27,7 @@ namespace Orleans.Lattice;
 /// sequence number on every shard the snapshot covers, captured at open
 /// time. With the frozen-baseline store this is the WAL retention pin
 /// anchor and a diagnostic bound (the per-shard projection is captured
-/// and served from a durable <see cref="Grains.SnapshotShardBaseline"/>
+/// and served from a durable <see cref="Orleans.Lattice.BPlusTree.State.SnapshotShardBaseline"/>
 /// rather than replayed per page); writes that append after the capture
 /// are invisible by construction.
 /// </description>
@@ -199,7 +199,7 @@ public readonly record struct LatticeSnapshotCoordinate
     /// Per-cursor identity of the durable frozen-baseline rows this snapshot
     /// reads instead of replaying the write-ahead log. A fresh
     /// <see cref="Guid"/> is minted at every <c>OpenSnapshot*Async</c> and the
-    /// matching per-shard <see cref="Grains.SnapshotShardBaseline"/> rows are
+    /// matching per-shard <see cref="Orleans.Lattice.BPlusTree.State.SnapshotShardBaseline"/> rows are
     /// persisted under <c>{treeId}/{shardIndex}/{token:N}</c>, so the cursor's
     /// view is frozen at open time and a later WAL GC that trims the prefix
     /// cannot perturb it.

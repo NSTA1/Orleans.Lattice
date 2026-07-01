@@ -4,7 +4,7 @@ namespace Orleans.Lattice.BPlusTree.State;
 
 /// <summary>
 /// Durable, per-tree record of which <see cref="IWalStorageProviderCatalog"/>
-/// key backs each WAL partition. Stored in <see cref="TreeRegistryEntry"/> and
+/// key backs each WAL partition. Stored in <see cref="Orleans.Lattice.BPlusTree.State.TreeRegistryEntry"/> and
 /// resolved to a live <see cref="IWalStorageProvider"/> at WAL shard activation
 /// time, replacing host-supplied placement delegates with an audit-able,
 /// version-stamped pin that changes only through the managed

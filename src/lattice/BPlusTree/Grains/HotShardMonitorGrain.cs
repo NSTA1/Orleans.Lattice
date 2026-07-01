@@ -11,7 +11,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <para>
 /// The monitor is started lazily by <c>LatticeGrain</c> on the first write
 /// to a tree and re-activates on silo restart via a keepalive reminder. On
-/// each tick it polls every physical shard's <see cref="IShardRootGrain.GetHotnessAsync"/>
+/// each tick it polls every physical shard's <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.GetHotnessAsync"/>
 /// in parallel, computes ops-per-second, and triggers splits on up to
 /// <see cref="LatticeOptions.MaxConcurrentAutoSplits"/> of the hottest
 /// eligible shards in parallel.
@@ -23,7 +23,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <item><description><see cref="LatticeOptions.AutoSplitEnabled"/> is <c>false</c> - entire pass returns.</description></item>
 /// <item><description>The tree is younger than <see cref="LatticeOptions.AutoSplitMinTreeAge"/> (since this monitor activated) - entire pass returns.</description></item>
 /// <item><description>A resize, merge, or snapshot is in progress (<see cref="ILattice.IsResizeCompleteAsync"/> etc.) - entire pass returns.</description></item>
-/// <item><description>Any physical shard has a pending bulk graft (<see cref="IShardRootGrain.HasPendingBulkOperationAsync"/>) - entire pass returns.</description></item>
+/// <item><description>Any physical shard has a pending bulk graft (<see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.HasPendingBulkOperationAsync"/>) - entire pass returns.</description></item>
 /// <item><description>A shard is already splitting - that shard is skipped and counts toward the in-flight cap.</description></item>
 /// <item><description>The shard is in the per-shard cooldown window after a recent split - that shard is skipped.</description></item>
 /// <item><description>The shard owns fewer than two virtual slots - that shard is skipped (nothing to subdivide).</description></item>

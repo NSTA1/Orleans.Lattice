@@ -93,6 +93,7 @@ public sealed class LatticeAtomicWriteBuilder
         slice.EntryDeletes.Add(true);
         return this;
     }
+    /// <summary>
     /// <paramref name="delta"/> that rides the atomic write alongside the value.
     /// The receiver applies the delta to the addressed key by its merge mode
     /// (the flag-CRDT membership-row path mints an enable-dot delta this way),

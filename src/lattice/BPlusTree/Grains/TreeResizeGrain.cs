@@ -500,7 +500,7 @@ internal sealed class TreeResizeGrain(
     /// <c>ShadowForwardPhase.Rejecting</c>. Any lingering client request
     /// routed to the old tree after this point throws
     /// <see cref="StaleTreeRoutingException"/>, which the stateless
-    /// <see cref="LatticeGrain"/> routing tier handles by refreshing its
+    /// <see cref="Orleans.Lattice.BPlusTree.Grains.LatticeGrain"/> routing tier handles by refreshing its
     /// alias and retrying against the new physical tree. Exposed as
     /// <c>internal</c> for unit testing.
     /// </summary>

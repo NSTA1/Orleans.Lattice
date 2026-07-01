@@ -17,7 +17,7 @@ internal interface IBPlusInternalGrain : IGrainWithGuidKey
     /// this node's children are leaves, in a single call. Avoids two
     /// sequential RPCs during tree traversal.
     /// <para>
-    /// Marked <see cref="AlwaysInterleaveAttribute"/> per U9p step
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> per U9p step
     /// 8c-c-iv-c2-vi: implementation is a single synchronous
     /// <c>Task.FromResult((state.State.Route(key), state.State.ChildrenAreLeaves))</c>
     /// expression with no awaits and no cross-state-field traversal,
@@ -40,7 +40,7 @@ internal interface IBPlusInternalGrain : IGrainWithGuidKey
     /// <see cref="AcceptSplitAsync"/> against this node; the shard root
     /// invalidates its cache entry on every such call.
     /// <para>
-    /// Marked <see cref="AlwaysInterleaveAttribute"/> per U9p step
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> per U9p step
     /// 8c-c-iv-c2-vi: implementation is a synchronous projection over
     /// <c>state.State.Children</c> into a freshly-allocated snapshot
     /// (no awaits, no cross-state-field traversal). This is the hottest
@@ -54,7 +54,7 @@ internal interface IBPlusInternalGrain : IGrainWithGuidKey
 
     /// <summary>Returns the grain identity of the leftmost child.</summary>
     /// <remarks>
-    /// Marked <see cref="AlwaysInterleaveAttribute"/> per U9p step
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> per U9p step
     /// 8c-c-iv-c2-vi. Single-line synchronous read of
     /// <c>state.State.Children[0].ChildId</c>; no traversal hazard.
     /// </remarks>
@@ -63,7 +63,7 @@ internal interface IBPlusInternalGrain : IGrainWithGuidKey
 
     /// <summary>Returns the grain identity of the rightmost child.</summary>
     /// <remarks>
-    /// Marked <see cref="AlwaysInterleaveAttribute"/> per U9p step
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> per U9p step
     /// 8c-c-iv-c2-vi. Single-line synchronous read.
     /// </remarks>
     [AlwaysInterleave]
@@ -73,7 +73,7 @@ internal interface IBPlusInternalGrain : IGrainWithGuidKey
     /// Returns the leftmost child and whether this node's children are leaves, in a single call.
     /// </summary>
     /// <remarks>
-    /// Marked <see cref="AlwaysInterleaveAttribute"/> per U9p step
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> per U9p step
     /// 8c-c-iv-c2-vi. Single synchronous tuple read.
     /// </remarks>
     [AlwaysInterleave]
@@ -83,7 +83,7 @@ internal interface IBPlusInternalGrain : IGrainWithGuidKey
     /// Returns the rightmost child and whether this node's children are leaves, in a single call.
     /// </summary>
     /// <remarks>
-    /// Marked <see cref="AlwaysInterleaveAttribute"/> per U9p step
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> per U9p step
     /// 8c-c-iv-c2-vi. Single synchronous tuple read.
     /// </remarks>
     [AlwaysInterleave]
@@ -91,7 +91,7 @@ internal interface IBPlusInternalGrain : IGrainWithGuidKey
 
     /// <summary>Returns whether this node's children are leaf grains.</summary>
     /// <remarks>
-    /// Marked <see cref="AlwaysInterleaveAttribute"/> per U9p step
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> per U9p step
     /// 8c-c-iv-c2-vi. Single-line synchronous bool read.
     /// </remarks>
     [AlwaysInterleave]
@@ -100,7 +100,7 @@ internal interface IBPlusInternalGrain : IGrainWithGuidKey
     /// <summary>Accepts a promoted split from a child node.</summary>
     /// <returns>A <see cref="SplitResult"/> if this node itself needed to split, otherwise <c>null</c>.</returns>
     /// <remarks>
-    /// Marked <see cref="AlwaysInterleaveAttribute"/> per U9p step
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> per U9p step
     /// 8c-c-iv-c2-vi so concurrent overflow propagations from
     /// different leaves do not queue on the internal node's turn. The
     /// mutation-state race that would otherwise result is serialised

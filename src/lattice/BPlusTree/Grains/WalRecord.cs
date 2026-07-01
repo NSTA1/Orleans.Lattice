@@ -55,7 +55,7 @@ public readonly record struct WalRecord
     /// the full-state byte payload is pure overhead on both the
     /// storage WAL and the cross-cluster wire. The non-prepared
     /// CRDT-delta producer no longer materialises the post-merge state
-    /// into this slot at all - <see cref="WalRecordBuilder.ForCrdtDelta"/>
+    /// into this slot at all - <see cref="Orleans.Lattice.BPlusTree.Grains.WalRecordBuilder.ForCrdtDelta"/>
     /// leaves it <see langword="null"/> in the in-grain instance too, so
     /// the durable writer path pays no O(state) post-merge serialisation
     /// to feed a slot the encoder drops. Both the receiver-side apply and
@@ -179,7 +179,7 @@ public readonly record struct WalRecord
     /// indistinguishable from today's per-origin-only high-water-mark
     /// check. Stored as the absolute frontier on the in-memory record;
     /// transports that need a more compact form encode through
-    /// <see cref="VectorClockCodec"/>
+    /// <c>VectorClockCodec</c>
     /// </summary>
     [Id(10)] public Orleans.Lattice.VersionVector? VectorClock { get; init; }
 

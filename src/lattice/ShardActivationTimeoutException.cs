@@ -3,7 +3,7 @@ namespace Orleans.Lattice;
 /// <summary>
 /// Thrown by <c>ShardRootGrain</c> when its one-time activation-readiness
 /// seed exceeds the per-tree
-/// <see cref="Orleans.Lattice.BPlusTree.LatticeOptions.ActivationReadyTimeout"/>
+/// <see cref="Orleans.Lattice.LatticeOptions.ActivationReadyTimeout"/>
 /// deadline (default 15 seconds). The seed runs the chain of cross-grain
 /// awaits a brand-new or freshly-reactivated shard performs the first time
 /// it prepares for an operation: the defensive state re-read, the

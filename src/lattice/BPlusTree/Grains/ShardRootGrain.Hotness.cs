@@ -7,7 +7,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// publishes a data point to the corresponding
 /// <see cref="LatticeMetrics"/> instrument so an OpenTelemetry pipeline
 /// can observe per-shard throughput without polling
-/// <see cref="IShardRootGrain.GetHotnessAsync"/>.
+/// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.GetHotnessAsync"/>.
 /// </summary>
 internal sealed partial class ShardRootGrain
 {

@@ -16,7 +16,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// <remarks>
 /// The expansion is breadth-first: every shard in the current
 /// frontier is queried in parallel for its
-/// <see cref="IShardRootGrain.GetSplitForwardTargetsAsync"/>, the
+/// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.GetSplitForwardTargetsAsync"/>, the
 /// results are unioned against the visited set, and any newly-seen
 /// destinations form the next frontier. The visited set itself acts
 /// as the cycle guard - a target that's already been expanded is
@@ -29,11 +29,11 @@ internal static class TerminalFanOutResolver
     /// <summary>
     /// Returns the transitive closure of <paramref name="seed"/>
     /// expanded by each shard's
-    /// <see cref="IShardRootGrain.GetSplitForwardTargetsAsync"/>. The
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.GetSplitForwardTargetsAsync"/>. The
     /// returned list is sorted ascending and includes every seed
     /// shard plus every shard reachable through any chain of
-    /// <see cref="State.ShardRootState.SplitInProgress"/> /
-    /// <see cref="State.ShardRootState.MovedAwaySlots"/> records.
+    /// <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.SplitInProgress"/> /
+    /// <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.MovedAwaySlots"/> records.
     /// </summary>
     /// <param name="grainFactory">Grain factory for resolving each
     /// shard root by its <c>{treeId}/{shardIndex}</c> grain key.</param>
@@ -46,7 +46,7 @@ internal static class TerminalFanOutResolver
     /// cross-cluster replication apply path.</param>
     /// <param name="cancellationToken">Cooperative cancellation for
     /// the BFS expansion. Each wavefront's parallel
-    /// <see cref="IShardRootGrain.GetSplitForwardTargetsAsync"/>
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.GetSplitForwardTargetsAsync"/>
     /// fan-out checks the token before issuing the RPCs.</param>
     public static async Task<List<int>> ResolveTransitiveAsync(
         IGrainFactory grainFactory,

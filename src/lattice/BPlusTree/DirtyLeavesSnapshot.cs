@@ -4,14 +4,14 @@ namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
 /// Snapshot returned by
-/// <see cref="IShardRootGrain.GetDirtyLeavesSinceLastCompactionAsync"/>:
+/// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.GetDirtyLeavesSinceLastCompactionAsync"/>:
 /// the set of leaf grain ids that have observed at least one routed
 /// <c>Delete</c> mutation since the last successful compaction pass
 /// drained the shard-root dirty set, paired with the
 /// <see cref="HybridLogicalClock"/> watermark at the moment of capture.
 /// The compaction coordinator walks <see cref="DirtyLeaves"/> and then
 /// passes <see cref="ObservedAdvance"/> to
-/// <see cref="IShardRootGrain.ClearDirtyLeavesUpToAsync"/> so that
+/// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.ClearDirtyLeavesUpToAsync"/> so that
 /// deletes which arrive mid-pass are preserved for the next pass.
 /// </summary>
 [GenerateSerializer]
@@ -24,7 +24,7 @@ internal readonly record struct DirtyLeavesSnapshot
 
     /// <summary>
     /// HLC watermark at the moment of snapshot. Passed back to
-    /// <see cref="IShardRootGrain.ClearDirtyLeavesUpToAsync"/> after the
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.ClearDirtyLeavesUpToAsync"/> after the
     /// coordinator has compacted every leaf in <see cref="DirtyLeaves"/>.
     /// Entries marked with an HLC strictly greater than this watermark
     /// are preserved by the clear so the next pass picks them up.

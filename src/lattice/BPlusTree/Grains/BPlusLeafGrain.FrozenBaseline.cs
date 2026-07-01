@@ -4,7 +4,7 @@ using Orleans.Lattice.Primitives;
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// Frozen-baseline capture partial for <see cref="BPlusLeafGrain"/>. Adds the
+/// Frozen-baseline capture partial for <see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain"/>. Adds the
 /// two read-only seams the per-shard snapshot-baseline capture
 /// (<see cref="ShardRootGrain.CaptureSnapshotBaselineAsync"/>) drives across a
 /// shard's leaf chain:

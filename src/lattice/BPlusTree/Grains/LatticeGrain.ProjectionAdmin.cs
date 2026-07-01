@@ -6,7 +6,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <see cref="ShardMap"/> via the existing
 /// <see cref="LatticeGrain.GetRoutingAsync"/> helper, validates the
 /// physical shard index, and dispatches to the
-/// <see cref="IShardRootGrain"/> admin seams. Guarded by
+/// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain"/> admin seams. Guarded by
 /// <see cref="LatticeGrain.ThrowIfSystemTree"/> so reserved system
 /// trees (registry, replication WAL prefix) cannot be rebuilt or
 /// inspected through the public surface.

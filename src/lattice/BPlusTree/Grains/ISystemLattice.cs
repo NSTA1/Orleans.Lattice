@@ -11,7 +11,7 @@ using System.ComponentModel;
 /// replication write-ahead-log prefix
 /// <see cref="LatticeConstants.WalTreePrefix"/>).
 /// <para>
-/// <see cref="LatticeGrain"/> implements both <see cref="ILattice"/>
+/// <see cref="Orleans.Lattice.BPlusTree.Grains.LatticeGrain"/> implements both <see cref="ILattice"/>
 /// (public, guarded) and this interface (internal, unguarded) against the
 /// same activation: the public surface rejects any call whose primary
 /// key starts with <see cref="LatticeConstants.SystemTreePrefix"/> with

@@ -8,7 +8,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// up the tree on every digest publish, so a topology query is answered
 /// without fanning out to the leaves: an internal node summarises each leaf
 /// child from its own stored snapshot table and only recurses into internal
-/// children. Carried by <see cref="Grains.IShardRootGrain"/> /
+/// children. Carried by <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain"/> /
 /// <see cref="IBPlusInternalGrain"/> topology reads.
 /// </summary>
 [GenerateSerializer]

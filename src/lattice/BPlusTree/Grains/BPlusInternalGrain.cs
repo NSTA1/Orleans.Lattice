@@ -22,7 +22,7 @@ internal sealed partial class BPlusInternalGrain(
     /// is intrinsic; this property is never reached. Test/bench harnesses
     /// that hand an IGrainFactory mock real grain instances back to callers
     /// (see Orleans.Lattice.Benchmark.Microbench) require this self-describing
-    /// shape - exactly the pattern <see cref="BPlusLeafGrain"/> already
+    /// shape - exactly the pattern <see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain"/> already
     /// follows. Adding <see cref="IGrainBase"/> here aligns the two grain
     /// classes with no production-runtime impact.
     /// </summary>

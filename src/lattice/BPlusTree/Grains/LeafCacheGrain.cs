@@ -6,13 +6,13 @@ using Microsoft.Extensions.Options;
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// A <see cref="StatelessWorkerAttribute"/>-based read-through cache that sits
-/// in front of a <see cref="BPlusLeafGrain"/>. Each silo may have its own
+/// A <see cref="Orleans.Concurrency.StatelessWorkerAttribute"/>-based read-through cache that sits
+/// in front of a <see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain"/>. Each silo may have its own
 /// activation, serving reads from a local LWW-map cache.
 ///
 /// On a cache miss or when the cache is stale, the grain fetches a
 /// <see cref="StateDelta"/> from the primary leaf and merges it into the
-/// local cache using <see cref="LwwValue{T}.Merge"/>. Because the merge is
+/// local cache using <see cref="Orleans.Lattice.Primitives.LwwValue{T}.Merge"/>. Because the merge is
 /// commutative and idempotent, stale entries are harmlessly overwritten
 /// without an explicit invalidation protocol.
 ///
@@ -67,7 +67,7 @@ internal sealed class LeafCacheGrain(
     /// Keys this cache currently knows are covered by a pending-tx
     /// prepare on the primary leaf. Refreshed whenever we take the
     /// cross-grain refresh path in <see cref="RefreshAsync"/> by
-    /// calling <see cref="IBPlusLeafGrain.GetPendingKeysAsync"/>.
+    /// calling <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.GetPendingKeysAsync"/>.
     /// Reads that hit a key in this set are delegated to the primary
     /// leaf so the per-tree <see cref="ITxRegistryGrain"/> can apply
     /// the strict atomic-visibility verdict; the cache cannot make
@@ -95,7 +95,7 @@ internal sealed class LeafCacheGrain(
     /// <summary>
     /// The most recent same-silo revision cookie this cache successfully
     /// observed and refreshed against. Used by <see cref="RefreshAsync"/>
-    /// to skip the cross-grain <see cref="IBPlusLeafGrain.GetDeltaSinceAsync"/>
+    /// to skip the cross-grain <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.GetDeltaSinceAsync"/>
     /// call when the primary leaf is on the same silo and has not
     /// advanced since this cache last refreshed. <c>0</c> means "never
     /// successfully refreshed" - must take the cross-grain refresh path.
@@ -142,7 +142,7 @@ internal sealed class LeafCacheGrain(
     /// read, but the primary leaf has already published its moved-away
     /// set in a <see cref="StateDelta"/> consumed by
     /// <see cref="RefreshAsync"/>. Surfacing the routing exception lets
-    /// <see cref="LatticeGrain"/>'s retry loop invalidate the shard map
+    /// <see cref="Orleans.Lattice.BPlusTree.Grains.LatticeGrain"/>'s retry loop invalidate the shard map
     /// and re-route to the new owner rather than letting the caller
     /// observe a phantom-absent key.
     /// </summary>

@@ -24,7 +24,7 @@ namespace Orleans.Lattice;
 /// </para>
 /// <para>
 /// The fix: the lattice-level scan entry point makes one
-/// <see cref="ITxRegistryGrain.SnapshotAsync"/> call before fan-out and
+/// <see cref="Orleans.Lattice.BPlusTree.ITxRegistryGrain.SnapshotAsync"/> call before fan-out and
 /// stamps the result onto this ambient. Every leaf in the scan reads
 /// the stamped snapshot in place of its own registry RPC, so all
 /// leaves share a single decision view and the scan is linearizable

@@ -462,7 +462,7 @@ internal sealed class ReplicationShipperGrain(
 
     /// <summary>
     /// Number of successful cursor advances since the last durable
-    /// <see cref="IPersistentState{TState}.WriteStateAsync"/>. Reset
+    /// <c>WriteStateAsync</c>. Reset
     /// to <c>0</c> on every flush. Counter rather than wall-clock
     /// because the relevant cost is per-batch persistence I/O, and
     /// the per-batch rate is what the operator tunes via
@@ -1485,8 +1485,8 @@ internal sealed class ReplicationShipperGrain(
     }
 
     /// <summary>
-    /// Persists <see cref="state"/> via
-    /// <see cref="IPersistentState{TState}.WriteStateAsync"/> and then
+    /// Persists <c>state</c> via
+    /// <c>WriteStateAsync</c> and then
     /// (only on success) reports the durable HLC cursor to the
     /// registry. Idempotent - safe to call when no in-memory advance
     /// is pending. The persistence-then-report ordering is

@@ -412,7 +412,7 @@ public interface ILattice : IGrainWithStringKey
 
     /// <summary>
     /// Resizes the tree by creating an offline snapshot with new
-    /// <see cref="LatticeOptions.MaxLeafKeys"/> and <see cref="LatticeOptions.MaxInternalChildren"/>
+    /// <see cref="Orleans.Lattice.BPlusTree.ResolvedLatticeOptions.MaxLeafKeys"/> and <see cref="Orleans.Lattice.BPlusTree.ResolvedLatticeOptions.MaxInternalChildren"/>
     /// values into a new physical tree, then swapping the tree alias so that all
     /// subsequent reads and writes are redirected to the resized tree. The old
     /// physical tree is soft-deleted and will be purged after the configured
@@ -456,7 +456,7 @@ public interface ILattice : IGrainWithStringKey
     /// before the snapshot completes is reflected on the destination.
     /// </para>
     /// <para>
-    /// The source and destination trees must have the same <see cref="LatticeOptions.ShardCount"/>.
+    /// The source and destination trees must have the same <see cref="Orleans.Lattice.BPlusTree.ResolvedLatticeOptions.ShardCount"/>.
     /// The destination tree must not already exist.
     /// </para>
     /// </summary>
@@ -619,15 +619,15 @@ public interface ILattice : IGrainWithStringKey
     /// <summary>
     /// Force-refresh overload of <see cref="GetRoutingAsync(CancellationToken)"/>.
     /// When <paramref name="forceRefresh"/> is <see langword="true"/>, the
-    /// <see cref="LatticeGrain"/> activation's cached <see cref="ShardMap"/>,
+    /// <see cref="Orleans.Lattice.BPlusTree.Grains.LatticeGrain"/> activation's cached <see cref="ShardMap"/>,
     /// cached resolved physical tree id (alias), and <see cref="RoutingInfo"/>
     /// are all invalidated before the routing snapshot is re-resolved.
     /// Used by external coordinators (e.g. the atomic-write saga's
     /// <c>CaptureShardAsync</c> / <c>MarkOneShardAsync</c> retry loops)
     /// whose stale-routing recovery would otherwise spin against the
     /// activation's cached snapshot indefinitely - the
-    /// <see cref="LatticeGrain"/> is a
-    /// <see cref="Orleans.Placement.StatelessWorkerPlacement"/> with
+    /// <see cref="Orleans.Lattice.BPlusTree.Grains.LatticeGrain"/> is a
+    /// <c>StatelessWorkerPlacement</c> with
     /// per-activation routing caching, and its private invalidation
     /// hooks only fire on the grain's own internal stale-routing throws,
     /// so an external caller cannot otherwise force the cache to refresh.
@@ -689,14 +689,14 @@ public interface ILattice : IGrainWithStringKey
     Task<TreeStorageUsageReport> GetStorageUsageAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Pre-activates every <see cref="IShardRootGrain"/> for this tree so the
+    /// Pre-activates every <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain"/> for this tree so the
     /// first hot-path write does not pay first-touch Orleans activation cost
     /// (placement-directory round-trip, grain-storage <c>ReadStateAsync</c>,
     /// constructor execution) inline with caller latency. Resolves routing
     /// once, enumerates the physical shard indices from the current
     /// <see cref="ShardMap"/>, and issues a bounded-concurrency fan-out of
     /// the cheapest read-only probe on each shard root (currently
-    /// <see cref="IShardRootGrain.IsDeletedAsync"/>). Returns once every probe
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.IsDeletedAsync"/>). Returns once every probe
     /// has completed.
     /// <para>
     /// Idempotent and safe to call repeatedly: re-activating an already-live

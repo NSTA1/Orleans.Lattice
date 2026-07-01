@@ -1,0 +1,38 @@
+<Project>
+
+  <!--
+    Ship XML documentation alongside every packable library so that consumers'
+    IDEs, code-completion, and AI agents see the <summary> docs on the public
+    surface. The .NET SDK automatically includes the generated .xml file in the
+    NuGet package (next to the assembly in lib/<tfm>/) when it exists.
+
+    Scope: packable library projects only. A project is in scope when it sets a
+    PackageId and has not opted out via IsPackable=false. Test, sample, and
+    benchmark projects set IsPackable=false and are therefore untouched;
+    projects without a PackageId (e.g. the Explorer sub-projects) are excluded
+    as well. This lives in Directory.Build.targets (imported after each project
+    body) so PackageId and IsPackable are already assigned when the condition is
+    evaluated.
+
+    Enabling the documentation file surfaces pre-existing XML-doc-comment
+    warnings on the existing surface - unresolved or ambiguous <see cref="..."/>
+    targets, malformed comment XML, and the occasional missing <summary>. Those
+    are latent doc-quality issues tracked separately; suppress the family here so
+    that shipping the docs does not flood every build with warnings. CI does not
+    treat warnings as errors, so this only affects console noise.
+  -->
+  <PropertyGroup Condition="'$(PackageId)' != '' and '$(IsPackable)' != 'false'">
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!--
+      The SDK's default mapping of GenerateDocumentationFile -> DocumentationFile
+      runs before this file is imported, so setting the flag alone leaves
+      DocumentationFile empty and no .xml is emitted. Set the output path
+      explicitly here (OutputPath is already Configuration/TFM-qualified by the
+      time Directory.Build.targets is evaluated) so the compiler writes the doc
+      file next to the assembly, where `dotnet pack` picks it up automatically.
+    -->
+    <DocumentationFile>$(OutputPath)$(AssemblyName).xml</DocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573;CS1574;CS1570;CS1571;CS1572;CS1580;CS1581;CS1584;CS1587;CS1658;CS1734;CS0419</NoWarn>
+  </PropertyGroup>
+
+</Project>

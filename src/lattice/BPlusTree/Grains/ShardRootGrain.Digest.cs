@@ -20,7 +20,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <para>
 /// When the shard's root is a single leaf (flat-tree case), the
 /// digest is read directly from that leaf via
-/// <see cref="IBPlusLeafGrain.GetProjectionDigestAsync"/>. When the
+/// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.GetProjectionDigestAsync"/>. When the
 /// shard has no root (empty shard), an empty digest is returned.
 /// </para>
 /// </summary>

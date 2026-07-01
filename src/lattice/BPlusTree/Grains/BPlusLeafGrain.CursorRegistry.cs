@@ -5,14 +5,14 @@ using Orleans.Lattice.Primitives;
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// Cursor-registry integration partial for <see cref="BPlusLeafGrain"/>.
+/// Cursor-registry integration partial for <see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain"/>.
 /// Reports the leaf's highest applied <see cref="HybridLogicalClock"/> to
 /// the silo-scoped <see cref="ILeafCursorReporter"/> after every successful
 /// projection-checkpoint persist so the per-shard WAL GC pins its trim
 /// point under the slowest local consumer (the leaf-as-materialiser).
 /// <para>
 /// Lazy and zero-cost when nothing drives the projection: the helper is a
-/// branch check + early return when <see cref="LeafNodeState.Clock"/> is
+/// branch check + early return when <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.Clock"/> is
 /// still <see cref="HybridLogicalClock.Zero"/>. The
 /// <see cref="ILeafCursorReporter"/> is registered by default (an in-memory
 /// reporter wired by <c>AddLattice</c>), so the leaf reports its applied
@@ -58,7 +58,7 @@ internal sealed partial class BPlusLeafGrain
     /// single-partition shape, or the partition-suffixed form
     /// <c>_lattice_materialiser_{treeId}_{leafGrainId}_{partition}</c>
     /// when <see cref="LatticeOptions.WalPartitions"/> > 1. Computed
-    /// once on first use; <c>null</c> when <see cref="LeafNodeState.TreeId"/>
+    /// once on first use; <c>null</c> when <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.TreeId"/>
     /// is unset (system-tree leaves and tests that bypass tree
     /// initialisation), in which case the cursor-report path is a
     /// no-op.

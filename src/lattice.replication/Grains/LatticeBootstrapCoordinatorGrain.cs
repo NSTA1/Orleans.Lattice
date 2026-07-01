@@ -26,7 +26,7 @@ namespace Orleans.Lattice.Replication.Grains;
 /// <para>
 /// Cluster-wide single-activation per tree id provides cross-silo
 /// mutual exclusion: a concurrent
-/// <see cref]="ILatticeBootstrapCoordinator.BootstrapAsync"/> from
+/// <see cref="Orleans.Lattice.Replication.ILatticeBootstrapCoordinator.BootstrapAsync(System.String,System.String,System.Threading.CancellationToken)"/> from
 /// another silo routes to the same activation, observes
 /// <see cref="BootstrapCoordinatorState.InProgress"/> on persistent
 /// state, and either no-ops (same source cluster) or throws
@@ -56,7 +56,7 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
 {
     /// <summary>
     /// Number of snapshot entries applied between
-    /// <see cref="IPersistentState{TState}.WriteStateAsync"/> calls
+    /// <c>WriteStateAsync</c> calls
     /// during the <see cref="LatticeBootstrapState.ApplyingSnapshot"/>
     /// phase. A silo crash may cost up to this many re-applied entries
     /// on resume; the per-origin HWM dedupe makes the replay

@@ -17,7 +17,7 @@ internal sealed record EntriesPage
     [Id(1)] public required bool HasMore { get; init; }
 
     /// <summary>
-    /// Virtual slots whose entries were filtered out of <see cref="Entries"/> by
+    /// Virtual slots whose entries were filtered out of <c>Entries</c> by
     /// the source shard because the slot has been (or is being) moved to
     /// another physical shard by an adaptive split. <c>null</c> or
     /// empty when no such filtering occurred. Strongly-consistent scans

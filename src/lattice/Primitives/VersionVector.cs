@@ -20,7 +20,7 @@ public sealed class VersionVector : ICrdt<VersionVector>
     /// <inheritdoc />
     /// <remarks>
     /// A <see cref="VersionVector"/> is bottom when no replica has
-    /// ticked - <see cref="Entries"/> is empty. A vector with entries
+    /// ticked - <c>Entries</c> is empty. A vector with entries
     /// at <see cref="HybridLogicalClock.Zero"/> is not bottom because
     /// the entries themselves carry replica identity.
     /// </remarks>
@@ -177,7 +177,7 @@ public sealed class VersionVector : ICrdt<VersionVector>
     }
 
     /// <summary>
-    /// Removes entries whose <see cref="HybridLogicalClock.WallTimeTicks"/>
+    /// Removes entries whose <see cref="Orleans.Lattice.HybridLogicalClock.WallClockTicks"/>
     /// is older than <paramref name="minRetainedUtcTicks"/>.
     /// <para>
     /// Pruning prevents unbounded growth of this vector when replicas

@@ -3,7 +3,7 @@ namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
 /// Coordinator grain that drives an online reshard end-to-end: iteratively
-/// dispatches per-shard <see cref="ITreeShardSplitGrain"/> operations
+/// dispatches per-shard <see cref="Orleans.Lattice.BPlusTree.ITreeShardSplitGrain"/> operations
 /// against the largest-slot-owning physical shards until the tree's
 /// <see cref="ShardMap"/> contains at least the target number of distinct
 /// physical shards. All work happens online - the tree continues to serve

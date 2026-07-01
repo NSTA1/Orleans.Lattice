@@ -64,7 +64,7 @@ internal enum ShardSplitPhase
     /// <summary>
     /// Background drain in progress: historical entries on moved slots are
     /// being copied from the source shard to the target shard via
-    /// <see cref="IShardRootGrain.MergeManyAsync"/>. The source shard
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.MergeManyAsync"/>. The source shard
     /// continues to serve reads and writes, with shadow-writes mirrored to
     /// the target.
     /// </summary>
@@ -97,12 +97,12 @@ internal enum ShardSplitPhase
 /// Per-shard-root state describing an in-progress split. When non-null, the
 /// shard root applies phase-specific routing checks to every operation:
 /// <list type="bullet">
-/// <item><description><see cref="ShardSplitPhase.BeginShadowWrite"/> /
-/// <see cref="ShardSplitPhase.Drain"/> /
+/// <item><description><see cref="Orleans.Lattice.BPlusTree.State.ShardSplitPhase.BeginShadowWrite"/> /
+/// <see cref="Orleans.Lattice.BPlusTree.State.ShardSplitPhase.Drain"/> /
 /// <see cref="ShardSplitPhase.Swap"/> - writes to keys whose virtual slot is
 /// in <see cref="MovedSlots"/> are mirrored to <see cref="ShadowTargetShardIndex"/>
 /// in addition to being written locally.</description></item>
-/// <item><description><see cref="ShardSplitPhase.Reject"/> - operations on
+/// <item><description><see cref="Orleans.Lattice.BPlusTree.State.ShardSplitPhase.Reject"/> - operations on
 /// keys whose virtual slot is in <see cref="MovedSlots"/> throw
 /// <see cref="StaleShardRoutingException"/>.</description></item>
 /// </list>

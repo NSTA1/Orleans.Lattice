@@ -1,7 +1,7 @@
 namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
-/// Result of <see cref="IShardRootGrain.CaptureSnapshotBaselineAsync"/>: the
+/// Result of <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.CaptureSnapshotBaselineAsync"/>: the
 /// per-partition WAL head the shard's frozen baseline was captured at, plus
 /// the materialised row count used by the snapshot-open budget gate.
 /// </summary>

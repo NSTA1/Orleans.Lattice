@@ -2,6 +2,15 @@
 
 Pre-built Grafana dashboards for [Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice) telemetry. Bundles five ready-to-import JSON dashboards covering every instrument on the `orleans.lattice` and `orleans.lattice.replication` meters.
 
+## What it gives you
+
+- **Five focused dashboards** - `Overview`, `CommitPath`, `Replication`, `AtomicWrites`, and `MaterialisedViews`, selectable via the `LatticeDashboardKind` enum.
+- **Full instrument coverage** - every metric published on the `orleans.lattice` and `orleans.lattice.replication` meters maps to at least one panel; drift guards in the test suite assert the coverage stays complete in both directions.
+- **Programmatic access** - `LatticeDashboards.GetGrafanaDashboardJson(kind)` returns the raw dashboard JSON for importing or writing to a Grafana provisioning directory.
+- **OpenTelemetry-ready** - designed for a Prometheus-exported OpenTelemetry pipeline; no bespoke agent or exporter required.
+
+For the underlying instruments and what each one measures, see the [metrics reference](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice/metrics.md).
+
 ## Quick start
 
 1. Wire the meters into an OpenTelemetry pipeline and export to Prometheus:

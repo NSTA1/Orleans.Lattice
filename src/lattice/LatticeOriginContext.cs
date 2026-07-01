@@ -4,7 +4,7 @@ using Orleans.Runtime;
 namespace Orleans.Lattice;
 
 /// <summary>
-/// Ambient origin-cluster context used to stamp <see cref="LwwValue{T}.OriginClusterId"/>
+/// Ambient origin-cluster context used to stamp <see cref="Orleans.Lattice.Primitives.LwwValue{T}.OriginClusterId"/>
 /// onto mutations authored by the current logical call.
 /// </summary>
 /// <remarks>
@@ -15,13 +15,13 @@ namespace Orleans.Lattice;
 /// replication handler) wrap the call in
 /// <see cref="With(string?)"/> so the grain write path reads the context
 /// at commit time and stamps it onto the freshly-constructed
-/// <see cref="LwwValue{T}"/> / tombstone. Local writes leave the context
+/// <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/> / tombstone. Local writes leave the context
 /// unset, producing a <c>null</c> origin (which convention treats as
 /// <em>local</em>).
 /// </para>
 /// <para>
 /// The stamp is then preserved end-to-end across every lifecycle path the
-/// library guarantees for <see cref="LwwValue{T}.ExpiresAtTicks"/> - shard
+/// library guarantees for <see cref="Orleans.Lattice.Primitives.LwwValue{T}.ExpiresAtTicks"/> - shard
 /// split shadow-forward, saga prepare / compensate, tree snapshot / restore,
 /// bulk-load, and merge - and is surfaced to post-commit
 /// <see cref="IMutationObserver"/> consumers through

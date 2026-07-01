@@ -3,7 +3,7 @@ using Orleans.Lattice.Primitives;
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// Activation-scoped delivery-cursor partial for <see cref="BPlusLeafGrain"/>.
+/// Activation-scoped delivery-cursor partial for <see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain"/>.
 /// Implements the in-memory sequence map consumed by
 /// <see cref="LeafCacheGrain"/> through <see cref="BPlusLeafGrain.GetDeltaSinceCursorAsync"/>.
 /// <para>
@@ -58,7 +58,7 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="StoreEntry(string, in Primitives.LwwValue{byte[]})"/>
     /// and <see cref="RemoveEntry(string)"/> after the projection
     /// mutation completes so the cursor stays in lock-step with
-    /// <see cref="State.LeafNodeState.Entries"/>.
+    /// <c>Entries</c>.
     /// </summary>
     private void BumpDeliverySequenceFor(string key)
     {
@@ -101,7 +101,7 @@ internal sealed partial class BPlusLeafGrain
         }
     }
 
-    /// <inheritdoc cref="IBPlusLeafGrain.GetDeltaSinceCursorAsync"/>
+    /// <inheritdoc cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.GetDeltaSinceCursorAsync"/>
     public Task<StateDelta> GetDeltaSinceCursorAsync(LeafDeliveryCursor sinceCursor)
     {
         EnsureDeliveryEpochInitialized();

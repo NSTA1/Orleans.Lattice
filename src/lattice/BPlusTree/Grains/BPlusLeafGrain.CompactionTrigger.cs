@@ -3,7 +3,7 @@ using Microsoft.Extensions.Logging;
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// Compaction-policy trigger evaluation for <see cref="BPlusLeafGrain"/>.
+/// Compaction-policy trigger evaluation for <see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain"/>.
 /// On every successful foreground commit (set, delete, range delete) the
 /// leaf evaluates the configured ratio and size thresholds against its
 /// current entry table. When a threshold is crossed the leaf asks its

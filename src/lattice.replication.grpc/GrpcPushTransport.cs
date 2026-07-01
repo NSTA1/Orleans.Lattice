@@ -19,7 +19,7 @@ namespace Orleans.Lattice.Replication.Grpc;
 /// The transport caches one <see cref="GrpcChannel"/> per
 /// <c>TargetClusterId</c>; the first <c>SendAsync</c> to a given peer
 /// constructs the channel via
-/// <see cref={`GrpcChannel.ForAddress(Uri, GrpcChannelOptions)`}, and
+/// <c>GrpcChannel.ForAddress(Uri, GrpcChannelOptions)</c>, and
 /// subsequent calls reuse it. HTTP/2 multiplexes concurrent batches
 /// over the underlying TCP connection, and gRPC retry policies
 /// (configured via <see cref="GrpcChannelOptions.ServiceConfig"/>) are

@@ -4,7 +4,7 @@ namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
 /// A read-through cache for leaf data. Keyed by the <see cref="GrainId"/> string
-/// of the backing <see cref="IBPlusLeafGrain"/>.
+/// of the backing <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain"/>.
 /// Multiple activations may exist across silos (stateless worker).
 /// </summary>
 [Alias(TypeAliases.ILeafCacheGrain)]

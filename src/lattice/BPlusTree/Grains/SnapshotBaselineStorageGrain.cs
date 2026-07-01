@@ -8,13 +8,13 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
 /// Default <see cref="ISnapshotBaselineStorageGrain"/> implementation. Holds a
-/// single persisted <see cref="SnapshotShardBaseline"/> per (snapshot cursor,
+/// single persisted <see cref="Orleans.Lattice.BPlusTree.State.SnapshotShardBaseline"/> per (snapshot cursor,
 /// physical shard) via the lattice storage provider configured by
 /// <see cref="LatticeOptions.StorageProviderName"/>.
 /// <para>
 /// Intentionally minimal: one read, one write, one clear. The capture fold
 /// (leaf-chain walk plus per-leaf tail replay) is owned by
-/// <see cref="ShardRootGrain"/>; this grain only persists the materialised
+/// <see cref="Orleans.Lattice.BPlusTree.Grains.ShardRootGrain"/>; this grain only persists the materialised
 /// result.
 /// </para>
 /// <para>

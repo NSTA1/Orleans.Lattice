@@ -3,8 +3,8 @@ using Orleans.Lattice.Primitives;
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// In-memory cache of per-key leaf entries for a single <see cref="BPlusLeafGrain"/>
-/// activation. Wraps the canonical <see cref="LwwValue{T}"/> byte rows that the
+/// In-memory cache of per-key leaf entries for a single <see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain"/>
+/// activation. Wraps the canonical <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/> byte rows that the
 /// projection digest XOR-fold consumes and additionally hosts a lazily-populated
 /// typed CRDT shadow keyed by entry type. The shadow lets the leaf grain skip
 /// the deserialize-then-merge-then-reserialize round-trip when consecutive
@@ -83,7 +83,7 @@ internal sealed class LeafEntryCache
 
     /// <summary>
     /// One-shot backfill seam for activations whose persisted
-    /// <see cref="LeafNodeState.LeafStateBytes"/> slot was written before
+    /// <c>LeafStateBytes</c> slot was written before
     /// incremental accounting was added. The activation path calls this
     /// once after the cache has been populated (snapshot rehydrate + WAL
     /// tail replay), at which point the running counter matches a fresh
@@ -179,7 +179,7 @@ internal sealed class LeafEntryCache
     /// the row currently carries a null-value placeholder backed by a
     /// materialiser. Used by the CRDT delta-apply hot path, which already holds
     /// the live typed shadow and must not trigger the O(state) materialisation
-    /// it is deferring. The returned row's <see cref="LwwValue{T}.Value"/> is
+    /// it is deferring. The returned row's <see cref="Orleans.Lattice.Primitives.LwwValue{T}.Value"/> is
     /// <see langword="null"/> when <paramref name="isDeferred"/> is
     /// <see langword="true"/>; all other metadata (timestamp, origin, vector
     /// clock, tombstone flag) is the canonical post-merge metadata.

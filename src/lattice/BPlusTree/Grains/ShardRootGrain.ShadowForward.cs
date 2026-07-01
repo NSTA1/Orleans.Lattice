@@ -4,7 +4,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <summary>
 /// Online shadow-forwarding primitive for the shard root.
 /// <para>
-/// When <see cref="ShardRootState.ShadowForward"/> is non-null, every accepted
+/// When <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.ShadowForward"/> is non-null, every accepted
 /// mutation on this shard is mirrored in parallel to the corresponding shard
 /// on <c>ShadowForwardState.DestinationPhysicalTreeId</c>. The destination
 /// tree is constrained by the coordinator to share this tree's

@@ -4,7 +4,7 @@ namespace Orleans.Lattice.Primitives;
 
 /// <summary>
 /// A delta representing changes to a leaf node since a given version.
-/// Contains only the entries whose <see cref="LwwValue{T}.Timestamp"/> is
+/// Contains only the entries whose <see cref="Orleans.Lattice.Primitives.LwwValue{T}.Timestamp"/> is
 /// strictly newer than the corresponding entry in the requester's version vector.
 /// </summary>
 [GenerateSerializer]

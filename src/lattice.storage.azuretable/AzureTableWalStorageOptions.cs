@@ -103,19 +103,19 @@ public sealed class AzureTableWalStorageOptions
     /// <see cref="RetryMaxAttempts"/> / <see cref="RetryDelay"/> /
     /// <see cref="RetryMaxDelay"/> / <see cref="RetryNetworkTimeout"/>
     /// / <see cref="RetryMode"/> knobs to
-    /// <see cref="TableClientOptions.Retry"/>, so anything the host
+    /// <see cref="ClientOptions.Retry"/>, so anything the host
     /// does inside this callback wins. To attach an additional
     /// per-retry policy without dropping the provider's bundled
     /// <see cref="RetryAttemptTrackingPolicy"/>, call
     /// <see cref="ClientOptions.AddPolicy"/> rather than replacing
-    /// <see cref="TableClientOptions.Retry"/> wholesale.
+    /// <see cref="ClientOptions.Retry"/> wholesale.
     /// </para>
     /// </summary>
     public Action<TableClientOptions>? ConfigureClientOptions { get; set; }
 
     /// <summary>
     /// When set, overrides <see cref="RetryOptions.MaxRetries"/> on
-    /// the constructed <see cref="TableClientOptions.Retry"/>. The
+    /// the constructed <see cref="ClientOptions.Retry"/>. The
     /// value is the number of <i>retries</i> after the initial
     /// attempt (so <c>RetryMaxAttempts = 3</c> yields up to four total
     /// attempts), matching the Azure.Core convention. <c>null</c>
@@ -143,7 +143,7 @@ public sealed class AzureTableWalStorageOptions
 
     /// <summary>
     /// When set, overrides <see cref="RetryOptions.Delay"/> on the
-    /// constructed <see cref="TableClientOptions.Retry"/> - the base
+    /// constructed <see cref="ClientOptions.Retry"/> - the base
     /// delay used by the exponential / fixed backoff strategy.
     /// <c>null</c> leaves the SDK default (0.8 s) in place. Must be
     /// non-negative and not exceed <see cref="RetryMaxDelay"/> when
@@ -156,7 +156,7 @@ public sealed class AzureTableWalStorageOptions
 
     /// <summary>
     /// When set, overrides <see cref="RetryOptions.MaxDelay"/> on the
-    /// constructed <see cref="TableClientOptions.Retry"/> - the
+    /// constructed <see cref="ClientOptions.Retry"/> - the
     /// per-attempt upper bound on backoff. <c>null</c> leaves the SDK
     /// default (60 s) in place. Must be non-negative and at least as
     /// large as <see cref="RetryDelay"/> when both are set.
@@ -168,7 +168,7 @@ public sealed class AzureTableWalStorageOptions
 
     /// <summary>
     /// Overrides <see cref="RetryOptions.NetworkTimeout"/> on the
-    /// constructed <see cref="TableClientOptions.Retry"/> - the
+    /// constructed <see cref="ClientOptions.Retry"/> - the
     /// per-attempt deadline applied at the transport layer. Defaults to
     /// <see cref="DefaultRetryNetworkTimeout"/> (10 s); set to
     /// <c>null</c> to restore the unbounded SDK default (~100 s). Must
@@ -177,7 +177,7 @@ public sealed class AzureTableWalStorageOptions
     /// Functions as a per-attempt deadline budget: a stuck request
     /// cannot keep a WAL slot occupied longer than this value before
     /// being cancelled and either retried (if attempts remain) or
-    /// surfacing a <see cref="ProviderRetryExhausted"/>-tagged failure
+    /// surfacing a <see cref="LatticeMetrics.ProviderRetryExhausted"/>-tagged failure
     /// to the caller. Ignored when <see cref="ServiceClient"/> is set.
     /// </para>
     /// <para>
@@ -217,7 +217,7 @@ public sealed class AzureTableWalStorageOptions
 
     /// <summary>
     /// When set, overrides <see cref="RetryOptions.Mode"/> on the
-    /// constructed <see cref="TableClientOptions.Retry"/>. Defaults to
+    /// constructed <see cref="ClientOptions.Retry"/>. Defaults to
     /// <c>null</c>, which leaves the SDK default (<see cref="Azure.Core.RetryMode.Exponential"/>)
     /// in place. Ignored when <see cref="ServiceClient"/> is set.
     /// </summary>

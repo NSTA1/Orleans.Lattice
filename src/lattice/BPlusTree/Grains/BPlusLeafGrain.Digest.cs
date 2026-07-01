@@ -42,7 +42,7 @@ internal sealed partial class BPlusLeafGrain
     /// Cached <see cref="XxHash128"/> reused across every per-entry
     /// contribution computed inside this grain activation. Lazily
     /// created on first use and reset (not recreated) between
-    /// contributions via <see cref="NonCryptographicHashAlgorithm.TryGetHashAndReset"/>.
+    /// contributions via <c>TryGetHashAndReset</c>.
     /// Caching matters because every mutation may produce one or two
     /// contributions (insert vs replace), and a freshly-allocated
     /// hasher per call would dominate the fold's allocation profile
@@ -51,7 +51,7 @@ internal sealed partial class BPlusLeafGrain
     private XxHash128? _entryHasher;
 
     /// <summary>
-    /// Internal hook invoked from <see cref="BPlusLeafGrain"/>'s
+    /// Internal hook invoked from <see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain"/>'s
     /// <c>OnDeactivateAsync</c> to release the cached hasher.
     /// <see cref="XxHash128"/> is not <see cref="IDisposable"/>, so this
     /// helper merely drops the reference to allow it to be collected
@@ -65,7 +65,7 @@ internal sealed partial class BPlusLeafGrain
     /// <summary>
     /// Centralised entry-write funnel. LWW-merges <paramref name="incoming"/>
     /// against any existing entry, writes the merged value back into
-    /// <see cref="LeafNodeState.Entries"/>, and XOR-folds the contribution
+    /// <c>Entries</c>, and XOR-folds the contribution
     /// delta into the running projection hash. Every leaf-state write that
     /// adds-or-replaces a key must funnel through this helper so the hash
     /// stays in sync with <c>Entries</c>.
@@ -145,7 +145,7 @@ internal sealed partial class BPlusLeafGrain
     /// <summary>
     /// Test-only accessor for the persisted projection-hash slot. Exposed
     /// internal so the walk-state oracle can compare the running
-    /// XOR-fold against a fresh walk of <see cref="LeafNodeState.Entries"/>.
+    /// XOR-fold against a fresh walk of <c>Entries</c>.
     /// </summary>
     internal byte[]? PersistedProjectionHash => state.State.ProjectionHash;
 
@@ -269,7 +269,7 @@ internal sealed partial class BPlusLeafGrain
     /// Lazily backfills <c>state.State.ProjectionHash</c> if persisted state
     /// pre-dates the slot or carries a hash from an older algorithm whose
     /// width no longer matches <see cref="ProjectionHashSize"/>. Cost is
-    /// one full walk over <see cref="Entries"/>; every subsequent mutation
+    /// one full walk over <c>Entries</c>; every subsequent mutation
     /// maintains the field incrementally.
     /// </summary>
     private void EnsureProjectionHashInitialized()
@@ -378,7 +378,7 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
-    /// Walks the current <see cref="Entries"/> and produces the XOR-fold of
+    /// Walks the current <c>Entries</c> and produces the XOR-fold of
     /// every entry's contribution. Used for lazy backfill of legacy state
     /// and exposed (internal) as the regression-test oracle for the
     /// incremental fold.
@@ -403,7 +403,7 @@ internal sealed partial class BPlusLeafGrain
     /// <c>(key, hlc, isTombstone, expiresAt, origin, vectorClock, value)</c>
     /// ordering established by the on-demand walk this method replaced.
     /// Reuses the activation-cached <see cref="_entryHasher"/> via
-    /// <see cref="NonCryptographicHashAlgorithm.TryGetHashAndReset"/> so the
+    /// <c>TryGetHashAndReset</c> so the
     /// hot path allocates no hasher instance per call.
     /// </summary>
     private void ComputeEntryContribution(string key, in LwwValue<byte[]> lww, Span<byte> dest16)

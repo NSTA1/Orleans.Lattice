@@ -4,7 +4,7 @@ using Orleans.Lattice.Primitives;
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// <see cref="ILeafProjection"/> implementation for <see cref="BPlusLeafGrain"/>.
+/// <see cref="ILeafProjection"/> implementation for <see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain"/>.
 /// Replays a single durably-committed mutation against the leaf's
 /// in-memory state using LWW semantics; persists the projection
 /// checkpoint offset alongside the leaf's existing storage row.
@@ -26,7 +26,7 @@ internal sealed partial class BPlusLeafGrain
     /// Pending in-memory checkpoint offset that has been requested via
     /// <see cref="ILeafProjection.SetCheckpointOffsetAsync"/> but not
     /// yet durably persisted. <c>null</c> when no advance is pending
-    /// (the persisted offset on <see cref="LeafNodeState"/> is the
+    /// (the persisted offset on <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState"/> is the
     /// source of truth).
     /// <para>
     /// Under <see cref="LatticeOptions.WalPartitions"/> greater than 1

@@ -87,7 +87,7 @@ public static class LatticeCompressionServiceCollectionExtensions
     /// (<see cref="ZstdDictionaryLatticeCompressor"/>) resolves the
     /// dictionary bytes for a wire-carried dictionary id through this
     /// provider. Uses
-    /// <see cref="ServiceCollectionDescriptorExtensions.TryAddSingleton(IServiceCollection, ServiceDescriptor)"/>
+    /// <c>TryAddSingleton</c>
     /// so a host-supplied provider registered before
     /// <c>AddLatticeReplication</c> wins over the default empty
     /// provider.
@@ -199,7 +199,7 @@ public static class LatticeCompressionServiceCollectionExtensions
     /// provider is also registered as itself so a host can resolve it to feed
     /// observed payloads (<c>Observe</c>) and drive training passes
     /// (<c>TryTrain</c>). Registration uses
-    /// <see cref="ServiceCollectionDescriptorExtensions.TryAddSingleton(IServiceCollection, ServiceDescriptor)"/>,
+    /// <c>TryAddSingleton</c>,
     /// so a host-supplied provider registered earlier wins.
     /// </para>
     /// </summary>

@@ -49,7 +49,7 @@ internal sealed class ReplicationShipperState
     /// Per-partition resume cursors keyed by partition index. Each value
     /// is the next unread WAL sequence number for that partition - i.e.
     /// the value to pass as <c>fromSequence</c> on the next call to
-    /// <see cref="Grains.IWalShardGrain.ReadAsync"/>
+    /// <see cref="Orleans.Lattice.BPlusTree.Grains.IWalShardGrain.ReadAsync(System.Int64,System.Int32,System.Threading.CancellationToken)"/>
     /// </summary>
     /// <remarks>
     /// <para>
@@ -73,7 +73,7 @@ internal sealed class ReplicationShipperState
     /// </para>
     /// <para>
     /// Persisted on every cursor advance via the same
-    /// <see cref="IPersistentState{TState}.WriteStateAsync"/> call
+    /// <c>WriteStateAsync</c> call
     /// that flushes the HLC cursor - one round-trip, atomic across
     /// the two slots. A failed write rolls back both, preserving the
     /// pre-existing pump-side guarantee that a transient storage

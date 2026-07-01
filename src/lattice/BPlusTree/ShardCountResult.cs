@@ -3,7 +3,7 @@ namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
 /// Result of a strongly-consistent shard count operation
-/// (<see cref="IShardRootGrain.CountWithMovedAwayAsync"/>): the live key
+/// (<see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.CountWithMovedAwayAsync"/>): the live key
 /// count from the shard at scan time, plus the set of virtual slots the
 /// shard filtered out because they are being or have been moved to another
 /// physical shard by an adaptive split.

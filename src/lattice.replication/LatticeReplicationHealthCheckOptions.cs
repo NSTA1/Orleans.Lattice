@@ -25,8 +25,8 @@ public sealed class LatticeReplicationHealthCheckOptions
 {
     /// <summary>
     /// Tiered bound on <see cref="ReplicationPeerSnapshot.EntriesBehind"/>:
-    /// a peer whose backlog exceeds <see cref="Tier.Degraded"/> reports
-    /// <c>Degraded</c>; a peer whose backlog exceeds <see cref="Tier.Unhealthy"/>
+    /// a peer whose backlog exceeds <see cref="LongTier.Degraded"/> reports
+    /// <c>Degraded</c>; a peer whose backlog exceeds <see cref="LongTier.Unhealthy"/>
     /// reports <c>Unhealthy</c> immediately (no sustained-degraded grace
     /// window). Defaults to <see cref="DefaultEntriesBehind"/>.
     /// </summary>
@@ -35,8 +35,8 @@ public sealed class LatticeReplicationHealthCheckOptions
     /// <summary>
     /// Tiered bound on <see cref="ReplicationPeerSnapshot.LastContactSeconds"/>:
     /// a peer whose last-successful-contact age exceeds
-    /// <see cref="Tier.Degraded"/> reports <c>Degraded</c>; exceeding
-    /// <see cref="Tier.Unhealthy"/> reports <c>Unhealthy</c> immediately.
+    /// <see cref="DoubleTier.Degraded"/> reports <c>Degraded</c>; exceeding
+    /// <see cref="DoubleTier.Unhealthy"/> reports <c>Unhealthy</c> immediately.
     /// A peer that has never been contacted (NaN <c>LastContactSeconds</c>)
     /// is treated as not yet probed and excluded from this signal; the
     /// <see cref="ConsecutiveErrors"/> bound covers the
@@ -47,8 +47,8 @@ public sealed class LatticeReplicationHealthCheckOptions
     /// <summary>
     /// Tiered bound on <see cref="ReplicationPeerSnapshot.ConsecutiveErrors"/>:
     /// a peer whose ship-attempt failure streak exceeds
-    /// <see cref="Tier.Degraded"/> reports <c>Degraded</c>; exceeding
-    /// <see cref="Tier.Unhealthy"/> reports <c>Unhealthy</c> immediately.
+    /// <see cref="LongTier.Degraded"/> reports <c>Degraded</c>; exceeding
+    /// <see cref="LongTier.Unhealthy"/> reports <c>Unhealthy</c> immediately.
     /// Defaults to <see cref="DefaultConsecutiveErrors"/>.
     /// </summary>
     public LongTier? ConsecutiveErrors { get; set; } = DefaultConsecutiveErrors;
@@ -67,7 +67,7 @@ public sealed class LatticeReplicationHealthCheckOptions
     /// <summary>
     /// Duration of inbound silence after which an inbound row's
     /// <see cref="ReplicationPeerSnapshot.LastContactSeconds"/>
-    /// signal contributes <see cref="HealthStatus.Degraded"/> to the
+    /// signal contributes <see cref="Microsoft.Extensions.Diagnostics.HealthChecks.HealthStatus.Degraded"/> to the
     /// aggregate verdict. Inbound rows are only recorded by the
     /// receiver-side apply path; a peer that this silo only ships to
     /// (never receives from) does not produce inbound rows and is
@@ -82,7 +82,7 @@ public sealed class LatticeReplicationHealthCheckOptions
     /// <summary>
     /// Duration of inbound silence after which an inbound row's
     /// <see cref="ReplicationPeerSnapshot.LastContactSeconds"/>
-    /// signal contributes <see cref="HealthStatus.Unhealthy"/> to
+    /// signal contributes <see cref="Microsoft.Extensions.Diagnostics.HealthChecks.HealthStatus.Unhealthy"/> to
     /// the aggregate verdict. Must be greater than or equal to
     /// <see cref="InboundDegradedAfter"/> when both are finite.
     /// Defaults to <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>
@@ -147,9 +147,9 @@ public sealed class LatticeReplicationHealthCheckOptions
 
     /// <summary>
     /// Tiered bound shape for <see cref="long"/>-valued signals. A peer
-    /// whose observed signal is strictly greater than <see cref="Degraded"/>
+    /// whose observed signal is strictly greater than <see cref="LongTier.Degraded"/>
     /// classifies as at least <c>Degraded</c>; one whose observed signal
-    /// is strictly greater than <see cref="Unhealthy"/> classifies as
+    /// is strictly greater than <see cref="LongTier.Unhealthy"/> classifies as
     /// <c>Unhealthy</c> immediately.
     /// </summary>
     /// <param name="Degraded">Soft bound. Must be non-negative and less than or equal to <paramref name="Unhealthy"/>.</param>

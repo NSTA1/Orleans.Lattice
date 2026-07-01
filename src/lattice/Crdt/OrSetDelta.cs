@@ -16,7 +16,7 @@ namespace Orleans.Lattice;
 /// Emitters always populate both collections (use empty arrays for
 /// "no adds" / "no removes"); use <see cref="Empty"/> to author a
 /// no-op delta without allocating fresh empty arrays. The
-/// <see cref="default"/> instance has <c>null</c> collections and is
+/// <see langword="default"/> instance has <c>null</c> collections and is
 /// intended only as the zero-value of the struct - consumers should
 /// either treat <c>null</c> as empty or assert non-null at the apply
 /// boundary.

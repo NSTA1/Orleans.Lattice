@@ -46,7 +46,7 @@ internal sealed class LeafNodeState
     /// </summary>
     [Id(6)] public VersionVector Version { get; set; } = new();
 
-    /// <summary>The tree this leaf belongs to. Used to resolve named <see cref="BPlusTree.LatticeOptions"/>.</summary>
+    /// <summary>The tree this leaf belongs to. Used to resolve named <see cref="Orleans.Lattice.LatticeOptions"/>.</summary>
     [Id(7)] public string? TreeId { get; set; }
 
     /// <summary>Grain identity of the left sibling leaf (for reverse scans), or <c>null</c>.</summary>
@@ -183,7 +183,7 @@ internal sealed class LeafNodeState
     /// <c>GetWithVersionAsync</c>, <c>ExistsAsync</c>, <c>GetManyAsync</c>)
     /// return null/false for any key hashing into that slot, sealing the
     /// persistent-orphan read path that the cache-coherence prune pass
-    /// cannot reach via the <see cref="BPlusTree.Grains.ILeafCacheGrain"/>
+    /// cannot reach via the <see cref="Orleans.Lattice.BPlusTree.ILeafCacheGrain"/>
     /// pending-key delegation hole. The list is sticky once written
     /// (slots never un-move).
     /// <para>

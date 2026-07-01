@@ -35,8 +35,8 @@ internal interface ITreeSnapshotGrain : IGrainWithStringKey
     /// shadow-forward they intend to manage themselves. The supplied
     /// <paramref name="operationId"/> is stamped onto every source shard's
     /// shadow-forward state so the caller can later invoke
-    /// <see cref="IShardRootGrain.EnterRejectingAsync"/> or
-    /// <see cref="IShardRootGrain.ClearShadowForwardAsync"/> with the same id.
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.EnterRejectingAsync"/> or
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.ClearShadowForwardAsync"/> with the same id.
     /// </summary>
     /// <param name="destinationTreeId">The ID for the new tree. Must not already exist.</param>
     /// <param name="mode">Snapshot mode. Typically <see cref="SnapshotMode.Online"/> for this overload.</param>

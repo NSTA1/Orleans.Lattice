@@ -8,19 +8,19 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <para>
 /// During an adaptive split, the source shard <c>S</c> participates in three
 /// hot-path behaviours driven by the persisted
-/// <see cref="ShardRootState.SplitInProgress"/>:
+/// <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.SplitInProgress"/>:
 /// </para>
 /// <list type="number">
 /// <item><description>
-/// In <see cref="ShardSplitPhase.BeginShadowWrite"/>, <see cref="ShardSplitPhase.Drain"/>,
+/// In <see cref="Orleans.Lattice.BPlusTree.State.ShardSplitPhase.BeginShadowWrite"/>, <see cref="Orleans.Lattice.BPlusTree.State.ShardSplitPhase.Drain"/>,
 /// or <see cref="ShardSplitPhase.Swap"/>, every successful write to a key in a
 /// moved virtual slot is mirrored to the target shard <c>T</c> via
-/// <see cref="IShardRootGrain.MergeManyAsync"/> with the original HLC, so that
+/// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.MergeManyAsync"/> with the original HLC, so that
 /// CRDT LWW guarantees convergence regardless of interleaving with the
 /// background drain.
 /// </description></item>
 /// <item><description>
-/// In <see cref="ShardSplitPhase.Reject"/>, every operation on a moved-slot
+/// In <see cref="Orleans.Lattice.BPlusTree.State.ShardSplitPhase.Reject"/>, every operation on a moved-slot
 /// key throws <see cref="StaleShardRoutingException"/>, signalling the
 /// caller's <c>LatticeGrain</c> to refresh its cached <see cref="ShardMap"/>
 /// and retry against the new owner.
@@ -29,7 +29,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// The target shard <c>T</c> never holds a <see cref="ShardSplitInProgress"/>
 /// record, so neither hook fires there - this naturally prevents recursive
 /// shadow-forwarding when <c>T</c> receives the mirrored
-/// <see cref="IShardRootGrain.MergeManyAsync"/> call. A defensive assertion in
+/// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.MergeManyAsync"/> call. A defensive assertion in
 /// <c>TryForwardShadowWriteAsync</c> still guards against pathological
 /// configurations where <c>T == S</c>.
 /// </description></item>
@@ -144,17 +144,17 @@ internal sealed partial class ShardRootGrain
 
     /// <summary>
     /// Hot-path write gate. Throws <see cref="StaleShardRoutingException"/>
-    /// when (a) the shard is in <see cref="ShardSplitPhase.Reject"/> and
+    /// when (a) the shard is in <see cref="Orleans.Lattice.BPlusTree.State.ShardSplitPhase.Reject"/> and
     /// <paramref name="key"/> hashes to a moved virtual slot of the active
     /// split, or (b) <paramref name="key"/> hashes to a slot in
-    /// <see cref="ShardRootState.MovedAwaySlots"/> from a previously-completed
+    /// <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.MovedAwaySlots"/> from a previously-completed
     /// split. No-op otherwise.
     /// <para>
     /// Writes at <see cref="ShardSplitPhase.Swap"/> are intentionally
     /// admitted: the source's local write is mirrored to the new owner via
     /// the shadow-forward pipeline, keeping both sides consistent through
     /// the swap → reject transition. Only the
-    /// <see cref="ShardSplitPhase.Reject"/> phase actively rejects writes
+    /// <see cref="Orleans.Lattice.BPlusTree.State.ShardSplitPhase.Reject"/> phase actively rejects writes
     /// on moved slots (because at that point the source has stopped
     /// accepting new mirrored work).
     /// </para>
@@ -182,7 +182,7 @@ internal sealed partial class ShardRootGrain
     /// Hot-path write gate for batched operations. Throws on the first key
     /// in <paramref name="keys"/> that maps to a moved virtual slot during the
     /// reject phase or to a slot already in
-    /// <see cref="ShardRootState.MovedAwaySlots"/>. No-op when neither
+    /// <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.MovedAwaySlots"/>. No-op when neither
     /// condition holds. See <see cref="ThrowIfRejectedForKey"/> for the
     /// rationale on excluding <see cref="ShardSplitPhase.Swap"/>.
     /// </summary>
@@ -217,7 +217,7 @@ internal sealed partial class ShardRootGrain
     /// soon as a split has advanced to <see cref="ShardSplitPhase.Swap"/>
     /// (the registry's <see cref="ShardMap"/> has been swapped to the new
     /// owner) or later, and <paramref name="key"/> hashes to a moved slot.
-    /// Also fires for slots in <see cref="ShardRootState.MovedAwaySlots"/>
+    /// Also fires for slots in <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.MovedAwaySlots"/>
     /// from a previously-completed split.
     /// <para>
     /// The gate is wider than the write-side
@@ -272,9 +272,9 @@ internal sealed partial class ShardRootGrain
 
     /// <summary>
     /// Forwards a successful local write to the shadow target if the split is
-    /// in <see cref="ShardSplitPhase.BeginShadowWrite"/>, <see cref="ShardSplitPhase.Drain"/>,
+    /// in <see cref="Orleans.Lattice.BPlusTree.State.ShardSplitPhase.BeginShadowWrite"/>, <see cref="Orleans.Lattice.BPlusTree.State.ShardSplitPhase.Drain"/>,
     /// or <see cref="ShardSplitPhase.Swap"/> and <paramref name="key"/> hashes
-    /// to a moved virtual slot. Uses <see cref="IShardRootGrain.MergeManyAsync"/>
+    /// to a moved virtual slot. Uses <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.MergeManyAsync"/>
     /// so the original HLC is preserved and the write is idempotent under retry.
     /// No-op otherwise.
     /// <para>
@@ -305,10 +305,10 @@ internal sealed partial class ShardRootGrain
     /// After a successful local write, forward the post-write LWW value to the
     /// shadow target if a split is active and the key falls in a moved virtual
     /// slot. For non-prepared writes the post-write value is captured by reading
-    /// back the leaf's persisted <see cref="LwwValue{T}"/> so TTL metadata
+    /// back the leaf's persisted <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/> so TTL metadata
     /// (<c>ExpiresAtTicks</c>) is preserved verbatim. For prepared writes the
     /// caller-supplied <paramref name="value"/> is forwarded directly via
-    /// <see cref="IShardRootGrain.SetAsync(string, byte[])"/> - the leaf read-back
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.SetAsync(string, byte[])"/> - the leaf read-back
     /// is skipped because during a prepare the leaf's <c>Entries</c> still holds
     /// the pre-saga value (the prepare routed into the per-leaf pending-tx
     /// map, not the visible projection), and forwarding that stale value would
@@ -333,8 +333,8 @@ internal sealed partial class ShardRootGrain
     /// </para>
     /// <para>
     /// <b>Phase coverage - Reject admission.</b> The active-split branch admits
-    /// <see cref="ShardSplitPhase.BeginShadowWrite"/>, <see cref="ShardSplitPhase.Drain"/>,
-    /// <see cref="ShardSplitPhase.Swap"/>, AND <see cref="ShardSplitPhase.Reject"/>. Reject is included because
+    /// <see cref="Orleans.Lattice.BPlusTree.State.ShardSplitPhase.BeginShadowWrite"/>, <see cref="Orleans.Lattice.BPlusTree.State.ShardSplitPhase.Drain"/>,
+    /// <see cref="ShardSplitPhase.Swap"/>, AND <see cref="Orleans.Lattice.BPlusTree.State.ShardSplitPhase.Reject"/>. Reject is included because
     /// <c>ThrowIfRejectedForKey</c> only gates writes whose <c>SetAsync</c>
     /// has not yet entered the leaf traversal - an in-flight write that
     /// already passed the gate (when the phase was Swap) can land its
@@ -347,14 +347,14 @@ internal sealed partial class ShardRootGrain
     /// <para>
     /// <b>Post-complete fallback.</b> A symmetric race exists at
     /// the Reject → Complete boundary: the coordinator clears
-    /// <see cref="ShardRootState.SplitInProgress"/> and populates
-    /// <see cref="ShardRootState.MovedAwaySlots"/> +
-    /// <see cref="ShardRootState.MovedAwayVirtualShardCount"/> in the
+    /// <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.SplitInProgress"/> and populates
+    /// <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.MovedAwaySlots"/> +
+    /// <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.MovedAwayVirtualShardCount"/> in the
     /// same write. If a write's <c>SetAsync</c> entered before the clear
     /// but reaches this helper after, <c>sip</c> reads as <c>null</c>.
     /// The fallback consults <c>MovedAwaySlots</c> under the recorded
     /// virtual shard count and forwards to the post-split owner. This
-    /// mirrors <see cref="IShardRootGrain.GetSplitForwardTargetsAsync"/>
+    /// mirrors <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.GetSplitForwardTargetsAsync"/>
     /// which already enumerates the post-Complete destinations for the
     /// saga's terminal fan-out, closing the prepare-side gap symmetrically.
     /// </para>
@@ -559,7 +559,7 @@ internal sealed partial class ShardRootGrain
     /// <summary>
     /// Returns <c>true</c> when <paramref name="key"/> hashes to a virtual slot
     /// that this shard no longer authoritively owns - either because it has
-    /// been permanently split away (<see cref="ShardRootState.MovedAwaySlots"/>),
+    /// been permanently split away (<see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.MovedAwaySlots"/>),
     /// or because an active split has reached <see cref="ShardSplitPhase.Swap"/>
     /// or later (the registry's shard map already routes the slot to <c>T</c>
     /// and <c>T</c> holds the authoritative copy via the drain + shadow-write
@@ -590,7 +590,7 @@ internal sealed partial class ShardRootGrain
     /// <summary>
     /// Slot-reporting variant of <see cref="IsSlotMovedAway"/>. When the key's
     /// virtual slot is in the active-split moved set or the permanent
-    /// <see cref="ShardRootState.MovedAwaySlots"/> map, returns <c>true</c>
+    /// <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.MovedAwaySlots"/> map, returns <c>true</c>
     /// and outputs the slot index; otherwise returns <c>false</c> and
     /// <paramref name="slot"/> is <c>-1</c>. Used by strongly-consistent scan
     /// APIs to both filter the entry and report the affected slot to
@@ -631,7 +631,7 @@ internal sealed partial class ShardRootGrain
     /// Read-path gate for batched operations. Throws on the first key in
     /// <paramref name="keys"/> that maps to a moved virtual slot from the
     /// swap phase onward or to a slot already in
-    /// <see cref="ShardRootState.MovedAwaySlots"/>. See
+    /// <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.MovedAwaySlots"/>. See
     /// <see cref="ThrowIfMovedAwayForReadKey"/> for the rationale on
     /// including <see cref="ShardSplitPhase.Swap"/>.
     /// </summary>

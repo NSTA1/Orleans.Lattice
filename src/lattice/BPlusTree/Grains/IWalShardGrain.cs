@@ -63,7 +63,7 @@ internal interface IWalShardGrain : IGrainWithStringKey
     /// <see cref="AppendAsync"/> uses when the batch exceeds the limit.
     /// </para>
     /// <para>
-    /// Marked <see cref="AlwaysInterleaveAttribute"/> so multiple producer
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> so multiple producer
     /// leaves / shard roots can enter the WAL grain concurrently and have
     /// their entries coalesce into the same in-flight flush window. Without
     /// this attribute the grain's default non-reentrant scheduling forces
@@ -97,7 +97,7 @@ internal interface IWalShardGrain : IGrainWithStringKey
     /// <param name="maxEntries">Maximum number of entries to return; must be at least 1.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <remarks>
-    /// Marked <see cref="AlwaysInterleaveAttribute"/> so catch-up readers
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> so catch-up readers
     /// (the materialised-view maintainer, leaf replay, fall-off detection,
     /// WAL introspection) do not head-of-line-block foreground appends.
     /// Without it the grain's default non-reentrant scheduling makes each
@@ -138,7 +138,7 @@ internal interface IWalShardGrain : IGrainWithStringKey
     /// <param name="maxEntries">Maximum number of entries to return; must be at least 1.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <remarks>
-    /// Marked <see cref="AlwaysInterleaveAttribute"/> for the same reason as
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> for the same reason as
     /// <see cref="ReadAsync"/>: the replication shipper drains this method
     /// continuously, and without interleaving each shipping read would hold
     /// the single per-partition activation turn across its provider
@@ -183,7 +183,7 @@ internal interface IWalShardGrain : IGrainWithStringKey
     /// WAL footprint. Forwards directly to
     /// <see cref="IWalStorageProvider.GetRetainedByteSizeAsync"/>.
     /// <para>
-    /// Marked <see cref="AlwaysInterleaveAttribute"/> so a storage-usage
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> so a storage-usage
     /// poll never queues behind an in-flight <c>AppendBatchAsync</c> /
     /// <c>TrimAsync</c> turn. The call is a read-only manifest scan on
     /// the underlying provider; it touches no shared in-grain state and
@@ -226,7 +226,7 @@ internal interface IWalShardGrain : IGrainWithStringKey
     /// the durable pin.
     /// </para>
     /// <para>
-    /// Marked <see cref="AlwaysInterleaveAttribute"/> so the fence is raised
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> so the fence is raised
     /// promptly even while appends are queued against the activation.
     /// </para>
     /// </summary>
@@ -243,7 +243,7 @@ internal interface IWalShardGrain : IGrainWithStringKey
     /// pin and routes to the new provider. Idempotent and safe to call on an
     /// already-quiesced shard.
     /// <para>
-    /// Marked <see cref="AlwaysInterleaveAttribute"/> so the deactivation request
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> so the deactivation request
     /// is not queued behind a fenced activation's pending turns.
     /// </para>
     /// </summary>

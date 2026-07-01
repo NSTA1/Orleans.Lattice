@@ -18,7 +18,7 @@ internal interface ILatticeWalUsage : IGrainWithStringKey
     /// <summary>
     /// Returns the current WAL-only byte-accurate
     /// <see cref="TreeWalUsageReport"/> for this tree. Resolves the tree's
-    /// WAL partition count and sums <see cref="IWalShardGrain.GetRetainedByteSizeAsync"/>
+    /// WAL partition count and sums <see cref="Orleans.Lattice.BPlusTree.Grains.IWalShardGrain.GetRetainedByteSizeAsync"/>
     /// across every partition. Touches no leaf, internal-node, snapshot, or
     /// shard-root grain.
     /// </summary>

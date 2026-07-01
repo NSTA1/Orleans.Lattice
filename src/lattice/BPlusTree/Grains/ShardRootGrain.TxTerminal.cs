@@ -410,7 +410,7 @@ internal sealed partial class ShardRootGrain
     /// receiver-side relay path), the override is returned verbatim so
     /// the receiver's local WAL record matches the authoring cluster's
     /// HLC bit-identically. Otherwise fans out
-    /// <see cref="IBPlusLeafGrain.GetClockAsync"/> across the chain in
+    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.GetClockAsync"/> across the chain in
     /// parallel, takes the max, and ticks once - guaranteeing the
     /// returned HLC is strictly greater than every prepare's stamp on
     /// this shard during the saga. Empty chains return
@@ -534,7 +534,7 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <summary>
-    /// Wraps a single per-leaf <see cref="IBPlusLeafGrain.ApplyTxTerminalAsync"/>
+    /// Wraps a single per-leaf <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.ApplyTxTerminalAsync"/>
     /// call with timing instrumentation: records the wall-clock
     /// duration on <see cref="LatticeMetrics.SagaBroadcastLeafDuration"/>
     /// tagged with the shard's tree and shard index. The
@@ -566,26 +566,26 @@ internal sealed partial class ShardRootGrain
     /// <remarks>
     /// Synchronous read of the persisted split state - no WAL append,
     /// no fan-out, no clock-tick. The shard root computes the union of
-    /// (a) <see cref="ShardRootState.SplitInProgress"/>.ShadowTargetShardIndex
+    /// (a) <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.SplitInProgress"/>.ShadowTargetShardIndex
     /// (when a split is in progress) and (b) every distinct value in
-    /// <see cref="ShardRootState.MovedAwaySlots"/>, excluding this
+    /// <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.MovedAwaySlots"/>, excluding this
     /// shard's own index. Used by
     /// <see cref="TerminalFanOutResolver.ResolveTransitiveAsync"/> as
     /// the per-shard BFS expansion step.
     /// <para>
     /// <b>Why both windows are required.</b> A saga whose prepare runs
-    /// during <see cref="ShardSplitPhase.BeginShadowWrite"/> /
-    /// <see cref="ShardSplitPhase.Drain"/> / <see cref="ShardSplitPhase.Swap"/>
+    /// during <see cref="Orleans.Lattice.BPlusTree.State.ShardSplitPhase.BeginShadowWrite"/> /
+    /// <see cref="Orleans.Lattice.BPlusTree.State.ShardSplitPhase.Drain"/> / <see cref="ShardSplitPhase.Swap"/>
     /// shadow-forwards every prepared write to the destination shard,
     /// where the destination's leaf buckets the value into its own
     /// <c>_pendingTx[txid]</c>. If the saga's terminal broadcast then
     /// lands on this source shard *after* the split has progressed to
-    /// <see cref="ShardSplitPhase.Reject"/> - or after the split has
-    /// fully completed and <see cref="ShardRootState.SplitInProgress"/>
+    /// <see cref="Orleans.Lattice.BPlusTree.State.ShardSplitPhase.Reject"/> - or after the split has
+    /// fully completed and <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.SplitInProgress"/>
     /// has been cleared - the destination's pending bucket would be
     /// orphaned without an explicit terminal mark. Reporting every
     /// destination this shard has ever migrated slots to via
-    /// <see cref="ShardRootState.MovedAwaySlots"/> lets the saga's
+    /// <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.MovedAwaySlots"/> lets the saga's
     /// flat fan-out reach all of them: each destination either
     /// flushes a real pending bucket into its visible projection
     /// (committed=true) or drops it (committed=false), and destinations

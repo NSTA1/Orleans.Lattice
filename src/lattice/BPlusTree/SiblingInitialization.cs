@@ -2,7 +2,7 @@ namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
 /// The batched metadata a leaf-split donor stamps onto a freshly created
-/// sibling in a single <see cref="IBPlusLeafGrain.InitializeSiblingAsync"/>
+/// sibling in a single <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.InitializeSiblingAsync"/>
 /// round-trip. Collapses the five separate gated setter RPCs the donor
 /// used to issue (tree id, shard index, ownership key range, and the
 /// next/prev sibling pointers) into one cross-grain call backed by a

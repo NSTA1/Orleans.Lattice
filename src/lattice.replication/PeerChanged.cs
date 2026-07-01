@@ -11,8 +11,8 @@ namespace Orleans.Lattice.Replication;
 /// every <c>IOptionsMonitor</c> reload. The default topology
 /// implementation diffs each reload against the last-seen set and
 /// suppresses no-op reloads; subscribers therefore see exactly one
-/// <see cref="Added"/> event for a newly-appearing peer and exactly one
-/// <see cref="Removed"/> event for a withdrawn peer, regardless of how
+/// <see cref="PeerChangeKind.Added"/> event for a newly-appearing peer and exactly one
+/// <see cref="PeerChangeKind.Removed"/> event for a withdrawn peer, regardless of how
 /// many reload callbacks the underlying configuration emits.
 /// </para>
 /// </summary>

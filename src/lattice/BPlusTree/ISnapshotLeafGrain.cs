@@ -67,7 +67,7 @@ internal interface ISnapshotLeafGrain : IGrainWithStringKey
     /// The cursor's per-open frozen-baseline token
     /// (<see cref="LatticeSnapshotCoordinate.SnapshotBaselineToken"/>). When
     /// non-empty the leaf seeds its projection from the durable per-shard
-    /// <see cref="Grains.SnapshotShardBaseline"/> captured at open time
+    /// <see cref="Orleans.Lattice.BPlusTree.State.SnapshotShardBaseline"/> captured at open time
     /// (through the same <paramref name="ownedVirtualSlots"/> ownership filter)
     /// and performs <b>no</b> WAL replay, so a later WAL GC cannot perturb the
     /// view. <see cref="Guid.Empty"/> selects the legacy from-zero WAL-replay
@@ -80,7 +80,7 @@ internal interface ISnapshotLeafGrain : IGrainWithStringKey
     /// Seeds this snapshot leaf's projection directly from an already
     /// materialised, in-memory per-shard frozen baseline, without any durable
     /// storage round-trip. Called by
-    /// <see cref="IShardRootGrain.CaptureSnapshotBaselineAsync"/> at snapshot
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.CaptureSnapshotBaselineAsync"/> at snapshot
     /// once for the in-memory seed path (issue #916): the baseline lives only
     /// in this transient leaf's memory until the owning cursor actually needs it
     /// to survive past page 1, at which point <see cref="EnsurePersistedAsync"/>

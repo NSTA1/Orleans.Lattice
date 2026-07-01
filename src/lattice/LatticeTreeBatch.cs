@@ -13,7 +13,7 @@ namespace Orleans.Lattice;
 /// </para>
 /// <para>
 /// <b>Mutability / safe-copy.</b> This type carries mutable reference-typed
-/// members (the <see cref="Entries"/> list, each entry's value <c>byte[]</c>,
+/// members (the <c>Entries</c> list, each entry's value <c>byte[]</c>,
 /// the optional mutable <see cref="LatticePredicateNode"/>
 /// <see cref="Predicate"/>, and the optional <see cref="EntryDeltas"/> list of
 /// per-entry delta buffers), so it is deliberately <b>not</b> marked
@@ -26,7 +26,7 @@ namespace Orleans.Lattice;
 /// </para>
 /// <para>
 /// <b>Per-entry deltas.</b> <see cref="EntryDeltas"/> (when non-null) is
-/// aligned 1:1 with <see cref="Entries"/>: <c>EntryDeltas[i]</c> is the
+/// aligned 1:1 with <c>Entries</c>: <c>EntryDeltas[i]</c> is the
 /// opaque, Orleans-serialised typed CRDT delta to ride the atomic write for
 /// <c>Entries[i]</c>, or <see langword="null"/> for a plain last-writer-wins
 /// value write. The plain <c>Set</c> / <c>SetWhere</c> builder methods leave
@@ -37,7 +37,7 @@ namespace Orleans.Lattice;
 /// </para>
 /// <para>
 /// <b>Per-entry deletes.</b> <see cref="EntryDeletes"/> (when non-null) is
-/// aligned 1:1 with <see cref="Entries"/>: <c>EntryDeletes[i]</c> is
+/// aligned 1:1 with <c>Entries</c>: <c>EntryDeletes[i]</c> is
 /// <see langword="true"/> when <c>Entries[i]</c> is a <b>retraction
 /// (tombstone) delete</b> that rides the all-or-nothing batch alongside the
 /// upserts, or <see langword="false"/> for a plain value upsert. A delete

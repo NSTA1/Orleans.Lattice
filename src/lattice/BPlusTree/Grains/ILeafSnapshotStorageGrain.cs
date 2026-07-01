@@ -11,7 +11,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// safety net).
 /// <para>
 /// Grain key format: the <see cref="System.Guid"/> portion of the
-/// owning <see cref="Grains.IBPlusLeafGrain"/>'s
+/// owning <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain"/>'s
 /// <see cref="GrainId"/>. One activation per leaf; the grain is
 /// completely passive between capture and reactivation reads.
 /// </para>

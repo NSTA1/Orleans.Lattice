@@ -63,7 +63,7 @@ public interface IReplicationApplier
     /// (a fully-deduped batch returns <see langword="false"/>). Per-entry
     /// failures are surfaced as exceptions only when the implementation
     /// has no recoverable per-entry failure handling - the
-    /// <see cref="LatticeReplicationGrpc.LatticeReplicationGrpcService"/>
+    /// <c>LatticeReplicationGrpcService</c>
     /// receiver wraps the batch call in a transport-level exception so
     /// the sender's backoff/retry loop kicks in for the whole batch.
     /// </para>

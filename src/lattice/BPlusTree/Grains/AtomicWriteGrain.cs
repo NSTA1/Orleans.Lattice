@@ -629,14 +629,14 @@ internal sealed class AtomicWriteGrain(
 
     /// <summary>
     /// Captures pre-saga values for every key via
-    /// <see cref="IShardRootGrain.GetRawEntryAsync"/> so <c>ExpiresAtTicks</c>
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.GetRawEntryAsync"/> so <c>ExpiresAtTicks</c>
     /// metadata is preserved for compensation. Already-expired entries are
     /// treated as absent (matching public read semantics) so compensation
     /// will restore an "absent" outcome rather than resurrect a stale value.
     /// <para>
     /// Routing is resolved once via the public <see cref="ILattice.GetRoutingAsync"/>
     /// hook (which returns routing metadata only, no CRDT internals) and the
-    /// saga then addresses <see cref="IShardRootGrain"/> directly. This keeps
+    /// saga then addresses <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain"/> directly. This keeps
     /// the raw <see cref="LwwEntry"/> traffic on guarded internal grain
     /// interfaces - it never crosses the public <see cref="ILattice"/> surface.
     /// A <see cref="StaleShardRoutingException"/> from an adaptive shard split
@@ -943,7 +943,7 @@ internal sealed class AtomicWriteGrain(
 
     /// <summary>
     /// Per-shard pre-saga capture helper used by <see cref="PrepareAsync"/>.
-    /// Issues a single <see cref="IShardRootGrain.GetRawEntriesAsync"/>
+    /// Issues a single <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.GetRawEntriesAsync"/>
     /// call for every key in <paramref name="bucket"/>, scatters the
     /// response into <paramref name="preValues"/> at each entry's
     /// original input index, and retries on a stale-routing throw with
@@ -1089,7 +1089,7 @@ internal sealed class AtomicWriteGrain(
     /// <paramref name="committed"/> = <see langword="true"/>;
     /// <see cref="MutationKind.TxAbort"/> otherwise) to every physical
     /// shard the prepare phase touched, by calling
-    /// <see cref="IShardRootGrain.AppendTxTerminalAsync(System.Guid, bool, System.Threading.CancellationToken)"/>
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.AppendTxTerminalAsync"/>
     /// once per shard.
     /// <para>
     /// The shard set is read from the persisted
@@ -1873,7 +1873,7 @@ internal sealed class AtomicWriteGrain(
     /// records produced by the no-WAL-adapter path and by
     /// already-marked / Guid.Empty / stale-routing-no-op shards, then
     /// dispatches the remainder through
-    /// <see cref="ICommitLogWriter.AppendManyAsync"/> which groups by
+    /// <see cref="Orleans.Lattice.BPlusTree.Grains.ICommitLogWriter.AppendManyAsync"/> which groups by
     /// WAL partition and fans out one batched <see cref="IWalShardGrain.AppendBatchAsync"/>
     /// call per partition in parallel. Awaits all partition writes so
     /// the saga still observes WAL durability before returning - only
@@ -1919,7 +1919,7 @@ internal sealed class AtomicWriteGrain(
     /// <see cref="WalRecord"/> rather than appending it to its own WAL
     /// partition - the saga coordinator collects every touched-shard
     /// record from the parallel fan-out and dispatches them as one
-    /// batched <see cref="ICommitLogWriter.AppendManyAsync"/> call so
+    /// batched <see cref="Orleans.Lattice.BPlusTree.Grains.ICommitLogWriter.AppendManyAsync"/> call so
     /// the N serialised single-entry partition transactions collapse
     /// into one per-partition batched transaction. Durability is
     /// preserved: the saga still awaits the batched write before

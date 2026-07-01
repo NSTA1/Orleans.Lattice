@@ -3,7 +3,7 @@ using Orleans.Lattice.Primitives;
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// Internal silo-scoped seam by which a <see cref="BPlusLeafGrain"/> reports
+/// Internal silo-scoped seam by which a <see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain"/> reports
 /// the highest <see cref="HybridLogicalClock"/> its materialiser projection
 /// has durably applied so the per-shard write-ahead-log GC can pin its
 /// trim point under the slowest local consumer.

@@ -41,11 +41,11 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>
     /// Keyed by <see cref="LatticeMutation.TransactionId"/> -&gt; key
-    /// -&gt; the prepared <see cref="LwwValue{T}"/>. Entries here are
+    /// -&gt; the prepared <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/>. Entries here are
     /// invisible to readers until a matching terminal mark surfaces; on
     /// <see cref="MutationKind.TxCommit"/> every value is merged into
     /// the per-activation runtime entry cache via
-    /// <see cref="LwwValue{T}.Merge(LwwValue{T}, LwwValue{T})"/>; on
+    /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}.Merge(LwwValue{T}, LwwValue{T})"/>; on
     /// <see cref="MutationKind.TxAbort"/> every value is dropped.
     /// <para>
     /// Lazily allocated on the first prepared-mutation apply. The vast
@@ -179,7 +179,7 @@ internal sealed partial class BPlusLeafGrain
     /// The entry is invisible to readers until a matching terminal mark
     /// flips or drops it. Idempotent under LWW: a re-applied prepare
     /// for the same <c>(txid, key)</c> uses
-    /// <see cref="LwwValue{T}.Merge(LwwValue{T}, LwwValue{T})"/> so the
+    /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}.Merge(LwwValue{T}, LwwValue{T})"/> so the
     /// strictly-greater HLC always wins.
     /// </summary>
     private void AddPreparedMutation(
@@ -295,7 +295,7 @@ internal sealed partial class BPlusLeafGrain
     /// <summary>
     /// Flips every pending-tx entry under <paramref name="transactionId"/>
     /// into the visible projection via
-    /// <see cref="LwwValue{T}.Merge(LwwValue{T}, LwwValue{T})"/>. The
+    /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}.Merge(LwwValue{T}, LwwValue{T})"/>. The
     /// linearization point for the saga on this leaf - every reader
     /// observes either zero of the saga's keys or every one of them
     /// after this call returns. Idempotent: repeated applies for the
@@ -304,7 +304,7 @@ internal sealed partial class BPlusLeafGrain
     /// <para>
     /// <b>Foreground single-cluster path (no <c>OriginClusterId</c>
     /// stamped).</b> Re-stamps every drained value's
-    /// <see cref="LwwValue{T}.Timestamp"/> with the leaf's current
+    /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}.Timestamp"/> with the leaf's current
     /// <c>state.State.Clock</c>. The re-stamp is the cure for the
     /// stuck-key cache delta failure: the cache's per-entry HLC filter
     /// (<c>lww.Timestamp &gt; callerClock</c>) would otherwise exclude
@@ -313,7 +313,7 @@ internal sealed partial class BPlusLeafGrain
     /// prepare-time HLC. Re-stamping with <c>state.State.Clock</c>
     /// (which advances on every prepare via
     /// <see cref="AdvanceClockOrOverride"/>) guarantees the drained
-    /// value's <see cref="LwwValue{T}.Timestamp"/> is strictly greater
+    /// value's <see cref="Orleans.Lattice.Primitives.LwwValue{T}.Timestamp"/> is strictly greater
     /// than every <c>callerClock</c> the cache could have observed
     /// during the saga, because the prepare path no longer ticks
     /// <c>state.State.Version[ReplicaId]</c> (only intervening
@@ -324,7 +324,7 @@ internal sealed partial class BPlusLeafGrain
     /// <para>
     /// <b>Cross-cluster atomic-apply path (per-entry
     /// <c>OriginClusterId</c> stamped).</b> Preserves every drained
-    /// value's <see cref="LwwValue{T}.Timestamp"/> verbatim. The source
+    /// value's <see cref="Orleans.Lattice.Primitives.LwwValue{T}.Timestamp"/> verbatim. The source
     /// cluster's per-entry HLC is the authoritative ordering token for
     /// receiver-side LWW resolution and MUST NOT be clobbered by the
     /// local clock. The cache-delta-filter constraint that motivates
@@ -334,10 +334,10 @@ internal sealed partial class BPlusLeafGrain
     /// reload rather than per-entry delta.
     /// </para>
     /// <para>
-    /// The branch decision uses <see cref="LwwValue{T}.OriginClusterId"/>
+    /// The branch decision uses <see cref="Orleans.Lattice.Primitives.LwwValue{T}.OriginClusterId"/>
     /// - a deterministic, persisted signal stamped at prepare time
     /// from <see cref="LatticeOriginContext"/>. Because the flag is
-    /// written into the WAL TxPrepare record's <see cref="LwwValue{T}"/>
+    /// written into the WAL TxPrepare record's <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/>
     /// payload (see
     /// <see cref="BPlusLeafGrain.CommitSetAsync(string, byte[], long)"/>),
     /// foreground and replay observe the same value and therefore
@@ -354,7 +354,7 @@ internal sealed partial class BPlusLeafGrain
     /// max of all prior WAL <see cref="LatticeMutation.Timestamp"/>
     /// values, which matches what foreground saw when the terminal
     /// was originally appended - so foreground and replay produce
-    /// bit-identical drained <see cref="LwwValue{T}.Timestamp"/>
+    /// bit-identical drained <see cref="Orleans.Lattice.Primitives.LwwValue{T}.Timestamp"/>
     /// values. The WAL terminal entry itself stamps
     /// <see cref="HybridLogicalClock.Zero"/> by convention (saga-wide
     /// events have no per-key HLC), so we do not consult
@@ -1553,7 +1553,7 @@ internal sealed partial class BPlusLeafGrain
     /// migrating into this leaf, the in-flight source-side sagas
     /// whose prepared mutations touched that key. The read path
     /// consults this map whenever it is about to surface an
-    /// <see cref="LwwValue{T}.IsMigrated"/>=<c>true</c> value, and
+    /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}.IsMigrated"/>=<c>true</c> value, and
     /// raises <see cref="StaleShardRoutingException"/> for any
     /// shadowing saga that the registry has flipped to
     /// <see cref="TxStatus.Committed"/> but whose backstop terminal
@@ -1632,7 +1632,7 @@ internal sealed partial class BPlusLeafGrain
     /// installed for <paramref name="key"/>, returning the captured
     /// txid set. The read path uses this signal to decide whether to
     /// consult the registry for a shadow-routing decision on an
-    /// <see cref="LwwValue{T}.IsMigrated"/>=<c>true</c> value.
+    /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}.IsMigrated"/>=<c>true</c> value.
     /// </summary>
     private bool TryGetShadowedSagas(string key, out HashSet<Guid> sagas)
     {
@@ -1647,7 +1647,7 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>
     /// Decides whether the read path is safe to surface an
-    /// <see cref="LwwValue{T}.IsMigrated"/>=<c>true</c> value for a
+    /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}.IsMigrated"/>=<c>true</c> value for a
     /// key that carries a destination-side shadow marker. Resolves
     /// every shadowing saga's <see cref="TxStatus"/> through the
     /// per-tree registry (or the ambient

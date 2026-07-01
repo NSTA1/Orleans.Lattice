@@ -4,7 +4,7 @@ using Orleans.Lattice.Primitives;
 namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
-/// Result returned by <see cref="IBPlusLeafGrain.SetIfVersionAsync"/> containing
+/// Result returned by <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.SetIfVersionAsync"/> containing
 /// whether the compare-and-swap succeeded, the current version of the entry,
 /// and an optional <see cref="SplitResult"/> when a write triggered a leaf split.
 /// </summary>
