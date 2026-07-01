@@ -997,10 +997,10 @@ public partial class ReplicationShipperGrainTests
     /// cross-shipper-HWM scenario - another shipper to the same tree
     /// already advanced the receiver's frontier past ours), the
     /// shipper must trust the ack and jump <c>state.Cursor</c> to the
-    /// receiver's frontier. The defensive HLC filter at the top of the
-    /// merge loop then drops any in-between WAL entries on the next
-    /// pump tick (their HLC is at-or-below the bumped cursor) so we
-    /// don't re-ship work the receiver already has.
+    /// receiver's frontier. Any in-between WAL entries are NOT dropped by
+    /// the scalar-HLC filter once a durable partition cursor exists (see
+    /// PumpOnceAsync_ships_below_cursor_entry_after_cross_shipper_hwm_jump);
+    /// this test only asserts the cursor-jump itself.
     /// </summary>
     [Test]
     public async Task PumpOnceAsync_jumps_cursor_to_ack_frontier_when_receiver_returns_higher_hwm()
@@ -1022,37 +1022,63 @@ public partial class ReplicationShipperGrainTests
     }
 
     /// <summary>
-    /// Follow-on for the cross-shipper-HWM scenario: after the cursor
-    /// jumps to the receiver's frontier, subsequent WAL entries with
-    /// HLC at-or-below that frontier must be filtered out by the
-    /// defensive HLC predicate inside the merge loop - they are work
-    /// the receiver already has and re-shipping would waste a round
-    /// trip.
+    /// #1060 regression / follow-on for the cross-shipper-HWM scenario:
+    /// after the scalar <c>state.Cursor</c> jumps to the receiver's
+    /// frontier, a subsequently-appended WAL entry whose per-leaf HLC is
+    /// below that frontier must STILL ship. The per-origin HLC is not
+    /// monotonic in WAL-append order (per-leaf clocks interleaved by
+    /// key-hash partition), so a below-cursor HLC does not imply the
+    /// receiver already has the entry. Once the partition has a saved
+    /// durable sequence cursor it is the sole exactly-once resume token,
+    /// so the defensive scalar-HLC filter is disabled for that partition
+    /// and the entry is shipped; receiver-side identity dedup + leaf LWW
+    /// uphold at-most-once.
     /// </summary>
     [Test]
-    public async Task PumpOnceAsync_filters_below_cursor_entries_after_cross_shipper_hwm_jump()
+    public async Task PumpOnceAsync_ships_below_cursor_entry_after_cross_shipper_hwm_jump()
     {
-        var (grain, state, feed, transport, encoder, _, _) = Create();
+        var (grain, state, feed, transport, _, _, _) = Create();
         feed.Append(MakeEntry("k0", ticks: 2));
-        // Tick 1: receiver returns a high frontier; cursor jumps to 50.
+
+        // Capture every non-empty batch handed to the transport. A
+        // dropped (silently-stranded) entry produces an EMPTY drain
+        // buffer, so the shipper never calls SendAsync - counting the
+        // sends is therefore the exact ship-vs-drop discriminator for
+        // this scenario (the shipper wraps pre-encoded WAL payloads
+        // verbatim, so the batch encoder is not on the ship path).
+        var sent = new List<ReplicationBatch>();
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
-            .Returns(new ReplicationAck
+            .Returns(c =>
             {
-                Accepted = true,
-                HighestAppliedHlc = new HybridLogicalClock { WallClockTicks = 50, Counter = 0 },
+                sent.Add(c.Arg<ReplicationBatch>());
+                return new ReplicationAck
+                {
+                    Accepted = true,
+                    HighestAppliedHlc = new HybridLogicalClock { WallClockTicks = 50, Counter = 0 },
+                };
             });
-        await grain.OnDoorbellAsync(CancellationToken.None);
-        Assert.That(state.State.Cursor.WallClockTicks, Is.EqualTo(50L),
-            "Sanity: cursor must have jumped to the receiver's frontier on tick 1.");
 
-        // Tick 2: a stale entry at HLC=10 (below the bumped cursor)
-        // arrives in the WAL. It must be filtered before reaching
-        // the encode/send path.
+        // Tick 1: receiver returns a high frontier; cursor jumps to 50
+        // and the partition sequence cursor is persisted.
+        await grain.OnDoorbellAsync(CancellationToken.None);
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.Cursor.WallClockTicks, Is.EqualTo(50L),
+                "Sanity: cursor must have jumped to the receiver's frontier on tick 1.");
+            Assert.That(state.State.PartitionCursors, Contains.Key(0),
+                "Sanity: the partition sequence cursor must be saved after tick 1.");
+            Assert.That(sent, Has.Count.EqualTo(1),
+                "Sanity: tick 1 must have shipped the initial entry.");
+        });
+
+        // Tick 2: a genuinely-new entry at HLC=10 (below the bumped
+        // cursor) arrives in the WAL. Under non-monotonic per-origin HLC
+        // this is a real write past the saved partition cursor and must
+        // ship - it must NOT be dropped by the scalar-HLC filter.
         feed.Append(MakeEntry("k1", ticks: 10));
-        var encodesBeforeTick2 = encoder.Encodes;
         await grain.OnDoorbellAsync(CancellationToken.None);
 
-        Assert.That(encoder.Encodes, Is.EqualTo(encodesBeforeTick2),
-            "Stale entry below the bumped cursor must be filtered by the defensive HLC predicate; encoder must not run.");
+        Assert.That(sent, Has.Count.EqualTo(2),
+            "A new below-cursor entry past the saved partition cursor must ship (#1060); the shipper must send a second, non-empty batch rather than dropping it on the scalar-HLC filter.");
     }
 }

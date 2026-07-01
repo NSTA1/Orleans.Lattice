@@ -407,12 +407,14 @@ internal sealed partial class ReplicationApplier
     ///   <item><description>Range-delete entries bypass HWM dedup and
     ///   apply unconditionally (they carry <see cref="HybridLogicalClock.Zero"/>
     ///   by design).</description></item>
-    ///   <item><description>The first entry's <see cref="WalRecord.Timestamp"/>
-    ///   is checked against the persisted HWM (single
-    ///   <see cref="IReplicationHighWaterMarkGrain.GetAsync"/>);
-    ///   subsequent entries are checked against an in-memory
-    ///   <c>runningHwm</c> that tracks the highest applied HLC in
-    ///   this run, saving N-1 redundant HWM round-trips.</description></item>
+    ///   <item><description>Point entries are deduped against the
+    ///   snapshot-pinned causal floor (single
+    ///   <see cref="IReplicationHighWaterMarkGrain.GetPinnedFloorAsync"/>
+    ///   read per run); the floor is constant across a run, so no
+    ///   in-memory running threshold is maintained. The incrementally
+    ///   advanced per-origin diagonal is deliberately NOT a drop
+    ///   threshold (per-origin HLC is non-monotonic in WAL-append
+    ///   order - #1060).</description></item>
     ///   <item><description>The local vector clock is fetched on
     ///   demand the first time a causal-dep entry is seen, then
     ///   reused until an apply mutates it (a "dirty" flag re-fetches
@@ -465,6 +467,11 @@ internal sealed partial class ReplicationApplier
 
         var hwmGrain = GetHwmGrain(treeId);
         var hwm = await hwmGrain.GetAsync(origin!, cancellationToken).ConfigureAwait(false);
+        // Snapshot-pinned causal floor for this origin - the sole valid
+        // point-write drop threshold (see ApplyAsync for the full
+        // rationale). Read once per run: pins never happen mid-run.
+        // Zero when no snapshot has been pinned, so nothing is dropped.
+        var pinnedFloor = await hwmGrain.GetPinnedFloorAsync(origin!, cancellationToken).ConfigureAwait(false);
 
         // Bootstrap-drain mode: receiver-side bootstrap replay opens a
         // <see cref="LatticeBootstrapApplyContext"/> scope around the
@@ -487,8 +494,8 @@ internal sealed partial class ReplicationApplier
 
         // Per-tree shadow-forward dedupe cache (see ApplyAsync for the
         // race scenario it closes). The cache instance is fetched once
-        // per run; per-entry TryAdd is performed after the runningHwm
-        // dedupe so HWM-deduped entries do not pollute the cache (which
+        // per run; per-entry TryAdd is performed after the pinned-floor
+        // dedupe so floor-deduped entries do not pollute the cache (which
         // would break operator-driven re-pin recovery, where lowering
         // the per-origin frontier must re-admit previously-deduped
         // identity tuples). On apply failure the reservation is rolled
@@ -499,13 +506,6 @@ internal sealed partial class ReplicationApplier
             static (_, capacity) => new RecentApplyCache(capacity),
             resolved.ShadowForwardDedupeCacheSize);
 
-        // runningHwm tracks the highest applied HLC in this run so
-        // subsequent entries can be deduped without a fresh GetAsync
-        // round trip. Within a single inbound run the producer
-        // guarantees per-origin HLC monotonicity, so this is strictly
-        // equivalent to per-entry GetAsync followed by an in-storage
-        // dedup check.
-        var runningHwm = hwm;
         var anyApplied = false;
         var advancedAtAll = false;
         var highestApplied = hwm;
@@ -522,7 +522,7 @@ internal sealed partial class ReplicationApplier
         // (not range delete, not dedup'd, not causally parked) and are
         // deferred into a single ApplyMergeManyAsync at end of run rather
         // than issuing one shard RPC per item. State changes
-        // (runningHwm, highestApplied, anyApplied, advancedAtAll,
+        // (highestApplied, anyApplied, advancedAtAll,
         // localVcDirty) and per-entry instrumentation
         // (ApplyDuration, ApplyLag, FifoState) are deferred until the
         // flush succeeds, mirroring the per-entry path's semantics under
@@ -587,10 +587,6 @@ internal sealed partial class ReplicationApplier
                 }
                 RecordApplyDuration(treeId, origin!, deferredStartTs, LatticeReplicationMetrics.OutcomeSuccess);
 
-                if (deferredEntry.Timestamp.CompareTo(runningHwm) > 0)
-                {
-                    runningHwm = deferredEntry.Timestamp;
-                }
                 if (deferredEntry.Timestamp.CompareTo(highestApplied) > 0)
                 {
                     highestApplied = deferredEntry.Timestamp;
@@ -662,10 +658,6 @@ internal sealed partial class ReplicationApplier
                 }
                 RecordApplyDuration(treeId, origin!, deferredStartTs, LatticeReplicationMetrics.OutcomeSuccess);
 
-                if (deferredEntry.Timestamp.CompareTo(runningHwm) > 0)
-                {
-                    runningHwm = deferredEntry.Timestamp;
-                }
                 if (deferredEntry.Timestamp.CompareTo(highestApplied) > 0)
                 {
                     highestApplied = deferredEntry.Timestamp;
@@ -712,7 +704,7 @@ internal sealed partial class ReplicationApplier
 
                 // Phase D1c: saga prepare-phase entries
                 // (IsPrepared && AtomicBatchSize > 0) bypass BOTH the
-                // runningHwm dedup AND the causal-park gate below.
+                // pinned-floor dedup AND the causal-park gate below.
                 // See ReplicationApplier.ApplyAsync for the full
                 // rationale; the same conditions apply on the batched
                 // per-entry pass. Compute the flag once and reuse it
@@ -721,7 +713,7 @@ internal sealed partial class ReplicationApplier
 
                 if (!bootstrapMode
                     && !isPreparedAtomicBatch
-                    && entry.Timestamp.CompareTo(runningHwm) <= 0)
+                    && entry.Timestamp.CompareTo(pinnedFloor) <= 0)
                 {
                     outcome = LatticeReplicationMetrics.OutcomeDedup;
                     continue;
@@ -732,7 +724,7 @@ internal sealed partial class ReplicationApplier
                 // compensate) generate when they shadow-forward a user
                 // write into a different shard. See ApplyAsync for the
                 // detailed race scenario. The check sits after the
-                // runningHwm dedupe so HWM-deduped entries do not
+                // pinned-floor dedupe so floor-deduped entries do not
                 // pollute the cache.
                 if (!dedupeCache.TryAdd(entry))
                 {
@@ -856,10 +848,6 @@ internal sealed partial class ReplicationApplier
                         RecordFifoState(entry);
                     }
 
-                    if (entry.Timestamp.CompareTo(runningHwm) > 0)
-                    {
-                        runningHwm = entry.Timestamp;
-                    }
                     if (entry.Timestamp.CompareTo(highestApplied) > 0)
                     {
                         highestApplied = entry.Timestamp;

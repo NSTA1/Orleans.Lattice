@@ -20,6 +20,14 @@ internal sealed class ReplicationHighWaterMarkGrain(
     }
 
     /// <inheritdoc />
+    public Task<HybridLogicalClock> GetPinnedFloorAsync(string originClusterId, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(originClusterId);
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(state.State.PinnedFloor.GetClock(originClusterId));
+    }
+
+    /// <inheritdoc />
     public Task<VersionVector> GetVectorAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -73,13 +81,21 @@ internal sealed class ReplicationHighWaterMarkGrain(
         // Build a defensive copy so subsequent caller-side mutations to
         // the supplied frontier do not bleed into grain state.
         var replacement = frontier.Clone();
-        if (VectorsEqual(state.State.Vector, replacement))
+        if (VectorsEqual(state.State.Vector, replacement)
+            && VectorsEqual(state.State.PinnedFloor, replacement))
         {
             return;
         }
 
         var previous = state.State.Vector;
+        var previousFloor = state.State.PinnedFloor;
         state.State.Vector = replacement;
+        // The pinned floor records the snapshot's causal cut and is the
+        // sole per-origin drop threshold the receiver honours. A second
+        // clone keeps the floor and the diagonal independently mutable
+        // (TryAdvanceAsync raises the diagonal but must never move the
+        // floor).
+        state.State.PinnedFloor = replacement.Clone();
         try
         {
             await state.WriteStateAsync();
@@ -87,6 +103,7 @@ internal sealed class ReplicationHighWaterMarkGrain(
         catch
         {
             state.State.Vector = previous;
+            state.State.PinnedFloor = previousFloor;
             throw;
         }
     }

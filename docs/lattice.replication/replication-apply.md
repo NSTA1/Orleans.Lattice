@@ -1,6 +1,6 @@
 # Replication apply seam (`IReplicationApplier`)
 
-`IReplicationApplier` is the public, in-process inbound seam over the per-tree apply pipeline. It installs a single `WalRecord` authored on a remote cluster onto the local tree while preserving the remote cluster's `HybridLogicalClock` and origin id end-to-end, and it filters re-delivery via a per-origin high-water-mark so at-least-once transports become at-most-once apply.
+`IReplicationApplier` is the public, in-process inbound seam over the per-tree apply pipeline. It installs a single `WalRecord` authored on a remote cluster onto the local tree while preserving the remote cluster's `HybridLogicalClock` and origin id end-to-end, and it filters re-delivery via a snapshot-pinned causal floor plus a shadow-forward identity cache and per-key last-writer-wins idempotence, so at-least-once transports become at-most-once apply.
 
 The contract is deliberately neutral: there is no transport binding, no per-peer state, no ack envelope. It is the seam custom transports and integration tests plug into.
 
@@ -29,8 +29,8 @@ public readonly record struct ApplyResult
 
 | `ApplyResult` member | Semantics |
 |---|---|
-| `Applied` | `true` when the entry was merged onto the local tree; `false` when the entry was filtered out as a re-delivery (its `Timestamp` was at or below the per-origin high-water-mark) or rejected as inapplicable (its `OriginClusterId` matched the local cluster id and would have looped). For batch calls, `true` if **any** entry in the batch was newly merged. |
-| `HighWaterMark` | For point applies (`Set` / `Delete`) this is the per-origin HWM after the call - equal to `entry.Timestamp` when `Applied` is `true`, or the HWM that suppressed the apply when `Applied` is `false`. For range deletes and local-origin no-op rejections - neither of which consults the HWM - this is `HybridLogicalClock.Zero`. For batch calls, the pointwise maximum HWM across every distinct origin in the batch. |
+| `Applied` | `true` when the entry was merged onto the local tree; `false` when the entry was filtered out as a re-delivery (its `Timestamp` was at or below the origin's pinned snapshot floor, or its identity tuple hit the shadow-forward cache) or rejected as inapplicable (its `OriginClusterId` matched the local cluster id and would have looped). For batch calls, `true` if **any** entry in the batch was newly merged. |
+| `HighWaterMark` | For point applies (`Set` / `Delete`) this is the per-origin HWM after the call - equal to `entry.Timestamp` when `entry.Timestamp` advanced the frontier, or the current HWM otherwise (including when `Applied` is `false`). For range deletes and local-origin no-op rejections - neither of which consults the HWM - this is `HybridLogicalClock.Zero`. For batch calls, the pointwise maximum HWM across every distinct origin in the batch. |
 
 ## Apply semantics
 
@@ -44,11 +44,18 @@ For typed CRDT modes (`OrSet`, `PnCounter`, `VersionVector`, `MvRegister`, `OrMa
 
 Range deletes carry `HybridLogicalClock.Zero` by design (a range walk produces many per-leaf HLCs that cannot be faithfully collapsed into a single timestamp). The receiver walks the leaf chain locally and stamps each tombstone with a freshly-ticked local HLC; the remote `OriginClusterId` rides through an ambient `LatticeOriginContext` scope so the receiver-side change-feed observer publishes it on every emitted `LatticeMutation`.
 
-### 2. Per-origin high-water-mark dedupe
+### 2. Snapshot-pinned causal floor (and per-origin high-water-mark)
 
-The applier resolves a per-origin high-water-mark for every `(TreeId, OriginClusterId)` pair it sees. Before applying a point entry it reads the current HWM; if `entry.Timestamp <= hwm` the call is a no-op (`Applied = false`). After a successful point apply it advances the HWM monotonically - concurrent appliers that race ahead leave the HWM higher and the laggard's advance becomes a no-op, exactly the semantics at-most-once apply requires. Typed CRDT modes consult and advance the HWM the same way, even though state-based merge is naturally idempotent - the dedupe just short-circuits redundant grain calls.
+The applier tracks two distinct per-`(TreeId, OriginClusterId)` quantities on the high-water-mark grain:
 
-Range deletes bypass the HWM by design. Range applies are naturally idempotent at the leaf layer: re-running a range delete on already-tombstoned keys merges to the same state, so dedupe is unnecessary.
+- The **per-origin high-water-mark** is the max-applied source HLC. It advances monotonically after every successful point apply and drives FIFO / causal ordering, observability, and the bootstrap handoff. It is **not** a drop criterion for steady-state point writes.
+- The **pinned causal floor** is written only by `PinSnapshotAsync` (the bootstrap handoff) and records the snapshot frontier below which every mutation is already contained in the pinned snapshot. When no snapshot has been pinned the floor is `HybridLogicalClock.Zero`.
+
+Before applying a point entry the applier reads the pinned floor; if `entry.Timestamp <= floor` the call is a no-op (`Applied = false`), because everything at or below a pinned snapshot frontier is already durably present. Otherwise the entry is admitted and its at-most-once guarantee rests on per-key last-writer-wins idempotence at the leaf (a superseded or duplicate write merges to the same state) plus the shadow-forward identity cache below. After a successful point apply the HWM advances monotonically; a laggard's lower advance becomes a no-op.
+
+This is deliberately **not** a `entry.Timestamp <= hwm` drop. The per-origin HLC stream is not monotonic in write-ahead-log / ship order: HLCs are stamped per leaf (each `BPlusLeafGrain` carries its own clock) and the write-ahead-log partitions by key hash, so many leaves interleave in one partition and a genuinely-new point write can arrive with a source HLC below the running max-applied HLC. Dropping such an entry on a scalar `hwm` comparison silently strands it - the cross-cluster data-loss regime this seam is designed to avoid. A legitimately out-of-order-but-new entry that lands below the current HWM is applied and increments `apply.fifo_violations` (observability only). Typed CRDT modes consult the floor and advance the HWM the same way; state-based merge is naturally idempotent, so the floor gate just short-circuits redundant grain calls for the below-snapshot backlog.
+
+Range deletes bypass the floor by design. Range applies are naturally idempotent at the leaf layer: re-running a range delete on already-tombstoned keys merges to the same state, so dedupe is unnecessary.
 
 ### 3. Local-origin defence-in-depth
 
@@ -56,17 +63,17 @@ A `WalRecord` whose `OriginClusterId` matches the local cluster id is rejected a
 
 ### 4. Shadow-forward dedupe cache
 
-A structural rewrite (shard split, shard merge, saga compensate) that shadow-forwards a user write into a different shard generates a duplicate-emit pair: one entry from the originating shard's commit, one from the shadow-forwarded shard's commit, both carrying identical `(originClusterId, timestamp, key, op)` identity tuples. The per-origin HWM check catches the second delivery when it is sequential (the first has already advanced the HWM), but a concurrent inbound delivery can otherwise observe the same pre-advance HWM on both deliveries and both pass before either advances it.
+A structural rewrite (shard split, shard merge, saga compensate) that shadow-forwards a user write into a different shard generates a duplicate-emit pair: one entry from the originating shard's commit, one from the shadow-forwarded shard's commit, both carrying identical `(originClusterId, timestamp, key, op)` identity tuples. Because the pinned-floor gate does not drop above-floor point writes, both deliveries reach the apply path; the identity cache is what collapses the redundant second grain hop before it happens.
 
-The applier holds a per-tree bounded FIFO cache of recently-applied identity tuples (`LatticeReplicationOptions.ShadowForwardDedupeCacheSize`, default `4096`, validator floor `64`). The cache is consulted *after* the per-origin HWM dedupe so HWM-deduped entries do not pollute it (which preserves operator-driven re-pin semantics where lowering the per-origin frontier must re-admit previously-deduped identity tuples). On cache hit the apply is suppressed with `Applied = false` and the apply-duration histogram is tagged `outcome=shadow-forward-dedup`. Range deletes bypass the cache because they carry `HybridLogicalClock.Zero` (ambiguous identity); the leaf layer is naturally idempotent for range applies.
+The applier holds a per-tree bounded FIFO cache of recently-applied identity tuples (`LatticeReplicationOptions.ShadowForwardDedupeCacheSize`, default `4096`, validator floor `64`). The cache is consulted *after* the pinned-floor gate so floor-deduped entries do not pollute it (which preserves operator-driven re-pin semantics where lowering the pinned floor must re-admit previously-deduped identity tuples). On cache hit the apply is suppressed with `Applied = false` and the apply-duration histogram is tagged `outcome=shadow-forward-dedup`. Range deletes bypass the cache because they carry `HybridLogicalClock.Zero` (ambiguous identity); the leaf layer is naturally idempotent for range applies.
 
-Correctness is still bounded by the HWM. The cache is a fast-path optimisation: it suppresses the duplicate-emit pair before the apply grain hop even when the HWM round-trip would otherwise admit both. Cache eviction under sustained churn cannot cause a re-merge - the HWM remains the authoritative dedupe key for any entry the cache has evicted.
+The cache is a fast-path optimisation, not the correctness backstop. It suppresses the duplicate-emit pair before the apply grain hop; if an entry it would have caught has been evicted under sustained churn, the duplicate still re-applies to the same state under per-key last-writer-wins idempotence at the leaf, so an eviction can never cause a divergent re-merge - it only costs one redundant grain hop.
 
 ### 5. Causal-dependency gate
 
 Entries authored with causal-plus tracking carry a `VectorClock` frontier. Before applying such an entry the receiver fetches its local vector clock and checks that every component of the entry's frontier is dominated-or-equal locally; an entry with an unsatisfied dependency is parked in the per-tree bounded causal-apply buffer and retried each time a later apply advances the local clock. Two frontier components are exempt from the check:
 
-- **The entry's own origin diagonal.** The per-origin high-water-mark table is the authoritative dedupe key for that component, so requiring the local clock to dominate the diagonal would deadlock the very entry being applied.
+- **The entry's own origin diagonal.** The per-origin high-water-mark tracks that origin's own FIFO progression, so requiring the local clock to dominate the diagonal would deadlock the very entry being applied.
 - **The receiver's own cluster id.** The receiver-side local vector clock tracks only *foreign*-applied frontiers - it never advances its own diagonal - but the receiver durably holds every write it authored itself, so any dependency on one of the receiver's own writes is trivially satisfied. Without this exemption a peer entry whose frontier references a write the receiver originated (for example, site C's post-partition write that causally follows site A's pre-partition write, once an A-C partition heals) would park forever against a perpetually-zero self-component and stall convergence.
 
 ## Validation
@@ -101,7 +108,7 @@ The applier is a stateless singleton that holds no per-call state; all coordinat
 
 ## Bootstrap handoff
 
-The per-origin high-water-mark is the explicit handoff contract for the bootstrap protocol introduced in a later phase: a newly-bootstrapped peer pins the HWM to the snapshot's authoring HLC, then resumes incremental replication from that pinned frontier with exactly-once apply guarantees across the snapshot / incremental boundary. The pinned value may be lower than the receiver's prior HWM (a peer that rewinds to an older snapshot must accept the snapshot's frontier as the apply point); the underlying grain therefore exposes an unconditional pin alongside the monotonic advance.
+The pinned causal floor is the explicit handoff contract for the bootstrap protocol: a newly-bootstrapped peer calls `PinSnapshotAsync`, which atomically installs both the per-origin HWM and the pinned floor at the snapshot's authoring frontier, then resumes incremental replication from that pinned frontier with exactly-once apply guarantees across the snapshot / incremental boundary. `PinSnapshotAsync` *replaces* the floor rather than max-merging it, so a peer that rewinds to an older snapshot (a pinned value lower than the receiver's prior frontier) correctly lowers the floor and re-admits entries above the new, lower cut. The grain therefore exposes this unconditional pin alongside the monotonic HWM advance and a `GetPinnedFloorAsync` read.
 
 ## Caveats
 
@@ -110,7 +117,7 @@ The per-origin high-water-mark is the explicit handoff contract for the bootstra
 
 ## Batch apply path
 
-Inbound transports deliver batches of `WalRecord` records, not single entries: a 256-entry gRPC push from a single producer is one network round-trip carrying 256 mutations. `ApplyBatchAsync` is the seam that lets the receiver process such a batch as one logical operation rather than 256 independent `ApplyAsync` calls - it collapses the per-entry per-origin HWM grain RPCs to one `GetAsync` + one `TryAdvanceAsync` per distinct origin per batch and drains the causal-apply buffer once at the end of the batch instead of after every successful apply.
+Inbound transports deliver batches of `WalRecord` records, not single entries: a 256-entry gRPC push from a single producer is one network round-trip carrying 256 mutations. `ApplyBatchAsync` is the seam that lets the receiver process such a batch as one logical operation rather than 256 independent `ApplyAsync` calls - it collapses the per-entry per-origin HWM grain RPCs to one `GetAsync` + one `GetPinnedFloorAsync` + one `TryAdvanceAsync` per distinct origin per batch and drains the causal-apply buffer once at the end of the batch instead of after every successful apply.
 
 The default-interface-method body provides backward-compatible semantics: it loops over `ApplyAsync` and aggregates the per-entry results, so any custom `IReplicationApplier` written before the batch seam existed continues to work without changes. The shipped `ReplicationApplier` overrides the batch path with the optimised implementation described below.
 
@@ -118,21 +125,21 @@ The default-interface-method body provides backward-compatible semantics: it loo
 
 The optimised batch path walks the inbound list and identifies maximal contiguous runs of entries that share the same `(TreeId, OriginClusterId)` tuple. For a 256-entry batch shipped by a single producer the entire batch is one run; for an interleaved batch (e.g. a snapshot recovery merge that intersperses entries from two origins) the path emits one run per contiguous group, each amortised independently. Within a run:
 
-- A single `GetAsync` reads the persisted per-origin HWM at the start of the run.
-- An in-memory `runningHwm` tracks the highest applied HLC for the rest of the run, so subsequent entries dedupe without a fresh round trip. The producer's per-origin HLC monotonicity guarantee makes this strictly equivalent to per-entry `GetAsync` + dedupe.
+- A single `GetAsync` reads the persisted per-origin HWM and a single `GetPinnedFloorAsync` reads the pinned causal floor at the start of the run.
+- The pinned floor is constant for the run, so every entry in the run is dedup-tested against the same floor with no further round trips; there is no in-batch running-HWM accumulator (a below-max-applied-HLC entry is a genuine write under non-monotonic per-origin HLC, not a duplicate, so it must not be dropped mid-run).
 - Causal-dependency entries fetch the local vector clock lazily on first use and reuse it until an apply has occurred, at which point a `localVcDirty` flag forces a re-fetch on the next causal-dep check.
 - A single `TryAdvanceAsync` advances the persisted HWM to the highest applied HLC at the end of the run.
 - A single `DrainBufferAsync` drains the causal-apply buffer once if the run advanced the persisted HWM.
 
-For a 256-entry single-origin batch this collapses ~3·256 = 768 grain round-trips (per-entry `GetAsync` + `ApplyPointAsync` + `TryAdvanceAsync`) to 256 + 2 = 258 - the dominant receiver-side cost on every inbound push.
+For a 256-entry single-origin batch this collapses ~3·256 = 768 grain round-trips (per-entry `GetAsync` + `ApplyPointAsync` + `TryAdvanceAsync`) to 256 + 3 = 259 (the batched `GetAsync` + `GetPinnedFloorAsync` + `TryAdvanceAsync`) - the dominant receiver-side cost on every inbound push.
 
 ### Preserved per-entry semantics
 
 Every classification the per-entry path produces survives the batch path:
 
-- **Range-delete entries** bypass HWM dedup and apply unconditionally (they carry `HybridLogicalClock.Zero` by design).
+- **Range-delete entries** bypass the pinned-floor gate and apply unconditionally (they carry `HybridLogicalClock.Zero` by design).
 - **Local-origin runs** classify every entry as `Dedup` with `HighWaterMark = HybridLogicalClock.Zero` and emit no grain calls.
-- **In-batch dedup** against the in-memory `runningHwm` is bit-equivalent to per-entry dedup against a freshly-read HWM, because the producer guarantees per-origin HLC monotonicity within the batch.
+- **Below-floor dedup** against the run's pinned causal floor is bit-equivalent to per-entry dedup against a freshly-read floor, because the floor is written only by `PinSnapshotAsync` and is therefore constant across a run.
 - **Causal-park** is exercised per-entry; only the local-vector-clock fetch is lazy.
 - **Per-entry instrumentation** (`ApplyDuration`, `ApplyLag`, `ApplyFifoViolations`) is recorded inside the per-entry loop so observability is preserved verbatim.
 - **Single-entry batches** defer to `ApplyAsync` so behaviour is bit-identical with the legacy receiver for the trivial case.

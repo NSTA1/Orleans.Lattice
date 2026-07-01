@@ -151,19 +151,20 @@ public partial class ReplicationApplierTests
     }
 
     [Test]
-    public async Task ApplyBatchAsync_in_batch_dedups_entries_below_running_hwm()
+    public async Task ApplyBatchAsync_dedups_entries_below_pinned_floor()
     {
         var (applier, _, apply, hwm) = CreateApplier();
-        // Persisted HWM is at 25; the batch contains some entries below
-        // that and some above. The first below-HWM entry is deduped via
-        // the persisted HWM; subsequent below-runningHwm entries are
-        // deduped without a fresh GetAsync.
+        // A snapshot floor is pinned at 25; the batch contains some
+        // entries at or below that (contained in the pinned snapshot ->
+        // dedup) and some above (genuinely new -> apply). The whole run
+        // reads the floor once.
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(25));
+        hwm.GetPinnedFloorAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(25));
 
         var entries = new[]
         {
-            SetEntry("a", Hlc(10)), // dedup (<= HWM)
-            SetEntry("b", Hlc(20)), // dedup (<= HWM)
+            SetEntry("a", Hlc(10)), // dedup (<= floor)
+            SetEntry("b", Hlc(20)), // dedup (<= floor)
             SetEntry("c", Hlc(30)), // apply
             SetEntry("d", Hlc(40)), // apply
         };
@@ -197,6 +198,7 @@ public partial class ReplicationApplierTests
     {
         var (applier, _, apply, hwm) = CreateApplier();
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(100));
+        hwm.GetPinnedFloorAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(100));
 
         var entries = new[]
         {
@@ -225,10 +227,11 @@ public partial class ReplicationApplierTests
     {
         var (applier, _, apply, hwm) = CreateApplier();
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(100));
+        hwm.GetPinnedFloorAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(100));
 
         var entries = new[]
         {
-            // Below HWM - would normally dedup, but range-delete bypasses.
+            // Below floor - would normally dedup, but range-delete bypasses.
             RangeDeleteEntry("a", "m"),
             SetEntry("a", Hlc(10)), // dedup
             SetEntry("z", Hlc(200)), // apply

@@ -130,16 +130,17 @@ public partial class ReplicationApplierTests
     {
         // Counter-check: the bypass is gated on
         // (IsPrepared && AtomicBatchSize > 0). A plain (non-prepared)
-        // entry with HLC at or below HWM must still be dedup'd -
-        // otherwise the bypass would silently disable HWM dedup for
-        // every entry.
+        // entry at or below a pinned snapshot floor must still be
+        // dedup'd - otherwise the bypass would silently disable the
+        // below-floor dedup for every entry.
         var (applier, _, apply, hwm) = CreateApplier();
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(50, 1));
+        hwm.GetPinnedFloorAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(50, 1));
 
         var result = await applier.ApplyAsync(SetEntry("k", Hlc(50, 1)));
 
         Assert.That(result.Applied, Is.False,
-            "Non-prepared entry at or below HWM must still be dedup'd; the D1c bypass applies only to IsPrepared+AtomicBatchSize>0.");
+            "Non-prepared entry at or below a pinned snapshot floor must still be dedup'd; the D1c bypass applies only to IsPrepared+AtomicBatchSize>0.");
         await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
     }
 
@@ -154,6 +155,7 @@ public partial class ReplicationApplierTests
         // bypass by stamping IsPrepared on a non-atomic entry.
         var (applier, _, apply, hwm) = CreateApplier();
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(50, 1));
+        hwm.GetPinnedFloorAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(50, 1));
         var txid = Guid.NewGuid();
         var entry = PreparedSetEntry("k", Hlc(20), txid, atomicBatchSize: 0, atomicBatchIndex: 0);
 

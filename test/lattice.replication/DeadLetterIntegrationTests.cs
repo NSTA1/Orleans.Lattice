@@ -200,13 +200,17 @@ public class DeadLetterIntegrationTests
         failingInner.ClearReceivedCalls();
 
         // Replay routes through the canonical ReplicationApplier (not
-        // the decorator). The HWM is already at this entry's timestamp
-        // from the parking step, so the canonical applier reports
-        // Applied=false (filtered re-delivery) - terminal for cleanup.
+        // the decorator). The parked entry's mutation never actually
+        // landed (every apply attempt threw), and no snapshot floor is
+        // pinned for this origin, so the canonical applier admits it and
+        // reports Applied=true - the corrected #1060 semantics, where a
+        // below-incremental-HWM point write is not silently deduped.
+        // Either way the replay is terminal for cleanup: the parked row
+        // is removed below.
         var result = await _inspector.ReplayAsync(TreeId, parked.EntryId, CancellationToken.None);
 
         Assert.That(result, Is.Not.Null);
-        Assert.That(result!.Value.Applied, Is.False);
+        Assert.That(result!.Value.Applied, Is.True);
 
         // Structural proof of bypass: the decorator's inner substitute
         // received zero calls during the replay. The seam built its

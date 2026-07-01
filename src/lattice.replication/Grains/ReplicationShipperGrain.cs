@@ -444,6 +444,17 @@ internal sealed class ReplicationShipperGrain(
     private long[] _partitionNextSeq = Array.Empty<long>();
     private long[] _partitionMaxReadSeq = Array.Empty<long>();
     private bool[] _partitionAdvanced = Array.Empty<bool>();
+    //   _partitionCursorSaved[p] - whether partition p resumed this tick
+    //                           from a durable saved sequence cursor
+    //                           (state.PartitionCursors contained p) as
+    //                           opposed to the legacy fallback of
+    //                           sequence 0. Once a durable partition
+    //                           cursor exists it is the sole authoritative
+    //                           exactly-once resume token, so the
+    //                           defensive scalar-HLC drop in the merge
+    //                           loop is scoped to the legacy (unsaved)
+    //                           case only - see MergeOneBatchAsync.
+    private bool[] _partitionCursorSaved = Array.Empty<bool>();
     private IWalShardGrain?[] _partitionGrainCache = Array.Empty<IWalShardGrain?>();
     private WalRecord[] _partitionHead = Array.Empty<WalRecord>();
     private bool[] _partitionHeadDecoded = Array.Empty<bool>();
@@ -2042,6 +2053,7 @@ internal sealed class ReplicationShipperGrain(
             _partitionAdvanced[p] = false;
             _partitionHeadDecoded[p] = false;
             var seeded = state.State.PartitionCursors.TryGetValue(p, out var saved) ? saved : 0L;
+            _partitionCursorSaved[p] = state.State.PartitionCursors.ContainsKey(p);
             _partitionNextSeq[p] = seeded;
             _partitionMaxReadSeq[p] = seeded - 1;
         }
@@ -2165,47 +2177,48 @@ internal sealed class ReplicationShipperGrain(
             _partitionMaxReadSeq[minPartition] = winningShipping.Sequence;
             _partitionAdvanced[minPartition] = true;
 
-            // Defensive HLC filter: a legacy state with a non-zero
-            // state.Cursor but an empty PartitionCursors dictionary
-            // resumes from sequence 0, which would re-ship every
-            // entry the peer has already seen on the very first tick
-            // after upgrade. The HLC predicate filters them out at
-            // negligible cost (one comparison per entry); steady
-            // state never matches because the partition cursor moves
-            // strictly forward on ack.
+            // Defensive HLC filter - legacy-migration case ONLY.
             //
-            // Exception: DeleteRange entries intentionally carry
-            // HybridLogicalClock.Zero (see WalRecord.Timestamp docs)
-            // because a single range may produce many per-leaf HLCs
-            // that cannot be faithfully collapsed. Applying the HLC
-            // filter to a Zero-stamped entry would silently drop
-            // every DeleteRange write once any non-zero cursor has
-            // been observed. DeleteRange entries are tracked solely
-            // by partition sequence, which already prevents
-            // re-shipping in steady state.
+            // The durable per-partition sequence cursor
+            // (state.PartitionCursors[p], mirrored in _partitionNextSeq /
+            // _partitionMaxReadSeq) is the authoritative exactly-once
+            // resume token: the outer merge loop presents each WAL
+            // sequence in a partition exactly once, and the cursor only
+            // advances past a sequence on a positive ack. So once a
+            // partition has a saved durable cursor, every entry past it
+            // is genuinely unshipped and MUST be shipped - dropping it on
+            // a scalar-HLC comparison would silently strand it.
             //
-            // Phase D1c additional bypass: saga prepare-phase entries
-            // (IsPrepared==true) carry the producer-stamped per-leaf
-            // HLC, which under the batched-saga path
-            // (AtomicWriteGrain.ExecutePhaseAsync's parallel cross-leaf
-            // `lattice.SetManyAsync` fan-out) can be non-monotonic
-            // per-WAL-partition: each touched leaf has its own
-            // independent HLC clock and advances independently. When
-            // two leaves' batches arrive at the same WAL partition
-            // in a different order than their HLCs would suggest,
-            // the later-arriving (lower-HLC) batch's prepared rows
-            // satisfy `entry.Timestamp <= state.Cursor` once any
-            // higher-HLC entry from the other leaf has been acked,
-            // and would be silently dropped here - the partial-saga
-            // failure shape. Bypass the HLC filter for those entries;
-            // partition-cursor monotonicity inside this method's
-            // outer loop already guarantees each entry is presented
-            // exactly once, and receiver-side idempotency on the
-            // prepared-write path (per-leaf LWW merge inside
-            // `AddPreparedMutation` + per-tx terminal-mark dedup)
-            // upholds at-most-once visibility.
+            // This matters because the source HLC is NOT monotonic with
+            // WAL-append order within a partition: HLCs are stamped per
+            // leaf (BPlusLeafGrain's own clock) and a partition is keyed
+            // by WalPartitionHash(key), so many leaves interleave in one
+            // partition. A genuinely-new point write can therefore arrive
+            // with a source HLC below the running scalar cursor
+            // (state.Cursor, which tracks the max-shipped / ack frontier).
+            // The old unconditional `Timestamp <= state.Cursor` drop
+            // treated every such entry as already-seen and skipped it
+            // while still advancing the partition cursor past it - the
+            // silent replication-gap bug (#1060). The receiver upholds
+            // at-most-once via its per-(origin,hlc,key,op) shadow-forward
+            // dedup cache and per-key LWW source-HLC guard, so shipping a
+            // below-cursor-but-new entry is safe; a true duplicate is a
+            // receiver-side no-op.
+            //
+            // The scalar filter is retained solely for the one-time
+            // legacy-migration tick: a state persisted by a pre-partition
+            // -cursor build carries a non-zero state.Cursor but an EMPTY
+            // PartitionCursors dictionary, so every partition resumes from
+            // sequence 0 and would re-ship the entire already-shipped
+            // prefix. `!_partitionCursorSaved[p]` scopes the drop to that
+            // case; from the first ack onward the partition cursor is
+            // saved and the drop is disabled for that partition. Zero-HLC
+            // (DeleteRange) and prepared-atomic-batch entries are excluded
+            // even in the legacy case - both carry non-monotonic per-leaf
+            // HLCs and are tracked purely by partition sequence.
             var isPreparedAtomicBatch = winningRecord.IsPrepared && winningRecord.AtomicBatchSize > 0;
-            if (!isPreparedAtomicBatch
+            if (!_partitionCursorSaved[minPartition]
+                && !isPreparedAtomicBatch
                 && winningRecord.Timestamp != HybridLogicalClock.Zero
                 && winningRecord.Timestamp.CompareTo(state.State.Cursor) <= 0)
             {
@@ -2824,6 +2837,7 @@ internal sealed class ReplicationShipperGrain(
         Array.Resize(ref _partitionNextSeq, partitions);
         Array.Resize(ref _partitionMaxReadSeq, partitions);
         Array.Resize(ref _partitionAdvanced, partitions);
+        Array.Resize(ref _partitionCursorSaved, partitions);
         Array.Resize(ref _partitionGrainCache, partitions);
         Array.Resize(ref _partitionHead, partitions);
         Array.Resize(ref _partitionHeadDecoded, partitions);

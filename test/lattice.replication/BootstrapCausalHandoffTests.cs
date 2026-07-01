@@ -134,6 +134,7 @@ public partial class BootstrapCausalHandoffTests
     private static HandoffHarness CreateHarness(LatticeReplicationOptions? options = null)
     {
         var rows = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
+        var pinnedFloor = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
         var localVc = new VersionVector();
         var parked = new List<(WalRecord, string)>();
 
@@ -151,6 +152,17 @@ public partial class BootstrapCausalHandoffTests
             {
                 var origin = (string)call[0];
                 return Task.FromResult(rows.TryGetValue(origin, out var v) ? v : HybridLogicalClock.Zero);
+            });
+
+        // The snapshot-pinned floor is written only by PinSnapshotAsync
+        // (never advanced by TryAdvanceAsync) - the receiver's sole
+        // point-write drop threshold. Mirrors the real grain's
+        // PinnedFloor state.
+        hwm.GetPinnedFloorAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                var origin = (string)call[0];
+                return Task.FromResult(pinnedFloor.TryGetValue(origin, out var v) ? v : HybridLogicalClock.Zero);
             });
 
         hwm.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
@@ -194,10 +206,12 @@ public partial class BootstrapCausalHandoffTests
             {
                 var frontier = (VersionVector)call[1];
                 rows.Clear();
+                pinnedFloor.Clear();
                 localVc.Entries.Clear();
                 foreach (var (origin, clock) in frontier.Entries)
                 {
                     rows[origin] = clock;
+                    pinnedFloor[origin] = clock;
                     localVc.Entries[origin] = clock;
                 }
                 return Task.CompletedTask;

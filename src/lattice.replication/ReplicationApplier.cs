@@ -252,77 +252,71 @@ internal sealed partial class ReplicationApplier(
             var hwmGrain = GetHwmGrain(entry.TreeId);
             var hwm = await hwmGrain.GetAsync(entry.OriginClusterId!, cancellationToken);
 
-            // Bootstrap-drain bypass: the receiver-side coordinator
-            // wraps its per-entry ApplyAsync calls in a
-            // <see cref="LatticeBootstrapApplyContext"/> scope. The
-            // snapshot exporter walks shards and leaves in arbitrary
-            // order rather than HLC order, so prepared rows for the
-            // same saga across different shards can arrive with
-            // non-monotonic per-origin HLCs. Applying the per-origin
-            // HWM gate to those entries drops every row whose source
-            // HLC is below the highest already-seen source HLC -
-            // leaving the saga's per-tx pending bucket with a strict
-            // subset of its keys and producing a partial-saga view
-            // when the matching terminal arrives. The post-drain
-            // <see cref="Grains.IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>
-            // call atomically establishes the per-origin HWM at the
-            // snapshot's AsOfHlc, so steady-state dedup is preserved
-            // across the bootstrap-to-incremental handoff. Receiver-side
-            // idempotency during the drain is upheld by leaf-level LWW
-            // (re-delivery is a no-op), the per-leaf _recentlyTerminal
-            // guard (re-arriving terminals are dropped), and the
-            // per-tree ITxRegistryGrain repeat-same-outcome rule
-            // (re-marking a saga is a no-op). See
-            // <see cref="LatticeBootstrapApplyContext"/> for the
-            // rationale and the dedup primitives that remain in force.
+            // Point-write dedup gate: the SNAPSHOT-PINNED CAUSAL FLOOR,
+            // not the incrementally-advanced per-origin diagonal.
             //
-            // Phase D1c additional bypass: saga prepare-phase entries
-            // (IsPrepared==true) carry the producer-stamped per-leaf
-            // HLC, which under the batched-saga path
-            // (AtomicWriteGrain.ExecutePhaseAsync's parallel cross-leaf
-            // `lattice.SetManyAsync` fan-out) can be non-monotonic
-            // across the saga's touched leaves: each leaf has its own
-            // independent HLC clock and advances independently. The
-            // pump delivers entries in WAL-append order (offset-monotonic
-            // per partition), which is not HLC-monotonic per-origin
-            // when multiple leaves participate in a single producer-side
-            // saga. Applying the per-origin HWM gate to those entries
-            // would deduplicate the second-arriving (lower-HLC) prepared
-            // row, leaving the receiver's per-tx pending bucket with a
-            // strict subset of the saga's keys - the same partial-saga
-            // failure shape the bootstrap-drain bypass closes for the
-            // snapshot path. Idempotency on the prepared-write path is
-            // upheld by the leaf-level LWW merge inside
-            // <see cref="BPlusTree.Grains.BPlusLeafGrain.AddPreparedMutation"/>
-            // (re-delivery of the same (txid, key) merges via
-            // LwwValue.Merge and is a no-op for identical bytes) and
-            // the per-tx terminal-mark idempotency (TxRegistry
-            // repeat-same-outcome + per-leaf _recentlyTerminal
-            // HashSet).
+            // The source HLC is stamped per leaf (BPlusLeafGrain's own
+            // clock) and WAL/replog partitions are keyed by
+            // WalPartitionHash(key), so many independent per-leaf HLC
+            // streams interleave within one origin cluster. In WAL-append
+            // (delivery) order the per-origin HLC is therefore NOT
+            // monotonic: a genuinely-new point write to a distinct key
+            // routinely arrives with a source HLC below the highest
+            // already-applied source HLC for the same origin. Gating on
+            // the incremental diagonal (`entry.Timestamp <= hwm`) treated
+            // every such entry as a duplicate and silently discarded it -
+            // the receiver half of the #1060 replication-gap (US
+            // shipped == EU applied == 1041 of 3967). Correctness for the
+            // incremental stream is instead upheld by the shadow-forward
+            // identity cache below (exact (origin, hlc, key, op) tuple)
+            // plus the leaf-level per-key LWW guard (re-applying an
+            // already-present (key, source-HLC) is a no-op). A below-
+            // diagonal entry that survives both is a new write; its
+            // out-of-order arrival is surfaced (observability-only) by the
+            // FIFO-violation counter in RecordFifoState.
+            //
+            // The pinned floor IS a valid drop threshold: it is written
+            // only by PinSnapshotAsync (bootstrap-snapshot handoff or
+            // operator rollback re-pin), never by incremental
+            // TryAdvanceAsync, so every origin entry at or below it is
+            // provably contained in the pinned snapshot. Dropping those is
+            // the exactly-once optimisation for the snapshot -> incremental
+            // handoff: the peer may re-deliver a large below-snapshot
+            // backlog that is already captured by the restore, and the
+            // floor short-circuits it without a leaf round-trip. When no
+            // snapshot has been pinned the floor is HybridLogicalClock.Zero
+            // for every origin, so nothing is dropped.
+            //
+            // Bypasses (unchanged): bootstrap-drain delivery runs before
+            // the post-drain pin, so its floor is still Zero and the
+            // bypass is belt-and-braces; saga prepare-phase entries
+            // (IsPrepared && AtomicBatchSize > 0) carry non-monotonic
+            // per-leaf HLCs across the saga's touched leaves and are
+            // deduped by the per-leaf AddPreparedMutation LWW merge + the
+            // per-tx terminal-mark idempotency instead.
             var isBootstrapDrain = LatticeBootstrapApplyContext.IsActive;
             var isPreparedAtomicBatch = entry.IsPrepared && entry.AtomicBatchSize > 0;
-            if (!isBootstrapDrain && !isPreparedAtomicBatch && entry.Timestamp <= hwm)
+            if (!isBootstrapDrain && !isPreparedAtomicBatch)
             {
-                outcome = LatticeReplicationMetrics.OutcomeDedup;
-                return new ApplyResult { Applied = false, HighWaterMark = hwm };
+                var pinnedFloor = await hwmGrain.GetPinnedFloorAsync(entry.OriginClusterId!, cancellationToken);
+                if (entry.Timestamp <= pinnedFloor)
+                {
+                    outcome = LatticeReplicationMetrics.OutcomeDedup;
+                    return new ApplyResult { Applied = false, HighWaterMark = hwm };
+                }
             }
 
             // Shadow-forward dedupe cache: a structural rewrite (shard
             // split / merge / saga compensate) that shadow-forwards a
             // user write into a different shard generates a duplicate
-            // emit pair with identical (origin, hlc, key, op). The
-            // per-origin HWM check above catches the second delivery
-            // when it is sequential (first has already advanced the
-            // HWM), but a concurrent inbound delivery can otherwise
-            // observe the same pre-advance HWM on both deliveries and
-            // both pass before either advances it. The cache is the
-            // fast-path race-killer for that scenario. The check sits
-            // after HWM so HWM-deduped entries do not pollute the
-            // cache (which would break operator-driven re-pin
-            // scenarios where a lower frontier must re-admit a
-            // previously-deduped identity tuple). Range deletes bypass
-            // it entirely because they carry HLC.Zero (ambiguous
-            // identity).
+            // emit pair with identical (origin, hlc, key, op). This cache
+            // is the primary exact-identity dedup for incremental point
+            // writes (the pinned-floor gate above only covers entries
+            // provably inside a snapshot); it catches recent re-deliveries
+            // without a leaf hop, and any re-delivery evicted from the
+            // bounded cache falls through to the idempotent leaf-level LWW
+            // apply (a no-op for identical bytes). Range deletes bypass it
+            // entirely because they carry HLC.Zero (ambiguous identity).
             var cache = _dedupeCaches.GetOrAdd(
                 entry.TreeId,
                 static (_, capacity) => new RecentApplyCache(capacity),
