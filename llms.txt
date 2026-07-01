@@ -1,0 +1,46 @@
+# Orleans.Lattice
+
+> Orleans.Lattice is a sorted, durable, horizontally-scalable key-value store embedded directly in a Microsoft Orleans cluster. Keys are `string`, values are `byte[]`; the keyspace is sharded across self-balancing B+ trees whose state is backed by conflict-free (CRDT) lattice primitives, so the store converges deterministically without external databases, coordinators, or queues.
+
+This file is the entry point for AI agents and LLM tooling. Documentation lives in-repo as Markdown under `docs/`, and every public type carries XML doc comments that ship in the NuGet packages. Prefer the linked Markdown over crawling source.
+
+## Start here
+
+- [README](README.md): Overview, the full feature matrix, quick start, and performance characteristics.
+- [API Reference](docs/lattice/api.md): The public `ILattice` interface, batch operations, options, and serializable types.
+- [Configuration](docs/lattice/configuration.md): Options reference, per-tree overrides, immutability constraints, storage-provider registration.
+- [Samples](docs/lattice/samples.md): Runnable sample projects exercising `ILattice`.
+- [Consistency](docs/lattice/consistency.md): The per-operation guarantee matrix (what is strongly consistent, what is eventually convergent).
+
+## Core concepts
+
+- [Architecture](docs/lattice/architecture.md): Grain layers, sharding, root promotion, grain mapping, capacity.
+- [Tree structure](docs/lattice/tree-structure.md): Internal/leaf node layout, two-phase leaf splits, idempotent split propagation.
+- [State model](docs/lattice/state-model.md): WAL as canonical truth; leaf row holds topology + checkpoint only; delta-only CRDT mutation.
+- [State primitives](docs/lattice/state-primitives.md): The CRDT/lattice value types and how concurrent writes converge.
+- [WAL](docs/lattice/wal.md): The write-ahead log as the sole foreground-commit durability boundary.
+- [Shard splitting](docs/lattice/shard-splitting.md): Online, caller-transparent rebalancing of hot shards.
+
+## Key capabilities
+
+- [Atomic writes](docs/lattice/atomic-writes.md): All-or-nothing multi-key writes within a tree and across trees.
+- [Predicate operations](docs/lattice/predicated-operations.md): Server-side `Expression<Func<T,bool>>` push-down for reads, writes, scans, cursors, and range deletes.
+- [Durable cursors](docs/lattice/durable-cursors.md): Server-checkpointed iterators that survive silo failover and client restart.
+- [Snapshots](docs/lattice/snapshots.md) and [snapshot cursors](docs/lattice/snapshot-cursors.md): Point-in-time copies and isolated iteration.
+- [Materialised views](docs/lattice/materialised-views.md) and [history views](docs/lattice/history-views.md): WAL-driven projections and per-key revision history.
+- [TTL](docs/lattice/ttl.md), [tag indexes](docs/lattice/api.md#tag-indexes), [queues](docs/lattice/queues.md), [compression](docs/lattice/compression.md), [metrics](docs/lattice/metrics.md).
+
+## Optional packages
+
+- [Replication](docs/lattice.replication/README.md): Cross-cluster active-active replication (`Orleans.Lattice.Replication`).
+- [Replication gRPC transport](docs/lattice.replication.grpc/README.md): The canonical gRPC push transport (`Orleans.Lattice.Replication.Grpc`).
+- [State API](docs/lattice.api.state/README.md): Read-only cluster state facade (`Orleans.Lattice.Api.State`).
+- [State API gRPC binding](docs/lattice.api.state.grpc/README.md): Code-first gRPC binding and client (`Orleans.Lattice.Api.State.Grpc`).
+- [Azure Table WAL backend](docs/lattice.storage.azuretable/README.md): Durable WAL storage (`Orleans.Lattice.Storage.AzureTable`).
+- [Grafana dashboards](docs/lattice.dashboards/README.md): Bundled dashboards for the Lattice meters (`Orleans.Lattice.Dashboards`).
+
+## Working on this repository
+
+- [AGENTS.md](AGENTS.md): Build/test commands, conventions, and hygiene gates for agents making changes here.
+- [.github/copilot-instructions.md](.github/copilot-instructions.md): Repository conventions.
+- [Feature indexes](docs/lattice/features.md): Issue-linked index of tracked features, fixes, and gaps.
