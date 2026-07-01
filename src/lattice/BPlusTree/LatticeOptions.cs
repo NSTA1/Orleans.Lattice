@@ -407,6 +407,36 @@ public class LatticeOptions
     public const int DefaultMaxConcurrentSnapshotCaptures = 4;
 
     /// <summary>
+    /// Whether a snapshot-isolated cursor open (the <c>OpenSnapshot*CursorAsync</c>
+    /// family) is shed fast with a retryable <see cref="LatticeSaturatedException"/>
+    /// when the tree's per-silo WAL saturation signal reports
+    /// <see cref="WalSaturationState.Saturated"/> at the moment of the open,
+    /// before the expensive per-shard baseline capture is fanned out.
+    /// <para>
+    /// A snapshot open freezes and materialises every shard's leaf chain on the
+    /// non-reentrant shard roots - heavier than a single write. Admitting one
+    /// into an already-saturated tree piles that work onto roots that are
+    /// collapsing under write back-pressure, starving replication applies and
+    /// reads queued on the same roots, and a client that retries on the resulting
+    /// timeout sustains a scan storm. When enabled (the default), the open is
+    /// refused at admission: the caller receives a typed, retryable back-pressure
+    /// error and the fan-out never starts. Only
+    /// <see cref="WalSaturationState.Saturated"/> (the "pause new appends" regime)
+    /// sheds; a <see cref="WalSaturationState.Throttled"/> tree is unaffected and
+    /// stays browsable, mirroring the atomic-write saga's quiesce gate.
+    /// </para>
+    /// <para>
+    /// Set to <see langword="false"/> to restore the prior behaviour where a
+    /// snapshot open always proceeds regardless of the saturation regime. The
+    /// signal is a cheap silo-local lookup; the check adds no fan-out.
+    /// </para>
+    /// </summary>
+    public bool ShedSnapshotOpensWhenSaturated { get; set; } = DefaultShedSnapshotOpensWhenSaturated;
+
+    /// <summary>Default value for <see cref="ShedSnapshotOpensWhenSaturated"/> (<see langword="true"/>).</summary>
+    public const bool DefaultShedSnapshotOpensWhenSaturated = true;
+
+    /// <summary>
     /// Maximum number of moved-slot entries the split coordinator accumulates
     /// in a single <see cref="IShardRootGrain.MergeManyAsync"/> call to the
     /// target shard during drain. Larger values reduce per-call overhead;

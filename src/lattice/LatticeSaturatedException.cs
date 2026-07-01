@@ -22,7 +22,7 @@ namespace Orleans.Lattice;
 /// same silo activation can succeed once the regime clears.
 /// </para>
 /// <para>
-/// <b>Sources.</b> Surfaces from two distinct saturation failure
+/// <b>Sources.</b> Surfaces from three distinct saturation failure
 /// shapes that share the same operational meaning ("this tree's
 /// storage layer is back-pressured; the operation was refused"):
 /// </para>
@@ -39,6 +39,14 @@ namespace Orleans.Lattice;
 ///   saga refuses to dispatch into a still-saturated tree rather
 ///   than re-issuing the same RowKeys into a back-pressured storage
 ///   account, which would amplify the 409-Conflict burst.</description></item>
+///   <item><description>The snapshot-cursor read-admission refusal
+///   from <c>LatticeGrain.OpenSnapshotCursorAsync</c>, raised when
+///   <see cref="LatticeOptions.ShedSnapshotOpensWhenSaturated"/> is
+///   enabled and the per-tree saturation signal reports
+///   <see cref="WalSaturationState.Saturated"/> at the open, so the
+///   heavy per-shard baseline capture is shed before it fans out onto
+///   shard roots already collapsing under write back-pressure (the
+///   Explorer-driven scan storm documented in issue #1053).</description></item>
 /// </list>
 /// <para>
 /// Derives from <see cref="System.InvalidOperationException"/> so

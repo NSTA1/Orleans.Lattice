@@ -245,6 +245,22 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
             }
             catch (RpcException ex)
             {
+                // Application-level back-pressure: the tree is WAL-saturated and
+                // shed a heavy snapshot-cursor open (issue #1053), surfaced as
+                // gRPC ResourceExhausted. This is not a connection fault, and must
+                // not be auto-retried - retrying re-issues the expensive open into
+                // an already-collapsing tree, amplifying the very storm the shed
+                // exists to stop. Surface a friendly, user-retryable error and
+                // leave the connection Connected so other trees stay browsable.
+                if (ex.StatusCode == StatusCode.ResourceExhausted)
+                {
+                    throw new LatticeStateApiException(Friendly(ex), ex)
+                    {
+                        IsTransient = true,
+                        RequiresAuthentication = false,
+                    };
+                }
+
                 if (IsTransient(ex) && attempt < maxRetries)
                 {
                     EnterReconnecting();
@@ -528,6 +544,7 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
         StatusCode.PermissionDenied => "Access to the state API was denied.",
         StatusCode.Unimplemented => "The endpoint does not expose the Lattice state API.",
         StatusCode.NotFound => "The requested tree or entry was not found.",
+        StatusCode.ResourceExhausted => "This table is very busy right now, so it can't be opened for browsing for a moment. Please wait a few seconds and try again.",
         _ => $"The state-API call failed ({ex.StatusCode}).",
     };
 

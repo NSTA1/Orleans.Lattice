@@ -451,6 +451,7 @@ internal sealed class LatticeOptionsResolver(
             MaxConcurrentMigrations = baseOptions.MaxConcurrentMigrations,
             MaxConcurrentDrains = baseOptions.MaxConcurrentDrains,
             MaxConcurrentSnapshotCaptures = baseOptions.MaxConcurrentSnapshotCaptures,
+            ShedSnapshotOpensWhenSaturated = baseOptions.ShedSnapshotOpensWhenSaturated,
             SplitDrainBatchSize = baseOptions.SplitDrainBatchSize,
             AutoSplitMinTreeAge = baseOptions.AutoSplitMinTreeAge,
             MaxScanRetries = baseOptions.MaxScanRetries,
