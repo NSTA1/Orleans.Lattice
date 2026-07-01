@@ -55,4 +55,18 @@ public sealed record TreeMetrics
     /// empty.
     /// </summary>
     [Id(10)] public IReadOnlyList<ShardHotness> ShardHotness { get; init; } = Array.Empty<ShardHotness>();
+
+    /// <summary>
+    /// <see langword="true"/> when the sampler deliberately skipped the fresh
+    /// per-shard walk because the tree was reporting WAL saturation, so the
+    /// live counts (<see cref="LiveKeys"/>, <see cref="Tombstones"/>,
+    /// <see cref="MinDepth"/>/<see cref="MaxDepth"/>,
+    /// <see cref="ShardsSplitting"/>) and <see cref="ShardHotness"/> are paused
+    /// and reported as zero / empty rather than sampled. Registry-sourced fields
+    /// (<see cref="Lifecycle"/>, <see cref="ShardCount"/>) and any requested view
+    /// lag are still populated. The detail returns automatically once the tree
+    /// settles; a consumer should surface this as a transient "paused - busy"
+    /// state, not an error.
+    /// </summary>
+    [Id(11)] public bool DetailPaused { get; init; }
 }

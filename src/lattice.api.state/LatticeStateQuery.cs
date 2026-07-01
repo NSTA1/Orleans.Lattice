@@ -75,6 +75,25 @@ internal sealed class LatticeStateQuery(
         return ShardSummariesResult.Found(treeId, shards);
     }
 
+    public async Task<int?> GetPhysicalShardCountAsync(
+        string treeId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var tree = _grainFactory.GetGrain<ILattice>(treeId);
+        if (IsReservedTree(treeId) || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return null;
+        }
+
+        // Routing carries the physical shard map, so this is one grain call with
+        // no per-shard fan-out - safe against a saturated tree's contended roots.
+        var routing = await tree.GetRoutingAsync(cancellationToken).ConfigureAwait(false);
+        return routing.Map.GetPhysicalShardIndices().Count;
+    }
+
     public async Task<TreeCatalogPage> ListTreesAsync(
         CatalogRequest request,
         CancellationToken cancellationToken = default)

@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
 namespace Orleans.Lattice.Api.State;
@@ -20,7 +21,8 @@ namespace Orleans.Lattice.Api.State;
 /// </remarks>
 internal sealed class SharedMetricsSampler(
     ILatticeStateQuery query,
-    IOptions<LatticeApiStateOptions> apiOptions)
+    IOptions<LatticeApiStateOptions> apiOptions,
+    IServiceProvider services)
 {
     private const int CatalogPageSize = 200;
 
@@ -29,6 +31,13 @@ internal sealed class SharedMetricsSampler(
 
     private readonly LatticeApiStateOptions _apiOptions = (apiOptions
         ?? throw new ArgumentNullException(nameof(apiOptions))).Value;
+
+    // Best-effort: a host that did not register the core lattice services (for
+    // example a transport-only test harness) resolves null here and simply
+    // never pauses detail sampling. Mirrors the opt-in semantics the snapshot
+    // admission control already relies on.
+    private readonly IWalSaturationSignal? _saturationSignal = (services
+        ?? throw new ArgumentNullException(nameof(services))).GetService<IWalSaturationSignal>();
 
     private readonly object _gate = new();
     private readonly Dictionary<string, SamplerLoop> _loops = new(StringComparer.Ordinal);
@@ -207,42 +216,120 @@ internal sealed class SharedMetricsSampler(
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var summary = await _query.GetTreeSummaryAsync(treeId, deep: true, cancellationToken).ConfigureAwait(false);
-            if (summary.Status != StateQueryStatus.Found || summary.Summary is null)
+            var (viewCount, viewLagTotal) = ResolveViewLag(viewLag, treeId);
+
+            // A saturated tree's shard roots are already contended by the write
+            // backlog; a fresh per-shard diagnostics walk would only pile on. Skip
+            // it and serve a degraded view: registry-sourced lifecycle + shard
+            // count, live counts paused, hotness empty. The detail returns
+            // automatically once the tree settles.
+            if (_saturationSignal?.GetCurrentState(treeId) == WalSaturationState.Saturated)
+            {
+                var shardCount = await _query.GetPhysicalShardCountAsync(treeId, cancellationToken).ConfigureAwait(false);
+                if (shardCount is null)
+                {
+                    continue;
+                }
+
+                result[treeId] = new TreeMetrics
+                {
+                    TreeId = treeId,
+                    Lifecycle = TreeLifecycleState.Active,
+                    ShardCount = shardCount.Value,
+                    DetailPaused = true,
+                    ViewCount = viewCount,
+                    ViewLagTotal = viewLagTotal,
+                    ShardHotness = Array.Empty<ShardHotness>(),
+                };
+                continue;
+            }
+
+            // A single deep per-shard diagnostics fan-out backs both the tile
+            // aggregates and the per-shard hotness rows, so the metrics sample
+            // walks each shard once, not twice.
+            var shards = await _query.GetShardSummariesAsync(treeId, deep: true, cancellationToken).ConfigureAwait(false);
+            if (shards.Status != StateQueryStatus.Found)
             {
                 continue;
             }
 
-            var hotness = request.IncludeShardHotness
-                ? await SampleHotnessAsync(treeId, cancellationToken).ConfigureAwait(false)
-                : Array.Empty<ShardHotness>();
-
-            int? viewCount = null;
-            long? viewLagTotal = null;
-            if (viewLag is not null)
-            {
-                viewCount = viewLag.TryGetValue(treeId, out var rollup) ? rollup.Count : 0;
-                viewLagTotal = viewLag.TryGetValue(treeId, out var lag) ? lag.LagTotal : null;
-            }
-
-            var state = summary.Summary;
-            result[treeId] = new TreeMetrics
-            {
-                TreeId = treeId,
-                Lifecycle = state.Lifecycle,
-                ShardCount = state.ShardCount,
-                LiveKeys = state.TotalLiveKeys,
-                Tombstones = state.TombstoneCount,
-                MinDepth = state.MinDepth,
-                MaxDepth = state.MaxDepth,
-                ShardsSplitting = state.ShardsSplitting,
-                ViewCount = viewCount,
-                ViewLagTotal = viewLagTotal,
-                ShardHotness = hotness,
-            };
+            result[treeId] = BuildTreeMetrics(
+                treeId,
+                shards.Shards,
+                request.IncludeShardHotness,
+                viewCount,
+                viewLagTotal);
         }
 
         return result;
+    }
+
+    private static (int? ViewCount, long? ViewLagTotal) ResolveViewLag(
+        Dictionary<string, ViewRollup>? viewLag,
+        string treeId)
+    {
+        if (viewLag is null)
+        {
+            return (null, null);
+        }
+
+        var viewCount = viewLag.TryGetValue(treeId, out var rollup) ? rollup.Count : 0;
+        var viewLagTotal = viewLag.TryGetValue(treeId, out var lag) ? lag.LagTotal : null;
+        return (viewCount, viewLagTotal);
+    }
+
+    private static TreeMetrics BuildTreeMetrics(
+        string treeId,
+        IReadOnlyList<ShardStateSummary> shards,
+        bool includeHotness,
+        int? viewCount,
+        long? viewLagTotal)
+    {
+        long liveKeys = 0;
+        long tombstones = 0;
+        var minDepth = int.MaxValue;
+        var maxDepth = 0;
+        var splitting = 0;
+
+        var hotness = includeHotness && shards.Count > 0
+            ? new ShardHotness[shards.Count]
+            : Array.Empty<ShardHotness>();
+
+        for (var i = 0; i < shards.Count; i++)
+        {
+            var shard = shards[i];
+            liveKeys += shard.LiveKeys;
+            tombstones += shard.Tombstones;
+            if (shard.Depth < minDepth) minDepth = shard.Depth;
+            if (shard.Depth > maxDepth) maxDepth = shard.Depth;
+            if (shard.SplitInProgress) splitting++;
+
+            if (includeHotness && hotness.Length > 0)
+            {
+                hotness[i] = new ShardHotness
+                {
+                    ShardIndex = shard.ShardIndex,
+                    OpsPerSecond = shard.OpsPerSecond,
+                    LiveKeys = shard.LiveKeys,
+                    SplitInProgress = shard.SplitInProgress,
+                };
+            }
+        }
+
+        return new TreeMetrics
+        {
+            TreeId = treeId,
+            Lifecycle = TreeLifecycleState.Active,
+            ShardCount = shards.Count,
+            LiveKeys = liveKeys,
+            Tombstones = tombstones,
+            MinDepth = minDepth == int.MaxValue ? 0 : minDepth,
+            MaxDepth = maxDepth,
+            ShardsSplitting = splitting,
+            ViewCount = viewCount,
+            ViewLagTotal = viewLagTotal,
+            ShardHotness = hotness,
+        };
     }
 
     private async Task<List<string>> EnumerateTreeIdsAsync(bool includeSystemTrees, CancellationToken cancellationToken)
@@ -303,30 +390,6 @@ internal sealed class SharedMetricsSampler(
         while (!string.IsNullOrEmpty(pageToken));
 
         return rollups;
-    }
-
-    private async Task<IReadOnlyList<ShardHotness>> SampleHotnessAsync(string treeId, CancellationToken cancellationToken)
-    {
-        var shards = await _query.GetShardSummariesAsync(treeId, deep: false, cancellationToken).ConfigureAwait(false);
-        if (shards.Status != StateQueryStatus.Found || shards.Shards.Count == 0)
-        {
-            return Array.Empty<ShardHotness>();
-        }
-
-        var hotness = new ShardHotness[shards.Shards.Count];
-        for (var i = 0; i < shards.Shards.Count; i++)
-        {
-            var shard = shards.Shards[i];
-            hotness[i] = new ShardHotness
-            {
-                ShardIndex = shard.ShardIndex,
-                OpsPerSecond = shard.OpsPerSecond,
-                LiveKeys = shard.LiveKeys,
-                SplitInProgress = shard.SplitInProgress,
-            };
-        }
-
-        return hotness;
     }
 
     private static string BuildSignature(TreeMetricsRequest request, TimeSpan interval)

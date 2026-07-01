@@ -20,11 +20,21 @@ A metrics subscription emits the initial full snapshot, then only the **changes*
 
 The read surfaces run alongside the write path without contending with it. Entry scans use the core library's snapshot-isolated cursors rather than locking the foreground, and metrics sampling reads aggregate counters rather than walking live state. A cluster under write load with many readers and subscribers attached keeps its writes prompt - this is asserted directly by the package's efficiency guardrail tests.
 
+## One per-shard walk backs both tiles and hotness
+
+A per-tree metrics sample assembles the tile aggregates (live keys, tombstones, depth, splitting shards) and the optional per-shard hotness rows from a **single** deep per-shard diagnostics walk. Both projections are derived from the same shard array, so requesting `IncludeShardHotness` costs no extra fan-out - the hotness rows ride for free on the walk the tiles already need.
+
+## Metrics sampling steps aside for a saturated tree
+
+Metrics sampling is best-effort and yields to write pressure. When a tree is reporting WAL saturation, the sampler skips the fresh per-shard walk entirely for that tree and serves a degraded snapshot (`DetailPaused = true`) built only from a single fan-out-free routing read: lifecycle and shard count remain, live counts and hotness are paused. This keeps the metrics surface from adding read load to shard roots that are already contended, and the detail resumes automatically on the next sample once the tree settles - see [Surfaces](surfaces.md#detail-paused-under-saturation).
+
 ## What this means in practice
 
 - Installing the package on a cluster nobody is observing costs effectively nothing.
 - A dashboard with many panels watching the same tree's metrics drives one sampler, not many.
+- Enabling per-shard hotness adds no extra fan-out over the base tile sample.
 - A slow or disconnected observer degrades only its own view, never the cluster or its peers.
+- A saturated tree's metrics pause their live detail rather than piling read load onto its shard roots.
 
 ## Next
 

@@ -43,6 +43,21 @@ internal interface ILatticeStateQuery
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Returns the number of physical shards currently owning virtual slots for
+    /// the given tree, read from the tree's routing map, or <see langword="null"/>
+    /// when the tree does not exist. This is a single, fan-out-free grain call
+    /// (it reads the shard-count from routing and never walks the per-shard leaf
+    /// chains), so it is safe to call against a saturated tree whose shard roots
+    /// are already contended - unlike <see cref="GetShardSummariesAsync"/>, which
+    /// fans a diagnostics read out to every shard.
+    /// </summary>
+    /// <param name="treeId">Logical tree identifier.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<int?> GetPhysicalShardCountAsync(
+        string treeId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Enumerates the trees registered in the cluster as a paged, deterministic
     /// catalog ordered by tree id. Each entry carries the tree's lifecycle
     /// state, shard count, alias transparency, and effective configuration.
