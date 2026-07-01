@@ -53,7 +53,7 @@ public partial class ReplicationShipperGrainTests
         });
         feed.Append(MakeEntry("k", ticks: 1));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -80,7 +80,7 @@ public partial class ReplicationShipperGrainTests
         });
         feed.Append(MakeEntry("k", ticks: 1));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -106,7 +106,7 @@ public partial class ReplicationShipperGrainTests
         // Tick 1: capability not yet captured -> conservative fallback. The
         // ack from this tick advertises id 7, captured for the next tick.
         feed.Append(MakeEntry("k1", ticks: 1));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
         Assert.Multiple(() =>
         {
             Assert.That(CapturedHeaderCompression(transport), Is.EqualTo(LatticeCompression.Zstd));
@@ -116,7 +116,7 @@ public partial class ReplicationShipperGrainTests
         // Tick 2: the peer advertised id 7, so the shipper now compresses
         // with the negotiated dictionary.
         feed.Append(MakeEntry("k2", ticks: 2));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
         Assert.Multiple(() =>
         {
             Assert.That(CapturedHeaderCompression(transport), Is.EqualTo(LatticeCompression.ZstdDictionary));
@@ -139,10 +139,10 @@ public partial class ReplicationShipperGrainTests
         AdvertiseDictionaryIds(transport, 3u);
 
         feed.Append(MakeEntry("k1", ticks: 1));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         feed.Append(MakeEntry("k2", ticks: 2));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -188,12 +188,12 @@ public partial class ReplicationShipperGrainTests
 
         // Tick 1: capability not yet captured -> conservative fallback.
         feed.Append(MakeEntry("k1", ticks: 1));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         // Tick 2: the peer advertised id 7 with a matching fingerprint, so the
         // shipper compresses with the negotiated dictionary.
         feed.Append(MakeEntry("k2", ticks: 2));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -227,10 +227,10 @@ public partial class ReplicationShipperGrainTests
             new AdvertisedCompressionDictionary(7u, senderFingerprint ^ 0xFFFFFFFFFFFFFFFFUL));
 
         feed.Append(MakeEntry("k1", ticks: 1));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         feed.Append(MakeEntry("k2", ticks: 2));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         // The fingerprints disagree, so the shipper must fall back to
         // dictionary-less Zstd rather than ship a frame the peer would
@@ -337,10 +337,10 @@ public partial class ReplicationShipperGrainTests
         AdvertiseDictionaries(transport, new AdvertisedCompressionDictionary(5u, fingerprint));
 
         feed.Append(MakeEntry("k1", ticks: 1));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         feed.Append(MakeEntry("k2", ticks: 2));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -371,10 +371,10 @@ public partial class ReplicationShipperGrainTests
             new AdvertisedCompressionDictionary(5u, CompressionDictionaryFingerprint.Compute(new byte[] { 1, 2, 3 })));
 
         feed.Append(MakeEntry("k1", ticks: 1));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         feed.Append(MakeEntry("k2", ticks: 2));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -410,10 +410,10 @@ public partial class ReplicationShipperGrainTests
 
         // Tick 1 captures the peer advertisement; tick 2 converges on it.
         feed.Append(MakeEntry("k1", ticks: 1));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         feed.Append(MakeEntry("k2", ticks: 2));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(provider.TryGetDictionary(9u, out var stored), Is.True);
         Assert.That(stored.ToArray(), Is.EqualTo(bytes));

@@ -45,7 +45,7 @@ public partial class ReplicationShipperGrainTests
 
         // Tick 1: one entry, ships it, picks up the hint of 2.
         feed.Append(MakeEntry("k1", ticks: 1));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
         Assert.That(LastShippedEntryCount(transport), Is.EqualTo(1),
             "tick 1 is unhinted; the shipper drains everything available");
 
@@ -54,7 +54,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntry("k2", ticks: 2));
         feed.Append(MakeEntry("k3", ticks: 3));
         feed.Append(MakeEntry("k4", ticks: 4));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(LastShippedEntryCount(transport), Is.EqualTo(2),
             "tick 2 must respect the receiver's suggested cap");
@@ -84,12 +84,12 @@ public partial class ReplicationShipperGrainTests
             });
 
         feed.Append(MakeEntry("k1", ticks: 1));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         feed.Append(MakeEntry("k2", ticks: 2));
         feed.Append(MakeEntry("k3", ticks: 3));
         feed.Append(MakeEntry("k4", ticks: 4));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(LastShippedEntryCount(transport), Is.EqualTo(opts.ShipBatchSize),
             "an oversize hint must never exceed the configured ShipBatchSize");
@@ -121,13 +121,13 @@ public partial class ReplicationShipperGrainTests
             });
 
         feed.Append(MakeEntry("k1", ticks: 1));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         feed.Append(MakeEntry("k2", ticks: 2));
         feed.Append(MakeEntry("k3", ticks: 3));
         feed.Append(MakeEntry("k4", ticks: 4));
         feed.Append(MakeEntry("k5", ticks: 5));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(LastShippedEntryCount(transport), Is.EqualTo(opts.ShipBatchSize),
             "a zero hint must collapse back to the configured ShipBatchSize");
@@ -160,12 +160,12 @@ public partial class ReplicationShipperGrainTests
                 SuggestedBatchSize = 1,
             });
         feed.Append(MakeEntry("k1", ticks: 1));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         // Tick 2: hint still applies (clamped to 1).
         feed.Append(MakeEntry("k2", ticks: 2));
         feed.Append(MakeEntry("k3", ticks: 3));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
         Assert.That(LastShippedEntryCount(transport), Is.EqualTo(1),
             "throttle is active");
 
@@ -177,7 +177,7 @@ public partial class ReplicationShipperGrainTests
                 HighestAppliedHlc = HybridLogicalClock.Zero,
                 SuggestedBatchSize = null,
             });
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         // Tick 4: many new entries; cap reverts to ShipBatchSize.
         feed.Append(MakeEntry("k4", ticks: 4));
@@ -187,7 +187,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntry("k8", ticks: 8));
         feed.Append(MakeEntry("k9", ticks: 9));
         feed.Append(MakeEntry("k10", ticks: 10));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(LastShippedEntryCount(transport), Is.EqualTo(opts.ShipBatchSize),
             "recovered receiver returning null hint must restore full ShipBatchSize");
@@ -218,12 +218,12 @@ public partial class ReplicationShipperGrainTests
             });
 
         feed.Append(MakeEntry("k1", ticks: 1));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
         await transport.Received(1).SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
 
         // Second doorbell inside the pause window: pump must short-circuit.
         feed.Append(MakeEntry("k2", ticks: 2));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
         await transport.Received(1).SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
     }
 
@@ -252,10 +252,10 @@ public partial class ReplicationShipperGrainTests
             });
 
         feed.Append(MakeEntry("k1", ticks: 1));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         feed.Append(MakeEntry("k2", ticks: 2));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         await transport.Received(2).SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
     }
@@ -284,10 +284,10 @@ public partial class ReplicationShipperGrainTests
             });
 
         feed.Append(MakeEntry("k1", ticks: 1));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         feed.Append(MakeEntry("k2", ticks: 2));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         await transport.Received(2).SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
     }
@@ -326,7 +326,7 @@ public partial class ReplicationShipperGrainTests
             feed.Append(MakeEntry($"k{i}", ticks: i));
         }
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -358,7 +358,7 @@ public partial class ReplicationShipperGrainTests
             feed.Append(MakeEntry($"k{i}", ticks: i));
         }
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(state.State.Cursor,
             Is.EqualTo(new HybridLogicalClock { WallClockTicks = 6, Counter = 0 }));
@@ -392,7 +392,7 @@ public partial class ReplicationShipperGrainTests
         // Tick 1: two entries -> one full batch; receiver asks to slow down.
         feed.Append(MakeEntry("k1", ticks: 1));
         feed.Append(MakeEntry("k2", ticks: 2));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
         var afterTick1 = SendCallCount(transport);
 
         // Tick 2: six new entries. With the hint active the window
@@ -402,7 +402,7 @@ public partial class ReplicationShipperGrainTests
         {
             feed.Append(MakeEntry($"k{i}", ticks: i));
         }
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -439,7 +439,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntry("k2", ticks: 2));
         feed.Append(MakeEntry("k3", ticks: 3));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(state.State.Cursor,
             Is.EqualTo(new HybridLogicalClock { WallClockTicks = 1, Counter = 0 }),
@@ -462,7 +462,7 @@ public partial class ReplicationShipperGrainTests
         };
         var (grain, _, _, transport, _, _, _) = Create(opts);
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         await transport.DidNotReceive().SendAsync(
             Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());

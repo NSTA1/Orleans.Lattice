@@ -62,6 +62,26 @@ internal abstract class CoordinatorGrain<TSelf>(
     Task IGrainBase.OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
         => OnDeactivateCoreAsync(reason, cancellationToken);
 
+    /// <summary>
+    /// Hook invoked when Orleans activates the grain, regardless of what
+    /// caused the activation (a client call, an incoming message, or a
+    /// reminder-driven reactivation). Default is a no-op: the one-shot
+    /// coordinators start their phase timer only once intent has been
+    /// persisted via <see cref="StartCoordinatorAsync"/>, so they must not
+    /// begin processing merely because something activated them. A
+    /// perpetual coordinator (one whose <see cref="InProgress"/> is always
+    /// <c>true</c>) overrides this to (re)arm its phase timer here, so
+    /// steady-state processing is decoupled from the specific call that
+    /// happened to activate it and can never be starved by that call
+    /// blocking the activation.
+    /// </summary>
+    /// <param name="cancellationToken">Soft deadline for the activation hook.</param>
+    protected virtual Task OnActivateCoreAsync(CancellationToken cancellationToken)
+        => Task.CompletedTask;
+
+    Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken)
+        => OnActivateCoreAsync(cancellationToken);
+
     /// <summary>Reminder-registry handle used by derived classes.</summary>
     protected IReminderRegistry ReminderRegistry => reminderRegistry;
 

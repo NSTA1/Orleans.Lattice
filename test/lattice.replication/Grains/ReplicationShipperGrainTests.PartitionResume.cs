@@ -43,7 +43,7 @@ public partial class ReplicationShipperGrainTests
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
             .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = ackHlc });
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -67,7 +67,7 @@ public partial class ReplicationShipperGrainTests
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
             .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = ackHlc });
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -85,7 +85,7 @@ public partial class ReplicationShipperGrainTests
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
             .Returns<ReplicationAck>(_ => throw new InvalidOperationException("transport-down"));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         // No partition cursor entry was persisted because the round-trip failed.
         Assert.That(state.State.PartitionCursors, Is.Empty);
@@ -99,7 +99,7 @@ public partial class ReplicationShipperGrainTests
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
             .Returns(new ReplicationAck { Accepted = false, HighestAppliedHlc = HybridLogicalClock.Zero });
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(state.State.PartitionCursors, Is.Empty);
     }
@@ -131,9 +131,9 @@ public partial class ReplicationShipperGrainTests
             });
 
         // Three pump ticks consume two entries each.
-        await grain.OnDoorbellAsync(CancellationToken.None);
-        await grain.OnDoorbellAsync(CancellationToken.None);
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         // ReadFromSequences captures the fromSequence of every read.
         // The first read must be 0; every subsequent read on the same
@@ -164,7 +164,7 @@ public partial class ReplicationShipperGrainTests
             feed.Append(MakeEntry($"k{i}", origin: Peer, ticks: i + 1));
         }
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -191,9 +191,9 @@ public partial class ReplicationShipperGrainTests
             feed.Append(MakeEntry($"k{i}", origin: Peer, ticks: i + 1));
         }
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
         var readsAfterFirstTick = feed.ReadFromSequences.Count;
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -245,7 +245,7 @@ public partial class ReplicationShipperGrainTests
                 };
             });
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         // The HLC filter dropped entries 0..4 (HLC 1..5 all <= cursor 5);
         // only entries 5..7 (HLC 6..8) made it into the batch.
@@ -378,7 +378,7 @@ public partial class ReplicationShipperGrainTests
             new WireVersionNegotiationState(), new NoOpReplicationDigestProbeTransport());
         grain.InitializeForTesting(Tree, Peer);
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         // The merge-loop must emit entries in HLC-ascending order
         // regardless of which partition they came from.
@@ -406,7 +406,7 @@ public partial class ReplicationShipperGrainTests
                 };
             });
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(captured, Is.Not.Null,
             "An empty partition must not pin the drain - the merge must still emit entries from the populated partition.");
@@ -427,7 +427,7 @@ public partial class ReplicationShipperGrainTests
                 HighestAppliedHlc = new HybridLogicalClock { WallClockTicks = 2, Counter = 0 },
             });
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -460,7 +460,7 @@ public partial class ReplicationShipperGrainTests
                 Accepted = true,
                 HighestAppliedHlc = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 },
             });
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
         Assert.That(state.State.PartitionCursors[0], Is.EqualTo(1L));
 
         // Now grow to 2 partitions on a fresh activation that inherits the same state.
@@ -510,7 +510,7 @@ public partial class ReplicationShipperGrainTests
         _ = feeds2;
         _ = transport2;
 
-        await freshGrain.OnDoorbellAsync(CancellationToken.None);
+        await freshGrain.PumpForTestingAsync(CancellationToken.None);
 
         // Partition 0's cursor was preserved; partition 1's cursor was created.
         Assert.Multiple(() =>
@@ -545,7 +545,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntry("dropped/a", ticks: 1));
         feed.Append(MakeEntry("dropped/b", ticks: 2));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         // Nothing was sent (every entry filtered).
         await transport.DidNotReceive().SendAsync(
@@ -586,9 +586,9 @@ public partial class ReplicationShipperGrainTests
                     : new HybridLogicalClock { WallClockTicks = ackHlc.WallClockTicks, Counter = 0 },
             });
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
-        await grain.OnDoorbellAsync(CancellationToken.None);
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         // Three successful acks at interval=4 means zero durable writes so far.
         Assert.That(state.WriteCount, Is.EqualTo(0),
@@ -625,11 +625,11 @@ public partial class ReplicationShipperGrainTests
             });
 
         // Advance 1, 2 - no flush yet. Advance 3 - first flush.
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
         Assert.That(state.WriteCount, Is.EqualTo(0));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
         Assert.That(state.WriteCount, Is.EqualTo(0));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
         Assert.That(state.WriteCount, Is.EqualTo(1),
             "The third successful ack at interval=3 must trigger the durable write.");
     }
@@ -651,9 +651,9 @@ public partial class ReplicationShipperGrainTests
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
             .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
-        await grain.OnDoorbellAsync(CancellationToken.None);
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         // Three acks at interval=4 means zero registry reports so far -
         // the registry feeds the WAL GC trim frontier and must never
@@ -678,8 +678,8 @@ public partial class ReplicationShipperGrainTests
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
             .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         // Second ack hits interval=2 → flush + report.
         await registry.Received(1).ReportCursorAsync(
@@ -705,7 +705,7 @@ public partial class ReplicationShipperGrainTests
             .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = hlc });
 
         // First pump: advances HLC to 5, reports.
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
         Assert.That(state.State.Cursor, Is.EqualTo(hlc));
         await registry.Received(1).ReportCursorAsync(
             Tree, Peer, hlc, Arg.Any<CancellationToken>());
@@ -733,7 +733,7 @@ public partial class ReplicationShipperGrainTests
             Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
             .Returns<Task>(_ => Task.FromException(new InvalidOperationException("registry-down")));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -759,8 +759,8 @@ public partial class ReplicationShipperGrainTests
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
             .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
         Assert.That(state.WriteCount, Is.EqualTo(0), "No interval flush yet.");
 
         // Drive the deactivation hook; pending writes must flush.
@@ -796,7 +796,7 @@ public partial class ReplicationShipperGrainTests
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
             .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
         // Arm the next WriteStateAsync call to fail.
         state.ThrowOnWrite = new InvalidOperationException("storage-down");
 
@@ -850,12 +850,12 @@ public partial class ReplicationShipperGrainTests
             .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
 
         // First ack: pending=1, count(1) < 100, no time elapsed - deferred.
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
         Assert.That(state.WriteCount, Is.EqualTo(0), "First advance must defer - neither threshold reached.");
 
         // Advance past the max delay, then book a second advance.
         clock.Advance(TimeSpan.FromSeconds(6));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(state.WriteCount, Is.EqualTo(1),
             "An advance booked after ShipCursorWriteMaxDelay has elapsed must force a durable flush even below the batch-count interval.");
@@ -886,13 +886,13 @@ public partial class ReplicationShipperGrainTests
             .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
 
         // Ship the one entry: pending=1, deferred.
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
         Assert.That(state.WriteCount, Is.EqualTo(0), "Partial batch must defer below the batch-count interval.");
 
         // Stream is now drained. Advance past the max delay and pump an
         // idle tick - the empty-drain path must flush the pending cursor.
         clock.Advance(TimeSpan.FromSeconds(6));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(state.WriteCount, Is.EqualTo(1),
             "An idle pump tick after ShipCursorWriteMaxDelay has elapsed must flush the pending cursor write.");
@@ -916,10 +916,10 @@ public partial class ReplicationShipperGrainTests
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
             .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
         // Advance only part-way to the max delay.
         clock.Advance(TimeSpan.FromSeconds(2));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(state.WriteCount, Is.EqualTo(0),
             "Below both the batch-count interval and the max delay, the pending cursor write must stay deferred.");
@@ -946,13 +946,13 @@ public partial class ReplicationShipperGrainTests
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
             .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
         // A full hour of wall-clock time passes - irrelevant when the
         // time dimension is disabled.
         clock.Advance(TimeSpan.FromHours(1));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
         // And an idle tick at the same elapsed time must also not flush.
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(state.WriteCount, Is.EqualTo(0),
             "Timeout.InfiniteTimeSpan must disable the time dimension so only the batch-count interval can flush.");
@@ -1015,7 +1015,7 @@ public partial class ReplicationShipperGrainTests
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
             .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = ackFrontier });
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(state.State.Cursor, Is.EqualTo(ackFrontier),
             "Receiver returned a frontier > sourceHlc - shipper must trust the ack and jump the cursor.");
@@ -1060,7 +1060,7 @@ public partial class ReplicationShipperGrainTests
 
         // Tick 1: receiver returns a high frontier; cursor jumps to 50
         // and the partition sequence cursor is persisted.
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
         Assert.Multiple(() =>
         {
             Assert.That(state.State.Cursor.WallClockTicks, Is.EqualTo(50L),
@@ -1076,7 +1076,7 @@ public partial class ReplicationShipperGrainTests
         // this is a real write past the saved partition cursor and must
         // ship - it must NOT be dropped by the scalar-HLC filter.
         feed.Append(MakeEntry("k1", ticks: 10));
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(sent, Has.Count.EqualTo(2),
             "A new below-cursor entry past the saved partition cursor must ship (#1060); the shipper must send a second, non-empty batch rather than dropping it on the scalar-HLC filter.");

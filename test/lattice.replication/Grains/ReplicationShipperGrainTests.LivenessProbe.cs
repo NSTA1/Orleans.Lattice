@@ -20,7 +20,7 @@ public partial class ReplicationShipperGrainTests
         // every existing producer-side test depends on.
         var (grain, _, _, transport, _, _, _) = Create();
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         var calls = transport.ReceivedCalls()
             .Where(c => c.GetMethodInfo().Name == nameof(IReplicationTransport.SendAsync))
@@ -40,11 +40,11 @@ public partial class ReplicationShipperGrainTests
         var (grain, _, _, transport, _, _, _) = Create(opts);
 
         // First tick anchors the probe-interval timer to now.
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         // Sleep past the (tiny) configured interval and tick again.
         await Task.Delay(50);
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         var calls = transport.ReceivedCalls()
             .Where(c => c.GetMethodInfo().Name == nameof(IReplicationTransport.SendAsync))
@@ -68,7 +68,7 @@ public partial class ReplicationShipperGrainTests
         };
         var (grain, _, _, transport, _, _, _) = Create(opts);
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         var calls = transport.ReceivedCalls()
             .Where(c => c.GetMethodInfo().Name == nameof(IReplicationTransport.SendAsync))
@@ -91,13 +91,13 @@ public partial class ReplicationShipperGrainTests
         // First tick anchors; second tick fires the probe. Make the
         // probe send throw - the existing transport-backoff path must
         // engage (RecordError increments peer.consecutive_errors).
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
         transport
             .When(t => t.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>()))
             .Do(_ => throw new TimeoutException("simulated probe transport failure"));
 
         await Task.Delay(50);
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         var calls = transport.ReceivedCalls()
             .Where(c => c.GetMethodInfo().Name == nameof(IReplicationTransport.SendAsync))

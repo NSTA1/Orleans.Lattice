@@ -45,7 +45,7 @@ public partial class ReplicationShipperGrainTests
         var (grain, _, feed, transport, _, _, _) = Create();
         feed.Append(MakeTombstoneReapEntry(ticks: 5));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         await transport.DidNotReceive().SendAsync(
             Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
@@ -65,7 +65,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntry("user/k1", ticks: 5));
         feed.Append(MakeTombstoneReapEntry(key: "user/k2", ticks: 7));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         await transport.Received(1).SendAsync(
             Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
@@ -90,7 +90,7 @@ public partial class ReplicationShipperGrainTests
         var (grain, _, feed, transport, _, _, _) = Create(opts);
         feed.Append(MakeTombstoneReapEntry(key: "anything-passes-the-filter", ticks: 5));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         await transport.DidNotReceive().SendAsync(
             Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());

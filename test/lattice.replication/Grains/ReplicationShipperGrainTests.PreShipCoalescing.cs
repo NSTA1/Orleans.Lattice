@@ -133,7 +133,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntry("hot", ticks: 3));
         feed.Append(MakeEntry("other", ticks: 4));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(LastShippedEntryCount(transport), Is.EqualTo(4),
             "with coalescing off the shipper ships every drained version verbatim");
@@ -148,7 +148,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntry("hot", ticks: 3));
         feed.Append(MakeEntry("other", ticks: 4));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(LastShippedEntryCount(transport), Is.EqualTo(2),
             "coalescing collapses the three 'hot' versions to the highest-HLC one, keeping 'other'");
@@ -162,7 +162,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntry("b", ticks: 2));
         feed.Append(MakeEntry("c", ticks: 3));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(LastShippedEntryCount(transport), Is.EqualTo(3),
             "three distinct keys have nothing to coalesce; all three ship");
@@ -176,7 +176,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntry("k", ticks: 2));
         feed.Append(MakeDelete("k", ticks: 3));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(LastShippedEntryCount(transport), Is.EqualTo(1),
             "the highest-HLC point write for the key is the delete, so only it survives");
@@ -192,7 +192,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntry("hot", ticks: 2));
         feed.Append(MakeEntry("hot", ticks: 3));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(LastShippedEntryCount(transport), Is.EqualTo(3),
             "CRDT-mode trees apply via delta merge; coalescing must leave every version verbatim");
@@ -206,7 +206,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntry("k", ticks: 2));
         feed.Append(MakeRangeDelete("a", "z"));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         // The two 'k' sets collapse to one; the range delete is never a
         // coalescing candidate and ships verbatim.
@@ -221,7 +221,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeZeroHlcSet("k"));
         feed.Append(MakeEntry("k", ticks: 2));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         // Without the zero-HLC guard the zero entry (lower order) would be
         // elided in favour of the real-HLC one; the guard keeps it verbatim.
@@ -237,7 +237,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakePreparedSet("k", ticks: 1, txId, batchSize: 2, batchIndex: 0));
         feed.Append(MakePreparedSet("k", ticks: 2, txId, batchSize: 2, batchIndex: 1));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(LastShippedEntryCount(transport), Is.EqualTo(2),
             "saga prepare-phase entries are never coalesced across the atomic-batch boundary");
@@ -256,7 +256,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntry("hot", ticks: 3));
         feed.Append(MakeEntry("other", ticks: 4));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -278,7 +278,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntry("other", ticks: 4));
 
         using var recorder = new CoalesceMetricRecorder();
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -297,7 +297,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntry("b", ticks: 2));
 
         using var recorder = new CoalesceMetricRecorder();
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.That(recorder.EntriesElided, Is.EqualTo(0),
             "with no redundant per-key versions the counter never fires");
@@ -312,7 +312,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntry("hot", ticks: 3));
 
         using var recorder = new CoalesceMetricRecorder();
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {

@@ -68,7 +68,7 @@ public partial class ReplicationShipperGrainTests
             });
         feed.Append(MakeTerminalEntry(MutationKind.TxCommit, shardIndex: 0, ticks: 5));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         await transport.Received(1).SendAsync(
             Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
@@ -87,7 +87,7 @@ public partial class ReplicationShipperGrainTests
         var (grain, _, feed, transport, _, _, _) = Create(opts);
         feed.Append(MakeTerminalEntry(MutationKind.TxAbort, shardIndex: 3, ticks: 7));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         await transport.Received(1).SendAsync(
             Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
@@ -109,7 +109,7 @@ public partial class ReplicationShipperGrainTests
         var (grain, _, feed, transport, _, _, _) = Create(opts);
         feed.Append(MakeTerminalEntry(MutationKind.TxCommit, shardIndex: 2, ticks: 5));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         await transport.Received(1).SendAsync(
             Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
@@ -127,7 +127,7 @@ public partial class ReplicationShipperGrainTests
         var (grain, _, feed, transport, _, _, _) = Create(opts);
         feed.Append(MakeTerminalEntry(MutationKind.TxAbort, shardIndex: 1, ticks: 9));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         await transport.Received(1).SendAsync(
             Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
@@ -151,7 +151,7 @@ public partial class ReplicationShipperGrainTests
         feed.Append(MakeEntry("other/x", ticks: 5));
         feed.Append(MakeTerminalEntry(MutationKind.TxCommit, shardIndex: 0, ticks: 7));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         await transport.Received(1).SendAsync(
             Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
@@ -169,7 +169,7 @@ public partial class ReplicationShipperGrainTests
         var (grain, _, feed, transport, _, _, _) = Create();
         feed.Append(MakeTerminalEntry(MutationKind.TxCommit, shardIndex: 0, origin: Peer, ticks: 5));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         await transport.DidNotReceive().SendAsync(
             Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
@@ -181,7 +181,7 @@ public partial class ReplicationShipperGrainTests
         var (grain, _, feed, transport, _, _, _) = Create();
         feed.Append(MakeTerminalEntry(MutationKind.TxAbort, shardIndex: 2, origin: Peer, ticks: 5));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         await transport.DidNotReceive().SendAsync(
             Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
@@ -197,7 +197,7 @@ public partial class ReplicationShipperGrainTests
         var (grain, _, feed, transport, _, _, _) = Create();
         feed.Append(MakeTerminalEntry(MutationKind.TxCommit, shardIndex: 0, origin: string.Empty, ticks: 5));
 
-        await grain.OnDoorbellAsync(CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         await transport.DidNotReceive().SendAsync(
             Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
