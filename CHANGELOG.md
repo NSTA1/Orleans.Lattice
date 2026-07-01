@@ -8,9 +8,13 @@ This changelog covers the **package family**: `Orleans.Lattice`, `Orleans.Lattic
 
 ## [Unreleased]
 
-These items are merged into `main` but held back from a published release: the `Orleans.Lattice.Api.State` / `Orleans.Lattice.Api.State.Grpc` packages (F-110) and the `Orleans.Lattice.Explorer` UI, plus the change-history read surface they expose (F-143) and the change-history sample / docs showcase (F-146). They sit on top of the v7.6.0 cut and accumulate under the `### Added` / `### Changed` / `### Fixed` / `### Breaking` headings until the next ship cut.
-
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), indexed in [`docs/lattice/features.md`](docs/lattice/features.md) and [`docs/lattice.replication/features.md`](docs/lattice.replication/features.md). See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
+
+## [7.7.0] - 2026-07-01
+
+Coordinated minor release across the shipping package family (`Orleans.Lattice`, `Orleans.Lattice.Storage.AzureTable`, `Orleans.Lattice.Replication`, `Orleans.Lattice.Replication.Grpc`, `Orleans.Lattice.Dashboards`, `Orleans.Lattice.Api.State`, `Orleans.Lattice.Api.State.Grpc`), all raised to `7.7.0` in lockstep on the minor digit.
+
+This is the cut that first publishes the `Orleans.Lattice.Api.State` / `Orleans.Lattice.Api.State.Grpc` read-only cluster-state introspection packages (F-110) - a transport-agnostic read facade and its code-first gRPC binding that fails closed under authorization - together with the change-history read surface they expose (F-143) and the `Orleans.Lattice.Explorer` change-history UI and sample / docs showcase (F-144 / F-145 / F-146) that depend on them; all of these were held back from the v7.6.0 cut and now ship. It also carries a large cluster of write-burst hardening fixes: the snapshot-scan-storm series (FX-068 / FX-069 / FX-070) that bounds and sheds snapshot-cursor baseline capture on a saturated tree, the replication-shipper series (FX-071 / FX-072 / FX-073) that coalesces doorbells, closes a silent cross-cluster replication gap under non-monotonic per-origin HLC, and drains the ship path continuously, the dashboard congestion-collapse and saturation-gauge fixes (FX-074 / FX-075), and the earlier FX-065 WAL leaf-materialiser drain back-pressure, FX-066 paged-range-scan read-amplification, and FX-067 adaptive-batch-sizing wedge fixes. Safe drop-in upgrade from v7.6.0; no public-API removal and no wire-format change.
 
 ### Added
 
@@ -379,7 +383,8 @@ Major release across the package family. Two source-affecting changes set the ma
 Changelog entries for v6.x and earlier - down to the historical pre-v6.0.0 notes - have been archived to [`CHANGELOG.old.v6.md`](CHANGELOG.old.v6.md).
 
 ---
-[Unreleased]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.6.0...HEAD
+[Unreleased]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.7.0...HEAD
+[7.7.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.6.0...v7.7.0
 [7.6.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.5.0...v7.6.0
 [7.5.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.4.0...v7.5.0
 [7.4.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.3.3...v7.4.0
