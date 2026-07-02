@@ -2,6 +2,35 @@
 
 Each sample lives under [`samples/`](../../samples) and is a self-contained runnable project.
 
+## Feature gallery
+
+Minimal, single-feature samples - one per row in the [README feature table](../../README.md#features). Each is an independent console app that hosts a single-silo in-process cluster (like [HelloWorld](#helloworld)), demonstrates exactly one capability with heavily-commented, before/after output, and carries its own README with a "When to use / When not to use" note. Run any of them with `dotnet run --project samples/<Name>`.
+
+| Sample | What it shows |
+|---|---|
+| [AtomicWrites](../../samples/AtomicWrites/README.md) | `SetManyAtomicAsync` all-or-nothing multi-key writes, a failed-guard batch that leaves no partial state, and the cross-tree `IGrainFactory` overload. |
+| [BulkLoading](../../samples/BulkLoading/README.md) | Seeding an empty tree via one-shot `BulkLoadAsync` and streaming `IAsyncEnumerable` ingestion. |
+| [ChangeHistory](../../samples/ChangeHistory/README.md) | Reading a key's revision timeline with `ScanEntryHistoryAsync`. |
+| [ConflictFreeMerges](../../samples/ConflictFreeMerges/README.md) | Two CRDT writers converging to the same result regardless of merge order. |
+| [CrossClusterReplication](../../samples/CrossClusterReplication/README.md) | Two in-process clusters over gRPC where a write on one converges onto the other. |
+| [Diagnostics](../../samples/Diagnostics/README.md) | The `DiagnoseAsync` per-tree health snapshot: shard depth, live keys, tombstones, hotness. |
+| [DurableCursors](../../samples/DurableCursors/README.md) | A server-checkpointed cursor resuming from its last yielded key after a client restart. |
+| [Events](../../samples/Events/README.md) | Subscribing to the per-tree `LatticeTreeEvent` Orleans stream. |
+| [HistoryViews](../../samples/HistoryViews/README.md) | An opt-in durable per-key history view whose revisions survive WAL garbage collection. |
+| [MaterialisedViews](../../samples/MaterialisedViews/README.md) | A filter view and a sum-aggregation view maintained off the source tree's WAL. |
+| [Metrics](../../samples/Metrics/README.md) | Reading the `orleans.lattice` meter instruments with a `MeterListener`. |
+| [OnlineReshard](../../samples/OnlineReshard/README.md) | Growing the physical shard count online with reads, writes, and data intact throughout. |
+| [PredicateOperations](../../samples/PredicateOperations/README.md) | Server-side `Expression<Func<T, bool>>` push-down so only matching keys or values cross the wire. |
+| [Resize](../../samples/Resize/README.md) | Changing `MaxLeafKeys` / `MaxInternalChildren` on a live, populated tree. |
+| [RetryPolicy](../../samples/RetryPolicy/README.md) | An idempotency-keyed retry policy recovering from simulated transient storage faults. |
+| [SnapshotCursors](../../samples/SnapshotCursors/README.md) | Strict snapshot isolation: mid-iteration writes stay invisible to an open snapshot cursor. |
+| [Snapshots](../../samples/Snapshots/README.md) | An offline point-in-time copy of a whole tree into an independent destination tree. |
+| [SoftDeleteRecovery](../../samples/SoftDeleteRecovery/README.md) | Soft-deleting a tree within its retention window, recovering it, then purging permanently. |
+| [StronglyConsistentScans](../../samples/StronglyConsistentScans/README.md) | `CountAsync` / `ScanKeysAsync` / `ScanEntriesAsync` returning the exact live key set under concurrent writes. |
+| [TagIndexes](../../samples/TagIndexes/README.md) | Tagging keys and querying them back with `WithAllTags` (intersection) and `WithAnyTags` (union). |
+| [TreeRegistry](../../samples/TreeRegistry/README.md) | Enumerating all user trees and their per-tree configuration overrides. |
+| [Ttl](../../samples/Ttl/README.md) | Per-entry time-to-live: a key visible before its TTL and gone after it expires. |
+
 ## HelloWorld
 
 [`samples/HelloWorld`](../../samples/HelloWorld)
