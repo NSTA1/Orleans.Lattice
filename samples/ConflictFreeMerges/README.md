@@ -1,5 +1,19 @@
 # Conflict-Free Merges
 
+## :warning: CRDTs are opt-in
+
+Plain writes on a tree - `SetAsync`, `SetManyAsync`, `SetManyAtomicAsync`, and
+friends - are **last-writer-wins** (an `LwwRegister`): when two writers touch the
+same key concurrently, the later timestamp silently overwrites the earlier one
+and the losing update is discarded. That is the correct default for ordinary
+key/value data, but it is **not** conflict-free.
+
+To get the convergent, no-lost-update behaviour shown below you must
+**explicitly opt in** by writing through one of the typed CRDT extension
+accessors (`tree.PnCounter(key)`, `tree.OrSet(key)`, `tree.OrFlag(key)`, ...).
+The accessor picks the right merge mode for the key; a plain `SetAsync` to the
+same key would fall back to last-writer-wins.
+
 ## What it shows
 
 Every value in Orleans.Lattice is a CRDT, so independent writers can mutate the
