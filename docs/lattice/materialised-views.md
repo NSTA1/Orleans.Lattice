@@ -287,8 +287,8 @@ to get exact per-key retraction on a re-keyed view and avoid the rebuild.
 
 An **aggregation view** is a grouped reduce: each source entry is mapped to a
 **group key** (a legitimate many-to-one mapping, unlike the injective filter /
-re-project re-key), and the view materialises one reduced value per group. Five
-reduces are supported through `AggregationKind`:
+re-project re-key), and the view materialises one reduced value per group. The
+built-in reduces are exposed through `AggregationKind`:
 
 | Kind | Materialised value | Selector required |
 |------|--------------------|-------------------|
@@ -297,6 +297,22 @@ reduces are supported through `AggregationKind`:
 | `Min` | Smallest live contribution (`double`) | value selector |
 | `Max` | Largest live contribution (`double`) | value selector |
 | `SetUnion` | Distinct-member cardinality (`long`) | member selector |
+| `Fold` | A user-defined fold's accumulator (opaque bytes) | group key + `Initial` / `Apply` fold |
+
+The first five are commutative-numeric reduces declared with
+`AggregationLatticeViewProjection.Create<T>`; `Fold` is a custom, non-commutative
+reduce declared with `LatticeFoldProjection` (see
+[Folded (custom-reducer) views](#folded-custom-reducer-views) below).
+
+Group keys share the view tree with the maintainer's internal rows, which live
+under a reserved NUL (`\u0000`) prefix. A group-key selector that returns an
+empty key or one beginning with `\u0000` therefore has its contribution
+**rejected** - dropped and counted on the
+`orleans.lattice.view.aggregation_rejected` metric - rather than materialised
+into the reserved region where it would be invisible to reads and could collide
+with an internal row. The rejection is deterministic on the key, so every cluster
+drops the same members and the view stays convergent; a non-zero counter means a
+selector is emitting reserved keys and should be corrected.
 
 Declare one with `AggregationLatticeViewProjection.Create<T>`: a group-key
 selector, a stable selector-version tag (the selectors are delegates and cannot
@@ -381,6 +397,61 @@ siloBuilder.ConfigureLatticeView("age-sum-by-name", options =>
 {
     options.AggregationMaxGroupEntries = 1024;
 });
+```
+
+### Folded (custom-reducer) views
+
+`Fold` maintains a **user-defined, non-commutative reduction** per group key
+instead of one of the built-in commutative reducers. You supply a fold as a seed
+(`Initial`) and a step (`Apply(accumulator, sourceKey, value, hlc)`); the
+maintainer applies the surviving members of each group **in ascending source-HLC
+order**, so the materialised value is a deterministic function of the group's
+member set (a state-machine fold, an ordered log, a "latest wins with terminal
+states" reduction, and so on).
+
+Because a general fold is **not invertible**, the maintainer cannot un-apply a
+single member on a delete or filter-exit. Instead it keeps each source key's
+contributed value and **re-folds the whole group** over its surviving members
+whenever a member is added, retracted, or re-grouped. The cost is bounded by the
+group's member count, so folds are best suited to groups with a bounded number of
+members each. The materialised value is the accumulator's opaque bytes, stored
+under the bare group key, so `ReconcileAsync` anti-entropy, rebuilds, shadow-swap,
+and both replication modes work exactly as for the built-in reducers.
+
+Declare one with `LatticeFoldProjection.Create<TValue, TAccumulator>` (or the raw
+`byte[]` constructor) and register it with `AddFoldedView`. As with the built-in
+projections, the delegates cannot be structurally hashed, so a stable
+`foldVersion` tag drives rebuild-on-change - bump it whenever the fold's logic
+changes:
+
+```csharp verify
+siloBuilder.AddLatticeViews(views => views.AddFoldedView(
+    viewName: "name-trail-by-age",
+    sourceTreeId: "people",
+    projection: LatticeFoldProjection.Create<User, string>(
+        groupKeySelector: u => u.Age.ToString(),
+        initial: () => string.Empty,
+        apply: (trail, sourceKey, u, hlc) => trail.Length == 0 ? u.Name : trail + "," + u.Name,
+        foldVersion: "name-trail-v1")));
+```
+
+The accumulator is stored under the bare group key, so read it with the typed
+`GetAsync<T>` (or the raw `GetAsync`) - there is no dedicated aggregate decoder
+because the accumulator shape is yours:
+
+```csharp verify
+ILatticeView trail = client.ServiceProvider
+    .GetRequiredService<ILatticeViewFactory>()
+    .Create(
+        grainFactory.GetGrain<ILattice>("people"),
+        "name-trail-by-age",
+        new LatticeViewDefinition("name-trail-by-age", LatticeFoldProjection.Create<User, string>(
+            groupKeySelector: u => u.Age.ToString(),
+            initial: () => string.Empty,
+            apply: (t, sourceKey, u, hlc) => t.Length == 0 ? u.Name : t + "," + u.Name,
+            foldVersion: "name-trail-v1")));
+
+string? names = await trail.GetAsync<string>("30", cancellationToken);
 ```
 
 ## Reconcile and drift detection
@@ -626,6 +697,7 @@ meter, each tagged with the view name:
 | `orleans.lattice.view.applied` | Counter | View writes applied to the view tree. |
 | `orleans.lattice.view.key_collisions` | Counter | Distinct source keys that re-mapped to one view key in a drain batch (injectivity violation). |
 | `orleans.lattice.view.aggregation_applied` | Counter | Aggregation contributions folded into the view. |
+| `orleans.lattice.view.aggregation_rejected` | Counter | Aggregation contributions dropped for producing a reserved (empty or NUL-prefixed) group key. |
 | `orleans.lattice.view.atomic_staging_backstop` | Counter | Times the bounded-buffer / retention backstop abandoned atomic staging and forced a rebuild. |
 | `orleans.lattice.view.cross_tree_joint_violation` | Counter | Cross-tree view batches that degraded to per-tree atomicity because a participant view did not become ready in time. |
 | `orleans.lattice.view.lag_budget_eviction` | Counter | Views force-evicted (WAL unpinned and rebuilt) for exceeding their `MaxLagBudget`. |

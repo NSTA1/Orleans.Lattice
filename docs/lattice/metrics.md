@@ -302,7 +302,8 @@ view name. See [Materialised views](materialised-views.md).
 | `orleans.lattice.view.backlog_depth` | `Histogram<long>` | `{entry}` | WAL entries read in the drain pass. |
 | `orleans.lattice.view.applied` | `Counter<long>` | `{write}` | View writes applied to the view tree. |
 | `orleans.lattice.view.key_collisions` | `Counter<long>` | `{collision}` | Distinct source keys that re-mapped to one view key in a drain batch (injectivity violation); resolved last-writer-wins. |
-| `orleans.lattice.view.aggregation_applied` | `Counter<long>` | `{contribution}` | Aggregation contributions folded into the view (count / sum / min / max / set-union). |
+| `orleans.lattice.view.aggregation_applied` | `Counter<long>` | `{contribution}` | Aggregation contributions folded into the view (count / sum / min / max / set-union / fold). |
+| `orleans.lattice.view.aggregation_rejected` | `Counter<long>` | `{contribution}` | Aggregation contributions dropped because the group-key selector produced an empty key or one under the reserved NUL (`\u0000`) prefix; deterministic on the key, so clusters stay convergent. A non-zero value flags a selector emitting reserved keys. |
 | `orleans.lattice.view.atomic_staging_backstop` | `Counter<long>` | `{rebuild}` | Times the bounded-buffer / retention backstop abandoned atomic staging and forced a rebuild. |
 | `orleans.lattice.view.cross_tree_joint_violation` | `Counter<long>` | `{degradation}` | Cross-tree view batches that degraded to per-tree atomicity because a participant view did not become ready within `CrossTreeReadinessTimeout`. |
 | `orleans.lattice.view.lag_budget_eviction` | `Counter<long>` | `{eviction}` | Views force-evicted (WAL unpinned and rebuilt) for exceeding their `MaxLagBudget`. |

@@ -1,5 +1,6 @@
 using System.IO.Hashing;
 using System.Text;
+using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.Views;
 
@@ -21,6 +22,18 @@ internal static class AggregationRowCodec
 {
     /// <summary>The reserved NUL prefix every internal row key begins with.</summary>
     internal const string ReservedPrefix = "\u0000";
+
+    /// <summary>
+    /// Returns <see langword="true"/> when <paramref name="groupKey"/> falls in the
+    /// reserved region and must not be materialised: an empty key, or one beginning
+    /// with the reserved NUL (<c>\u0000</c>) prefix. A materialised value under such
+    /// a key would sort below <see cref="FirstNonReservedKey"/> - invisible to every
+    /// view read - and could collide with an internal accumulator / inverse /
+    /// membership row. The applier rejects a contribution whose group key is
+    /// reserved rather than corrupt the view silently.
+    /// </summary>
+    internal static bool IsReservedGroupKey(string groupKey) =>
+        groupKey.Length == 0 || groupKey[0] == '\u0000';
 
     /// <summary>
     /// The "logically empty" sentinel an internal row carries when it has been
@@ -66,6 +79,9 @@ internal static class AggregationRowCodec
 
     /// <summary>Returns the inverse-contribution row key for a group shard.</summary>
     internal static string InverseKey(string groupKey, int slot) => "\u0000i" + groupKey + "\u0000" + slot.ToString();
+
+    /// <summary>Returns the fold-contribution row key for a group shard (custom fold views).</summary>
+    internal static string FoldInverseKey(string groupKey, int slot) => "\u0000f" + groupKey + "\u0000" + slot.ToString();
 
     /// <summary>
     /// Maps a source key to its accumulator shard in <c>[0, fanout)</c> using a
@@ -183,4 +199,48 @@ internal static class AggregationRowCodec
     /// <param name="Numeric">The numeric contributed (min / max).</param>
     /// <param name="Member">The member contributed (set-union), or <see langword="null"/>.</param>
     internal readonly record struct MemberEntry(double Numeric, string? Member);
+
+    /// <summary>Encodes a fold-contribution row (a source-key to member-value map for a custom fold group shard).</summary>
+    internal static byte[] EncodeFoldInverse(IReadOnlyDictionary<string, FoldMember> entries)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream, Encoding.UTF8);
+        writer.Write(entries.Count);
+        foreach (var (sourceKey, entry) in entries)
+        {
+            writer.Write(sourceKey);
+            writer.Write(entry.Timestamp.WallClockTicks);
+            writer.Write(entry.Timestamp.Counter);
+            writer.Write(entry.Value.Length);
+            writer.Write(entry.Value);
+        }
+
+        writer.Flush();
+        return stream.ToArray();
+    }
+
+    /// <summary>Decodes a fold-contribution row produced by <see cref="EncodeFoldInverse"/>.</summary>
+    internal static Dictionary<string, FoldMember> DecodeFoldInverse(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes);
+        using var reader = new BinaryReader(stream, Encoding.UTF8);
+        var count = reader.ReadInt32();
+        var map = new Dictionary<string, FoldMember>(count, StringComparer.Ordinal);
+        for (var i = 0; i < count; i++)
+        {
+            var sourceKey = reader.ReadString();
+            var ticks = reader.ReadInt64();
+            var counter = reader.ReadInt32();
+            var length = reader.ReadInt32();
+            var value = reader.ReadBytes(length);
+            map[sourceKey] = new FoldMember(value, new HybridLogicalClock { WallClockTicks = ticks, Counter = counter });
+        }
+
+        return map;
+    }
+
+    /// <summary>A single source key's contribution inside a fold-inverse row.</summary>
+    /// <param name="Value">The source value bytes the source key last contributed.</param>
+    /// <param name="Timestamp">The source entry HLC, used to order the re-fold.</param>
+    internal readonly record struct FoldMember(byte[] Value, HybridLogicalClock Timestamp);
 }

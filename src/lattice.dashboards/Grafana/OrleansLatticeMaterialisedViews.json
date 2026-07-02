@@ -343,6 +343,30 @@
           "legendFormat": "{{view}} ({{state}})"
         }
       ]
+    },
+    {
+      "id": 11,
+      "title": "Aggregation reserved-key rejections (rate)",
+      "description": "Aggregation contributions per second dropped because the projection's group-key selector produced an empty key or one beginning with the reserved NUL (\\u0000) prefix the maintainer uses for its internal rows, by view. Any non-zero value is a configuration warning: the rejected contribution is not materialised (it would otherwise land in the reserved region, invisible to reads and liable to collide with an internal row), so that group's value is missing from the view. The drop is deterministic on the key, so every cluster rejects the same members and the view stays convergent - but a steady non-zero floor means the group-key selector is emitting reserved keys and needs correcting. Zero for a correctly-configured aggregation view and for every filter / re-project view.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 40 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 15, "spanNulls": true, "thresholdsStyle": { "mode": "line" } },
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 0.0001 } ] },
+          "color": { "mode": "fixed", "fixedColor": "yellow" }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (view) (rate(orleans_lattice_view_aggregation_rejected_total{view=~\"$view\",cluster=~\"$cluster\"}[5m])) or vector(0)",
+          "legendFormat": "{{view}}"
+        }
+      ]
     }
   ]
 }

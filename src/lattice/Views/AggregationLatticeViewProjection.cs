@@ -43,9 +43,11 @@ public sealed class AggregationLatticeViewProjection : ILatticeAggregationProjec
     /// <param name="aggregation">The reduce the view computes.</param>
     /// <param name="groupKeySelector">
     /// Maps a source entry's value bytes to the group key it belongs to. Must not
-    /// be <see langword="null"/>. The group key must not begin with the reserved
-    /// NUL (<c>\u0000</c>) character (the maintainer reserves that prefix for
-    /// internal accumulator rows).
+    /// be <see langword="null"/>. A group key that is empty or begins with the
+    /// reserved NUL (<c>\u0000</c>) prefix (which the maintainer reserves for its
+    /// internal rows) is rejected: the contribution is dropped and counted via the
+    /// <c>orleans.lattice.view.aggregation_rejected</c> metric rather than
+    /// materialised.
     /// </param>
     /// <param name="selectorVersion">
     /// Stable tag identifying the selectors' logic, folded into
@@ -113,8 +115,9 @@ public sealed class AggregationLatticeViewProjection : ILatticeAggregationProjec
     /// <param name="aggregation">The reduce the view computes.</param>
     /// <param name="groupKeySelector">
     /// Maps a deserialized source value to the group key it belongs to. Must not
-    /// be <see langword="null"/>. The group key must not begin with the reserved
-    /// NUL (<c>\u0000</c>) character.
+    /// be <see langword="null"/>. A group key that is empty or begins with the
+    /// reserved NUL (<c>\u0000</c>) prefix is rejected (dropped and counted via the
+    /// <c>orleans.lattice.view.aggregation_rejected</c> metric).
     /// </param>
     /// <param name="selectorVersion">
     /// Stable tag identifying the selectors' logic, folded into

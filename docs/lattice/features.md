@@ -157,6 +157,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-144](https://github.com/NSTA1/Orleans.Lattice/issues/956) - Orleans.Lattice.Explorer: History tab - per-key revision timeline + value diff, retention-mode aware
 - [F-145](https://github.com/NSTA1/Orleans.Lattice/issues/957) - Orleans.Lattice.Explorer: live follow mode for the History tab (ObserveChanges)
 - [F-146](https://github.com/NSTA1/Orleans.Lattice/issues/958) - Change-history sample + docs showcase (MultiSiteManufacturing + features.md sync)
+- [F-163](https://github.com/NSTA1/Orleans.Lattice/issues/1039) - Custom-reducer (folded) aggregation materialised views: a user-defined, non-commutative HLC-ordered fold per group key (re-folded over surviving members on any change), registered via `AddFoldedView` / `LatticeFoldProjection`, maintained with the same rebuild / digest / replication machinery as the built-in reducers
 - [P-000](https://github.com/NSTA1/Orleans.Lattice/issues/555) - Server-side predicate filtering (expression-tree push-down) for typed reads, scans, cursors, and conditional mutations
 - [P-001](https://github.com/NSTA1/Orleans.Lattice/issues/556) - Expression-tree predicate IR + server-side document-model evaluator (umbrella spine)
 - [P-002](https://github.com/NSTA1/Orleans.Lattice/issues/557) - `GetManyAsync<T>` server-side predicate push-down

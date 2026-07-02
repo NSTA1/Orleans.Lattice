@@ -84,6 +84,7 @@ Every instrument on the `orleans.lattice` and `orleans.lattice.replication` mete
 | `orleans.lattice.view.backlog_depth` | histogram (`{entry}`) | `view` | MaterialisedViews | Drain backlog depth (entries) p50/p95/p99 |
 | `orleans.lattice.view.applied` | counter | `view` | MaterialisedViews | View writes applied (rate) |
 | `orleans.lattice.view.aggregation_applied` | counter | `view` | MaterialisedViews | Aggregation contributions applied (rate) |
+| `orleans.lattice.view.aggregation_rejected` | counter | `view` | MaterialisedViews | Aggregation reserved-key rejections (rate) |
 | `orleans.lattice.view.lag_budget_eviction` | counter | `view` | MaterialisedViews | Lag-budget evictions (rate) |
 | `orleans.lattice.view.key_collisions` | counter | `view` | MaterialisedViews | Re-key collisions (rate) |
 | `orleans.lattice.view.atomic_staging_backstop` | counter | `view` | MaterialisedViews | Atomic-staging backstop fall-backs (rate) |
