@@ -22,6 +22,7 @@ public sealed class DataReader(ILatticeStateClient client) : IDataReader
         string? continuationToken = null,
         TagFilter? tagFilter = null,
         string? keyPrefix = null,
+        EntryScanMode mode = EntryScanMode.Live,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
@@ -42,6 +43,10 @@ public sealed class DataReader(ILatticeStateClient client) : IDataReader
             EndExclusive = applyPrefix ? PrefixUpperBound(keyPrefix!) : null,
             IndexName = tagFilter?.IndexName,
             Tag = tagFilter?.Tag,
+            // The default is a live cursor so a casual browse does not fan an
+            // all-shard snapshot-baseline capture out to every shard root; the
+            // Data tab lets the user opt into Snapshot for a consistent view.
+            Mode = mode,
         };
 
         var response = await _client.ScanEntriesAsync(request, cancellationToken).ConfigureAwait(false);

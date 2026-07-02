@@ -309,6 +309,7 @@ public sealed class StateDtoSerializationTests
             Predicate = LatticePredicateTranslator.Translate<ScanPerson>(p => p.Age >= 18),
             IndexName = "by-status",
             Tag = "open",
+            Mode = EntryScanMode.LivePointInTime,
         };
 
         var copy = RoundTrip(original);
@@ -324,7 +325,17 @@ public sealed class StateDtoSerializationTests
             Assert.That(copy.Predicate, Is.Not.Null);
             Assert.That(copy.IndexName, Is.EqualTo("by-status"));
             Assert.That(copy.Tag, Is.EqualTo("open"));
+            Assert.That(copy.Mode, Is.EqualTo(EntryScanMode.LivePointInTime));
         });
+    }
+
+    [Test]
+    public void EntryScanRequest_default_mode_is_snapshot()
+    {
+        // The wire default (an unset field) must decode as Snapshot so an
+        // existing caller keeps the released point-in-time semantics.
+        var copy = RoundTrip(new EntryScanRequest { TreeId = "tree-a" });
+        Assert.That(copy.Mode, Is.EqualTo(EntryScanMode.Snapshot));
     }
 
     [Test]

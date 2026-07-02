@@ -1,3 +1,5 @@
+using Orleans.Lattice.Api.State;
+
 namespace Orleans.Lattice.Explorer.Core.Data;
 
 /// <summary>
@@ -9,11 +11,16 @@ public interface IDataReader
     /// <summary>
     /// Scans a page of entries for <paramref name="treeId"/>. Pass the
     /// <paramref name="continuationToken"/> from a prior page to resume the same
-    /// snapshot, or <see langword="null"/> to open a fresh snapshot scan. When a
-    /// <paramref name="tagFilter"/> is supplied, only the rows of
-    /// <paramref name="treeId"/> tagged with that value (in the named index) are
-    /// returned. When a non-empty <paramref name="keyPrefix"/> is supplied (and
-    /// no <paramref name="tagFilter"/> is active), the scan is bounded to the keys
+    /// cursor, or <see langword="null"/> to open a fresh scan. The
+    /// <paramref name="mode"/> selects the cursor isolation for a fresh scan and
+    /// defaults to <see cref="EntryScanMode.Live"/> (a cheap, baseline-free
+    /// browse); pass <see cref="EntryScanMode.Snapshot"/> for a consistent
+    /// point-in-time view (it is ignored on a continuation, which resumes the
+    /// mode the cursor opened with). When a <paramref name="tagFilter"/> is
+    /// supplied, only the rows of <paramref name="treeId"/> tagged with that
+    /// value (in the named index) are returned. When a non-empty
+    /// <paramref name="keyPrefix"/> is supplied (and no
+    /// <paramref name="tagFilter"/> is active), the scan is bounded to the keys
     /// that start with that prefix, served as a ranged seek over the sorted keys.
     /// </summary>
     Task<DataPage> ScanAsync(
@@ -22,6 +29,7 @@ public interface IDataReader
         string? continuationToken = null,
         TagFilter? tagFilter = null,
         string? keyPrefix = null,
+        EntryScanMode mode = EntryScanMode.Live,
         CancellationToken cancellationToken = default);
 
     /// <summary>

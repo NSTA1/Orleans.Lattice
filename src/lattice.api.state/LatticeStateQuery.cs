@@ -430,15 +430,28 @@ internal sealed class LatticeStateQuery(
                 return EntryScanResult.NotFound(request.TreeId);
             }
 
-            // A point-in-time snapshot cursor: every page reads the frozen view
-            // captured here, so a multi-page scan never observes a torn write.
-            cursorId = request.Predicate is { } predicate
-                ? await tree.OpenSnapshotEntryCursorWherePredicateAsync(
-                    predicate, request.StartInclusive, request.EndExclusive, request.Reverse, cancellationToken)
-                    .ConfigureAwait(false)
-                : await tree.OpenSnapshotEntryCursorAsync(
-                    request.StartInclusive, request.EndExclusive, request.Reverse, cancellationToken)
-                    .ConfigureAwait(false);
+            // Open the cursor selected by the request mode. Snapshot opens a
+            // point-in-time cursor that captures an all-shard frozen baseline so
+            // every page reads a torn-free instant; the live modes open a
+            // baseline-free cursor whose paging is keyed on the last yielded
+            // key, so later pages can observe writes committed after the open.
+            cursorId = request.Mode == EntryScanMode.Snapshot
+                ? request.Predicate is { } snapshotPredicate
+                    ? await tree.OpenSnapshotEntryCursorWherePredicateAsync(
+                        snapshotPredicate, request.StartInclusive, request.EndExclusive, request.Reverse, cancellationToken)
+                        .ConfigureAwait(false)
+                    : await tree.OpenSnapshotEntryCursorAsync(
+                        request.StartInclusive, request.EndExclusive, request.Reverse, cancellationToken)
+                        .ConfigureAwait(false)
+                : request.Predicate is { } livePredicate
+                    ? await tree.OpenEntryCursorWherePredicateAsync(
+                        livePredicate, request.StartInclusive, request.EndExclusive, request.Reverse,
+                        pointInTime: request.Mode == EntryScanMode.LivePointInTime, cancellationToken)
+                        .ConfigureAwait(false)
+                    : await tree.OpenEntryCursorAsync(
+                        request.StartInclusive, request.EndExclusive, request.Reverse,
+                        pointInTime: request.Mode == EntryScanMode.LivePointInTime, cancellationToken)
+                        .ConfigureAwait(false);
         }
         else
         {
@@ -483,7 +496,8 @@ internal sealed class LatticeStateQuery(
         string? continuation = page.HasMore ? cursorId : null;
         if (!page.HasMore)
         {
-            // Drained: release the server-side cursor / snapshot pin promptly.
+            // Drained: release the server-side cursor (and, for a snapshot or
+            // point-in-time cursor, its WAL-retention pin) promptly.
             await tree.CloseCursorAsync(cursorId, cancellationToken).ConfigureAwait(false);
         }
 
