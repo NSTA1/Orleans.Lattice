@@ -1,10 +1,12 @@
 @using Orleans.Lattice.Api.State
+@using Orleans.Lattice.Explorer.Core.Catalog
 @using Orleans.Lattice.Explorer.Core.Connection
 @using Orleans.Lattice.Explorer.Core.Data
 @inherits DetailTabBase
 @inject IDataReader DataReader
 @inject IUiSessionStore SessionStore
 @inject IUiPreferenceStore Preferences
+@inject IExplorerSelection ExplorerSelection
 @inject IServiceProvider Services
 
 @if (Selection.IsHistory)
@@ -58,9 +60,9 @@ else
             <label class="explorer-data-tagfilter-field">
                 Tag index
                 <select disabled="@_loading" @bind="_selectedIndex" @bind:after="OnTagIndexChangedAsync">
-                    @foreach (var name in _tagIndexes)
+                    @foreach (var index in _tagIndexes)
                     {
-                        <option value="@name">@name</option>
+                        <option value="@index.IndexName">@index.IndexName</option>
                     }
                 </select>
             </label>
@@ -79,6 +81,15 @@ else
                 <span class="explorer-data-tagfilter-active">
                     Showing rows tagged <code>@_activeTagFilter.Tag</code> in <code>@_activeTagFilter.IndexName</code>
                 </span>
+            }
+            @if (!string.IsNullOrEmpty(_selectedIndex))
+            {
+                <button type="button" class="explorer-btn explorer-data-tagfilter-explore"
+                        disabled="@_loading"
+                        title="@($"Browse the {_selectedIndex} tag index")"
+                        @onclick="ExploreTagIndexAsync">
+                    Explore tag index
+                </button>
             }
         </div>
     }
@@ -271,7 +282,7 @@ else
     // instead of the value view. Reset whenever the selected key changes.
     private bool _showHistory;
 
-    private IReadOnlyList<string> _tagIndexes = Array.Empty<string>();
+    private IReadOnlyList<TagIndexRef> _tagIndexes = Array.Empty<TagIndexRef>();
     private string? _selectedIndex;
     private IReadOnlyList<string> _tagValues = Array.Empty<string>();
     private bool _tagValuesLoading;
@@ -369,6 +380,16 @@ else
         {
             await RestoreToPageAsync(targetPage);
         }
+
+        // Restore the previously inspected key for this tree, if any. This both
+        // re-opens the last-selected key when returning to the tab and lands the
+        // detail on the key when navigating here from the tag-index member list
+        // (which seeds this session key before selecting the tree).
+        var restoredKey = SessionStore.GetOrDefault(DataSelection.SelectedKey(Selection.Id), string.Empty);
+        if (!string.IsNullOrEmpty(restoredKey))
+        {
+            await SelectAsync(restoredKey);
+        }
     }
 
     // When durable preferences could not be hydrated during initialization (the
@@ -403,9 +424,9 @@ else
             // Restore the retained index selection for this selection (durable
             // preference); fall back to the first index when none is retained.
             var retained = Preferences.GetOrDefault(TagIndexStateKey, string.Empty);
-            _selectedIndex = _tagIndexes.Contains(retained)
+            _selectedIndex = _tagIndexes.Any(i => string.Equals(i.IndexName, retained, StringComparison.Ordinal))
                 ? retained
-                : _tagIndexes.Count > 0 ? _tagIndexes[0] : null;
+                : _tagIndexes.Count > 0 ? _tagIndexes[0].IndexName : null;
         }
         catch (OperationCanceledException) when (TabToken.IsCancellationRequested)
         {
@@ -415,7 +436,7 @@ else
         {
             // The tag filter is a progressive enhancement: if the catalog probe
             // fails the Data tab still works as an unfiltered scan.
-            _tagIndexes = Array.Empty<string>();
+            _tagIndexes = Array.Empty<TagIndexRef>();
             _selectedIndex = null;
         }
     }
@@ -524,6 +545,45 @@ else
         await LoadRetainedTagFilterAsync();
         await ReloadFirstPageAsync();
     }
+
+    // Navigate to the selected tag index's dedicated detail view. When a tag is
+    // also selected, seed the detail view's one-shot tag preference (owned by the
+    // membership tree id, keyed by TagIndexDetailTab's own scheme) so it opens
+    // with that tag preselected. No-op when the selected index has no known
+    // membership tree id (it was dropped from the catalog mid-session).
+    private async Task ExploreTagIndexAsync()
+    {
+        if (string.IsNullOrEmpty(_selectedIndex))
+        {
+            return;
+        }
+
+        var target = _tagIndexes.FirstOrDefault(i => string.Equals(i.IndexName, _selectedIndex, StringComparison.Ordinal));
+        if (target is null)
+        {
+            return;
+        }
+
+        if (!string.IsNullOrEmpty(_tagValue))
+        {
+            await Preferences.SetAsync(
+                TagIndexDetailTagStateKey(target.TreeId),
+                _tagValue,
+                owner: target.TreeId,
+                TabToken);
+        }
+
+        ExplorerSelection.Select(new CatalogItem
+        {
+            Id = target.TreeId,
+            Kind = CatalogKind.TagIndexes,
+            IndexName = target.IndexName,
+        });
+    }
+
+    // Durable-preference key the tag-index detail view consumes (once) to
+    // preselect a tag when navigated to from this Data tab.
+    private static string TagIndexDetailTagStateKey(string membershipTreeId) => $"tagindex-tag:{membershipTreeId}";
 
     // The user picked a tag value (or the empty "(any)" option, which clears the
     // filter). Retain per selection and index as a durable preference, then refresh.

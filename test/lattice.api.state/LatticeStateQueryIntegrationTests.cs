@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Orleans.Configuration;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.State;
 
 namespace Orleans.Lattice.Api.State.Tests;
 
@@ -69,6 +70,31 @@ public sealed partial class LatticeStateQueryIntegrationTests
         var result = await _fixture.Query.GetShardSummariesAsync("no-such-tree");
 
         Assert.That(result.Status, Is.EqualTo(StateQueryStatus.TreeNotFound));
+        Assert.That(result.Shards, Is.Empty);
+    }
+
+    [Test]
+    public async Task GetShardSummariesAsync_inspects_view_tree_as_read_only()
+    {
+        // A materialised view is a read-only tree with real shards; its shard
+        // metrics must be inspectable so the Explorer Metrics tab renders them
+        // rather than the bare "No metrics reported for this id." empty state.
+        var registry = _fixture.Cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        await registry.RegisterAsync("view-metrics-probe", new TreeRegistryEntry { ShardCount = 1 });
+
+        var result = await _fixture.Query.GetShardSummariesAsync("view-metrics-probe");
+
+        Assert.That(result.Status, Is.EqualTo(StateQueryStatus.Found),
+            "a materialised view is a read-only tree and its shard metrics must be inspectable");
+    }
+
+    [Test]
+    public async Task GetShardSummariesAsync_treats_system_tree_as_not_found()
+    {
+        var result = await _fixture.Query.GetShardSummariesAsync("_lattice_metrics-probe");
+
+        Assert.That(result.Status, Is.EqualTo(StateQueryStatus.TreeNotFound),
+            "silo-internal system trees must stay invisible to the shard-metrics surface");
         Assert.That(result.Shards, Is.Empty);
     }
 

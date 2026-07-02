@@ -243,6 +243,73 @@ public sealed class StateDtoSerializationTests
     }
 
     [Test]
+    public void CoveredTreeCatalogPage_round_trips()
+    {
+        var original = new CoveredTreeCatalogPage
+        {
+            Entries = new[] { "eu", "us", "za" },
+            NextPageToken = "za",
+        };
+
+        var copy = RoundTrip(original);
+        Assert.That(copy.Entries, Is.EqualTo(new[] { "eu", "us", "za" }));
+        Assert.That(copy.NextPageToken, Is.EqualTo("za"));
+    }
+
+    [Test]
+    public void TagMember_round_trips()
+    {
+        var original = new TagMember { TreeId = "eu", Key = "key-00001" };
+
+        var copy = RoundTrip(original);
+        Assert.That(copy, Is.EqualTo(original));
+    }
+
+    [Test]
+    public void TagMemberScanRequest_round_trips()
+    {
+        var original = new TagMemberScanRequest
+        {
+            IndexName = "by-status",
+            Tag = "open",
+            PageSize = 250,
+            PageToken = "eu\0key-00001",
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.IndexName, Is.EqualTo("by-status"));
+            Assert.That(copy.Tag, Is.EqualTo("open"));
+            Assert.That(copy.PageSize, Is.EqualTo(250));
+            Assert.That(copy.PageToken, Is.EqualTo("eu\0key-00001"));
+        });
+    }
+
+    [Test]
+    public void TagMemberScanPage_round_trips()
+    {
+        var original = new TagMemberScanPage
+        {
+            Entries = new[]
+            {
+                new TagMember { TreeId = "eu", Key = "key-00001" },
+                new TagMember { TreeId = "us", Key = "key-00002" },
+            },
+            NextPageToken = "us\0key-00002",
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Entries, Has.Count.EqualTo(2));
+            Assert.That(copy.Entries[0], Is.EqualTo(new TagMember { TreeId = "eu", Key = "key-00001" }));
+            Assert.That(copy.Entries[1].Key, Is.EqualTo("key-00002"));
+            Assert.That(copy.NextPageToken, Is.EqualTo("us\0key-00002"));
+        });
+    }
+
+    [Test]
     public void EntryRecord_round_trips()
     {
         var original = new EntryRecord

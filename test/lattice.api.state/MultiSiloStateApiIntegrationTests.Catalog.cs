@@ -48,10 +48,8 @@ public sealed partial class MultiSiloStateApiIntegrationTests
         await registry.RegisterAsync("view-reserved-probe", new TreeRegistryEntry { ShardCount = 1 });
 
         var summary = await _fixture.Query.GetTreeSummaryAsync("view-reserved-probe");
-        var shards = await _fixture.Query.GetShardSummariesAsync("view-reserved-probe");
 
         Assert.That(summary.Status, Is.EqualTo(StateQueryStatus.TreeNotFound),
-            "reserved trees must be invisible to the per-tree summary surface, not just to ListTrees");
-        Assert.That(shards.Status, Is.EqualTo(StateQueryStatus.TreeNotFound));
+            "a materialised view belongs to the Views catalog, so it stays invisible to the tree-summary surface, not just to ListTrees");
     }
 }

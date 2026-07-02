@@ -160,6 +160,18 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
         => ExecuteAsync((c, ct) => c.ListTagValuesAsync(request, ct), cancellationToken);
 
     /// <inheritdoc />
+    public Task<CoveredTreeCatalogPage> ListCoveredTreesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
+        => ExecuteAsync((c, ct) => c.ListCoveredTreesAsync(request, ct), cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TagValueCatalogPage> ListIndexTagsAsync(CatalogRequest request, CancellationToken cancellationToken = default)
+        => ExecuteAsync((c, ct) => c.ListIndexTagsAsync(request, ct), cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TagMemberScanPage> ScanTagMembersAsync(TagMemberScanRequest request, CancellationToken cancellationToken = default)
+        => ExecuteAsync((c, ct) => c.ScanTagMembersAsync(request, ct), cancellationToken);
+
+    /// <inheritdoc />
     public Task<StructureResponse> GetTreeStructureAsync(StructureRequest request, CancellationToken cancellationToken = default)
         => ExecuteAsync((c, ct) => c.GetTreeStructureAsync(request, ct), cancellationToken);
 

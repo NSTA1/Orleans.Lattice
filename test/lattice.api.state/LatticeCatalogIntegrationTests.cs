@@ -347,6 +347,187 @@ public sealed class LatticeCatalogIntegrationTests
     }
 
     [Test]
+    public async Task ListCoveredTreesAsync_returns_covered_trees_in_ordinal_order()
+    {
+        await _fixture.CreatePopulatedTreeAsync("orders", keyCount: 2);
+        await _fixture.CreatePopulatedTreeAsync("archive", keyCount: 2);
+
+        var ordersIndex = _fixture.CreateTagIndex("orders", "by-status");
+        await ordersIndex.Key("key-00000").AddAsync(["open"]);
+        var archiveIndex = _fixture.CreateTagIndex("archive", "by-status");
+        await archiveIndex.Key("key-00000").AddAsync(["open"]);
+
+        var page = await _fixture.Query.ListCoveredTreesAsync(
+            new CatalogRequest { IndexName = "by-status" });
+
+        Assert.That(page.Entries, Is.EqualTo(new[] { "archive", "orders" }));
+        Assert.That(page.NextPageToken, Is.Null);
+    }
+
+    [Test]
+    public async Task ListCoveredTreesAsync_pages_with_continuation_token()
+    {
+        await _fixture.CreatePopulatedTreeAsync("orders", keyCount: 1);
+        await _fixture.CreatePopulatedTreeAsync("archive", keyCount: 1);
+        await _fixture.CreatePopulatedTreeAsync("widgets", keyCount: 1);
+
+        foreach (var tree in new[] { "orders", "archive", "widgets" })
+        {
+            var index = _fixture.CreateTagIndex(tree, "by-status");
+            await index.Key("key-00000").AddAsync(["open"]);
+        }
+
+        var first = await _fixture.Query.ListCoveredTreesAsync(
+            new CatalogRequest { IndexName = "by-status", PageSize = 2 });
+        Assert.That(first.Entries, Is.EqualTo(new[] { "archive", "orders" }));
+        Assert.That(first.NextPageToken, Is.EqualTo("orders"));
+
+        var second = await _fixture.Query.ListCoveredTreesAsync(
+            new CatalogRequest { IndexName = "by-status", PageSize = 2, PageToken = first.NextPageToken });
+        Assert.That(second.Entries, Is.EqualTo(new[] { "widgets" }));
+        Assert.That(second.NextPageToken, Is.Null);
+    }
+
+    [Test]
+    public async Task ListCoveredTreesAsync_returns_empty_for_unknown_index()
+    {
+        var page = await _fixture.Query.ListCoveredTreesAsync(
+            new CatalogRequest { IndexName = "no-such-index" });
+
+        Assert.That(page.Entries, Is.Empty);
+        Assert.That(page.NextPageToken, Is.Null);
+    }
+
+    [Test]
+    public async Task ListIndexTagsAsync_returns_distinct_tags_across_covered_trees()
+    {
+        await _fixture.CreatePopulatedTreeAsync("orders", keyCount: 3);
+        await _fixture.CreatePopulatedTreeAsync("archive", keyCount: 3);
+
+        var ordersIndex = _fixture.CreateTagIndex("orders", "by-status");
+        await ordersIndex.Key("key-00000").AddAsync(["open"]);
+        await ordersIndex.Key("key-00001").AddAsync(["pending"]);
+
+        var archiveIndex = _fixture.CreateTagIndex("archive", "by-status");
+        await archiveIndex.Key("key-00000").AddAsync(["closed"]);
+        await archiveIndex.Key("key-00001").AddAsync(["open"]);
+
+        var page = await _fixture.Query.ListIndexTagsAsync(
+            new CatalogRequest { IndexName = "by-status" });
+
+        Assert.That(page.Entries, Is.EqualTo(new[] { "closed", "open", "pending" }));
+        Assert.That(page.NextPageToken, Is.Null);
+    }
+
+    [Test]
+    public async Task ListIndexTagsAsync_pages_with_continuation_token()
+    {
+        await _fixture.CreatePopulatedTreeAsync("orders", keyCount: 3);
+
+        var index = _fixture.CreateTagIndex("orders", "by-status");
+        await index.Key("key-00000").AddAsync(["alpha"]);
+        await index.Key("key-00001").AddAsync(["bravo"]);
+        await index.Key("key-00002").AddAsync(["charlie"]);
+
+        var first = await _fixture.Query.ListIndexTagsAsync(
+            new CatalogRequest { IndexName = "by-status", PageSize = 2 });
+        Assert.That(first.Entries, Is.EqualTo(new[] { "alpha", "bravo" }));
+        Assert.That(first.NextPageToken, Is.EqualTo("bravo"));
+
+        var second = await _fixture.Query.ListIndexTagsAsync(
+            new CatalogRequest { IndexName = "by-status", PageSize = 2, PageToken = first.NextPageToken });
+        Assert.That(second.Entries, Is.EqualTo(new[] { "charlie" }));
+        Assert.That(second.NextPageToken, Is.Null);
+    }
+
+    [Test]
+    public async Task ScanTagMembersAsync_returns_live_members_across_trees_in_order()
+    {
+        await _fixture.CreatePopulatedTreeAsync("orders", keyCount: 3);
+        await _fixture.CreatePopulatedTreeAsync("archive", keyCount: 3);
+
+        var ordersIndex = _fixture.CreateTagIndex("orders", "by-status");
+        await ordersIndex.Key("key-00000").AddAsync(["open"]);
+        await ordersIndex.Key("key-00002").AddAsync(["open"]);
+
+        var archiveIndex = _fixture.CreateTagIndex("archive", "by-status");
+        await archiveIndex.Key("key-00001").AddAsync(["open"]);
+
+        var page = await _fixture.Query.ScanTagMembersAsync(
+            new TagMemberScanRequest { IndexName = "by-status", Tag = "open" });
+
+        Assert.That(
+            page.Entries.Select(m => (m.TreeId, m.Key)),
+            Is.EqualTo(new[]
+            {
+                ("archive", "key-00001"),
+                ("orders", "key-00000"),
+                ("orders", "key-00002"),
+            }));
+        Assert.That(page.NextPageToken, Is.Null);
+    }
+
+    [Test]
+    public async Task ScanTagMembersAsync_pages_with_continuation_token()
+    {
+        await _fixture.CreatePopulatedTreeAsync("orders", keyCount: 3);
+
+        var index = _fixture.CreateTagIndex("orders", "by-status");
+        await index.Key("key-00000").AddAsync(["open"]);
+        await index.Key("key-00001").AddAsync(["open"]);
+        await index.Key("key-00002").AddAsync(["open"]);
+
+        var first = await _fixture.Query.ScanTagMembersAsync(
+            new TagMemberScanRequest { IndexName = "by-status", Tag = "open", PageSize = 2 });
+        Assert.That(
+            first.Entries.Select(m => m.Key),
+            Is.EqualTo(new[] { "key-00000", "key-00001" }));
+        Assert.That(first.NextPageToken, Is.Not.Null);
+
+        var second = await _fixture.Query.ScanTagMembersAsync(
+            new TagMemberScanRequest
+            {
+                IndexName = "by-status",
+                Tag = "open",
+                PageSize = 2,
+                PageToken = first.NextPageToken,
+            });
+        Assert.That(second.Entries.Select(m => m.Key), Is.EqualTo(new[] { "key-00002" }));
+        Assert.That(second.NextPageToken, Is.Null);
+    }
+
+    [Test]
+    public async Task ScanTagMembersAsync_excludes_stale_members_whose_key_is_absent()
+    {
+        await _fixture.CreatePopulatedTreeAsync("orders", keyCount: 2);
+
+        var index = _fixture.CreateTagIndex("orders", "by-status");
+        await index.Key("key-00000").AddAsync(["open"]);
+        // A membership row for a key that does not exist in the source tree: the
+        // liveness filter must drop it so the browse never shows a phantom key.
+        await index.Key("key-99999").AddAsync(["open"]);
+
+        var page = await _fixture.Query.ScanTagMembersAsync(
+            new TagMemberScanRequest { IndexName = "by-status", Tag = "open" });
+
+        Assert.That(page.Entries.Select(m => m.Key), Is.EqualTo(new[] { "key-00000" }));
+    }
+
+    [Test]
+    public async Task ScanTagMembersAsync_returns_empty_for_unknown_tag()
+    {
+        await _fixture.CreatePopulatedTreeAsync("orders", keyCount: 1);
+        var index = _fixture.CreateTagIndex("orders", "by-status");
+        await index.Key("key-00000").AddAsync(["open"]);
+
+        var page = await _fixture.Query.ScanTagMembersAsync(
+            new TagMemberScanRequest { IndexName = "by-status", Tag = "no-such-tag" });
+
+        Assert.That(page.Entries, Is.Empty);
+        Assert.That(page.NextPageToken, Is.Null);
+    }
+
+    [Test]
     public async Task ScanEntriesAsync_with_index_and_tag_returns_only_tagged_rows()
     {
         await _fixture.CreatePopulatedTreeAsync("orders", keyCount: 6);

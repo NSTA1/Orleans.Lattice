@@ -12,15 +12,18 @@
     }
     <header class="explorer-detail-header">
         <div class="explorer-tabstrip" role="tablist" aria-label="Detail tabs">
-            @foreach (var tab in DetailTabs.Ordered)
+            @if (selected?.Kind != CatalogKind.TagIndexes)
             {
-                <button type="button"
-                        role="tab"
-                        class="explorer-tab @(_tabRestored && tab == _activeTab ? "is-active" : null)"
-                        aria-selected="@(_tabRestored && tab == _activeTab)"
-                        @onclick="@(() => SetTab(tab))">
-                    @DetailTabs.Label(tab)
-                </button>
+                @foreach (var tab in DetailTabs.Ordered)
+                {
+                    <button type="button"
+                            role="tab"
+                            class="explorer-tab @(_tabRestored && tab == _activeTab ? "is-active" : null)"
+                            aria-selected="@(_tabRestored && tab == _activeTab)"
+                            @onclick="@(() => SetTab(tab))">
+                        @DetailTabs.Label(tab)
+                    </button>
+                }
             }
         </div>
         @if (selected is not null)
@@ -35,6 +38,13 @@
             <div class="explorer-detail-empty">
                 <p>Select a tree or view to inspect it.</p>
             </div>
+        }
+        else if (selected.Kind == CatalogKind.TagIndexes)
+        {
+            // A tag index gets a purpose-built browsing surface (covered trees,
+            // tags, and per-tag members) instead of the generic tabs, which would
+            // only expose the membership tree's internal composite-key rows.
+            <TagIndexDetailTab @key="@($"tagindex:{selected.Id}")" Selection="selected" />
         }
         else if (!_tabRestored)
         {
@@ -125,7 +135,21 @@
         StateHasChanged();
     }
 
-    private void OnSelectionChanged() => InvokeAsync(StateHasChanged);
+    private void OnSelectionChanged()
+    {
+        // A programmatic navigation (for example clicking a covered tree or a
+        // member from the tag-index view) can seed a new active tab alongside the
+        // new selection. Re-apply the retained tab preference so the panel opens
+        // on the seeded tab rather than the one that was active before; in the
+        // ordinary case the preference still holds the last-used tab, so this is a
+        // no-op that preserves the "reopen on the same tab" behaviour.
+        if (_tabRestored && Preferences.IsLoaded)
+        {
+            _activeTab = Preferences.GetOrDefault(TabStateKey, DetailTabs.Default);
+        }
+
+        InvokeAsync(StateHasChanged);
+    }
 
     public void Dispose() => Selection.SelectionChanged -= OnSelectionChanged;
 }
