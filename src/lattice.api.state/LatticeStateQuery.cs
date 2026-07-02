@@ -58,8 +58,15 @@ internal sealed class LatticeStateQuery(
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var tree = _grainFactory.GetGrain<ILattice>(treeId);
-        if (IsReservedTree(treeId) || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
+        // A materialised view is a read-only tree backed by a real shard set, so
+        // its metrics are legitimately inspectable (the Explorer Metrics tab reads
+        // them). Bind under an authorised view-read scope and resolve the active
+        // generation, exactly as the entry read paths do; only system trees stay
+        // hidden. The result keeps the requested id so the caller keys on it.
+        using var viewScope = OpenViewReadScopeIfNeeded(treeId);
+        var bindTreeId = await ResolveReadTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var tree = bindTreeId is null ? null : _grainFactory.GetGrain<ILattice>(bindTreeId);
+        if (IsSystemTree(treeId) || tree is null || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
         {
             return ShardSummariesResult.NotFound(treeId);
         }
@@ -82,8 +89,13 @@ internal sealed class LatticeStateQuery(
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var tree = _grainFactory.GetGrain<ILattice>(treeId);
-        if (IsReservedTree(treeId) || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
+        // Mirror GetShardSummariesAsync's view handling so the saturated-tree
+        // degraded metrics path also serves materialised views rather than
+        // dropping them; only system trees stay hidden.
+        using var viewScope = OpenViewReadScopeIfNeeded(treeId);
+        var bindTreeId = await ResolveReadTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var tree = bindTreeId is null ? null : _grainFactory.GetGrain<ILattice>(bindTreeId);
+        if (IsSystemTree(treeId) || tree is null || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
         {
             return null;
         }
