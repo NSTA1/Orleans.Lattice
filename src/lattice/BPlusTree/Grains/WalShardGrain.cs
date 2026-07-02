@@ -1007,21 +1007,47 @@ internal sealed class WalShardGrain(
     }
 
     /// <summary>
-    /// Idle fast-path predicate shared by the read seams (<see cref="ReadAsync"/>
-    /// and <see cref="ReadShippingAsync"/>). A read that starts at or beyond
-    /// <see cref="_nextOffset"/> - the next sequence that will be assigned, so the
-    /// highest entry that currently exists is <c>_nextOffset - 1</c> - can never
-    /// match a row and is answered from this in-memory cursor instead of a storage
-    /// round-trip. Against a backend such as Azure Table Storage that round-trip is
-    /// a real OData query issued per partition per poll tick, and both the
-    /// replication shipper and every materialised-view maintainer poll every
-    /// partition on a fixed cadence even when the link / source is idle. Correctness
-    /// relies on Orleans turn-based single-threading (a read turn never interleaves
-    /// with an append) and on <see cref="_nextOffset"/> only ever erring high - an
-    /// optimistic append bump is resynced down to the durable tail on flush failure -
-    /// so the guard can never hide a durable entry.
+    /// The exclusive upper bound of the durable, gap-free offset prefix:
+    /// the lowest offset that is <b>not yet guaranteed</b> to be durably
+    /// persisted and contiguous with everything below it. Every offset
+    /// strictly below this watermark is durable and forms an unbroken run
+    /// from the log head; every offset at or above it may be missing from
+    /// the provider even though a <em>higher</em> offset is already present.
+    /// <para>
+    /// The watermark is <see cref="_nextOffset"/> when no flush is in
+    /// flight (all assigned offsets have either persisted contiguously or
+    /// been resynced away by a flush failure), and the start offset of the
+    /// oldest in-flight flush otherwise. Offsets are assigned under
+    /// <see cref="_stateGate"/> in strictly increasing order and each
+    /// in-flight flush owns a contiguous, non-overlapping window
+    /// (<see cref="_inFlight"/> is ordered oldest-first), so the first
+    /// in-flight window's start offset is precisely the first
+    /// not-yet-durable offset. Pending (un-flushed) entries always carry
+    /// higher offsets than any in-flight window, and are absent from the
+    /// provider, so they cannot introduce a hole below this bound.
+    /// </para>
+    /// <para>
+    /// Read seams must never surface an entry at or above this watermark to
+    /// a cursor-advancing consumer: because concurrent flushes persist
+    /// their windows to the provider independently and out of completion
+    /// order, a higher window can land before the oldest in-flight window,
+    /// leaving a transient prefix hole. A shipper/materialiser that read
+    /// past that hole would advance its durable cursor beyond the hole and
+    /// strand the still-in-flight entries forever once they finally land
+    /// below the advanced cursor - a silent, permanent replication /
+    /// projection gap. Clamping every read at this watermark defers those
+    /// higher offsets by exactly one poll tick (until the hole fills),
+    /// which is the same at-least-once catch-up the steady state already
+    /// relies on.
+    /// </para>
     /// </summary>
-    private bool IsAtOrBeyondTail(long fromSequence) => fromSequence >= _nextOffset;
+    private long DurableContiguousTailOffset()
+    {
+        lock (_stateGate)
+        {
+            return _inFlight.Count == 0 ? _nextOffset : _inFlight.First!.Value.StartOffset;
+        }
+    }
 
     /// <inheritdoc />
     public async ValueTask<WalShardPage> ReadAsync(long fromSequence, int maxEntries, CancellationToken cancellationToken)
@@ -1046,14 +1072,18 @@ internal sealed class WalShardGrain(
 
         EnsureInitialized();
 
-        // Idle fast-path: a commit-log read at or beyond the in-memory tail
-        // returns nothing without a storage round-trip (see IsAtOrBeyondTail).
-        // This is the read the materialised-view maintainers and replay
-        // coordinators issue on every drain tick; on a caught-up source the
-        // empty page (a value type, with a cached-singleton Entries array, so no
-        // heap allocation) matches the provider path's empty result below, so
-        // those callers observe no behavioural change.
-        if (IsAtOrBeyondTail(fromSequence))
+        // Idle fast-path: a commit-log read at or beyond the durable,
+        // gap-free prefix returns nothing without a storage round-trip.
+        // The bound is DurableContiguousTailOffset() rather than the raw
+        // _nextOffset tail: a read must never surface an offset that sits
+        // above a still-in-flight lower offset, because concurrent flushes
+        // persist out of completion order and can leave a transient prefix
+        // hole (see DurableContiguousTailOffset). On a caught-up source
+        // the empty page (a value type, with a cached-singleton Entries
+        // array, so no heap allocation) matches the provider path's empty
+        // result below, so those callers observe no behavioural change.
+        var durableTail = DurableContiguousTailOffset();
+        if (fromSequence >= durableTail)
         {
             return new WalShardPage
             {
@@ -1068,6 +1098,17 @@ internal sealed class WalShardGrain(
             .ReadAsync(_treeId, _shardIndex, fromOffsetExclusive, maxEntries, cancellationToken)
             .ConfigureAwait(true))
         {
+            // Stop at the durable-contiguous watermark: any offset at or
+            // above it may sit above a transient prefix hole (a lower
+            // offset still in flight), so surfacing it would let a
+            // cursor-advancing reader strand the in-flight entries. The
+            // provider returns offsets ascending, so the first at-or-above
+            // entry ends the page; the deferred tail is picked up on the
+            // next poll once the hole fills.
+            if (walEntry.Offset >= durableTail)
+            {
+                break;
+            }
             // Recover the declared merge mode durably. Since wire id 26
             // the encoded WAL record persists the authored mode, so a
             // record decoded by the storage provider carries it on
@@ -1138,13 +1179,19 @@ internal sealed class WalShardGrain(
 
         EnsureInitialized();
 
-        // Idle fast-path: a shipper read at or beyond the in-memory tail
-        // returns nothing without a storage round-trip (see IsAtOrBeyondTail).
-        // The empty page is allocation-free - WalShardShippingPage is a value
-        // type and Array.Empty is a cached singleton - and is identical to the
-        // empty result the provider path produces below, so the shipper's
+        // Idle fast-path: a shipper read at or beyond the durable, gap-free
+        // prefix returns nothing without a storage round-trip. The bound is
+        // DurableContiguousTailOffset() rather than the raw _nextOffset
+        // tail: surfacing an offset that sits above a still-in-flight lower
+        // offset would let the shipper advance its per-partition cursor past
+        // the transient prefix hole and strand the in-flight entries forever
+        // (see DurableContiguousTailOffset). The empty page is
+        // allocation-free - WalShardShippingPage is a value type and
+        // Array.Empty is a cached singleton - and is identical to the empty
+        // result the provider path produces below, so the shipper's
         // merge/cursor logic is unaffected.
-        if (IsAtOrBeyondTail(fromSequence))
+        var durableTail = DurableContiguousTailOffset();
+        if (fromSequence >= durableTail)
         {
             return new WalShardShippingPage
             {
@@ -1169,6 +1216,18 @@ internal sealed class WalShardGrain(
         var collected = new List<WalShardShippingEntry>(segments.Length);
         for (var i = 0; i < segments.Length; i++)
         {
+            // Stop at the durable-contiguous watermark: any offset at or
+            // above it may sit above a transient prefix hole (a lower
+            // offset still in flight), so shipping it would advance the
+            // partition cursor past the unshipped hole. The provider
+            // returns offsets ascending, so the first at-or-above offset
+            // ends the page; the deferred tail ships on the next pump tick
+            // once the hole fills.
+            if (offsets[i] >= durableTail)
+            {
+                break;
+            }
+
             // The shipping page is dispatched across grain boundaries,
             // so the encoded payload must be a self-contained byte[]
             // (provider-owned segments are scoped to the provider call
