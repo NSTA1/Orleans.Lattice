@@ -11,9 +11,10 @@ using static MultiSiteManufacturing.Tests.Federation.FactFixtures;
 namespace MultiSiteManufacturing.Tests.Dashboard;
 
 /// <summary>
-/// Covers the scan-storm mitigations added to <see cref="DashboardBroadcaster"/>
-/// (issue #1038): per-part rebuild coalescing, the no-subscriber skip, and the
-/// short-TTL initial-snapshot cache that backs the snapshot's part directory.
+/// Covers the scan-storm mitigations retained on <see cref="DashboardBroadcaster"/>
+/// (issue #1038): per-part rebuild coalescing, the watcher-gated dirty mark, and
+/// the short-TTL initial-snapshot cache that backs the snapshot's part directory
+/// (now sourced from the library-maintained folded compliance view).
 /// </summary>
 [TestFixture]
 public sealed class DashboardBroadcasterCoalescingTests
@@ -38,6 +39,7 @@ public sealed class DashboardBroadcasterCoalescingTests
             router,
             _fixture.Cluster.Client,
             _fixture.NewPartCrdtStore(),
+            _fixture.ViewFactory,
             NullLogger<DashboardBroadcaster>.Instance,
             streamId,
             partRebuildInterval: rebuildInterval,
@@ -108,7 +110,7 @@ public sealed class DashboardBroadcasterCoalescingTests
     }
 
     [Test]
-    public async Task MarkPartDirty_queues_regardless_of_subscribers_and_coalesces_per_serial()
+    public async Task MarkPartDirty_is_gated_on_watchers_and_coalesces_per_serial()
     {
         // A very long window guarantees the background loop never drains during
         // the test, so PendingRebuildCount reflects exactly what marking did.
@@ -116,43 +118,39 @@ public sealed class DashboardBroadcasterCoalescingTests
         await using var broadcaster = NewBroadcaster(router, TimeSpan.FromMinutes(10));
         var serial = new PartSerialNumber("HPT-BLD-S1-2028-91100");
 
-        // No subscriber yet: the mark is still queued, because the rebuild loop
-        // maintains the materialised summary view from the fact stream so a
-        // later dashboard open reads a current snapshot. (The old behaviour -
-        // skipping the mark with no subscriber - left the view stale.)
+        // No subscriber attached: the mark is a no-op. The sample no longer owns
+        // a durable summary tree to keep warm - the library view is maintained
+        // off the WAL - so there is nothing to fold when no circuit is watching.
+        broadcaster.MarkPartDirtyForTest(serial);
+        Assert.That(broadcaster.PendingRebuildCount, Is.EqualTo(0),
+            "with no watcher attached, marking must not queue a rebuild");
+
+        // Attach + prime a part subscriber so HasPartWatchers is true.
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var subscriber = broadcaster.SubscribePartUpdates(cts.Token).GetAsyncEnumerator(cts.Token);
+        var move = subscriber.MoveNextAsync().AsTask();
+        await Task.Delay(50, cts.Token);
+
         broadcaster.MarkPartDirtyForTest(serial);
         Assert.That(broadcaster.PendingRebuildCount, Is.EqualTo(1),
-            "a fact must queue a rebuild even with no subscriber, to keep the view current");
+            "with a watcher attached, a mark queues a rebuild");
 
         // Repeated marks for the same serial coalesce to a single queued entry.
         broadcaster.MarkPartDirtyForTest(serial);
         broadcaster.MarkPartDirtyForTest(serial);
         Assert.That(broadcaster.PendingRebuildCount, Is.EqualTo(1),
             "repeated marks for one serial coalesce to a single rebuild");
-    }
 
-    [Test]
-    public async Task View_is_maintained_without_subscribers_so_snapshot_is_current()
-    {
-        // A long rebuild window keeps the background loop from racing the test;
-        // a zero snapshot TTL forces every GetInitialPartsAsync to re-read the
-        // view rather than serve a memoised result.
-        var (router, _, lattice) = _fixture.NewRouter();
-        await using var broadcaster = NewBroadcaster(
-            router, TimeSpan.FromMinutes(10), snapshotCacheTtl: TimeSpan.Zero);
-        var serial = new PartSerialNumber("HPT-BLD-S1-2028-91400");
-
-        // A fact lands in the tree the broadcaster folds from, with no circuit
-        // attached. Drive the rebuild deterministically (no stream timing).
-        await lattice.EmitAsync(Step(serial, tick: 1, ProcessStage.Forge, ProcessSite.OhioForge), CancellationToken.None);
-        broadcaster.MarkPartDirtyForTest(serial);
-        await broadcaster.DrainDirtyForTestAsync();
-
-        // The snapshot reads the materialised view (not a fresh per-part fold)
-        // and sees the part, proving the view was maintained with no subscriber.
-        var snapshot = await broadcaster.GetInitialPartsAsync();
-        Assert.That(snapshot.Any(p => p.Serial == serial), Is.True,
-            "the materialised view must reflect facts folded with no subscriber attached");
+        cts.Cancel();
+        try
+        {
+            await move;
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected once the subscription token is cancelled.
+        }
+        await subscriber.DisposeAsync();
     }
 
     [Test]
@@ -160,25 +158,28 @@ public sealed class DashboardBroadcasterCoalescingTests
     {
         // A long TTL makes the memoisation deterministic regardless of build
         // latency: the second call must reuse the first build.
-        var (router, _, lattice) = _fixture.NewRouter();
+        var (router, _, _) = _fixture.NewRouter();
         await using var broadcaster = NewBroadcaster(
             router, TimeSpan.FromMinutes(10), snapshotCacheTtl: TimeSpan.FromMinutes(10));
-        var first = new PartSerialNumber("HPT-BLD-S1-2028-91200");
-        var second = new PartSerialNumber("HPT-BLD-S1-2028-91201");
+        var first = new PartSerialNumber($"HPT-BLD-S1-2028-{Random.Shared.Next(80000, 84999)}");
+        var second = new PartSerialNumber($"HPT-BLD-S1-2028-{Random.Shared.Next(85000, 89999)}");
 
-        // Materialise the first part into the view before priming the cache.
-        await lattice.EmitAsync(Step(first, tick: 1, ProcessStage.Forge, ProcessSite.OhioForge), CancellationToken.None);
-        broadcaster.MarkPartDirtyForTest(first);
-        await broadcaster.DrainDirtyForTestAsync();
+        // The snapshot reads the library-maintained folded view over the default
+        // tree, so seed parts there and wait for the maintainer to catch up.
+        var defaultTree = _fixture.NewLatticeBackendOverDefaultTree();
+        var view = await _fixture.ViewFactory.GetAsync(ComplianceFoldProjection.ViewName);
+        Assert.That(view, Is.Not.Null);
+
+        await defaultTree.EmitAsync(Step(first, tick: 1, ProcessStage.Forge, ProcessSite.OhioForge), CancellationToken.None);
+        await view!.WaitForSourceHeadAsync(TimeSpan.FromSeconds(30));
 
         // Prime the cache with a snapshot that predates the second part.
         var seeded = await broadcaster.GetInitialPartsAsync();
         Assert.That(seeded.Any(p => p.Serial == first), Is.True);
 
         // Materialise the second part into the view after the cache was primed.
-        await lattice.EmitAsync(Step(second, tick: 1, ProcessStage.Forge, ProcessSite.OhioForge), CancellationToken.None);
-        broadcaster.MarkPartDirtyForTest(second);
-        await broadcaster.DrainDirtyForTestAsync();
+        await defaultTree.EmitAsync(Step(second, tick: 1, ProcessStage.Forge, ProcessSite.OhioForge), CancellationToken.None);
+        await view.WaitForSourceHeadAsync(TimeSpan.FromSeconds(30));
 
         // Within the TTL the memoised snapshot is returned, so the just-added
         // part is not yet visible.
@@ -192,21 +193,23 @@ public sealed class DashboardBroadcasterCoalescingTests
     {
         // A zero TTL forces every call to rebuild, so the snapshot always
         // reflects the latest materialised-view state.
-        var (router, _, lattice) = _fixture.NewRouter();
+        var (router, _, _) = _fixture.NewRouter();
         await using var broadcaster = NewBroadcaster(
             router, TimeSpan.FromMinutes(10), snapshotCacheTtl: TimeSpan.Zero);
-        var first = new PartSerialNumber("HPT-BLD-S1-2028-91300");
-        var second = new PartSerialNumber("HPT-BLD-S1-2028-91301");
+        var first = new PartSerialNumber($"HPT-BLD-S1-2028-{Random.Shared.Next(75000, 77499)}");
+        var second = new PartSerialNumber($"HPT-BLD-S1-2028-{Random.Shared.Next(77500, 79999)}");
 
-        await lattice.EmitAsync(Step(first, tick: 1, ProcessStage.Forge, ProcessSite.OhioForge), CancellationToken.None);
-        broadcaster.MarkPartDirtyForTest(first);
-        await broadcaster.DrainDirtyForTestAsync();
+        var defaultTree = _fixture.NewLatticeBackendOverDefaultTree();
+        var view = await _fixture.ViewFactory.GetAsync(ComplianceFoldProjection.ViewName);
+        Assert.That(view, Is.Not.Null);
+
+        await defaultTree.EmitAsync(Step(first, tick: 1, ProcessStage.Forge, ProcessSite.OhioForge), CancellationToken.None);
+        await view!.WaitForSourceHeadAsync(TimeSpan.FromSeconds(30));
         var seeded = await broadcaster.GetInitialPartsAsync();
         Assert.That(seeded.Any(p => p.Serial == first), Is.True);
 
-        await lattice.EmitAsync(Step(second, tick: 1, ProcessStage.Forge, ProcessSite.OhioForge), CancellationToken.None);
-        broadcaster.MarkPartDirtyForTest(second);
-        await broadcaster.DrainDirtyForTestAsync();
+        await defaultTree.EmitAsync(Step(second, tick: 1, ProcessStage.Forge, ProcessSite.OhioForge), CancellationToken.None);
+        await view.WaitForSourceHeadAsync(TimeSpan.FromSeconds(30));
 
         var refreshed = await broadcaster.GetInitialPartsAsync();
         Assert.That(refreshed.Any(p => p.Serial == second), Is.True,

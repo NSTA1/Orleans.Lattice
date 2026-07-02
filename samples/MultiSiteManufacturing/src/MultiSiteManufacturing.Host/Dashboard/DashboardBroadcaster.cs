@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 using System.Threading.Channels;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 using MultiSiteManufacturing.Host.Domain;
 using MultiSiteManufacturing.Host.Federation;
 using MultiSiteManufacturing.Host.Lattice;
@@ -142,16 +141,15 @@ public sealed partial class DashboardBroadcaster : IHostedService
     private static readonly TimeSpan ShutdownStepTimeout = TimeSpan.FromSeconds(5);
 
     /// <summary>
-    /// Default cadence for the background view-vs-tree reconciliation pass.
-    /// While a dashboard subscriber is attached, the rebuild loop periodically
-    /// diffs the fact tree (truth) against the materialised
-    /// <see cref="PartSummaryView"/> and queues any parts the view is missing
-    /// for a rebuild. This is what makes writes that bypass
-    /// <see cref="FederationRouter"/> (e.g. a direct <c>SetMany</c> seed, which
-    /// raises no <c>FactRouted</c> event) eventually appear on the dashboard
-    /// (issue #1048). Kept slower than the rebuild interval so steady-state
-    /// reconciliation costs at most one key-scan per cadence, and only when a
-    /// dashboard is actually being watched. Tests inject a custom value.
+    /// Default cadence for the background fact-tree reconciliation pass. While a
+    /// dashboard subscriber is attached, the rebuild loop periodically scans the
+    /// fact tree (truth) and queues any part it has not yet fanned out live for a
+    /// rebuild. This is what makes writes that bypass <see cref="FederationRouter"/>
+    /// (e.g. a direct <c>SetMany</c> seed, which raises no <c>FactRouted</c> event)
+    /// eventually push onto an already-attached dashboard (issue #1048). Kept
+    /// slower than the rebuild interval so steady-state reconciliation costs at
+    /// most one key-scan per cadence, and only when a dashboard is actually being
+    /// watched. Tests inject a custom value.
     /// </summary>
     private static readonly TimeSpan DefaultReconcileInterval = TimeSpan.FromSeconds(5);
 
@@ -164,25 +162,14 @@ public sealed partial class DashboardBroadcaster : IHostedService
     /// </summary>
     private const int DefaultReconcileBudget = 512;
 
-    /// <summary>
-    /// Upper bound on the exponential back-off the rebuild loop applies while
-    /// summary upserts are failing (e.g. the WAL storage is saturated and
-    /// phase-2 commits are timing out). Without this back-pressure the loop
-    /// retries the whole dirty backlog every <see cref="DefaultPartRebuildInterval"/>
-    /// and the reconcile pass keeps re-queuing the same parts, so a failing
-    /// hot partition never drains - the retries pile more load on it, pin the
-    /// silo CPU at 100%, and starve every other grain on the silo (including
-    /// the cross-cluster replication shipper). Backing off lets the storage
-    /// tier catch up, then the loop resumes its normal cadence once upserts
-    /// succeed again.
-    /// </summary>
-    private static readonly TimeSpan MaxRebuildBackoff = TimeSpan.FromSeconds(30);
+    private static readonly ILatticeSerializer<ComplianceAccumulator> Accumulators =
+        JsonLatticeSerializer<ComplianceAccumulator>.Default;
 
     private readonly FederationRouter _router;
     private readonly IClusterClient _client;
     private readonly IGrainFactory _grainFactory;
     private readonly PartCrdtStore _crdtStore;
-    private readonly PartSummaryView _summaryView;
+    private readonly ILatticeViewFactory _viewFactory;
     private readonly ILogger<DashboardBroadcaster> _logger;
     private readonly TimeSpan _partRebuildInterval;
     private readonly TimeSpan _snapshotCacheTtl;
@@ -190,12 +177,6 @@ public sealed partial class DashboardBroadcaster : IHostedService
     private readonly int _reconcileBudget;
     private DateTime _nextReconcileUtc = DateTime.MinValue;
 
-    // Number of consecutive rebuild cycles whose drain saw at least one
-    // failed summary upsert. Drives the rebuild loop's exponential back-off
-    // (see MaxRebuildBackoff) so a saturated / failing storage tier sheds load
-    // instead of congestion-collapsing under a full-rate retry storm. Reset to
-    // zero as soon as a drain completes cleanly or the dirty set empties.
-    private int _consecutiveFailedDrains;
     private readonly StreamId _streamId;
     private readonly StreamId _partChangeStreamId;
     private readonly CancellationTokenSource _shutdownCts = new();
@@ -241,14 +222,21 @@ public sealed partial class DashboardBroadcaster : IHostedService
     /// card would be stale on every circuit other than the one that
     /// issued the mutation, until the user reloaded.
     /// </para>
+    /// <para>
+    /// Takes <see cref="ILatticeViewFactory"/> (registered by
+    /// <c>AddLatticeViews</c>) so the dashboard snapshot reads the
+    /// library-maintained folded <see cref="ComplianceFoldProjection"/> view
+    /// instead of re-folding the fact tree - the sample no longer owns a
+    /// summary read model.
+    /// </para>
     /// </remarks>
     public DashboardBroadcaster(
         FederationRouter router,
         IClusterClient client,
         PartCrdtStore crdtStore,
-        PartSummaryView summaryView,
+        ILatticeViewFactory viewFactory,
         ILogger<DashboardBroadcaster> logger)
-        : this(router, client, crdtStore, summaryView, logger, DefaultBroadcastStreamId)
+        : this(router, client, crdtStore, viewFactory, logger, DefaultBroadcastStreamId)
     {
     }
     /// <summary>
@@ -261,7 +249,7 @@ public sealed partial class DashboardBroadcaster : IHostedService
         FederationRouter router,
         IClusterClient client,
         PartCrdtStore crdtStore,
-        PartSummaryView summaryView,
+        ILatticeViewFactory viewFactory,
         ILogger<DashboardBroadcaster> logger,
         StreamId streamId,
         TimeSpan? partRebuildInterval = null,
@@ -273,7 +261,7 @@ public sealed partial class DashboardBroadcaster : IHostedService
         _client = client;
         _grainFactory = client;
         _crdtStore = crdtStore;
-        _summaryView = summaryView;
+        _viewFactory = viewFactory;
         _logger = logger;
         _partRebuildInterval = partRebuildInterval ?? DefaultPartRebuildInterval;
         _snapshotCacheTtl = snapshotCacheTtl ?? DefaultSnapshotCacheTtl;
@@ -281,38 +269,6 @@ public sealed partial class DashboardBroadcaster : IHostedService
         _reconcileBudget = reconcileBudget ?? DefaultReconcileBudget;
         _streamId = streamId;
         _partChangeStreamId = DerivePartChangeStreamId(streamId);
-    }
-
-    /// <summary>
-    /// Test-only ctor overload that auto-provisions a private
-    /// <see cref="PartSummaryView"/> over a unique tree id, so existing
-    /// fixtures that don't exercise the materialised view can construct a
-    /// broadcaster without wiring one. Each broadcaster gets an isolated
-    /// summary tree, matching the per-test isolation the lattice / stream
-    /// ids already provide.
-    /// </summary>
-    internal DashboardBroadcaster(
-        FederationRouter router,
-        IClusterClient client,
-        PartCrdtStore crdtStore,
-        ILogger<DashboardBroadcaster> logger,
-        StreamId streamId,
-        TimeSpan? partRebuildInterval = null,
-        TimeSpan? snapshotCacheTtl = null,
-        TimeSpan? reconcileInterval = null,
-        int? reconcileBudget = null)
-        : this(
-            router,
-            client,
-            crdtStore,
-            new PartSummaryView(client, NullLogger<PartSummaryView>.Instance, $"mfg-part-summary-{Guid.NewGuid():N}"),
-            logger,
-            streamId,
-            partRebuildInterval,
-            snapshotCacheTtl,
-            reconcileInterval,
-            reconcileBudget)
-    {
     }
 
     /// <summary>

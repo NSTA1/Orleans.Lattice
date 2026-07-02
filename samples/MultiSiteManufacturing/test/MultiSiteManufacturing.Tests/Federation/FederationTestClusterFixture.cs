@@ -71,12 +71,22 @@ public sealed class FederationTestClusterFixture
         new(GrainFactory, NullLogger<LatticeFactBackend>.Instance, $"mfg-facts-{Guid.NewGuid():N}");
 
     /// <summary>
-    /// Convenience: a <see cref="PartSummaryView"/> over a unique tree id so
-    /// each broadcaster under test materialises into an isolated summary tree
-    /// (the in-memory Lattice state is shared across all tests in the fixture).
+    /// The silo's <see cref="ILatticeViewFactory"/>, used by tests that exercise
+    /// the materialised folded compliance view.
     /// </summary>
-    public PartSummaryView NewPartSummaryView() =>
-        new(GrainFactory, NullLogger<PartSummaryView>.Instance, $"mfg-part-summary-{Guid.NewGuid():N}");
+    public ILatticeViewFactory ViewFactory =>
+        Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions
+            .GetRequiredService<ILatticeViewFactory>(SiloServices);
+
+    /// <summary>
+    /// Convenience: a lattice backend over the default <see cref="LatticeFactBackend.FactTreeId"/>
+    /// tree with the silo's view factory injected, so <c>GetStateAsync</c> is
+    /// served from the folded <see cref="ComplianceFoldProjection"/> view (the
+    /// only tree the view is registered over). Use a unique serial per test to
+    /// keep parts isolated on the shared tree.
+    /// </summary>
+    public LatticeFactBackend NewLatticeBackendOverDefaultTree() =>
+        new(GrainFactory, NullLogger<LatticeFactBackend>.Instance, LatticeFactBackend.FactTreeId, ViewFactory);
 
     /// <summary>
     /// Convenience: a <see cref="PartCrdtStore"/> wired to the
@@ -112,8 +122,14 @@ public sealed class FederationTestClusterFixture
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             // Durable materialised-view subsystem so tests can enable a per-key
             // history view over the CRDT trees (HistoryShowcaseActivator), mirroring
-            // the production silo configuration in Program.cs. Must follow AddLattice.
-            siloBuilder.AddLatticeViews();
+            // the production silo configuration in Program.cs. Also registers the
+            // folded compliance view (ComplianceFoldProjection) over the default
+            // fact tree so the lattice backend's state read can be served from the
+            // pre-folded view. Must follow AddLattice.
+            siloBuilder.AddLatticeViews(views => views.AddFoldedView(
+                ComplianceFoldProjection.ViewName,
+                LatticeFactBackend.FactTreeId,
+                new ComplianceFoldProjection()));
             // Dashboard broadcast stream: mirrors the production silo
             // configuration in Program.cs so DashboardBroadcaster can
             // publish and subscribe during tests without ceremony.

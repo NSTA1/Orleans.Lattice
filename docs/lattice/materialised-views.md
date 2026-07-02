@@ -454,6 +454,27 @@ ILatticeView trail = client.ServiceProvider
 string? names = await trail.GetAsync<string>("30", cancellationToken);
 ```
 
+#### Worked example: a folded view plus a read-time join
+
+A folded view can only carry state that is a deterministic function of one
+source tree's member set. When a read model needs a field that is **not**
+derivable from that tree - because it is maintained independently, in a
+different order, or by a different backend - pair the folded view with a
+per-key join at read time: the view supplies the fact-derived half, and the
+caller joins the rest.
+
+The MultiSiteManufacturing sample uses exactly this shape for its dashboard
+summary. A folded view over the `mfg-facts` tree (`mfg-compliance`) folds each
+part's facts in business-HLC order into an accumulator carrying the lattice
+compliance state, the latest process stage, and the fact count. The dashboard
+snapshot scans that view and then joins each part's baseline compliance state -
+which the baseline backend folds in **arrival** order, deliberately diverging
+from the HLC-ordered lattice fold - from the baseline grain. The divergence
+between the two halves is the point of the demo, and because it cannot be
+reproduced by any fold over `mfg-facts`, it is joined per part rather than
+materialised. The sample owns no summary read model of its own; the library
+maintains the folded half off the write-ahead log.
+
 ## Reconcile and drift detection
 
 `ReconcileAsync` is the view's anti-entropy: it re-derives the expected view from
