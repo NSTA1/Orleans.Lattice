@@ -217,6 +217,7 @@ public class ReplicationApplyIntegrationTests
     {
         const string tree = "ri-orset";
         const string key = "k";
+        TwoSiteClusterFixture.TreeModeOverrides[tree] = LatticeMergeMode.OrSet;
         var lattice = _fixture.SiteB.Client.GetGrain<ILattice>(tree);
         var applier = CreateSiteBApplier();
 
@@ -261,6 +262,7 @@ public class ReplicationApplyIntegrationTests
     {
         const string tree = "ri-pncounter";
         const string key = "k";
+        TwoSiteClusterFixture.TreeModeOverrides[tree] = LatticeMergeMode.PnCounter;
         var lattice = _fixture.SiteB.Client.GetGrain<ILattice>(tree);
         var applier = CreateSiteBApplier();
 
@@ -300,6 +302,7 @@ public class ReplicationApplyIntegrationTests
     {
         const string tree = "ri-vv";
         const string key = "k";
+        TwoSiteClusterFixture.TreeModeOverrides[tree] = LatticeMergeMode.VersionVector;
         var lattice = _fixture.SiteB.Client.GetGrain<ILattice>(tree);
         var applier = CreateSiteBApplier();
 
@@ -396,6 +399,7 @@ public class ReplicationApplyIntegrationTests
         // `ApplyStateMergeAsync<MvRegister>`.
         const string tree = "ri-mvregister";
         const string key = "k";
+        TwoSiteClusterFixture.TreeModeOverrides[tree] = LatticeMergeMode.MvRegister;
         var lattice = _fixture.SiteB.Client.GetGrain<ILattice>(tree);
         var applier = CreateSiteBApplier();
 

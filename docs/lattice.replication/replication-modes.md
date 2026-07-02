@@ -80,6 +80,67 @@ Mitigations, in order of preference:
 
 The WAL saturation back-pressure surface (`IWalSaturationSignal` / `IWalSaturationObserver`) still applies: a producer that ignores the debounce guidance and drives a single hot sequence key past the per-tree WAL admission budget observes the standard saturation signal and `LatticeSaturatedException`, the same as any other write-amplifying workload.
 
+## Single shape per tree
+
+A replicated tree is **single-shape**: every value in it is authored and
+shipped under the one `LatticeMergeMode` the tree is declared with. The mode is
+a property of the *tree*, not of the individual write - the producer stamps the
+declared mode onto every `WalRecord`, hoists it once per batch into the encoded
+batch header, and the receiver re-stamps it onto every decoded entry before
+dispatching the typed apply. There is nowhere on the wire to carry a second
+shape, and the receiver never re-inspects the bytes to guess one.
+
+This means a write whose shape disagrees with the declared mode cannot converge
+on the peer. A plain last-writer-wins write to a tree declared as a CRDT mode
+ships value bytes the receiver tries to decode as a typed delta; a CRDT write
+under the wrong mode ships a delta the receiver decodes with the wrong shape.
+Either way the receiver's typed apply throws during `DeserializeDelta`, the
+entry is retried, and after `MaxApplyRetries` it is parked on the dead-letter
+queue. The origin cluster's own copy stays correct, so the divergence is
+silent - the peer simply never receives that key.
+
+To turn that silent, receiver-side divergence into a loud, origin-side failure,
+the public `ILattice` write surface **fails fast**. When a tree is declared for
+replication, any write whose shape does not match the declared mode throws
+`LatticeReplicationModeMismatchException` before it commits - nothing is written
+locally and nothing is shipped:
+
+- A plain last-writer-wins write (`SetAsync`, `SetManyAsync`,
+  `SetManyAtomicAsync`, `SetIfVersionAsync`, `GetOrSetAsync`, `DeleteAsync`,
+  `DeleteRangeAsync`, `BulkLoadAsync`, and their predicate variants) to a tree
+  declared as any typed CRDT mode is rejected. Author the value through the
+  matching accessor (`OrSet(key)`, `PnCounter(key)`, and so on) instead.
+- A CRDT write (`ApplyCrdtDeltaAsync`, reached through any CRDT accessor) whose
+  mode differs from the declared mode is rejected - whether the tree is declared
+  as a different CRDT mode or as `LwwRegister`.
+
+```csharp verify
+try
+{
+    // 'tree' is declared for replication as a typed CRDT mode (for example
+    // OrSet). A plain last-writer-wins write is rejected before it commits,
+    // because the receiver could not decode the bytes under the declared shape.
+    await tree.SetAsync("k", new byte[] { 1 }, cancellationToken);
+}
+catch (LatticeReplicationModeMismatchException ex)
+{
+    Console.WriteLine($"{ex.TreeId}: declared {ex.DeclaredMode}, attempted {ex.AttemptedMode}");
+}
+```
+
+The guard is a no-op for trees that are not declared in
+`LatticeReplicationOptions.ReplicatedTrees` (the resolver returns `null`, so
+single-cluster hosts are never affected) and for writes whose shape already
+matches the declared mode, including a plain write to a tree declared as
+`LwwRegister`. It costs a single cached resolver reference and one per-tree
+dictionary read per write.
+
+The rejection covers the direct `ILattice` write surface. The
+[cross-tree atomic write](../lattice/api.md) builder stages writes through a
+separate coordinator saga; when a slice of a cross-tree batch targets a
+replicated tree, the same single-shape rule applies - stage the slice with the
+matching accessor's `Stage*` method rather than a plain value write.
+
 ## How the mode is resolved at commit time
 
 The commit-time observer routes every mutation through

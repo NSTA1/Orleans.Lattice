@@ -182,6 +182,7 @@ public class CompressedReplicationApplyIntegrationTests
     {
         const string tree = "rzc-orset";
         const string key = "k";
+        CompressedTwoSiteClusterFixture.TreeModeOverrides[tree] = LatticeMergeMode.OrSet;
         var lattice = _fixture.SiteB.Client.GetGrain<ILattice>(tree);
         var applier = CreateSiteBApplier();
 
@@ -223,6 +224,7 @@ public class CompressedReplicationApplyIntegrationTests
     {
         const string tree = "rzc-pncounter";
         const string key = "k";
+        CompressedTwoSiteClusterFixture.TreeModeOverrides[tree] = LatticeMergeMode.PnCounter;
         var lattice = _fixture.SiteB.Client.GetGrain<ILattice>(tree);
         var applier = CreateSiteBApplier();
 
@@ -259,6 +261,7 @@ public class CompressedReplicationApplyIntegrationTests
     {
         const string tree = "rzc-mvregister";
         const string key = "k";
+        CompressedTwoSiteClusterFixture.TreeModeOverrides[tree] = LatticeMergeMode.MvRegister;
         var lattice = _fixture.SiteB.Client.GetGrain<ILattice>(tree);
         var applier = CreateSiteBApplier();
 

@@ -59,6 +59,15 @@ internal static class SiteFactory
             silo.AddLatticeReplication(opts =>
             {
                 opts.ClusterId = site.ClusterId;
+                // A replicated tree is single-shape: every value must be
+                // authored under the one merge mode declared here. This tree is
+                // LwwRegister, so plain SetAsync/DeleteAsync writes are correct.
+                // Had it been declared as a CRDT mode (OrSet, PnCounter, ...),
+                // the origin cluster would reject any write that did not match -
+                // a plain LWW write, or a different CRDT type - with
+                // LatticeReplicationModeMismatchException, because the receiver
+                // could not decode the bytes under the declared shape. See
+                // docs/lattice.replication/replication-modes.md#single-shape-per-tree.
                 opts.ReplicatedTrees = new Dictionary<string, LatticeMergeMode>(StringComparer.Ordinal)
                 {
                     [TreeName] = LatticeMergeMode.LwwRegister,

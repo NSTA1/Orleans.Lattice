@@ -19,7 +19,8 @@ public partial class LatticeGrainTests
         int shardCount = 4,
         int maxLeafKeys = 128,
         int maxInternalChildren = 128,
-        IHostApplicationLifetime? lifetime = null)
+        IHostApplicationLifetime? lifetime = null,
+        ILatticeMergeModeResolver? mergeModeResolver = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("lattice", treeId));
@@ -52,6 +53,14 @@ public partial class LatticeGrainTests
         if (lifetime is not null)
         {
             services.GetService(typeof(IHostApplicationLifetime)).Returns(lifetime);
+        }
+        // When a merge-mode resolver is supplied, wire it through the activation
+        // service provider so the grain's replication single-shape write guard
+        // sees a "declared" tree. Absent one, GetService returns null and the
+        // guard is a no-op (the single-cluster default).
+        if (mergeModeResolver is not null)
+        {
+            services.GetService(typeof(ILatticeMergeModeResolver)).Returns(mergeModeResolver);
         }
         var logger = NullLogger<LatticeGrain>.Instance;
         var grain = new LatticeGrain(context, grainFactory, optionsMonitor, optionsResolver, services, logger);
