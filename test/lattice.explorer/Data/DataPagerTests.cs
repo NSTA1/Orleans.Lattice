@@ -308,8 +308,8 @@ public class DataPagerTests
             return Task.CompletedTask;
         }
 
-        public Task<IReadOnlyList<string>> ListTagIndexesForTreeAsync(string treeId, CancellationToken cancellationToken = default)
-            => Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+        public Task<IReadOnlyList<TagIndexRef>> ListTagIndexesForTreeAsync(string treeId, CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<TagIndexRef>>(Array.Empty<TagIndexRef>());
 
         public Task<IReadOnlyList<string>> ListTagValuesForIndexAsync(string treeId, string indexName, CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());

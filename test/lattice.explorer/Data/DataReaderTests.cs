@@ -195,7 +195,7 @@ public class DataReaderTests
     }
 
     [Test]
-    public async Task ListTagIndexesForTreeAsync_PassesSourceTreeId_AndPagesAllNames()
+    public async Task ListTagIndexesForTreeAsync_PassesSourceTreeId_AndPagesAllEntries()
     {
         var calls = 0;
         var client = new FakeEntryStateClient
@@ -218,12 +218,13 @@ public class DataReaderTests
         };
         var reader = new DataReader(client);
 
-        var names = await reader.ListTagIndexesForTreeAsync("orders");
+        var indexes = await reader.ListTagIndexesForTreeAsync("orders");
 
         Assert.Multiple(() =>
         {
             Assert.That(client.LastTagIndexes!.SourceTreeId, Is.EqualTo("orders"));
-            Assert.That(names, Is.EqualTo(new[] { "by-status", "by-owner" }));
+            Assert.That(indexes.Select(i => i.IndexName), Is.EqualTo(new[] { "by-status", "by-owner" }));
+            Assert.That(indexes.Select(i => i.TreeId), Is.EqualTo(new[] { "tag-by-status", "tag-by-owner" }));
         });
     }
 

@@ -49,11 +49,12 @@ public interface IDataReader
     Task CancelScanAsync(string treeId, string? continuationToken, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Lists the clean names of the tag indexes that cover
-    /// <paramref name="treeId"/>, for the Data tab's tag filter. Returns an
-    /// empty list when the table has no associated tag indexes.
+    /// Lists the tag indexes that cover <paramref name="treeId"/>, for the Data
+    /// tab's tag filter. Each entry carries the clean index name and the id of
+    /// its membership tree so the tab can navigate to the index's detail view.
+    /// Returns an empty list when the table has no associated tag indexes.
     /// </summary>
-    Task<IReadOnlyList<string>> ListTagIndexesForTreeAsync(string treeId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<TagIndexRef>> ListTagIndexesForTreeAsync(string treeId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Lists the distinct tag values carried by the tag index

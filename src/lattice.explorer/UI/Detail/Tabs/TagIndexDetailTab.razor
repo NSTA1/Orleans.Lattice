@@ -180,6 +180,11 @@
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
 
+    // Durable-preference key the Data tab's "Explore tag index" button writes to
+    // seed a one-shot preselected tag for this view (owned by, and keyed on, the
+    // membership tree id so it never collides with another index's seed).
+    private string SeededTagStateKey => $"tagindex-tag:{Selection.Id}";
+
     private async Task LoadAsync()
     {
         var indexName = Selection.IndexName;
@@ -197,6 +202,24 @@
             _coveredTrees = await DataReader.ListCoveredTreesForIndexAsync(indexName, TabToken);
             _tags = await DataReader.ListTagsForIndexAsync(indexName, TabToken);
             _loaded = true;
+
+            // Consume a one-shot tag seed left by the Data tab's "Explore tag
+            // index" button so this view opens with that tag preselected. Only
+            // honoured on the first load (when nothing is selected yet) and
+            // removed immediately so a later Refresh or manual navigation starts
+            // clean.
+            if (_selectedTag is null)
+            {
+                var seededTag = Preferences.GetOrDefault(SeededTagStateKey, string.Empty);
+                if (!string.IsNullOrEmpty(seededTag))
+                {
+                    await Preferences.RemoveAsync(SeededTagStateKey, TabToken);
+                    if (_tags.Contains(seededTag))
+                    {
+                        _selectedTag = seededTag;
+                    }
+                }
+            }
 
             // Drop a stale member view if the previously selected tag no longer exists.
             if (_selectedTag is not null && !_tags.Contains(_selectedTag))

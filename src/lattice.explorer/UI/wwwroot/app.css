@@ -1046,6 +1046,12 @@ code, .explorer-mono {
     flex-wrap: wrap;
 }
 
+/* Push the tag-index explore button to the trailing edge of the filter row so
+   it sits apart from the index / tag pickers rather than crowding them. */
+.explorer-data-tagfilter-explore {
+    margin-left: auto;
+}
+
 .explorer-data-pagesize {
     display: inline-flex;
     align-items: center;

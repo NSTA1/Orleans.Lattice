@@ -63,13 +63,13 @@ public sealed class DataReader(ILatticeStateClient client) : IDataReader
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<string>> ListTagIndexesForTreeAsync(
+    public async Task<IReadOnlyList<TagIndexRef>> ListTagIndexesForTreeAsync(
         string treeId,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
 
-        var names = new List<string>();
+        var indexes = new List<TagIndexRef>();
         string? token = null;
         do
         {
@@ -79,14 +79,14 @@ public sealed class DataReader(ILatticeStateClient client) : IDataReader
 
             foreach (var entry in page.Entries)
             {
-                names.Add(entry.IndexName);
+                indexes.Add(new TagIndexRef { IndexName = entry.IndexName, TreeId = entry.TreeId });
             }
 
             token = page.NextPageToken;
         }
         while (!string.IsNullOrEmpty(token));
 
-        return names;
+        return indexes;
     }
 
     /// <inheritdoc />
