@@ -8,12 +8,13 @@ using Orleans.Lattice;
 // ---------------------------------------------------------------------------
 // ConflictFreeMerges
 // ---------------------------------------------------------------------------
-// Every value in Orleans.Lattice is a CRDT: independent writers can mutate the
+// Orleans.Lattice can store values as CRDTs: independent writers can mutate the
 // same logical value concurrently, with no coordination, and the store always
 // converges to the SAME final state - regardless of thread interleaving or the
-// order updates are merged in.
+// order updates are merged in. CRDT semantics are opt-in: plain SetAsync writes
+// are last-writer-wins.
 //
-// This sample drives that entirely through the typed CRDT *extension* surface
+// You opt in by driving writes through the typed CRDT *extension* surface
 // on ILattice (tree.PnCounter(key), tree.OrSet(key), ...). Those accessors
 // read-modify-write a single key through the single-writer leaf seam, so you
 // never hand-roll byte arrays, dots, or merge loops - you call the primitive's

@@ -16,12 +16,13 @@ same key would fall back to last-writer-wins.
 
 ## What it shows
 
-Every value in Orleans.Lattice is a CRDT, so independent writers can mutate the
+Orleans.Lattice can store values as CRDTs, so independent writers can mutate the
 same logical value concurrently - with no coordination - and the store always
 converges to the **same** final state, regardless of thread interleaving or the
-order updates are merged. This sample drives that entirely through the typed
-CRDT **extension** surface on `ILattice` (`tree.PnCounter(key)`,
-`tree.OrSet(key)`, ...) rather than instantiating the primitive types directly.
+order updates are merged. This is opt-in (see the warning above); this sample
+drives it entirely through the typed CRDT **extension** surface on `ILattice`
+(`tree.PnCounter(key)`, `tree.OrSet(key)`, ...) rather than instantiating the
+primitive types directly.
 
 1. **Convergence under concurrent threads** - 100 writers, each its own replica,
    hammer one shared tree at the same time. Every PN-counter increment and
