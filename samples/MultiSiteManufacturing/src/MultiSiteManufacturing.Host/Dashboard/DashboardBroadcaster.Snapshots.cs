@@ -1,5 +1,6 @@
 using MultiSiteManufacturing.Host.Domain;
 using MultiSiteManufacturing.Host.Federation;
+using MultiSiteManufacturing.Host.Lattice;
 using Microsoft.Extensions.Logging;
 
 namespace MultiSiteManufacturing.Host.Dashboard;
@@ -75,17 +76,63 @@ public sealed partial class DashboardBroadcaster
 
     private async Task<IReadOnlyList<PartSummaryUpdate>> BuildAllPartsAsync(CancellationToken cancellationToken)
     {
-        // Pure read of the materialised per-part summary view in a single
-        // contiguous scan (~one row per part). The background rebuild loop keeps
-        // the view current two ways: incrementally from the fact stream, and -
-        // for writes that bypass FederationRouter (e.g. a direct SetMany seed,
-        // which raises no FactRouted) - via the periodic tree-vs-view
-        // reconciliation pass. The snapshot therefore never re-folds the whole
-        // fact tree on the request path (the idle scan-storm fix, issue #1038)
-        // and never blocks on a large backfill (issue #1048); a freshly-seeded
-        // cluster converges in the background within a few reconcile cadences of
-        // a dashboard attaching.
-        return await _summaryView.ReadAllAsync(cancellationToken);
+        // Read the library-maintained folded compliance view (mfg-compliance)
+        // rather than re-folding the whole mfg-facts tree on the request path.
+        // The maintainer keeps the view current directly off the source WAL, so
+        // a direct SetMany seed (which raises no FactRouted) is materialised
+        // without any sample-side upkeep. A host without the view subsystem
+        // returns an empty directory.
+        var view = await _viewFactory.GetAsync(ComplianceFoldProjection.ViewName, cancellationToken);
+        if (view is null)
+        {
+            return Array.Empty<PartSummaryUpdate>();
+        }
+
+        // One contiguous scan of the view: one pre-folded accumulator per part,
+        // already skipping the reserved internal accumulator / membership rows
+        // (LatticeView starts every scan above the NUL-prefixed range). Each
+        // accumulator carries the fact-derived half of the summary - lattice
+        // state, latest stage, fact count.
+        var parts = new List<(PartSerialNumber Serial, ComplianceAccumulator Accumulator)>();
+        await foreach (var entry in view.EntriesAsync(cancellationToken: cancellationToken))
+        {
+            parts.Add((new PartSerialNumber(entry.Key), Accumulators.Deserialize(entry.Value)));
+        }
+
+        if (parts.Count == 0)
+        {
+            return Array.Empty<PartSummaryUpdate>();
+        }
+
+        // Join the baseline half per part. BaselineState cannot be derived from
+        // mfg-facts: the baseline backend folds facts in arrival order
+        // (FactsInArrivalOrder), deliberately diverging from the HLC-ordered
+        // lattice fold - that divergence is the whole point of the demo (the
+        // red-row highlight and the WatchDivergence stream). So it is joined
+        // from the baseline backend at read time. Bounded fan-out into a
+        // pre-sized array avoids opening one concurrent grain call per part.
+        var baseline = _router.GetBackend("baseline");
+        var results = new PartSummaryUpdate[parts.Count];
+        await Parallel.ForAsync(
+            0,
+            parts.Count,
+            new ParallelOptions { MaxDegreeOfParallelism = 32, CancellationToken = cancellationToken },
+            async (index, ct) =>
+            {
+                var (serial, accumulator) = parts[index];
+                var baselineState = await baseline.GetStateAsync(serial, ct);
+                results[index] = new PartSummaryUpdate
+                {
+                    Serial = serial,
+                    Family = InferFamily(serial),
+                    LatestStage = accumulator.LatestStage,
+                    BaselineState = baselineState,
+                    LatticeState = accumulator.State,
+                    FactCount = accumulator.FactCount,
+                };
+            });
+
+        return results;
     }
 
     /// <summary>
@@ -163,11 +210,11 @@ public sealed partial class DashboardBroadcaster
         var latticeState = ComplianceFold.Fold(facts);
         // "Latest stage" reflects the part's furthest-along lifecycle
         // milestone, not just the last ProcessStepCompleted. The facts
-        // list is HLC-ascending so the tail is the newest fact; map it
-        // to a ProcessStage by fact kind - InspectionRecorded → NDT,
-        // NCR/MRB/Rework → MRB, FinalAcceptance → FAI - otherwise a
-        // FAI-accepted part would still show Machining.
-        var latestStage = facts.Count == 0 ? null : StageOf(facts[^1]);
+        // list is HLC-ascending so the tail is the newest fact; map it to a
+        // ProcessStage via the shared ProcessStageMap the folded projection
+        // also uses, so an FAI-accepted part reads as FAI rather than
+        // whatever its last process step was.
+        var latestStage = facts.Count == 0 ? null : ProcessStageMap.Of(facts[^1]);
 
         return new PartSummaryUpdate
         {
@@ -179,17 +226,6 @@ public sealed partial class DashboardBroadcaster
             FactCount = facts.Count,
         };
     }
-
-    private static ProcessStage? StageOf(Fact fact) => fact switch
-    {
-        ProcessStepCompleted step => step.Stage,
-        InspectionRecorded => ProcessStage.NDT,
-        NonConformanceRaised => ProcessStage.MRB,
-        MrbDisposition => ProcessStage.MRB,
-        ReworkCompleted => ProcessStage.MRB,
-        FinalAcceptance => ProcessStage.FAI,
-        _ => null,
-    };
 
     private static ChaosOverview BuildOverview(
         IReadOnlyList<SiteState> sites,

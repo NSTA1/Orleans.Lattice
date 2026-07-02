@@ -39,6 +39,7 @@ public sealed class DashboardBroadcasterTests
             router,
             _fixture.Cluster.Client,
             _fixture.NewPartCrdtStore(),
+            _fixture.ViewFactory,
             NullLogger<DashboardBroadcaster>.Instance,
             streamId);
         broadcaster.StartAsync(CancellationToken.None).GetAwaiter().GetResult();
@@ -46,14 +47,18 @@ public sealed class DashboardBroadcasterTests
     }
 
     [Test]
-    public async Task GetInitialPartsAsync_returns_empty_for_fresh_router()
+    public async Task GetInitialPartsAsync_omits_a_never_written_serial()
     {
         var (router, _, _) = _fixture.NewRouter();
         await using var broadcaster = NewBroadcaster(router);
 
+        // The snapshot reads the shared library view over the default tree.
+        // A serial no test ever writes must never appear in it.
+        var absent = new PartSerialNumber($"HPT-BLD-S1-2028-{Random.Shared.Next(70000, 79999)}");
+
         var initial = await broadcaster.GetInitialPartsAsync();
 
-        Assert.That(initial, Is.Empty);
+        Assert.That(initial.Any(p => p.Serial == absent), Is.False);
     }
 
     [Test]
@@ -103,6 +108,7 @@ public sealed class DashboardBroadcasterTests
             router,
             _fixture.Cluster.Client,
             crdtStore,
+            _fixture.ViewFactory,
             NullLogger<DashboardBroadcaster>.Instance,
             streamId);
         await broadcaster.StartAsync(CancellationToken.None);
@@ -279,17 +285,22 @@ public sealed class DashboardBroadcasterTests
     [Test]
     public async Task GetInitialDivergenceAsync_returns_currently_divergent_parts()
     {
-        var (router, _, lattice) = _fixture.NewRouter();
+        var (router, _, _) = _fixture.NewRouter();
         await using var broadcaster = NewBroadcaster(router);
-        var serial = new PartSerialNumber("HPT-BLD-S1-2028-90102");
+        var serial = new PartSerialNumber($"HPT-BLD-S1-2028-{Random.Shared.Next(90100, 90199)}");
 
-        // Bury a Critical NC in the lattice backend only.
-        await lattice.EmitAsync(Nc(serial, tick: 1, "NC-2", NcSeverity.Critical, ProcessSite.ToulouseNdtLab), CancellationToken.None);
+        // The snapshot reads the library-maintained folded view over the
+        // default fact tree, so seed the NC there (not the router's private
+        // tree). Baseline stays empty (Nominal), the view folds the Critical NC
+        // to Scrap - so the part diverges.
+        var defaultTree = _fixture.NewLatticeBackendOverDefaultTree();
+        await defaultTree.EmitAsync(Nc(serial, tick: 1, "NC-2", NcSeverity.Critical, ProcessSite.ToulouseNdtLab), CancellationToken.None);
 
-        // The fact was written directly to the tree (no FactRouted), so the
-        // materialised view the snapshot reads only learns about it via the
-        // background tree-vs-view reconciliation pass. Drive one deterministically.
-        await broadcaster.ReconcileViewWithTreeForTestAsync();
+        // Drive the maintainer until it has applied the write so the snapshot
+        // reads the materialised row rather than a stale/absent one.
+        var view = await _fixture.ViewFactory.GetAsync(ComplianceFoldProjection.ViewName);
+        Assert.That(view, Is.Not.Null);
+        await view!.WaitForSourceHeadAsync(TimeSpan.FromSeconds(30));
 
         var initial = await broadcaster.GetInitialDivergenceAsync();
 
@@ -474,11 +485,11 @@ public sealed class DashboardBroadcasterTests
         var (routerB, _, _) = _fixture.NewRouter();
 
         await using var broadcasterA = new DashboardBroadcaster(
-            routerA, _fixture.Cluster.Client, _fixture.NewPartCrdtStore(), NullLogger<DashboardBroadcaster>.Instance, sharedStreamId);
+            routerA, _fixture.Cluster.Client, _fixture.NewPartCrdtStore(), _fixture.ViewFactory, NullLogger<DashboardBroadcaster>.Instance, sharedStreamId);
         await broadcasterA.StartAsync(CancellationToken.None);
 
         await using var broadcasterB = new DashboardBroadcaster(
-            routerB, _fixture.Cluster.Client, _fixture.NewPartCrdtStore(), NullLogger<DashboardBroadcaster>.Instance, sharedStreamId);
+            routerB, _fixture.Cluster.Client, _fixture.NewPartCrdtStore(), _fixture.ViewFactory, NullLogger<DashboardBroadcaster>.Instance, sharedStreamId);
         await broadcasterB.StartAsync(CancellationToken.None);
 
         var serial = new PartSerialNumber("HPT-BLD-XSILO-91001");
@@ -540,11 +551,11 @@ public sealed class DashboardBroadcasterTests
         var crdtStoreB = _fixture.NewPartCrdtStore();
 
         await using var broadcasterA = new DashboardBroadcaster(
-            routerA, _fixture.Cluster.Client, crdtStoreA, NullLogger<DashboardBroadcaster>.Instance, sharedStreamId);
+            routerA, _fixture.Cluster.Client, crdtStoreA, _fixture.ViewFactory, NullLogger<DashboardBroadcaster>.Instance, sharedStreamId);
         await broadcasterA.StartAsync(CancellationToken.None);
 
         await using var broadcasterB = new DashboardBroadcaster(
-            routerB, _fixture.Cluster.Client, crdtStoreB, NullLogger<DashboardBroadcaster>.Instance, sharedStreamId);
+            routerB, _fixture.Cluster.Client, crdtStoreB, _fixture.ViewFactory, NullLogger<DashboardBroadcaster>.Instance, sharedStreamId);
         await broadcasterB.StartAsync(CancellationToken.None);
 
         var serial = new PartSerialNumber("HPT-BLD-XSILO-91100");

@@ -163,10 +163,14 @@ builder.Host.UseOrleans(silo =>
 
         // Durable materialised-view subsystem - required so the change-history
         // showcase can enable a per-key history view over the CRDT trees (see
-        // HistoryShowcaseActivator). Must follow AddLattice (views tail its WAL).
-        silo.AddLatticeViews();
-
-        // Read-only cluster state API (issue #886). Co-hosted on the
+        // HistoryShowcaseActivator). Also registers the folded compliance view
+        // (ComplianceFoldProjection) so LatticeFactBackend.GetStateAsync serves
+        // each part's HLC-ordered state from a pre-folded row instead of a
+        // per-read scan + fold. Must follow AddLattice (views tail its WAL).
+        silo.AddLatticeViews(views => views.AddFoldedView(
+            ComplianceFoldProjection.ViewName,
+            LatticeFactBackend.FactTreeId,
+            new ComplianceFoldProjection()));
         // lattice-backed silo so the Orleans.Lattice.Explorer can browse this
         // single-process quick-start over the gRPC state surface. Must follow
         // AddLattice (it reads the core tree registry / digests).
@@ -249,8 +253,14 @@ builder.Host.UseOrleans(silo =>
 
         // Durable materialised-view subsystem - required so the change-history
         // showcase can enable a per-key history view over the CRDT trees (see
-        // HistoryShowcaseActivator). Must follow AddLattice (views tail its WAL).
-        silo.AddLatticeViews();
+        // HistoryShowcaseActivator). Also registers the folded compliance view
+        // (ComplianceFoldProjection) so LatticeFactBackend.GetStateAsync serves
+        // each part's HLC-ordered state from a pre-folded row instead of a
+        // per-read scan + fold. Must follow AddLattice (views tail its WAL).
+        silo.AddLatticeViews(views => views.AddFoldedView(
+            ComplianceFoldProjection.ViewName,
+            LatticeFactBackend.FactTreeId,
+            new ComplianceFoldProjection()));
 
         // Persist the lattice write-ahead log to Azure Table Storage
         // (Azurite locally) rather than the in-memory baseline AddLattice
@@ -530,12 +540,11 @@ builder.Services.AddHostedService<PartitionHealHostedService>();
 builder.Services.AddSingleton<SiteActivityIndex>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SiteActivityIndex>());
 
-// Materialised per-part dashboard summary (one row per part, keyed by
-// serial) in its own Lattice tree. The broadcaster keeps it fresh from
-// the fact stream so the dashboard snapshot reads it in a single scan
-// instead of re-folding mfg-facts per render (issue #1038).
-builder.Services.AddSingleton<MultiSiteManufacturing.Host.Lattice.PartSummaryView>();
-
+// The dashboard's per-part summary read model is the library-maintained
+// folded compliance view (mfg-compliance), registered above via
+// AddLatticeViews. The maintainer keeps it current directly off the
+// mfg-facts WAL, so the broadcaster only reads it (joining baseline state
+// per part at snapshot time) - the sample owns no summary tree of its own.
 builder.Services.AddSingleton<DashboardBroadcaster>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<DashboardBroadcaster>());
 

@@ -9,8 +9,10 @@ namespace MultiSiteManufacturing.Host.Lattice;
 /// <summary>
 /// Lattice backend - appends every fact to a single Orleans.Lattice B+ tree
 /// (keyed by <c>{serial}/{hlc}/{factId}</c> so a range scan over one prefix
-/// returns all facts for a part in HLC order) and computes state via
-/// <see cref="ComplianceFold"/> over the scan result.
+/// returns all facts for a part in HLC order) and computes state from the
+/// <see cref="ComplianceFoldProjection.ViewName"/> materialised folded view,
+/// falling back to <see cref="ComplianceFold"/> over the scan result when the
+/// view is unavailable or not yet populated.
 /// </summary>
 /// <remarks>
 /// <para>Keys are structured:</para>
@@ -27,7 +29,8 @@ namespace MultiSiteManufacturing.Host.Lattice;
 public sealed class LatticeFactBackend(
     IGrainFactory grainFactory,
     ILogger<LatticeFactBackend> logger,
-    string treeId = LatticeFactBackend.FactTreeId) : IFactBackend
+    string treeId = LatticeFactBackend.FactTreeId,
+    ILatticeViewFactory? viewFactory = null) : IFactBackend
 {
     /// <summary>Default Lattice tree id that holds every fact across every part.</summary>
     public const string FactTreeId = "mfg-facts";
@@ -54,8 +57,30 @@ public sealed class LatticeFactBackend(
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Reads the pre-folded state from the <see cref="ComplianceFoldProjection.ViewName"/>
+    /// materialised view (kept in business-HLC order, identical semantics to
+    /// <see cref="ComplianceFold"/> but O(1) per part instead of a prefix scan +
+    /// fold). Only the default <see cref="FactTreeId"/> tree has a registered
+    /// view; a per-test isolated tree, a host without the view subsystem, or a
+    /// cold/unpopulated group all fall through to the authoritative scan + fold
+    /// below, so the read is always self-healing and read-your-writes safe.
+    /// </remarks>
     public async Task<ComplianceState> GetStateAsync(PartSerialNumber serial, CancellationToken cancellationToken = default)
     {
+        if (viewFactory is not null && treeId == FactTreeId)
+        {
+            var view = await viewFactory.GetAsync(ComplianceFoldProjection.ViewName, cancellationToken);
+            if (view is not null)
+            {
+                var accumulator = await view.GetAsync<ComplianceAccumulator>(serial.Value, cancellationToken);
+                if (accumulator is not null)
+                {
+                    return accumulator.State;
+                }
+            }
+        }
+
         var facts = await GetFactsAsync(serial, cancellationToken);
         return ComplianceFold.Fold(facts);
     }

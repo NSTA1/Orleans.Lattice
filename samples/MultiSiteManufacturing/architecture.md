@@ -290,7 +290,11 @@ flowchart LR
 | `tag-mfg-site` | tag-index membership (`tag \0 treeId \0 key`) | Posting list mapping each `ProcessSite` to its `{serial}/{site}` keys; powers `ListAtSiteAsync` via `WithAnyTags(site)`. | Yes |
 | `mfg-part-labels` | `{serial}` (one OrSet per serial) | Per-part label set (`damaged`, `awaiting-mrb`, `awaiting-rework`, `accepted`, `scrapped`, …). | Yes - `ReplicationMode.OrSet` (typed CRDT delta shipping) |
 | `mfg-part-operator` | `{serial}` (one LWW register per serial) | Per-part current operator id. | No (cluster-local) - LWW across clusters with disjoint HLCs is meaningless |
-| `mfg-part-summary` | `{serial}` (one summary row per serial) | Materialised per-part dashboard summary (family, latest stage, baseline/lattice compliance state, fact count). The broadcaster folds each dirty part once per coalesced rebuild window and upserts its row; the dashboard snapshot reads the whole tree in a single scan instead of re-folding every part on each load. | No (cluster-local) - each region rebuilds its own copy from its routed + replicated facts |
+
+The dashboard's per-part summary is no longer a sample-owned tree. It is the
+library-maintained folded view `mfg-compliance` over `mfg-facts` (registered via
+`AddLatticeViews`/`AddFoldedView`), joined at read time with each part's baseline
+compliance state. See the access patterns below.
 
 Access patterns:
 
@@ -302,15 +306,21 @@ Access patterns:
   The site is deliberately the key *suffix*, so a range scan cannot
   answer this query - the tag index is the access path.
 
-- All-parts dashboard snapshot → single full scan of
-  `mfg-part-summary`. The broadcaster keeps the tree warm from the
-  fact stream (one coalesced fold per dirty part per rebuild window),
-  so a dashboard load reads one row per part in a single pass instead
-  of re-folding every part's `mfg-facts` prefix on every load. While a
-  dashboard is being watched, a bounded background pass also reconciles
-  the view against the `mfg-facts` tree, so parts written directly -
-  bypassing `FederationRouter`, which raises no fact-stream event - still
-  converge onto the dashboard within a few cadences.
+- All-parts dashboard snapshot → scan of the library-maintained folded view
+  `mfg-compliance` (the fact-derived half: lattice compliance state, latest
+  process stage, fact count), joined per part with the baseline compliance
+  state from the baseline backend. The library maintainer keeps the folded
+  half current directly off the `mfg-facts` write-ahead log, so a dashboard
+  load reads one pre-folded accumulator per part instead of re-folding every
+  part's `mfg-facts` prefix. `BaselineState` is folded in arrival order by the
+  baseline backend, deliberately diverging from the HLC-ordered lattice fold
+  (the red-row highlight and divergence stream are the demo), so it cannot be
+  reproduced by any fold over `mfg-facts` and is joined per part at read time
+  rather than materialised. While a dashboard is being watched, a bounded
+  background pass also reconciles the fanned-out set against the `mfg-facts`
+  tree, so parts written directly - bypassing `FederationRouter`, which raises
+  no fact-stream event - are still fanned out live to the attached dashboard
+  within a few cadences.
 
 Cross-cluster shipping and WAL compaction are package concerns - see
 [`docs/lattice.replication/`](../../docs/lattice.replication/) for
