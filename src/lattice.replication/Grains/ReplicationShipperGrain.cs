@@ -444,17 +444,23 @@ internal sealed class ReplicationShipperGrain(
     private long[] _partitionNextSeq = Array.Empty<long>();
     private long[] _partitionMaxReadSeq = Array.Empty<long>();
     private bool[] _partitionAdvanced = Array.Empty<bool>();
-    //   _partitionCursorSaved[p] - whether partition p resumed this tick
-    //                           from a durable saved sequence cursor
-    //                           (state.PartitionCursors contained p) as
-    //                           opposed to the legacy fallback of
-    //                           sequence 0. Once a durable partition
-    //                           cursor exists it is the sole authoritative
-    //                           exactly-once resume token, so the
-    //                           defensive scalar-HLC drop in the merge
-    //                           loop is scoped to the legacy (unsaved)
-    //                           case only - see MergeOneBatchAsync.
-    private bool[] _partitionCursorSaved = Array.Empty<bool>();
+    //   _legacyCursorMigrationPending - whether THIS pump tick is the
+    //                           one-time legacy migration from a pre-
+    //                           partition-cursor build: a non-zero
+    //                           state.Cursor but an entirely EMPTY
+    //                           PartitionCursors dictionary. This is the
+    //                           only situation in which the defensive
+    //                           scalar-HLC drop in the merge loop may fire.
+    //                           It must be keyed on the whole dictionary
+    //                           being empty, NOT on a single partition
+    //                           lacking a cursor: a genuinely cold
+    //                           partition in a modern build (dict non-empty
+    //                           overall, missing just this partition) has
+    //                           real unshipped entries whose per-leaf HLC
+    //                           can legitimately sit below the scalar
+    //                           cursor, and dropping them silently strands
+    //                           them - see MergeOneBatchAsync.
+    private bool _legacyCursorMigrationPending;
     private IWalShardGrain?[] _partitionGrainCache = Array.Empty<IWalShardGrain?>();
     private WalRecord[] _partitionHead = Array.Empty<WalRecord>();
     private bool[] _partitionHeadDecoded = Array.Empty<bool>();
@@ -2139,6 +2145,19 @@ internal sealed class ReplicationShipperGrain(
         // _partitionMaxReadSeq is initialised from the cursor minus 1
         // so a partition that contributes nothing this tick reports
         // "no advance" in AdvancePartitionCursorsInState.
+        // A non-zero scalar cursor with an entirely empty PartitionCursors
+        // map is the signature of a state persisted by a pre-partition-
+        // cursor build: every partition resumes from sequence 0 and would
+        // otherwise re-ship the whole already-shipped prefix. This is the
+        // ONLY tick in which the defensive scalar-HLC drop may fire. From
+        // the first saved partition cursor onward the drop is disabled for
+        // every partition - including genuinely cold ones - because a cold
+        // partition's unshipped entries may legitimately carry a per-leaf
+        // HLC below the scalar cursor.
+        _legacyCursorMigrationPending =
+            state.State.Cursor != HybridLogicalClock.Zero
+            && state.State.PartitionCursors.Count == 0;
+
         for (var p = 0; p < partitions; p++)
         {
             _partitionPages[p] = null;
@@ -2146,7 +2165,6 @@ internal sealed class ReplicationShipperGrain(
             _partitionAdvanced[p] = false;
             _partitionHeadDecoded[p] = false;
             var seeded = state.State.PartitionCursors.TryGetValue(p, out var saved) ? saved : 0L;
-            _partitionCursorSaved[p] = state.State.PartitionCursors.ContainsKey(p);
             _partitionNextSeq[p] = seeded;
             _partitionMaxReadSeq[p] = seeded - 1;
         }
@@ -2328,14 +2346,18 @@ internal sealed class ReplicationShipperGrain(
             // -cursor build carries a non-zero state.Cursor but an EMPTY
             // PartitionCursors dictionary, so every partition resumes from
             // sequence 0 and would re-ship the entire already-shipped
-            // prefix. `!_partitionCursorSaved[p]` scopes the drop to that
-            // case; from the first ack onward the partition cursor is
-            // saved and the drop is disabled for that partition. Zero-HLC
+            // prefix. `_legacyCursorMigrationPending` (computed once per
+            // tick in InitializeDrainTickAsync from the WHOLE dictionary
+            // being empty) scopes the drop to that case; from the first ack
+            // onward at least one partition cursor is saved and the drop is
+            // disabled for every partition - including genuinely cold ones,
+            // whose unshipped entries may legitimately carry a per-leaf HLC
+            // below the scalar cursor and MUST NOT be dropped. Zero-HLC
             // (DeleteRange) and prepared-atomic-batch entries are excluded
             // even in the legacy case - both carry non-monotonic per-leaf
             // HLCs and are tracked purely by partition sequence.
             var isPreparedAtomicBatch = winningRecord.IsPrepared && winningRecord.AtomicBatchSize > 0;
-            if (!_partitionCursorSaved[minPartition]
+            if (_legacyCursorMigrationPending
                 && !isPreparedAtomicBatch
                 && winningRecord.Timestamp != HybridLogicalClock.Zero
                 && winningRecord.Timestamp.CompareTo(state.State.Cursor) <= 0)
@@ -2955,7 +2977,6 @@ internal sealed class ReplicationShipperGrain(
         Array.Resize(ref _partitionNextSeq, partitions);
         Array.Resize(ref _partitionMaxReadSeq, partitions);
         Array.Resize(ref _partitionAdvanced, partitions);
-        Array.Resize(ref _partitionCursorSaved, partitions);
         Array.Resize(ref _partitionGrainCache, partitions);
         Array.Resize(ref _partitionHead, partitions);
         Array.Resize(ref _partitionHeadDecoded, partitions);
