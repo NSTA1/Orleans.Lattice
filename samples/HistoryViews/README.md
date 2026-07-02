@@ -1,4 +1,4 @@
-# HistoryViews
+# History Views
 
 ## What it shows
 

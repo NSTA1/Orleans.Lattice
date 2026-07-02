@@ -1,4 +1,4 @@
-# AtomicWrites
+# Atomic Writes
 
 ## What it shows
 

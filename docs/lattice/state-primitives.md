@@ -109,6 +109,12 @@ Because both `LwwValue.Merge` and `VersionVector.Merge` are lattice operations, 
 
 **Example use case:** the wire format for incremental sync between a leaf and its caches or replicas. If the network drops a delta and the consumer retries, replaying the same delta is harmless; if two deltas arrive out of order, applying them in either order produces the same result.
 
+## :warning: Opt-in CRDT values
+
+The primitives that follow (`OrSet`, `OrFlag`, `RwFlag`, `PnCounter`, `MvRegister`, `OrMap`, `Rga`) are **opt-in**. Plain writes - `SetAsync`, `SetManyAsync`, and friends - are last-writer-wins: a later timestamp silently overwrites a concurrent write. To get convergent, no-lost-update behaviour you write through the typed CRDT accessors on `ILattice` (`tree.PnCounter(key)`, `tree.OrSet(key)`, ...), which pick the right merge mode for the key.
+
+The [Conflict-Free Merges sample](../../samples/ConflictFreeMerges/README.md) is a runnable tour of every accessor, including convergence under concurrent threads.
+
 ## Observed-Remove Set (OR-Set)
 
 `OrSet` is an **add-wins, observed-remove set** of `byte[]` elements. Every `Add(element, replicaId, counter)` mints a fresh causal dot `(replicaId, counter)` and attaches it to the element under `Adds`; `Remove(element)` moves every currently-observed dot for that element into `Tombstones`. An element is present in the set whenever its `Adds` set contains at least one dot that is not in `Tombstones`:

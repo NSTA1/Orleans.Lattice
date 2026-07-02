@@ -1,4 +1,4 @@
-# DurableCursors
+# Durable Cursors
 
 ## What it shows
 

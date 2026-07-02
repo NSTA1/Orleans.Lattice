@@ -1,4 +1,4 @@
-# RetryPolicy
+# Retry Policy
 
 ## What it shows
 

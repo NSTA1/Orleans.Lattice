@@ -1,4 +1,4 @@
-# PredicateOperations
+# Predicate Operations
 
 ## What it shows
 

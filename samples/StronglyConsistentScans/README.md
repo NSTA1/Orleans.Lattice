@@ -1,4 +1,4 @@
-# StronglyConsistentScans
+# Strongly Consistent Scans
 
 ## What it shows
 

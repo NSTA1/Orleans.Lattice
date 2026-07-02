@@ -1,4 +1,4 @@
-# MultiSiteManufacturing - an Orleans.Lattice sample
+# Multi-Site Manufacturing - an Orleans.Lattice sample
 
 A working thin slice of a regulated process-engineering traceability
 system (turbine-blade lifecycle: forge → heat-treat → machining → NDT
