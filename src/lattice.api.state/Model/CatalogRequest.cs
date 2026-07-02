@@ -62,9 +62,12 @@ public sealed record CatalogRequest
     [Id(4)] public string? SourceTreeId { get; init; }
 
     /// <summary>
-    /// Names the tag index whose distinct tag values
-    /// <see cref="ILatticeStateQuery.ListTagValuesAsync"/> enumerates (scoped to
-    /// the subject tree named by <see cref="SourceTreeId"/>). Ignored by every
+    /// Names the tag index for the index-scoped catalog endpoints. For
+    /// <see cref="ILatticeStateQuery.ListTagValuesAsync"/> the distinct tag
+    /// values are scoped to the subject tree named by <see cref="SourceTreeId"/>;
+    /// for <see cref="ILatticeStateQuery.ListIndexTagsAsync"/> and
+    /// <see cref="ILatticeStateQuery.ListCoveredTreesAsync"/> the enumeration is
+    /// index-wide and <see cref="SourceTreeId"/> is ignored. Ignored by every
     /// other catalog endpoint. Defaults to <see langword="null"/>.
     /// </summary>
     [Id(5)] public string? IndexName { get; init; }

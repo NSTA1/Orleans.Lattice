@@ -65,4 +65,37 @@ public interface IDataReader
         string treeId,
         string indexName,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lists the subject trees the tag index <paramref name="indexName"/>
+    /// covers, in ascending ordinal order, for the tag-index detail view.
+    /// Returns an empty list when the index covers no trees.
+    /// </summary>
+    Task<IReadOnlyList<string>> ListCoveredTreesForIndexAsync(
+        string indexName,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lists the distinct tags carried by the tag index
+    /// <paramref name="indexName"/> across every tree it covers, in ascending
+    /// ordinal order, for the tag-index detail view. Returns an empty list when
+    /// the index has no members.
+    /// </summary>
+    Task<IReadOnlyList<string>> ListTagsForIndexAsync(
+        string indexName,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Scans a page of the live members of the tag <paramref name="tag"/> across
+    /// the tag index <paramref name="indexName"/>, ordered by <c>(tree id, key)</c>
+    /// ordinal, for the tag-index detail view. Pass the
+    /// <paramref name="continuationToken"/> from a prior page to resume, or
+    /// <see langword="null"/> to open a fresh scan.
+    /// </summary>
+    Task<TagMemberPage> ScanTagMembersAsync(
+        string indexName,
+        string tag,
+        int pageSize,
+        string? continuationToken = null,
+        CancellationToken cancellationToken = default);
 }

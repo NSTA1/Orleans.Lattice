@@ -126,6 +126,55 @@ internal interface ILatticeStateQuery
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Enumerates the subject trees a single tag index covers, as a
+    /// deterministic, paged catalog in ascending ordinal order. The index is
+    /// named by <see cref="CatalogRequest.IndexName"/> (required);
+    /// <see cref="CatalogRequest.SourceTreeId"/> is ignored. Returns an empty
+    /// page when no tag-index factory is registered or when the index covers no
+    /// trees.
+    /// </summary>
+    /// <param name="request">Paging request carrying the index name (<see cref="CatalogRequest.IndexName"/>).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<CoveredTreeCatalogPage> ListCoveredTreesAsync(
+        CatalogRequest request,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Enumerates the distinct tag values a single tag index carries across
+    /// <b>every</b> tree it covers, as a deterministic, paged catalog in
+    /// ascending ordinal order. This is the index-wide analog of
+    /// <see cref="ListTagValuesAsync"/> (which is scoped to one subject tree).
+    /// The index is named by <see cref="CatalogRequest.IndexName"/> (required);
+    /// <see cref="CatalogRequest.SourceTreeId"/> is ignored. Returns an empty
+    /// page when no tag-index factory is registered or when the index has no
+    /// members.
+    /// </summary>
+    /// <param name="request">Paging request carrying the index name (<see cref="CatalogRequest.IndexName"/>).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<TagValueCatalogPage> ListIndexTagsAsync(
+        CatalogRequest request,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Enumerates the live members of a single tag - the <c>(tree, key)</c>
+    /// pairs currently carrying it - across every tree a tag index covers, as a
+    /// deterministic, paged catalog in ascending ordinal <c>(tree id, key)</c>
+    /// order. Members whose primary key no longer exists in its subject tree (a
+    /// membership row that outlived its key, pending reconcile) are skipped, so
+    /// only live rows are returned. Returns an empty page when no tag-index
+    /// factory is registered or the tag has no live members.
+    /// </summary>
+    /// <param name="request">
+    /// Paging request carrying the index name
+    /// (<see cref="TagMemberScanRequest.IndexName"/>) and tag
+    /// (<see cref="TagMemberScanRequest.Tag"/>).
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<TagMemberScanPage> ScanTagMembersAsync(
+        TagMemberScanRequest request,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns the structural node graph of the given tree - shard roots,
     /// internal nodes, and leaves - each annotated with node kind, key-range
     /// bounds, live/tombstone counts, fan-out, and depth, or a typed

@@ -85,6 +85,8 @@ public sealed class StateApiRequestSizeContractTests
                 new EntryHistoryRequest { TreeId = TreeId, Key = KnownKey },
             _ when requestType == typeof(StructureRequest) =>
                 new StructureRequest { TreeId = TreeId },
+            _ when requestType == typeof(TagMemberScanRequest) =>
+                new TagMemberScanRequest { IndexName = "size-contract-index", Tag = "size-contract-tag" },
             _ => throw new NotSupportedException(
                 $"No baseline request is configured for '{requestType}'. Add one so the "
                 + "size-contract guard exercises its caller-influenced size properties."),

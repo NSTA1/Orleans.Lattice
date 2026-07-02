@@ -48,6 +48,14 @@ Each `TreeCatalogEntry` carries the tree id, its shard count, and its lifecycle.
 
 `ListTagIndexesAsync` lists the tag-index membership trees as their own category; set `SourceTreeId` to restrict it to the indexes that cover one tree. `ListTagValuesAsync` then enumerates the distinct tag values carried by a single index over its subject tree, in ascending ordinal order - pass both `SourceTreeId` (the subject tree) and `IndexName` (the index). Both are paged like the other catalogs, so a client can populate a tag picker without scanning the index tree itself.
 
+Three index-wide read methods browse a multi-tree tag index without decoding any internal membership-tree naming convention. Each is scoped to a single `IndexName` and spans every tree the index covers:
+
+- `ListCoveredTreesAsync(CatalogRequest { IndexName })` returns a `CoveredTreeCatalogPage` of the subject-tree ids the index covers, in ascending ordinal order.
+- `ListIndexTagsAsync(CatalogRequest { IndexName })` returns a `TagValueCatalogPage` of the distinct tag values across the whole index (the index-wide union of `ListTagValuesAsync` over every covered tree).
+- `ScanTagMembersAsync(TagMemberScanRequest { IndexName, Tag })` returns a `TagMemberScanPage` of the live `TagMember` rows (each a `{ TreeId, Key }` pair) carrying that tag, ordered by `(tree id, key)`. Membership rows whose primary key no longer exists (stale until the next reconcile) are filtered out, so the page reflects only live members. `PageSize` is clamped to `[1, 1000]` (default 100); resume with the returned `NextPageToken`.
+
+Because these three span many trees, they present no single target tree to a host authorizer - they authorize like the cluster-wide `ListTrees` / `ListViews` rather than the subject-tree-scoped `ListTagValues`.
+
 ## Structure
 
 `GetTreeStructureAsync` returns the structural node graph of a tree as a `StructureResponse`. `Roots` holds one `NodeStateSummary` per shard root; each node reports its kind (leaf or internal), child fan-out, and `SubtreeKeyCount` - the live-key count under that subtree. Summing the roots' subtree counts gives the tree's total live-key count.

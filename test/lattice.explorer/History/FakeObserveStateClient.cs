@@ -104,6 +104,12 @@ internal sealed class FakeObserveStateClient : ILatticeStateClient
         => Task.FromResult(new TagIndexCatalogPage());
     public Task<TagValueCatalogPage> ListTagValuesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
         => Task.FromResult(new TagValueCatalogPage());
+    public Task<CoveredTreeCatalogPage> ListCoveredTreesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
+        => Task.FromResult(new CoveredTreeCatalogPage());
+    public Task<TagValueCatalogPage> ListIndexTagsAsync(CatalogRequest request, CancellationToken cancellationToken = default)
+        => Task.FromResult(new TagValueCatalogPage());
+    public Task<TagMemberScanPage> ScanTagMembersAsync(TagMemberScanRequest request, CancellationToken cancellationToken = default)
+        => Task.FromResult(new TagMemberScanPage());
     public Task<StructureResponse> GetTreeStructureAsync(StructureRequest request, CancellationToken cancellationToken = default)
         => Task.FromResult(new StructureResponse { TreeId = "t" });
     public Task<EntryScanResponse> ScanEntriesAsync(EntryScanRequest request, CancellationToken cancellationToken = default)

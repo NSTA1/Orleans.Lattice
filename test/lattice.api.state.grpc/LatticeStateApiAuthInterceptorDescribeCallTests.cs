@@ -75,6 +75,51 @@ public sealed class LatticeStateApiAuthInterceptorDescribeCallTests
     }
 
     [Test]
+    public void ListCoveredTrees_is_index_scoped_with_no_single_target()
+    {
+        var result = Describe(
+            LatticeStateGrpcMethods.ListCoveredTreesMethodName,
+            new CatalogRequest { IndexName = "idx" });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Operation, Is.EqualTo(LatticeStateApiOperation.ListCoveredTrees));
+            Assert.That(result.TargetTreeId, Is.Null,
+                "an index-wide covered-trees listing spans many trees, so it presents no single target");
+        });
+    }
+
+    [Test]
+    public void ListIndexTags_is_index_scoped_with_no_single_target()
+    {
+        var result = Describe(
+            LatticeStateGrpcMethods.ListIndexTagsMethodName,
+            new CatalogRequest { IndexName = "idx" });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Operation, Is.EqualTo(LatticeStateApiOperation.ListIndexTags));
+            Assert.That(result.TargetTreeId, Is.Null,
+                "an index-wide tag listing spans many trees, so it presents no single target");
+        });
+    }
+
+    [Test]
+    public void ScanTagMembers_is_index_scoped_with_no_single_target()
+    {
+        var result = Describe(
+            LatticeStateGrpcMethods.ScanTagMembersMethodName,
+            new TagMemberScanRequest { IndexName = "idx", Tag = "open" });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Operation, Is.EqualTo(LatticeStateApiOperation.ScanTagMembers));
+            Assert.That(result.TargetTreeId, Is.Null,
+                "a tag-member scan spans every covered tree, so it presents no single target");
+        });
+    }
+
+    [Test]
     public void GetTreeStructure_targets_its_tree()
     {
         var result = Describe(

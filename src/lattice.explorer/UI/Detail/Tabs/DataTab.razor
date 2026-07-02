@@ -369,6 +369,16 @@ else
         {
             await RestoreToPageAsync(targetPage);
         }
+
+        // Restore the previously inspected key for this tree, if any. This both
+        // re-opens the last-selected key when returning to the tab and lands the
+        // detail on the key when navigating here from the tag-index member list
+        // (which seeds this session key before selecting the tree).
+        var restoredKey = SessionStore.GetOrDefault(DataSelection.SelectedKey(Selection.Id), string.Empty);
+        if (!string.IsNullOrEmpty(restoredKey))
+        {
+            await SelectAsync(restoredKey);
+        }
     }
 
     // When durable preferences could not be hydrated during initialization (the

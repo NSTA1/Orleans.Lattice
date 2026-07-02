@@ -68,6 +68,18 @@ public sealed class LatticeStateApiGrpcClient
     public Task<TagValueCatalogPage> ListTagValuesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
         => UnaryAsync(_methods.ListTagValues, request, cancellationToken);
 
+    /// <summary>Lists the subject trees a tag index covers as a deterministic, paged catalog.</summary>
+    public Task<CoveredTreeCatalogPage> ListCoveredTreesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
+        => UnaryAsync(_methods.ListCoveredTrees, request, cancellationToken);
+
+    /// <summary>Lists a tag index's distinct tags across every covered tree as a deterministic, paged catalog.</summary>
+    public Task<TagValueCatalogPage> ListIndexTagsAsync(CatalogRequest request, CancellationToken cancellationToken = default)
+        => UnaryAsync(_methods.ListIndexTags, request, cancellationToken);
+
+    /// <summary>Scans the live members of a tag across a tag index as a deterministic, paged result.</summary>
+    public Task<TagMemberScanPage> ScanTagMembersAsync(TagMemberScanRequest request, CancellationToken cancellationToken = default)
+        => UnaryAsync(_methods.ScanTagMembers, request, cancellationToken);
+
     /// <summary>Returns the structural node graph of a tree.</summary>
     public Task<StructureResponse> GetTreeStructureAsync(StructureRequest request, CancellationToken cancellationToken = default)
         => UnaryAsync(_methods.GetTreeStructure, request, cancellationToken);

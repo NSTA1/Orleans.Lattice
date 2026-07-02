@@ -313,5 +313,14 @@ public class DataPagerTests
 
         public Task<IReadOnlyList<string>> ListTagValuesForIndexAsync(string treeId, string indexName, CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+
+        public Task<IReadOnlyList<string>> ListCoveredTreesForIndexAsync(string indexName, CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+
+        public Task<IReadOnlyList<string>> ListTagsForIndexAsync(string indexName, CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+
+        public Task<TagMemberPage> ScanTagMembersAsync(string indexName, string tag, int pageSize, string? continuationToken = null, CancellationToken cancellationToken = default)
+            => Task.FromResult(TagMemberPage.Empty);
     }
 }

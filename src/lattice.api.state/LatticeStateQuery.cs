@@ -296,6 +296,181 @@ internal sealed class LatticeStateQuery(
         return new TagValueCatalogPage { Entries = values, NextPageToken = nextToken };
     }
 
+    /// <inheritdoc />
+    public async Task<CoveredTreeCatalogPage> ListCoveredTreesAsync(
+        CatalogRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentException.ThrowIfNullOrEmpty(request.IndexName);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var tagFactory = _services.GetService<ILatticeTagIndexFactory>();
+        if (tagFactory is null)
+        {
+            return new CoveredTreeCatalogPage();
+        }
+
+        var covered = await tagFactory.CreateMultiTree(request.IndexName)
+            .CoveredTreesAsync(cancellationToken).ConfigureAwait(false);
+
+        var pageSize = request.EffectivePageSize;
+        var entries = new List<string>(Math.Min(pageSize, covered.Count));
+        string? nextToken = null;
+
+        // CoveredTreesAsync already yields ordinal-sorted ids; the explicit sort
+        // keeps the page contract independent of that implementation detail.
+        foreach (var treeId in covered.OrderBy(id => id, StringComparer.Ordinal))
+        {
+            if (request.PageToken is not null && string.CompareOrdinal(treeId, request.PageToken) <= 0)
+            {
+                continue;
+            }
+
+            if (entries.Count == pageSize)
+            {
+                nextToken = entries[^1];
+                break;
+            }
+
+            entries.Add(treeId);
+        }
+
+        return new CoveredTreeCatalogPage { Entries = entries, NextPageToken = nextToken };
+    }
+
+    /// <inheritdoc />
+    public async Task<TagValueCatalogPage> ListIndexTagsAsync(
+        CatalogRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentException.ThrowIfNullOrEmpty(request.IndexName);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var tagFactory = _services.GetService<ILatticeTagIndexFactory>();
+        if (tagFactory is null)
+        {
+            return new TagValueCatalogPage();
+        }
+
+        var index = tagFactory.CreateMultiTree(request.IndexName);
+        var pageSize = request.EffectivePageSize;
+        var values = new List<string>(pageSize);
+        string? nextToken = null;
+
+        // TagsAsync yields the index-wide distinct tags in ascending ordinal
+        // order; the page token is the last tag returned, an exclusive lower bound.
+        await foreach (var tag in index.TagsAsync(cancellationToken).ConfigureAwait(false))
+        {
+            if (request.PageToken is not null && string.CompareOrdinal(tag, request.PageToken) <= 0)
+            {
+                continue;
+            }
+
+            if (values.Count == pageSize)
+            {
+                nextToken = values[^1];
+                break;
+            }
+
+            values.Add(tag);
+        }
+
+        return new TagValueCatalogPage { Entries = values, NextPageToken = nextToken };
+    }
+
+    /// <inheritdoc />
+    public async Task<TagMemberScanPage> ScanTagMembersAsync(
+        TagMemberScanRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentException.ThrowIfNullOrEmpty(request.IndexName);
+        ArgumentException.ThrowIfNullOrEmpty(request.Tag);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var tagFactory = _services.GetService<ILatticeTagIndexFactory>();
+        if (tagFactory is null)
+        {
+            return new TagMemberScanPage();
+        }
+
+        var index = tagFactory.CreateMultiTree(request.IndexName);
+        var pageSize = request.EffectivePageSize;
+        DecodeTagMemberToken(request.PageToken, out var afterTree, out var afterKey);
+
+        var members = new List<TagMember>(pageSize);
+        string? nextToken = null;
+
+        // The multi-tree query yields (treeId, key) pairs ordered by covered tree
+        // then by key, both ascending ordinal; the continuation token is the last
+        // (treeId, key) returned, applied as an exclusive lower bound.
+        await foreach (var tagged in index.WithAllTags(request.Tag)
+            .WithCancellation(cancellationToken).ConfigureAwait(false))
+        {
+            if (afterTree is not null
+                && CompareTaggedKey(tagged.TreeId, tagged.Key, afterTree, afterKey) <= 0)
+            {
+                continue;
+            }
+
+            if (members.Count == pageSize)
+            {
+                nextToken = EncodeTagMemberToken(members[^1].TreeId, members[^1].Key);
+                break;
+            }
+
+            // Live-only: a membership row can outlive its primary key until the
+            // next reconcile. ExistsAsync is a cheap presence probe (no value
+            // fetch) that keeps the browse showing real rows.
+            var tree = _grainFactory.GetGrain<ILattice>(tagged.TreeId);
+            if (!await tree.ExistsAsync(tagged.Key, cancellationToken).ConfigureAwait(false))
+            {
+                continue;
+            }
+
+            members.Add(new TagMember { TreeId = tagged.TreeId, Key = tagged.Key });
+        }
+
+        return new TagMemberScanPage { Entries = members, NextPageToken = nextToken };
+    }
+
+    // NUL joins the (treeId, key) continuation token: a tree id never contains
+    // NUL (write-time validation forbids it), so the first NUL is the delimiter
+    // and the remainder is the key (which may itself contain NUL).
+    private const char TagMemberTokenSeparator = '\0';
+
+    private static string EncodeTagMemberToken(string treeId, string key) =>
+        string.Concat(treeId, "\0", key);
+
+    private static void DecodeTagMemberToken(string? token, out string? treeId, out string key)
+    {
+        if (string.IsNullOrEmpty(token))
+        {
+            treeId = null;
+            key = string.Empty;
+            return;
+        }
+
+        var sep = token.IndexOf(TagMemberTokenSeparator);
+        if (sep < 0)
+        {
+            treeId = token;
+            key = string.Empty;
+            return;
+        }
+
+        treeId = token[..sep];
+        key = token[(sep + 1)..];
+    }
+
+    private static int CompareTaggedKey(string leftTree, string leftKey, string rightTree, string rightKey)
+    {
+        var byTree = string.CompareOrdinal(leftTree, rightTree);
+        return byTree != 0 ? byTree : string.CompareOrdinal(leftKey, rightKey);
+    }
+
     public async Task<TreeStructureResult> GetTreeStructureAsync(
         StructureRequest request,
         CancellationToken cancellationToken = default)

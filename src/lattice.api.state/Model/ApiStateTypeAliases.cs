@@ -100,4 +100,16 @@ public static class ApiStateTypeAliases
 
     /// <summary>Alias for <see cref="EntryHistoryBound"/>.</summary>
     public const string EntryHistoryBound = "ola.ehb";
+
+    /// <summary>Alias for <see cref="CoveredTreeCatalogPage"/>.</summary>
+    public const string CoveredTreeCatalogPage = "ola.ctp";
+
+    /// <summary>Alias for <see cref="TagMemberScanRequest"/>.</summary>
+    public const string TagMemberScanRequest = "ola.tmsr";
+
+    /// <summary>Alias for <see cref="TagMember"/>.</summary>
+    public const string TagMember = "ola.tmem";
+
+    /// <summary>Alias for <see cref="TagMemberScanPage"/>.</summary>
+    public const string TagMemberScanPage = "ola.tmsp";
 }
