@@ -65,8 +65,9 @@ After mutation - views re-converged:
 
 - When you need the value the instant the write commits - a view lags the source.
   Read the source tree directly for read-your-writes semantics.
-- Views are read-only and derived: never write to a `view-*` tree; change the
-  **source** and let the view converge.
+- Views are read-only and derived. Attempting to write to a `view-*` tree
+  directly through the public `ILattice` surface is **rejected** with an
+  `InvalidOperationException` - change the **source** and let the view converge.
 
 ## Notes
 
