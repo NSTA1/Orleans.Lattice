@@ -37,6 +37,24 @@ public enum LatticeStateApiOperation
     /// </summary>
     ListTagValues,
 
+    /// <summary>
+    /// The <c>ListCoveredTrees</c> RPC, which enumerates the subject trees a
+    /// tag index covers.
+    /// </summary>
+    ListCoveredTrees,
+
+    /// <summary>
+    /// The <c>ListIndexTags</c> RPC, which enumerates a tag index's distinct
+    /// tags across every covered tree.
+    /// </summary>
+    ListIndexTags,
+
+    /// <summary>
+    /// The <c>ScanTagMembers</c> RPC, which enumerates the live members of a
+    /// tag across a tag index.
+    /// </summary>
+    ScanTagMembers,
+
     /// <summary>The <c>CancelScan</c> snapshot-cursor release RPC.</summary>
     CancelScan,
 

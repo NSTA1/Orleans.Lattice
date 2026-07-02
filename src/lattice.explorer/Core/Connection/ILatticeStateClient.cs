@@ -24,6 +24,15 @@ public interface ILatticeStateClient
     /// <summary>Lists the distinct tag values of one tag index as a deterministic, paged catalog.</summary>
     Task<TagValueCatalogPage> ListTagValuesAsync(CatalogRequest request, CancellationToken cancellationToken = default);
 
+    /// <summary>Lists the subject trees a tag index covers as a deterministic, paged catalog.</summary>
+    Task<CoveredTreeCatalogPage> ListCoveredTreesAsync(CatalogRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>Lists a tag index's distinct tags across every covered tree as a deterministic, paged catalog.</summary>
+    Task<TagValueCatalogPage> ListIndexTagsAsync(CatalogRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>Scans the live members of a tag across a tag index as a deterministic, paged result.</summary>
+    Task<TagMemberScanPage> ScanTagMembersAsync(TagMemberScanRequest request, CancellationToken cancellationToken = default);
+
     /// <summary>Returns the structural node graph of a tree.</summary>
     Task<StructureResponse> GetTreeStructureAsync(StructureRequest request, CancellationToken cancellationToken = default);
 

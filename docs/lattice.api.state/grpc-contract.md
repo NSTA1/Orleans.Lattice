@@ -12,6 +12,9 @@ The service name on the wire is `orleans.lattice.api.state` (so each method's fu
 | `ListViews` | unary | `CatalogRequest` | `ViewCatalogPage` | [Discovery](surfaces.md#discovery) |
 | `ListTagIndexes` | unary | `CatalogRequest` | `TagIndexCatalogPage` | [Discovery](surfaces.md#discovery) |
 | `ListTagValues` | unary | `CatalogRequest` | `TagValueCatalogPage` | [Discovery](surfaces.md#discovery) |
+| `ListCoveredTrees` | unary | `CatalogRequest` | `CoveredTreeCatalogPage` | [Discovery](surfaces.md#discovery) |
+| `ListIndexTags` | unary | `CatalogRequest` | `TagValueCatalogPage` | [Discovery](surfaces.md#discovery) |
+| `ScanTagMembers` | unary | `TagMemberScanRequest` | `TagMemberScanPage` | [Discovery](surfaces.md#discovery) |
 | `GetTreeStructure` | unary | `StructureRequest` | `StructureResponse` | [Structure](surfaces.md#structure) |
 | `ScanEntries` | unary | `EntryScanRequest` | `EntryScanResponse` | [Entries](surfaces.md#entries) |
 | `GetEntry` | unary | `EntryGetRequest` | `EntryGetResponse` | [Entries](surfaces.md#entries) |

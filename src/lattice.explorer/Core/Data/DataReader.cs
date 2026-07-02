@@ -63,13 +63,13 @@ public sealed class DataReader(ILatticeStateClient client) : IDataReader
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<string>> ListTagIndexesForTreeAsync(
+    public async Task<IReadOnlyList<TagIndexRef>> ListTagIndexesForTreeAsync(
         string treeId,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
 
-        var names = new List<string>();
+        var indexes = new List<TagIndexRef>();
         string? token = null;
         do
         {
@@ -79,14 +79,14 @@ public sealed class DataReader(ILatticeStateClient client) : IDataReader
 
             foreach (var entry in page.Entries)
             {
-                names.Add(entry.IndexName);
+                indexes.Add(new TagIndexRef { IndexName = entry.IndexName, TreeId = entry.TreeId });
             }
 
             token = page.NextPageToken;
         }
         while (!string.IsNullOrEmpty(token));
 
-        return names;
+        return indexes;
     }
 
     /// <inheritdoc />
@@ -112,6 +112,84 @@ public sealed class DataReader(ILatticeStateClient client) : IDataReader
         while (!string.IsNullOrEmpty(token));
 
         return values;
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<string>> ListCoveredTreesForIndexAsync(
+        string indexName,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(indexName);
+
+        var trees = new List<string>();
+        string? token = null;
+        do
+        {
+            var page = await _client.ListCoveredTreesAsync(
+                new CatalogRequest { IndexName = indexName, PageToken = token },
+                cancellationToken).ConfigureAwait(false);
+
+            trees.AddRange(page.Entries);
+            token = page.NextPageToken;
+        }
+        while (!string.IsNullOrEmpty(token));
+
+        return trees;
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<string>> ListTagsForIndexAsync(
+        string indexName,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(indexName);
+
+        var tags = new List<string>();
+        string? token = null;
+        do
+        {
+            var page = await _client.ListIndexTagsAsync(
+                new CatalogRequest { IndexName = indexName, PageToken = token },
+                cancellationToken).ConfigureAwait(false);
+
+            tags.AddRange(page.Entries);
+            token = page.NextPageToken;
+        }
+        while (!string.IsNullOrEmpty(token));
+
+        return tags;
+    }
+
+    /// <inheritdoc />
+    public async Task<TagMemberPage> ScanTagMembersAsync(
+        string indexName,
+        string tag,
+        int pageSize,
+        string? continuationToken = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(indexName);
+        ArgumentException.ThrowIfNullOrEmpty(tag);
+
+        var request = new TagMemberScanRequest
+        {
+            IndexName = indexName,
+            Tag = tag,
+            PageSize = DataPaging.Normalize(pageSize),
+            PageToken = string.IsNullOrEmpty(continuationToken) ? null : continuationToken,
+        };
+
+        var page = await _client.ScanTagMembersAsync(request, cancellationToken).ConfigureAwait(false);
+
+        var members = page.Entries.Count == 0
+            ? Array.Empty<TagMemberRow>()
+            : page.Entries.Select(static m => new TagMemberRow { TreeId = m.TreeId, Key = m.Key }).ToArray();
+
+        return new TagMemberPage
+        {
+            Members = members,
+            ContinuationToken = page.NextPageToken,
+        };
     }
 
     /// <inheritdoc />

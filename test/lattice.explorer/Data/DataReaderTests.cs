@@ -195,7 +195,7 @@ public class DataReaderTests
     }
 
     [Test]
-    public async Task ListTagIndexesForTreeAsync_PassesSourceTreeId_AndPagesAllNames()
+    public async Task ListTagIndexesForTreeAsync_PassesSourceTreeId_AndPagesAllEntries()
     {
         var calls = 0;
         var client = new FakeEntryStateClient
@@ -218,12 +218,13 @@ public class DataReaderTests
         };
         var reader = new DataReader(client);
 
-        var names = await reader.ListTagIndexesForTreeAsync("orders");
+        var indexes = await reader.ListTagIndexesForTreeAsync("orders");
 
         Assert.Multiple(() =>
         {
             Assert.That(client.LastTagIndexes!.SourceTreeId, Is.EqualTo("orders"));
-            Assert.That(names, Is.EqualTo(new[] { "by-status", "by-owner" }));
+            Assert.That(indexes.Select(i => i.IndexName), Is.EqualTo(new[] { "by-status", "by-owner" }));
+            Assert.That(indexes.Select(i => i.TreeId), Is.EqualTo(new[] { "tag-by-status", "tag-by-owner" }));
         });
     }
 
@@ -388,5 +389,120 @@ public class DataReaderTests
         await reader.CancelScanAsync("tree-1", string.Empty);
 
         Assert.That(client.LastCancel, Is.Null, "an empty token names no cursor, so no cancel call is made");
+    }
+
+    [Test]
+    public async Task ListCoveredTreesForIndexAsync_PassesIndex_AndPagesAllTrees()
+    {
+        var calls = 0;
+        var client = new FakeEntryStateClient
+        {
+            OnListCoveredTrees = _ =>
+            {
+                calls++;
+                return calls == 1
+                    ? new CoveredTreeCatalogPage { Entries = new[] { "eu", "us" }, NextPageToken = "us" }
+                    : new CoveredTreeCatalogPage { Entries = new[] { "za" }, NextPageToken = null };
+            },
+        };
+        var reader = new DataReader(client);
+
+        var trees = await reader.ListCoveredTreesForIndexAsync("by-status");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(client.LastCoveredTrees!.IndexName, Is.EqualTo("by-status"));
+            Assert.That(trees, Is.EqualTo(new[] { "eu", "us", "za" }));
+        });
+    }
+
+    [Test]
+    public async Task ListTagsForIndexAsync_PassesIndex_AndPagesAllTags()
+    {
+        var calls = 0;
+        var client = new FakeEntryStateClient
+        {
+            OnListIndexTags = _ =>
+            {
+                calls++;
+                return calls == 1
+                    ? new TagValueCatalogPage { Entries = new[] { "closed", "open" }, NextPageToken = "open" }
+                    : new TagValueCatalogPage { Entries = new[] { "pending" }, NextPageToken = null };
+            },
+        };
+        var reader = new DataReader(client);
+
+        var tags = await reader.ListTagsForIndexAsync("by-status");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(client.LastIndexTags!.IndexName, Is.EqualTo("by-status"));
+            Assert.That(tags, Is.EqualTo(new[] { "closed", "open", "pending" }));
+        });
+    }
+
+    [Test]
+    public async Task ScanTagMembersAsync_BuildsNormalizedRequest_AndMapsMembers()
+    {
+        var client = new FakeEntryStateClient
+        {
+            OnScanTagMembers = _ => new TagMemberScanPage
+            {
+                Entries = new[]
+                {
+                    new TagMember { TreeId = "eu", Key = "key-1" },
+                    new TagMember { TreeId = "us", Key = "key-2" },
+                },
+                NextPageToken = "eu\0key-1",
+            },
+        };
+        var reader = new DataReader(client);
+
+        var page = await reader.ScanTagMembersAsync("by-status", "open", 50, continuationToken: null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(client.LastTagMembers!.IndexName, Is.EqualTo("by-status"));
+            Assert.That(client.LastTagMembers!.Tag, Is.EqualTo("open"));
+            Assert.That(client.LastTagMembers!.PageSize, Is.EqualTo(DataPaging.Normalize(50)));
+            Assert.That(client.LastTagMembers!.PageToken, Is.Null);
+            Assert.That(page.Members.Select(m => (m.TreeId, m.Key)),
+                Is.EqualTo(new[] { ("eu", "key-1"), ("us", "key-2") }));
+            Assert.That(page.ContinuationToken, Is.EqualTo("eu\0key-1"));
+            Assert.That(page.HasMore, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task ScanTagMembersAsync_EmptyPage_ReturnsEmptyWithoutContinuation()
+    {
+        var client = new FakeEntryStateClient
+        {
+            OnScanTagMembers = _ => new TagMemberScanPage(),
+        };
+        var reader = new DataReader(client);
+
+        var page = await reader.ScanTagMembersAsync("by-status", "open", 50);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(page.Members, Is.Empty);
+            Assert.That(page.HasMore, Is.False);
+            Assert.That(page.ContinuationToken, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task ScanTagMembersAsync_WithContinuationToken_PassesTokenThrough()
+    {
+        var client = new FakeEntryStateClient
+        {
+            OnScanTagMembers = _ => new TagMemberScanPage(),
+        };
+        var reader = new DataReader(client);
+
+        await reader.ScanTagMembersAsync("by-status", "open", 50, continuationToken: "eu\0key-1");
+
+        Assert.That(client.LastTagMembers!.PageToken, Is.EqualTo("eu\0key-1"));
     }
 }

@@ -35,6 +35,15 @@ internal abstract class LatticeStateGrpcServiceBase
     /// <summary>Enumerates the distinct tag values of one tag index. Implemented in <see cref="LatticeStateGrpcService"/>.</summary>
     public abstract Task<TagValueCatalogPage> ListTagValues(CatalogRequest request, ServerCallContext context);
 
+    /// <summary>Enumerates the subject trees a tag index covers. Implemented in <see cref="LatticeStateGrpcService"/>.</summary>
+    public abstract Task<CoveredTreeCatalogPage> ListCoveredTrees(CatalogRequest request, ServerCallContext context);
+
+    /// <summary>Enumerates a tag index's distinct tags across every covered tree. Implemented in <see cref="LatticeStateGrpcService"/>.</summary>
+    public abstract Task<TagValueCatalogPage> ListIndexTags(CatalogRequest request, ServerCallContext context);
+
+    /// <summary>Enumerates the live members of a tag across a tag index. Implemented in <see cref="LatticeStateGrpcService"/>.</summary>
+    public abstract Task<TagMemberScanPage> ScanTagMembers(TagMemberScanRequest request, ServerCallContext context);
+
     /// <summary>Returns the structural node graph of a tree. Implemented in <see cref="LatticeStateGrpcService"/>.</summary>
     public abstract Task<StructureResponse> GetTreeStructure(StructureRequest request, ServerCallContext context);
 
@@ -91,6 +100,9 @@ internal abstract class LatticeStateGrpcServiceBase
             binder.AddMethod(methods.ListViews, (UnaryServerMethod<CatalogRequest, ViewCatalogPage>?)null);
             binder.AddMethod(methods.ListTagIndexes, (UnaryServerMethod<CatalogRequest, TagIndexCatalogPage>?)null);
             binder.AddMethod(methods.ListTagValues, (UnaryServerMethod<CatalogRequest, TagValueCatalogPage>?)null);
+            binder.AddMethod(methods.ListCoveredTrees, (UnaryServerMethod<CatalogRequest, CoveredTreeCatalogPage>?)null);
+            binder.AddMethod(methods.ListIndexTags, (UnaryServerMethod<CatalogRequest, TagValueCatalogPage>?)null);
+            binder.AddMethod(methods.ScanTagMembers, (UnaryServerMethod<TagMemberScanRequest, TagMemberScanPage>?)null);
             binder.AddMethod(methods.GetTreeStructure, (UnaryServerMethod<StructureRequest, StructureResponse>?)null);
             binder.AddMethod(methods.ScanEntries, (UnaryServerMethod<EntryScanRequest, EntryScanResponse>?)null);
             binder.AddMethod(methods.GetEntry, (UnaryServerMethod<EntryGetRequest, EntryGetResponse>?)null);
@@ -107,6 +119,9 @@ internal abstract class LatticeStateGrpcServiceBase
         binder.AddMethod(methods.ListViews, new UnaryServerMethod<CatalogRequest, ViewCatalogPage>(serviceImpl.ListViews));
         binder.AddMethod(methods.ListTagIndexes, new UnaryServerMethod<CatalogRequest, TagIndexCatalogPage>(serviceImpl.ListTagIndexes));
         binder.AddMethod(methods.ListTagValues, new UnaryServerMethod<CatalogRequest, TagValueCatalogPage>(serviceImpl.ListTagValues));
+        binder.AddMethod(methods.ListCoveredTrees, new UnaryServerMethod<CatalogRequest, CoveredTreeCatalogPage>(serviceImpl.ListCoveredTrees));
+        binder.AddMethod(methods.ListIndexTags, new UnaryServerMethod<CatalogRequest, TagValueCatalogPage>(serviceImpl.ListIndexTags));
+        binder.AddMethod(methods.ScanTagMembers, new UnaryServerMethod<TagMemberScanRequest, TagMemberScanPage>(serviceImpl.ScanTagMembers));
         binder.AddMethod(methods.GetTreeStructure, new UnaryServerMethod<StructureRequest, StructureResponse>(serviceImpl.GetTreeStructure));
         binder.AddMethod(methods.ScanEntries, new UnaryServerMethod<EntryScanRequest, EntryScanResponse>(serviceImpl.ScanEntries));
         binder.AddMethod(methods.GetEntry, new UnaryServerMethod<EntryGetRequest, EntryGetResponse>(serviceImpl.GetEntry));
@@ -175,6 +190,18 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
 
     public override Task<TagValueCatalogPage> ListTagValues(CatalogRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (q, req, ct) => q.ListTagValuesAsync(req, ct));
+
+    /// <inheritdoc />
+    public override Task<CoveredTreeCatalogPage> ListCoveredTrees(CatalogRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (q, req, ct) => q.ListCoveredTreesAsync(req, ct));
+
+    /// <inheritdoc />
+    public override Task<TagValueCatalogPage> ListIndexTags(CatalogRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (q, req, ct) => q.ListIndexTagsAsync(req, ct));
+
+    /// <inheritdoc />
+    public override Task<TagMemberScanPage> ScanTagMembers(TagMemberScanRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (q, req, ct) => q.ScanTagMembersAsync(req, ct));
 
     /// <inheritdoc />
     public override Task<StructureResponse> GetTreeStructure(StructureRequest request, ServerCallContext context)

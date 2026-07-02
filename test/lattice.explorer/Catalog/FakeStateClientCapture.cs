@@ -23,6 +23,15 @@ internal sealed class FakeStateClientCapture : ILatticeStateClient
     public Func<CatalogRequest, Task<TagValueCatalogPage>> OnListTagValues { get; set; } =
         _ => Task.FromResult(new TagValueCatalogPage());
 
+    public Func<CatalogRequest, Task<CoveredTreeCatalogPage>> OnListCoveredTrees { get; set; } =
+        _ => Task.FromResult(new CoveredTreeCatalogPage());
+
+    public Func<CatalogRequest, Task<TagValueCatalogPage>> OnListIndexTags { get; set; } =
+        _ => Task.FromResult(new TagValueCatalogPage());
+
+    public Func<TagMemberScanRequest, Task<TagMemberScanPage>> OnScanTagMembers { get; set; } =
+        _ => Task.FromResult(new TagMemberScanPage());
+
     public Task<TreeCatalogPage> ListTreesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
         => OnListTrees(request);
 
@@ -34,6 +43,15 @@ internal sealed class FakeStateClientCapture : ILatticeStateClient
 
     public Task<TagValueCatalogPage> ListTagValuesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
         => OnListTagValues(request);
+
+    public Task<CoveredTreeCatalogPage> ListCoveredTreesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
+        => OnListCoveredTrees(request);
+
+    public Task<TagValueCatalogPage> ListIndexTagsAsync(CatalogRequest request, CancellationToken cancellationToken = default)
+        => OnListIndexTags(request);
+
+    public Task<TagMemberScanPage> ScanTagMembersAsync(TagMemberScanRequest request, CancellationToken cancellationToken = default)
+        => OnScanTagMembers(request);
 
     public Task<StructureResponse> GetTreeStructureAsync(StructureRequest request, CancellationToken cancellationToken = default)
         => Task.FromResult(new StructureResponse { TreeId = "t" });

@@ -32,6 +32,19 @@ internal sealed class FakeEntryStateClient : ILatticeStateClient
     public Func<CatalogRequest, TagValueCatalogPage> OnListTagValues { get; set; } =
         _ => new TagValueCatalogPage();
 
+    public CatalogRequest? LastCoveredTrees { get; private set; }
+    public CatalogRequest? LastIndexTags { get; private set; }
+    public TagMemberScanRequest? LastTagMembers { get; private set; }
+
+    public Func<CatalogRequest, CoveredTreeCatalogPage> OnListCoveredTrees { get; set; } =
+        _ => new CoveredTreeCatalogPage();
+
+    public Func<CatalogRequest, TagValueCatalogPage> OnListIndexTags { get; set; } =
+        _ => new TagValueCatalogPage();
+
+    public Func<TagMemberScanRequest, TagMemberScanPage> OnScanTagMembers { get; set; } =
+        _ => new TagMemberScanPage();
+
     public Task<EntryScanResponse> ScanEntriesAsync(EntryScanRequest request, CancellationToken cancellationToken = default)
     {
         LastScan = request;
@@ -71,6 +84,24 @@ internal sealed class FakeEntryStateClient : ILatticeStateClient
     {
         LastTagValues = request;
         return Task.FromResult(OnListTagValues(request));
+    }
+
+    public Task<CoveredTreeCatalogPage> ListCoveredTreesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
+    {
+        LastCoveredTrees = request;
+        return Task.FromResult(OnListCoveredTrees(request));
+    }
+
+    public Task<TagValueCatalogPage> ListIndexTagsAsync(CatalogRequest request, CancellationToken cancellationToken = default)
+    {
+        LastIndexTags = request;
+        return Task.FromResult(OnListIndexTags(request));
+    }
+
+    public Task<TagMemberScanPage> ScanTagMembersAsync(TagMemberScanRequest request, CancellationToken cancellationToken = default)
+    {
+        LastTagMembers = request;
+        return Task.FromResult(OnScanTagMembers(request));
     }
     public Task<StructureResponse> GetTreeStructureAsync(StructureRequest request, CancellationToken cancellationToken = default)
         => Task.FromResult(new StructureResponse { TreeId = "t" });

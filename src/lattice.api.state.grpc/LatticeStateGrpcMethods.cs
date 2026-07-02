@@ -38,6 +38,15 @@ internal sealed class LatticeStateGrpcMethods
     /// <summary>The unary tag-value-catalog discovery RPC method name.</summary>
     public const string ListTagValuesMethodName = "ListTagValues";
 
+    /// <summary>The unary covered-tree-catalog discovery RPC method name.</summary>
+    public const string ListCoveredTreesMethodName = "ListCoveredTrees";
+
+    /// <summary>The unary index-wide tag-catalog discovery RPC method name.</summary>
+    public const string ListIndexTagsMethodName = "ListIndexTags";
+
+    /// <summary>The unary tag-member-scan RPC method name.</summary>
+    public const string ScanTagMembersMethodName = "ScanTagMembers";
+
     /// <summary>The unary tree-structure RPC method name.</summary>
     public const string GetTreeStructureMethodName = "GetTreeStructure";
 
@@ -72,6 +81,9 @@ internal sealed class LatticeStateGrpcMethods
         Serializer<ViewCatalogPage> viewCatalogPageSerializer,
         Serializer<TagIndexCatalogPage> tagIndexCatalogPageSerializer,
         Serializer<TagValueCatalogPage> tagValueCatalogPageSerializer,
+        Serializer<CoveredTreeCatalogPage> coveredTreeCatalogPageSerializer,
+        Serializer<TagMemberScanRequest> tagMemberScanRequestSerializer,
+        Serializer<TagMemberScanPage> tagMemberScanPageSerializer,
         Serializer<StructureRequest> structureRequestSerializer,
         Serializer<StructureResponse> structureResponseSerializer,
         Serializer<EntryScanRequest> entryScanRequestSerializer,
@@ -94,6 +106,9 @@ internal sealed class LatticeStateGrpcMethods
         ArgumentNullException.ThrowIfNull(viewCatalogPageSerializer);
         ArgumentNullException.ThrowIfNull(tagIndexCatalogPageSerializer);
         ArgumentNullException.ThrowIfNull(tagValueCatalogPageSerializer);
+        ArgumentNullException.ThrowIfNull(coveredTreeCatalogPageSerializer);
+        ArgumentNullException.ThrowIfNull(tagMemberScanRequestSerializer);
+        ArgumentNullException.ThrowIfNull(tagMemberScanPageSerializer);
         ArgumentNullException.ThrowIfNull(structureRequestSerializer);
         ArgumentNullException.ThrowIfNull(structureResponseSerializer);
         ArgumentNullException.ThrowIfNull(entryScanRequestSerializer);
@@ -138,6 +153,27 @@ internal sealed class LatticeStateGrpcMethods
             name: ListTagValuesMethodName,
             requestMarshaller: LatticeStateGrpcMarshallers.Create(catalogRequestSerializer),
             responseMarshaller: LatticeStateGrpcMarshallers.Create(tagValueCatalogPageSerializer));
+
+        ListCoveredTrees = new Method<CatalogRequest, CoveredTreeCatalogPage>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: ListCoveredTreesMethodName,
+            requestMarshaller: LatticeStateGrpcMarshallers.Create(catalogRequestSerializer),
+            responseMarshaller: LatticeStateGrpcMarshallers.Create(coveredTreeCatalogPageSerializer));
+
+        ListIndexTags = new Method<CatalogRequest, TagValueCatalogPage>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: ListIndexTagsMethodName,
+            requestMarshaller: LatticeStateGrpcMarshallers.Create(catalogRequestSerializer),
+            responseMarshaller: LatticeStateGrpcMarshallers.Create(tagValueCatalogPageSerializer));
+
+        ScanTagMembers = new Method<TagMemberScanRequest, TagMemberScanPage>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: ScanTagMembersMethodName,
+            requestMarshaller: LatticeStateGrpcMarshallers.Create(tagMemberScanRequestSerializer),
+            responseMarshaller: LatticeStateGrpcMarshallers.Create(tagMemberScanPageSerializer));
 
         GetTreeStructure = new Method<StructureRequest, StructureResponse>(
             type: MethodType.Unary,
@@ -215,6 +251,15 @@ internal sealed class LatticeStateGrpcMethods
     /// <summary>The unary <c>ListTagValues</c> discovery RPC.</summary>
     public Method<CatalogRequest, TagValueCatalogPage> ListTagValues { get; }
 
+    /// <summary>The unary <c>ListCoveredTrees</c> discovery RPC.</summary>
+    public Method<CatalogRequest, CoveredTreeCatalogPage> ListCoveredTrees { get; }
+
+    /// <summary>The unary <c>ListIndexTags</c> index-wide tag discovery RPC.</summary>
+    public Method<CatalogRequest, TagValueCatalogPage> ListIndexTags { get; }
+
+    /// <summary>The unary <c>ScanTagMembers</c> RPC.</summary>
+    public Method<TagMemberScanRequest, TagMemberScanPage> ScanTagMembers { get; }
+
     /// <summary>The unary <c>GetTreeStructure</c> RPC.</summary>
     public Method<StructureRequest, StructureResponse> GetTreeStructure { get; }
 
@@ -257,6 +302,9 @@ internal sealed class LatticeStateGrpcMethods
             serializerProvider.GetRequiredService<Serializer<ViewCatalogPage>>(),
             serializerProvider.GetRequiredService<Serializer<TagIndexCatalogPage>>(),
             serializerProvider.GetRequiredService<Serializer<TagValueCatalogPage>>(),
+            serializerProvider.GetRequiredService<Serializer<CoveredTreeCatalogPage>>(),
+            serializerProvider.GetRequiredService<Serializer<TagMemberScanRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TagMemberScanPage>>(),
             serializerProvider.GetRequiredService<Serializer<StructureRequest>>(),
             serializerProvider.GetRequiredService<Serializer<StructureResponse>>(),
             serializerProvider.GetRequiredService<Serializer<EntryScanRequest>>(),

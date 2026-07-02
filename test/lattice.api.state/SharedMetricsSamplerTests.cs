@@ -223,6 +223,15 @@ public class SharedMetricsSamplerTests
         public Task<TagValueCatalogPage> ListTagValuesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
+        public Task<CoveredTreeCatalogPage> ListCoveredTreesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<TagValueCatalogPage> ListIndexTagsAsync(CatalogRequest request, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<TagMemberScanPage> ScanTagMembersAsync(TagMemberScanRequest request, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
         public Task<TreeStructureResult> GetTreeStructureAsync(StructureRequest request, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 

@@ -1,0 +1,391 @@
+@using Orleans.Lattice.Explorer.Core.Catalog
+@using Orleans.Lattice.Explorer.Core.Data
+@using Orleans.Lattice.Explorer.Core.Detail
+@using Orleans.Lattice.Explorer.Core.Session
+@inherits DetailTabBase
+@inject IDataReader DataReader
+@inject IExplorerSelection ExplorerSelection
+@inject IUiPreferenceStore Preferences
+@inject IUiSessionStore SessionStore
+
+@{
+    var indexName = Selection.IndexName;
+}
+
+<div class="explorer-tagindex">
+    @if (string.IsNullOrEmpty(indexName))
+    {
+        <div class="explorer-tagindex-state">This selection is not a tag index.</div>
+    }
+    else if (_loading && !_loaded)
+    {
+        <div class="explorer-tagindex-state">Loading tag index...</div>
+    }
+    else if (_error is not null)
+    {
+        <div class="explorer-tagindex-state explorer-tagindex-error">
+            <span>@_error</span>
+            <button type="button" class="explorer-btn-link" @onclick="LoadAsync">Try again</button>
+        </div>
+    }
+    else
+    {
+        <div class="explorer-tagindex-summary">
+            <span class="explorer-badge">index</span>
+            <span class="explorer-tagindex-name explorer-mono">@indexName</span>
+            <span class="explorer-tagindex-stat">@_coveredTrees.Count covered tree@(_coveredTrees.Count == 1 ? "" : "s")</span>
+            <span class="explorer-tagindex-stat">@_tags.Count tag@(_tags.Count == 1 ? "" : "s")</span>
+            <button type="button" class="explorer-btn" disabled="@_loading" @onclick="LoadAsync">
+                @(_loading ? "Loading..." : "Refresh")
+            </button>
+        </div>
+
+        <div class="explorer-tagindex-body">
+            <section class="explorer-tagindex-section explorer-tagindex-trees">
+                <h4 class="explorer-tagindex-heading">Covered trees</h4>
+                @if (_coveredTrees.Count == 0)
+                {
+                    <p class="explorer-tagindex-empty">This index covers no trees yet.</p>
+                }
+                else
+                {
+                    <ul class="explorer-tagindex-treelist">
+                        @foreach (var tree in _coveredTrees)
+                        {
+                            <li>
+                                <button type="button"
+                                        class="explorer-tagindex-treelink explorer-mono"
+                                        title="@($"Open {tree}")"
+                                        @onclick="@(() => GoToTree(tree))">
+                                    @tree
+                                </button>
+                            </li>
+                        }
+                    </ul>
+                }
+            </section>
+
+            <section class="explorer-tagindex-section explorer-tagindex-tags">
+                <h4 class="explorer-tagindex-heading">Tags</h4>
+                @if (_tags.Count == 0)
+                {
+                    <p class="explorer-tagindex-empty">This index has no tags yet.</p>
+                }
+                else
+                {
+                    <ul class="explorer-tagindex-taglist">
+                        @foreach (var tag in _tags)
+                        {
+                            <li>
+                                <button type="button"
+                                        class="explorer-tagindex-tag @(string.Equals(tag, _selectedTag, StringComparison.Ordinal) ? "is-active" : null)"
+                                        @onclick="@(() => SelectTagAsync(tag))">
+                                    @(tag.Length == 0 ? "(empty)" : tag)
+                                </button>
+                            </li>
+                        }
+                    </ul>
+                }
+            </section>
+
+            <section class="explorer-tagindex-section explorer-tagindex-members">
+                <h4 class="explorer-tagindex-heading">
+                    Members
+                    @if (!string.IsNullOrEmpty(_selectedTag))
+                    {
+                        <span class="explorer-tagindex-membertag explorer-mono">@(_selectedTag.Length == 0 ? "(empty)" : _selectedTag)</span>
+                    }
+                </h4>
+
+                @if (string.IsNullOrEmpty(_selectedTag))
+                {
+                    <p class="explorer-tagindex-empty">Select a tag to list its members.</p>
+                }
+                else if (_membersLoading && _memberPages.Count == 0)
+                {
+                    <p class="explorer-tagindex-empty">Loading members...</p>
+                }
+                else if (_memberError is not null)
+                {
+                    <p class="explorer-tagindex-empty explorer-tagindex-error">
+                        <span>@_memberError</span>
+                        <button type="button" class="explorer-btn-link" @onclick="ReloadMembersAsync">Try again</button>
+                    </p>
+                }
+                else if (CurrentMembers.Count == 0)
+                {
+                    <p class="explorer-tagindex-empty">No live members carry this tag.</p>
+                }
+                else
+                {
+                    <div class="explorer-tagindex-pager">
+                        <button type="button" class="explorer-btn"
+                                disabled="@(_membersLoading || _memberPageIndex == 0)"
+                                @onclick="PreviousMembersPage">Prev</button>
+                        <span class="explorer-tagindex-pagenum">Page @(_memberPageIndex + 1)</span>
+                        <button type="button" class="explorer-btn"
+                                disabled="@(_membersLoading || !CanGoNextMembers)"
+                                @onclick="NextMembersPageAsync">Next</button>
+                    </div>
+                    <table class="explorer-table explorer-tagindex-membertable">
+                        <thead>
+                            <tr>
+                                <th>Tree</th>
+                                <th>Key</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var member in CurrentMembers)
+                            {
+                                <tr>
+                                    <td class="explorer-mono">@member.TreeId</td>
+                                    <td>
+                                        <button type="button"
+                                                class="explorer-tagindex-memberlink explorer-mono"
+                                                title="Open this key in its tree's Data tab"
+                                                @onclick="@(() => GoToMember(member))">
+                                            @member.Key
+                                        </button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </section>
+        </div>
+    }
+</div>
+
+@code {
+    private const int MemberPageSize = 50;
+
+    private IReadOnlyList<string> _coveredTrees = Array.Empty<string>();
+    private IReadOnlyList<string> _tags = Array.Empty<string>();
+    private bool _loading;
+    private bool _loaded;
+    private string? _error;
+
+    private string? _selectedTag;
+    private readonly List<TagMemberPage> _memberPages = new();
+    private int _memberPageIndex;
+    private bool _membersLoading;
+    private string? _memberError;
+
+    private IReadOnlyList<TagMemberRow> CurrentMembers =>
+        _memberPages.Count == 0 ? Array.Empty<TagMemberRow>() : _memberPages[_memberPageIndex].Members;
+
+    private bool CanGoNextMembers =>
+        _memberPages.Count > 0 && (_memberPageIndex < _memberPages.Count - 1 || _memberPages[^1].HasMore);
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    // Durable-preference key the Data tab's "Explore tag index" button writes to
+    // seed a one-shot preselected tag for this view (owned by, and keyed on, the
+    // membership tree id so it never collides with another index's seed).
+    private string SeededTagStateKey => $"tagindex-tag:{Selection.Id}";
+
+    private async Task LoadAsync()
+    {
+        var indexName = Selection.IndexName;
+        if (string.IsNullOrEmpty(indexName))
+        {
+            return;
+        }
+
+        _loading = true;
+        _error = null;
+        StateHasChanged();
+
+        try
+        {
+            _coveredTrees = await DataReader.ListCoveredTreesForIndexAsync(indexName, TabToken);
+            _tags = await DataReader.ListTagsForIndexAsync(indexName, TabToken);
+            _loaded = true;
+
+            // Consume a one-shot tag seed left by the Data tab's "Explore tag
+            // index" button so this view opens with that tag preselected. Only
+            // honoured on the first load (when nothing is selected yet) and
+            // removed immediately so a later Refresh or manual navigation starts
+            // clean.
+            if (_selectedTag is null)
+            {
+                var seededTag = Preferences.GetOrDefault(SeededTagStateKey, string.Empty);
+                if (!string.IsNullOrEmpty(seededTag))
+                {
+                    await Preferences.RemoveAsync(SeededTagStateKey, TabToken);
+                    if (_tags.Contains(seededTag))
+                    {
+                        _selectedTag = seededTag;
+                    }
+                }
+            }
+
+            // Drop a stale member view if the previously selected tag no longer exists.
+            if (_selectedTag is not null && !_tags.Contains(_selectedTag))
+            {
+                ClearMembers();
+            }
+            else if (_selectedTag is not null)
+            {
+                await ReloadMembersAsync();
+            }
+        }
+        catch (OperationCanceledException) when (TabToken.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task SelectTagAsync(string tag)
+    {
+        if (string.Equals(tag, _selectedTag, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _selectedTag = tag;
+        await ReloadMembersAsync();
+    }
+
+    private async Task ReloadMembersAsync()
+    {
+        var indexName = Selection.IndexName;
+        if (string.IsNullOrEmpty(indexName) || _selectedTag is null)
+        {
+            return;
+        }
+
+        _membersLoading = true;
+        _memberError = null;
+        StateHasChanged();
+
+        try
+        {
+            var page = await DataReader.ScanTagMembersAsync(indexName, _selectedTag, MemberPageSize, null, TabToken);
+            _memberPages.Clear();
+            _memberPages.Add(page);
+            _memberPageIndex = 0;
+        }
+        catch (OperationCanceledException) when (TabToken.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            _memberError = ex.Message;
+        }
+        finally
+        {
+            _membersLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task NextMembersPageAsync()
+    {
+        if (_memberPages.Count == 0)
+        {
+            return;
+        }
+
+        if (_memberPageIndex < _memberPages.Count - 1)
+        {
+            _memberPageIndex++;
+            return;
+        }
+
+        var token = _memberPages[^1].ContinuationToken;
+        var indexName = Selection.IndexName;
+        if (string.IsNullOrEmpty(token) || string.IsNullOrEmpty(indexName) || _selectedTag is null)
+        {
+            return;
+        }
+
+        _membersLoading = true;
+        _memberError = null;
+        StateHasChanged();
+
+        try
+        {
+            var page = await DataReader.ScanTagMembersAsync(indexName, _selectedTag, MemberPageSize, token, TabToken);
+            _memberPages.Add(page);
+            _memberPageIndex = _memberPages.Count - 1;
+        }
+        catch (OperationCanceledException) when (TabToken.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            _memberError = ex.Message;
+        }
+        finally
+        {
+            _membersLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void PreviousMembersPage()
+    {
+        if (_memberPageIndex > 0)
+        {
+            _memberPageIndex--;
+        }
+    }
+
+    private void ClearMembers()
+    {
+        _selectedTag = null;
+        _memberPages.Clear();
+        _memberPageIndex = 0;
+        _memberError = null;
+    }
+
+    // Navigate to a covered tree's Data tab with no tag filter. Seeds the active
+    // detail tab so the panel opens on Data (DetailPanel re-applies the retained
+    // tab on selection change) rather than whichever tab was last active.
+    private async Task GoToTree(string treeId)
+    {
+        await Preferences.SetAsync("detail-tab", DetailTab.Data, cancellationToken: TabToken);
+
+        ExplorerSelection.Select(new CatalogItem
+        {
+            Id = treeId,
+            Kind = CatalogKind.Trees,
+        });
+    }
+
+    // Navigate to a member's key in its tree's Data tab, pre-filtered by this
+    // index and tag. Seeds the Data tab's retained-filter preferences (owned by
+    // the target tree id, matching DataTab's own key scheme) and the inspected
+    // key, then selects the tree so DetailPanel opens on the Data tab.
+    private async Task GoToMember(TagMemberRow member)
+    {
+        var indexName = Selection.IndexName;
+        if (!string.IsNullOrEmpty(indexName) && _selectedTag is not null)
+        {
+            await Preferences.SetAsync($"data-tagindex:{member.TreeId}", indexName, owner: member.TreeId, TabToken);
+            await Preferences.SetAsync($"data-tagvalue:{member.TreeId}:{indexName}", _selectedTag, owner: member.TreeId, TabToken);
+        }
+
+        await Preferences.SetAsync("detail-tab", DetailTab.Data, cancellationToken: TabToken);
+        SessionStore.Set(DataSelection.SelectedKey(member.TreeId), member.Key);
+
+        ExplorerSelection.Select(new CatalogItem
+        {
+            Id = member.TreeId,
+            Kind = CatalogKind.Trees,
+        });
+    }
+}

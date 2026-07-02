@@ -246,6 +246,38 @@ public class LatticeStateGrpcClientE2ETests
     }
 
     [Test]
+    public async Task client_browses_tag_index_covered_trees_tags_and_members_end_to_end()
+    {
+        await _fixture.CreatePopulatedTreeAsync(TreeId, KeyCount, ShardCount);
+        var index = _fixture.CreateTagIndex(TreeId, "by-status");
+        await index.Key(GrpcStateClusterFixture.KeyAt(1)).AddAsync(["open"]);
+        await index.Key(GrpcStateClusterFixture.KeyAt(4)).AddAsync(["open"]);
+        await index.Key(GrpcStateClusterFixture.KeyAt(2)).AddAsync(["closed"]);
+
+        await using var host = await _fixture.CreateGrpcHostAsync();
+        var client = LatticeStateApiGrpcClient.Create(host.Channel.CreateCallInvoker(), host.Services);
+
+        var covered = await client.ListCoveredTreesAsync(new CatalogRequest { IndexName = "by-status", PageSize = 100 });
+        Assert.That(covered.Entries, Does.Contain(TreeId),
+            "the covered subject tree must round-trip over the gRPC transport");
+
+        var tags = await client.ListIndexTagsAsync(new CatalogRequest { IndexName = "by-status", PageSize = 100 });
+        Assert.That(tags.Entries, Is.EqualTo(new[] { "closed", "open" }),
+            "index-wide tags must round-trip in ordinal order");
+
+        var members = await client.ScanTagMembersAsync(new TagMemberScanRequest { IndexName = "by-status", Tag = "open", PageSize = 100 });
+        Assert.That(
+            members.Entries.Select(m => (m.TreeId, m.Key)),
+            Is.EquivalentTo(new[]
+            {
+                (TreeId, GrpcStateClusterFixture.KeyAt(1)),
+                (TreeId, GrpcStateClusterFixture.KeyAt(4)),
+            }),
+            "the live members of the 'open' tag must round-trip with their owning tree");
+        Assert.That(members.NextPageToken, Is.Null);
+    }
+
+    [Test]
     public async Task client_cancels_a_scan_cursor_over_the_transport()
     {
         await _fixture.CreatePopulatedTreeAsync(TreeId, KeyCount, ShardCount);

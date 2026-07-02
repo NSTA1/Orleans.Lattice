@@ -13,6 +13,8 @@ The state API is a read-only surface, but read-only is not the same as public. T
 
 The seam describes each call faithfully: the `LatticeStateApiAuthorizationContext` carries the specific `LatticeStateApiOperation` (every RPC maps to its own member) and the `TargetTreeId` the call acts on, so a policy can scope by operation and by tree. A method the binding does not recognise maps to `LatticeStateApiOperation.Unknown` rather than a benign default, so a deny-by-default policy refuses anything unmapped instead of letting it pass as a catalog read.
 
+The three index-wide tag-browsing operations (`ListCoveredTrees`, `ListIndexTags`, `ScanTagMembers`) span every tree a tag index covers, so they present a `null` `TargetTreeId` - they authorize at the cluster / index level like `ListTrees` and `ListViews`, not per subject tree. A policy that grants tag-index browsing therefore grants it across all covered trees; scope it by operation (deny these three) rather than by target tree if a tenant must not see cross-tree membership. The subject-tree-scoped `ListTagValues` (which does carry a `TargetTreeId`) remains available for per-tree tag enumeration.
+
 ### Turnkey credential authorizer
 
 `AddEnvVarCredentialAuthorizer` registers a reference `EnvVarCredentialAuthorizer` that validates an inbound `authorization: Basic base64(user:pass)` header against environment-variable-backed PBKDF2-SHA256 password hashes, with a per-username failed-attempt lockout. Because it reads a `Basic` credential off the wire, it **must run behind TLS** - terminate TLS at the channel (or an outer boundary) so the credential is never sent in clear text. It is an authentication front door, not a per-tree authorization policy: it does not consult the call's operation or target tree.
