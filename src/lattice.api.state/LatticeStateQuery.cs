@@ -430,6 +430,14 @@ internal sealed class LatticeStateQuery(
                 return EntryScanResult.NotFound(request.TreeId);
             }
 
+            // An aggregation (grouped-reduce or custom-fold) view keeps its
+            // internal accumulator / inverse / membership / fold-inverse rows
+            // under the reserved NUL prefix (see AggregationRowCodec). The
+            // canonical view read surface floors every unbounded scan above that
+            // range so readers see only the materialised group values; mirror
+            // that here so the state API never leaks the internal rows.
+            var startInclusive = ClampViewScanStart(request.TreeId, request.StartInclusive);
+
             // Open the cursor selected by the request mode. Snapshot opens a
             // point-in-time cursor that captures an all-shard frozen baseline so
             // every page reads a torn-free instant; the live modes open a
@@ -438,18 +446,18 @@ internal sealed class LatticeStateQuery(
             cursorId = request.Mode == EntryScanMode.Snapshot
                 ? request.Predicate is { } snapshotPredicate
                     ? await tree.OpenSnapshotEntryCursorWherePredicateAsync(
-                        snapshotPredicate, request.StartInclusive, request.EndExclusive, request.Reverse, cancellationToken)
+                        snapshotPredicate, startInclusive, request.EndExclusive, request.Reverse, cancellationToken)
                         .ConfigureAwait(false)
                     : await tree.OpenSnapshotEntryCursorAsync(
-                        request.StartInclusive, request.EndExclusive, request.Reverse, cancellationToken)
+                        startInclusive, request.EndExclusive, request.Reverse, cancellationToken)
                         .ConfigureAwait(false)
                 : request.Predicate is { } livePredicate
                     ? await tree.OpenEntryCursorWherePredicateAsync(
-                        livePredicate, request.StartInclusive, request.EndExclusive, request.Reverse,
+                        livePredicate, startInclusive, request.EndExclusive, request.Reverse,
                         pointInTime: request.Mode == EntryScanMode.LivePointInTime, cancellationToken)
                         .ConfigureAwait(false)
                     : await tree.OpenEntryCursorAsync(
-                        request.StartInclusive, request.EndExclusive, request.Reverse,
+                        startInclusive, request.EndExclusive, request.Reverse,
                         pointInTime: request.Mode == EntryScanMode.LivePointInTime, cancellationToken)
                         .ConfigureAwait(false);
         }
@@ -1023,6 +1031,67 @@ internal sealed class LatticeStateQuery(
 
         var mode = _services.GetService<ILatticeMergeModeResolver>()?.Resolve(registration.SourceTreeId);
         return mode is null or LatticeMergeMode.LwwRegister ? null : mode.Value.ToString();
+    }
+
+    /// <summary>
+    /// Clamps an entry-scan's start bound up to
+    /// <see cref="AggregationRowCodec.FirstNonReservedKey"/> when
+    /// <paramref name="treeId"/> names an aggregation (grouped-reduce or
+    /// custom-fold) view tree and the caller's start is unset or sorts inside the
+    /// reserved region. This mirrors <c>LatticeView</c>'s reserved floor so the
+    /// state API's scan of a view returns only its materialised group values,
+    /// never the internal accumulator / inverse / membership / fold-inverse rows
+    /// kept under the reserved NUL prefix. Any other tree - and any non-reserved
+    /// caller-supplied start - is returned unchanged.
+    /// </summary>
+    private string? ClampViewScanStart(string treeId, string? startInclusive)
+    {
+        if (!IsAggregationViewTree(treeId))
+        {
+            return startInclusive;
+        }
+
+        return string.IsNullOrEmpty(startInclusive)
+            || string.CompareOrdinal(startInclusive, AggregationRowCodec.FirstNonReservedKey) < 0
+            ? AggregationRowCodec.FirstNonReservedKey
+            : startInclusive;
+    }
+
+    /// <summary>
+    /// Tests whether <paramref name="treeId"/> names an aggregation
+    /// (grouped-reduce or custom-fold) materialised-view tree by looking up its
+    /// registration in the local <see cref="IViewCatalog"/>. Degrades to
+    /// <see langword="false"/> (no clamping) when the view infrastructure is not
+    /// registered, the view name is unrecoverable, or the view is not in the local
+    /// catalog - the same conservative fallback as <see cref="ResolveViewCrdtShape"/>.
+    /// </summary>
+    private bool IsAggregationViewTree(string treeId)
+    {
+        if (!IsViewTree(treeId))
+        {
+            return false;
+        }
+
+        var catalog = _services.GetService<IViewCatalog>();
+        if (catalog is null)
+        {
+            return false;
+        }
+
+        var viewName = ViewNameFromTreeId(treeId);
+        if (viewName.Length == 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            return catalog.TryGet(viewName) is { IsAggregation: true };
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     private int ClampPageSize(int requested) => requested switch
