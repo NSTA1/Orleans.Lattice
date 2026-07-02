@@ -2405,6 +2405,22 @@ public static class LatticeMetrics
             description: "Aggregation contributions (folds and retractions) applied to an aggregation view's group accumulators.");
 
     /// <summary>
+    /// Counter of aggregation contributions rejected because the projection's
+    /// group-key selector produced a key in the reserved region - empty, or
+    /// beginning with the reserved NUL (<c>\u0000</c>) prefix the maintainer uses
+    /// for its internal accumulator / inverse / membership rows. Tagged with
+    /// <see cref="TagView"/>. The maintainer drops the offending contribution
+    /// rather than writing a group value that would be invisible to view reads
+    /// (which floor above the reserved region) and could collide with an internal
+    /// row; the rejection is deterministic on the key, so every cluster drops the
+    /// same members and the view stays convergent. A non-zero value means a
+    /// group-key selector is emitting reserved keys and should be corrected.
+    /// </summary>
+    public static readonly Counter<long> ViewAggregationRejected =
+        Meter.CreateCounter<long>("orleans.lattice.view.aggregation_rejected", unit: "{contribution}",
+            description: "Aggregation contributions dropped because the group-key selector produced a reserved (empty or NUL-prefixed) key.");
+
+    /// <summary>
     /// Counter of atomic-write staging backstop fall-backs: a drain pass
     /// abandoned incremental atomic-batch staging and forced a rebuild because
     /// the in-flight staging buffer exceeded its configured bound

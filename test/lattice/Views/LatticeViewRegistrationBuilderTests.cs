@@ -55,4 +55,32 @@ public class LatticeViewRegistrationBuilderTests
             () => builder.AddAggregationView("chained", "view-adults", _ => Aggregation()),
             Throws.InvalidOperationException);
     }
+
+    private static ILatticeFoldProjection Fold() =>
+        new LatticeFoldProjection(_ => "g", () => [], (acc, _, _, _) => acc, "v1");
+
+    [Test]
+    public void AddFoldedView_accepts_a_directly_writable_source()
+    {
+        var builder = new LatticeViewRegistrationBuilder();
+        Assert.That(() => builder.AddFoldedView("compliance", "parts", Fold()), Throws.Nothing);
+    }
+
+    [Test]
+    public void AddFoldedView_rejects_a_view_tree_source()
+    {
+        var builder = new LatticeViewRegistrationBuilder();
+        Assert.That(
+            () => builder.AddFoldedView("chained", "view-adults", Fold()),
+            Throws.InvalidOperationException);
+    }
+
+    [Test]
+    public void AddFoldedView_factory_overload_rejects_a_view_tree_source()
+    {
+        var builder = new LatticeViewRegistrationBuilder();
+        Assert.That(
+            () => builder.AddFoldedView("chained", "view-adults", _ => Fold()),
+            Throws.InvalidOperationException);
+    }
 }

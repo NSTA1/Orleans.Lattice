@@ -82,4 +82,32 @@ public sealed class LatticeViewRegistrationBuilder
         _registrations.Add(new StartupViewRegistration(viewName, sourceTreeId, ProjectionFactory: null, projectionFactory));
         return this;
     }
+
+    /// <summary>
+    /// Declares a folded aggregation view (a custom, non-commutative grouped fold)
+    /// maintained by the supplied projection instance. A convenience over
+    /// <see cref="AddAggregationView(string, string, ILatticeAggregationProjection)"/>
+    /// that documents the fold intent at the call site.
+    /// </summary>
+    /// <param name="viewName">The logical view name; the view tree is <c>view-{viewName}</c>.</param>
+    /// <param name="sourceTreeId">The source tree id whose WAL the view tails.</param>
+    /// <param name="projection">The fold projection that maintains the view.</param>
+    public LatticeViewRegistrationBuilder AddFoldedView(string viewName, string sourceTreeId, ILatticeFoldProjection projection)
+    {
+        ArgumentNullException.ThrowIfNull(projection);
+        return AddAggregationView(viewName, sourceTreeId, projection);
+    }
+
+    /// <summary>
+    /// Declares a folded aggregation view whose projection is resolved from the
+    /// service provider at startup, allowing the fold to take service dependencies.
+    /// </summary>
+    /// <param name="viewName">The logical view name; the view tree is <c>view-{viewName}</c>.</param>
+    /// <param name="sourceTreeId">The source tree id whose WAL the view tails.</param>
+    /// <param name="projectionFactory">Resolves the fold projection from the service provider.</param>
+    public LatticeViewRegistrationBuilder AddFoldedView(string viewName, string sourceTreeId, Func<IServiceProvider, ILatticeFoldProjection> projectionFactory)
+    {
+        ArgumentNullException.ThrowIfNull(projectionFactory);
+        return AddAggregationView(viewName, sourceTreeId, projectionFactory);
+    }
 }

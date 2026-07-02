@@ -31,12 +31,15 @@ internal sealed partial class ViewMaintainerGrain
     {
         var options = Options;
         var fanout = options.AggregationFanout > 0 ? options.AggregationFanout : LatticeViewOptions.DefaultAggregationFanout;
+        var projection = catalog.TryGet(ViewName)!.AggregationProjection!;
         return new AggregationApplier(
             store,
-            catalog.TryGet(ViewName)!.AggregationProjection!.Aggregation,
+            projection.Aggregation,
             fanout,
             Math.Max(0, options.AggregationMaxGroupEntries),
-            state.State.RebuildGeneration.ToString());
+            state.State.RebuildGeneration.ToString(),
+            projection as ILatticeFoldProjection,
+            ViewName);
     }
 
     private async Task<int> DrainAggregationAsync(ViewRegistration registration, CancellationToken cancellationToken)

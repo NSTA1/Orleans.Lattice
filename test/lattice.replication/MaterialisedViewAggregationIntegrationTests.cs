@@ -258,4 +258,142 @@ public class MaterialisedViewAggregationIntegrationTests
         Assert.That(afterDelete, Is.EqualTo(2),
             "Removing the only contribution to a group drops the group count.");
     }
+
+    // --- custom-reducer (folded) aggregation view ---
+
+    private sealed record Fact(string Part, string Kind);
+
+    // A non-commutative, HLC-ordered compliance state machine (the issue-1039
+    // motivation): "Flag" demotes to FlaggedForReview, "UseAsIs" promotes back to
+    // Nominal, "Scrap" is terminal. The materialised value is the final state
+    // string, so ordering and retraction are directly observable.
+    private static ILatticeView CreateComplianceView(MaterialisedViewClusterFixture fixture, string sourceTreeId, string viewName)
+    {
+        var factory = fixture.SiloServices.GetRequiredService<ILatticeViewFactory>();
+        var source = fixture.Cluster.Client.GetGrain<ILattice>(sourceTreeId);
+        var projection = LatticeFoldProjection.Create<Fact, string>(
+            groupKeySelector: f => f.Part,
+            initial: () => "Nominal",
+            apply: (state, _, fact, _) => state switch
+            {
+                "Scrap" => "Scrap",
+                _ => fact.Kind switch
+                {
+                    "Flag" => "FlaggedForReview",
+                    "UseAsIs" => "Nominal",
+                    "Scrap" => "Scrap",
+                    _ => state,
+                },
+            },
+            foldVersion: "compliance-v1");
+        return factory.Create(source, viewName, new LatticeViewDefinition(viewName, projection));
+    }
+
+    private static byte[] FactValue(string part, string kind) =>
+        JsonLatticeSerializer<Fact>.Default.Serialize(new Fact(part, kind));
+
+    private static string? StateOf(byte[]? bytes) =>
+        bytes is null ? null : JsonLatticeSerializer<string>.Default.Deserialize(bytes);
+
+    [Test]
+    public async Task Folded_view_applies_non_commutative_fold_in_hlc_order()
+    {
+        using var viewReadScope = ViewReadContext.BeginScope();
+        const string tree = "fold-compliance-src";
+        const string view = "fold-compliance-view";
+        var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
+        _ = CreateComplianceView(_fixture, tree, view);
+
+        // Part p1: Flag then UseAsIs -> back to Nominal (later fact demotes state).
+        await source.SetAsync("p1:f1", FactValue("p1", "Flag"));
+        await source.SetAsync("p1:f2", FactValue("p1", "UseAsIs"));
+        // Part p2: Flag then Scrap -> terminal Scrap.
+        await source.SetAsync("p2:f1", FactValue("p2", "Flag"));
+        await source.SetAsync("p2:f2", FactValue("p2", "Scrap"));
+
+        var viewTree = await DrainToZeroAsync(view);
+
+        await Assert.MultipleAsync(async () =>
+        {
+            Assert.That(StateOf(await viewTree.GetAsync("p1")), Is.EqualTo("Nominal"));
+            Assert.That(StateOf(await viewTree.GetAsync("p2")), Is.EqualTo("Scrap"));
+        });
+    }
+
+    [Test]
+    public async Task Folded_view_refolds_over_survivors_on_retraction()
+    {
+        using var viewReadScope = ViewReadContext.BeginScope();
+        const string tree = "fold-retract-src";
+        const string view = "fold-retract-view";
+        var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
+        _ = CreateComplianceView(_fixture, tree, view);
+
+        await source.SetAsync("p1:f1", FactValue("p1", "Flag"));
+        await source.SetAsync("p1:f2", FactValue("p1", "UseAsIs"));
+        var viewTree = await DrainToZeroAsync(view);
+        Assert.That(StateOf(await viewTree.GetAsync("p1")), Is.EqualTo("Nominal"));
+
+        // Delete the UseAsIs fact: the group re-folds over the surviving Flag fact
+        // (a plain reducer could not un-apply this), so the state reverts.
+        await source.DeleteAsync("p1:f2");
+        viewTree = await DrainToZeroAsync(view);
+        Assert.That(StateOf(await viewTree.GetAsync("p1")), Is.EqualTo("FlaggedForReview"));
+    }
+
+    [Test]
+    public async Task Folded_view_rebuild_reproduces_state_from_source()
+    {
+        using var viewReadScope = ViewReadContext.BeginScope();
+        const string tree = "fold-rebuild-src";
+        const string view = "fold-rebuild-view";
+        var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
+        _ = CreateComplianceView(_fixture, tree, view);
+
+        await source.SetAsync("p1:f1", FactValue("p1", "Flag"));
+        await source.SetAsync("p1:f2", FactValue("p1", "UseAsIs"));
+        await source.SetAsync("p2:f1", FactValue("p2", "Scrap"));
+        await DrainToZeroAsync(view);
+
+        var maintainer = _fixture.Cluster.Client.GetGrain<IViewMaintainerGrain>(view);
+        await maintainer.RebuildAsync();
+        var viewTree = await DrainToZeroAsync(view);
+
+        await Assert.MultipleAsync(async () =>
+        {
+            Assert.That(StateOf(await viewTree.GetAsync("p1")), Is.EqualTo("Nominal"));
+            Assert.That(StateOf(await viewTree.GetAsync("p2")), Is.EqualTo("Scrap"));
+        });
+    }
+
+    [Test]
+    public async Task Folded_view_digest_is_stable_across_rebuild()
+    {
+        using var viewReadScope = ViewReadContext.BeginScope();
+        const string tree = "fold-digest-src";
+        const string view = "fold-digest-view";
+        var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
+        var handle = CreateComplianceView(_fixture, tree, view);
+
+        await source.SetAsync("p1:f1", FactValue("p1", "Flag"));
+        await source.SetAsync("p1:f2", FactValue("p1", "UseAsIs"));
+        await source.SetAsync("p2:f1", FactValue("p2", "Flag"));
+        await source.SetAsync("p2:f2", FactValue("p2", "Scrap"));
+        await DrainToZeroAsync(view);
+
+        // The materialised value is an opaque fold accumulator (arbitrary bytes),
+        // so this asserts ComputeDigestAsync / anti-entropy fingerprints custom
+        // accumulators correctly: a rebuild that re-derives the same member set
+        // must reproduce a byte-identical digest, so two clusters that converge on
+        // the same source never see a spurious drift.
+        var beforeRebuild = await handle.ComputeDigestAsync();
+
+        var maintainer = _fixture.Cluster.Client.GetGrain<IViewMaintainerGrain>(view);
+        await maintainer.RebuildAsync();
+        await DrainToZeroAsync(view);
+
+        var afterRebuild = await handle.ComputeDigestAsync();
+        Assert.That(afterRebuild.ContentEquals(beforeRebuild), Is.True,
+            "A folded view's opaque-accumulator digest must be rebuild-stable.");
+    }
 }

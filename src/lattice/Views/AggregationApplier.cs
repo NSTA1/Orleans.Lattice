@@ -43,13 +43,21 @@ internal sealed class AggregationApplier(
     AggregationKind kind,
     int fanout,
     int maxGroupEntries,
-    string operationEpoch)
+    string operationEpoch,
+    ILatticeFoldProjection? fold = null,
+    string? viewName = null)
 {
+    private static readonly System.Diagnostics.Metrics.Counter<long> Rejected = LatticeMetrics.ViewAggregationRejected;
+
     private readonly int _fanout = fanout < 1 ? 1 : fanout;
     private readonly int _maxGroupEntries = maxGroupEntries;
     private readonly string _operationEpoch = operationEpoch;
+    private readonly ILatticeFoldProjection? _fold = fold;
+    private readonly string? _viewName = viewName;
 
     private bool IsNumeric => kind is AggregationKind.Count or AggregationKind.Sum;
+
+    private bool IsFold => kind == AggregationKind.Fold;
 
     /// <summary>Applies a single contribution and re-materialises every group it touches.</summary>
     public async Task ApplyAsync(AggregationContribution contribution, CancellationToken cancellationToken = default)
@@ -69,15 +77,34 @@ internal sealed class AggregationApplier(
         }
     }
 
-    private Task ContributeAsync(AggregationContribution contribution, CancellationToken cancellationToken) =>
-        IsNumeric
+    private Task ContributeAsync(AggregationContribution contribution, CancellationToken cancellationToken)
+    {
+        // A group value is materialised under its bare group key, so a key in the
+        // reserved region (empty, or NUL-prefixed) would sort below every readable
+        // key and could collide with an internal accumulator / inverse / membership
+        // row. Rather than corrupt the view silently, drop the contribution and
+        // meter it: the rejection is deterministic on the key, so every cluster
+        // drops the same members and the view stays convergent. A regrouped source
+        // key whose new group is reserved simply keeps its prior (valid) group.
+        if (IsReservedGroupKey(contribution.GroupKey))
+        {
+            Rejected.Add(1, new KeyValuePair<string, object?>(LatticeMetrics.TagView, _viewName));
+            return Task.CompletedTask;
+        }
+
+        return IsNumeric
             ? ContributeNumericAsync(contribution, cancellationToken)
-            : ContributeInverseAsync(contribution, cancellationToken);
+            : IsFold
+                ? ContributeFoldAsync(contribution, cancellationToken)
+                : ContributeInverseAsync(contribution, cancellationToken);
+    }
 
     private Task RetractAsync(AggregationContribution contribution, CancellationToken cancellationToken) =>
         IsNumeric
             ? RetractNumericAsync(contribution, cancellationToken)
-            : RetractInverseAsync(contribution.SourceKey, cancellationToken);
+            : IsFold
+                ? RetractFoldAsync(contribution.SourceKey, cancellationToken)
+                : RetractInverseAsync(contribution.SourceKey, cancellationToken);
 
     // --- count / sum: crash-idempotent atomic membership + accumulator flip ---
     //
@@ -428,6 +455,127 @@ internal sealed class AggregationApplier(
             ? LatticeAggregationValue.EncodeInt64(members!.Count)
             : LatticeAggregationValue.EncodeDouble(extreme);
         await store.SetAsync(groupKey, value, cancellationToken);
+    }
+
+    // --- fold: per-source-key value rows re-folded on every change ---
+    //
+    // A custom fold is not invertible, so the applier cannot un-apply a single
+    // member. Instead it keeps each source key's contributed value (+ its source
+    // HLC) in a fold-inverse shard (mirroring the min/max/set-union inverse path),
+    // and RE-FOLDS the whole group - over its surviving members, in ascending
+    // (HLC, sourceKey) order - whenever a member is added, retracted, or
+    // re-grouped. The fold-inverse mutation (map[k]=entry / map.Remove(k)) is
+    // idempotent on replay, so like the inverse path it needs no atomic flip.
+    private async Task ContributeFoldAsync(AggregationContribution contribution, CancellationToken cancellationToken)
+    {
+        var sourceKey = contribution.SourceKey;
+        var membershipKey = MembershipKey(sourceKey);
+        var prior = await ReadMembershipAsync(membershipKey, cancellationToken);
+
+        if (prior is { } old)
+        {
+            await MutateFoldAsync(old.GroupKey, sourceKey, add: null, cancellationToken);
+        }
+
+        await MutateFoldAsync(
+            contribution.GroupKey,
+            sourceKey,
+            add: new FoldMember(contribution.Value ?? [], contribution.Timestamp),
+            cancellationToken);
+
+        await store.SetAsync(
+            membershipKey,
+            EncodeMembership(new MembershipRow(contribution.GroupKey, 0, null)),
+            cancellationToken);
+
+        if (prior is { } o && !string.Equals(o.GroupKey, contribution.GroupKey, StringComparison.Ordinal))
+        {
+            await MaterialiseFoldAsync(o.GroupKey, cancellationToken);
+        }
+
+        await MaterialiseFoldAsync(contribution.GroupKey, cancellationToken);
+    }
+
+    private async Task RetractFoldAsync(string sourceKey, CancellationToken cancellationToken)
+    {
+        var membershipKey = MembershipKey(sourceKey);
+        var prior = await ReadMembershipAsync(membershipKey, cancellationToken);
+        if (prior is not { } old)
+        {
+            // Nothing recorded for this source key: idempotent no-op.
+            return;
+        }
+
+        await MutateFoldAsync(old.GroupKey, sourceKey, add: null, cancellationToken);
+        await store.DeleteAsync(membershipKey, cancellationToken);
+        await MaterialiseFoldAsync(old.GroupKey, cancellationToken);
+    }
+
+    private async Task MutateFoldAsync(string groupKey, string sourceKey, FoldMember? add, CancellationToken cancellationToken)
+    {
+        var key = FoldInverseKey(groupKey, Slot(sourceKey, _fanout));
+        var bytes = await store.GetAsync(key, cancellationToken);
+        var map = bytes is null ? new Dictionary<string, FoldMember>(StringComparer.Ordinal) : DecodeFoldInverse(bytes);
+
+        if (add is { } entry)
+        {
+            map[sourceKey] = entry;
+        }
+        else
+        {
+            map.Remove(sourceKey);
+        }
+
+        if (map.Count == 0)
+        {
+            await store.DeleteAsync(key, cancellationToken);
+        }
+        else
+        {
+            await store.SetAsync(key, EncodeFoldInverse(map), cancellationToken);
+        }
+    }
+
+    private async Task MaterialiseFoldAsync(string groupKey, CancellationToken cancellationToken)
+    {
+        // Gather every surviving member across the group's shards, then re-fold in
+        // ascending (HLC, sourceKey) order so the materialised value is a pure,
+        // convergent function of the group's member set regardless of delivery
+        // order. The source-key tie-break makes equal-HLC members deterministic.
+        var members = new List<(string SourceKey, FoldMember Member)>();
+        for (var slot = 0; slot < _fanout; slot++)
+        {
+            var bytes = await store.GetAsync(FoldInverseKey(groupKey, slot), cancellationToken);
+            if (bytes is null)
+            {
+                continue;
+            }
+
+            foreach (var (sourceKey, member) in DecodeFoldInverse(bytes))
+            {
+                members.Add((sourceKey, member));
+            }
+        }
+
+        if (members.Count == 0)
+        {
+            await store.DeleteAsync(groupKey, cancellationToken);
+            return;
+        }
+
+        members.Sort(static (a, b) =>
+        {
+            var cmp = a.Member.Timestamp.CompareTo(b.Member.Timestamp);
+            return cmp != 0 ? cmp : string.CompareOrdinal(a.SourceKey, b.SourceKey);
+        });
+
+        var accumulator = _fold!.Initial();
+        foreach (var (sourceKey, member) in members)
+        {
+            accumulator = _fold.Apply(accumulator, sourceKey, member.Value, member.Timestamp);
+        }
+
+        await store.SetAsync(groupKey, accumulator, cancellationToken);
     }
 
     private async Task<MembershipRow?> ReadMembershipAsync(string key, CancellationToken cancellationToken)

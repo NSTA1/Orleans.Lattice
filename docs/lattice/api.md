@@ -1778,13 +1778,26 @@ ILatticeView ageByName = viewFactory.Create(
 
 // Typed aggregate read: null means the group has no live members.
 double total = await ageByName.GetAggregateDoubleAsync("Alice", cancellationToken) ?? 0;
+
+// Folded (custom-reducer) view: a user-defined, HLC-ordered fold per group.
+ILatticeView nameTrail = viewFactory.Create(
+    people,
+    "name-trail-by-age",
+    new LatticeViewDefinition("name-trail-by-age", LatticeFoldProjection.Create<User, string>(
+        groupKeySelector: u => u.Age.ToString(),
+        initial: () => string.Empty,
+        apply: (trail, key, u, hlc) => trail.Length == 0 ? u.Name : trail + "," + u.Name,
+        foldVersion: "name-trail-v1")));
+
+// The accumulator is stored under the bare group key; read it with GetAsync<T>.
+string? names = await nameTrail.GetAsync<string>("30", cancellationToken);
 ```
 
 ### Surface
 
 | Type | Role |
 |------|------|
-| `AddLatticeViews(configure?)` | Silo-builder registration for the view catalog, factory, and hosted maintainer. Part of the core `Orleans.Lattice` package. Declares startup views through the builder (`AddView` / `AddAggregationView`). |
+| `AddLatticeViews(configure?)` | Silo-builder registration for the view catalog, factory, and hosted maintainer. Part of the core `Orleans.Lattice` package. Declares startup views through the builder (`AddView` / `AddAggregationView` / `AddFoldedView`). |
 | `ConfigureLatticeView(viewName?, configure)` | Sets `LatticeViewOptions` defaults (no name) or per-view overrides. |
 | `ILatticeViewFactory` | Injected entry point: `Create(source, viewName, definition)` returns an `ILatticeView` handle and persists a durable runtime registration; `GetAsync(viewName, ct?)` opens a read handle for an already-registered view by name (returns `null` when none is registered), without re-supplying the source or projection; `DeleteAsync(viewName, ct?)` tears a runtime view down completely (maintainer, reminder, WAL pin, backing tree, checkpoint, and registration) and is idempotent. Registered as a singleton by `AddLatticeViews`. |
 | `ILatticeView` | The view handle: `ViewName`, `GetAsync`, `CountAsync`, `KeysAsync`, `EntriesAsync`, `GetLagAsync`, `RebuildAsync`, `ReconcileAsync`, `ComputeDigestAsync`, `WaitForSourceHlcAsync`, `WaitForSourceHeadAsync`. |
@@ -1792,7 +1805,8 @@ double total = await ageByName.GetAggregateDoubleAsync("Alice", cancellationToke
 | `LatticeViewDefinition` | Pairs a view name with either an `ILatticeViewProjection` (filter / re-project) or an `ILatticeAggregationProjection` (aggregation). |
 | `ILatticeViewProjection` / `PredicateLatticeViewProjection` | Filter / re-project projection: a predicate, optional value transform, and optional injective key re-map. `ProjectionVersion` is a structural hash that drives rebuild-on-change. `Create<T>(...)` builds one whose value transform runs against a deserialized `T` (defaulting to `JsonLatticeSerializer<T>`). |
 | `ILatticeAggregationProjection` / `AggregationLatticeViewProjection` | Aggregation projection: an `AggregationKind`, group-key selector, selector-version tag, and the value / member selector the kind needs. `Create<T>(...)` builds one whose selectors run against a deserialized `T` (defaulting to `JsonLatticeSerializer<T>`). |
-| `AggregationKind` | `Count`, `Sum`, `Min`, `Max`, `SetUnion`. |
+| `ILatticeFoldProjection` / `LatticeFoldProjection` | Custom-reducer aggregation projection (`AggregationKind.Fold`): a group-key selector plus a fold seed (`Initial`) and step (`Apply(accumulator, sourceKey, value, hlc)`) applied over a group's surviving members in ascending source-HLC order, re-folded on every change. `Create<TValue, TAccumulator>(...)` builds one whose delegates run against a deserialized `TValue` / `TAccumulator` (defaulting to `JsonLatticeSerializer<T>`). A `foldVersion` tag drives rebuild-on-change. |
+| `AggregationKind` | `Count`, `Sum`, `Min`, `Max`, `SetUnion`, `Fold`. |
 | `ViewWrite` / `ViewWriteKind` | The SPI value a projection's `Project(...)` yields: an upsert, delete, or range-reconcile against the view tree (`ViewWrite.Upsert` / `ViewWrite.Delete`). Authored only when writing a custom projection. |
 | `LatticeAggregationValue` | Decoder for materialised aggregate bytes: `DecodeDouble` (`Sum` / `Min` / `Max`) and `DecodeInt64` (`Count` / `SetUnion`). |
 | `ViewDigest` | Order-independent content fingerprint over the materialised `(key, value)` pairs, with an `EntryCount`. |
@@ -1834,8 +1848,8 @@ double total = await ageByName.GetAggregateDoubleAsync("Alice", cancellationToke
   `InvalidOperationException` naming the dependent view(s). Tear the view(s) down
   first via `ILatticeViewFactory.DeleteAsync`, then delete the source.
 - **No view-on-view.** A view's source must be a directly-writable tree, not
-  another view. `Create` and the startup `AddView` / `AddAggregationView`
-  builders reject a `view-*` source with `InvalidOperationException`.
+  another view. `Create` and the startup `AddView` / `AddAggregationView` /
+  `AddFoldedView` builders reject a `view-*` source with `InvalidOperationException`.
 - **Atomic visibility.** A source atomic write (single-tree or cross-tree) is
   surfaced atomically in the derived views; see
   [Materialised views](materialised-views.md#atomic-write-visibility).

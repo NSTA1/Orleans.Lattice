@@ -69,6 +69,14 @@ public readonly record struct AggregationContribution
     [Id(6)] public string? EndKey { get; init; }
 
     /// <summary>
+    /// The source entry's value bytes a <see cref="AggregationKind.Fold"/> view
+    /// folds into its group accumulator (carried so the maintainer can store the
+    /// per-source-key contribution and re-fold the group on any change);
+    /// <see langword="null"/> for every other kind.
+    /// </summary>
+    [Id(7)] public byte[]? Value { get; init; }
+
+    /// <summary>
     /// Creates a <see cref="AggregationContributionKind.Contribute"/> over a
     /// numeric value (sum / min / max).
     /// </summary>
@@ -129,6 +137,31 @@ public readonly record struct AggregationContribution
             GroupKey = groupKey,
             SourceKey = sourceKey,
             Member = member,
+            Timestamp = timestamp,
+        };
+    }
+
+    /// <summary>
+    /// Creates a <see cref="AggregationContributionKind.Contribute"/> that folds
+    /// the source key's <paramref name="value"/> bytes into a
+    /// <see cref="AggregationKind.Fold"/> group. The maintainer stores the value
+    /// as the source key's contribution and re-folds the group in HLC order.
+    /// </summary>
+    /// <param name="groupKey">The group the source key contributes to. Must not be <see langword="null"/>.</param>
+    /// <param name="sourceKey">The contributing source key. Must not be <see langword="null"/>.</param>
+    /// <param name="value">The source value bytes folded into the group accumulator. Must not be <see langword="null"/>.</param>
+    /// <param name="timestamp">The source entry HLC.</param>
+    public static AggregationContribution Fold(string groupKey, string sourceKey, byte[] value, HybridLogicalClock timestamp)
+    {
+        ArgumentNullException.ThrowIfNull(groupKey);
+        ArgumentNullException.ThrowIfNull(sourceKey);
+        ArgumentNullException.ThrowIfNull(value);
+        return new AggregationContribution
+        {
+            Kind = AggregationContributionKind.Contribute,
+            GroupKey = groupKey,
+            SourceKey = sourceKey,
+            Value = value,
             Timestamp = timestamp,
         };
     }

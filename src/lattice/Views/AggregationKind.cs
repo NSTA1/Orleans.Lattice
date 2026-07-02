@@ -30,4 +30,18 @@ public enum AggregationKind
     /// approximate mode estimates the cardinality.
     /// </summary>
     SetUnion = 4,
+
+    /// <summary>
+    /// A user-defined, non-commutative reduction (fold) over the group's
+    /// surviving members, applied in ascending source-HLC order. The fold is
+    /// supplied by an <see cref="ILatticeFoldProjection"/> (its
+    /// <see cref="ILatticeFoldProjection.Initial"/> seed plus
+    /// <see cref="ILatticeFoldProjection.Apply"/> step); the materialised group
+    /// value is the resulting accumulator's opaque bytes. Because a general fold
+    /// is not invertible, the maintainer re-folds the whole group whenever a
+    /// member is added, retracted, or range-reconciled, so the value converges to
+    /// a pure function of the group's converged member set regardless of delivery
+    /// order.
+    /// </summary>
+    Fold = 5,
 }
