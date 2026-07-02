@@ -183,6 +183,156 @@ public sealed class LatticeEntryInspectionIntegrationTests
     }
 
     [Test]
+    public async Task ScanEntries_live_mode_reflects_writes_committed_after_open()
+    {
+        const int count = 40;
+        var tree = await _fixture.CreatePopulatedTreeAsync("scan-live", keyCount: count, shardCount: 3);
+
+        // Open a live scan and read only the first page.
+        var first = await _fixture.Query.ScanEntriesAsync(new EntryScanRequest
+        {
+            TreeId = "scan-live",
+            PageSize = 5,
+            Mode = EntryScanMode.Live,
+        });
+        Assert.That(first.ContinuationToken, Is.Not.Null);
+
+        // Commit new keys after the scan opened; they sort after every original
+        // key, so they fall into not-yet-read pages ahead of the cursor.
+        var lateKeys = new List<string>();
+        for (var i = 0; i < 10; i++)
+        {
+            var key = $"key-9{i:D4}";
+            lateKeys.Add(key);
+            await tree.SetAsync(key, EntryInspectionClusterFixture.Utf8("late"));
+        }
+
+        // Drain the remaining pages against the same live cursor.
+        var seen = new List<EntryRecord>(first.Entries);
+        var token = first.ContinuationToken;
+        while (token is not null)
+        {
+            var page = await _fixture.Query.ScanEntriesAsync(new EntryScanRequest
+            {
+                TreeId = "scan-live",
+                PageSize = 5,
+                Mode = EntryScanMode.Live,
+                ContinuationToken = token,
+            });
+            seen.AddRange(page.Entries);
+            token = page.ContinuationToken;
+        }
+
+        var keys = seen.Select(e => e.Key).ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(keys, Is.Unique, "live paging must not duplicate entries");
+            Assert.That(lateKeys.All(keys.Contains), Is.True,
+                "a live scan must observe writes committed after the open on later pages");
+            var originals = Enumerable.Range(0, count).Select(EntryInspectionClusterFixture.KeyAt);
+            Assert.That(originals.All(keys.Contains), Is.True, "every original key must still be returned");
+        });
+    }
+
+    [Test]
+    public async Task ScanEntries_live_mode_pages_all_entries_in_key_order()
+    {
+        const int count = 50;
+        await _fixture.CreatePopulatedTreeAsync("scan-live-order", keyCount: count, shardCount: 3);
+
+        var entries = await DrainAsync(new EntryScanRequest
+        {
+            TreeId = "scan-live-order",
+            PageSize = 7,
+            Mode = EntryScanMode.Live,
+        });
+
+        var keys = entries.Select(e => e.Key).ToArray();
+        var expected = Enumerable.Range(0, count).Select(EntryInspectionClusterFixture.KeyAt).ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(keys, Is.EqualTo(expected), "a live scan of a quiescent tree returns every key in order");
+            Assert.That(keys, Is.Unique);
+        });
+    }
+
+    [Test]
+    public async Task ScanEntries_live_point_in_time_mode_pages_all_entries_in_key_order()
+    {
+        const int count = 50;
+        await _fixture.CreatePopulatedTreeAsync("scan-live-pit", keyCount: count, shardCount: 3);
+
+        var entries = await DrainAsync(new EntryScanRequest
+        {
+            TreeId = "scan-live-pit",
+            PageSize = 7,
+            Mode = EntryScanMode.LivePointInTime,
+        });
+
+        var keys = entries.Select(e => e.Key).ToArray();
+        var expected = Enumerable.Range(0, count).Select(EntryInspectionClusterFixture.KeyAt).ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(keys, Is.EqualTo(expected), "a point-in-time live scan returns every key in order");
+            Assert.That(keys, Is.Unique);
+        });
+    }
+
+    [Test]
+    public async Task ScanEntries_live_mode_pushes_predicate_down()
+    {
+        var tree = await _fixture.RegisterTreeAsync("scan-live-predicate", shardCount: 2);
+        for (var age = 0; age < 40; age++)
+        {
+            await tree.SetAsync($"person-{age:D3}", Encoding.UTF8.GetBytes($"{{\"Age\":{age}}}"));
+        }
+
+        var predicate = LatticePredicateTranslator.Translate<ScanPerson>(p => p.Age >= 18);
+        var entries = await DrainAsync(new EntryScanRequest
+        {
+            TreeId = "scan-live-predicate",
+            PageSize = 8,
+            Mode = EntryScanMode.Live,
+            Predicate = predicate,
+        });
+
+        Assert.That(entries, Has.Count.EqualTo(22),
+            "the live cursor honours the pushed-down predicate just like the snapshot cursor");
+    }
+
+    [Test]
+    public async Task ScanEntries_default_mode_is_snapshot_isolated_under_concurrent_writes()
+    {
+        // The default (unset) mode must keep the released snapshot semantics: a
+        // write committed after the open is invisible to later pages.
+        const int count = 40;
+        var tree = await _fixture.CreatePopulatedTreeAsync("scan-default-snapshot", keyCount: count, shardCount: 3);
+
+        var first = await _fixture.Query.ScanEntriesAsync(new EntryScanRequest { TreeId = "scan-default-snapshot", PageSize = 5 });
+        Assert.That(first.ContinuationToken, Is.Not.Null);
+
+        await tree.SetAsync("key-90000", EntryInspectionClusterFixture.Utf8("late"));
+
+        var seen = new List<EntryRecord>(first.Entries);
+        var token = first.ContinuationToken;
+        while (token is not null)
+        {
+            var page = await _fixture.Query.ScanEntriesAsync(new EntryScanRequest
+            {
+                TreeId = "scan-default-snapshot",
+                PageSize = 5,
+                ContinuationToken = token,
+            });
+            seen.AddRange(page.Entries);
+            token = page.ContinuationToken;
+        }
+
+        var keys = seen.Select(e => e.Key).ToArray();
+        Assert.That(keys, Does.Not.Contain("key-90000"),
+            "the default scan mode stays snapshot-isolated: a post-open write must not appear");
+    }
+
+    [Test]
     public async Task ScanEntries_pushes_predicate_down_so_only_matching_entries_return()
     {
         var tree = await _fixture.RegisterTreeAsync("scan-predicate", shardCount: 2);

@@ -1,12 +1,14 @@
 namespace Orleans.Lattice.Explorer.Core.Data;
 
+using Orleans.Lattice.Api.State;
+
 /// <summary>
-/// Forward-only-safe pager over the Data tab's snapshot scan. The state-API
-/// snapshot cursor is forward-only: every page's continuation token names the
-/// <em>same</em> server cursor, which advances by one page on each call and is
-/// closed once drained. Replaying a token for a page that has already been read
-/// therefore either skips ahead silently or, once the cursor is closed, makes
-/// the server reject the call with <c>InvalidArgument</c>.
+/// Forward-only-safe pager over the Data tab's scan. The state-API cursor is
+/// forward-only: every page's continuation token names the <em>same</em> server
+/// cursor, which advances by one page on each call and is closed once drained.
+/// Replaying a token for a page that has already been read therefore either
+/// skips ahead silently or, once the cursor is closed, makes the server reject
+/// the call with <c>InvalidArgument</c>.
 /// <para>
 /// To support backward navigation without ever replaying a token, this pager
 /// caches the contents of every page it has visited and only calls
@@ -39,6 +41,9 @@ public sealed class DataPager(IDataReader reader)
     /// <summary>The key prefix the current snapshot was opened with, if any.</summary>
     public string? KeyPrefix { get; private set; }
 
+    /// <summary>The cursor isolation the current scan was opened with.</summary>
+    public EntryScanMode ScanMode { get; private set; } = EntryScanMode.Live;
+
     /// <summary>The zero-based index of the page currently in view.</summary>
     public int PageIndex { get; private set; }
 
@@ -55,18 +60,20 @@ public sealed class DataPager(IDataReader reader)
     public bool CanGoNext => _pages.Count > 0 && (PageIndex < _pages.Count - 1 || Current.HasMore);
 
     /// <summary>
-    /// Opens a fresh point-in-time snapshot from the first page, discarding any
-    /// previously cached pages. On failure the previously cached pages are left
-    /// untouched so the caller can surface the error and retry. When the prior
-    /// snapshot still had an open cursor, it is released best-effort after the
-    /// new snapshot opens so its server-side WAL pin and baseline are freed
-    /// promptly rather than lingering until the idle TTL.
+    /// Opens a fresh scan under <paramref name="mode"/> from the first page,
+    /// discarding any previously cached pages. On failure the previously cached
+    /// pages are left untouched so the caller can surface the error and retry.
+    /// When the prior scan still had an open cursor, it is released best-effort
+    /// after the new scan opens so its server-side cursor (and, for a snapshot
+    /// scan, its WAL pin and baseline) is freed promptly rather than lingering
+    /// until the idle TTL.
     /// </summary>
     public async Task ResetAsync(
         string treeId,
         int pageSize,
         TagFilter? tagFilter = null,
         string? keyPrefix = null,
+        EntryScanMode mode = EntryScanMode.Live,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
@@ -76,12 +83,13 @@ public sealed class DataPager(IDataReader reader)
         var oldTreeId = TreeId;
         var oldContinuation = _liveContinuation;
 
-        var page = await _reader.ScanAsync(treeId, pageSize, null, tagFilter, keyPrefix, cancellationToken).ConfigureAwait(false);
+        var page = await _reader.ScanAsync(treeId, pageSize, null, tagFilter, keyPrefix, mode, cancellationToken).ConfigureAwait(false);
 
         TreeId = treeId;
         PageSize = pageSize;
         TagFilter = tagFilter;
         KeyPrefix = keyPrefix;
+        ScanMode = mode;
         _pages.Clear();
         _pages.Add(page);
         PageIndex = 0;
@@ -115,7 +123,7 @@ public sealed class DataPager(IDataReader reader)
             return;
         }
 
-        var page = await _reader.ScanAsync(TreeId!, PageSize, token, TagFilter, KeyPrefix, cancellationToken).ConfigureAwait(false);
+        var page = await _reader.ScanAsync(TreeId!, PageSize, token, TagFilter, KeyPrefix, ScanMode, cancellationToken).ConfigureAwait(false);
         _pages.Add(page);
         PageIndex = _pages.Count - 1;
 

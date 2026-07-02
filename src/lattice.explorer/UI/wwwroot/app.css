@@ -1071,6 +1071,43 @@ code, .explorer-mono {
     margin-left: auto;
 }
 
+.explorer-data-scanmode {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    cursor: pointer;
+}
+
+.explorer-data-scanmode input {
+    cursor: pointer;
+}
+
+.explorer-data-infoicon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 0.65rem;
+    font-style: italic;
+    font-weight: 700;
+    line-height: 1;
+    cursor: help;
+    user-select: none;
+}
+
+.explorer-data-infoicon:hover,
+.explorer-data-infoicon:focus {
+    color: var(--text);
+    border-color: var(--text-muted);
+    outline: none;
+}
+
 .explorer-data-pagenum {
     font-size: 0.8rem;
     color: var(--text-muted);

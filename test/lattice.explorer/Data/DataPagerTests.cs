@@ -1,3 +1,4 @@
+using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Explorer.Core.Data;
 
 namespace Orleans.Lattice.Explorer.Tests.Data;
@@ -20,6 +21,37 @@ public class DataPagerTests
             Assert.That(pager.CanGoPrevious, Is.False);
             Assert.That(pager.CanGoNext, Is.True);
             Assert.That(reader.ScanCalls, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task ResetAsync_DefaultsToLiveMode()
+    {
+        var reader = new ForwardOnlyCursorReader(pageCount: 3);
+        var pager = new DataPager(reader);
+
+        await pager.ResetAsync("tree-1", pageSize: 1);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pager.ScanMode, Is.EqualTo(EntryScanMode.Live));
+            Assert.That(reader.LastScanMode, Is.EqualTo(EntryScanMode.Live));
+        });
+    }
+
+    [Test]
+    public async Task ResetAsync_PropagatesSnapshotModeToReaderAcrossPages()
+    {
+        var reader = new ForwardOnlyCursorReader(pageCount: 3);
+        var pager = new DataPager(reader);
+
+        await pager.ResetAsync("tree-1", pageSize: 1, mode: EntryScanMode.Snapshot);
+        await pager.NextAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pager.ScanMode, Is.EqualTo(EntryScanMode.Snapshot));
+            Assert.That(reader.LastScanMode, Is.EqualTo(EntryScanMode.Snapshot));
         });
     }
 
@@ -209,15 +241,19 @@ public class DataPagerTests
 
         public bool FailNextScan { get; set; }
 
+        public EntryScanMode LastScanMode { get; private set; } = EntryScanMode.Live;
+
         public Task<DataPage> ScanAsync(
             string treeId,
             int pageSize,
             string? continuationToken = null,
             TagFilter? tagFilter = null,
             string? keyPrefix = null,
+            EntryScanMode mode = EntryScanMode.Live,
             CancellationToken cancellationToken = default)
         {
             ScanCalls++;
+            LastScanMode = mode;
 
             if (FailNextScan)
             {

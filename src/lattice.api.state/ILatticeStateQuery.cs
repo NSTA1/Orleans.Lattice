@@ -144,16 +144,21 @@ internal interface ILatticeStateQuery
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Scans the actual entries of a tree as a snapshot-isolated, key-ordered,
-    /// paged read, optionally scoped to a key range and filtered by a
-    /// server-side predicate. The first call (no
-    /// <see cref="EntryScanRequest.ContinuationToken"/>) opens a point-in-time
-    /// cursor; every continuation pages against that same frozen view, so the
-    /// scan never observes a torn write and is resilient to concurrent writes,
-    /// splits, and reshards. Values are returned as size-bounded previews (the
-    /// full length is always reported) so whole values do not cross the wire
-    /// unnecessarily. Tombstoned and TTL-expired entries are excluded from the
-    /// live scan rather than surfaced as live.
+    /// Scans the actual entries of a tree as a key-ordered, paged read,
+    /// optionally scoped to a key range and filtered by a server-side predicate.
+    /// The <see cref="EntryScanRequest.Mode"/> selects the cursor isolation for a
+    /// fresh scan (no <see cref="EntryScanRequest.ContinuationToken"/>): the
+    /// default <see cref="EntryScanMode.Snapshot"/> opens a point-in-time cursor
+    /// whose every continuation pages against the same frozen view, so the scan
+    /// never observes a torn write and is resilient to concurrent writes,
+    /// splits, and reshards, at the cost of an all-shard baseline capture at
+    /// open; <see cref="EntryScanMode.Live"/> and
+    /// <see cref="EntryScanMode.LivePointInTime"/> page a baseline-free live
+    /// cursor whose continuation is keyed on the last yielded key, so later
+    /// pages can reflect writes committed after the open. Values are returned as
+    /// size-bounded previews (the full length is always reported) so whole
+    /// values do not cross the wire unnecessarily. Tombstoned and TTL-expired
+    /// entries are excluded from the scan rather than surfaced as live.
     /// </summary>
     /// <param name="request">Scope, paging, preview budget, and optional predicate.</param>
     /// <param name="cancellationToken">Cancellation token.</param>

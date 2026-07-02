@@ -27,6 +27,28 @@ public class DataReaderTests
     }
 
     [Test]
+    public async Task ScanAsync_DefaultsToLiveMode()
+    {
+        var client = new FakeEntryStateClient();
+        var reader = new DataReader(client);
+
+        await reader.ScanAsync("tree-1", pageSize: 40);
+
+        Assert.That(client.LastScan!.Mode, Is.EqualTo(EntryScanMode.Live));
+    }
+
+    [Test]
+    public async Task ScanAsync_PassesSnapshotMode()
+    {
+        var client = new FakeEntryStateClient();
+        var reader = new DataReader(client);
+
+        await reader.ScanAsync("tree-1", pageSize: 40, mode: EntryScanMode.Snapshot);
+
+        Assert.That(client.LastScan!.Mode, Is.EqualTo(EntryScanMode.Snapshot));
+    }
+
+    [Test]
     public async Task ScanAsync_PassesContinuationToken()
     {
         var client = new FakeEntryStateClient();

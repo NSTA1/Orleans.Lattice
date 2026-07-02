@@ -1,3 +1,4 @@
+@using Orleans.Lattice.Api.State
 @using Orleans.Lattice.Explorer.Core.Connection
 @using Orleans.Lattice.Explorer.Core.Data
 @inherits DetailTabBase
@@ -5,7 +6,6 @@
 @inject IUiSessionStore SessionStore
 @inject IUiPreferenceStore Preferences
 @inject IServiceProvider Services
-@inject IExplorerSelection ExplorerSelection
 
 @if (Selection.IsHistory)
 {
@@ -15,32 +15,7 @@
        per-entry History instead, and skip the value scan and live follow loop
        entirely for this selection (see OnInitializedAsync). *@
     <div class="explorer-data explorer-data-history-guidance">
-        <div class="explorer-data-state explorer-data-guidance">
-            <p class="explorer-data-guidance-title">This is a change-history view.</p>
-            <p class="explorer-data-guidance-body">
-                Its rows are serialized history records that back the
-                <strong>History</strong> timeline, not directly inspectable value
-                data. Inspect its timeline from its source table
-                @if (Selection.SourceTreeId is { Length: > 0 } named)
-                {
-                    <code>@named</code>
-                }
-                else
-                {
-                    <span>(unknown)</span>
-                }:
-                select the source table, open a key in its <strong>Data</strong>
-                tab, then choose <strong>History</strong>.
-            </p>
-            @if (Selection.SourceTreeId is { Length: > 0 } sourceTreeId)
-            {
-                <button type="button"
-                        class="explorer-btn explorer-data-guidance-action"
-                        @onclick="@(() => GoToSourceTree(sourceTreeId))">
-                    Go to source table @sourceTreeId
-                </button>
-            }
-        </div>
+        <HistoryViewGuidance Selection="Selection" />
     </div>
 }
 else
@@ -58,6 +33,14 @@ else
                     <option value="@size" selected="@(size == _pageSize)">@size</option>
                 }
             </select>
+        </label>
+        <label class="explorer-data-scanmode">
+            <input type="checkbox" disabled="@_loading"
+                   checked="@(_scanMode == EntryScanMode.Snapshot)" @onchange="OnScanModeChangedAsync" />
+            Consistent snapshot
+            <span class="explorer-data-infoicon" tabindex="0" role="img"
+                  aria-label="Consistent snapshot scan mode explanation"
+                  title="Off (default): a live scan reads current data cheaply, so entries written after you start paging can appear on later pages. On: a consistent snapshot freezes the table at the moment you open the scan, so every page reflects one instant - at the cost of a heavier per-shard capture that can be shed while the table is very busy.">i</span>
         </label>
         <div class="explorer-data-pager">
             <button type="button" class="explorer-btn" disabled="@(_loading || !_pager.CanGoPrevious)" @onclick="PreviousPage">Prev</button>
@@ -300,6 +283,11 @@ else
     // untagged scan; the state-API range is ignored under a tag filter.
     private string _keyPrefix = string.Empty;
 
+    // The cursor isolation for the scan. Defaults to a cheap live browse; the
+    // user can opt into a consistent point-in-time snapshot via the toolbar
+    // toggle. Retained per selection as a durable preference.
+    private EntryScanMode _scanMode = EntryScanMode.Live;
+
     protected override async Task OnInitializedAsync()
     {
         // A change-history view renders the guidance panel only: there is no
@@ -367,6 +355,7 @@ else
         // Durable per-selection preferences: prior search prefix and page size.
         _keyPrefix = Preferences.GetOrDefault(SearchStateKey, string.Empty);
         _pageSize = DataPaging.Normalize(Preferences.GetOrDefault(PageSizeStateKey, DataPaging.DefaultPageSize));
+        _scanMode = Preferences.GetOrDefault(ScanModeStateKey, EntryScanMode.Live);
 
         // Capture the retained page before the first scan resets it; a fresh
         // snapshot always opens at page 0, so we replay forward to it afterwards.
@@ -482,7 +471,7 @@ else
         // A key prefix only applies to an untagged scan; the state-API range is
         // ignored under a tag filter (and the prefix box is disabled then).
         var prefix = _activeTagFilter is null && !string.IsNullOrEmpty(_keyPrefix) ? _keyPrefix : null;
-        await RunAsync(() => _pager.ResetAsync(Selection.Id, _pageSize, _activeTagFilter, prefix, TabToken));
+        await RunAsync(() => _pager.ResetAsync(Selection.Id, _pageSize, _activeTagFilter, prefix, _scanMode, TabToken));
         PersistPage();
     }
 
@@ -509,6 +498,9 @@ else
 
     // Durable-preference key for this selection's retained page size.
     private string PageSizeStateKey => $"data-pagesize:{Selection.Id}";
+
+    // Durable-preference key for this selection's retained scan isolation mode.
+    private string ScanModeStateKey => $"data-scanmode:{Selection.Id}";
 
     // Session-store key for this selection's retained current page index. Page
     // position is ephemeral (not a preference), so it stays in the session store.
@@ -567,6 +559,17 @@ else
         }
 
         // Page-size change opens a fresh snapshot from the first page.
+        await ReloadFirstPageAsync();
+    }
+
+    // The user toggled the scan isolation. Checked opts into a consistent
+    // point-in-time snapshot; unchecked is the default cheap live browse. Retain
+    // per selection as a durable preference, then open a fresh scan under the new
+    // mode from the first page.
+    private async Task OnScanModeChangedAsync(ChangeEventArgs e)
+    {
+        _scanMode = e.Value is true ? EntryScanMode.Snapshot : EntryScanMode.Live;
+        await Preferences.SetAsync(ScanModeStateKey, _scanMode, owner: Selection.Id, TabToken);
         await ReloadFirstPageAsync();
     }
 
@@ -810,20 +813,6 @@ else
     }
 
     private void ToggleHistory() => _showHistory = !_showHistory;
-
-    // Selects the history view's source table so the operator can open a key's
-    // History from that table's Data tab. This reuses the shared explorer
-    // selection: the detail panel re-mounts on the new selection while keeping
-    // the active (Data) tab, and the navigation list re-highlights by id+kind.
-    // A minimal CatalogItem (id + kind) is sufficient here because the detail
-    // tabs key only off the id; the navigation panel rehydrates the richer
-    // badge metadata from the catalog on its next list render.
-    private void GoToSourceTree(string sourceTreeId) =>
-        ExplorerSelection.Select(new CatalogItem
-        {
-            Id = sourceTreeId,
-            Kind = CatalogKind.Trees,
-        });
 
     private static string MemberElementText(DataCrdtMember member) =>
         member.ElementFormat == ValueFormat.Empty ? "(empty)" : member.ElementText;

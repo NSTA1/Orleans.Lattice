@@ -5,10 +5,13 @@ namespace Orleans.Lattice.Api.State;
 /// (<see cref="ILatticeStateQuery.ScanEntriesAsync"/>). Selects a tree and an
 /// optional key range, bounds the page size and per-entry value-preview
 /// budget, and optionally carries a server-side predicate so non-matching
-/// values never cross the wire. Paging is snapshot-isolated: the first call
-/// (no <see cref="ContinuationToken"/>) opens a point-in-time cursor and every
-/// continuation pages against that same frozen view, so a multi-page scan is
-/// resilient to concurrent writes, splits, and reshards.
+/// values never cross the wire. The <see cref="Mode"/> selects the cursor
+/// isolation: the default <see cref="EntryScanMode.Snapshot"/> opens a
+/// point-in-time cursor whose every continuation pages against the same frozen
+/// view (resilient to concurrent writes, splits, and reshards, but with an
+/// all-shard baseline capture at open); <see cref="EntryScanMode.Live"/> and
+/// <see cref="EntryScanMode.LivePointInTime"/> page against a live cursor with
+/// no baseline capture.
 /// </summary>
 [GenerateSerializer]
 [Alias(ApiStateTypeAliases.EntryScanRequest)]
@@ -42,8 +45,9 @@ public sealed record EntryScanRequest
 
     /// <summary>
     /// Opaque continuation token returned by a prior page. <see langword="null"/>
-    /// or empty opens a fresh snapshot scan; otherwise the scan resumes the
-    /// same point-in-time cursor.
+    /// or empty opens a fresh scan under <see cref="Mode"/>; otherwise the scan
+    /// resumes the same server-side cursor and <see cref="Mode"/> is ignored
+    /// (the mode was fixed when the cursor opened).
     /// </summary>
     [Id(5)] public string? ContinuationToken { get; init; }
 
@@ -82,4 +86,13 @@ public sealed record EntryScanRequest
     /// tag-filtered scan.
     /// </summary>
     [Id(9)] public string? Tag { get; init; }
+
+    /// <summary>
+    /// Selects the cursor isolation for a fresh scan (ignored on a continuation,
+    /// which resumes the mode fixed when the cursor opened). Defaults to
+    /// <see cref="EntryScanMode.Snapshot"/> for wire back-compatibility; prefer
+    /// <see cref="EntryScanMode.Live"/> for casual browsing so the open does not
+    /// fan an all-shard snapshot-baseline capture out to every shard root.
+    /// </summary>
+    [Id(10)] public EntryScanMode Mode { get; init; }
 }
