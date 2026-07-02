@@ -1,4 +1,4 @@
-# OnlineReshard
+# Online Reshard
 
 ## What it shows
 

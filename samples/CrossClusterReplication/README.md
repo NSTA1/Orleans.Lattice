@@ -1,4 +1,4 @@
-# CrossClusterReplication
+# Cross-Cluster Replication
 
 ## What it shows
 

@@ -1,4 +1,4 @@
-# MaterialisedViews
+# Materialised Views
 
 ## What it shows
 

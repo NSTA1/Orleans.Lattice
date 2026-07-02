@@ -1,4 +1,4 @@
-# SoftDeleteRecovery
+# Soft-Delete Recovery
 
 ## What it shows
 

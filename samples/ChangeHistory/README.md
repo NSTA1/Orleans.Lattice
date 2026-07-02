@@ -1,4 +1,4 @@
-# ChangeHistory
+# Change History
 
 ## What it shows
 

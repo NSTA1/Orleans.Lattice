@@ -1,4 +1,4 @@
-# SnapshotCursors
+# Snapshot Cursors
 
 ## What it shows
 

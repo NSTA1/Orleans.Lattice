@@ -1,4 +1,4 @@
-# VehicleFleetSimulator
+# Vehicle Fleet Simulator
 
 A simulated vehicle fleet that streams structured telemetry events over gRPC. Imported into this repo to drive forthcoming WAL benchmarks for `Orleans.Lattice` and `Orleans.Lattice.Replication`, and as the foundation for a future sample that bridges the simulator's event stream into a Lattice tree.
 

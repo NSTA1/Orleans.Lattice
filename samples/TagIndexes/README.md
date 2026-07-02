@@ -1,4 +1,4 @@
-# TagIndexes
+# Tag Indexes
 
 ## What it shows
 

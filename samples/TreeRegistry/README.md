@@ -1,4 +1,4 @@
-# TreeRegistry
+# Tree Registry
 
 ## What it shows
 
