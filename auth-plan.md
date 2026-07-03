@@ -149,8 +149,8 @@ sub-issue closes, applying the correct release label.
 | 11 | #1095 | Api.Data: external read-write data-plane API | done (merged; new package pair, all ops gated via public ILattice, coarse DenyAll transport gate, deny->PermissionDenied; api.data 35, grpc 55; F-166) |
 | 12 | #982 | Replication: replicate auth/membership trees | done (merged; sys-* enrolment LWW/OR-Set + system-origin apply bypass + opt-in epoch fence + drift guards; F-158) |
 | 13 | #983 | Auth: observability & audit | in_progress (sub-agent dispatched; F-159) |
-| 14 | #984 | Api.Auth: facade & model | pending |
-| 15 | #985 | Api.Auth.Grpc: gRPC binding, client, meta-auth | pending |
+| 14 | #984 | Api.Auth: facade & model | done (merged; ILatticeAuthAdmin combined admin API, every op requires Admin verdict on sys-auth-policy, Explain gate-parity, oli.* aliases; 36 tests; F-160) |
+| 15 | #985 | Api.Auth.Grpc: gRPC binding, client, meta-auth | in_progress (sub-agent dispatched; F-161) |
 | 16 | #1101 | Membership.Entra: Entra ID authenticator | done (merged; 53 focused tests) |
 | 17 | #1102 | Explorer: connect to auth-enabled State API | pending |
 | 18 | #1103 | Security hardening: full security & design review | pending |
@@ -213,6 +213,21 @@ Out of scope: #1104 (admin UI follow-up).
   new dedicated racing regression test is the authoritative guard. No longer a
   backstop for #1103.
 
+- **OC-7 (security posture, for #1102/#1103 review) - RAISED by #984 review.** The
+  Api.Auth admin facade authorizes every operation by requiring an `Admin` verdict on
+  the reserved `sys-auth-policy` tree via the shared enforcement primitive. Under the
+  RECOMMENDED `DefaultEffect=Deny` posture this is correctly bootstrap-admin-only and
+  fail-closed. BUT under `DefaultEffect=Allow` (an explicitly open cluster) a non-admin
+  would PASS the admin check, because no rule can target the reserved `sys-auth-*`
+  namespace to deny it and the open default grants it - so the admin control plane
+  inherits the cluster's open posture. Not a new hole (everything is open under Allow),
+  and not blocking (Allow is a non-recommended operator opt-out of enforcement), but an
+  admin control plane arguably warrants a stricter stance (require an explicit admin
+  grant rather than inheriting the open default). The sub-agent deliberately did NOT add
+  a bespoke stricter path (per the no-new-gated-path constraint). DECISION for security
+  review: decide whether admin mutations should require an explicit allow even under
+  DefaultEffect=Allow; if so, add a defense-in-depth check + regression test.
+
 ## Decision log
 
 - 2026-07-03: Coordination started. Baseline build green (0 warnings/errors) on
@@ -227,6 +242,18 @@ Out of scope: #1104 (admin UI follow-up).
   finalize the degrade-vs-fail decision in the #1103 security review.
 
 ## Progress log
+
+- 2026-07-03 REVIEWED + MERGED #984 (F-160, Api.Auth control facade). Verified the
+  critical admin-authorization seam: all 19 facade methods (read AND write) call
+  AuthorizeAdminAsync first (caller identity, before EnterSystemOrigin), delegating to
+  the shared LatticeAccessGateEnforcement.EnforceWholeTreeAsync requiring an Admin
+  verdict on sys-auth-policy - no new gated path. ExplainAsync reuses the real
+  ILatticeAccessGate decision (parity test). oli.* aliases <=6 chars with mirror test.
+  Coordinator touches minimal (slnx +2, core csproj +2 IVT mirroring Api.State src-IVT,
+  auth csproj +1 IVT). Coordinator-verified 36/36. RAISED OC-7 (admin facade inherits
+  open posture under DefaultEffect=Allow -> #1102/#1103 decision; not blocking).
+  CHANGELOG F-160 landed. DISPATCHED #985 (F-161, Api.Auth.Grpc binding) - depends on
+  the now-merged #984 facade. #983 (auth observability) still running in parallel.
 
 - 2026-07-03 REVIEWED + MERGED #982 (F-158) and #1095 (F-166). #982: verified the
   system-origin apply bypass in both ReplicationApplier apply paths, the zero-cost
