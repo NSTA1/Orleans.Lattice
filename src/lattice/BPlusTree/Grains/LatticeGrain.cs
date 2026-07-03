@@ -2551,6 +2551,13 @@ internal sealed partial class LatticeGrain(
         ThrowIfSystemTree();
         ThrowIfProtectedViewRead();
         cancellationToken.ThrowIfCancellationRequested();
+
+        // Hard-deny fail-closed: a per-shard count exposes the physical shard
+        // count and per-shard key distribution, which cannot be narrowed by a
+        // per-key filter without full enumeration. A denied or partially-
+        // authorized caller is refused rather than shown real (or zero-padded)
+        // counts, so no structural information leaks across the authz boundary.
+        await EnforceUniformRangeReadAsync(null, null, cancellationToken);
         try
         {
             return await CountPerShardAsyncCore(cancellationToken);

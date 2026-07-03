@@ -232,6 +232,15 @@ internal sealed partial class LatticeGrain
     }
 
     /// <summary>
+    /// Fail-closed hard-deny enforcement for a read that cannot be narrowed by a
+    /// per-key filter (a per-shard count aggregate or a content digest): a plain
+    /// deny or a partial-coverage (filtered) allow both throw; only a uniform
+    /// whole-range allow proceeds.
+    /// </summary>
+    private ValueTask EnforceUniformRangeReadAsync(string? startInclusive, string? endExclusive, CancellationToken cancellationToken) =>
+        LatticeAccessGateEnforcement.EnforceUniformRangeReadAsync(AccessGate, MembershipContext, TreeId, startInclusive, endExclusive, cancellationToken);
+
+    /// <summary>
     /// Resolves the read-path key-filter for a range scan
     /// (<see cref="LatticeOperation.RangeRead"/>) over the half-open range
     /// [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>).

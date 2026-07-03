@@ -174,6 +174,52 @@ internal static class LatticeAccessGateEnforcement
     }
 
     /// <summary>
+    /// Enforces a read that cannot be meaningfully narrowed by a per-key filter -
+    /// a per-shard count aggregate or a content digest over a range - with
+    /// <b>hard-deny</b> semantics: a plain deny <em>and</em> a partial-coverage
+    /// (filtered) allow both throw; only a uniform whole-range allow proceeds.
+    /// Refusing rather than narrowing avoids leaking structural information (the
+    /// physical shard count and per-shard key distribution, or a content-digest
+    /// oracle) about keys the caller is not authorized to read.
+    /// </summary>
+    public static async ValueTask EnforceUniformRangeReadAsync(
+        ILatticeAccessGate gate,
+        ILatticeMembershipContext? membership,
+        string treeId,
+        string? rangeStart,
+        string? rangeEnd,
+        CancellationToken cancellationToken)
+    {
+        if (LatticeAccessGateContext.IsGateBypassed || gate is NullLatticeAccessGate)
+        {
+            return;
+        }
+
+        var subject = await ResolveSubjectAsync(membership, cancellationToken);
+        var request = new LatticeAccessRequest(
+            treeId, LatticeOperation.RangeRead, subject, key: null, rangeStart, rangeEnd);
+        var decision = await gate.AuthorizeAsync(in request, cancellationToken);
+
+        if (!decision.Allowed)
+        {
+            throw Denied(treeId, LatticeOperation.RangeRead, subject, decision.Reason);
+        }
+
+        // Partial-coverage allow: a per-shard count or a content digest cannot be
+        // narrowed to an authorized key subset without leaking structure, so a
+        // filtered allow is refused rather than narrowed (fail-closed).
+        if (decision.KeyFilter is not null)
+        {
+            throw new LatticeAuthorizationDeniedException(
+                treeId,
+                LatticeOperation.RangeRead,
+                subject.SubjectId,
+                decision.Reason ?? "Read is not fully authorized over the requested range; "
+                    + "a per-shard count or content digest cannot be narrowed per key and is refused.");
+        }
+    }
+
+    /// <summary>
     /// Resolves the read-path key-filter for a <see cref="LatticeOperation.RangeRead"/>
     /// over the half-open range, fail-closed. Returns <c>null</c> when no per-key
     /// filtering is required (a plain allow, the default null gate, or a
