@@ -61,6 +61,12 @@ public static class LatticeStateApiGrpcServiceCollectionExtensions
         // the host registered first; the fallback keeps the surface closed.
         services.TryAddSingleton<ILatticeStateApiAuthorizer, DenyAllStateApiAuthorizer>();
 
+        // Identity bridge: lifts the inbound gRPC credential header into the
+        // ambient Lattice credential so auth-backed read visibility can resolve
+        // the caller's subject. TryAdd preserves a host-supplied bridge (for a
+        // bespoke identity source such as a client certificate).
+        services.TryAddSingleton<ILatticeStateApiCredentialBridge, HeaderLatticeStateApiCredentialBridge>();
+
         // Register the auth interceptor globally; it scopes enforcement to the
         // state-API service by service-name prefix so unrelated gRPC services
         // on the same host are unaffected.

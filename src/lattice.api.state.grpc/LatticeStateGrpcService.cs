@@ -146,6 +146,7 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
     private readonly ILatticeStateQuery _query;
     private readonly ILatticeStateObserver _observer;
     private readonly ILatticeStateMetricsObserver _metricsObserver;
+    private readonly ILatticeStateApiCredentialBridge _credentialBridge;
     private readonly ILogger<LatticeStateGrpcService> _logger;
 
     /// <summary>
@@ -162,18 +163,36 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
         ILatticeStateQuery query,
         ILatticeStateObserver observer,
         ILatticeStateMetricsObserver metricsObserver,
+        ILatticeStateApiCredentialBridge credentialBridge,
         ILogger<LatticeStateGrpcService> logger)
     {
         ArgumentNullException.ThrowIfNull(methods);
         ArgumentNullException.ThrowIfNull(query);
         ArgumentNullException.ThrowIfNull(observer);
         ArgumentNullException.ThrowIfNull(metricsObserver);
+        ArgumentNullException.ThrowIfNull(credentialBridge);
         ArgumentNullException.ThrowIfNull(logger);
 
         _query = query;
         _observer = observer;
         _metricsObserver = metricsObserver;
+        _credentialBridge = credentialBridge;
         _logger = logger;
+    }
+
+    /// <summary>
+    /// Bridges the caller identity on <paramref name="context"/> into the ambient
+    /// <see cref="LatticeCredentialContext"/> for the duration of the returned
+    /// scope, so the gated data-plane surface resolves the caller's subject and
+    /// filters the read. Returns <see langword="null"/> (no scope) when the call
+    /// carries no credential, leaving the caller anonymous - fail-closed when
+    /// auth-backed visibility is active. This is orthogonal to, and runs after,
+    /// the transport-level <see cref="ILatticeStateApiAuthorizer"/> gate.
+    /// </summary>
+    private IDisposable? StampCallerCredential(ServerCallContext context)
+    {
+        var credential = _credentialBridge.Resolve(context);
+        return credential is null ? null : LatticeCredentialContext.With(credential);
     }
 
     /// <inheritdoc />
@@ -305,6 +324,8 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
         ArgumentNullException.ThrowIfNull(responseStream);
         ArgumentNullException.ThrowIfNull(context);
 
+        using var credentialScope = StampCallerCredential(context);
+
         try
         {
             await foreach (var notification in _observer
@@ -351,6 +372,8 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
         ArgumentNullException.ThrowIfNull(responseStream);
         ArgumentNullException.ThrowIfNull(context);
 
+        using var credentialScope = StampCallerCredential(context);
+
         try
         {
             await foreach (var snapshot in _metricsObserver
@@ -384,6 +407,8 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(context);
+
+        using var credentialScope = StampCallerCredential(context);
 
         try
         {
@@ -419,6 +444,8 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(context);
+
+        using var credentialScope = StampCallerCredential(context);
 
         try
         {
