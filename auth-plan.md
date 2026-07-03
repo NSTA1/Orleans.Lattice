@@ -257,6 +257,41 @@ Out of scope: #1104 (admin UI follow-up).
 
 ## Progress log
 
+- 2026-07-03 #1103 SECURITY REVIEW findings (security-review agent, read-only). 4 findings +
+  clean conclusions. Dependency CVE scan (coordinator): all 39 projects CLEAN (item 12).
+  FINDINGS to fix + regression-test in #1103 remediation:
+  * A1 (HIGH, = OC-5 CONFIRMED): State-API view-read bypasses per-caller read authz.
+    LatticeStateQuery.IsTreeReadHiddenAsync short-circuits on IsReservedTree so view-* trees
+    are treated unconditionally readable; ViewReadContext scope then sets IsGateBypassed=true,
+    so entry reads skip the gate and are NOT gated by the view's SOURCE tree readability
+    (ListViewsAsync DOES filter by CanReadTreeAsync(SourceTreeId) - entry paths omit it). Fix:
+    enforce CanReadTreeAsync(sourceTreeId) + deny-anonymous before opening ViewReadContext.
+  * A2 (HIGH, = OC-7 CONFIRMED): admin control-plane inherits DefaultEffect=Allow. No rule can
+    scope the reserved sys-auth-* namespace, so under DefaultEffect=Allow FromMatch returns
+    Allow() for the unmatched admin check -> anonymous caller can rewrite policy/membership
+    (control-plane takeover). Fix: reserved sys-auth-* namespace unmatched -> Deny regardless
+    of DefaultEffect (only bootstrap admin passes); defense-in-depth over validator rejection.
+  * A3 (MEDIUM): Explorer GrpcLatticeStateClient sets UnsafeUseInsecureChannelCallCredentials
+    whenever a credential provider is present, NOT gated on scheme (replication transports gate
+    it on plaintext+opt-in only). Fix: set flag only for http + AllowUnencryptedHttp2; https
+    keeps gRPC's insecure-channel refusal as a fail-safe. (Refines the #1102 h2c deviation.)
+  * A4 (MEDIUM): internal ShardRootGrain/BPlusLeafGrain (ApplyCrdtDeltaAsync/BulkLoad*/leaf
+    mutations) do no gate enforcement - a direct in-cluster Orleans grain call bypasses policy
+    (bounded by the Orleans clustering trust boundary; the external gRPC APIs correctly funnel
+    through LatticeGrain). Fix: internal-origin assertion on shard/leaf entry points + test.
+  CLEAN: OC-3 (Entra resolver failure fails CLOSED - propagates/denies, overage only ever
+  yields FEWER groups) -> OC-3 CLOSED. System-origin (ol.sysorig) + credential context NOT
+  injectable via external gRPC (services never copy inbound metadata into RequestContext);
+  in-cluster Orleans client can set RequestContext = same boundary as A4. JWT strict (alg:none
+  rejected; issuer/audience/lifetime on), Entra issuer strict (no wildcard tenant), resolution
+  cache honours token expiry, replication secret constant-time + default-deny, transport
+  meta-authorizers default-deny, range/whole-tree/point enforcement fail-closed - all SOUND.
+  Unverified (feed adversarial suite / my own checks): PolicyEpoch monotonicity + revoke
+  convergence e2e; audit cannot-be-silently-disabled; rule-injection via crafted keys/prefixes;
+  GetTreeStructure/metrics side channels. NEXT: dispatch Feature Dev to fix A1-A4 + regression
+  test each + adversarial/negative-path suite + RequestContext capability-key-stripping
+  IIncomingGrainCallFilter + security-posture docs page.
+
 - 2026-07-03 REVIEWED + MERGED #1102 (F-164, Explorer auth). Verified myself: (a)
   ExplorerAccessTokenSource single-flight (SemaphoreSlim + generation counter, racing
   caller adopts the winner), proactive refresh via injected TimeProvider margin, revoke
