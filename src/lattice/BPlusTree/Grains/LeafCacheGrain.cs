@@ -35,7 +35,7 @@ internal sealed class LeafCacheGrain(
     ILatticeOriginClusterIdResolver originClusterIdResolver) : ILeafCacheGrain
 #pragma warning restore CS9113
 {
-    private readonly Dictionary<string, LwwValue<byte[]>> _cache = new(StringComparer.Ordinal);
+    private readonly LeafPayloadCache _cache = new();
 
 #if LATTICE_DIAG
     /// <summary>
@@ -206,20 +206,36 @@ internal sealed class LeafCacheGrain(
         // window can observe a split snapshot: the cache serves the
         // pre-saga value from _cache while a sibling cache (whose leaf
         // already saw the saga's terminal) serves the post-saga value.
-        var hasCached = _cache.TryGetValue(key, out var cached)
+        var found = _cache.TryPeek(key, out var cached);
+        var live = found
             && !cached.IsTombstone
             && !cached.IsExpired(DateTimeOffset.UtcNow.Ticks);
-        if (_pendingKeys.Contains(key) || (hasCached && cached.IsMigrated))
+
+        // Payload-evicted sentinel: the row's metadata is retained but its
+        // value payload was reclaimed by the LRU budget. Value is null while
+        // IsTombstone is false - a shape LwwValue.Create can never produce -
+        // so this is an unambiguous "delegate to the leaf for the authoritative
+        // payload" signal, reusing the same leaf RPC path as pending / migrated
+        // keys. Without this branch the read below would return the null
+        // payload as a false miss.
+        var payloadEvicted = live && cached.Value is null;
+        if (_pendingKeys.Contains(key) || (live && cached.IsMigrated) || payloadEvicted)
         {
 #if LATTICE_DIAG
-            DiagSink.Write($"[DIAG cache-delegate-get] silo={DiagSiloTag} cache-gid={context.GrainId} primary={PrimaryLeafId} key={key} reason={(_pendingKeys.Contains(key) ? "pending" : "migrated")}");
+            DiagSink.Write($"[DIAG cache-delegate-get] silo={DiagSiloTag} cache-gid={context.GrainId} primary={PrimaryLeafId} key={key} reason={(_pendingKeys.Contains(key) ? "pending" : cached.IsMigrated ? "migrated" : "evicted")}");
 #endif
+            // A pure payload-eviction miss (not pending, not migrated) is a
+            // capacity-driven miss - record it so the eviction budget's cost
+            // is visible on the existing cache-miss instrument.
+            if (payloadEvicted && !_pendingKeys.Contains(key) && !cached.IsMigrated)
+                LatticeMetrics.CacheMisses.Add(1, CacheTreeTag());
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(PrimaryLeafId);
             return await leaf.GetAsync(key);
         }
 
-        if (hasCached)
+        if (live)
         {
+            _cache.RecordHit(key);
             LatticeMetrics.CacheHits.Add(1, CacheTreeTag());
             return cached.Value;
         }
@@ -239,7 +255,7 @@ internal sealed class LeafCacheGrain(
         // IsMigrated=true entries must delegate so the leaf's shadow
         // guard runs against the per-tree TxRegistry).
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
-        var hasCached = _cache.TryGetValue(key, out var cached)
+        var hasCached = _cache.TryPeek(key, out var cached)
             && !cached.IsTombstone
             && !cached.IsExpired(nowTicks);
         if (_pendingKeys.Contains(key) || (hasCached && cached.IsMigrated))
@@ -248,6 +264,11 @@ internal sealed class LeafCacheGrain(
             return await leaf.ExistsAsync(key);
         }
 
+        // Existence is answerable from the retained metadata envelope alone, so
+        // a payload-evicted entry (Value == null, not a tombstone) still counts
+        // as a live hit here without a leaf RPC - only value reads pay the
+        // eviction delegation cost.
+        if (hasCached) _cache.RecordHit(key);
         (hasCached ? LatticeMetrics.CacheHits : LatticeMetrics.CacheMisses).Add(1, CacheTreeTag());
         return hasCached;
     }
@@ -287,12 +308,29 @@ internal sealed class LeafCacheGrain(
         foreach (var key in keys)
         {
             var pending = _pendingKeys.Contains(key);
-            var migrated = !pending
-                && _cache.TryGetValue(key, out var probe)
+            bool mustDelegate;
+            if (pending)
+            {
+                mustDelegate = true;
+            }
+            else if (_cache.TryPeek(key, out var probe)
                 && !probe.IsTombstone
-                && !probe.IsExpired(nowTicks)
-                && probe.IsMigrated;
-            if (pending || migrated)
+                && !probe.IsExpired(nowTicks))
+            {
+                // Delegate a live entry when it is a cross-shard migration
+                // import (shadow-guard must run on the leaf) OR its payload was
+                // evicted by the LRU budget (Value == null; the leaf holds the
+                // authoritative payload). A value read cannot be served from the
+                // retained metadata alone, so payload eviction forces the same
+                // delegation as migration.
+                mustDelegate = probe.IsMigrated || probe.Value is null;
+            }
+            else
+            {
+                mustDelegate = false;
+            }
+
+            if (mustDelegate)
             {
                 delegated ??= new List<string>();
                 delegatedSet ??= new HashSet<string>();
@@ -331,9 +369,13 @@ internal sealed class LeafCacheGrain(
             }
 
             cacheLookups++;
-            if (_cache.TryGetValue(key, out var cached) && !cached.IsTombstone
+            if (_cache.TryPeek(key, out var cached) && !cached.IsTombstone
                 && !cached.IsExpired(nowTicks))
             {
+                // Non-delegated live entries always carry a resident payload -
+                // payload-evicted keys were routed to the delegation partition
+                // above - so cached.Value is non-null here.
+                _cache.RecordHit(key);
                 if (predicate is not null && !LatticePredicateEvaluator.Matches(cached.Value, predicate.Value))
                 {
                     hits++;
@@ -588,16 +630,23 @@ internal sealed class LeafCacheGrain(
             return;
         }
 
+        // Apply the per-activation payload budget before merging new entries.
+        // Re-read from options each refresh so a live reconfiguration takes
+        // effect; a null budget (the default) leaves the mirror unbounded and
+        // the store keeps its zero-overhead path. Eviction runs inside
+        // LeafPayloadCache.Set as entries are merged below.
+        _cache.SetBudget(optionsMonitor.Get(_treeId ?? string.Empty).MaxCacheValueBytes ?? 0);
+
         // Merge each entry using LWW semantics.
         foreach (var (key, lww) in delta.Entries)
         {
-            if (_cache.TryGetValue(key, out var existing))
+            if (_cache.TryPeek(key, out var existing))
             {
-                _cache[key] = LwwValue<byte[]>.Merge(existing, lww);
+                _cache.Set(key, LwwValue<byte[]>.Merge(existing, lww));
             }
             else
             {
-                _cache[key] = lww;
+                _cache.Set(key, lww);
             }
         }
 
@@ -617,5 +666,30 @@ internal sealed class LeafCacheGrain(
             _treeId = await primaryLeaf.GetTreeIdAsync() ?? string.Empty;
         }
         return optionsMonitor.Get(_treeId).CacheTtl;
+    }
+
+    /// <summary>
+    /// Diagnostic-only footprint snapshot of the live read-through cache
+    /// mirror. This is <em>not</em> part of any grain interface or wire
+    /// contract - it is an internal seam consumed only by the
+    /// <c>Bench.LeafCacheGrowth</c> probe (and its unit test) to measure the
+    /// unbounded cache's per-activation memory cost as a function of entry
+    /// count and value size, and by the future regression test that pins the
+    /// per-activation budget so a refactor cannot silently re-introduce
+    /// unbounded growth. Enumerates the cache once; O(n) in the live entry
+    /// count. The reported <see cref="LeafCacheFootprint.ValueBytes"/> sums
+    /// only the non-null <c>Value</c> payload lengths - the dominant,
+    /// unbounded memory dimension the eviction investigation targets - and
+    /// excludes the bounded per-row LWW-envelope metadata.
+    /// </summary>
+    internal LeafCacheFootprint DebugFootprint()
+    {
+        long valueBytes = 0;
+        foreach (var lww in _cache.Values)
+        {
+            if (lww.Value is { } payload)
+                valueBytes += payload.Length;
+        }
+        return new LeafCacheFootprint(_cache.Count, valueBytes);
     }
 }

@@ -102,6 +102,30 @@ public class LatticeOptionsValidatorTests
     }
 
     [Test]
+    public void MaxCacheValueBytes_null_succeeds()
+    {
+        var result = Validate(o => o.MaxCacheValueBytes = null);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [TestCase(1L)]
+    [TestCase(268435456L)]
+    public void MaxCacheValueBytes_positive_succeeds(long value)
+    {
+        var result = Validate(o => o.MaxCacheValueBytes = value);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [TestCase(0L)]
+    [TestCase(-1L)]
+    public void MaxCacheValueBytes_below_one_fails(long value)
+    {
+        var result = Validate(o => o.MaxCacheValueBytes = value);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain("MaxCacheValueBytes"));
+    }
+
+    [Test]
     public void Valid_custom_values_pass()
     {
         var result = Validate(o =>

@@ -79,6 +79,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`MaintainProjectionDigest`](#maintainprojectiondigest) | `bool` | `true` | Yes |
 | [`MaterialiserCheckpointEntries`](#materialisercheckpointentries) | `int` | 5000 | Yes |
 | [`MaterialiserCheckpointInterval`](#materialisercheckpointinterval) | `TimeSpan` | 5 seconds | Yes |
+| [`MaxCacheValueBytes`](#maxcachevaluebytes) | `long?` | `null` (unbounded mirror) | Yes |
 | [`MaxConcurrentAutoSplits`](#maxconcurrentautosplits) | `int` | 2 | Yes |
 | [`MaxConcurrentDrains`](#maxconcurrentdrains) | `int` | 4 | Yes |
 | [`MaxConcurrentMigrations`](#maxconcurrentmigrations) | `int` | 4 | Yes |
@@ -323,6 +324,24 @@ siloBuilder.ConfigureLattice("strict-tree", o => o.MaterialiserCheckpointInterva
 ```
 
 This option can be changed freely at any time.
+
+### `MaxCacheValueBytes`
+
+Optional upper bound, in bytes, on the resident **value-payload** memory a single `LeafCacheGrain` activation may hold in its read-through mirror. `null` (the default) leaves the mirror unbounded - it grows to a faithful 1:1 copy of the primary leaf's live entry set, which is the lowest-latency configuration but scales per-silo per-tree memory linearly with the touched-leaf entry count.
+
+When set to a positive value, the cache evicts **value payloads only** (never whole rows) in least-recently-used order once the sum of resident `byte[]` payload lengths would exceed the budget. The per-row metadata envelope (timestamp, delivery-sequence position, tombstone / migration flags, expiry) is always retained, so eviction cannot violate the cursor-based delta-refresh, pending-key, moved-away, or migrated-entry contracts described in [Read Caching](caching.md#value-payload-eviction). A value read that lands on an evicted payload transparently delegates to the primary leaf for the authoritative bytes (one RPC) and is counted as a cache miss; existence checks are answered from the retained metadata with no RPC; hot keys stay resident and continue to serve from memory. Only the value payload is bounded - the retained envelope metadata (tens of bytes per row) is not counted against this budget, so plan for a small fixed overhead per live key on top of the configured budget.
+
+```csharp verify
+// Cap each cache activation at 256 MiB of resident value payloads.
+siloBuilder.ConfigureLattice(o => o.MaxCacheValueBytes = 256L * 1024 * 1024);
+
+// Per-tree: leave a low-cardinality hot tree unbounded (default) but
+// bound a large cold-scan tree so a full sweep cannot pin its whole
+// value set in every silo's cache.
+siloBuilder.ConfigureLattice("cold-archive", o => o.MaxCacheValueBytes = 32L * 1024 * 1024);
+```
+
+Intended as deploy-time configuration; the budget is re-read on each cache refresh so a running silo honours option changes, but toggling it on a warm activation only bounds payloads merged after the change. A `null` budget preserves the original unbounded behaviour.
 
 ### `MaxConcurrentAutoSplits`
 

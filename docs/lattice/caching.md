@@ -54,6 +54,41 @@ flowchart LR
   slots so it stops serving the source's pre-migration snapshot once
   the destination has taken authoritative ownership.
 
+## Value-payload eviction
+
+By default the cache mirror is **unbounded**: `_cache` holds one
+`LwwValue<byte[]>` per live key on the primary leaf, so per-silo per-tree memory
+scales linearly with the touched-leaf entry count. This is the lowest-latency
+configuration - every read is served from the local dictionary - but it has no
+operator-side cap.
+
+Setting [`MaxCacheValueBytes`](configuration.md#maxcachevaluebytes) to a positive
+value bounds the resident **value-payload** bytes per activation with a
+least-recently-used policy. The policy is deliberately narrow: it evicts the
+`byte[]` **payload only**, never the row. An evicted entry is rewritten with a
+`null` value while every metadata field is retained, which is what lets the bound
+coexist with the correctness contracts above:
+
+- **Delta-refresh cursor**: the row keeps its place under the adopted delivery
+  cursor, so eviction never makes the leaf skip re-shipping the key. (Evicting
+  the whole row would leave the cursor at the leaf head with no entry to
+  re-deliver until the next write - a silent false miss. That is why only the
+  payload is dropped.)
+- **Pending-key, moved-away, migrated-entry**: the retained timestamp, tombstone
+  bit, `IsMigrated` flag, and expiry keep every delegation and pruning decision
+  intact.
+
+Because `LwwValue.Create` never stores a `null` value and empty values are
+non-null `byte[0]`, the shape `Value == null && !IsTombstone` is an unambiguous
+**payload-evicted sentinel**. A value read (`GetAsync` / `GetManyAsync`) that
+lands on the sentinel delegates to the primary leaf for the authoritative bytes -
+reusing the same delegation path as pending and migrated keys - and is recorded
+as a cache miss. An existence check (`ExistsAsync`) is answered from the retained
+metadata with no leaf RPC. A later higher-HLC write for the key re-ships the full
+value in a delta, and the merge repopulates the payload, so hot keys drift back
+into residency automatically. The net trade is bounded per-silo memory against
+one leaf RPC on the evicted fraction of value reads.
+
 ## Cache Invalidation via Tree Aliasing
 
 When a tree is **resized** (via `ResizeAsync`), the data is copied into a new physical tree with different leaf grain IDs. After the alias swap, reads route to the new physical tree's leaf grains - which have entirely different `GrainId` values. Because `LeafCacheGrain` instances are keyed by the primary leaf's `GrainId.ToString()`, the new physical tree automatically gets **fresh cache grains** with no stale data.
