@@ -41,6 +41,11 @@ internal static class TypeAliases
     // can later resolve it into a subject; the core library never reads it).
     internal const string LatticeCredential = "ol.cdl";
 
+    // Resolved caller identity produced by the Membership layer from a
+    // credential. Defined in core (not Membership) because the later
+    // access-gate seam references it and core cannot depend on Membership.
+    internal const string LatticeSubject = "ol.sub";
+
     // BPlusTree State
     internal const string ChildEntry = "ol.ce";
     internal const string InternalNodeState = "ol.ins";

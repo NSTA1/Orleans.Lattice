@@ -1,0 +1,229 @@
+using System.Security.Claims;
+using Microsoft.IdentityModel.JsonWebTokens;
+using Microsoft.IdentityModel.Tokens;
+
+namespace Orleans.Lattice.Membership;
+
+/// <summary>
+/// The built-in JWT <see cref="ILatticeCredentialAuthenticator"/>, designed as
+/// an <b>extensible base</b>: it validates issuer / audience / signing-key /
+/// lifetime and maps token claims into a <see cref="LatticePrincipal"/>, and
+/// exposes every provider-specific concern as an overridable extension point so
+/// a concrete provider authenticator (for example Microsoft Entra ID, shipped
+/// separately) is a thin subclass rather than a second token-validation
+/// implementation.
+/// <para>
+/// Extension points: <see cref="CanHandle"/> (selection), <see cref="ResolveValidationParametersAsync"/>
+/// (OIDC / JWKS metadata discovery and signing-key rotation), and
+/// <see cref="MapPrincipal"/> (subject / groups / claim mapping).
+/// </para>
+/// </summary>
+public class JwtCredentialAuthenticator : ILatticeCredentialAuthenticator
+{
+    private readonly JsonWebTokenHandler _handler = new();
+    private readonly TokenValidationParameters _staticParameters;
+
+    /// <summary>
+    /// Initializes a new <see cref="JwtCredentialAuthenticator"/> from the
+    /// supplied <paramref name="options"/>.
+    /// </summary>
+    /// <param name="options">The per-issuer configuration. Must not be <c>null</c> and must set an issuer.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="options"/> is <c>null</c>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="options"/> does not set an issuer.</exception>
+    public JwtCredentialAuthenticator(JwtAuthenticatorOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (string.IsNullOrWhiteSpace(options.Issuer))
+        {
+            throw new ArgumentException("JwtAuthenticatorOptions.Issuer must be set.", nameof(options));
+        }
+
+        Options = options;
+        _staticParameters = options.ValidationParameters ?? BuildValidationParameters(options);
+    }
+
+    /// <summary>The configuration this authenticator was built from.</summary>
+    protected JwtAuthenticatorOptions Options { get; }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Selects this authenticator when the credential's
+    /// <see cref="LatticeCredential.Scheme"/> matches the configured scheme hint
+    /// or issuer; when neither hint is present it parses the token's <c>iss</c>
+    /// claim and matches on the configured issuer. A malformed token never
+    /// matches.
+    /// </remarks>
+    public virtual bool CanHandle(in LatticeCredential credential)
+    {
+        var scheme = credential.Scheme;
+        if (!string.IsNullOrEmpty(scheme))
+        {
+            if (Options.SchemeHint is { } hint && string.Equals(scheme, hint, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (string.Equals(scheme, Options.Issuer, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            // A hint was supplied but did not match this authenticator.
+            return false;
+        }
+
+        // No hint: fall back to parsing the token issuer.
+        return TryReadIssuer(credential.Token, out var issuer)
+            && string.Equals(issuer, Options.Issuer, StringComparison.Ordinal);
+    }
+
+    /// <inheritdoc />
+    public virtual async ValueTask<LatticePrincipal?> AuthenticateAsync(LatticeCredential credential, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrEmpty(credential.Token))
+        {
+            return null;
+        }
+
+        var parameters = await ResolveValidationParametersAsync(credential, cancellationToken).ConfigureAwait(false);
+        var result = await _handler.ValidateTokenAsync(credential.Token, parameters).ConfigureAwait(false);
+        if (!result.IsValid || result.SecurityToken is not JsonWebToken token || result.ClaimsIdentity is null)
+        {
+            return null;
+        }
+
+        return MapPrincipal(token, result.ClaimsIdentity);
+    }
+
+    /// <summary>
+    /// Resolves the <see cref="TokenValidationParameters"/> to validate
+    /// <paramref name="credential"/> against. The base returns the static
+    /// parameters built from <see cref="Options"/>; override to plug in OIDC /
+    /// JWKS metadata discovery and signing-key rotation (for example returning a
+    /// parameters instance whose <see cref="TokenValidationParameters.IssuerSigningKeys"/>
+    /// come from a refreshed JWKS document).
+    /// </summary>
+    /// <param name="credential">The credential being validated.</param>
+    /// <param name="cancellationToken">Cancels any metadata fetch.</param>
+    protected virtual ValueTask<TokenValidationParameters> ResolveValidationParametersAsync(
+        LatticeCredential credential,
+        CancellationToken cancellationToken) =>
+        new(_staticParameters);
+
+    /// <summary>
+    /// Maps a validated token and its identity into a
+    /// <see cref="LatticePrincipal"/>. The base resolves the subject id from the
+    /// first present <see cref="JwtAuthenticatorOptions.SubjectClaimTypes"/>,
+    /// collects group ids from <see cref="JwtAuthenticatorOptions.GroupClaimTypes"/>,
+    /// copies the remaining claims into a flat bag, and surfaces the token
+    /// expiry. Override for provider-specific claim shapes.
+    /// </summary>
+    /// <param name="token">The validated token.</param>
+    /// <param name="identity">The claims identity produced by validation.</param>
+    protected virtual LatticePrincipal MapPrincipal(JsonWebToken token, ClaimsIdentity identity)
+    {
+        var subjectId = ResolveSubjectId(identity);
+        var groups = ResolveGroups(identity);
+        var claims = ResolveClaims(identity);
+        DateTimeOffset? expiresAt = token.ValidTo == default ? null : new DateTimeOffset(token.ValidTo, TimeSpan.Zero);
+
+        return new LatticePrincipal(subjectId, Options.Issuer, claims, groups, expiresAt);
+    }
+
+    /// <summary>Resolves the subject id from the first present subject claim, falling back to the issuer-qualified token subject.</summary>
+    /// <param name="identity">The validated claims identity.</param>
+    protected string ResolveSubjectId(ClaimsIdentity identity)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+        foreach (var claimType in Options.SubjectClaimTypes)
+        {
+            var value = identity.FindFirst(claimType)?.Value;
+            if (!string.IsNullOrEmpty(value))
+            {
+                return value;
+            }
+        }
+
+        return identity.FindFirst(ClaimTypes.NameIdentifier)?.Value
+            ?? LatticeSubject.AnonymousSubjectId;
+    }
+
+    /// <summary>Collects token-asserted group ids from the configured group claim types.</summary>
+    /// <param name="identity">The validated claims identity.</param>
+    protected IReadOnlyCollection<string>? ResolveGroups(ClaimsIdentity identity)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+        HashSet<string>? groups = null;
+        foreach (var claimType in Options.GroupClaimTypes)
+        {
+            foreach (var claim in identity.FindAll(claimType))
+            {
+                if (string.IsNullOrEmpty(claim.Value))
+                {
+                    continue;
+                }
+
+                groups ??= new HashSet<string>(StringComparer.Ordinal);
+                groups.Add(claim.Value);
+            }
+        }
+
+        return groups;
+    }
+
+    /// <summary>Copies non-group, non-subject claims into a flat, last-wins bag.</summary>
+    /// <param name="identity">The validated claims identity.</param>
+    protected IReadOnlyDictionary<string, string>? ResolveClaims(ClaimsIdentity identity)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+        Dictionary<string, string>? claims = null;
+        foreach (var claim in identity.Claims)
+        {
+            claims ??= new Dictionary<string, string>(StringComparer.Ordinal);
+            claims[claim.Type] = claim.Value;
+        }
+
+        return claims;
+    }
+
+    private static bool TryReadIssuer(string? token, out string issuer)
+    {
+        issuer = string.Empty;
+        if (string.IsNullOrEmpty(token))
+        {
+            return false;
+        }
+
+        try
+        {
+            issuer = new JsonWebToken(token).Issuer ?? string.Empty;
+            return !string.IsNullOrEmpty(issuer);
+        }
+        catch (ArgumentException)
+        {
+            // Not a well-formed JWT: this authenticator does not own it.
+            return false;
+        }
+    }
+
+    private static TokenValidationParameters BuildValidationParameters(JwtAuthenticatorOptions options)
+    {
+        var parameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidIssuer = options.Issuer,
+            ValidateAudience = options.ValidateAudience && options.Audiences.Count > 0,
+            ValidateLifetime = options.ValidateLifetime,
+            ClockSkew = options.ClockSkew,
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKeys = options.SigningKeys.ToArray(),
+        };
+
+        if (parameters.ValidateAudience)
+        {
+            parameters.ValidAudiences = options.Audiences.ToArray();
+        }
+
+        return parameters;
+    }
+}
