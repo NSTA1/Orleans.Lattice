@@ -42,13 +42,18 @@ internal sealed class LeafPayloadCache
     private readonly Dictionary<string, LwwValue<byte[]>> _entries = new(StringComparer.Ordinal);
 
     /// <summary>
-    /// LRU order, least-recently-used at the head. Only populated when a
-    /// positive budget is in force; empty (and unused) in the unbounded default.
+    /// LRU order, least-recently-used at the head. Lazily allocated the first
+    /// time a positive budget is set (see <see cref="SetBudget"/>); stays
+    /// <c>null</c> in the unbounded default so an unbounded activation pays no
+    /// LRU allocation. Non-null whenever <see cref="Bounded"/> is <c>true</c>.
     /// </summary>
-    private readonly LinkedList<string> _lru = new();
+    private LinkedList<string>? _lru;
 
-    /// <summary>Key to LRU node map for O(1) recency moves. See <see cref="_lru"/>.</summary>
-    private readonly Dictionary<string, LinkedListNode<string>> _nodes = new(StringComparer.Ordinal);
+    /// <summary>
+    /// Key to LRU node map for O(1) recency moves. Lazily allocated alongside
+    /// <see cref="_lru"/> and non-null whenever <see cref="Bounded"/> is <c>true</c>.
+    /// </summary>
+    private Dictionary<string, LinkedListNode<string>>? _nodes;
 
     /// <summary>Sum of resident (non-null, non-tombstone) payload lengths; only maintained when bounded.</summary>
     private long _residentValueBytes;
@@ -69,12 +74,13 @@ internal sealed class LeafPayloadCache
     public Dictionary<string, LwwValue<byte[]>>.ValueCollection Values => _entries.Values;
 
     /// <summary>
-    /// A snapshot of the current keys, safe to enumerate while the caller
-    /// subsequently mutates the store. The prune passes collect matching keys
-    /// into a list and remove them afterwards, so a snapshot copy avoids any
-    /// "collection modified during enumeration" hazard.
+    /// The live key set, used by the refresh prune passes. Zero-allocation
+    /// (a struct enumerator over the backing dictionary). Callers must not add
+    /// or remove keys <em>during</em> enumeration; the prune passes collect the
+    /// matching keys into a list and remove them only after the loop completes,
+    /// which is safe over the live collection.
     /// </summary>
-    public List<string> KeysSnapshot() => new(_entries.Keys);
+    public Dictionary<string, LwwValue<byte[]>>.KeyCollection Keys => _entries.Keys;
 
     /// <summary>
     /// Sets the resident-payload budget. A non-positive value disables bounding
@@ -86,6 +92,13 @@ internal sealed class LeafPayloadCache
     public void SetBudget(long maxValueBytes)
     {
         _maxValueBytes = maxValueBytes > 0 ? maxValueBytes : 0;
+        if (_maxValueBytes > 0 && _lru is null)
+        {
+            // First transition to bounded: allocate the recency structures. An
+            // activation that never bounds pays none of this.
+            _lru = new LinkedList<string>();
+            _nodes = new Dictionary<string, LinkedListNode<string>>(StringComparer.Ordinal);
+        }
     }
 
     /// <summary>
@@ -124,7 +137,7 @@ internal sealed class LeafPayloadCache
         }
         else
         {
-            _nodes[key] = _lru.AddLast(key);
+            _nodes![key] = _lru!.AddLast(key);
         }
 
         _entries[key] = value;
@@ -141,8 +154,8 @@ internal sealed class LeafPayloadCache
         if (Bounded)
         {
             _residentValueBytes -= ResidentBytes(old);
-            if (_nodes.Remove(key, out var node))
-                _lru.Remove(node);
+            if (_nodes!.Remove(key, out var node))
+                _lru!.Remove(node);
         }
         return true;
     }
@@ -151,8 +164,8 @@ internal sealed class LeafPayloadCache
     public void Clear()
     {
         _entries.Clear();
-        _lru.Clear();
-        _nodes.Clear();
+        _lru?.Clear();
+        _nodes?.Clear();
         _residentValueBytes = 0;
     }
 
@@ -161,9 +174,9 @@ internal sealed class LeafPayloadCache
 
     private void Touch(string key)
     {
-        if (_nodes.TryGetValue(key, out var node))
+        if (_nodes!.TryGetValue(key, out var node))
         {
-            if (!ReferenceEquals(node, _lru.Last))
+            if (!ReferenceEquals(node, _lru!.Last))
             {
                 _lru.Remove(node);
                 _lru.AddLast(node);
@@ -175,7 +188,7 @@ internal sealed class LeafPayloadCache
     {
         if (_residentValueBytes <= _maxValueBytes) return;
 
-        var node = _lru.First;
+        var node = _lru!.First;
         while (_residentValueBytes > _maxValueBytes && node is not null)
         {
             var next = node.Next;

@@ -546,7 +546,7 @@ internal sealed class LeafCacheGrain(
         {
             var splitKey = delta.SplitKey;
             var keysToRemove = new List<string>();
-            foreach (var key in _cache.KeysSnapshot())
+            foreach (var key in _cache.Keys)
             {
                 if (string.Compare(key, splitKey, StringComparison.Ordinal) >= 0)
                     keysToRemove.Add(key);
@@ -586,7 +586,7 @@ internal sealed class LeafCacheGrain(
             // split, exactly one virtual-slot stripe migrates per leaf,
             // so most refreshes hit this fast path.
             List<string>? keysToRemoveMoved = null;
-            foreach (var key in _cache.KeysSnapshot())
+            foreach (var key in _cache.Keys)
             {
                 var slot = ShardMap.GetVirtualSlot(key, movedVsc);
                 if (Array.BinarySearch(movedSlots, slot) >= 0)

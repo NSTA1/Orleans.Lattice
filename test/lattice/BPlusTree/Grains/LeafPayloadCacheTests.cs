@@ -225,15 +225,19 @@ public class LeafPayloadCacheTests
     }
 
     [Test]
-    public void KeysSnapshot_is_safe_to_enumerate_while_removing()
+    public void Keys_supports_the_deferred_removal_prune_pattern()
     {
         var cache = new LeafPayloadCache();
         cache.SetBudget(1000);
         for (var i = 0; i < 10; i++)
             cache.Set($"k{i}", Val("v"));
 
-        // Simulate a prune pass: enumerate the snapshot, remove from the store.
-        foreach (var key in cache.KeysSnapshot())
+        // Mirror a prune pass: enumerate the live keys, collect matches, then
+        // remove after the loop completes (never mutating during enumeration).
+        var toRemove = new List<string>();
+        foreach (var key in cache.Keys)
+            toRemove.Add(key);
+        foreach (var key in toRemove)
             cache.Remove(key);
 
         Assert.That(cache.Count, Is.EqualTo(0));
@@ -253,5 +257,26 @@ public class LeafPayloadCacheTests
         cache.Set("c", Val("cccccccccc")); // 10
 
         Assert.That(cache.ResidentValueBytes, Is.LessThanOrEqualTo(10));
+    }
+
+    [Test]
+    public void Applying_a_budget_after_unbounded_use_bounds_subsequent_writes()
+    {
+        // The LRU structures are lazily allocated: an unbounded activation
+        // holds none. Applying a budget afterwards must still evict correctly.
+        var cache = new LeafPayloadCache();
+        cache.Set("a", Val("aaaaaaaaaa")); // written while unbounded
+        cache.Set("b", Val("bbbbbbbbbb"));
+
+        cache.SetBudget(10);
+
+        // Newly-merged entries are tracked and evicted against the budget.
+        cache.Set("c", Val("cccccccccc"));
+        cache.Set("d", Val("dddddddddd"));
+
+        Assert.That(cache.ResidentValueBytes, Is.LessThanOrEqualTo(10));
+        // The rows themselves are never dropped, only their payloads.
+        Assert.That(cache.TryPeek("c", out _), Is.True);
+        Assert.That(cache.TryPeek("d", out _), Is.True);
     }
 }
