@@ -36,6 +36,11 @@ internal static class TypeAliases
     // LWW / PnCounter dedup paths).
     internal const string LatticeIdempotencyKey = "ol.idk";
 
+    // Opt-in caller-credential surface (carried on the ambient
+    // RequestContext via LatticeCredentialContext so the Membership layer
+    // can later resolve it into a subject; the core library never reads it).
+    internal const string LatticeCredential = "ol.cdl";
+
     // BPlusTree State
     internal const string ChildEntry = "ol.ce";
     internal const string InternalNodeState = "ol.ins";

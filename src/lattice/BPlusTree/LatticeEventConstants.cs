@@ -351,4 +351,17 @@ public static class LatticeEventConstants
     /// because <c>RequestContext</c> flows automatically on outgoing calls.
     /// </summary>
     internal const string ViewReadRequestContextKey = "ol.vr";
+
+    /// <summary>
+    /// Orleans <c>RequestContext</c> key used to carry the opaque caller
+    /// credential (a <see cref="LatticeCredential"/>) from the client edge
+    /// down to the silo so the Membership layer can later resolve it into a
+    /// subject. Purely a transport seam - the core library never reads it, so
+    /// an unset credential adds no cost and changes no read/write semantics. A
+    /// library-internal system-origin call carries no user credential (see the
+    /// suppression contract on <see cref="LatticeCredentialContext"/>). Public
+    /// callers set this through <see cref="LatticeCredentialContext"/>; they
+    /// should never touch this key directly.
+    /// </summary>
+    internal const string CredentialRequestContextKey = "ol.cred";
 }
