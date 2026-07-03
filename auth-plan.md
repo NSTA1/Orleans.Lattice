@@ -146,9 +146,9 @@ sub-issue closes, applying the correct release label.
 | 8 | #979 | Auth: compiled snapshot & decision engine | done (merged; 116 focused tests) |
 | 9 | #980 | Auth: enforcement wiring at LatticeGrain | done (merged; core boundary; closes OC-1/OC-2; sec-review remediated) |
 | 10 | #981 | State API: honour read-access visibility | done (merged; identity bridge + catalog scoping + change-feed gating; F-157) |
-| 11 | #1095 | Api.Data: external read-write data-plane API | in_progress (sub-agent; new package pair, gated via ILattice; F-166) |
-| 12 | #982 | Replication: replicate auth/membership trees | in_progress (sub-agent; sys-* enrolment + system-origin apply + opt-in epoch fence; F-158) |
-| 13 | #983 | Auth: observability & audit | pending |
+| 11 | #1095 | Api.Data: external read-write data-plane API | done (merged; new package pair, all ops gated via public ILattice, coarse DenyAll transport gate, deny->PermissionDenied; api.data 35, grpc 55; F-166) |
+| 12 | #982 | Replication: replicate auth/membership trees | done (merged; sys-* enrolment LWW/OR-Set + system-origin apply bypass + opt-in epoch fence + drift guards; F-158) |
+| 13 | #983 | Auth: observability & audit | in_progress (sub-agent dispatched; F-159) |
 | 14 | #984 | Api.Auth: facade & model | pending |
 | 15 | #985 | Api.Auth.Grpc: gRPC binding, client, meta-auth | pending |
 | 16 | #1101 | Membership.Entra: Entra ID authenticator | done (merged; 53 focused tests) |
@@ -227,6 +227,17 @@ Out of scope: #1104 (admin UI follow-up).
   finalize the degrade-vs-fail decision in the #1103 security review.
 
 ## Progress log
+
+- 2026-07-03 REVIEWED + MERGED #982 (F-158) and #1095 (F-166). #982: verified the
+  system-origin apply bypass in both ReplicationApplier apply paths, the zero-cost
+  opt-in PolicyEpoch fence, hardened the reserved-name mirror with drift guards
+  (auth + membership test projects). #1095: verified every op routes through the
+  gated public ILattice surface (facade + gRPC), fail-closed anonymous, deny->
+  PermissionDenied (no value leak), coarse DenyAll transport gate, minimal
+  coordinator-owned touches (IVT + docs-harness refs mirroring State API). Focused
+  suites green: replication 2521, auth 167, membership 52; api.data 35, api.data.grpc
+  55. CHANGELOG F-158 + F-166 landed. DISPATCHED #983 (F-159, auth observability &
+  audit) next in dependency order.
 
 - 2026-07-03 DISPATCHED #1095 (F-166, Api.Data external read-write data-plane) and
   #982 (F-158, replicate auth/membership sys-* trees) as PARALLEL Feature Dev
