@@ -2087,6 +2087,50 @@ public static class LatticeMetrics
         Meter.CreateHistogram<double>("orleans.lattice.split.retroactive_forward.duration", unit: "ms",
             description: "Wall-clock duration of the retroactive prepared-mutation sweep at shard-split BeginShadowWrite entry.");
 
+    // --- Autonomic split admission instruments (HotShardMonitorGrain) -------
+
+    /// <summary>
+    /// Histogram sampled once per autonomic monitor pass with the number of
+    /// splits currently in flight for that tree (derived from each shard's
+    /// authoritative <c>IsSplitting</c> status). Tagged with <see cref="TagTree"/>.
+    /// Emitted every pass <em>regardless</em> of whether the cluster-wide split
+    /// gate (<see cref="LatticeOptions.MaxClusterConcurrentAutoSplits"/>) is
+    /// enabled, so operators can compute the cluster aggregate as a
+    /// <c>sum</c> across the <c>tree</c> tag and decide whether they need the
+    /// gate and how to size it.
+    /// </summary>
+    public static readonly Histogram<long> SplitInFlight =
+        Meter.CreateHistogram<long>("orleans.lattice.split.in_flight", unit: "{split}",
+            description: "Per-tree autonomic splits in flight, sampled every monitor pass (sum across tree for the cluster total).");
+
+    /// <summary>
+    /// Counter of hot, otherwise-eligible shards that could not trigger an
+    /// autonomic split this pass because a concurrency cap (the per-tree
+    /// <see cref="LatticeOptions.MaxConcurrentAutoSplits"/> or the cluster-wide
+    /// <see cref="LatticeOptions.MaxClusterConcurrentAutoSplits"/>) was already
+    /// reached. Tagged with <see cref="TagTree"/>. Emitted regardless of whether
+    /// the cluster gate is enabled; a chronically non-zero value across many
+    /// trees signals aggregate split pressure the per-tree cap alone cannot see.
+    /// </summary>
+    public static readonly Counter<long> SplitCandidatesSuppressed =
+        Meter.CreateCounter<long>("orleans.lattice.split.candidates_suppressed", unit: "{shard}",
+            description: "Hot eligible shards that could not split this pass because a concurrency cap was reached.");
+
+    /// <summary>
+    /// Counter incremented only when the <em>cluster-wide</em> admission gate
+    /// denied an otherwise-eligible autonomic split (no permit available under
+    /// <see cref="LatticeOptions.MaxClusterConcurrentAutoSplits"/>). Tagged with
+    /// <see cref="TagTree"/> and <see cref="TagReason"/> (<c>cluster_cap</c>).
+    /// Flat-zero means the ceiling never binds; sustained non-zero alongside
+    /// rising hot-shard latency means the ceiling is set too low.
+    /// </summary>
+    public static readonly Counter<long> SplitAdmissionDeferred =
+        Meter.CreateCounter<long>("orleans.lattice.split.admission.deferred", unit: "{shard}",
+            description: "Otherwise-eligible autonomic splits held back by the cluster-wide admission gate.");
+
+    /// <summary><see cref="TagReason"/> = <c>cluster_cap</c> on <see cref="SplitAdmissionDeferred"/>.</summary>
+    public static readonly KeyValuePair<string, object?> SplitDeferredClusterCapReasonTag = new(TagReason, "cluster_cap");
+
     // --- Compaction policy instruments (TombstoneCompactionGrain) -----------
 
     /// <summary>

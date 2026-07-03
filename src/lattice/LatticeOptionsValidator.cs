@@ -32,6 +32,13 @@ internal sealed class LatticeOptionsValidator : IValidateOptions<LatticeOptions>
                 $"{nameof(LatticeOptions.MaxCacheValueBytes)} must be greater than or equal to 1 when set "
                 + "(null leaves the read-through cache mirror unbounded; a positive value caps the resident value-payload bytes per cache activation with LRU payload eviction).");
         }
+        if (options.MaxClusterConcurrentAutoSplits is { } maxClusterConcurrentAutoSplits && maxClusterConcurrentAutoSplits < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.MaxClusterConcurrentAutoSplits)} must be greater than or equal to 1 when set "
+                + "(null disables the cluster-wide split gate so each tree enforces only its own MaxConcurrentAutoSplits; "
+                + "a positive value caps the aggregate number of concurrently in-flight autonomic splits across all trees).");
+        }
         if (options.MaxLeafReplayEntries < 1)
             return ValidateOptionsResult.Fail($"{nameof(LatticeOptions.MaxLeafReplayEntries)} must be greater than or equal to 1.");
         if (options.MaterialiserCheckpointEntries < 1)

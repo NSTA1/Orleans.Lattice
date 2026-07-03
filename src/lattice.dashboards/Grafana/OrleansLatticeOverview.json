@@ -425,6 +425,44 @@
       ]
     },
     {
+      "id": 48,
+      "title": "Autonomic split admission (cluster gate)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 1000
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(orleans_lattice_split_in_flight_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}) or vector(0)",
+          "legendFormat": "in-flight (cluster)"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (tree) (rate(orleans_lattice_split_candidates_suppressed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
+          "legendFormat": "suppressed {{tree}}"
+        },
+        {
+          "refId": "C",
+          "expr": "sum by (tree) (rate(orleans_lattice_split_admission_deferred_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
+          "legendFormat": "deferred {{tree}}"
+        }
+      ]
+    },
+    {
       "id": 10,
       "title": "Coordinator completions (rate)",
       "type": "timeseries",

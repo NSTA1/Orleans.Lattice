@@ -28,6 +28,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <item><description>The shard is in the per-shard cooldown window after a recent split - that shard is skipped.</description></item>
 /// <item><description>The shard owns fewer than two virtual slots - that shard is skipped (nothing to subdivide).</description></item>
 /// <item><description><see cref="LatticeOptions.MaxConcurrentAutoSplits"/> in-flight splits already running - no further splits this tick.</description></item>
+/// <item><description><see cref="LatticeOptions.MaxClusterConcurrentAutoSplits"/> is set and the cluster-wide admission gate has no free slot (the aggregate in-flight ceiling across all trees is reached) - the affected candidates are deferred to a later tick.</description></item>
 /// </list>
 /// Key format: <c>{treeId}</c>.
 /// </summary>
@@ -42,6 +43,18 @@ internal sealed class HotShardMonitorGrain(
     IPersistentState<HotShardMonitorState> state) : IHotShardMonitorGrain, IRemindable, IGrainBase
 {
     private const string KeepaliveReminderName = "hot-shard-monitor";
+
+    /// <summary>Well-known singleton key of the cluster-wide split admission gate.</summary>
+    private const long ClusterSplitConcurrencyKey = 0;
+
+    /// <summary>
+    /// Multiple of the sampling interval used as the time-to-live for this
+    /// monitor's cluster-gate heartbeat footprint. A generous window so a single
+    /// missed sampling pass (or a brief reactivation gap) does not prematurely
+    /// expire the tree's reported in-flight footprint; a silo that stops
+    /// reporting entirely still has its share reclaimed within this window.
+    /// </summary>
+    private const int ClusterFootprintTtlSampleMultiple = 3;
 
     private string TreeId => context.GrainId.Key.ToString()!;
     private LatticeOptions Options => optionsMonitor.Get(TreeId);
@@ -244,10 +257,16 @@ internal sealed class HotShardMonitorGrain(
         for (int i = 0; i < physicalShards.Count; i++)
             if (splittingTasks[i].Result) inFlight++;
 
+        // Emit the per-tree in-flight split count every pass, regardless of
+        // whether the cluster gate is enabled, so operators can compute the
+        // cluster aggregate as a sum across the tree tag and decide whether they
+        // need MaxClusterConcurrentAutoSplits at all.
+        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId);
+        LatticeMetrics.SplitInFlight.Record(inFlight, treeTag);
+
         var maxConcurrent = options.MaxConcurrentAutoSplits;
         if (maxConcurrent < 1) maxConcurrent = 1;
-        if (inFlight >= maxConcurrent) return;
-        var slotsAvailable = maxConcurrent - inFlight;
+        var slotsAvailable = inFlight >= maxConcurrent ? 0 : maxConcurrent - inFlight;
 
         // Build the candidate list of hot, eligible shards. A shard is
         // eligible when it (a) is not already splitting, (b) is above the
@@ -255,29 +274,65 @@ internal sealed class HotShardMonitorGrain(
         // two virtual slots (otherwise there is nothing to subdivide).
         var threshold = options.HotShardOpsPerSecondThreshold;
         var candidates = new List<(double Rate, int ShardIndex)>(physicalShards.Count);
-        for (int i = 0; i < physicalShards.Count; i++)
+        if (slotsAvailable > 0)
         {
-            if (splittingTasks[i].Result) continue;
+            for (int i = 0; i < physicalShards.Count; i++)
+            {
+                if (splittingTasks[i].Result) continue;
 
-            var h = hotnessTasks[i].Result;
-            if (h.Window <= TimeSpan.Zero) continue;
-            var rate = (h.Reads + h.Writes) / h.Window.TotalSeconds;
-            if (rate < threshold) continue;
-            if (_shardCooldownUntilUtc.TryGetValue(physicalShards[i], out var until) && nowUtc < until) continue;
+                var h = hotnessTasks[i].Result;
+                if (h.Window <= TimeSpan.Zero) continue;
+                var rate = (h.Reads + h.Writes) / h.Window.TotalSeconds;
+                if (rate < threshold) continue;
+                if (_shardCooldownUntilUtc.TryGetValue(physicalShards[i], out var until) && nowUtc < until) continue;
 
-            var owned = 0;
-            foreach (var slot in map.Slots)
-                if (slot == physicalShards[i]) { owned++; if (owned > 1) break; }
-            if (owned < 2) continue;
+                var owned = 0;
+                foreach (var slot in map.Slots)
+                    if (slot == physicalShards[i]) { owned++; if (owned > 1) break; }
+                if (owned < 2) continue;
 
-            candidates.Add((rate, physicalShards[i]));
+                candidates.Add((rate, physicalShards[i]));
+            }
+
+            // Pick the top N hottest by rate (descending).
+            candidates.Sort((a, b) => b.Rate.CompareTo(a.Rate));
         }
 
-        if (candidates.Count == 0) return;
+        // How many splits this tree would start under its own per-tree cap.
+        var desiredNew = Math.Min(slotsAvailable, candidates.Count);
 
-        // Pick the top N hottest by rate (descending).
-        candidates.Sort((a, b) => b.Rate.CompareTo(a.Rate));
-        var triggerCount = Math.Min(slotsAvailable, candidates.Count);
+        // Cluster-wide admission gate (opt-in). When enabled, report this tree's
+        // authoritative in-flight count every pass - even when it wants no new
+        // splits - so other trees see this tree's drain footprint, and receive a
+        // grant of new slots against the remaining cluster headroom. When the
+        // option is null the gate grain is never consulted, so the disabled path
+        // issues no extra RPC and behaves exactly as before.
+        int triggerCount;
+        var clusterDeferred = 0;
+        if (options.MaxClusterConcurrentAutoSplits is { } clusterCap)
+        {
+            var sampleInterval = options.HotShardSampleInterval;
+            if (sampleInterval <= TimeSpan.Zero) sampleInterval = LatticeOptions.DefaultHotShardSampleInterval;
+            var gate = grainFactory.GetGrain<IClusterSplitConcurrencyGrain>(ClusterSplitConcurrencyKey);
+            var granted = await gate.AcquireSlotsAsync(
+                TreeId, inFlight, desiredNew, clusterCap, sampleInterval * ClusterFootprintTtlSampleMultiple);
+            triggerCount = granted;
+            clusterDeferred = desiredNew - granted;
+        }
+        else
+        {
+            triggerCount = desiredNew;
+        }
+
+        // Candidates the tree could not start this pass: those beyond its own
+        // per-tree cap plus any held back by the cluster gate.
+        var suppressed = (candidates.Count - desiredNew) + clusterDeferred;
+        if (suppressed > 0)
+            LatticeMetrics.SplitCandidatesSuppressed.Add(suppressed, treeTag);
+        if (clusterDeferred > 0)
+            LatticeMetrics.SplitAdmissionDeferred.Add(clusterDeferred, treeTag, LatticeMetrics.SplitDeferredClusterCapReasonTag);
+
+        if (triggerCount == 0) return;
 
         // Trigger each split via its own per-shard coordinator key. Each
         // coordinator runs independently and persists its own state, so
@@ -285,11 +340,8 @@ internal sealed class HotShardMonitorGrain(
         // monitor grain.
         var triggers = new List<Task>(triggerCount);
         for (int i = 0; i < triggerCount; i++)
-        {
-            var shardIndex = candidates[i].ShardIndex;
-            var rate = candidates[i].Rate;
-            triggers.Add(TriggerSplitAsync(shardIndex, rate, threshold, nowUtc + options.HotShardSplitCooldown));
-        }
+            triggers.Add(TriggerSplitAsync(candidates[i].ShardIndex, candidates[i].Rate, threshold, nowUtc + options.HotShardSplitCooldown));
+
         await Task.WhenAll(triggers);
     }
 

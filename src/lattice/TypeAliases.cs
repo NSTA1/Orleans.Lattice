@@ -61,6 +61,8 @@ internal static class TypeAliases
     internal const string SnapshotMode = "ol.snm";
     internal const string TreeMergeState = "ol.tms";
     internal const string HotShardMonitorState = "ol.hms";
+    internal const string ClusterSplitConcurrencyState = "ol.csc";
+    internal const string TreeSplitFootprint = "ol.tsf";
 
     // BPlusTree
     internal const string SplitResult = "ol.sr";
@@ -291,6 +293,7 @@ internal static class TypeAliases
     internal const string ILeafSnapshotStorageGrain = "ol.gsx";
     internal const string ISnapshotBaselineStorageGrain = "ol.sbs";
     internal const string ILatticeQueueGrain = "ol.glq";
+    internal const string IClusterSplitConcurrencyGrain = "ol.gcs";
 
     // Cluster-internal FIFO queue (ILatticeQueue<T>) grain wire-return shape:
     // a single parked entry's monotonic id plus its opaque serialized payload.
