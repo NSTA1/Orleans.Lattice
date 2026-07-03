@@ -138,7 +138,7 @@ sub-issue closes, applying the correct release label.
 |---|-------|---------|--------|
 | 1 | #972 | Membership: project & package scaffolding | done (merged) |
 | 2 | #973 | Core: caller-credential propagation seam | done (merged) |
-| 3 | #974 | Membership: subject model, directory & resolution | pending |
+| 3 | #974 | Membership: subject model, directory & resolution | done (merged) |
 | 4 | #975 | Auth: project & package scaffolding | done (merged) |
 | 5 | #976 | Core: access-gate enforcement point | pending |
 | 6 | #977 | Core: range-scan key-filter | pending |
@@ -165,6 +165,46 @@ Out of scope: #1104 (admin UI follow-up).
 
 ## Progress log
 
+- 2026-07-03 #974 (Membership: subject model, directory & resolution) MERGED, and
+  the FIRST FULL NON-CHAOS GATE (Membership boundary) PASSED: core 5653, Replication
+  2508, Api.State 248, Api.State.Grpc 123, Storage.AzureTable 233, Membership 51,
+  plus the rest; 0 failures (Azurite emulator suite skipped as expected). This gate
+  also validated #973 + the core identity primitives. Delivered: core `LatticeSubject`
+  (`ol.sub`) + `ILatticeMembershipContext` seam + `NullLatticeMembershipContext`
+  (Anonymous default, zero-cost when Membership unregistered); `Orleans.Lattice.Membership`
+  resolution pipeline (directory over reserved `sys-membership-*` users/groups/edges
+  trees, per-silo resolution cache with change-feed invalidation + token-expiry bound,
+  default subject mapper, extensible `JwtCredentialAuthenticator` base + anonymous
+  fallback, lazy `MembershipInitializer` enabling durable per-key history). Deleted the
+  `LatticeMembershipMarker` placeholder from #972.
+  REVIEW (3 sub-agent-flagged concerns adjudicated):
+  1. Cross-silo cache invalidation: `MembershipResolutionCache` flushes only on
+     locally-observed `sys-membership-*` mutations, so a peer silo serves a stale
+     subject until the resolution-cache TTL (default 5m) after a membership change on
+     another silo. ACCEPTED for now as consistent with the epic's ratified eventual
+     posture and bounded by the TTL + token-expiry; LOGGED for the security review
+     (#1103) to formally address cluster-wide invalidation (candidate: ride the #982
+     replication of the membership trees / a cluster broadcast) and to reconsider the
+     default TTL. Not a #974 blocker.
+  2. History-view idempotency on silo restart: `MembershipInitializer` re-invokes
+     `ILatticeViewFactory.Create` per silo boot. VERIFIED idempotent - `Create` does
+     catalog re-register (dictionary set) + durable runtime-registration upsert +
+     idempotent `EnsureActiveAsync`; safe on restart. RESOLVED, no change.
+  3. Token-asserted groups not transitively expanded: the mapper unioned token-asserted
+     / claim-projected seed groups FLAT while only the subject's directory groups were
+     expanded, so a nested policy on an ancestor group would NOT apply to a federated
+     (Entra, #1101) identity carrying only a child group in its token - an authorization
+     correctness gap that also contradicted the mapper's own documented contract.
+     REMEDIATED by the coordinator (scope was small/localized): added
+     `ILatticeMembershipDirectory.ExpandGroupsAsync(seeds)` (shared BFS with cycle
+     detection) and re-expand the merged group set through the directory closure for
+     non-`TokenOnly` merge modes, guarded so the pure-directory path keeps a single
+     directory round-trip (no perf regression). Added a regression integration test
+     (`Token_asserted_group_is_transitively_expanded_through_the_directory`). Membership
+     focused suite 51/51 green.
+  CHANGELOG: incremental Added entry under Unreleased (F-150, folding the F-148/F-149/
+  F-151 scaffold + credential-seam context). features.md index rows move Planned->Shipped
+  at the final epic PR (rule 7).
 - 2026-07-03 #975 (Auth scaffolding) MERGED (out of numeric order; independent of
   #974). Empty `Orleans.Lattice.Auth` package referencing core + Membership, slnx +
   docs skeleton, marker + trivial green test. Deferred CHANGELOG/features entry (inert
