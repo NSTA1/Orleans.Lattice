@@ -153,7 +153,7 @@ sub-issue closes, applying the correct release label.
 | 15 | #985 | Api.Auth.Grpc: gRPC binding, client, meta-auth | done (merged; LatticeAuthApiGrpcClient + DenyAll meta-authorizer + facade self-auth two-layer, deny->PermissionDenied, oli. wire aliases; grpc 89 + api.auth 36; F-161) |
 | 16 | #1101 | Membership.Entra: Entra ID authenticator | done (merged; 53 focused tests) |
 | 17 | #1102 | Explorer: connect to auth-enabled State API | done (reviewed + merged; provider seam + Entra login + transparent single-flight token refresh + retry-once + tokens-never-persisted + unauthenticated GetAuthScheme advertisement; explorer 380 / entra 17 / api.state.grpc 151 green; F-164) |
-| 18 | #1103 | Security hardening: full security & design review | pending |
+| 18 | #1103 | Security hardening: full security & design review | in_progress (security-review agent enumerating findings; then Feature Dev implements adversarial suite + IIncomingGrainCallFilter + closes OC-3/5/7; F-165) |
 | 19 | #986 | Docs, sample & end-to-end tests | pending |
 
 Out of scope: #1104 (admin UI follow-up).
