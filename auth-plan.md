@@ -141,7 +141,7 @@ sub-issue closes, applying the correct release label.
 | 3 | #974 | Membership: subject model, directory & resolution | done (merged) |
 | 4 | #975 | Auth: project & package scaffolding | done (merged) |
 | 5 | #976 | Core: access-gate enforcement point | done (merged; gate batched with #977) |
-| 6 | #977 | Core: range-scan key-filter | in_progress (sub-agent) |
+| 6 | #977 | Core: range-scan key-filter | done (merged; batched gate) |
 | 7 | #978 | Auth: authorization rule model & policy store | done (merged; gate batched with #977) |
 | 8 | #979 | Auth: compiled snapshot & decision engine | pending |
 | 9 | #980 | Auth: enforcement wiring at LatticeGrain | pending |
@@ -158,12 +158,48 @@ sub-issue closes, applying the correct release label.
 
 Out of scope: #1104 (admin UI follow-up).
 
+## Open concerns (MUST-CLOSE before final PR)
+
+- **OC-1 (security): durable-cursor read path bypasses the key-filter.** #977
+  wired the read-path key-filter into the `KeysAsync`/`EntriesAsync`/`GetMany`/
+  `Count` surfaces at the `LatticeGrain` merge yield point, but the durable
+  paged-cursor surface (`ILatticeCursorGrain`: `OpenKeyCursorAsync`/
+  `NextKeysAsync` and the entry/snapshot variants) runs in a SEPARATE grain
+  activation and does NOT funnel through `KeysAsyncCore`, so it is currently an
+  unfiltered read surface. A `Func<string,bool>` cannot be serialized across the
+  `OpenAsync` boundary, so closing this requires the cursor grain to resolve its
+  OWN gate + subject (subject flows via `RequestContext`) and apply the filter at
+  its page-emit point. ACTION: fold explicitly into #980's enforcement scope (the
+  #980 sub-agent contract MUST name this path); #1103 security review is the
+  backstop. Do NOT let the epic reach the final PR with this open.
+
 ## Decision log
 
 - 2026-07-03: Coordination started. Baseline build green (0 warnings/errors) on
   `main`; `feat/auth` branched from `main`.
 
 ## Progress log
+
+- 2026-07-03 #977 (Core: read-path access-gate key-filter, F-153) MERGED into
+  `feat/auth`. Delivered the read-path key-filter wiring in `LatticeGrain`
+  (`LatticeGrain.AccessGate.cs`): activation-cached lazy `ILatticeAccessGate` +
+  `ILatticeMembershipContext` resolution, a general `AuthorizeAsync` helper
+  (system-origin bypass, subject resolve, returns the FULL `LatticeAccessDecision`
+  so #980 can reuse it for allow/deny), and the two read wrappers. The returned
+  `KeyFilter` is applied server-side at the k-way-merge YIELD point in
+  `KeysAsyncCore`/`EntriesAsyncCore` - AFTER the merge frontier (`lastYieldedKey`)
+  and dedup set advance, so it is a pure caller-visibility prune that cannot break
+  reconciliation ordering/dedup; `GetMany` prunes its input list up front (values
+  never read for unauthorized keys); `Count` computes via the key stream under the
+  already-resolved filter (no double gate consult, values never cross the wire).
+  `ISystemLattice` scan callers pass `enforceAccessGate:false`. REVIEW: only 4
+  read-path source files touched (no write/delete/CRDT/atomic/RangeDelete/cursor/
+  lifecycle path); zero per-key cost on the null path (null filter short-circuits;
+  both awaits complete synchronously on the null gate/context so the async
+  ValueTask never suspends/boxes; `LatticeAccessRequest` is a struct); hygiene
+  clean. Focused suite 8 new + 30 scan-regression + 49 GetMany + 5 hygiene GREEN.
+  RAISED OC-1 (durable-cursor bypass) - see Open concerns; folded into #980 scope.
+  CHANGELOG folded into the #980 enforcement entry.
 
 - 2026-07-03 #978 (Auth: authorization rule model & policy store) MERGED into
   `feat/auth`. Delivered in `Orleans.Lattice.Auth`: the durable authorization
