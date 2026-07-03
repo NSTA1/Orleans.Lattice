@@ -132,7 +132,7 @@ sub-issue closes, applying the correct release label.
 
 | # | Issue | Feature | Status |
 |---|-------|---------|--------|
-| 1 | #972 | Membership: project & package scaffolding | pending |
+| 1 | #972 | Membership: project & package scaffolding | done (merged) |
 | 2 | #973 | Core: caller-credential propagation seam | pending |
 | 3 | #974 | Membership: subject model, directory & resolution | pending |
 | 4 | #975 | Auth: project & package scaffolding | pending |
@@ -161,4 +161,9 @@ Out of scope: #1104 (admin UI follow-up).
 
 ## Progress log
 
-- (entries appended as features land)
+- 2026-07-03 #972 (Membership scaffolding) MERGED. Empty `Orleans.Lattice.Membership`
+  package + test project, slnx + docs skeleton, `LatticeMembershipMarker` + trivial
+  green test. Version 7.7.1 (family lockstep with core/api.state). Post-merge focused
+  test green (1/1). DECISION: no CHANGELOG/features entry yet - the package is inert
+  with nothing user-callable; its entry lands with the first real behaviour (#974).
+  Placeholder marker to be deleted when real types arrive (per #974).
