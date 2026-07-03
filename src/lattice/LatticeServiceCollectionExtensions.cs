@@ -167,6 +167,12 @@ public static class LatticeServiceCollectionExtensions
         // access-gate) always resolves an instance. AddLatticeMembership
         // replaces this with the real credential-resolving implementation.
         builder.Services.TryAddSingleton<ILatticeMembershipContext, NullLatticeMembershipContext>();
+        // Access-gate seam: default to the allow-all no-op so the data-plane
+        // choke point always resolves a gate and behaviour is byte-for-byte
+        // unchanged until an auth add-on registers a real, policy-evaluating
+        // gate. The null gate returns a cached, synchronously-completed allow
+        // decision, so an unregistered gate adds no per-call allocation.
+        builder.Services.TryAddSingleton<ILatticeAccessGate, NullLatticeAccessGate>();
         // CRDT shape registry: closed-shape modes (OrSet / PnCounter /
         // VersionVector / MvRegister) are pre-populated on construction
         // so no host registration is required for them. Generic OrMap
