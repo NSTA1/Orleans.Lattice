@@ -71,7 +71,7 @@ internal sealed partial class LatticeGrain
     {
         ThrowIfSystemTree();
         ThrowIfProtectedViewRead();
-        return KeysAsyncCore(startInclusive, endExclusive, reverse, prefetch, null, cancellationToken);
+        return KeysAsyncCore(startInclusive, endExclusive, reverse, prefetch, null, enforceAccessGate: true, cancellationToken);
     }
 
     public IAsyncEnumerable<string> KeysWherePredicateAsync(
@@ -84,7 +84,7 @@ internal sealed partial class LatticeGrain
     {
         ThrowIfSystemTree();
         ThrowIfProtectedViewRead();
-        return KeysAsyncCore(startInclusive, endExclusive, reverse, prefetch, predicate, cancellationToken);
+        return KeysAsyncCore(startInclusive, endExclusive, reverse, prefetch, predicate, enforceAccessGate: true, cancellationToken);
     }
 
     IAsyncEnumerable<string> ISystemLattice.KeysAsync(
@@ -93,7 +93,7 @@ internal sealed partial class LatticeGrain
         bool reverse,
         bool? prefetch,
         CancellationToken cancellationToken)
-        => KeysAsyncCore(startInclusive, endExclusive, reverse, prefetch, null, cancellationToken);
+        => KeysAsyncCore(startInclusive, endExclusive, reverse, prefetch, null, enforceAccessGate: false, cancellationToken);
 
     private async IAsyncEnumerable<string> KeysAsyncCore(
         string? startInclusive,
@@ -101,9 +101,21 @@ internal sealed partial class LatticeGrain
         bool reverse,
         bool? prefetch,
         LatticePredicateNode? predicate,
+        bool enforceAccessGate,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+
+        // Read-path access-gate key-filter. Resolved once per scan (before any
+        // key is enumerated) so unauthorized keys are pruned server-side, at the
+        // orchestrator's yield point, before any key crosses the grain boundary
+        // to the caller. On the default path (null gate / system-origin) the
+        // filter is null and the per-key loop below does no per-key work.
+        // ISystemLattice callers pass enforceAccessGate: false so internal
+        // machinery never self-filters.
+        Func<string, bool>? keyFilter = enforceAccessGate
+            ? await ResolveRangeReadKeyFilterAsync(startInclusive, endExclusive, cancellationToken)
+            : null;
         var (physicalTreeId, shardMap0) = await GetRoutingAsync();
         var physicalShards = shardMap0.GetPhysicalShardIndices();
         var pageSize = Options.KeysPageSize;
@@ -305,8 +317,15 @@ internal sealed partial class LatticeGrain
             // committed. Suppress silently.
             if (yielded is null || yielded.Add(key))
             {
+                // Advance the merge frontier for every key the merge passes
+                // (used by reconciliation to drop drained keys behind it),
+                // independently of the access-gate visibility prune, so
+                // ordering/dedup bookkeeping stays correct even when a key is
+                // hidden from the caller. The filter is a caller-visibility
+                // prune only.
                 lastYieldedKey = key;
-                yield return key;
+                if (keyFilter is null || keyFilter(key))
+                    yield return key;
             }
 
             await cursors[idx].MoveNextAsync();

@@ -861,6 +861,25 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(keys);
         cancellationToken.ThrowIfCancellationRequested();
 
+        // Read-path access-gate key-filter. GetMany is a multi-key point read,
+        // so a single Read request is authorized for the tree and the returned
+        // filter (if any) prunes the requested keys up front - unauthorized keys
+        // are never fanned out to a leaf, so their values are never read on the
+        // silo, let alone returned to the caller. On the default (null gate /
+        // system-origin) path the filter is null and the caller's list is used
+        // unchanged with no per-key work or allocation.
+        var keyFilter = await ResolveMultiReadKeyFilterAsync(cancellationToken);
+        if (keyFilter is not null)
+        {
+            var filtered = new List<string>(keys.Count);
+            foreach (var k in keys)
+            {
+                if (k is not null && keyFilter(k))
+                    filtered.Add(k);
+            }
+            keys = filtered;
+        }
+
         // Caller-visible per-call envelope. GetManyDuration tracks the
         // wall-clock cost of one ILattice.GetManyAsync (including the
         // outer stale-routing retry loop below and the inner
@@ -2095,6 +2114,17 @@ internal sealed partial class LatticeGrain(
         ThrowIfSystemTree();
         ThrowIfProtectedViewRead();
         cancellationToken.ThrowIfCancellationRequested();
+
+        // Read-path access-gate key-filter. When a filter is present the count
+        // must reflect only authorized keys, so it is computed by enumerating
+        // the (server-side) key stream and counting keys the filter admits -
+        // consistent by construction with the filtered KeysAsync enumeration.
+        // On the default (null gate / system-origin) path the filter is null and
+        // the cheap fan-out count path below is used unchanged.
+        var keyFilter = await ResolveRangeReadKeyFilterAsync(null, null, cancellationToken);
+        if (keyFilter is not null)
+            return await CountUnderFilterAsync(null, null, keyFilter, cancellationToken);
+
         try
         {
             return await CountAsyncCore(cancellationToken);
@@ -2116,6 +2146,14 @@ internal sealed partial class LatticeGrain(
         ThrowIfSystemTree();
         ThrowIfProtectedViewRead();
         cancellationToken.ThrowIfCancellationRequested();
+
+        // Read-path access-gate key-filter over the requested range: see the
+        // whole-tree CountAsync overload for the rationale. Null on the default
+        // path (cheap fan-out count is used unchanged).
+        var keyFilter = await ResolveRangeReadKeyFilterAsync(startInclusive, endExclusive, cancellationToken);
+        if (keyFilter is not null)
+            return await CountUnderFilterAsync(startInclusive, endExclusive, keyFilter, cancellationToken);
+
         try
         {
             return await RangedCountAsyncCore(startInclusive, endExclusive, cancellationToken);
@@ -2140,6 +2178,35 @@ internal sealed partial class LatticeGrain(
     /// </summary>
     private Task<int> CountAsyncCore(CancellationToken cancellationToken) =>
         RangedCountAsyncCore(null, null, cancellationToken);
+
+    /// <summary>
+    /// Counts only the keys an access-gate <see cref="LatticeAccessDecision.KeyFilter"/>
+    /// admits over the half-open range
+    /// [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>).
+    /// Used only when a read-path filter is present (the auth-enabled path); it
+    /// enumerates the server-side key stream (via <see cref="KeysAsyncCore"/>
+    /// with the gate already resolved, so the gate is not consulted a second
+    /// time) and counts keys the supplied <paramref name="keyFilter"/> keeps, so
+    /// the result is consistent by construction with the filtered
+    /// <c>KeysAsync</c> enumeration. Keys are streamed, never their values, so no
+    /// value crosses the wire.
+    /// </summary>
+    private async Task<int> CountUnderFilterAsync(
+        string? startInclusive,
+        string? endExclusive,
+        Func<string, bool> keyFilter,
+        CancellationToken cancellationToken)
+    {
+        var count = 0;
+        await foreach (var key in KeysAsyncCore(
+            startInclusive, endExclusive, reverse: false, prefetch: null,
+            predicate: null, enforceAccessGate: false, cancellationToken))
+        {
+            if (keyFilter(key))
+                count++;
+        }
+        return count;
+    }
 
     /// <summary>
     /// Strongly-consistent live key count over the half-open key range

@@ -46,7 +46,7 @@ internal sealed partial class LatticeGrain
     {
         ThrowIfSystemTree();
         ThrowIfProtectedViewRead();
-        return EntriesAsyncCore(startInclusive, endExclusive, reverse, prefetch, null, cancellationToken);
+        return EntriesAsyncCore(startInclusive, endExclusive, reverse, prefetch, null, enforceAccessGate: true, cancellationToken);
     }
 
     public IAsyncEnumerable<KeyValuePair<string, byte[]>> EntriesWherePredicateAsync(
@@ -59,7 +59,7 @@ internal sealed partial class LatticeGrain
     {
         ThrowIfSystemTree();
         ThrowIfProtectedViewRead();
-        return EntriesAsyncCore(startInclusive, endExclusive, reverse, prefetch, predicate, cancellationToken);
+        return EntriesAsyncCore(startInclusive, endExclusive, reverse, prefetch, predicate, enforceAccessGate: true, cancellationToken);
     }
 
     IAsyncEnumerable<KeyValuePair<string, byte[]>> ISystemLattice.EntriesAsync(
@@ -68,7 +68,7 @@ internal sealed partial class LatticeGrain
         bool reverse,
         bool? prefetch,
         CancellationToken cancellationToken)
-        => EntriesAsyncCore(startInclusive, endExclusive, reverse, prefetch, null, cancellationToken);
+        => EntriesAsyncCore(startInclusive, endExclusive, reverse, prefetch, null, enforceAccessGate: false, cancellationToken);
 
     private async IAsyncEnumerable<KeyValuePair<string, byte[]>> EntriesAsyncCore(
         string? startInclusive,
@@ -76,9 +76,19 @@ internal sealed partial class LatticeGrain
         bool reverse,
         bool? prefetch,
         LatticePredicateNode? predicate,
+        bool enforceAccessGate,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+
+        // Read-path access-gate key-filter: resolved once per scan and applied
+        // at the yield point so an unauthorized entry's value never crosses the
+        // grain boundary. Null (no per-key work) on the default / system-origin
+        // path; ISystemLattice callers pass enforceAccessGate: false.
+        Func<string, bool>? keyFilter = enforceAccessGate
+            ? await ResolveRangeReadKeyFilterAsync(startInclusive, endExclusive, cancellationToken)
+            : null;
+
         var (physicalTreeId, shardMap0) = await GetRoutingAsync();
         var physicalShards = shardMap0.GetPhysicalShardIndices();
         var pageSize = Options.KeysPageSize;
@@ -253,8 +263,13 @@ internal sealed partial class LatticeGrain
 
             if (yielded is null || yielded.Add(entry.Key))
             {
+                // Advance the merge frontier for every key the merge passes,
+                // independently of the access-gate visibility prune, so
+                // reconciliation ordering/dedup bookkeeping stays correct even
+                // when an entry is hidden from the caller.
                 lastYieldedKey = entry.Key;
-                yield return entry;
+                if (keyFilter is null || keyFilter(entry.Key))
+                    yield return entry;
             }
 
             await cursors[idx].MoveNextAsync();
