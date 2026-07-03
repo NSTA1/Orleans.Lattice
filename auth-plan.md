@@ -151,7 +151,7 @@ sub-issue closes, applying the correct release label.
 | 13 | #983 | Auth: observability & audit | pending |
 | 14 | #984 | Api.Auth: facade & model | pending |
 | 15 | #985 | Api.Auth.Grpc: gRPC binding, client, meta-auth | pending |
-| 16 | #1101 | Membership.Entra: Entra ID authenticator | in_progress (sub-agent; parallel, independent pkg) |
+| 16 | #1101 | Membership.Entra: Entra ID authenticator | done (merged; 53 focused tests) |
 | 17 | #1102 | Explorer: connect to auth-enabled State API | pending |
 | 18 | #1103 | Security hardening: full security & design review | pending |
 | 19 | #986 | Docs, sample & end-to-end tests | pending |
@@ -189,7 +189,31 @@ Out of scope: #1104 (admin UI follow-up).
 - 2026-07-03: Coordination started. Baseline build green (0 warnings/errors) on
   `main`; `feat/auth` branched from `main`.
 
+- OC-3 (security, for #1103 review): `EntraCredentialAuthenticator.AuthenticateAsync`
+  propagates `IEntraGroupResolver` exceptions on the groups-overage path (only the
+  NO-resolver case is the silent token-only fallback). A Microsoft Graph outage
+  therefore fails authentication outright. Degrading to token-only groups on a
+  resolver fault is fail-closed for access (fewer groups = less access) and better
+  for availability. Left strict/propagate as the #1101 sub-agent implemented;
+  finalize the degrade-vs-fail decision in the #1103 security review.
+
 ## Progress log
+
+- 2026-07-03 #1101 (Membership.Entra, Entra ID authenticator) MERGED into
+  `feat/auth` (parallel independent-package track). Two new packages:
+  `Orleans.Lattice.Membership.Entra` (specializes the F-150 `JwtCredentialAuthenticator`
+  - OIDC/JWKS discovery + signing-key rotation via `ConfigurationManager<OpenIdConnectConfiguration>`,
+  Entra v2.0 claim mapping `oid`/`tid`/`groups`/`roles`, tenant allow-list issuer
+  validation, groups-overage detection with pluggable `IEntraGroupResolver` +
+  token-only default) and `Orleans.Lattice.Membership.Entra.Graph` (MS Graph-backed
+  resolver behind faked seams; MSAL confidential-client app-token acquired/cached/
+  transparently refreshed with single-flight `SemaphoreSlim` guard). Reviewed:
+  design clean, registration ordering-guarded after `AddLatticeMembership`, no
+  aliases needed (all in-process types), 0 warnings, hygiene clean. Focused suites
+  green: Entra 32/32, Graph 21/21 (53 total). Pkg pins IdentityModel 8.3.0 (matches
+  membership), Graph 5.105.0, MSAL 4.66.1, Kiota 1.22.2 (advisory GHSA-7j59 override).
+  Raised OC-3 (resolver-failure = fail vs degrade) -> deferred to #1103. Docs/
+  CHANGELOG/features refresh deferred to the final docs pass (#986) + epic PR.
 
 - 2026-07-03 GATE FIX (#977 re-entrancy, coordinator remediation on `feat/auth`).
   The first batched full non-chaos gate (976+977+978) surfaced 4 Membership
