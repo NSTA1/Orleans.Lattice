@@ -31,4 +31,13 @@ public static class GrpcStateTypeAliases
 
     /// <summary>Alias for <see cref="EntryHistoryResponse"/>.</summary>
     public const string EntryHistoryResponse = "olag.ehresp";
+
+    /// <summary>Alias for <see cref="AuthSchemeAdvertisementRequest"/>.</summary>
+    public const string AuthSchemeAdvertisementRequest = "olag.asreq";
+
+    /// <summary>Alias for <see cref="AuthSchemeDescriptor"/>.</summary>
+    public const string AuthSchemeDescriptor = "olag.asdesc";
+
+    /// <summary>Alias for <see cref="AuthSchemeAdvertisement"/>.</summary>
+    public const string AuthSchemeAdvertisement = "olag.asadv";
 }

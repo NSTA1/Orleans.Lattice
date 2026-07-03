@@ -15,6 +15,12 @@ public interface IExplorerAuthSession
     /// <summary>The signed-in username, or <see langword="null"/> when anonymous.</summary>
     string? Username { get; }
 
+    /// <summary>The scheme id of the current sign-in, or <see langword="null"/> when anonymous.</summary>
+    string? CurrentScheme { get; }
+
+    /// <summary>The scheme ids the registered auth-method providers can service.</summary>
+    IReadOnlyCollection<string> AvailableSchemes { get; }
+
     /// <summary>Raised after a successful sign-in or sign-out.</summary>
     event Action? AuthenticationChanged;
 
@@ -35,6 +41,25 @@ public interface IExplorerAuthSession
     /// <param name="password">The credential password. Must not be <see langword="null"/>.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task LoginAsync(string username, string password, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Signs in with the auth-method provider identified by
+    /// <paramref name="schemeId"/>, running its (possibly interactive) challenge
+    /// with <paramref name="inputs"/> and any discovered scheme parameters. The
+    /// Basic credential is persisted; token-based sign-ins are session-only.
+    /// </summary>
+    /// <param name="schemeId">The scheme to sign in with (an <see cref="AvailableSchemes"/> value).</param>
+    /// <param name="inputs">Interactive inputs for the challenge, or <see langword="null"/> for schemes that take none.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task LoginWithMethodAsync(string schemeId, IReadOnlyDictionary<string, string?>? inputs = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Probes the current endpoint for the auth scheme(s) it advertises. Returns
+    /// <see cref="ExplorerAuthSchemeAdvertisement.Empty"/> when the endpoint does
+    /// not advertise or no probe is registered.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<ExplorerAuthSchemeAdvertisement> DiscoverAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Signs out: clears the stored credential and drops the connection back to an

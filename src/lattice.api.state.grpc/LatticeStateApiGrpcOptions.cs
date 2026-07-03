@@ -36,4 +36,13 @@ public sealed class LatticeStateApiGrpcOptions
     /// token is used as the credential.
     /// </summary>
     public string CredentialScheme { get; set; } = "Bearer";
+
+    /// <summary>
+    /// The auth schemes the endpoint advertises from its unauthenticated
+    /// <c>GetAuthScheme</c> RPC, in preference order. Empty by default (the
+    /// endpoint advertises nothing, so a client falls back to manual or Basic
+    /// selection). Populated by a host to tell clients how to sign in. Each
+    /// descriptor must carry only public configuration - never a secret.
+    /// </summary>
+    public IList<AuthSchemeDescriptor> AdvertisedAuthSchemes { get; } = new List<AuthSchemeDescriptor>();
 }

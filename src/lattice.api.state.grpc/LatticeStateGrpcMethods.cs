@@ -74,6 +74,9 @@ internal sealed class LatticeStateGrpcMethods
     /// <summary>The unary cluster-info RPC method name.</summary>
     public const string GetClusterInfoMethodName = "GetClusterInfo";
 
+    /// <summary>The unary, unauthenticated auth-scheme advertisement RPC method name.</summary>
+    public const string GetAuthSchemeMethodName = "GetAuthScheme";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeStateGrpcMethods(
         Serializer<CatalogRequest> catalogRequestSerializer,
@@ -99,7 +102,9 @@ internal sealed class LatticeStateGrpcMethods
         Serializer<TreeMetricsRequest> metricsRequestSerializer,
         Serializer<TreeMetricsSnapshot> metricsSnapshotSerializer,
         Serializer<ClusterInfoRequest> clusterInfoRequestSerializer,
-        Serializer<ClusterInfo> clusterInfoSerializer)
+        Serializer<ClusterInfo> clusterInfoSerializer,
+        Serializer<AuthSchemeAdvertisementRequest> authSchemeRequestSerializer,
+        Serializer<AuthSchemeAdvertisement> authSchemeAdvertisementSerializer)
     {
         ArgumentNullException.ThrowIfNull(catalogRequestSerializer);
         ArgumentNullException.ThrowIfNull(treeCatalogPageSerializer);
@@ -125,6 +130,8 @@ internal sealed class LatticeStateGrpcMethods
         ArgumentNullException.ThrowIfNull(metricsSnapshotSerializer);
         ArgumentNullException.ThrowIfNull(clusterInfoRequestSerializer);
         ArgumentNullException.ThrowIfNull(clusterInfoSerializer);
+        ArgumentNullException.ThrowIfNull(authSchemeRequestSerializer);
+        ArgumentNullException.ThrowIfNull(authSchemeAdvertisementSerializer);
 
         ListTrees = new Method<CatalogRequest, TreeCatalogPage>(
             type: MethodType.Unary,
@@ -237,6 +244,13 @@ internal sealed class LatticeStateGrpcMethods
             name: GetClusterInfoMethodName,
             requestMarshaller: LatticeStateGrpcMarshallers.Create(clusterInfoRequestSerializer),
             responseMarshaller: LatticeStateGrpcMarshallers.Create(clusterInfoSerializer));
+
+        GetAuthScheme = new Method<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: GetAuthSchemeMethodName,
+            requestMarshaller: LatticeStateGrpcMarshallers.Create(authSchemeRequestSerializer),
+            responseMarshaller: LatticeStateGrpcMarshallers.Create(authSchemeAdvertisementSerializer));
     }
 
     /// <summary>The unary <c>ListTrees</c> discovery RPC.</summary>
@@ -287,6 +301,9 @@ internal sealed class LatticeStateGrpcMethods
     /// <summary>The unary <c>GetClusterInfo</c> RPC.</summary>
     public Method<ClusterInfoRequest, ClusterInfo> GetClusterInfo { get; }
 
+    /// <summary>The unary, unauthenticated <c>GetAuthScheme</c> advertisement RPC.</summary>
+    public Method<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement> GetAuthScheme { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out
     /// of <paramref name="serializerProvider"/>. Shared by the server-side DI
@@ -320,7 +337,9 @@ internal sealed class LatticeStateGrpcMethods
             serializerProvider.GetRequiredService<Serializer<TreeMetricsRequest>>(),
             serializerProvider.GetRequiredService<Serializer<TreeMetricsSnapshot>>(),
             serializerProvider.GetRequiredService<Serializer<ClusterInfoRequest>>(),
-            serializerProvider.GetRequiredService<Serializer<ClusterInfo>>());
+            serializerProvider.GetRequiredService<Serializer<ClusterInfo>>(),
+            serializerProvider.GetRequiredService<Serializer<AuthSchemeAdvertisementRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<AuthSchemeAdvertisement>>());
     }
 }
 

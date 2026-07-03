@@ -38,10 +38,39 @@ internal sealed class GrpcLatticeStateClient : ILatticeStateClient, IDisposable
             AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
         }
 
-        var channel = GrpcChannel.ForAddress(settings.Address);
+        var auth = settings.Authentication;
+
+        // A live token provider must be consulted per call so the freshest token
+        // is attached; allowing call credentials on an unencrypted dev endpoint
+        // keeps the h2c local-development path working.
+        var channelOptions = new GrpcChannelOptions();
+        if (auth is { HasCredentialProvider: true })
+        {
+            channelOptions.UnsafeUseInsecureChannelCallCredentials = true;
+        }
+
+        var channel = GrpcChannel.ForAddress(settings.Address, channelOptions);
 
         CallInvoker invoker = channel.CreateCallInvoker();
-        if (settings.Authentication is { HasHeaders: true } auth)
+        if (auth is { HasCredentialProvider: true, CredentialProvider: { } provider })
+        {
+            // CallCredentials.FromInterceptor is invoked per RPC and may await, so
+            // the provider can refresh a near-expiry token before the header is
+            // written. The token is never captured statically on the channel.
+            var callCredentials = CallCredentials.FromInterceptor(async (context, metadata) =>
+            {
+                var header = await provider
+                    .GetAuthorizationHeaderAsync(context.CancellationToken)
+                    .ConfigureAwait(false);
+                if (!string.IsNullOrEmpty(header))
+                {
+                    metadata.Add(LatticeCallAuthentication.AuthorizationHeaderName, header);
+                }
+            });
+
+            invoker = invoker.Intercept(new CallCredentialsInterceptor(callCredentials));
+        }
+        else if (auth is { HasHeaders: true })
         {
             var headers = auth.Headers!;
             invoker = invoker.Intercept(metadata =>

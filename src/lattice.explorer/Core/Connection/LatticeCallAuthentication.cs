@@ -25,6 +25,18 @@ public sealed record LatticeCallAuthentication
     public bool HasHeaders => Headers is { Count: > 0 };
 
     /// <summary>
+    /// A live credential provider consulted on every call for a current
+    /// <c>authorization</c> header. Set (in place of static
+    /// <see cref="Headers"/>) when the credential is a short-lived bearer token
+    /// the provider refreshes transparently. <see langword="null"/> for a static
+    /// credential (for example Basic) or anonymous connections.
+    /// </summary>
+    public ILatticeCallCredentialProvider? CredentialProvider { get; init; }
+
+    /// <summary><see langword="true"/> when a live token provider is attached.</summary>
+    public bool HasCredentialProvider => CredentialProvider is not null;
+
+    /// <summary>
     /// Creates an authentication seam that attaches an
     /// <c>authorization: Basic base64(username:password)</c> header to every
     /// call, matching the server-side <c>EnvVarCredentialAuthorizer</c> contract.
@@ -47,5 +59,22 @@ public sealed record LatticeCallAuthentication
                 [AuthorizationHeaderName] = $"Basic {encoded}",
             },
         };
+    }
+
+    /// <summary>
+    /// Creates an authentication seam backed by a live token
+    /// <paramref name="provider"/>. The connection queries the provider on every
+    /// call for a currently-valid <c>authorization</c> header, so a token that
+    /// the provider refreshes in the background is always attached fresh. Used by
+    /// interactive/federated login providers (for example Entra) whose bearer
+    /// tokens expire and are renewed silently.
+    /// </summary>
+    /// <param name="provider">The live credential provider. Must not be <see langword="null"/>.</param>
+    /// <returns>A <see cref="LatticeCallAuthentication"/> carrying the provider.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="provider"/> is <see langword="null"/>.</exception>
+    public static LatticeCallAuthentication Bearer(ILatticeCallCredentialProvider provider)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        return new LatticeCallAuthentication { CredentialProvider = provider };
     }
 }

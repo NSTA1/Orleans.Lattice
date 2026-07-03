@@ -67,6 +67,11 @@ public static class LatticeStateApiGrpcServiceCollectionExtensions
         // bespoke identity source such as a client certificate).
         services.TryAddSingleton<ILatticeStateApiCredentialBridge, HeaderLatticeStateApiCredentialBridge>();
 
+        // Auth-scheme advertisement source: the unauthenticated GetAuthScheme RPC
+        // reads the schemes a host configured via options. TryAdd preserves a
+        // host-supplied source. Advertises nothing by default.
+        services.TryAddSingleton<ILatticeStateApiAuthSchemeSource, OptionsLatticeStateApiAuthSchemeSource>();
+
         // Register the auth interceptor globally; it scopes enforcement to the
         // state-API service by service-name prefix so unrelated gRPC services
         // on the same host are unaffected.

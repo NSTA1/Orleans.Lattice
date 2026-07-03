@@ -5,12 +5,42 @@
 
 <div class="explorer-config-dialog" role="dialog" aria-modal="true" aria-label="Sign in to the state API">
     <h2>Sign in</h2>
-    <p class="explorer-config-help">
-        Enter the username and password for the Lattice state-API endpoint.
-    </p>
 
-    @if (_options.UseServerFormPost)
+    @if (_mode == SignInMode.Unsupported)
     {
+        <p class="explorer-config-help">
+            This endpoint requires the <strong>@_unsupportedScheme</strong> sign-in method, which is not
+            available in this build of the explorer. Install the matching login provider package (for example
+            <code>Orleans.Lattice.Explorer.Entra</code> for Entra ID) and reconnect.
+        </p>
+        <div class="explorer-config-actions">
+            <button type="button" class="explorer-btn" @onclick="Cancel">Close</button>
+        </div>
+    }
+    else if (_mode == SignInMode.Token)
+    {
+        <p class="explorer-config-help">
+            This endpoint uses <strong>@_selectedDisplay</strong>. Continue to sign in; a browser window
+            or device-code prompt may open to complete authentication.
+        </p>
+
+        @if (!string.IsNullOrEmpty(_error))
+        {
+            <p class="explorer-config-error" role="alert">@_error</p>
+        }
+
+        <div class="explorer-config-actions">
+            <button type="button" class="explorer-btn" disabled="@_busy" @onclick="Cancel">Cancel</button>
+            <button type="button" class="explorer-btn explorer-btn-primary" disabled="@_busy" @onclick="SignInWithMethodAsync">
+                @(_busy ? "Signing in..." : $"Sign in with {_selectedDisplay}")
+            </button>
+        </div>
+    }
+    else if (_options.UseServerFormPost)
+    {
+        <p class="explorer-config-help">
+            Enter the username and password for the Lattice state-API endpoint.
+        </p>
         <form method="post" action="@_options.LoginPath">
             <AntiforgeryToken />
             <label class="explorer-config-field">
@@ -29,6 +59,9 @@
     }
     else
     {
+        <p class="explorer-config-help">
+            Enter the username and password for the Lattice state-API endpoint.
+        </p>
         <label class="explorer-config-field">
             <span>Username</span>
             <input type="text"
@@ -61,18 +94,66 @@
 </div>
 
 @code {
+    private enum SignInMode
+    {
+        Basic,
+        Token,
+        Unsupported,
+    }
+
     private string _username = string.Empty;
     private string _password = string.Empty;
     private string? _error;
     private bool _busy;
     private ExplorerAuthUiOptions _options = new();
+    private SignInMode _mode = SignInMode.Basic;
+    private string? _selectedScheme;
+    private string _selectedDisplay = string.Empty;
+    private string? _unsupportedScheme;
 
     /// <summary>Invoked when the dialog is dismissed (cancel or successful sign-in).</summary>
     [Parameter]
     public EventCallback OnClosed { get; set; }
 
-    protected override void OnInitialized() =>
+    protected override async Task OnInitializedAsync()
+    {
         _options = (ExplorerAuthUiOptions?)Services.GetService(typeof(ExplorerAuthUiOptions)) ?? new ExplorerAuthUiOptions();
+
+        // Ask the endpoint which scheme it requires. Discovery degrades to Basic
+        // when the endpoint does not advertise or is unreachable, so the original
+        // username/password flow is always the safe fallback.
+        try
+        {
+            var advertisement = await AuthSession.DiscoverAsync();
+            ResolveMode(advertisement);
+        }
+        catch
+        {
+            _mode = SignInMode.Basic;
+        }
+    }
+
+    private void ResolveMode(ExplorerAuthSchemeAdvertisement advertisement)
+    {
+        foreach (var scheme in advertisement.Schemes)
+        {
+            if (AuthSession.AvailableSchemes.Any(a => string.Equals(a, scheme.SchemeId, StringComparison.OrdinalIgnoreCase)))
+            {
+                _selectedScheme = scheme.SchemeId;
+                _selectedDisplay = string.IsNullOrWhiteSpace(scheme.DisplayName) ? scheme.SchemeId : scheme.DisplayName;
+                _mode = string.Equals(scheme.SchemeId, ExplorerAuthSchemes.Basic, StringComparison.OrdinalIgnoreCase)
+                    ? SignInMode.Basic
+                    : SignInMode.Token;
+                return;
+            }
+        }
+
+        if (advertisement.HasSchemes)
+        {
+            _mode = SignInMode.Unsupported;
+            _unsupportedScheme = advertisement.Schemes[0].SchemeId;
+        }
+    }
 
     private void OnUsernameInput(ChangeEventArgs e) => _username = e.Value?.ToString() ?? string.Empty;
 
@@ -99,6 +180,30 @@
         try
         {
             await AuthSession.LoginAsync(_username.Trim(), _password);
+            await OnClosed.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task SignInWithMethodAsync()
+    {
+        if (_selectedScheme is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            await AuthSession.LoginWithMethodAsync(_selectedScheme);
             await OnClosed.InvokeAsync();
         }
         catch (Exception ex)
