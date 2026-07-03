@@ -144,7 +144,7 @@ sub-issue closes, applying the correct release label.
 | 6 | #977 | Core: range-scan key-filter | done (merged; batched gate) |
 | 7 | #978 | Auth: authorization rule model & policy store | done (merged; gate batched with #977) |
 | 8 | #979 | Auth: compiled snapshot & decision engine | done (merged; 116 focused tests) |
-| 9 | #980 | Auth: enforcement wiring at LatticeGrain | pending |
+| 9 | #980 | Auth: enforcement wiring at LatticeGrain | in_progress (sub-agent; CORE boundary; closes OC-1/OC-2) |
 | 10 | #981 | State API: honour read-access visibility | pending |
 | 11 | #1095 | Api.Data: external read-write data-plane API | pending |
 | 12 | #982 | Replication: replicate auth/membership trees | pending |
