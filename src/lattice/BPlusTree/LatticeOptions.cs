@@ -209,6 +209,34 @@ public class LatticeOptions
     /// </summary>
     public TimeSpan CacheTtl { get; set; } = DefaultCacheTtl;
 
+    /// <summary>
+    /// Optional upper bound, in bytes, on the resident value-payload memory a
+    /// single <c>LeafCacheGrain</c> activation may hold in its read-through
+    /// mirror. <c>null</c> (the default) leaves the mirror unbounded - it
+    /// grows to a faithful 1:1 copy of the primary leaf's live entry set,
+    /// which is the lowest-latency configuration but scales per-silo memory
+    /// linearly with the touched-leaf entry count.
+    /// <para>
+    /// When set to a positive value, the cache evicts <em>value payloads
+    /// only</em> (never whole rows) in least-recently-used order once the sum
+    /// of resident <c>byte[]</c> payload lengths would exceed the budget. The
+    /// per-row metadata envelope (timestamp, delivery-sequence position,
+    /// tombstone / migration flags) is always retained, so eviction cannot
+    /// violate the delta-refresh cursor, pending-key, moved-away, or
+    /// migrated-entry contracts. A read that lands on an evicted payload
+    /// transparently delegates to the primary leaf (one RPC) and is counted as
+    /// a cache miss; hot keys stay resident and continue to serve from memory.
+    /// Only the value payload is bounded - the retained envelope metadata
+    /// (tens of bytes per row) is not counted against this budget.
+    /// </para>
+    /// <para>
+    /// Intended as deploy-time configuration; the budget is re-read on each
+    /// cache refresh so a running silo honours option changes, but toggling it
+    /// on a warm activation only bounds payloads merged after the change.
+    /// </para>
+    /// </summary>
+    public long? MaxCacheValueBytes { get; set; } = DefaultMaxCacheValueBytes;
+
     /// <summary>Default value for <see cref="SoftDeleteDuration"/> (72 hours).</summary>
     public static readonly TimeSpan DefaultSoftDeleteDuration = TimeSpan.FromHours(72);
 
@@ -262,6 +290,9 @@ public class LatticeOptions
 
     /// <summary>Default value for <see cref="CacheTtl"/> (zero - refresh on every read).</summary>
     public static readonly TimeSpan DefaultCacheTtl = TimeSpan.Zero;
+
+    /// <summary>Default value for <see cref="MaxCacheValueBytes"/> (<c>null</c> - the read-through cache mirror is unbounded).</summary>
+    public static readonly long? DefaultMaxCacheValueBytes = null;
 
     /// <summary>
     /// When <c>true</c>, <see cref="ILattice.KeysAsync"/> pre-fetches the next page
