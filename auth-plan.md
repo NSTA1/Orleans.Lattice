@@ -143,7 +143,7 @@ sub-issue closes, applying the correct release label.
 | 5 | #976 | Core: access-gate enforcement point | done (merged; gate batched with #977) |
 | 6 | #977 | Core: range-scan key-filter | done (merged; batched gate) |
 | 7 | #978 | Auth: authorization rule model & policy store | done (merged; gate batched with #977) |
-| 8 | #979 | Auth: compiled snapshot & decision engine | pending |
+| 8 | #979 | Auth: compiled snapshot & decision engine | in_progress (sub-agent) |
 | 9 | #980 | Auth: enforcement wiring at LatticeGrain | pending |
 | 10 | #981 | State API: honour read-access visibility | pending |
 | 11 | #1095 | Api.Data: external read-write data-plane API | pending |
@@ -151,7 +151,7 @@ sub-issue closes, applying the correct release label.
 | 13 | #983 | Auth: observability & audit | pending |
 | 14 | #984 | Api.Auth: facade & model | pending |
 | 15 | #985 | Api.Auth.Grpc: gRPC binding, client, meta-auth | pending |
-| 16 | #1101 | Membership.Entra: Entra ID authenticator | pending |
+| 16 | #1101 | Membership.Entra: Entra ID authenticator | in_progress (sub-agent; parallel, independent pkg) |
 | 17 | #1102 | Explorer: connect to auth-enabled State API | pending |
 | 18 | #1103 | Security hardening: full security & design review | pending |
 | 19 | #986 | Docs, sample & end-to-end tests | pending |
