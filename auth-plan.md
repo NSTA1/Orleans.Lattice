@@ -160,6 +160,17 @@ Out of scope: #1104 (admin UI follow-up).
 
 ## Open concerns (MUST-CLOSE before final PR)
 
+- **OC-2 (security, for #980): the gate's own policy-store reads must run under
+  system-origin.** The #977 re-entrancy fix wraps *subject resolution* in a
+  system-origin scope so the membership directory's dogfooded-tree reads bypass
+  the gate. When #980 wires a REAL decision engine, the gate/decision path will
+  read the `sys-auth-policy` tree (via `ILatticeAuthorizationPolicyStore`, public
+  scan surface) - those reads MUST likewise be system-origin or they recurse into
+  the gate. Same applies to any membership/auth infra read on the enforced path.
+  ACTION: #980 sub-agent contract MUST require system-origin wrapping for all
+  gate/decision-engine internal tree reads, with a real-gate + membership-directory
+  regression test proving no recursion. Backstop: #1103.
+
 - **OC-1 (security): durable-cursor read path bypasses the key-filter.** #977
   wired the read-path key-filter into the `KeysAsync`/`EntriesAsync`/`GetMany`/
   `Count` surfaces at the `LatticeGrain` merge yield point, but the durable
@@ -179,6 +190,24 @@ Out of scope: #1104 (admin UI follow-up).
   `main`; `feat/auth` branched from `main`.
 
 ## Progress log
+
+- 2026-07-03 GATE FIX (#977 re-entrancy, coordinator remediation on `feat/auth`).
+  The first batched full non-chaos gate (976+977+978) surfaced 4 Membership
+  failures (`EnumerationAbortedException`) + 1 flaky Replication failure. ROOT
+  CAUSE: `LatticeGrain.AuthorizeAsync` resolved the caller subject on every public
+  scan; with Membership registered, the directory reads its `sys-membership-*`
+  trees through the public scan surface, so subject resolution re-entered the
+  grain mid-enumeration and aborted the enumerator. FIX (core-only, both in
+  `AuthorizeAsync`): (A) when only the default null gate is registered, return a
+  cached allow-all WITHOUT resolving the subject/allocating a request (restores
+  byte-identical pre-gate default path; membership suite 51/51 and its runtime
+  dropped ~79s->~4s); (B) when a real gate is registered, resolve the subject
+  under a `LatticeAccessGateContext.EnterSystemOrigin()` scope so the directory's
+  own dogfooded-tree reads bypass the gate instead of recursing. Re-verified:
+  Membership 51/51, Replication 2508/2508 (the 1 failure was a flake), core
+  access-gate key-filter 8/8. Raised OC-2 (gate's own policy reads must be
+  system-origin in #980). Re-running the full batched gate for clean single-run
+  certification before dispatching #979.
 
 - 2026-07-03 #977 (Core: read-path access-gate key-filter, F-153) MERGED into
   `feat/auth`. Delivered the read-path key-filter wiring in `LatticeGrain`
