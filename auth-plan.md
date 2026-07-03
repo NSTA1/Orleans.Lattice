@@ -145,7 +145,7 @@ sub-issue closes, applying the correct release label.
 | 7 | #978 | Auth: authorization rule model & policy store | done (merged; gate batched with #977) |
 | 8 | #979 | Auth: compiled snapshot & decision engine | done (merged; 116 focused tests) |
 | 9 | #980 | Auth: enforcement wiring at LatticeGrain | done (merged; core boundary; closes OC-1/OC-2; sec-review remediated) |
-| 10 | #981 | State API: honour read-access visibility | pending |
+| 10 | #981 | State API: honour read-access visibility | in_progress (sub-agent; identity bridge + catalog scoping) |
 | 11 | #1095 | Api.Data: external read-write data-plane API | pending |
 | 12 | #982 | Replication: replicate auth/membership trees | pending |
 | 13 | #983 | Auth: observability & audit | pending |
@@ -214,6 +214,21 @@ Out of scope: #1104 (admin UI follow-up).
   finalize the degrade-vs-fail decision in the #1103 security review.
 
 ## Progress log
+
+- 2026-07-03 DISPATCHED #981 (F-157, State API read visibility) Feature Dev
+  sub-agent in worktree 981. Key design steer: State-API reads go through the
+  PUBLIC `ILattice` surface which #980 already enforces, so the crux is the
+  IDENTITY BRIDGE (gRPC ServerCallContext/credential -> LatticeCredentialContext
+  so existing enforcement fires) + explicit catalog/structure scoping
+  (ListTrees/ListViews/GetTreeStructure omit unreadable trees) + fail-closed on
+  unresolved identity + zero-cost when Auth absent. Non-recursion: infra reads
+  (registry, policy/membership trees) under system-origin.
+- 2026-07-03 DISPATCHED OC-6 Bug Hunter in worktree oc6 (branch
+  hunt/oc6-scan-concurrency). Root-cause whether a strongly-consistent core scan
+  transiently omits a durably-written key under a concurrent same-activation scan
+  (amplified by #980's active maintainer rescan of sys-auth-policy). Resilient
+  resume already ruled out; suspect per-activation shared enumeration state /
+  ambient snapshot scope trample. Fix in core if genuine; do not weaken tests.
 
 - 2026-07-03 #980 (F-156, enforcement wiring at LatticeGrain) MERGED into
   `feat/auth`. The security-critical core boundary: `ILatticeAccessGate` now
