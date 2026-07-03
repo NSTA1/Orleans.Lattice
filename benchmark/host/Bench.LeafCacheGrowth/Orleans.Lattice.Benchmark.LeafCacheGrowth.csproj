@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Orleans.Lattice.Benchmark.LeafCacheGrowth</RootNamespace>
+    <AssemblyName>Orleans.Lattice.Benchmark.LeafCacheGrowth</AssemblyName>
+    <!--
+      Server GC + concurrent GC on: the probe reports Process.WorkingSet64 and
+      GC.GetTotalMemory as the memory signal of the unbounded cache mirror,
+      which is a resident-set / total-heap measurement rather than a
+      per-operation allocation delta. Server GC is the production Orleans silo
+      default, so measuring the cache footprint under the same GC keeps the
+      numbers representative of the deployed shape.
+    -->
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <TieredCompilation>true</TieredCompilation>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      The probe drives a real BPlusLeafGrain (primary leaf) and a real
+      LeafCacheGrain in-process, with no Orleans silo, so it measures the
+      cache grain's own resident memory footprint and steady-state hit-path
+      latency directly. The internal grains and their collaborators are
+      reachable via the InternalsVisibleTo grant on the core library csproj.
+      No BenchmarkDotNet harness: the workload is whole-run footprint + latency
+      sampling, not a nanosecond-resolution per-op microbench.
+    -->
+    <ProjectReference Include="..\..\..\src\lattice\Orleans.Lattice.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- NSubstitute drives the IGrainContext / IGrainFactory / IOptionsMonitor
+         / ILatticeRegistry seams in the same shape as the unit-test fakes under
+         test/lattice/Fakes/ and the Bench.Microbench harness. The per-read hot
+         path is deliberately kept off these mocks (see Program.cs). -->
+    <PackageReference Include="NSubstitute" Version="5.3.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.9" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.9" />
+  </ItemGroup>
+
+</Project>

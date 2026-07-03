@@ -14,7 +14,6 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-022](https://github.com/NSTA1/Orleans.Lattice/issues/342) - Troubleshooting guide (`docs/troubleshooting.md`)
 - [F-023](https://github.com/NSTA1/Orleans.Lattice/issues/343) - Sample applications (`samples/`)
 - [F-025](https://github.com/NSTA1/Orleans.Lattice/issues/345) - Incremental, ongoing merge from one or more source trees using `VersionVector` to track a per-source high-water mark, so each cycle transfers only entries newer than the last
-- [F-067](https://github.com/NSTA1/Orleans.Lattice/issues/387) - Bound `LeafCacheGrain._cache` size without violating Orleans semantics
 - [F-088](https://github.com/NSTA1/Orleans.Lattice/issues/657) - Orleans.Lattice.GrainIndex: typed grain indexing package (epic)
 - [F-089](https://github.com/NSTA1/Orleans.Lattice/issues/658) - Orleans.Lattice.GrainIndex: project & package scaffolding
 - [F-090](https://github.com/NSTA1/Orleans.Lattice/issues/659) - Orleans.Lattice.GrainIndex: index definition model & silo-setup registration API
@@ -103,6 +102,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-063](https://github.com/NSTA1/Orleans.Lattice/issues/383) - The leaf's `BPlusLeafGrain.CommitSetAsync` / `CommitDeleteAsync` / `DeleteRangeAsync` foreground write paths each end with an awaited cross-grain RPC to the parent internal node (`IBPlusInternalGrain.OnChildDigestPublishedAsync`)
 - [F-064](https://github.com/NSTA1/Orleans.Lattice/issues/384) - Point-in-time read views over multi-page enumerations
 - [F-065](https://github.com/NSTA1/Orleans.Lattice/issues/385) - Strict snapshot-isolation reads:
+- [F-067](https://github.com/NSTA1/Orleans.Lattice/issues/387) - Bound `LeafCacheGrain._cache` size without violating Orleans semantics
 - [F-068](https://github.com/NSTA1/Orleans.Lattice/issues/388) - Order-independent WAL provider registration
 - [F-069](https://github.com/NSTA1/Orleans.Lattice/issues/389) - Batched WAL append on the leaf write path
 - [F-070](https://github.com/NSTA1/Orleans.Lattice/issues/390) - Pipelined phase-2 commit on the Azure Table WAL provider

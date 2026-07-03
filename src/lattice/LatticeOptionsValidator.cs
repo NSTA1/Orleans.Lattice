@@ -26,6 +26,12 @@ internal sealed class LatticeOptionsValidator : IValidateOptions<LatticeOptions>
                 $"{nameof(LatticeOptions.MaxValueSizeBytes)} must be greater than or equal to 1 when set "
                 + "(null leaves value size unbounded; a positive value caps the byte length of a value or CRDT delta).");
         }
+        if (options.MaxCacheValueBytes is { } maxCacheValueBytes && maxCacheValueBytes < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.MaxCacheValueBytes)} must be greater than or equal to 1 when set "
+                + "(null leaves the read-through cache mirror unbounded; a positive value caps the resident value-payload bytes per cache activation with LRU payload eviction).");
+        }
         if (options.MaxLeafReplayEntries < 1)
             return ValidateOptionsResult.Fail($"{nameof(LatticeOptions.MaxLeafReplayEntries)} must be greater than or equal to 1.");
         if (options.MaterialiserCheckpointEntries < 1)
