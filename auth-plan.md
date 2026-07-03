@@ -144,7 +144,7 @@ sub-issue closes, applying the correct release label.
 | 6 | #977 | Core: range-scan key-filter | done (merged; batched gate) |
 | 7 | #978 | Auth: authorization rule model & policy store | done (merged; gate batched with #977) |
 | 8 | #979 | Auth: compiled snapshot & decision engine | done (merged; 116 focused tests) |
-| 9 | #980 | Auth: enforcement wiring at LatticeGrain | in_progress (sub-agent; CORE boundary; closes OC-1/OC-2) |
+| 9 | #980 | Auth: enforcement wiring at LatticeGrain | done (merged; core boundary; closes OC-1/OC-2; sec-review remediated) |
 | 10 | #981 | State API: honour read-access visibility | pending |
 | 11 | #1095 | Api.Data: external read-write data-plane API | pending |
 | 12 | #982 | Replication: replicate auth/membership trees | pending |
@@ -160,29 +160,45 @@ Out of scope: #1104 (admin UI follow-up).
 
 ## Open concerns (MUST-CLOSE before final PR)
 
-- **OC-2 (security, for #980): the gate's own policy-store reads must run under
-  system-origin.** The #977 re-entrancy fix wraps *subject resolution* in a
-  system-origin scope so the membership directory's dogfooded-tree reads bypass
-  the gate. When #980 wires a REAL decision engine, the gate/decision path will
-  read the `sys-auth-policy` tree (via `ILatticeAuthorizationPolicyStore`, public
-  scan surface) - those reads MUST likewise be system-origin or they recurse into
-  the gate. Same applies to any membership/auth infra read on the enforced path.
-  ACTION: #980 sub-agent contract MUST require system-origin wrapping for all
-  gate/decision-engine internal tree reads, with a real-gate + membership-directory
-  regression test proving no recursion. Backstop: #1103.
+- **OC-2 (security) - CLOSED by #980.** Enforcement resolves the subject and all
+  gate/decision-engine internal tree reads under `EnterSystemOrigin()` (see
+  `LatticeAccessGateEnforcement.ResolveSubjectAsync` and the policy store's
+  system-origin scopes); `PolicyAccessGate` does NO storage I/O on the request
+  path (in-memory compiled snapshot only). Real-gate + membership-directory
+  integration tests prove no recursion. Backstop remains #1103.
 
-- **OC-1 (security): durable-cursor read path bypasses the key-filter.** #977
-  wired the read-path key-filter into the `KeysAsync`/`EntriesAsync`/`GetMany`/
-  `Count` surfaces at the `LatticeGrain` merge yield point, but the durable
-  paged-cursor surface (`ILatticeCursorGrain`: `OpenKeyCursorAsync`/
-  `NextKeysAsync` and the entry/snapshot variants) runs in a SEPARATE grain
-  activation and does NOT funnel through `KeysAsyncCore`, so it is currently an
-  unfiltered read surface. A `Func<string,bool>` cannot be serialized across the
-  `OpenAsync` boundary, so closing this requires the cursor grain to resolve its
-  OWN gate + subject (subject flows via `RequestContext`) and apply the filter at
-  its page-emit point. ACTION: fold explicitly into #980's enforcement scope (the
-  #980 sub-agent contract MUST name this path); #1103 security review is the
-  backstop. Do NOT let the epic reach the final PR with this open.
+- **OC-1 (security) - CLOSED by #980.** The durable cursor grain now resolves its
+  own gate + subject (subject flows via `RequestContext`) and applies the
+  key-filter at its page-emit point (`LatticeCursorGrain.AccessGate.cs`); snapshot
+  cursors re-apply the filter and delete-range cursors hard-deny per step. Tests:
+  prefix-scoped resume sees only allowed prefix, no-rule sees nothing, anonymous
+  resume fails closed empty.
+
+- **OC-5 (security, for #1103 review): a materialised view read bypasses the
+  data-plane gate.** `LatticeAccessGateContext.IsGateBypassed` is true under
+  `ViewReadContext`, which the user-facing `ILatticeView` read handle opens around
+  every view read. A view materialised over a restricted source data tree can
+  therefore be read ungated by a subject denied the source tree. View-level authz
+  never existed and is out of #980 scope, but it is a real confidentiality gap.
+  These scopes are `internal` (not client-settable), confirmed by the #980
+  security review. ACTION: close in #1103 (a view-level Read decision keyed by
+  view id or underlying source tree) - the epic MUST NOT reach the final PR with
+  a materialised view over restricted data readable ungated.
+
+- **OC-6 (correctness, for #1103 / core follow-up): a strongly-consistent scan can
+  transiently omit a durably-written key while a second scan of the SAME grain
+  activation runs concurrently.** Surfaced by the two admin `ListRules*` store
+  tests (~1/6) once #980's active `PolicyAccessGate` makes the background policy
+  maintainer rescan the `sys-auth-policy` tree on every edit, overlapping the
+  test's own list scan. The resilient `ScanEntriesAsync` resume is correct
+  (resumes from `lastKey + "\u0000"`, never drops a committed successor), so the
+  omission is in the underlying single-pass `EntriesAsync` scan under a concurrent
+  same-activation scan - a pre-existing core concern, orthogonal to enforcement
+  (which reads the authoritative in-memory compiled snapshot, not a client list).
+  MITIGATION IN PLACE: the two admin-list tests assert eventual convergence
+  (durable keys converge on a subsequent pass). ACTION: root-cause the core scan
+  under a concurrent same-activation scan (Bug Hunter dispatched); if a genuine
+  key-drop, fix in core and revert the test convergence loop. Backstop: #1103.
 
 ## Decision log
 
@@ -198,6 +214,35 @@ Out of scope: #1104 (admin UI follow-up).
   finalize the degrade-vs-fail decision in the #1103 security review.
 
 ## Progress log
+
+- 2026-07-03 #980 (F-156, enforcement wiring at LatticeGrain) MERGED into
+  `feat/auth`. The security-critical core boundary: `ILatticeAccessGate` now
+  enforces every user-originated mutation/read at `LatticeGrain`, the durable
+  cursor grain, and the cross-tree atomic-write coordinator. New public
+  `LatticeAuthorizationDeniedException` (alias `ol.azd`, carries tree/op/subject/
+  reason only). `PolicyAccessGate` (Auth) does the real allow/deny over the
+  in-memory compiled snapshot with NO request-path storage I/O; registered via
+  `services.Replace`. Bootstrap administrators are the root-of-trust bypass.
+  Fail-closed throughout: writes/deletes/CRDT/bulk-load/admin throw on deny;
+  point reads report absent; range/multi reads prune; range-delete hard-denied
+  all-or-nothing; atomic + cross-tree batches authorize all legs before any
+  apply. Zero-cost default preserved (null-gate/system-origin short-circuit before
+  subject resolution). Closes OC-1 (durable cursor) and OC-2 (no recursion).
+  REVIEW: I committed the sub-agent's work (it left it uncommitted), built the
+  full solution clean, ran a `security-review` sub-agent, and ran the full
+  non-chaos gate in the worktree - all packages green (core 5715, Auth 147).
+  REMEDIATED two MEDIUM fail-open reads the sub-agent missed, flagged by the
+  security review: `CountPerShardAsync` (per-shard count leak) and the two
+  leaf-projection digest reads (content oracle) were ungated - added
+  `EnforceUniformRangeReadAsync` (hard-deny: a denied OR partially-authorized
+  caller is refused, since these structural reads cannot be narrowed per key) and
+  6 regression tests. Also converged the two admin `ListRules*` tests (OC-6).
+  RAISED OC-5 (view-read ungated, -> #1103) and OC-6 (core scan under concurrent
+  same-activation scan, -> Bug Hunter + #1103). Security review's RequestContext
+  capability-key note (`ol.sysorig`/`ol.vw`/`ol.vr` not stripped from client
+  calls; deferred deliverable-8 `IIncomingGrainCallFilter`) recorded for #1103.
+  CHANGELOG: consolidated F-152..F-156 Added entry landed. Explorer/Membership/
+  core focused suites all green post-merge.
 
 - 2026-07-03 #979 (F-155, compiled policy snapshot & decision engine) MERGED into
   `feat/auth`. Adds an INERT, in-process decision surface: `ILatticeDecisionEngine`
