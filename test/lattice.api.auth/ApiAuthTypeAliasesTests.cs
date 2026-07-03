@@ -70,8 +70,18 @@ public class ApiAuthTypeAliasesTests
     {
         var declared = EnumerateConstants().ToDictionary(c => c.Name, c => c.Value, StringComparer.Ordinal);
 
-        var prodAssembly = typeof(ApiAuthTypeAliases).Assembly;
-        var usageByAlias = prodAssembly.GetTypes()
+        // The alias registry is shared across the auth-API package and its gRPC
+        // transport binding: the grpc wire-type records (request / response
+        // envelopes) live in the sibling Orleans.Lattice.Api.Auth.Grpc assembly but
+        // draw their stable aliases from this same table. Scan both assemblies so a
+        // grpc wire-type's alias is not mis-reported as a dead constant.
+        var assemblies = new[]
+        {
+            typeof(ApiAuthTypeAliases).Assembly,
+            typeof(Orleans.Lattice.Api.Auth.Grpc.LatticeAuthApiGrpcOptions).Assembly,
+        };
+        var usageByAlias = assemblies
+            .SelectMany(asm => asm.GetTypes())
             .SelectMany(t => t.GetCustomAttributes<AliasAttribute>(inherit: false).Select(a => (Type: t, a.Alias)))
             .GroupBy(x => x.Alias, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.Select(x => x.Type.FullName ?? x.Type.Name).ToList(), StringComparer.Ordinal);
