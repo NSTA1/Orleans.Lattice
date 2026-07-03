@@ -94,11 +94,30 @@ internal sealed class MembershipContext : ILatticeMembershipContext
         }
 
         var mergeMode = _options.CurrentValue.GroupMergeMode;
+        var opts = _options.CurrentValue;
         IReadOnlyCollection<string> directoryGroups = mergeMode == SubjectGroupMergeMode.TokenOnly
             ? Array.Empty<string>()
             : await _directory.GroupsOfAsync(principal.SubjectId, cancellationToken).ConfigureAwait(false);
 
         var subject = _mapper.Map(principal, directoryGroups);
+
+        // The directory groups above are already transitively expanded, but the
+        // mapper also unions in token-asserted and claim-projected seed groups
+        // that are not. Unless the directory is being ignored entirely
+        // (TokenOnly), run the merged set back through the directory closure so a
+        // nested policy on an ancestor group still applies to a federated
+        // identity that carries only the child group in its token. Skipped when
+        // no such unexpanded seeds exist, keeping the pure-directory path to a
+        // single directory round-trip.
+        var hasUnexpandedSeeds =
+            (mergeMode != SubjectGroupMergeMode.DirectoryOnly && principal.AssertedGroups is { Count: > 0 })
+            || opts.ClaimToGroups is not null;
+        if (mergeMode != SubjectGroupMergeMode.TokenOnly && hasUnexpandedSeeds && subject.GroupIds.Count > 0)
+        {
+            var expanded = await _directory.ExpandGroupsAsync(subject.GroupIds, cancellationToken).ConfigureAwait(false);
+            subject = subject with { GroupIds = expanded };
+        }
+
         return new ResolvedSubject(subject, principal.ExpiresAt);
     }
 }

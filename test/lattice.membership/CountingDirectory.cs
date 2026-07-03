@@ -10,10 +10,20 @@ internal sealed class CountingDirectory(IReadOnlyCollection<string> groups) : IL
 {
     public int GroupsOfCalls { get; private set; }
 
+    public int ExpandCalls { get; private set; }
+
     public Task<IReadOnlyCollection<string>> GroupsOfAsync(string memberId, CancellationToken cancellationToken = default)
     {
         GroupsOfCalls++;
         return Task.FromResult(groups);
+    }
+
+    public Task<IReadOnlyCollection<string>> ExpandGroupsAsync(IReadOnlyCollection<string> seedGroups, CancellationToken cancellationToken = default)
+    {
+        ExpandCalls++;
+        // Identity expansion: this fake has no edges, so a seed set expands to
+        // itself. Enough for the context's merge/expand plumbing tests.
+        return Task.FromResult(seedGroups);
     }
 
     public Task<IReadOnlyCollection<string>> MembersOfAsync(string groupId, CancellationToken cancellationToken = default) =>

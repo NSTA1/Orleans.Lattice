@@ -72,6 +72,18 @@ public interface ILatticeMembershipDirectory
     /// <param name="cancellationToken">Cancels the scan.</param>
     Task<IReadOnlyCollection<string>> GroupsOfAsync(string memberId, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Expands a set of seed group ids into its full <b>transitive</b> closure
+    /// over the directory graph (walking nested-group parents, with cycle
+    /// detection). The returned set <b>includes the seeds themselves</b> plus
+    /// every group reachable from them; a seed that is not a known directory
+    /// node contributes only itself. Used to expand token-asserted / claim-derived
+    /// group ids so downstream policy sees a single uniformly-expanded group set.
+    /// </summary>
+    /// <param name="seedGroups">The seed group ids to expand. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancels the scan.</param>
+    Task<IReadOnlyCollection<string>> ExpandGroupsAsync(IReadOnlyCollection<string> seedGroups, CancellationToken cancellationToken = default);
+
     /// <summary>Returns the <b>direct</b> members of a group (users and nested groups).</summary>
     /// <param name="groupId">The group id. Must not be <c>null</c>.</param>
     /// <param name="cancellationToken">Cancels the scan.</param>

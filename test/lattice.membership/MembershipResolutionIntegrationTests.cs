@@ -61,6 +61,30 @@ public sealed class MembershipResolutionIntegrationTests
     }
 
     [Test]
+    public async Task Token_asserted_group_is_transitively_expanded_through_the_directory()
+    {
+        var directory = _fixture.Directory;
+        // Nested directory hierarchy: the child group is itself a member of the
+        // parent group.
+        await directory.UpsertGroupAsync(new MembershipGroup("tok-child"));
+        await directory.UpsertGroupAsync(new MembershipGroup("tok-parent"));
+        await directory.AddMemberAsync("tok-parent", "tok-child", MembershipMemberKind.Group);
+
+        // A federated identity with no directory user record, carrying only the
+        // child group directly in its token.
+        var token = MembershipClusterFixture.MintToken("tok-federated", groups: new[] { "tok-child" });
+        LatticeSubject subject;
+        using (LatticeCredentialContext.Use(token, scheme: "Bearer"))
+        {
+            subject = await _fixture.Context.ResolveCurrentAsync();
+        }
+
+        Assert.That(subject.GroupIds, Is.SupersetOf(new[] { "tok-child", "tok-parent" }),
+            "a token-asserted group must be expanded through the directory closure so a nested " +
+            "policy on the ancestor group still applies to a federated identity");
+    }
+
+    [Test]
     public async Task Membership_state_is_readable_through_the_standard_scan_surface()
     {
         var directory = _fixture.Directory;

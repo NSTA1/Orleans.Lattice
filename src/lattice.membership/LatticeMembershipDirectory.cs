@@ -129,6 +129,50 @@ internal sealed class LatticeMembershipDirectory(
         var frontier = new Queue<string>();
         frontier.Enqueue(memberId);
 
+        await WalkForwardClosureAsync(closure, visited, frontier, cancellationToken).ConfigureAwait(false);
+        return closure;
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyCollection<string>> ExpandGroupsAsync(IReadOnlyCollection<string> seedGroups, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(seedGroups);
+        if (seedGroups.Count == 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        // Unlike GroupsOfAsync (whose member seed is a user that is not itself a
+        // group), the seeds here are groups the subject already belongs to, so
+        // they are part of the closure.
+        var closure = new HashSet<string>(StringComparer.Ordinal);
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        var frontier = new Queue<string>();
+        foreach (var seed in seedGroups)
+        {
+            if (visited.Add(seed))
+            {
+                closure.Add(seed);
+                frontier.Enqueue(seed);
+            }
+        }
+
+        await WalkForwardClosureAsync(closure, visited, frontier, cancellationToken).ConfigureAwait(false);
+        return closure;
+    }
+
+    /// <summary>
+    /// Walks forward membership edges from every id on <paramref name="frontier"/>,
+    /// adding each reachable parent group to <paramref name="closure"/> and
+    /// enqueueing newly-seen groups. <paramref name="visited"/> provides cycle
+    /// detection so an A-in-B, B-in-A cycle terminates.
+    /// </summary>
+    private async Task WalkForwardClosureAsync(
+        HashSet<string> closure,
+        HashSet<string> visited,
+        Queue<string> frontier,
+        CancellationToken cancellationToken)
+    {
         while (frontier.Count > 0)
         {
             var current = frontier.Dequeue();
@@ -144,16 +188,12 @@ internal sealed class LatticeMembershipDirectory(
                 }
 
                 closure.Add(groupId);
-                // Cycle detection: a group already visited (including memberId
-                // itself in an A-in-B, B-in-A cycle) is never re-walked.
                 if (visited.Add(groupId))
                 {
                     frontier.Enqueue(groupId);
                 }
             }
         }
-
-        return closure;
     }
 
     /// <inheritdoc />
