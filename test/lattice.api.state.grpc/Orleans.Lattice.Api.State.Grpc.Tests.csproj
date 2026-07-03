@@ -26,6 +26,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\lattice.api.state.grpc\Orleans.Lattice.Api.State.Grpc.csproj" />
+    <ProjectReference Include="..\..\src\lattice.membership\Orleans.Lattice.Membership.csproj" />
+    <ProjectReference Include="..\..\src\lattice.auth\Orleans.Lattice.Auth.csproj" />
     <ProjectReference Include="..\shared\Orleans.Lattice.Testing\Orleans.Lattice.Testing.csproj" />
   </ItemGroup>
 

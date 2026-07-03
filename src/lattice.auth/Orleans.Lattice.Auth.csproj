@@ -19,6 +19,8 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Orleans.Lattice.Auth.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.State.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.State.Grpc.Tests" />
     <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
   </ItemGroup>
 
