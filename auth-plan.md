@@ -122,6 +122,10 @@ Prompt MUST contain the full contract:
 - Update the task ledger status + append a Progress-log entry (what landed,
   key decisions, any follow-ups) in this file; commit it.
 - Push: `git -C C:\dev\lattice push -u origin feat/auth` (branch only, no PR).
+  IMPORTANT: run `$env:GH_TOKEN=""` first - the shell default `GH_TOKEN`
+  resolves to the wrong account (staudtnathan_microsoft) and git push 403s;
+  clearing it makes gh's git-credential helper use the NSTA1 keyring account.
+  The same `$env:GH_TOKEN=""` prefix is required for every `gh` write.
 - Update the session task DB row to `done`.
 
 **End of epic:** all 19 merged -> full suite + chaos green (coordinator) ->
