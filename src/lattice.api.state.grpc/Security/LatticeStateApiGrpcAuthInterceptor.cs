@@ -55,7 +55,7 @@ internal sealed class LatticeStateApiGrpcAuthInterceptor : Interceptor
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(continuation);
 
-        if (!IsLatticeStateApiMethod(context.Method))
+        if (!IsLatticeStateApiMethod(context.Method) || IsUnauthenticatedMethod(context.Method))
         {
             return await continuation(request, context).ConfigureAwait(false);
         }
@@ -183,5 +183,19 @@ internal sealed class LatticeStateApiGrpcAuthInterceptor : Interceptor
     {
         const string ServicePrefix = "/" + LatticeStateGrpcMethods.ServiceName + "/";
         return fullMethodName.StartsWith(ServicePrefix, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Whether the call targets a method exempt from authorization. The
+    /// auth-scheme advertisement RPC must be reachable without a credential so a
+    /// client can discover how to sign in before it holds one; every other
+    /// state-API method is enforced.
+    /// </summary>
+    /// <remarks>Exposed as <c>internal</c> so the exemption can be asserted
+    /// directly in unit tests without standing up a gRPC server.</remarks>
+    internal static bool IsUnauthenticatedMethod(string fullMethodName)
+    {
+        var methodName = fullMethodName[(fullMethodName.LastIndexOf('/') + 1)..];
+        return string.Equals(methodName, LatticeStateGrpcMethods.GetAuthSchemeMethodName, StringComparison.Ordinal);
     }
 }

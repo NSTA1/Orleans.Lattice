@@ -109,6 +109,14 @@ public sealed class LatticeStateApiGrpcClient
         => UnaryAsync(_methods.GetClusterInfo, request, cancellationToken);
 
     /// <summary>
+    /// Returns the endpoint's advertised auth schemes. This RPC is
+    /// unauthenticated: it can be called before any credential is acquired, so a
+    /// client can discover how to sign in.
+    /// </summary>
+    public Task<AuthSchemeAdvertisement> GetAuthSchemeAsync(AuthSchemeAdvertisementRequest request, CancellationToken cancellationToken = default)
+        => UnaryAsync(_methods.GetAuthScheme, request, cancellationToken);
+
+    /// <summary>
     /// Subscribes to live change notifications for a tree, yielding each
     /// notification until the call is cancelled or the server ends the stream.
     /// </summary>

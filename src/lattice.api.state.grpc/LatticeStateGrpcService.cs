@@ -78,6 +78,14 @@ internal abstract class LatticeStateGrpcServiceBase
     public abstract Task<ClusterInfo> GetClusterInfo(ClusterInfoRequest request, ServerCallContext context);
 
     /// <summary>
+    /// Returns the endpoint's advertised auth schemes. Unauthenticated: this RPC
+    /// is exempt from the authorization interceptor so a client can learn how to
+    /// sign in before it holds any credential. Implemented in
+    /// <see cref="LatticeStateGrpcService"/>.
+    /// </summary>
+    public abstract Task<AuthSchemeAdvertisement> GetAuthScheme(AuthSchemeAdvertisementRequest request, ServerCallContext context);
+
+    /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at
     /// startup with <paramref name="serviceImpl"/> set to
     /// <see langword="null"/> to record method metadata; the actual service
@@ -112,6 +120,7 @@ internal abstract class LatticeStateGrpcServiceBase
             binder.AddMethod(methods.ObserveMetrics, (ServerStreamingServerMethod<TreeMetricsRequest, TreeMetricsSnapshot>?)null);
             binder.AddMethod(methods.GetMetricsSnapshot, (UnaryServerMethod<TreeMetricsRequest, TreeMetricsSnapshot>?)null);
             binder.AddMethod(methods.GetClusterInfo, (UnaryServerMethod<ClusterInfoRequest, ClusterInfo>?)null);
+            binder.AddMethod(methods.GetAuthScheme, (UnaryServerMethod<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>?)null);
             return;
         }
 
@@ -131,6 +140,7 @@ internal abstract class LatticeStateGrpcServiceBase
         binder.AddMethod(methods.ObserveMetrics, new ServerStreamingServerMethod<TreeMetricsRequest, TreeMetricsSnapshot>(serviceImpl.ObserveMetrics));
         binder.AddMethod(methods.GetMetricsSnapshot, new UnaryServerMethod<TreeMetricsRequest, TreeMetricsSnapshot>(serviceImpl.GetMetricsSnapshot));
         binder.AddMethod(methods.GetClusterInfo, new UnaryServerMethod<ClusterInfoRequest, ClusterInfo>(serviceImpl.GetClusterInfo));
+        binder.AddMethod(methods.GetAuthScheme, new UnaryServerMethod<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>(serviceImpl.GetAuthScheme));
     }
 }
 
@@ -147,6 +157,7 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
     private readonly ILatticeStateObserver _observer;
     private readonly ILatticeStateMetricsObserver _metricsObserver;
     private readonly ILatticeStateApiCredentialBridge _credentialBridge;
+    private readonly ILatticeStateApiAuthSchemeSource _authSchemeSource;
     private readonly ILogger<LatticeStateGrpcService> _logger;
 
     /// <summary>
@@ -164,6 +175,7 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
         ILatticeStateObserver observer,
         ILatticeStateMetricsObserver metricsObserver,
         ILatticeStateApiCredentialBridge credentialBridge,
+        ILatticeStateApiAuthSchemeSource authSchemeSource,
         ILogger<LatticeStateGrpcService> logger)
     {
         ArgumentNullException.ThrowIfNull(methods);
@@ -171,12 +183,14 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
         ArgumentNullException.ThrowIfNull(observer);
         ArgumentNullException.ThrowIfNull(metricsObserver);
         ArgumentNullException.ThrowIfNull(credentialBridge);
+        ArgumentNullException.ThrowIfNull(authSchemeSource);
         ArgumentNullException.ThrowIfNull(logger);
 
         _query = query;
         _observer = observer;
         _metricsObserver = metricsObserver;
         _credentialBridge = credentialBridge;
+        _authSchemeSource = authSchemeSource;
         _logger = logger;
     }
 
@@ -436,6 +450,17 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
     /// <inheritdoc />
     public override Task<ClusterInfo> GetClusterInfo(ClusterInfoRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (query, _, ct) => query.GetClusterInfoAsync(ct));
+
+    /// <inheritdoc />
+    public override Task<AuthSchemeAdvertisement> GetAuthScheme(AuthSchemeAdvertisementRequest request, ServerCallContext context)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(context);
+
+        // Unauthenticated by design (the interceptor exempts this method), so no
+        // credential is bridged and only the public advertisement is returned.
+        return Task.FromResult(_authSchemeSource.GetAdvertisement());
+    }
 
     private async Task<TResponse> InvokeAsync<TRequest, TResponse>(
         TRequest request,
