@@ -139,7 +139,7 @@ sub-issue closes, applying the correct release label.
 | 1 | #972 | Membership: project & package scaffolding | done (merged) |
 | 2 | #973 | Core: caller-credential propagation seam | done (merged) |
 | 3 | #974 | Membership: subject model, directory & resolution | pending |
-| 4 | #975 | Auth: project & package scaffolding | pending |
+| 4 | #975 | Auth: project & package scaffolding | done (merged) |
 | 5 | #976 | Core: access-gate enforcement point | pending |
 | 6 | #977 | Core: range-scan key-filter | pending |
 | 7 | #978 | Auth: authorization rule model & policy store | pending |
@@ -165,6 +165,10 @@ Out of scope: #1104 (admin UI follow-up).
 
 ## Progress log
 
+- 2026-07-03 #975 (Auth scaffolding) MERGED (out of numeric order; independent of
+  #974). Empty `Orleans.Lattice.Auth` package referencing core + Membership, slnx +
+  docs skeleton, marker + trivial green test. Deferred CHANGELOG/features entry (inert
+  package), same as #972. Focused test green post-merge.
 - 2026-07-03 #973 (core credential seam) MERGED. `LatticeCredential` readonly
   record struct (alias `ol.cdl`, unique/<=6) + `LatticeCredentialContext` ambient
   marker (Current/IsActive/With/Use/Suppress), RequestContext key `ol.cred` placed
