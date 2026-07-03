@@ -412,6 +412,15 @@ internal sealed partial class LatticeCursorGrain(
         var (effStart, effEnd) = ComputeEffectiveRange();
         var predicate = state.State.Spec.Predicate;
 
+        // Fail-closed RangeDelete hard-deny over the cursor's FULL effective
+        // range, up front and every step: a delete-range cursor is all-or-nothing
+        // across its whole span, so a plain deny or a partial-coverage allow
+        // throws and tombstones nothing on any step. The per-step public
+        // DeleteRangeAsync calls below re-assert this over each sub-range, but
+        // checking the full range here prevents even the probe read from
+        // observing a partially authorized range.
+        await EnforceCursorRangeDeleteAsync(effStart, effEnd);
+
         // Probe the range: collect up to maxToDelete+1 keys so we can tell
         // whether this step exhausts the range. One-past-budget lets us pick
         // a correct sub-range end without an extra round-trip.

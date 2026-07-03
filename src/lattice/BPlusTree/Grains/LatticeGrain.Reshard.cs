@@ -23,6 +23,7 @@ internal sealed partial class LatticeGrain
     {
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
+        await EnforceWholeTreeAsync(LatticeOperation.Admin, cancellationToken);
         var reshard = grainFactory.GetGrain<ITreeReshardGrain>(TreeId);
         await ShardActivationRetry.RunAsync(
             () => reshard.ReshardAsync(newShardCount),

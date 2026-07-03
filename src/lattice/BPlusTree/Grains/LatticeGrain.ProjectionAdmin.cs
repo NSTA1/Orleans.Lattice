@@ -20,6 +20,7 @@ internal sealed partial class LatticeGrain
     {
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
+        await EnforceWholeTreeAsync(LatticeOperation.Admin, cancellationToken);
 
         var (physicalTreeId, shardMap) = await GetRoutingAsync();
         cancellationToken.ThrowIfCancellationRequested();
@@ -50,6 +51,7 @@ internal sealed partial class LatticeGrain
     {
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
+        await EnforceWholeTreeAsync(LatticeOperation.Admin, cancellationToken);
 
         var (_, shardMap) = await GetRoutingAsync();
         cancellationToken.ThrowIfCancellationRequested();

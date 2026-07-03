@@ -578,7 +578,21 @@ internal sealed partial class LatticeGrain(
     {
         ThrowIfSystemTree();
         ThrowIfProtectedViewRead();
-        return GetAsyncCore(key, cancellationToken);
+        ArgumentNullException.ThrowIfNull(key);
+        var allowed = IsPointReadAllowedAsync(key, cancellationToken);
+        if (allowed.IsCompletedSuccessfully)
+        {
+            return allowed.GetAwaiter().GetResult()
+                ? GetAsyncCore(key, cancellationToken)
+                : Task.FromResult<byte[]?>(null);
+        }
+        return GetEnforcedSlowAsync(allowed, key, cancellationToken);
+    }
+
+    private async Task<byte[]?> GetEnforcedSlowAsync(ValueTask<bool> allowed, string key, CancellationToken cancellationToken)
+    {
+        // Denied point read reads as absent (not-found), never throws.
+        return await allowed ? await GetAsyncCore(key, cancellationToken) : null;
     }
 
     async Task<byte[]?> ISystemLattice.GetAsync(string key, CancellationToken cancellationToken)
@@ -690,6 +704,12 @@ internal sealed partial class LatticeGrain(
         ThrowIfProtectedViewRead();
         ArgumentNullException.ThrowIfNull(key);
         cancellationToken.ThrowIfCancellationRequested();
+        // Denied point read reads as absent: an empty VersionedValue
+        // (Value=null, Version=Zero), matching missing-key semantics, never throws.
+        if (!await IsPointReadAllowedAsync(key, cancellationToken))
+        {
+            return new VersionedValue();
+        }
 
         // Caller-visible per-call envelope. GetWithVersionDuration is the
         // single-observation envelope histogram; no per-stage decomposition
@@ -768,7 +788,21 @@ internal sealed partial class LatticeGrain(
     {
         ThrowIfSystemTree();
         ThrowIfProtectedViewRead();
-        return ExistsAsyncCore(key, cancellationToken);
+        ArgumentNullException.ThrowIfNull(key);
+        var allowed = IsPointReadAllowedAsync(key, cancellationToken);
+        if (allowed.IsCompletedSuccessfully)
+        {
+            return allowed.GetAwaiter().GetResult()
+                ? ExistsAsyncCore(key, cancellationToken)
+                : Task.FromResult(false);
+        }
+        return ExistsEnforcedSlowAsync(allowed, key, cancellationToken);
+    }
+
+    private async Task<bool> ExistsEnforcedSlowAsync(ValueTask<bool> allowed, string key, CancellationToken cancellationToken)
+    {
+        // Denied point read reads as absent (not-found), never throws.
+        return await allowed && await ExistsAsyncCore(key, cancellationToken);
     }
 
     async Task<bool> ISystemLattice.ExistsAsync(string key, CancellationToken cancellationToken)
@@ -1202,9 +1236,24 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(key);
         ValidateWriteSize(key, value);
         EnforceAdmissionControl();
-        return LatticeIdempotencyContext.IsActive
-            ? RunMutationAsync(ct => SetAsyncCore(key, value, ct), cancellationToken)
-            : SetAsyncCore(key, value, cancellationToken);
+        var enforce = EnforcePointAsync(LatticeOperation.Write, key, cancellationToken);
+        if (enforce.IsCompletedSuccessfully)
+        {
+            enforce.GetAwaiter().GetResult();
+            return LatticeIdempotencyContext.IsActive
+                ? RunMutationAsync(ct => SetAsyncCore(key, value, ct), cancellationToken)
+                : SetAsyncCore(key, value, cancellationToken);
+        }
+        return SetEnforcedSlowAsync(enforce, key, value, cancellationToken);
+    }
+
+    private async Task SetEnforcedSlowAsync(ValueTask enforce, string key, byte[] value, CancellationToken cancellationToken)
+    {
+        await enforce;
+        if (LatticeIdempotencyContext.IsActive)
+            await RunMutationAsync(ct => SetAsyncCore(key, value, ct), cancellationToken);
+        else
+            await SetAsyncCore(key, value, cancellationToken);
     }
 
     async Task ISystemLattice.SetAsync(string key, byte[] value, CancellationToken cancellationToken)
@@ -1383,6 +1432,7 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(value);
         ValidateWriteSize(key, value);
         EnforceAdmissionControl();
+        await EnforcePointAsync(LatticeOperation.Write, key, cancellationToken);
         if (ttl <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(ttl), "TTL must be positive.");
         var nowUtc = DateTimeOffset.UtcNow;
@@ -1433,6 +1483,7 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(value);
         ValidateWriteSize(key, value);
         EnforceAdmissionControl();
+        await EnforcePointAsync(LatticeOperation.Write, key, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
@@ -1467,6 +1518,7 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(deltaBytes);
         ValidateWriteSize(key, deltaBytes);
         EnforceAdmissionControl();
+        await EnforcePointAsync(LatticeOperation.CrdtApply, key, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
@@ -1501,6 +1553,7 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(value);
         ValidateWriteSize(key, value);
         EnforceAdmissionControl();
+        await EnforcePointAsync(LatticeOperation.Write, key, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
@@ -1545,6 +1598,7 @@ internal sealed partial class LatticeGrain(
             }
         }
         EnforceAdmissionControl();
+        await EnforceEntryWritesAsync(entries, null, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
 
@@ -1697,6 +1751,7 @@ internal sealed partial class LatticeGrain(
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
         ArgumentNullException.ThrowIfNull(entries);
+        await EnforceEntryWritesAsync(entries, null, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
 
@@ -1801,6 +1856,7 @@ internal sealed partial class LatticeGrain(
         cancellationToken.ThrowIfCancellationRequested();
         if (entries.Count == 0) return;
 
+        await EnforceEntryWritesAsync(entries, null, cancellationToken);
         var operationId = Guid.NewGuid().ToString("N");
         var saga = grainFactory.GetGrain<IAtomicWriteGrain>($"{TreeId}/{operationId}");
 #if LATTICE_DIAG
@@ -1846,6 +1902,7 @@ internal sealed partial class LatticeGrain(
         cancellationToken.ThrowIfCancellationRequested();
         if (entries.Count == 0) return;
 
+        await EnforceEntryWritesAsync(entries, null, cancellationToken);
         var saga = grainFactory.GetGrain<IAtomicWriteGrain>($"{TreeId}/{operationId}");
 #if LATTICE_DIAG
         var swSetMany = System.Diagnostics.Stopwatch.StartNew();
@@ -1902,6 +1959,13 @@ internal sealed partial class LatticeGrain(
         cancellationToken.ThrowIfCancellationRequested();
         if (upserts.Count == 0 && deletes.Count == 0) return;
 
+        // Authorize every leg up front: upserts as Write, deletes as Delete. Any
+        // denied key throws before the batch is unioned or dispatched, so the
+        // atomic saga never sees a partially authorized batch and nothing persists.
+        await EnforceEntryWritesAsync(upserts, null, cancellationToken);
+        if (deletes.Count > 0)
+            await EnforceManyPointsAsync(LatticeOperation.Delete, deletes, cancellationToken);
+
         // Union the upserts and deletes into a single batch with a parallel
         // per-entry delete flag. Upserts keep their flag false; deletes carry
         // an empty (non-null) value buffer and a true flag so the leaf stages a
@@ -1947,6 +2011,7 @@ internal sealed partial class LatticeGrain(
         cancellationToken.ThrowIfCancellationRequested();
         if (entries.Count == 0) return AtomicWriteOutcome.Committed;
 
+        await EnforceEntryWritesAsync(entries, null, cancellationToken);
         var operationId = Guid.NewGuid().ToString("N");
         var saga = grainFactory.GetGrain<IAtomicWriteGrain>($"{TreeId}/{operationId}");
         return await ShardActivationRetry.RunAsync(
@@ -1974,6 +2039,7 @@ internal sealed partial class LatticeGrain(
         cancellationToken.ThrowIfCancellationRequested();
         if (entries.Count == 0) return AtomicWriteOutcome.Committed;
 
+        await EnforceEntryWritesAsync(entries, null, cancellationToken);
         var saga = grainFactory.GetGrain<IAtomicWriteGrain>($"{TreeId}/{operationId}");
         return await ShardActivationRetry.RunAsync(
             () => saga.ExecuteGuardedAsync(TreeId, entries, predicate),
@@ -1986,9 +2052,24 @@ internal sealed partial class LatticeGrain(
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
+        ArgumentNullException.ThrowIfNull(key);
+        var enforce = EnforcePointAsync(LatticeOperation.Delete, key, cancellationToken);
+        if (enforce.IsCompletedSuccessfully)
+        {
+            enforce.GetAwaiter().GetResult();
+            return LatticeIdempotencyContext.IsActive
+                ? RunMutationAsync(ct => DeleteAsyncCore(key, ct), cancellationToken)
+                : DeleteAsyncCore(key, cancellationToken);
+        }
+        return DeleteEnforcedSlowAsync(enforce, key, cancellationToken);
+    }
+
+    private async Task<bool> DeleteEnforcedSlowAsync(ValueTask enforce, string key, CancellationToken cancellationToken)
+    {
+        await enforce;
         return LatticeIdempotencyContext.IsActive
-            ? RunMutationAsync(ct => DeleteAsyncCore(key, ct), cancellationToken)
-            : DeleteAsyncCore(key, cancellationToken);
+            ? await RunMutationAsync(ct => DeleteAsyncCore(key, ct), cancellationToken)
+            : await DeleteAsyncCore(key, cancellationToken);
     }
 
     async Task<bool> ISystemLattice.DeleteAsync(string key, CancellationToken cancellationToken)
@@ -2025,6 +2106,7 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(startInclusive);
         ArgumentNullException.ThrowIfNull(endExclusive);
         cancellationToken.ThrowIfCancellationRequested();
+        await EnforceRangeDeleteAsync(startInclusive, endExclusive, cancellationToken);
         LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
         cancellationToken.ThrowIfCancellationRequested();
@@ -2045,6 +2127,7 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(startInclusive);
         ArgumentNullException.ThrowIfNull(endExclusive);
         cancellationToken.ThrowIfCancellationRequested();
+        await EnforceRangeDeleteAsync(startInclusive, endExclusive, cancellationToken);
         LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
         cancellationToken.ThrowIfCancellationRequested();
@@ -2468,6 +2551,13 @@ internal sealed partial class LatticeGrain(
         ThrowIfSystemTree();
         ThrowIfProtectedViewRead();
         cancellationToken.ThrowIfCancellationRequested();
+
+        // Hard-deny fail-closed: a per-shard count exposes the physical shard
+        // count and per-shard key distribution, which cannot be narrowed by a
+        // per-key filter without full enumeration. A denied or partially-
+        // authorized caller is refused rather than shown real (or zero-padded)
+        // counts, so no structural information leaks across the authz boundary.
+        await EnforceUniformRangeReadAsync(null, null, cancellationToken);
         try
         {
             return await CountPerShardAsyncCore(cancellationToken);

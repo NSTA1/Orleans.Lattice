@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using Orleans.Hosting;
+using Orleans.Lattice.Membership;
 
 namespace Orleans.Lattice.Auth;
 
@@ -19,23 +20,27 @@ public static class LatticeAuthServiceCollectionExtensions
     /// policy tree gets durable per-key history out of the box.
     /// <para>
     /// This registers the rule model, the policy storage surface, the compiled
-    /// policy snapshot maintainer, and the inert <see cref="ILatticeDecisionEngine"/>;
-    /// enforcement wiring (making an access gate consult the engine) is added by a
-    /// later feature. The core access gate stays the default no-op.
+    /// policy snapshot maintainer, the <see cref="ILatticeDecisionEngine"/>, and
+    /// the enforcing <see cref="ILatticeAccessGate"/> that replaces the core
+    /// default no-op gate - so with this add-on installed every user-originated
+    /// operation at the <c>LatticeGrain</c> choke point is authorized fail-closed
+    /// against the compiled policy snapshot.
     /// </para>
     /// <para>
     /// Must be called <i>after</i>
-    /// <see cref="LatticeServiceCollectionExtensions.AddLattice(ISiloBuilder, Action{ISiloBuilder, string})"/>:
-    /// the core registration is the source of truth for the tree registry and
-    /// options system this add-on builds on. Calling it first fails fast with a
-    /// clear message, mirroring how the other add-ons guard their ordering.
+    /// <see cref="LatticeServiceCollectionExtensions.AddLattice(ISiloBuilder, Action{ISiloBuilder, string})"/>
+    /// and after <c>AddLatticeMembership(...)</c>: the core registration is the
+    /// source of truth for the tree registry and options system this add-on builds
+    /// on, and membership resolves the caller identities the gate authorizes.
+    /// Calling it before either fails fast with a clear message, mirroring how the
+    /// other add-ons guard their ordering.
     /// </para>
     /// </summary>
     /// <param name="builder">The silo builder.</param>
     /// <param name="configure">Optional delegate that populates <see cref="LatticeAuthOptions"/>.</param>
     /// <returns>The same <paramref name="builder"/> for chaining.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="builder"/> is <c>null</c>.</exception>
-    /// <exception cref="InvalidOperationException"><c>AddLattice(...)</c> was not called first.</exception>
+    /// <exception cref="InvalidOperationException"><c>AddLattice(...)</c> or <c>AddLatticeMembership(...)</c> was not called first.</exception>
     public static ISiloBuilder AddLatticeAuth(
         this ISiloBuilder builder,
         Action<LatticeAuthOptions>? configure = null)
@@ -51,6 +56,20 @@ public static class LatticeAuthServiceCollectionExtensions
             throw new InvalidOperationException(
                 "AddLatticeAuth() must be called after AddLattice(). Register the core " +
                 "lattice (siloBuilder.AddLattice(...)) before adding authorization.");
+        }
+
+        // Ordering guard: enforcement resolves the caller subject through the
+        // membership directory. AddLatticeMembership is the only registrar of
+        // ILatticeMembershipDirectory (the core registers only the null
+        // membership context), so its absence means every request would fail
+        // closed against LatticeSubject.Anonymous. Fail fast so the operator
+        // wires membership before turning enforcement on.
+        if (!builder.Services.Any(d => d.ServiceType == typeof(ILatticeMembershipDirectory)))
+        {
+            throw new InvalidOperationException(
+                "AddLatticeAuth() must be called after AddLatticeMembership(). Register " +
+                "membership (siloBuilder.AddLatticeMembership(...)) before adding authorization " +
+                "so the enforcement gate can resolve caller identities.");
         }
 
         // A repeat call still layers any supplied configure delegate above but
@@ -91,11 +110,19 @@ public static class LatticeAuthServiceCollectionExtensions
         builder.Services.AddSingleton<IMutationObserver>(
             sp => sp.GetRequiredService<CompiledPolicySnapshotMaintainer>());
 
-        // The decision engine: an inert decision surface. Registering it does not
-        // wire enforcement - the core access gate stays the default no-op and
-        // nothing on the data path consults the engine until a later feature
-        // wires it in.
+        // The decision engine: the in-memory decision surface the enforcement
+        // gate consults. Registered once; the gate below replaces the core
+        // default no-op access gate with one that routes through this engine.
         builder.Services.TryAddSingleton<ILatticeDecisionEngine, LatticeDecisionEngine>();
+
+        // Enforcement wiring: replace the core default NullLatticeAccessGate
+        // (registered by AddLattice via TryAddSingleton) with PolicyAccessGate,
+        // so this add-on becomes the enforcement control point. Replace (not
+        // TryAdd) guarantees exactly one ILatticeAccessGate resolves and it is
+        // the policy gate; the LatticeGrain choke point already routes every
+        // user-originated operation through the resolved gate.
+        builder.Services.Replace(
+            ServiceDescriptor.Singleton<ILatticeAccessGate, PolicyAccessGate>());
 
         return builder;
     }

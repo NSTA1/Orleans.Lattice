@@ -46,6 +46,12 @@ internal static class TypeAliases
     // access-gate seam references it and core cannot depend on Membership.
     internal const string LatticeSubject = "ol.sub";
 
+    // Access-gate enforcement: the fail-closed denial the public write /
+    // delete / CRDT / atomic / range-delete / bulk-load / lifecycle surface
+    // throws when the registered access gate denies the caller. Serialized so
+    // the denial propagates intact from the enforcing grain back to the client.
+    internal const string LatticeAuthorizationDenied = "ol.azd";
+
     // BPlusTree State
     internal const string ChildEntry = "ol.ce";
     internal const string InternalNodeState = "ol.ins";

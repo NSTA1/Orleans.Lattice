@@ -11,6 +11,17 @@ namespace Orleans.Lattice.Auth;
 /// mutation runs through the standard write path, so it is durably captured by
 /// the per-key history view created at bootstrap.
 /// </summary>
+/// <remarks>
+/// The store is authorization <b>infrastructure</b>: it reads and writes the
+/// policy tree that feeds the enforcement gate itself, so every operation runs
+/// under <see cref="LatticeAccessGateContext.EnterSystemOrigin"/>. This both
+/// avoids a bootstrap paradox (the very first rule cannot be authorized by a
+/// rule that does not exist yet) and breaks the re-entrancy cycle where the
+/// compiled-snapshot maintainer's own scan of the policy tree would otherwise
+/// call back into a cold gate and deadlock. Authorizing <i>who</i> may edit
+/// policy is a higher-layer concern (a bootstrap administrator or an admin API
+/// grain), not the store's.
+/// </remarks>
 internal sealed class LatticeAuthorizationPolicyStore(
     IGrainFactory grainFactory,
     AuthInitializer initializer) : ILatticeAuthorizationPolicyStore
@@ -24,15 +35,21 @@ internal sealed class LatticeAuthorizationPolicyStore(
         AuthConstants.ThrowIfReservedTree(rule.Scope.TreeId, "rule.Scope.TreeId");
 
         await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
-        await Policy.SetAsync(RuleKey(rule.Scope.TreeId, rule.RuleId), rule, cancellationToken).ConfigureAwait(false);
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            await Policy.SetAsync(RuleKey(rule.Scope.TreeId, rule.RuleId), rule, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <inheritdoc />
-    public Task<LatticeAuthorizationRule?> GetRuleAsync(string treeId, string ruleId, CancellationToken cancellationToken = default)
+    public async Task<LatticeAuthorizationRule?> GetRuleAsync(string treeId, string ruleId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         ArgumentException.ThrowIfNullOrEmpty(ruleId);
-        return Policy.GetAsync<LatticeAuthorizationRule>(RuleKey(treeId, ruleId), cancellationToken);
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            return await Policy.GetAsync<LatticeAuthorizationRule>(RuleKey(treeId, ruleId), cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <inheritdoc />
@@ -41,7 +58,10 @@ internal sealed class LatticeAuthorizationPolicyStore(
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         ArgumentException.ThrowIfNullOrEmpty(ruleId);
         await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
-        return await Policy.DeleteAsync(RuleKey(treeId, ruleId), cancellationToken).ConfigureAwait(false);
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            return await Policy.DeleteAsync(RuleKey(treeId, ruleId), cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <inheritdoc />
@@ -52,13 +72,16 @@ internal sealed class LatticeAuthorizationPolicyStore(
         ArgumentException.ThrowIfNullOrEmpty(treeId);
 
         var prefix = TreePrefix(treeId);
-        await foreach (var entry in Policy
-            .ScanEntriesAsync<LatticeAuthorizationRule>(prefix, PrefixUpperBound(prefix), cancellationToken: cancellationToken)
-            .ConfigureAwait(false))
+        using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            if (entry.Value is { } rule)
+            await foreach (var entry in Policy
+                .ScanEntriesAsync<LatticeAuthorizationRule>(prefix, PrefixUpperBound(prefix), cancellationToken: cancellationToken)
+                .ConfigureAwait(false))
             {
-                yield return rule;
+                if (entry.Value is { } rule)
+                {
+                    yield return rule;
+                }
             }
         }
     }
@@ -72,14 +95,18 @@ internal sealed class LatticeAuthorizationPolicyStore(
         // duplicates or gaps. The compiled-policy snapshot maintainer rescans this
         // same policy tree in the background on every edit, so a caller's list scan
         // routinely overlaps a maintainer scan; the resilient scan converges rather
-        // than surfacing the transient abort.
-        await foreach (var entry in Policy
-            .ScanEntriesAsync<LatticeAuthorizationRule>(cancellationToken: cancellationToken)
-            .ConfigureAwait(false))
+        // than surfacing the transient abort. The scan runs under system-origin so
+        // it bypasses the enforcement gate it feeds (see the type remarks).
+        using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            if (entry.Value is { } rule)
+            await foreach (var entry in Policy
+                .ScanEntriesAsync<LatticeAuthorizationRule>(cancellationToken: cancellationToken)
+                .ConfigureAwait(false))
             {
-                yield return rule;
+                if (entry.Value is { } rule)
+                {
+                    yield return rule;
+                }
             }
         }
     }

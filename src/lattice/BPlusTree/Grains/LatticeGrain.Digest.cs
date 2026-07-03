@@ -24,6 +24,14 @@ internal sealed partial class LatticeGrain
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
 
+        // Hard-deny fail-closed before any routing or shard-index validation: a
+        // content-derived digest over a shard's leaf data is an oracle a denied
+        // caller could use to confirm guessed values or detect changes to
+        // restricted keys. A digest cannot be narrowed per key, so a denied or
+        // partially-authorized caller is refused. The whole-shard digest requires
+        // uniform read authorization over the tree.
+        await EnforceUniformRangeReadAsync(null, null, cancellationToken);
+
         // Fast-fail at the public surface so a routing-table fetch and a
         // cross-grain hop to the shard root are not paid on every poll
         // against a tree that has explicitly opted out of digest
@@ -70,6 +78,13 @@ internal sealed partial class LatticeGrain
     {
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
+
+        // Hard-deny fail-closed over the requested [start, end) range before any
+        // routing or shard-index validation: a range digest is a content oracle
+        // (see GetLeafProjectionDigestAsync). A caller must be uniformly
+        // authorized for the whole probed range; a partial (filtered) allow is
+        // refused rather than narrowed, since a digest cannot be narrowed per key.
+        await EnforceUniformRangeReadAsync(startKeyInclusive, endKeyExclusive, cancellationToken);
 
         // Same fast-fail as GetLeafProjectionDigestAsync: a digest-quiescent
         // tree has no maintained aggregates, so a range probe would return

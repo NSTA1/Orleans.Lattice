@@ -71,17 +71,24 @@ internal sealed class AuthInitializer
     {
         var options = _options.CurrentValue;
 
-        foreach (var tree in AuthConstants.AllTrees)
+        // The bootstrap runs against the reserved policy tree that feeds the
+        // enforcement gate, so it runs under system-origin: SetHistoryRetention
+        // is an Admin-gated operation and would otherwise be denied for the
+        // (identity-less) bootstrap turn.
+        using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            var lattice = _grainFactory.GetGrain<ILattice>(tree);
-            await lattice
-                .SetHistoryRetentionAsync(options.HistoryRetentionMode, options.HistoryRetentionWindow, CancellationToken.None)
-                .ConfigureAwait(false);
-
-            if (options.EnableDurableHistoryView && _viewFactory is not null)
+            foreach (var tree in AuthConstants.AllTrees)
             {
-                var viewName = HistoryViewNameFor(tree);
-                _viewFactory.Create(lattice, viewName, LatticeHistoryView.Definition(viewName, _services));
+                var lattice = _grainFactory.GetGrain<ILattice>(tree);
+                await lattice
+                    .SetHistoryRetentionAsync(options.HistoryRetentionMode, options.HistoryRetentionWindow, CancellationToken.None)
+                    .ConfigureAwait(false);
+
+                if (options.EnableDurableHistoryView && _viewFactory is not null)
+                {
+                    var viewName = HistoryViewNameFor(tree);
+                    _viewFactory.Create(lattice, viewName, LatticeHistoryView.Definition(viewName, _services));
+                }
             }
         }
     }

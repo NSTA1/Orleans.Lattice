@@ -30,6 +30,15 @@ internal sealed class LatticeAuthOptionsValidator : IValidateOptions<LatticeAuth
             failures.Add($"{nameof(LatticeAuthOptions.DefaultEffect)} must be a defined LatticeEffect value.");
         }
 
+        if (options.BootstrapAdministrators is null)
+        {
+            failures.Add($"{nameof(LatticeAuthOptions.BootstrapAdministrators)} must not be null.");
+        }
+        else if (options.BootstrapAdministrators.Any(string.IsNullOrEmpty))
+        {
+            failures.Add($"{nameof(LatticeAuthOptions.BootstrapAdministrators)} must not contain a null or empty subject id.");
+        }
+
         return failures.Count > 0
             ? ValidateOptionsResult.Fail(failures)
             : ValidateOptionsResult.Success;

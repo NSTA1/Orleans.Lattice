@@ -2433,7 +2433,18 @@ internal sealed class AtomicWriteGrain(
                         deltaMap,
                         deleteSet))
                     {
-                        await lattice.SetManyAsync(slice).ConfigureAwait(true);
+                        // The saga's per-batch write leg is system-origin
+                        // infrastructure: the caller was already authorized per
+                        // key up front at the public SetManyAtomic* / cross-tree
+                        // entry point before this saga was dispatched. Enter a
+                        // system-origin scope so the enforcement point at the
+                        // target LatticeGrain.SetManyAsync bypasses re-authorizing
+                        // this internal leg (which runs without the caller's
+                        // identity and would otherwise fail-closed).
+                        using (LatticeAccessGateContext.EnterSystemOrigin())
+                        {
+                            await lattice.SetManyAsync(slice).ConfigureAwait(true);
+                        }
                     }
                 }
                 catch (Exception ex)
