@@ -140,9 +140,9 @@ sub-issue closes, applying the correct release label.
 | 2 | #973 | Core: caller-credential propagation seam | done (merged) |
 | 3 | #974 | Membership: subject model, directory & resolution | done (merged) |
 | 4 | #975 | Auth: project & package scaffolding | done (merged) |
-| 5 | #976 | Core: access-gate enforcement point | pending |
-| 6 | #977 | Core: range-scan key-filter | pending |
-| 7 | #978 | Auth: authorization rule model & policy store | pending |
+| 5 | #976 | Core: access-gate enforcement point | done (merged; gate batched with #977) |
+| 6 | #977 | Core: range-scan key-filter | in_progress (sub-agent) |
+| 7 | #978 | Auth: authorization rule model & policy store | done (merged; gate batched with #977) |
 | 8 | #979 | Auth: compiled snapshot & decision engine | pending |
 | 9 | #980 | Auth: enforcement wiring at LatticeGrain | pending |
 | 10 | #981 | State API: honour read-access visibility | pending |
@@ -164,6 +164,43 @@ Out of scope: #1104 (admin UI follow-up).
   `main`; `feat/auth` branched from `main`.
 
 ## Progress log
+
+- 2026-07-03 #978 (Auth: authorization rule model & policy store) MERGED into
+  `feat/auth`. Delivered in `Orleans.Lattice.Auth`: the durable authorization
+  policy model (`LatticeAuthorizationRule` with `LatticeSubjectSelector`,
+  `LatticeScope` (tree/key/prefix), `LatticeOperation` mask, `LatticeEffect`,
+  optional opaque `Condition`; aliases `olz.ar`/`olz.ss`/`olz.sc`, `olz.` mirror
+  test) and `ILatticeAuthorizationPolicyStore` (runtime CRUD + prefix/full scans)
+  backed by the reserved, dogfooded `sys-auth-policy` tree with an auto-enabled
+  durable per-key history view, mirroring the membership template. Registered via
+  `AddLatticeAuth()` (ordering-guarded after `AddLattice`). RECONCILIATION: the
+  sub-agent branched before #976 and used a local placeholder `LatticeOperation`;
+  as coordinator I merged `feat/auth` (with core `LatticeOperation`) into the
+  branch, deleted the placeholder, retargeted the rule model + tests at the core
+  enum (`Enumerate`->`RangeRead`, `Administer`->`Admin`), and added an Auth-level
+  `LatticeAuthOperations.All` grant-mask convenience so core stays pure
+  per-request vocabulary. Also refreshed the stale csproj package Description
+  (NUGET/docs READMEs deliberately left on the scaffolding text, matching the
+  membership package's deferred pattern -> refreshed in the #986 docs pass).
+  REVIEW: surgical, allocation-disciplined (`string.Create` rule key, per-scan
+  not per-entry prefix bounds, `Volatile.Read` init fast-path), reserved-namespace
+  write guard prevents a rule from being scoped over the policy tree itself,
+  history auto-on. Auth focused suite: 84/84 green. Full non-chaos gate BATCHED
+  with #977 (isolated new package, zero core-file changes, cannot regress the rest
+  of the suite). CHANGELOG entry DEFERRED into the consolidated Auth-enforcement
+  entry landing with #980 (store alone stores policy that nothing consumes yet;
+  mirrors how membership consolidated #972-#975 into one F-150 entry).
+
+- 2026-07-03 #976 (Core: access-gate seam, F-152) MERGED into `feat/auth` and
+  pushed. Delivered the inert, allocation-free `ILatticeAccessGate` seam:
+  `NullLatticeAccessGate` (cached `Allow()` `ValueTask`, registered by default),
+  `LatticeAccessRequest`/`LatticeAccessDecision` (Allow/Deny/Filtered), the
+  `LatticeOperation` `[Flags]` vocabulary, the system-origin marker
+  (`LatticeAccessGateContext`, key `ol.sysorig`), and the null-tolerant subject
+  resolver. No grain enforcement yet (that is #977 read-path + #980 write-path).
+  Surgical/additive (only 2 core files touched); no serialization attributes on the
+  in-process vocabulary. Focused suite 40 + hygiene 10 green. Full gate batched
+  with #977. CHANGELOG folded into the #980 enforcement entry.
 
 - 2026-07-03 #974 (Membership: subject model, directory & resolution) MERGED, and
   the FIRST FULL NON-CHAOS GATE (Membership boundary) PASSED: core 5653, Replication
