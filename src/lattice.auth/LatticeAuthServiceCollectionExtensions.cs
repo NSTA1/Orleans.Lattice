@@ -18,8 +18,10 @@ public static class LatticeAuthServiceCollectionExtensions
     /// history bootstrap. Also ensures the view infrastructure is present so the
     /// policy tree gets durable per-key history out of the box.
     /// <para>
-    /// This registers only the rule model and policy storage surface; the
-    /// decision engine and enforcement wiring are added by later features.
+    /// This registers the rule model, the policy storage surface, the compiled
+    /// policy snapshot maintainer, and the inert <see cref="ILatticeDecisionEngine"/>;
+    /// enforcement wiring (making an access gate consult the engine) is added by a
+    /// later feature. The core access gate stays the default no-op.
     /// </para>
     /// <para>
     /// Must be called <i>after</i>
@@ -76,6 +78,24 @@ public static class LatticeAuthServiceCollectionExtensions
 
         builder.Services.TryAddSingleton<AuthInitializer>();
         builder.Services.TryAddSingleton<ILatticeAuthorizationPolicyStore, LatticeAuthorizationPolicyStore>();
+
+        // The compiled policy snapshot maintainer: a per-silo singleton that
+        // builds the in-memory decision snapshot and rebuilds it off the core
+        // change-feed when the reserved policy tree mutates. Registered once as
+        // the concrete singleton and once as an IMutationObserver routed at that
+        // same instance, so a sys-auth-policy write refreshes the exact snapshot
+        // the decision engine reads. The AddSingleton<IMutationObserver>(...)
+        // factory is intentionally not idempotent under TryAdd, which is why the
+        // whole block runs only once (guarded by AuthRegistrationMarker above).
+        builder.Services.TryAddSingleton<CompiledPolicySnapshotMaintainer>();
+        builder.Services.AddSingleton<IMutationObserver>(
+            sp => sp.GetRequiredService<CompiledPolicySnapshotMaintainer>());
+
+        // The decision engine: an inert decision surface. Registering it does not
+        // wire enforcement - the core access gate stays the default no-op and
+        // nothing on the data path consults the engine until a later feature
+        // wires it in.
+        builder.Services.TryAddSingleton<ILatticeDecisionEngine, LatticeDecisionEngine>();
 
         return builder;
     }

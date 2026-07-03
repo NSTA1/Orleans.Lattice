@@ -61,6 +61,35 @@ public class LatticeAuthOptionsValidatorTests
     }
 
     [Test]
+    public void Undefined_default_effect_fails_validation()
+    {
+        var options = new LatticeAuthOptions { DefaultEffect = (LatticeEffect)999 };
+
+        var result = Validator.Validate(null, options);
+
+        Assert.That(result.Failed, Is.True);
+    }
+
+    [Test]
+    public void Allow_default_effect_validates_successfully()
+    {
+        var options = new LatticeAuthOptions { DefaultEffect = LatticeEffect.Allow };
+
+        var result = Validator.Validate(null, options);
+
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void Default_effect_is_deny_and_user_beats_group_by_default()
+    {
+        var options = new LatticeAuthOptions();
+
+        Assert.That(options.DefaultEffect, Is.EqualTo(LatticeEffect.Deny));
+        Assert.That(options.UserRuleBeatsGroupRuleAtEqualScope, Is.True);
+    }
+
+    [Test]
     public void History_view_is_enabled_by_default()
     {
         Assert.That(new LatticeAuthOptions().EnableDurableHistoryView, Is.True);

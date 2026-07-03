@@ -52,14 +52,9 @@ internal sealed class LatticeAuthorizationPolicyStore(
         ArgumentException.ThrowIfNullOrEmpty(treeId);
 
         var prefix = TreePrefix(treeId);
-        await foreach (var entry in Policy
-            .EntriesAsync<LatticeAuthorizationRule>(prefix, PrefixUpperBound(prefix), cancellationToken: cancellationToken)
-            .ConfigureAwait(false))
+        foreach (var rule in await ScanAsync(prefix, PrefixUpperBound(prefix), cancellationToken).ConfigureAwait(false))
         {
-            if (entry.Value is { } rule)
-            {
-                yield return rule;
-            }
+            yield return rule;
         }
     }
 
@@ -67,16 +62,59 @@ internal sealed class LatticeAuthorizationPolicyStore(
     public async IAsyncEnumerable<LatticeAuthorizationRule> ListRulesAsync(
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        await foreach (var entry in Policy
-            .EntriesAsync<LatticeAuthorizationRule>(cancellationToken: cancellationToken)
-            .ConfigureAwait(false))
+        foreach (var rule in await ScanAsync(startInclusive: null, endExclusive: null, cancellationToken).ConfigureAwait(false))
         {
-            if (entry.Value is { } rule)
+            yield return rule;
+        }
+    }
+
+    // A streaming scan over the policy tree grain can be aborted mid-flight when a
+    // concurrent enumeration is active over the same tree (the compiled-policy
+    // snapshot maintainer rescans the policy tree in the background on every
+    // policy edit, so a caller's list scan now routinely overlaps a maintainer
+    // scan). Orleans surfaces that as an enumeration-aborted error. It is
+    // transient, so the scan is buffered and retried as a whole with a short
+    // backoff; the policy rule set is bounded and small, so eager buffering is
+    // cheap and the retry converges once the overlapping scan drains.
+    private const int MaxScanAttempts = 8;
+
+    private async Task<List<LatticeAuthorizationRule>> ScanAsync(
+        string? startInclusive,
+        string? endExclusive,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
             {
-                yield return rule;
+                var rules = new List<LatticeAuthorizationRule>();
+                await foreach (var entry in Policy
+                    .EntriesAsync<LatticeAuthorizationRule>(startInclusive, endExclusive, cancellationToken: cancellationToken)
+                    .ConfigureAwait(false))
+                {
+                    if (entry.Value is { } rule)
+                    {
+                        rules.Add(rule);
+                    }
+                }
+
+                return rules;
+            }
+            catch (Exception ex) when (attempt < MaxScanAttempts && IsTransientScanFailure(ex))
+            {
+                await Task.Delay(25 * attempt, cancellationToken).ConfigureAwait(false);
             }
         }
     }
+
+    /// <summary>
+    /// A streaming scan over a grain can be aborted when its server-side
+    /// enumerator is evicted by a concurrent enumeration over the same tree or the
+    /// grain deactivates between pages. Orleans reports this as an
+    /// enumeration-aborted error; it is transient and a fresh scan converges.
+    /// </summary>
+    private static bool IsTransientScanFailure(Exception ex) =>
+        ex.GetType().Name == "EnumerationAbortedException";
 
     private static string RuleKey(string treeId, string ruleId) =>
         string.Create(
