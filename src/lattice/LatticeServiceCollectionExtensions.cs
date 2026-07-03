@@ -69,6 +69,13 @@ public static class LatticeServiceCollectionExtensions
         // latest report here so a meter scrape never fans out to grains.
         builder.Services.AddSingleton<LatticeStorageUsageMetrics>();
 
+        // Per-tree admission-control observable-gauge sink. Constructing the
+        // singleton registers the admission gauges (live_keys, estimated_bytes,
+        // over_advisory, utilization) on the shared meter (idempotent,
+        // process-wide); the per-tree aggregator pushes the latest admission
+        // sample here so a meter scrape never fans out to grains.
+        builder.Services.AddSingleton<LatticeAdmissionMetrics>();
+
         // Per-silo background poller that drives every registered tree's
         // storage-usage aggregator on a cadence so the gauges populate
         // without any caller invoking ILattice.GetStorageUsageAsync. Each

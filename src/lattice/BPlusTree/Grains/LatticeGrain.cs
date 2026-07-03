@@ -135,6 +135,147 @@ internal sealed partial class LatticeGrain(
         }
     }
 
+    // --- Per-tree admission control (opt-in, fail-open) --------------------
+    //
+    // Activation-cached snapshot of this tree's aggregate live-key count and
+    // estimated-byte footprint, refreshed by a coalesced background call to the
+    // single per-tree storage-usage aggregator (ILatticeStorageUsage) at most
+    // once per StorageUsageCacheTtl. The aggregate is the same cached,
+    // eventually-consistent figure the storage gauges report - never a per-write
+    // fan-out - so the cap is best-effort/approximate and enforcement fails open
+    // (never rejects) until the first sample lands after activation.
+    private long _admLiveKeys;
+    private long _admEstimatedBytes;
+    private bool _admHasSample;
+    private DateTimeOffset _admSampledAt;
+    private bool _admRefreshInFlight;
+
+    /// <summary>
+    /// Enforces the optional per-tree admission caps
+    /// (<see cref="LatticeOptions.MaxLiveKeys"/> /
+    /// <see cref="LatticeOptions.MaxEstimatedBytes"/>) and evaluates the
+    /// non-enforcing advisory ceilings
+    /// (<see cref="LatticeOptions.AdmissionAdvisoryLiveKeys"/> /
+    /// <see cref="LatticeOptions.AdmissionAdvisoryBytes"/>) at the public write
+    /// boundary. Strictly opt-in: a no-op (and zero grain hops) when all four
+    /// options are unset, which is the default. Replication / atomic-write-saga
+    /// apply paths bypass enforcement (they re-enter under a foreign origin or
+    /// prepared scope), exactly like the single-shape write guard. Compares the
+    /// cached per-tree aggregate - not a per-write fan-out - so the cap is
+    /// best-effort and fails open until the first sample lands. Throws
+    /// <see cref="LatticeQuotaExceededException"/> when an enforcing cap is
+    /// reached; advisory ceilings only increment the dry-run
+    /// <c>would_reject</c> counter and never reject.
+    /// </summary>
+    private void EnforceAdmissionControl()
+    {
+        // Foreign-origin (replication) and prepared (atomic-write saga) applies
+        // bypass admission control, mirroring ThrowIfLwwWriteToCrdtReplicatedTree.
+        if (LatticeOriginContext.Current is not null)
+        {
+            return;
+        }
+        if (LatticePreparedContext.Current)
+        {
+            return;
+        }
+
+        var options = Options;
+        var maxKeys = options.MaxLiveKeys;
+        var maxBytes = options.MaxEstimatedBytes;
+        var advisoryKeys = options.AdmissionAdvisoryLiveKeys;
+        var advisoryBytes = options.AdmissionAdvisoryBytes;
+
+        // Fully unbounded (the default): pay nothing, take no grain hop.
+        if (maxKeys is null && maxBytes is null && advisoryKeys is null && advisoryBytes is null)
+        {
+            return;
+        }
+
+        MaybeRefreshAdmissionSample(options.StorageUsageCacheTtl);
+
+        // Fail open until the first aggregate sample lands after activation.
+        if (!_admHasSample)
+        {
+            return;
+        }
+
+        var liveKeys = _admLiveKeys;
+        var estimatedBytes = _admEstimatedBytes;
+
+        // Advisory dry-run: count writes that a candidate cap WOULD reject,
+        // without rejecting anything.
+        if (advisoryKeys is { } advK && liveKeys >= advK)
+        {
+            LatticeMetrics.AdmissionWouldReject.Add(1, StageTagTree, LatticeMetrics.DimensionKeys);
+        }
+        if (advisoryBytes is { } advB && estimatedBytes >= advB)
+        {
+            LatticeMetrics.AdmissionWouldReject.Add(1, StageTagTree, LatticeMetrics.DimensionBytes);
+        }
+
+        // Enforcing caps: reject at-or-over the ceiling.
+        if (maxKeys is { } capKeys && liveKeys >= capKeys)
+        {
+            LatticeMetrics.AdmissionRejected.Add(1, StageTagTree, LatticeMetrics.DimensionKeys);
+            throw new LatticeQuotaExceededException(
+                $"Write to tree '{TreeId}' rejected: live key count {liveKeys} has reached the configured LatticeOptions.MaxLiveKeys cap of {capKeys}.",
+                TreeId, LatticeQuotaExceededException.KeysDimension, liveKeys, capKeys);
+        }
+        if (maxBytes is { } capBytes && estimatedBytes >= capBytes)
+        {
+            LatticeMetrics.AdmissionRejected.Add(1, StageTagTree, LatticeMetrics.DimensionBytes);
+            throw new LatticeQuotaExceededException(
+                $"Write to tree '{TreeId}' rejected: estimated footprint {estimatedBytes} bytes has reached the configured LatticeOptions.MaxEstimatedBytes cap of {capBytes} bytes.",
+                TreeId, LatticeQuotaExceededException.BytesDimension, estimatedBytes, capBytes);
+        }
+    }
+
+    /// <summary>
+    /// Kicks a coalesced, fire-and-forget refresh of the activation-cached
+    /// admission aggregate when the current sample is missing or older than
+    /// <paramref name="cacheTtl"/>. Never blocks the write path: the in-flight
+    /// write decides on the last-known sample; the refreshed value is used by
+    /// subsequent writes. At most one refresh is outstanding at a time.
+    /// </summary>
+    private void MaybeRefreshAdmissionSample(TimeSpan cacheTtl)
+    {
+        if (_admRefreshInFlight)
+        {
+            return;
+        }
+        var now = DateTimeOffset.UtcNow;
+        if (_admHasSample && cacheTtl > TimeSpan.Zero && (now - _admSampledAt) < cacheTtl)
+        {
+            return;
+        }
+        _admRefreshInFlight = true;
+        _ = RefreshAdmissionSampleAsync();
+    }
+
+    private async Task RefreshAdmissionSampleAsync()
+    {
+        try
+        {
+            var report = await grainFactory
+                .GetGrain<ILatticeStorageUsage>(TreeId)
+                .GetReportAsync(forceRefresh: false, CancellationToken.None);
+            _admLiveKeys = report.LiveKeys;
+            _admEstimatedBytes = report.TotalBytes;
+            _admHasSample = true;
+            _admSampledAt = DateTimeOffset.UtcNow;
+        }
+        catch
+        {
+            // Fail open: retain the last-known sample (if any). A transient
+            // aggregator fault must never block or fail a write.
+        }
+        finally
+        {
+            _admRefreshInFlight = false;
+        }
+    }
+
     private bool _compactionEnsured;
     private bool _monitorEnsured;
     private string? _physicalTreeId;
@@ -1041,6 +1182,7 @@ internal sealed partial class LatticeGrain(
         ThrowIfLwwWriteToCrdtReplicatedTree();
         ArgumentNullException.ThrowIfNull(key);
         ValidateWriteSize(key, value);
+        EnforceAdmissionControl();
         return LatticeIdempotencyContext.IsActive
             ? RunMutationAsync(ct => SetAsyncCore(key, value, ct), cancellationToken)
             : SetAsyncCore(key, value, cancellationToken);
@@ -1221,6 +1363,7 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
         ValidateWriteSize(key, value);
+        EnforceAdmissionControl();
         if (ttl <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(ttl), "TTL must be positive.");
         var nowUtc = DateTimeOffset.UtcNow;
@@ -1270,6 +1413,7 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
         ValidateWriteSize(key, value);
+        EnforceAdmissionControl();
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
@@ -1303,6 +1447,7 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(deltaBytes);
         ValidateWriteSize(key, deltaBytes);
+        EnforceAdmissionControl();
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
@@ -1336,6 +1481,7 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
         ValidateWriteSize(key, value);
+        EnforceAdmissionControl();
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
@@ -1379,6 +1525,7 @@ internal sealed partial class LatticeGrain(
                 }
             }
         }
+        EnforceAdmissionControl();
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
 

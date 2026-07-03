@@ -56,6 +56,8 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | Option | Type | Default | Safe to change after data exists? |
 |---|---|---|---|
 | [`ActivationReadyTimeout`](#activationreadytimeout) | `TimeSpan` | 15 seconds | Yes (on next seed) |
+| [`AdmissionAdvisoryBytes`](#admissionadvisorybytes) | `long?` | `null` (advisory dry-run off) | Yes |
+| [`AdmissionAdvisoryLiveKeys`](#admissionadvisorylivekeys) | `long?` | `null` (advisory dry-run off) | Yes |
 | [`AtomicWriteRetention`](#atomicwriteretention) | `TimeSpan` | 48 hours | Yes |
 | [`AutoSplitEnabled`](#autosplitenabled) | `bool` | `true` | Yes |
 | [`AutoSplitMinTreeAge`](#autosplitmintreeage) | `TimeSpan` | 60 seconds | Yes |
@@ -86,9 +88,11 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`MaxConcurrentMigrations`](#maxconcurrentmigrations) | `int` | 4 | Yes |
 | [`MaxConcurrentSnapshotCaptures`](#maxconcurrentsnapshotcaptures) | `int` | 4 | Yes |
 | [`MaxCursorSnapshotPinTtl`](#maxcursorsnapshotpinttl) | `TimeSpan` | 7 days | Yes |
+| [`MaxEstimatedBytes`](#maxestimatedbytes) | `long?` | `null` (unbounded) | Yes |
 | [`MaxKeyLength`](#maxkeylength) | `int?` | `null` (unbounded) | Yes |
 | [`MaxLeafEntriesBeforeForcedCompaction`](tombstone-compaction.md) | `int` | 0 (disabled) | Yes |
 | [`MaxLeafReplayEntries`](#maxleafreplayentries) | `int` | 10 000 | Yes |
+| [`MaxLiveKeys`](#maxlivekeys) | `long?` | `null` (unbounded) | Yes |
 | [`MaxPinnedSagaDecisions`](#maxpinnedsagadecisions) | `int` | 100 000 | Yes |
 | [`MaxScanRetries`](#maxscanretries) | `int` | 3 | Yes |
 | [`MaxSnapshotReplayEntries`](snapshot-cursors.md) | `long` | 10 000 000 | Yes |
@@ -154,6 +158,26 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 The virtual shard space is fixed at `LatticeConstants.DefaultVirtualShardCount = 4096` for every tree. Keys hash into `[0, 4096)` and the per-tree [`ShardMap`](tree-registry.md#shard-map) collapses ranges of virtual slots onto physical shards. This indirection decouples logical key routing from the physical shard count, enabling adaptive shard splitting without rehashing existing keys.
 
 The pinned `ShardCount` must divide 4096 evenly for the default identity map to preserve `hash % ShardCount` routing exactly; this invariant is validated at use time by `ShardMap.CreateDefault`. The value is a compile-time constant - changing it in source would invalidate every persisted `ShardMap` and is treated as a breaking wire-format change.
+
+### `AdmissionAdvisoryBytes`
+
+Optional non-enforcing advisory ceiling, in bytes, on a tree's estimated retained storage, used to right-size [`MaxEstimatedBytes`](#maxestimatedbytes) before turning enforcement on. `null` (the default) disables the byte advisory dry-run signal. When set it must be at least `1` (validated at startup). A tree over this ceiling is flagged by the `orleans.lattice.admission.over_advisory` gauge, and every write that *would* have been rejected at this ceiling increments `orleans.lattice.admission.would_reject` (dimension `bytes`) - but no write is ever rejected. Resolvable per tree.
+
+```csharp verify
+// Dry-run a 512 MiB byte ceiling: no rejections, just the would-reject signal.
+siloBuilder.ConfigureLattice("bulk-ingest", o => o.AdmissionAdvisoryBytes = 512L * 1024 * 1024);
+```
+
+See [Metrics](metrics.md#per-tree-admission-control) for the advisory-first-then-enforce adoption workflow.
+
+### `AdmissionAdvisoryLiveKeys`
+
+Optional non-enforcing advisory ceiling on a tree's live (non-tombstone) key count, used to right-size [`MaxLiveKeys`](#maxlivekeys) before turning enforcement on. `null` (the default) disables the live-key advisory dry-run signal. When set it must be at least `1` (validated at startup). Drives the same non-rejecting `orleans.lattice.admission.over_advisory` and `orleans.lattice.admission.would_reject` (dimension `keys`) signals as [`AdmissionAdvisoryBytes`](#admissionadvisorybytes), for the key dimension. Resolvable per tree.
+
+```csharp verify
+// Dry-run a 1,000,000 live-key ceiling before enforcing it.
+siloBuilder.ConfigureLattice("bulk-ingest", o => o.AdmissionAdvisoryLiveKeys = 1_000_000);
+```
 
 ### `AtomicWriteRetention`
 
@@ -402,6 +426,19 @@ The cap exists so a forgotten point-in-time cursor cannot stall registry-tombsto
 
 This option can be changed freely at any time.
 
+### `MaxEstimatedBytes`
+
+Optional enforcing cap, in bytes, on a tree's estimated retained storage (the same figure the `orleans.lattice.storage.total_bytes` gauge reports: WAL rows plus snapshot blobs plus leaf/shard-root state). `null` (the default) leaves estimated bytes unbounded; enforcement is strictly **opt-in**. When set it must be at least `1` (validated at startup). Once the tree's cached estimated-byte footprint reaches the cap, a locally-authored write is rejected with a `LatticeQuotaExceededException` carrying the `bytes` dimension.
+
+The cap is **best-effort and approximate**: it is evaluated against a cached, eventually-consistent per-tree aggregate (the same TTL-coalesced aggregator that backs the storage-usage gauges), never a per-write fan-out, so concurrent cross-shard writes can overshoot it slightly before the aggregate refreshes, and a freshly-activated tree **fails open** (accepts writes) until its first sample lands. Replication and atomic-write-saga apply paths bypass the cap, so an incoming replicated write is never rejected. Resolvable per tree.
+
+```csharp verify
+// Cap the "bulk-ingest" tree at 1 GiB of estimated retained storage.
+siloBuilder.ConfigureLattice("bulk-ingest", o => o.MaxEstimatedBytes = 1024L * 1024 * 1024);
+```
+
+Prefer the advisory-first workflow: dry-run with [`AdmissionAdvisoryBytes`](#admissionadvisorybytes) and watch `orleans.lattice.admission.would_reject` before promoting to this enforcing cap. See [Metrics](metrics.md#per-tree-admission-control). This option can be changed freely at any time; a new value takes effect on the next write.
+
 ### `MaxKeyLength`
 
 Optional upper bound on the number of characters in a key accepted by the `ILattice` write surface - `SetAsync` (and its TTL overload), `SetIfVersionAsync`, `GetOrSetAsync`, `SetManyAsync`, and the CRDT delta-apply path (default: `null`, unbounded). When set, a write whose key is longer than this bound is rejected with an `ArgumentException` before any shard work, so a client cannot drive unbounded heap growth by writing pathologically large keys. Leaving it `null` preserves the historical unbounded behaviour; when set it must be at least `1`.
@@ -421,6 +458,19 @@ siloBuilder.ConfigureLattice(o => o.MaxLeafReplayEntries = 100_000);
 ```
 
 This option can be changed freely at any time. The new value takes effect on the next leaf activation.
+
+### `MaxLiveKeys`
+
+Optional enforcing cap on the number of live (non-tombstone) keys a single tree may hold. `null` (the default) leaves the live-key count unbounded; enforcement is strictly **opt-in**. When set it must be at least `1` (validated at startup). Once the tree's cached live-key count reaches the cap, a locally-authored write is rejected with a `LatticeQuotaExceededException` carrying the `keys` dimension.
+
+Shares the **best-effort / approximate**, fail-open, replication-bypassing semantics of [`MaxEstimatedBytes`](#maxestimatedbytes): the cap is compared against the cached, eventually-consistent per-tree aggregate (never a per-write fan-out), so concurrent cross-shard writes can overshoot it slightly, a freshly-activated tree accepts writes until its first sample lands, and replicated / saga-applied writes are never rejected. A time-expired entry that compaction has not yet reaped counts as live until the next deep re-anchor, so the cap can bite slightly early - never late. Resolvable per tree.
+
+```csharp verify
+// Cap the "sessions" tree at 5,000,000 live keys.
+siloBuilder.ConfigureLattice("sessions", o => o.MaxLiveKeys = 5_000_000);
+```
+
+Prefer the advisory-first workflow: dry-run with [`AdmissionAdvisoryLiveKeys`](#admissionadvisorylivekeys) and watch `orleans.lattice.admission.would_reject` before promoting to this enforcing cap. See [Metrics](metrics.md#per-tree-admission-control). This option can be changed freely at any time; a new value takes effect on the next write.
 
 ### `MaxPinnedSagaDecisions`
 

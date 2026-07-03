@@ -14,6 +14,7 @@ internal sealed class LatticeStorageUsageGrain(
     IGrainFactory grainFactory,
     LatticeOptionsResolver optionsResolver,
     LatticeStorageUsageMetrics metrics,
+    LatticeAdmissionMetrics admissionMetrics,
     ILogger<LatticeStorageUsageGrain> logger) : ILatticeStorageUsage
 {
     private string TreeId => context.GrainId.Key.ToString()!;
@@ -57,6 +58,25 @@ internal sealed class LatticeStorageUsageGrain(
         {
             metrics.PublishOverThreshold(report.TreeId, report.WalRetainedBytes > ceiling);
         }
+
+        // Publish the per-tree admission aggregate so the observable admission
+        // gauges reflect it on the next scrape and so the LatticeGrain write
+        // guard can read the current live-key / estimated-byte figure in O(1)
+        // without fanning out. Estimated bytes aliases the total retained-byte
+        // figure; a byte surface that reported "unsupported" (Partial) is passed
+        // through unchanged (best-effort). The resolved caps ride along so the
+        // sink can compute the over-advisory and utilisation gauges at scrape
+        // time from a single published record.
+        admissionMetrics.Publish(new AdmissionUsageSample
+        {
+            TreeId = report.TreeId,
+            LiveKeys = report.LiveKeys,
+            EstimatedBytes = report.TotalBytes,
+            MaxLiveKeys = options.MaxLiveKeys,
+            MaxEstimatedBytes = options.MaxEstimatedBytes,
+            AdvisoryLiveKeys = options.AdmissionAdvisoryLiveKeys,
+            AdvisoryBytes = options.AdmissionAdvisoryBytes,
+        });
     }
 
     private async Task<TreeStorageUsageReport> BuildReportAsync(bool forceRefresh, CancellationToken cancellationToken)
@@ -94,10 +114,12 @@ internal sealed class LatticeStorageUsageGrain(
 
         long leafStateBytes = 0;
         long snapshotBytes = 0;
+        long liveKeys = 0;
         foreach (var usage in shardUsages)
         {
             leafStateBytes += usage.LeafStateBytes;
             snapshotBytes += usage.SnapshotBytes;
+            liveKeys += usage.LiveKeys;
         }
 
         long walRetainedBytes = 0;
@@ -128,6 +150,7 @@ internal sealed class LatticeStorageUsageGrain(
             TotalBytes = total,
             Partial = partial,
             SampledAt = DateTimeOffset.UtcNow,
+            LiveKeys = liveKeys,
         };
     }
 

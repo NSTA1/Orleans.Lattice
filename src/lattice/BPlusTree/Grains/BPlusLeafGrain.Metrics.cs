@@ -132,6 +132,7 @@ internal sealed partial class BPlusLeafGrain
 
     private long _lastPublishedStateBytes = long.MinValue;
     private long _lastPublishedSnapshotBytes = long.MinValue;
+    private long _lastPublishedLiveKeys = long.MinValue;
 
     /// <summary>
     /// Awaitable best-effort byte-footprint publish to the owning shard
@@ -155,7 +156,10 @@ internal sealed partial class BPlusLeafGrain
 
         var stateBytes = Cache.StateBytes;
         var snapshotBytes = _lastCapturedSnapshotBytes;
-        if (stateBytes == _lastPublishedStateBytes && snapshotBytes == _lastPublishedSnapshotBytes)
+        var liveKeys = Cache.LiveCount;
+        if (stateBytes == _lastPublishedStateBytes
+            && snapshotBytes == _lastPublishedSnapshotBytes
+            && liveKeys == _lastPublishedLiveKeys)
         {
             return;
         }
@@ -174,6 +178,7 @@ internal sealed partial class BPlusLeafGrain
         {
             StateBytes = stateBytes,
             SnapshotBytes = snapshotBytes,
+            LiveKeys = liveKeys,
         };
         try
         {
@@ -184,6 +189,7 @@ internal sealed partial class BPlusLeafGrain
             // that would otherwise carry the same byte totals.
             _lastPublishedStateBytes = stateBytes;
             _lastPublishedSnapshotBytes = snapshotBytes;
+            _lastPublishedLiveKeys = liveKeys;
         }
         catch
         {

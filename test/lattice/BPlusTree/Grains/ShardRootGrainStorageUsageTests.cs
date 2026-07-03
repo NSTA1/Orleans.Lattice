@@ -133,4 +133,50 @@ public sealed class ShardRootGrainStorageUsageTests
         Assert.That(usage.LeafStateBytes, Is.EqualTo(100L));
         Assert.That(usage.SnapshotBytes, Is.EqualTo(40L));
     }
+
+    [Test]
+    public async Task GetStorageUsageAsync_rolls_up_live_key_counts_across_leaves()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var grain = CreateGrain(factory, new FakePersistentState<ShardRootState>());
+        var leafA = Guid.NewGuid();
+        var leafB = Guid.NewGuid();
+
+        await grain.PublishLeafByteFootprintAsync(leafA, new LeafByteFootprint { StateBytes = 100, LiveKeys = 3 });
+        await grain.PublishLeafByteFootprintAsync(leafB, new LeafByteFootprint { StateBytes = 60, LiveKeys = 5 });
+
+        var usage = await grain.GetStorageUsageAsync(CancellationToken.None);
+        Assert.That(usage.LiveKeys, Is.EqualTo(8L));
+    }
+
+    [Test]
+    public async Task PublishLeafByteFootprintAsync_replaces_previous_live_key_contribution_for_the_same_leaf()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var grain = CreateGrain(factory, new FakePersistentState<ShardRootState>());
+        var leafA = Guid.NewGuid();
+
+        await grain.PublishLeafByteFootprintAsync(leafA, new LeafByteFootprint { StateBytes = 100, LiveKeys = 7 });
+        await grain.PublishLeafByteFootprintAsync(leafA, new LeafByteFootprint { StateBytes = 40, LiveKeys = 2 });
+
+        var usage = await grain.GetStorageUsageAsync(CancellationToken.None);
+        Assert.That(usage.LiveKeys, Is.EqualTo(2L),
+            "the same leaf republishing must replace, not add to, its live-key contribution");
+    }
+
+    [Test]
+    public async Task PublishLeafByteFootprintAsync_Removed_drops_the_leaf_live_key_contribution()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var grain = CreateGrain(factory, new FakePersistentState<ShardRootState>());
+        var leafA = Guid.NewGuid();
+        var leafB = Guid.NewGuid();
+
+        await grain.PublishLeafByteFootprintAsync(leafA, new LeafByteFootprint { StateBytes = 100, LiveKeys = 4 });
+        await grain.PublishLeafByteFootprintAsync(leafB, new LeafByteFootprint { StateBytes = 30, LiveKeys = 6 });
+        await grain.PublishLeafByteFootprintAsync(leafA, LeafByteFootprint.Removed);
+
+        var usage = await grain.GetStorageUsageAsync(CancellationToken.None);
+        Assert.That(usage.LiveKeys, Is.EqualTo(6L));
+    }
 }

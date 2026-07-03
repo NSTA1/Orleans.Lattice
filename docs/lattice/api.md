@@ -551,6 +551,7 @@ The `TreeStorageUsageReport` fields are:
 | `TotalBytes` | `long` | `WalRetainedBytes + SnapshotBytes + LeafStateBytes`. |
 | `Partial` | `bool` | `true` when WAL byte accounting was unavailable, so `WalRetainedBytes` is best-effort. |
 | `SampledAt` | `DateTimeOffset` | When the underlying fan-out was sampled. |
+| `LiveKeys` | `long` | Summed live (non-tombstone) key count across every shard - the figure per-tree admission control compares against `LatticeOptions.MaxLiveKeys`. Best-effort / eventually-consistent (see [Metrics - admission control](metrics.md#per-tree-admission-control)). |
 
 For a cluster-wide roll-up across every registered tree, resolve the
 `ILatticeAdmin` grain (see [`ILatticeAdmin`](#ilatticeadmin)).
@@ -952,6 +953,29 @@ catch (LatticeSaturatedException ex)
 ```
 
 The writer-side admission refusal is also recorded on the `orleans.lattice.wal.writer.append.admission_saturation_refusals` counter (tagged `tree`, `partition`) so operators can dashboard the back-pressure rate separately from the dispatch-timeout counter (`orleans.lattice.wal.writer.append.admission_timeouts`) and the drain-release counter (`orleans.lattice.wal.writer.append.drain.releases`).
+
+## Admission back-pressure - `LatticeQuotaExceededException`
+
+Public typed exception thrown by the `ILattice` write surface when a locally-authored write is refused because the target tree has reached a configured per-tree admission-control cap - either [`LatticeOptions.MaxLiveKeys`](configuration.md#maxlivekeys) (the `Dimension` property is `keys`) or [`LatticeOptions.MaxEstimatedBytes`](configuration.md#maxestimatedbytes) (the `Dimension` is `bytes`). Admission control is strictly **opt-in**: both caps default to `null` (unbounded), so a tree that has not configured a cap never sees this exception. Distinct from [`LatticeSaturatedException`](#saturation-back-pressure---latticesaturatedexception): saturation is a transient storage-drain regime, whereas a quota breach persists until the tree's live footprint drops back under its cap.
+
+Derives from `InvalidOperationException` so existing catch handlers continue to absorb it; the typed slot carries `TreeId`, `Dimension` (`keys` or `bytes`), `Current` (the observed value), and `Limit` (the configured cap) for caller-side attribution without parsing the message.
+
+Caller contract: treat as back-pressure. Either reduce the tree's live footprint (delete keys, let TTLs expire and compaction reap tombstones) or, if the ceiling is genuinely too low, raise the cap. The cap is evaluated against a cached, eventually-consistent per-tree aggregate, so it is **best-effort / approximate**: concurrent cross-shard writes can overshoot it slightly before the aggregate refreshes, and enforcement **fails open** until the tree's first sample lands after activation. Replication and atomic-write-saga apply paths bypass admission control, so an incoming replicated write is never refused. Every rejection also increments the `orleans.lattice.admission.rejected` counter (tagged `tree`, `dimension`); see [Metrics - admission control](metrics.md#per-tree-admission-control) for the advisory-first-then-enforce adoption workflow.
+
+```csharp verify
+byte[] value = [1, 2, 3];
+try
+{
+    await tree.SetAsync("k", value, cancellationToken);
+}
+catch (LatticeQuotaExceededException ex)
+{
+    // The tree reached its configured admission cap on the named
+    // dimension. The write did not commit. Shed load or raise the cap.
+    Console.WriteLine(
+        $"tree {ex.TreeId} over {ex.Dimension} quota: {ex.Current} >= {ex.Limit}");
+}
+```
 
 ## Leaf-projection digest
 
@@ -1503,6 +1527,7 @@ they are implementation details not intended for direct use.
 | `WalMoveBatchReceipt` | `ol.wbr` | public | `readonly record struct` returned by the batch `ILatticeAdmin.ExecuteWalMoveAsync`. Wraps one `WalMoveReceipt` per partition plus the single placement-version transition the batch applied. |
 | `WalMoveOutcome` | `ol.wmc` | public | Enum: `Moved`, `AlreadyAtTarget`, `SourceReclaimed`, `NoOp`. The terminal disposition of a move / reclaim call. |
 | `LatticeSaturatedException` | `ol.lsa` | public | Typed `InvalidOperationException` subclass thrown by the WAL writer admission gate and the `AtomicWriteGrain` saga coordinator when an operation cannot complete because the per-tree saturation signal stayed `Saturated` past the caller's configured wait budget. Carries the originating `TreeId` for caller-side attribution. See [Saturation back-pressure](#saturation-back-pressure---latticesaturatedexception) and [WAL Saturation Signal](wal-saturation-signal.md). |
+| `LatticeQuotaExceededException` | `ol.lqe` | public | Typed `InvalidOperationException` subclass thrown by the `ILattice` write surface when a locally-authored write is refused because the tree reached its configured `MaxLiveKeys` / `MaxEstimatedBytes` admission cap. Carries `TreeId`, `Dimension` (`keys`/`bytes`), `Current`, and `Limit`. See [Admission back-pressure](#admission-back-pressure---latticequotaexceededexception) and [Metrics](metrics.md#per-tree-admission-control). |
 | `LatticeTreeBatch` | `ol.ltb` | public | `readonly record struct` - one tree's slice of a cross-tree atomic write (`TreeId`, `Entries`, optional `Predicate`). Deliberately **not** `[Immutable]` (mutable members). See [Cross-tree atomic writes](#cross-tree-atomic-writes). |
 | `CrossTreeAtomicWriteOutcome` | `ol.cto` | public | Enum: `Committed`, `PreconditionFailed`. Terminal outcome of a cross-tree atomic write. |
 

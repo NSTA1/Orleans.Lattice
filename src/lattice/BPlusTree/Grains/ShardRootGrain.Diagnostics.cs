@@ -19,6 +19,7 @@ internal sealed partial class ShardRootGrain
     private readonly Dictionary<Guid, LeafByteFootprint> _leafByteFootprints = new();
     private long _leafStateBytesTotal;
     private long _snapshotBytesTotal;
+    private long _liveKeyCountTotal;
 
     /// <inheritdoc />
     public async Task<ShardDiagnosticReport> GetDiagnosticsAsync(bool deep)
@@ -136,6 +137,7 @@ internal sealed partial class ShardRootGrain
         {
             LeafStateBytes = _leafStateBytesTotal,
             SnapshotBytes = _snapshotBytesTotal,
+            LiveKeys = _liveKeyCountTotal,
         });
     }
 
@@ -150,6 +152,7 @@ internal sealed partial class ShardRootGrain
             {
                 _leafStateBytesTotal -= prev.StateBytes;
                 _snapshotBytesTotal -= prev.SnapshotBytes;
+                _liveKeyCountTotal -= prev.LiveKeys;
             }
             return Task.CompletedTask;
         }
@@ -157,17 +160,20 @@ internal sealed partial class ShardRootGrain
         if (_leafByteFootprints.TryGetValue(leafKey, out var existing))
         {
             if (existing.StateBytes == footprint.StateBytes
-                && existing.SnapshotBytes == footprint.SnapshotBytes)
+                && existing.SnapshotBytes == footprint.SnapshotBytes
+                && existing.LiveKeys == footprint.LiveKeys)
             {
                 return Task.CompletedTask;
             }
             _leafStateBytesTotal += footprint.StateBytes - existing.StateBytes;
             _snapshotBytesTotal += footprint.SnapshotBytes - existing.SnapshotBytes;
+            _liveKeyCountTotal += footprint.LiveKeys - existing.LiveKeys;
         }
         else
         {
             _leafStateBytesTotal += footprint.StateBytes;
             _snapshotBytesTotal += footprint.SnapshotBytes;
+            _liveKeyCountTotal += footprint.LiveKeys;
         }
         _leafByteFootprints[leafKey] = footprint;
         return Task.CompletedTask;
@@ -185,6 +191,7 @@ internal sealed partial class ShardRootGrain
         // drift accumulated since the last activation self-heals.
         _leafStateBytesTotal = rollup.LeafStateBytes;
         _snapshotBytesTotal = rollup.SnapshotBytes;
+        _liveKeyCountTotal = rollup.LiveKeys;
         return rollup;
     }
 
@@ -214,6 +221,7 @@ internal sealed partial class ShardRootGrain
 
         long leafStateBytes = 0;
         long snapshotBytes = 0;
+        long liveKeys = 0;
         var leafId = currentId;
         while (true)
         {
@@ -221,6 +229,7 @@ internal sealed partial class ShardRootGrain
             var usage = await AccumulateLeafUsageAsync(leafId.GetGuidKey(), cancellationToken);
             leafStateBytes += usage.LeafStateBytes;
             snapshotBytes += usage.SnapshotBytes;
+            liveKeys += usage.LiveKeys;
 
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.GetGuidKey());
             var next = await leaf.GetNextSiblingAsync();
@@ -232,6 +241,7 @@ internal sealed partial class ShardRootGrain
         {
             LeafStateBytes = leafStateBytes,
             SnapshotBytes = snapshotBytes,
+            LiveKeys = liveKeys,
         };
     }
 
@@ -254,6 +264,7 @@ internal sealed partial class ShardRootGrain
         {
             LeafStateBytes = stats.StateBytes,
             SnapshotBytes = snapshotBytes,
+            LiveKeys = stats.LiveKeys,
         };
     }
 }
