@@ -150,7 +150,7 @@ sub-issue closes, applying the correct release label.
 | 12 | #982 | Replication: replicate auth/membership trees | done (merged; sys-* enrolment LWW/OR-Set + system-origin apply bypass + opt-in epoch fence + drift guards; F-158) |
 | 13 | #983 | Auth: observability & audit | done (merged; orleans.lattice.auth meter + ILatticeAuthAuditSink + opt-in TTL sys-auth-audit trail; decision path byte-for-byte unchanged; zero-cost off; 214 tests; F-159) |
 | 14 | #984 | Api.Auth: facade & model | done (merged; ILatticeAuthAdmin combined admin API, every op requires Admin verdict on sys-auth-policy, Explain gate-parity, oli.* aliases; 36 tests; F-160) |
-| 15 | #985 | Api.Auth.Grpc: gRPC binding, client, meta-auth | in_progress (sub-agent dispatched; F-161) |
+| 15 | #985 | Api.Auth.Grpc: gRPC binding, client, meta-auth | done (merged; LatticeAuthApiGrpcClient + DenyAll meta-authorizer + facade self-auth two-layer, deny->PermissionDenied, oli. wire aliases; grpc 89 + api.auth 36; F-161) |
 | 16 | #1101 | Membership.Entra: Entra ID authenticator | done (merged; 53 focused tests) |
 | 17 | #1102 | Explorer: connect to auth-enabled State API | pending |
 | 18 | #1103 | Security hardening: full security & design review | pending |
@@ -256,6 +256,18 @@ Out of scope: #1104 (admin UI follow-up).
   finalize the degrade-vs-fail decision in the #1103 security review.
 
 ## Progress log
+
+- 2026-07-03 REVIEWED + MERGED #985 (F-161, Api.Auth.Grpc). Verified the two-layer
+  authorization: (1) transport meta-authorizer ILatticeAuthApiAuthorizer default DenyAll
+  + RequireAuthorization=true, prefix-scoped interceptor -> PermissionDenied; (2) facade
+  self-auth (Admin on sys-auth-policy) still runs after the credential bridge stamps the
+  caller, so opting the transport gate out never opens policy admin to anonymous/non-admin.
+  Deny->PermissionDenied trailers carry no value. 15 new oli.+2 (6-char) wire aliases in
+  the parent ApiAuthTypeAliases per the issue's explicit reuse-parent directive (siblings
+  actually use own tables; accepted as issue-directed, two-assembly alias scan added to
+  keep the parent test green). Coordinator-verified grpc 89/89 + api.auth 36/36. CHANGELOG
+  F-161 landed. Api.Auth package pair (#984+#985) + observability (#983) all COMPLETE.
+  NEXT: #1102 (explorer auth), #1103 (security review), #986 (docs/e2e + F-162 benchmark).
 
 - 2026-07-03 REVIEWED + MERGED #983 (F-159, auth observability & audit). Verified the
   SAFETY-CRITICAL property that the decision path is byte-for-byte unchanged: the
