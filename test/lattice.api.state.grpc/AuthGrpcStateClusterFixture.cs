@@ -123,7 +123,7 @@ internal sealed class AuthGrpcStateClusterFixture
     /// <summary>
     /// Co-hosts the state-API gRPC surface over this fixture's live facade with
     /// the identity bridge configured for the test scheme. The transport-level
-    /// authorizer (F-117) is left disabled so the test isolates the new
+    /// authorizer is left disabled so the test isolates the new
     /// visibility layer rather than the coarse transport gate.
     /// </summary>
     public async Task<GrpcStateHost> CreateGrpcHostAsync()

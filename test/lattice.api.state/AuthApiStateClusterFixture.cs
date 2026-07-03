@@ -31,6 +31,9 @@ internal sealed class AuthApiStateClusterFixture
     /// <summary>The state-API read facade under test.</summary>
     public ILatticeStateQuery Query => SiloServices.GetRequiredService<ILatticeStateQuery>();
 
+    /// <summary>The state-API change-feed facade under test.</summary>
+    public ILatticeStateObserver Observer => SiloServices.GetRequiredService<ILatticeStateObserver>();
+
     /// <summary>The silo-side authorization policy store (rule authoring).</summary>
     public ILatticeAuthorizationPolicyStore Store =>
         SiloServices.GetRequiredService<ILatticeAuthorizationPolicyStore>();
@@ -122,13 +125,85 @@ internal sealed class AuthApiStateClusterFixture
         return tree;
     }
 
+    /// <summary>
+    /// Registers an empty single-WAL-partition tree (so the merged change stream
+    /// is a strict per-tree order) and returns the grain handle. Used by the
+    /// change-feed visibility tests, which write live after subscribing.
+    /// </summary>
+    public async Task<ILattice> RegisterTreeAsync(string treeId)
+    {
+        var registry = Cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        await registry.RegisterAsync(treeId, new TreeRegistryEntry
+        {
+            MaxLeafKeys = 4,
+            ShardCount = 2,
+            WalPartitions = 1,
+        });
+
+        return Cluster.Client.GetGrain<ILattice>(treeId);
+    }
+
+    /// <summary>
+    /// Opens a live change subscription for <paramref name="request"/> under the
+    /// currently ambient subject, seeds its tail, then runs <paramref name="mutate"/>
+    /// and drains up to <paramref name="expectedCount"/> notifications (or until the
+    /// timeout elapses). The subscription captures the ambient subject at open, so
+    /// the caller must invoke this inside the observer's <c>AsSubject</c> scope;
+    /// <paramref name="mutate"/> may re-scope internally to author writes as another
+    /// subject without changing the subscriber's identity.
+    /// </summary>
+    public async Task<IReadOnlyList<StateChangeNotification>> ObserveWhileAsync(
+        StateObserveRequest request,
+        int expectedCount,
+        Func<Task> mutate)
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var collectTask = CollectAsync(request, expectedCount, cts.Token);
+
+        // Give the subscription a moment to seed its tail cursor before the
+        // mutations land, so a fresh subscription observes exactly them.
+        await Task.Delay(300);
+        await mutate();
+
+        return await collectTask;
+    }
+
+    private async Task<IReadOnlyList<StateChangeNotification>> CollectAsync(
+        StateObserveRequest request,
+        int count,
+        CancellationToken cancellationToken)
+    {
+        var collected = new List<StateChangeNotification>(count);
+        try
+        {
+            await foreach (var notification in Observer.ObserveAsync(request, cancellationToken))
+            {
+                collected.Add(notification);
+                if (collected.Count >= count)
+                {
+                    break;
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Timed out waiting for the expected count; return what arrived.
+        }
+
+        return collected;
+    }
+
     private sealed class SiloConfigurator : ISiloConfigurator
     {
         public void Configure(ISiloBuilder siloBuilder)
         {
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             siloBuilder.UseInMemoryReminderService();
-            siloBuilder.AddLatticeStateApi();
+            siloBuilder.AddLatticeStateApi(o =>
+            {
+                o.ChangeObservationPollInterval = TimeSpan.FromMilliseconds(25);
+                o.ChangeObservationPageSize = 64;
+            });
             siloBuilder.AddLatticeMembership();
             siloBuilder.Services.AddSingleton<ILatticeCredentialAuthenticator, ApiStateTestCredentialAuthenticator>();
             siloBuilder.AddLatticeAuth(options =>

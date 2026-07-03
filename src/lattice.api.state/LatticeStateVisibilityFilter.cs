@@ -137,4 +137,32 @@ internal sealed class LatticeStateVisibilityFilter
         var decision = await _gate.AuthorizeAsync(in request, cancellationToken).ConfigureAwait(false);
         return decision.Allowed;
     }
+
+    /// <summary>
+    /// Resolves change-feed read access for a whole tree in a single gate
+    /// evaluation: whether <paramref name="subject"/> may observe the tree at all
+    /// (<c>Allowed</c>) and, for a partial (prefix) grant, the per-key predicate
+    /// (<c>KeyFilter</c>, keeping a key when it returns <see langword="true"/>) the
+    /// caller applies to each emitted change so a partially-authorized subscriber
+    /// only observes changes to keys it may read. A whole-tree grant returns a
+    /// <see langword="null"/> filter (emit every key); an anonymous or unauthorized
+    /// subject returns <c>Allowed == false</c>. Unlike the per-entry reads, the
+    /// change feed does not flow through the gated <see cref="ILattice"/> surface
+    /// (it tails the write-ahead log directly), so this filter is the only point
+    /// that honours the data-plane read policy for the live stream.
+    /// </summary>
+    internal async ValueTask<(bool Allowed, Func<string, bool>? KeyFilter)> ResolveTreeReadAccessAsync(
+        string treeId,
+        LatticeSubject subject,
+        CancellationToken cancellationToken)
+    {
+        if (subject.IsAnonymous)
+        {
+            return (false, null);
+        }
+
+        var request = new LatticeAccessRequest(treeId, LatticeOperation.RangeRead, subject);
+        var decision = await _gate.AuthorizeAsync(in request, cancellationToken).ConfigureAwait(false);
+        return (decision.Allowed, decision.KeyFilter);
+    }
 }
