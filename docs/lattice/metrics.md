@@ -111,6 +111,28 @@ drives autonomic splitting.
 | `orleans.lattice.storage.wal.stored_bytes` | `Counter<long>` | `By` | Post-compression WAL payload bytes actually stored for the tree, summed once per append batch. Dividing this by `uncompressed_bytes` gives the realised compression ratio; `1 -` that ratio is the savings. Tagged `tree`. |
 | `orleans.lattice.storage.wal.compression_skipped` | `Counter<long>` | `{row}` | WAL rows the compressing provider stored verbatim instead of compressed. Tagged `tree` and `reason`: `below_threshold` (payload shorter than `CompressionMinPayloadBytes`), `inflation_guard` (compressing did not shrink the payload), or `disabled` (compression off for the row). |
 
+### Per-tree admission control
+
+Opt-in, fail-open per-tree quota enforcement. All six instruments are on the `orleans.lattice` meter and tagged `tree`; the three prefixed with a dimension additionally carry a low-cardinality `dimension` tag whose value is `keys` or `bytes`. The four gauges are observed lazily from the same cached, TTL-coalesced per-tree aggregate that backs the storage-usage gauges, so they cost nothing on the write path; they populate once the per-tree storage-usage aggregator has sampled the tree (which happens on any `GetStorageUsageAsync` call, whenever `StorageUsageDeepPollInterval` is enabled, and automatically whenever a cap or advisory ceiling is configured, because the write guard refreshes the aggregate at most once per `StorageUsageCacheTtl`).
+
+| Name | Kind | Unit | Description |
+|---|---|---|---|
+| `orleans.lattice.admission.live_keys` | `ObservableGauge<long>` | `{key}` | Current live (non-tombstone) key count for the tree - the figure compared against `LatticeOptions.MaxLiveKeys`. Best-effort / eventually-consistent (assembled from each shard root's incrementally-maintained live-key total, re-anchored on a deep refresh); a time-expired entry not yet reaped by compaction counts as live until the next re-anchor. Tagged `tree`. |
+| `orleans.lattice.admission.estimated_bytes` | `ObservableGauge<long>` | `By` | Current estimated retained bytes for the tree - the figure compared against `LatticeOptions.MaxEstimatedBytes`. Aliases `storage.total_bytes` (WAL rows + snapshot blobs + leaf/shard-root state). Tagged `tree`. |
+| `orleans.lattice.admission.over_advisory` | `ObservableGauge<long>` | `{tree}` | `1` when the tree currently exceeds an advisory ceiling (`AdmissionAdvisoryLiveKeys` or `AdmissionAdvisoryBytes`), else `0`. Emitted only for a tree that has set at least one advisory ceiling. Non-enforcing: no write is rejected. Tagged `tree`. |
+| `orleans.lattice.admission.would_reject` | `Counter<long>` | `{write}` | Incremented once per write that *would* have been rejected at an advisory ceiling - the dry-run blast radius of a candidate cap. No write is rejected. Tagged `tree` and `dimension` (`keys` or `bytes`). |
+| `orleans.lattice.admission.utilization` | `ObservableGauge<double>` | ratio | Current / ceiling utilisation per dimension. The denominator prefers the enforcing cap (`MaxLiveKeys` / `MaxEstimatedBytes`) and falls back to the advisory ceiling when only that is set; a series is emitted only for a dimension whose ceiling is configured. At or above `1` the enforcing cap is being hit. Tagged `tree` and `dimension` (`keys` or `bytes`). |
+| `orleans.lattice.admission.rejected` | `Counter<long>` | `{write}` | Incremented once per write actually rejected by an enforced cap (one `LatticeQuotaExceededException` thrown). Tagged `tree` and `dimension` (`keys` or `bytes`). |
+
+**Semantics.** Admission control is strictly opt-in: every cap and ceiling defaults to `null` (unbounded), and a tree with none set pays nothing and never takes a grain hop on the write path. The cap is enforced against the cached per-tree aggregate, never a per-write fan-out, so it is **best-effort and approximate**: concurrent cross-shard writes can overshoot a cap slightly before the aggregate refreshes, and enforcement **fails open** (never rejects) until the tree's first sample lands after activation. Replication and atomic-write-saga apply paths bypass enforcement, so an incoming replicated write is never rejected. On an enforcing breach the write throws `LatticeQuotaExceededException` (dimension `keys` or `bytes`, with the observed `Current` and configured `Limit`), a recoverable back-off signal.
+
+**Advisory-first-then-enforce adoption workflow.**
+
+1. **Observe.** With no cap set, watch `admission.live_keys` and `admission.estimated_bytes` (enable `StorageUsageDeepPollInterval` so the gauges populate without a cap configured) to learn each tree's steady-state footprint.
+2. **Set an advisory ceiling.** Configure `AdmissionAdvisoryLiveKeys` and/or `AdmissionAdvisoryBytes` at a candidate ceiling. This rejects nothing.
+3. **Right-size.** Watch `admission.over_advisory` (which trees sit over the candidate ceiling) and the `admission.would_reject` rate (how many writes a promoted cap would reject, by dimension) to tune the ceiling until the dry-run blast radius is acceptable.
+4. **Promote and enforce.** Move the tuned value to `MaxLiveKeys` and/or `MaxEstimatedBytes`. Watch `admission.utilization` (how close each tree runs to its cap) and the `admission.rejected` rate (writes actually throttled) to confirm enforcement behaves as intended.
+
 ### Compression dictionary auto-training
 
 These instruments are emitted only when auto-training of the Zstandard compression dictionary is enabled. They expose training cadence and the realised compression of the most recent training probe.

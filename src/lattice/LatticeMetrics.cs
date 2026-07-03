@@ -55,6 +55,19 @@ public static class LatticeMetrics
     public const string TagShard = "shard";
 
     /// <summary>
+    /// Tag key for the admission-control quota dimension
+    /// (<see cref="DimensionKeys"/> or <see cref="DimensionBytes"/>) on the
+    /// <c>orleans.lattice.admission.*</c> instruments.
+    /// </summary>
+    public const string TagDimension = "dimension";
+
+    /// <summary><see cref="TagDimension"/> = <c>keys</c> (live-key admission dimension).</summary>
+    public static readonly KeyValuePair<string, object?> DimensionKeys = new(TagDimension, "keys");
+
+    /// <summary><see cref="TagDimension"/> = <c>bytes</c> (estimated-byte admission dimension).</summary>
+    public static readonly KeyValuePair<string, object?> DimensionBytes = new(TagDimension, "bytes");
+
+    /// <summary>
     /// Tag key for the WAL writer partition index. Distinct from
     /// <see cref="TagShard"/>: the writer partition is the producer-side
     /// routing key (one entry-batch per partition per call into
@@ -761,6 +774,58 @@ public static class LatticeMetrics
 
     /// <summary><see cref="TagReason"/> = <c>byte_pressure</c> (advisory storage-policy trim attribution).</summary>
     public static readonly KeyValuePair<string, object?> ReasonBytePressure = new(TagReason, "byte_pressure");
+
+    // --- Per-tree admission-control instruments ----------------------------
+    //
+    // Four observable gauges (live_keys, estimated_bytes, over_advisory,
+    // utilization) are registered lazily by LatticeAdmissionMetrics - they read
+    // the cached per-tree admission aggregate on scrape and cost nothing when no
+    // listener is attached, exactly like the storage gauges - so their canonical
+    // names are exposed here as `...Name` constants for the dashboard drift
+    // guard. The two would_reject / rejected counters are ordinary counters
+    // constructed on the meter below. All are tagged with `tree`; the utilisation
+    // gauge and the two counters additionally carry the low-cardinality
+    // `dimension` = keys | bytes tag.
+
+    /// <summary>Canonical name of the observable gauge reporting a tree's current live (non-tombstone) key count (tagged <see cref="TagTree"/>).</summary>
+    public const string AdmissionLiveKeysName = "orleans.lattice.admission.live_keys";
+
+    /// <summary>Canonical name of the observable gauge reporting a tree's current estimated retained bytes (tagged <see cref="TagTree"/>). May alias <see cref="StorageTotalBytesName"/>.</summary>
+    public const string AdmissionEstimatedBytesName = "orleans.lattice.admission.estimated_bytes";
+
+    /// <summary>Canonical name of the observable 0/1 gauge that flags a tree currently exceeding its advisory admission ceiling (tagged <see cref="TagTree"/>).</summary>
+    public const string AdmissionOverAdvisoryName = "orleans.lattice.admission.over_advisory";
+
+    /// <summary>Canonical name of the observable ratio gauge reporting current / ceiling per <see cref="TagDimension"/> (tagged <see cref="TagTree"/>).</summary>
+    public const string AdmissionUtilizationName = "orleans.lattice.admission.utilization";
+
+    /// <summary>
+    /// Counter incremented once per write that <i>would</i> have been rejected
+    /// at a tree's advisory admission ceiling (the dry-run blast radius of a
+    /// candidate cap), tagged with <see cref="TagTree"/> and
+    /// <see cref="TagDimension"/>. Never rejects a write; pairs with
+    /// <see cref="AdmissionOverAdvisoryName"/> to right-size a cap before
+    /// enforcement is enabled.
+    /// </summary>
+    public static readonly Counter<long> AdmissionWouldReject =
+        Meter.CreateCounter<long>(AdmissionWouldRejectName, unit: "{write}",
+            description: "Writes that would be rejected at the advisory admission ceiling, tagged by tree and dimension.");
+
+    /// <summary>Canonical name of <see cref="AdmissionWouldReject"/>.</summary>
+    public const string AdmissionWouldRejectName = "orleans.lattice.admission.would_reject";
+
+    /// <summary>
+    /// Counter incremented once per write actually rejected by an enforced
+    /// admission cap (<see cref="LatticeQuotaExceededException"/> thrown), tagged
+    /// with <see cref="TagTree"/> and <see cref="TagDimension"/>. Confirms
+    /// enforcement is live and surfaces the offending tree(s).
+    /// </summary>
+    public static readonly Counter<long> AdmissionRejected =
+        Meter.CreateCounter<long>(AdmissionRejectedName, unit: "{write}",
+            description: "Writes rejected by an enforced admission cap, tagged by tree and dimension.");
+
+    /// <summary>Canonical name of <see cref="AdmissionRejected"/>.</summary>
+    public const string AdmissionRejectedName = "orleans.lattice.admission.rejected";
 
     // --- WAL compression-savings instruments (per-row payload compression) --
     //

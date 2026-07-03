@@ -39,6 +39,30 @@ internal sealed class LatticeOptionsValidator : IValidateOptions<LatticeOptions>
                 + "(null disables the cluster-wide split gate so each tree enforces only its own MaxConcurrentAutoSplits; "
                 + "a positive value caps the aggregate number of concurrently in-flight autonomic splits across all trees).");
         }
+        if (options.MaxLiveKeys is { } maxLiveKeys && maxLiveKeys < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.MaxLiveKeys)} must be greater than or equal to 1 when set "
+                + "(null leaves the live-key count unbounded; a positive value caps the number of live keys per tree, rejecting further writes with LatticeQuotaExceededException).");
+        }
+        if (options.MaxEstimatedBytes is { } maxEstimatedBytes && maxEstimatedBytes < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.MaxEstimatedBytes)} must be greater than or equal to 1 when set "
+                + "(null leaves estimated storage unbounded; a positive value caps the estimated retained bytes per tree, rejecting further writes with LatticeQuotaExceededException).");
+        }
+        if (options.AdmissionAdvisoryLiveKeys is { } advisoryLiveKeys && advisoryLiveKeys < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.AdmissionAdvisoryLiveKeys)} must be greater than or equal to 1 when set "
+                + "(null disables the live-key advisory dry-run signal; a positive value drives the over-advisory and would-reject metrics without rejecting any write).");
+        }
+        if (options.AdmissionAdvisoryBytes is { } advisoryBytes && advisoryBytes < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.AdmissionAdvisoryBytes)} must be greater than or equal to 1 when set "
+                + "(null disables the byte advisory dry-run signal; a positive value drives the over-advisory and would-reject metrics without rejecting any write).");
+        }
         if (options.MaxLeafReplayEntries < 1)
             return ValidateOptionsResult.Fail($"{nameof(LatticeOptions.MaxLeafReplayEntries)} must be greater than or equal to 1.");
         if (options.MaterialiserCheckpointEntries < 1)

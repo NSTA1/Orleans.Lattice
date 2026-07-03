@@ -55,4 +55,18 @@ public readonly record struct TreeStorageUsageReport
 
     /// <summary>UTC time at which this report was sampled.</summary>
     [Id(6)] public DateTimeOffset SampledAt { get; init; }
+
+    /// <summary>
+    /// Summed live (non-tombstone) key count across every shard in the tree,
+    /// the figure the <c>orleans.lattice.admission.live_keys</c> gauge reports
+    /// and that per-tree admission control compares against
+    /// <see cref="LatticeOptions.MaxLiveKeys"/>. Best-effort and
+    /// eventually-consistent: it is assembled from each shard root's O(1)
+    /// incrementally-maintained live-key total (or re-anchored exactly on a
+    /// deep refresh), so a concurrent cross-shard write may make it lag or lead
+    /// the true count slightly. A time-expired entry that compaction has not yet
+    /// reaped is counted as live until the next deep re-anchor. Unaffected by
+    /// <see cref="Partial"/> (which only flags a missing <i>byte</i> surface).
+    /// </summary>
+    [Id(7)] public long LiveKeys { get; init; }
 }

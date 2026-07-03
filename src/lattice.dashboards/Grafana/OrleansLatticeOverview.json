@@ -1274,6 +1274,78 @@
       "targets": [
         { "refId": "RATIO", "expr": "sum (rate(orleans_lattice_compress_dictionary_trained_bytes_out_bytes_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / sum (rate(orleans_lattice_compress_dictionary_trained_bytes_in_bytes_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "trained / baseline" }
       ]
+    },
+    {
+      "id": 48,
+      "title": "Admission - live keys by tree",
+      "description": "Current live (non-tombstone) key count per tree (orleans_lattice_admission_live_keys observable gauge). This is the figure per-tree admission control compares against LatticeOptions.MaxLiveKeys. Best-effort and eventually-consistent: it is the same cached, TTL-coalesced per-tree aggregate that backs the storage-footprint panels, published by a single per-tree aggregator, so it lands on one silo per tree; this panel deliberately ignores the $silo selector and evaluates across all silos in the selected cluster. Step 1 of the adoption workflow: watch this to learn a tree's steady-state live-key count before setting any ceiling.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 152 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "KEYS", "expr": "max by (tree) (orleans_lattice_admission_live_keys{tree=~\"$tree\",cluster=~\"$cluster\"})", "legendFormat": "{{tree}}" }
+      ]
+    },
+    {
+      "id": 49,
+      "title": "Admission - estimated bytes by tree",
+      "description": "Current estimated retained bytes per tree (orleans_lattice_admission_estimated_bytes observable gauge), the figure admission control compares against LatticeOptions.MaxEstimatedBytes. Aliases the storage total-bytes figure (WAL rows plus snapshot blobs plus leaf/shard-root state). Published by the same single per-tree aggregator as the live-keys panel, so it lands on one silo per tree; this panel ignores the $silo selector and evaluates across all silos in the selected cluster. Step 1 of the adoption workflow for the byte dimension: watch this to learn a tree's steady-state footprint before setting a ceiling.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 152 },
+      "fieldConfig": { "defaults": { "unit": "bytes", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "BYTES", "expr": "max by (tree) (orleans_lattice_admission_estimated_bytes{tree=~\"$tree\",cluster=~\"$cluster\"})", "legendFormat": "{{tree}}" }
+      ]
+    },
+    {
+      "id": 50,
+      "title": "Admission - trees over advisory ceiling",
+      "description": "Trees currently exceeding an advisory admission ceiling (AdmissionAdvisoryLiveKeys or AdmissionAdvisoryBytes). The 0/1 over_advisory gauge is 1 while the tree's live-key count or estimated bytes sits at or above its advisory ceiling; the ceiling is non-enforcing, so no write is rejected. Published by the single per-tree aggregator, so it lands on one silo per tree; this panel ignores the $silo selector and evaluates across all silos in the selected cluster. Step 3 of the adoption workflow: watch this while an advisory ceiling is set to see whether the tree would breach a candidate cap.",
+      "type": "table",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 159 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "OVER", "expr": "max by (tree) (orleans_lattice_admission_over_advisory{tree=~\"$tree\",cluster=~\"$cluster\"}) == 1", "legendFormat": "{{tree}}", "format": "table", "instant": true }
+      ]
+    },
+    {
+      "id": 51,
+      "title": "Admission - would-reject rate (advisory dry-run)",
+      "description": "Rate of writes that WOULD have been rejected at a tree's advisory admission ceiling, by dimension (orleans_lattice_admission_would_reject_total, tagged tree and dimension = keys | bytes). No write is actually rejected: this is the dry-run blast radius of a candidate cap. These counters accrue at the write boundary (a per-silo stateless worker), so this panel sums across all silos in the selected cluster. Step 3 of the adoption workflow: a non-zero rate here tells you a promoted enforcing cap at the current advisory ceiling would start rejecting that many writes.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 159 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "WOULD", "expr": "sum by (tree, dimension) (rate(orleans_lattice_admission_would_reject_total{tree=~\"$tree\",cluster=~\"$cluster\"}[5m]))", "legendFormat": "{{tree}} {{dimension}}" }
+      ]
+    },
+    {
+      "id": 52,
+      "title": "Admission - utilization by dimension",
+      "description": "Current admission utilisation ratio (current / ceiling) per tree and dimension (orleans_lattice_admission_utilization observable gauge, tagged tree and dimension = keys | bytes). The denominator prefers the enforcing cap (MaxLiveKeys / MaxEstimatedBytes) and falls back to the advisory ceiling when only that is set; a series is emitted only for a dimension whose ceiling is configured. At or above 1 means the enforcing cap is being hit and writes on that dimension are being rejected. Published by the single per-tree aggregator, so this panel ignores the $silo selector and evaluates across all silos in the selected cluster. Step 4 of the adoption workflow: watch this after promoting a ceiling to an enforcing cap.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 166 },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "UTIL", "expr": "max by (tree, dimension) (orleans_lattice_admission_utilization{tree=~\"$tree\",cluster=~\"$cluster\"})", "legendFormat": "{{tree}} {{dimension}}" }
+      ]
+    },
+    {
+      "id": 53,
+      "title": "Admission - rejected write rate (enforced)",
+      "description": "Rate of writes actually rejected by an enforced admission cap, by dimension (orleans_lattice_admission_rejected_total, tagged tree and dimension = keys | bytes). Each increment corresponds to a LatticeQuotaExceededException thrown at the write boundary. These counters accrue at the write boundary (a per-silo stateless worker), so this panel sums across all silos in the selected cluster. Step 4 of the adoption workflow: this is the ground-truth signal that enforcement is live and which trees are being throttled.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 166 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "REJ", "expr": "sum by (tree, dimension) (rate(orleans_lattice_admission_rejected_total{tree=~\"$tree\",cluster=~\"$cluster\"}[5m]))", "legendFormat": "{{tree}} {{dimension}}" }
+      ]
     }
   ]
 }

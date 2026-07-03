@@ -166,6 +166,17 @@ internal readonly record struct LeafByteFootprint
 
     /// <summary>Per-leaf snapshot-byte footprint; <c>0</c> when the leaf has no captured snapshot.</summary>
     [Id(1)] public long SnapshotBytes { get; init; }
+
+    /// <summary>
+    /// Per-leaf live (non-tombstone) key count, fed into the shard root's
+    /// activation-scoped live-key total that backs the per-tree admission
+    /// aggregate. Best-effort: a time-expired-but-not-yet-reaped entry is still
+    /// counted as live until compaction reaps it, and the shard total is
+    /// re-anchored to the exact figure on the operator-driven deep refresh.
+    /// Ignored on the <see cref="Removed"/> sentinel (the shard subtracts the
+    /// leaf's last-known total in that case).
+    /// </summary>
+    [Id(2)] public long LiveKeys { get; init; }
 }
 
 /// <summary>

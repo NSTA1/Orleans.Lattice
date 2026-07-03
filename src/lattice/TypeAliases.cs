@@ -100,6 +100,14 @@ internal static class TypeAliases
     // transition for that silo activation.
     internal const string LatticeSaturated = "ol.lsa";
 
+    // Per-tree admission-control quota surface. Thrown by the public ILattice
+    // write guard when a locally-authored write is refused because the tree's
+    // cached live-key count or estimated-byte footprint has reached the
+    // configured MaxLiveKeys / MaxEstimatedBytes cap. A recoverable back-off
+    // signal (the caller should reduce the tree's live footprint or raise the
+    // cap), distinct from the transient WAL saturation regime.
+    internal const string LatticeQuotaExceeded = "ol.lqe";
+
     // Single-shape-per-replicated-tree guard. Thrown by the public ILattice
     // write surface when a write would violate the declared replication mode
     // for a tree (a CRDT accessor whose mode differs from the declared mode,

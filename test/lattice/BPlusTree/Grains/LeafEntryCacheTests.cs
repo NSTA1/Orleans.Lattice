@@ -91,6 +91,88 @@ public sealed class LeafEntryCacheTests
     }
 
     [Test]
+    public void LiveCount_starts_at_zero()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        Assert.That(cache.LiveCount, Is.EqualTo(0L));
+    }
+
+    [Test]
+    public void LiveCount_increments_once_per_new_live_key()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        cache.StoreRow("a", Row([1]));
+        cache.StoreRow("b", Row([2]));
+        Assert.That(cache.LiveCount, Is.EqualTo(2L));
+    }
+
+    [Test]
+    public void LiveCount_does_not_count_a_tombstone_inserted_fresh()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        cache.StoreRow("a", Row([1], tombstone: true));
+        Assert.That(cache.LiveCount, Is.EqualTo(0L));
+    }
+
+    [Test]
+    public void LiveCount_is_unchanged_by_a_like_for_like_live_replace()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        cache.StoreRow("a", Row([1]));
+        cache.StoreRow("a", Row([2], ticks: 2));
+        Assert.That(cache.LiveCount, Is.EqualTo(1L));
+    }
+
+    [Test]
+    public void LiveCount_decrements_when_a_live_key_is_tombstoned_in_place()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        cache.StoreRow("a", Row([1]));
+        cache.StoreRow("a", Row([2], ticks: 2, tombstone: true));
+        Assert.That(cache.LiveCount, Is.EqualTo(0L));
+    }
+
+    [Test]
+    public void LiveCount_increments_when_a_tombstone_is_resurrected_in_place()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        cache.StoreRow("a", Row([1], tombstone: true));
+        cache.StoreRow("a", Row([2], ticks: 2));
+        Assert.That(cache.LiveCount, Is.EqualTo(1L));
+    }
+
+    [Test]
+    public void LiveCount_decrements_when_a_live_key_is_removed()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        cache.StoreRow("a", Row([1]));
+        cache.StoreRow("b", Row([2]));
+        cache.Remove("a");
+        Assert.That(cache.LiveCount, Is.EqualTo(1L));
+    }
+
+    [Test]
+    public void LiveCount_is_unchanged_when_a_tombstone_is_removed()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        cache.StoreRow("a", Row([1]));
+        cache.StoreRow("t", Row([2], tombstone: true));
+        Assert.That(cache.LiveCount, Is.EqualTo(1L));
+        cache.Remove("t");
+        Assert.That(cache.LiveCount, Is.EqualTo(1L));
+    }
+
+    [Test]
+    public void LiveCount_resets_to_zero_on_clear()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        cache.StoreRow("a", Row([1]));
+        cache.StoreRow("b", Row([2]));
+        cache.Clear();
+        Assert.That(cache.LiveCount, Is.EqualTo(0L));
+    }
+
+    [Test]
     public void Remove_returns_true_when_present_and_false_when_absent()
     {
         var cache = new LeafEntryCache(NewBackingStore());

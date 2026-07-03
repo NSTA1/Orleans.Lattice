@@ -150,6 +150,102 @@ public class LatticeOptionsValidatorTests
     }
 
     [Test]
+    public void MaxLiveKeys_null_succeeds()
+    {
+        var result = Validate(o => o.MaxLiveKeys = null);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [TestCase(1L)]
+    [TestCase(5_000_000L)]
+    public void MaxLiveKeys_positive_succeeds(long value)
+    {
+        var result = Validate(o => o.MaxLiveKeys = value);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [TestCase(0L)]
+    [TestCase(-1L)]
+    public void MaxLiveKeys_below_one_fails(long value)
+    {
+        var result = Validate(o => o.MaxLiveKeys = value);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain("MaxLiveKeys"));
+    }
+
+    [Test]
+    public void MaxEstimatedBytes_null_succeeds()
+    {
+        var result = Validate(o => o.MaxEstimatedBytes = null);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [TestCase(1L)]
+    [TestCase(1073741824L)]
+    public void MaxEstimatedBytes_positive_succeeds(long value)
+    {
+        var result = Validate(o => o.MaxEstimatedBytes = value);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [TestCase(0L)]
+    [TestCase(-1L)]
+    public void MaxEstimatedBytes_below_one_fails(long value)
+    {
+        var result = Validate(o => o.MaxEstimatedBytes = value);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain("MaxEstimatedBytes"));
+    }
+
+    [Test]
+    public void AdmissionAdvisoryLiveKeys_null_succeeds()
+    {
+        var result = Validate(o => o.AdmissionAdvisoryLiveKeys = null);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [TestCase(1L)]
+    [TestCase(4_000_000L)]
+    public void AdmissionAdvisoryLiveKeys_positive_succeeds(long value)
+    {
+        var result = Validate(o => o.AdmissionAdvisoryLiveKeys = value);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [TestCase(0L)]
+    [TestCase(-1L)]
+    public void AdmissionAdvisoryLiveKeys_below_one_fails(long value)
+    {
+        var result = Validate(o => o.AdmissionAdvisoryLiveKeys = value);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain("AdmissionAdvisoryLiveKeys"));
+    }
+
+    [Test]
+    public void AdmissionAdvisoryBytes_null_succeeds()
+    {
+        var result = Validate(o => o.AdmissionAdvisoryBytes = null);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [TestCase(1L)]
+    [TestCase(536870912L)]
+    public void AdmissionAdvisoryBytes_positive_succeeds(long value)
+    {
+        var result = Validate(o => o.AdmissionAdvisoryBytes = value);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [TestCase(0L)]
+    [TestCase(-1L)]
+    public void AdmissionAdvisoryBytes_below_one_fails(long value)
+    {
+        var result = Validate(o => o.AdmissionAdvisoryBytes = value);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain("AdmissionAdvisoryBytes"));
+    }
+
+    [Test]
     public void Valid_custom_values_pass()
     {
         var result = Validate(o =>

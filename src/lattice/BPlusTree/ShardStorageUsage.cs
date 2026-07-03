@@ -26,4 +26,14 @@ internal readonly record struct ShardStorageUsage
     /// snapshot.
     /// </summary>
     [Id(1)] public long SnapshotBytes { get; init; }
+
+    /// <summary>
+    /// Summed live (non-tombstone) key count across every leaf in the shard's
+    /// chain (each leaf's <see cref="LeafStats.LiveKeys"/>). Feeds the per-tree
+    /// live-key admission aggregate. Best-effort: the shard maintains this
+    /// incrementally off per-leaf footprint publishes between deep re-anchors,
+    /// so a concurrent cross-leaf write may make it lag or lead the exact
+    /// figure slightly, which is acceptable for admission control.
+    /// </summary>
+    [Id(2)] public long LiveKeys { get; init; }
 }

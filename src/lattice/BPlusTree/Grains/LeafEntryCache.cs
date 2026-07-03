@@ -21,6 +21,7 @@ internal sealed class LeafEntryCache
 {
     private readonly SortedDictionary<string, LwwValue<byte[]>> _rows;
     private long _stateBytes;
+    private long _liveCount;
 
     // Lazily allocated; null until the first StoreTyped call. Keyed by the
     // canonical row key. Storage is object-boxed because the cache hosts
@@ -80,6 +81,22 @@ internal sealed class LeafEntryCache
     /// matching the contract of <see cref="LeafStats.StateBytes"/>.
     /// </summary>
     internal long StateBytes => _stateBytes;
+
+    /// <summary>
+    /// Running count of live (non-tombstone) rows currently held by the cache,
+    /// maintained incrementally on every <see cref="StoreRow"/> /
+    /// <see cref="StoreDeferredRow"/> / <see cref="Remove"/> / <see cref="Clear"/>
+    /// call so the owning leaf can publish its per-leaf live-key contribution to
+    /// the shard-level admission aggregate in O(1) rather than streaming the
+    /// cache on every commit. Liveness is taken from the stored row's tombstone
+    /// flag; a time-expired entry that has not yet been reaped by compaction is
+    /// still counted as live here (its byte row is not a tombstone), so this is a
+    /// conservative upper bound that the operator-driven deep re-anchor
+    /// (which honours expiry via <see cref="LeafStats.LiveKeys"/>) corrects. An
+    /// over-count only ever makes an admission cap bite slightly early, never
+    /// late, so it is safe for best-effort admission control.
+    /// </summary>
+    internal long LiveCount => _liveCount;
 
     /// <summary>
     /// One-shot backfill seam for activations whose persisted
@@ -220,6 +237,11 @@ internal sealed class LeafEntryCache
         if (_rows.TryGetValue(key, out var existing))
         {
             _stateBytes -= AccountedRowBytes(key, existing);
+            AdjustLiveCount(existing.IsTombstone, metadataRow.IsTombstone);
+        }
+        else if (!metadataRow.IsTombstone)
+        {
+            _liveCount++;
         }
         _stateBytes += EntryBytes(key, null) + serializedLength;
         _rows[key] = metadataRow;
@@ -248,6 +270,11 @@ internal sealed class LeafEntryCache
         if (_rows.TryGetValue(key, out var existing))
         {
             _stateBytes -= AccountedRowBytes(key, existing);
+            AdjustLiveCount(existing.IsTombstone, row.IsTombstone);
+        }
+        else if (!row.IsTombstone)
+        {
+            _liveCount++;
         }
         _deferredMaterializers?.Remove(key);
         _deferredLengths?.Remove(key);
@@ -270,6 +297,10 @@ internal sealed class LeafEntryCache
         if (_rows.TryGetValue(key, out var existing))
         {
             _stateBytes -= AccountedRowBytes(key, existing);
+            if (!existing.IsTombstone)
+            {
+                _liveCount--;
+            }
         }
         _deferredMaterializers?.Remove(key);
         _deferredLengths?.Remove(key);
@@ -284,6 +315,22 @@ internal sealed class LeafEntryCache
         _deferredMaterializers?.Clear();
         _deferredLengths?.Clear();
         _stateBytes = 0;
+        _liveCount = 0;
+    }
+
+    /// <summary>
+    /// Applies the delta to <see cref="_liveCount"/> when a row's tombstone
+    /// state changes on an in-place replace: a live row becoming a tombstone
+    /// decrements, a tombstone becoming live increments, and a like-for-like
+    /// replacement leaves the count unchanged.
+    /// </summary>
+    private void AdjustLiveCount(bool wasTombstone, bool isTombstone)
+    {
+        if (wasTombstone == isTombstone)
+        {
+            return;
+        }
+        _liveCount += isTombstone ? -1 : 1;
     }
 
     /// <summary>

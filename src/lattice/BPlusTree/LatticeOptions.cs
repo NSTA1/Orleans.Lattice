@@ -71,6 +71,70 @@ public class LatticeOptions
     public int? MaxValueSizeBytes { get; set; }
 
     /// <summary>
+    /// Optional enforcing cap on the number of live (non-tombstone) keys a
+    /// single tree may hold. When set and breached, a locally-authored write to
+    /// the tree is rejected with a <see cref="LatticeQuotaExceededException"/>
+    /// carrying the <c>keys</c> dimension, so a misbehaving multi-tenant
+    /// workload cannot grow one tree without bound and starve storage for the
+    /// others. <see langword="null"/> (the default) leaves the live-key count
+    /// unbounded; enforcement is strictly opt-in and fail-open. When set it must
+    /// be at least <c>1</c>, enforced by the options validator.
+    /// <para>
+    /// The cap is <b>best-effort and approximate</b>. It is evaluated against a
+    /// cached, eventually-consistent per-tree aggregate (the same TTL-coalesced
+    /// aggregator that backs the storage-usage gauges), never a per-write
+    /// fan-out, so concurrent cross-shard writes can overshoot the cap slightly
+    /// before the aggregate refreshes, and a freshly-activated tree fails open
+    /// until its first sample lands. Replication and atomic-write-saga apply
+    /// paths bypass the cap so an incoming replicated write is never rejected.
+    /// Resolved per tree via <c>IOptionsMonitor&lt;LatticeOptions&gt;.Get(treeName)</c>.
+    /// </para>
+    /// </summary>
+    public long? MaxLiveKeys { get; set; } = DefaultMaxLiveKeys;
+
+    /// <summary>
+    /// Optional enforcing cap, in bytes, on the estimated retained storage a
+    /// single tree may occupy (the same figure the
+    /// <c>orleans.lattice.storage.total_bytes</c> gauge reports: WAL rows plus
+    /// snapshot blobs plus leaf/shard-root state). When set and breached, a
+    /// locally-authored write is rejected with a
+    /// <see cref="LatticeQuotaExceededException"/> carrying the <c>bytes</c>
+    /// dimension. <see langword="null"/> (the default) leaves estimated bytes
+    /// unbounded; enforcement is strictly opt-in and fail-open. When set it must
+    /// be at least <c>1</c>, enforced by the options validator. Shares the
+    /// best-effort / approximate, replication-bypassing semantics of
+    /// <see cref="MaxLiveKeys"/>. Resolved per tree via
+    /// <c>IOptionsMonitor&lt;LatticeOptions&gt;.Get(treeName)</c>.
+    /// </summary>
+    public long? MaxEstimatedBytes { get; set; } = DefaultMaxEstimatedBytes;
+
+    /// <summary>
+    /// Optional non-enforcing advisory ceiling on the live (non-tombstone) key
+    /// count, used to right-size <see cref="MaxLiveKeys"/> before turning
+    /// enforcement on. A tree that exceeds this ceiling is flagged by the
+    /// <c>orleans.lattice.admission.over_advisory</c> gauge and every write that
+    /// <i>would</i> have been rejected at this ceiling increments the
+    /// <c>orleans.lattice.admission.would_reject</c> counter - but no write is
+    /// ever rejected. <see langword="null"/> (the default) disables the advisory
+    /// signal for the key dimension. When set it must be at least <c>1</c>,
+    /// enforced by the options validator.
+    /// </summary>
+    public long? AdmissionAdvisoryLiveKeys { get; set; } = DefaultAdmissionAdvisoryLiveKeys;
+
+    /// <summary>
+    /// Optional non-enforcing advisory ceiling, in bytes, on the estimated
+    /// retained storage, used to right-size <see cref="MaxEstimatedBytes"/>
+    /// before turning enforcement on. Drives the same non-rejecting
+    /// <c>orleans.lattice.admission.over_advisory</c> /
+    /// <c>orleans.lattice.admission.would_reject</c> dry-run signals as
+    /// <see cref="AdmissionAdvisoryLiveKeys"/>, for the byte dimension.
+    /// <see langword="null"/> (the default) disables the advisory signal for the
+    /// byte dimension. When set it must be at least <c>1</c>, enforced by the
+    /// options validator.
+    /// </summary>
+    public long? AdmissionAdvisoryBytes { get; set; } = DefaultAdmissionAdvisoryBytes;
+
+    /// <summary>
     /// How long a tombstone must exist before it is eligible for compaction.
     /// A grain reminder fires at this interval; tombstones older than this
     /// grace period are permanently removed. Set to <see cref="Timeout.InfiniteTimeSpan"/>
@@ -293,6 +357,18 @@ public class LatticeOptions
 
     /// <summary>Default value for <see cref="MaxCacheValueBytes"/> (<c>null</c> - the read-through cache mirror is unbounded).</summary>
     public static readonly long? DefaultMaxCacheValueBytes = null;
+
+    /// <summary>Default value for <see cref="MaxLiveKeys"/> (<c>null</c> - live-key admission control disabled).</summary>
+    public static readonly long? DefaultMaxLiveKeys = null;
+
+    /// <summary>Default value for <see cref="MaxEstimatedBytes"/> (<c>null</c> - byte admission control disabled).</summary>
+    public static readonly long? DefaultMaxEstimatedBytes = null;
+
+    /// <summary>Default value for <see cref="AdmissionAdvisoryLiveKeys"/> (<c>null</c> - the live-key advisory dry-run signal is disabled).</summary>
+    public static readonly long? DefaultAdmissionAdvisoryLiveKeys = null;
+
+    /// <summary>Default value for <see cref="AdmissionAdvisoryBytes"/> (<c>null</c> - the byte advisory dry-run signal is disabled).</summary>
+    public static readonly long? DefaultAdmissionAdvisoryBytes = null;
 
     /// <summary>
     /// When <c>true</c>, <see cref="ILattice.KeysAsync"/> pre-fetches the next page
