@@ -148,7 +148,7 @@ sub-issue closes, applying the correct release label.
 | 10 | #981 | State API: honour read-access visibility | done (merged; identity bridge + catalog scoping + change-feed gating; F-157) |
 | 11 | #1095 | Api.Data: external read-write data-plane API | done (merged; new package pair, all ops gated via public ILattice, coarse DenyAll transport gate, deny->PermissionDenied; api.data 35, grpc 55; F-166) |
 | 12 | #982 | Replication: replicate auth/membership trees | done (merged; sys-* enrolment LWW/OR-Set + system-origin apply bypass + opt-in epoch fence + drift guards; F-158) |
-| 13 | #983 | Auth: observability & audit | in_progress (sub-agent dispatched; F-159) |
+| 13 | #983 | Auth: observability & audit | done (merged; orleans.lattice.auth meter + ILatticeAuthAuditSink + opt-in TTL sys-auth-audit trail; decision path byte-for-byte unchanged; zero-cost off; 214 tests; F-159) |
 | 14 | #984 | Api.Auth: facade & model | done (merged; ILatticeAuthAdmin combined admin API, every op requires Admin verdict on sys-auth-policy, Explain gate-parity, oli.* aliases; 36 tests; F-160) |
 | 15 | #985 | Api.Auth.Grpc: gRPC binding, client, meta-auth | in_progress (sub-agent dispatched; F-161) |
 | 16 | #1101 | Membership.Entra: Entra ID authenticator | done (merged; 53 focused tests) |
@@ -159,6 +159,20 @@ sub-issue closes, applying the correct release label.
 Out of scope: #1104 (admin UI follow-up).
 
 ## Open concerns (MUST-CLOSE before final PR)
+
+- **DOC-DEBT (MUST-CLOSE in #986, before final PR).** Package READMEs under docs/ are
+  stale from the pre-auth scaffolding era - `docs/lattice.auth/README.md` still says the
+  package is "scaffolding only ... empty and inert", which is now false (the full auth
+  surface F-150..F-162 has shipped). Several Unreleased CHANGELOG entries link these
+  READMEs (lattice.auth, api.state, api.data, api.auth, api.auth.grpc). #986 (docs/
+  sample/e2e) MUST rewrite every referenced README to reflect the shipped surface so
+  every CHANGELOG doc-link resolves to ACCURATE content before the epic PR. Also add an
+  auth observability/audit doc section (meter names, sinks, verbosity, durable trail,
+  zero-cost-off) and consider an auth `metrics.md` sibling to the core one. Also decide
+  whether to wire the subject-resolution cache hit/miss counters (F-159 shipped the
+  instruments + public Record* methods as a seam only; the cache lives below auth and
+  needs a core->auth callback to feed them - deferred as a documented seam for v1).
+
 
 - **OC-2 (security) - CLOSED by #980.** Enforcement resolves the subject and all
   gate/decision-engine internal tree reads under `EnterSystemOrigin()` (see
@@ -242,6 +256,21 @@ Out of scope: #1104 (admin UI follow-up).
   finalize the degrade-vs-fail decision in the #1103 security review.
 
 ## Progress log
+
+- 2026-07-03 REVIEWED + MERGED #983 (F-159, auth observability & audit). Verified the
+  SAFETY-CRITICAL property that the decision path is byte-for-byte unchanged: the
+  PolicyEvaluator's original no-match Evaluate now delegates to the new out-match
+  overload with `out _`, so audit-on and audit-off run identical evaluation; the gate's
+  EvaluateAndObserve calls the original Evaluate(in request) on the audit-off path;
+  order (bootstrap-admin -> epoch-fence -> warm/cold eval) preserved; Observe() emitted
+  strictly after the decision at every return; audit dispatch fire-and-forget with sink
+  exceptions swallowed. Verified zero-cost-off fast-exit (LatticeAuthDecisionObserver
+  lines 88-92: three bool reads, no alloc/timestamp/taglist). Event carries no stored
+  value. Coordinator-verified 214/214. Accepted the unwired subject-cache counters as a
+  documented v1 seam (cache is below auth) -> logged under DOC-DEBT for #986. CHANGELOG
+  F-159 landed. RAISED DOC-DEBT concern: stale package READMEs must be rewritten in #986
+  before the final PR so CHANGELOG doc-links are accurate. #985 (Api.Auth.Grpc) still
+  running in parallel.
 
 - 2026-07-03 REVIEWED + MERGED #984 (F-160, Api.Auth control facade). Verified the
   critical admin-authorization seam: all 19 facade methods (read AND write) call
