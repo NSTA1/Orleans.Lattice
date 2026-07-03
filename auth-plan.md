@@ -152,7 +152,7 @@ sub-issue closes, applying the correct release label.
 | 14 | #984 | Api.Auth: facade & model | done (merged; ILatticeAuthAdmin combined admin API, every op requires Admin verdict on sys-auth-policy, Explain gate-parity, oli.* aliases; 36 tests; F-160) |
 | 15 | #985 | Api.Auth.Grpc: gRPC binding, client, meta-auth | done (merged; LatticeAuthApiGrpcClient + DenyAll meta-authorizer + facade self-auth two-layer, deny->PermissionDenied, oli. wire aliases; grpc 89 + api.auth 36; F-161) |
 | 16 | #1101 | Membership.Entra: Entra ID authenticator | done (merged; 53 focused tests) |
-| 17 | #1102 | Explorer: connect to auth-enabled State API | in_progress (sub-agent dispatched; provider seam + Entra login + silent refresh + server scheme advertisement; F-164) |
+| 17 | #1102 | Explorer: connect to auth-enabled State API | done (reviewed + merged; provider seam + Entra login + transparent single-flight token refresh + retry-once + tokens-never-persisted + unauthenticated GetAuthScheme advertisement; explorer 380 / entra 17 / api.state.grpc 151 green; F-164) |
 | 18 | #1103 | Security hardening: full security & design review | pending |
 | 19 | #986 | Docs, sample & end-to-end tests | pending |
 
@@ -256,6 +256,25 @@ Out of scope: #1104 (admin UI follow-up).
   finalize the degrade-vs-fail decision in the #1103 security review.
 
 ## Progress log
+
+- 2026-07-03 REVIEWED + MERGED #1102 (F-164, Explorer auth). Verified myself: (a)
+  ExplorerAccessTokenSource single-flight (SemaphoreSlim + generation counter, racing
+  caller adopts the winner), proactive refresh via injected TimeProvider margin, revoke
+  latch (dead token never looped); (b) LatticeStateConnection.ExecuteAsync mid-session
+  auth failure does exactly one authRetried-gated silent RefreshAsync-then-retry, else
+  faults RequiresAuthentication=true to re-challenge; (c) IsUnauthenticatedMethod exempts
+  ONLY GetAuthScheme (exact ordinal match) - every data/catalog RPC stays enforced; (d)
+  ExplorerAuthSession.LoginWithMethodAsync: only Basic persists to the store, token schemes
+  ClearAsync + _credential=null (tokens in memory only), challenge runs before any state
+  mutation (clean rollback on cancel). Coordinator-verified explorer 380 / entra 17 /
+  api.state.grpc 151. CHANGELOG F-164 landed. 4 agent deviations FEED INTO #1103 review:
+  (1) UnsafeUseInsecureChannelCallCredentials enabled ONLY on the h2c/allow-unencrypted
+  branch (TLS uses the secure path) - audit; (2) Entra scope heuristic maps audience ->
+  <audience>/.default unless already suffixed - confirm vs #1101 audience convention;
+  (3) GrpcExplorerAuthSchemeProbe happy-path only guard-tested (FakeSchemeProbe indirect) -
+  needs a live-server harness; (4) explorer docs use plain ```csharp fences (harness lacks
+  explorer/Entra refs). NEXT: #1103 (security review; folds #1095, closes OC-3/OC-5/OC-7),
+  then #986 (docs/e2e + F-162 benchmark).
 
 - 2026-07-03 REVIEWED + MERGED #985 (F-161, Api.Auth.Grpc). Verified the two-layer
   authorization: (1) transport meta-authorizer ILatticeAuthApiAuthorizer default DenyAll
