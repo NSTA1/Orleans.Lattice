@@ -364,4 +364,19 @@ public static class LatticeEventConstants
     /// should never touch this key directly.
     /// </summary>
     internal const string CredentialRequestContextKey = "ol.cred";
+
+    /// <summary>
+    /// Orleans <c>RequestContext</c> key used to positively mark the current
+    /// logical call as <em>system-origin</em> (infrastructure-authored:
+    /// maintenance, replication-apply, or a saga leg) so the access-gate
+    /// enforcement point can skip authorization for it and never self-block.
+    /// Distinct from the maintenance-mutation flag
+    /// (<see cref="MaintenanceRequestContextKey"/>, which only sets
+    /// <see cref="LatticeMutation.Category"/>) and from an absent credential
+    /// (which is ambiguous between an anonymous user and a system call). Set
+    /// through <see cref="LatticeAccessGateContext"/>; consumers read
+    /// <see cref="LatticeAccessGateContext.IsSystemOrigin"/> rather than this
+    /// key directly.
+    /// </summary>
+    internal const string AccessGateSystemOriginRequestContextKey = "ol.sysorig";
 }
