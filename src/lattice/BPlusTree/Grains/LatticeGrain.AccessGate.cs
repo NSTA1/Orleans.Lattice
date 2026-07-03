@@ -21,14 +21,13 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// consult it here.
 /// </para>
 /// <para>
-/// <b>Zero-cost default.</b> With only <c>AddLattice</c> registered the gate is
-/// <see cref="NullLatticeAccessGate"/> (a cached, synchronously-completed
-/// <see cref="LatticeAccessDecision.Allow"/> with a <c>null</c>
-/// <see cref="LatticeAccessDecision.KeyFilter"/>) and the membership context is
-/// <see cref="NullLatticeMembershipContext"/> (a cached anonymous subject). Both
-/// awaits complete synchronously, so the <c>async ValueTask</c> state machine
-/// never suspends and never heap-allocates, and the per-key scan loop sees a
-/// <c>null</c> filter and does no per-key work.
+/// <b>Zero-cost default.</b> With only <c>AddLattice</c> registered the gate
+/// is <see cref="NullLatticeAccessGate"/>, so <see cref="AuthorizeAsync"/>
+/// returns a cached allow-all decision <em>without</em> resolving the caller
+/// subject or allocating a request: the default read path is byte-for-byte
+/// identical to the pre-gate behaviour, and the per-key scan loop sees a
+/// <c>null</c> filter and does no per-key work. Subject resolution and the
+/// gate call happen only once a real gate is registered.
 /// </para>
 /// </remarks>
 internal sealed partial class LatticeGrain
@@ -104,10 +103,35 @@ internal sealed partial class LatticeGrain
             return LatticeAccessDecision.Allow();
         }
 
-        var subject = await LatticeAccessGateSubjectResolver
-            .ResolveAsync(MembershipContext, cancellationToken);
+        // No authorization configured: with only the default null gate there is
+        // no decision to make and no filter to apply, so skip subject resolution
+        // entirely. This keeps the default path byte-for-byte identical to the
+        // pre-gate behaviour (no membership resolution, no request allocation)
+        // and - crucially - avoids re-entrancy: an infrastructure add-on that
+        // dogfoods a tree (for example the membership directory) reads that tree
+        // through the public scan surface, and resolving the caller subject here
+        // would recurse back into the very directory being read.
+        var gate = AccessGate;
+        if (gate is NullLatticeAccessGate)
+        {
+            return LatticeAccessDecision.Allow();
+        }
+
+        // Caller-identity resolution is itself infrastructure: the membership
+        // context resolves the subject by reading its dogfooded directory trees
+        // through the public scan surface, which would otherwise re-enter this
+        // gate and recurse. Resolve the subject under a system-origin scope so
+        // those internal directory reads bypass the gate; the gate is then
+        // consulted for the caller's actual request outside that scope.
+        LatticeSubject subject;
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            subject = await LatticeAccessGateSubjectResolver
+                .ResolveAsync(MembershipContext, cancellationToken);
+        }
+
         var request = new LatticeAccessRequest(TreeId, operation, subject, key, rangeStart, rangeEnd);
-        return await AccessGate.AuthorizeAsync(in request, cancellationToken);
+        return await gate.AuthorizeAsync(in request, cancellationToken);
     }
 
     /// <summary>
