@@ -146,8 +146,8 @@ sub-issue closes, applying the correct release label.
 | 8 | #979 | Auth: compiled snapshot & decision engine | done (merged; 116 focused tests) |
 | 9 | #980 | Auth: enforcement wiring at LatticeGrain | done (merged; core boundary; closes OC-1/OC-2; sec-review remediated) |
 | 10 | #981 | State API: honour read-access visibility | done (merged; identity bridge + catalog scoping + change-feed gating; F-157) |
-| 11 | #1095 | Api.Data: external read-write data-plane API | pending |
-| 12 | #982 | Replication: replicate auth/membership trees | pending |
+| 11 | #1095 | Api.Data: external read-write data-plane API | in_progress (sub-agent; new package pair, gated via ILattice; F-166) |
+| 12 | #982 | Replication: replicate auth/membership trees | in_progress (sub-agent; sys-* enrolment + system-origin apply + opt-in epoch fence; F-158) |
 | 13 | #983 | Auth: observability & audit | pending |
 | 14 | #984 | Api.Auth: facade & model | pending |
 | 15 | #985 | Api.Auth.Grpc: gRPC binding, client, meta-auth | pending |
@@ -227,6 +227,22 @@ Out of scope: #1104 (admin UI follow-up).
   finalize the degrade-vs-fail decision in the #1103 security review.
 
 ## Progress log
+
+- 2026-07-03 DISPATCHED #1095 (F-166, Api.Data external read-write data-plane) and
+  #982 (F-158, replicate auth/membership sys-* trees) as PARALLEL Feature Dev
+  sub-agents in worktrees 1095 and 982 (disjoint packages: api.data vs replication;
+  both depend only on merged auth backbone, not on each other). #1095 brief: new
+  package pair mirroring the read-only State API, v1 scope = point set/remove/get +
+  single-tree atomic batch + cross-tree atomic + bounded single-page range read
+  (streaming deferred); ALL ops route through the gated `ILattice` surface so #980
+  enforcement fires automatically (no new authz path); reuse the #981 identity-bridge
+  pattern; opt-in/absent by default; map deny -> PermissionDenied. #982 brief: gated
+  enrolment of sys-membership-*/sys-auth-policy (+optional sys-auth-audit) into
+  replication (LWW policy/membership, OR/append audit); system-origin apply bypass on
+  the receiver (security-critical - replicated writes must not be user-authorized);
+  opt-in per-tree strict PolicyEpoch fence (off by default = eventual, zero-cost);
+  guardrail validation if replication absent. Both: focused tests only, commit in
+  worktree (hooks off, no attribution), no merge/push - coordinator reviews & merges.
 
 - 2026-07-03 #981 (F-157, State API read visibility) MERGED into `feat/auth`, and
   the OC-6 core scan fix MERGED alongside it. REVIEW of the sub-agent's work: built
