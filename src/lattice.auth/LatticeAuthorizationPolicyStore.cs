@@ -52,9 +52,14 @@ internal sealed class LatticeAuthorizationPolicyStore(
         ArgumentException.ThrowIfNullOrEmpty(treeId);
 
         var prefix = TreePrefix(treeId);
-        foreach (var rule in await ScanAsync(prefix, PrefixUpperBound(prefix), cancellationToken).ConfigureAwait(false))
+        await foreach (var entry in Policy
+            .ScanEntriesAsync<LatticeAuthorizationRule>(prefix, PrefixUpperBound(prefix), cancellationToken: cancellationToken)
+            .ConfigureAwait(false))
         {
-            yield return rule;
+            if (entry.Value is { } rule)
+            {
+                yield return rule;
+            }
         }
     }
 
@@ -62,59 +67,22 @@ internal sealed class LatticeAuthorizationPolicyStore(
     public async IAsyncEnumerable<LatticeAuthorizationRule> ListRulesAsync(
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        foreach (var rule in await ScanAsync(startInclusive: null, endExclusive: null, cancellationToken).ConfigureAwait(false))
+        // ScanEntriesAsync (not EntriesAsync) so the scan transparently recovers
+        // from a mid-flight Orleans.Runtime.EnumerationAbortedException without
+        // duplicates or gaps. The compiled-policy snapshot maintainer rescans this
+        // same policy tree in the background on every edit, so a caller's list scan
+        // routinely overlaps a maintainer scan; the resilient scan converges rather
+        // than surfacing the transient abort.
+        await foreach (var entry in Policy
+            .ScanEntriesAsync<LatticeAuthorizationRule>(cancellationToken: cancellationToken)
+            .ConfigureAwait(false))
         {
-            yield return rule;
-        }
-    }
-
-    // A streaming scan over the policy tree grain can be aborted mid-flight when a
-    // concurrent enumeration is active over the same tree (the compiled-policy
-    // snapshot maintainer rescans the policy tree in the background on every
-    // policy edit, so a caller's list scan now routinely overlaps a maintainer
-    // scan). Orleans surfaces that as an enumeration-aborted error. It is
-    // transient, so the scan is buffered and retried as a whole with a short
-    // backoff; the policy rule set is bounded and small, so eager buffering is
-    // cheap and the retry converges once the overlapping scan drains.
-    private const int MaxScanAttempts = 8;
-
-    private async Task<List<LatticeAuthorizationRule>> ScanAsync(
-        string? startInclusive,
-        string? endExclusive,
-        CancellationToken cancellationToken)
-    {
-        for (var attempt = 1; ; attempt++)
-        {
-            try
+            if (entry.Value is { } rule)
             {
-                var rules = new List<LatticeAuthorizationRule>();
-                await foreach (var entry in Policy
-                    .EntriesAsync<LatticeAuthorizationRule>(startInclusive, endExclusive, cancellationToken: cancellationToken)
-                    .ConfigureAwait(false))
-                {
-                    if (entry.Value is { } rule)
-                    {
-                        rules.Add(rule);
-                    }
-                }
-
-                return rules;
-            }
-            catch (Exception ex) when (attempt < MaxScanAttempts && IsTransientScanFailure(ex))
-            {
-                await Task.Delay(25 * attempt, cancellationToken).ConfigureAwait(false);
+                yield return rule;
             }
         }
     }
-
-    /// <summary>
-    /// A streaming scan over a grain can be aborted when its server-side
-    /// enumerator is evicted by a concurrent enumeration over the same tree or the
-    /// grain deactivates between pages. Orleans reports this as an
-    /// enumeration-aborted error; it is transient and a fresh scan converges.
-    /// </summary>
-    private static bool IsTransientScanFailure(Exception ex) =>
-        ex.GetType().Name == "EnumerationAbortedException";
 
     private static string RuleKey(string treeId, string ruleId) =>
         string.Create(
