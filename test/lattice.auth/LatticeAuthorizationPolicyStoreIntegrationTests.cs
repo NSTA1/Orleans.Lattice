@@ -45,7 +45,7 @@ public sealed class LatticeAuthorizationPolicyStoreIntegrationTests
         {
             LatticeOperation.Read,
             LatticeOperation.Read | LatticeOperation.Write | LatticeOperation.Delete,
-            LatticeOperation.All,
+            LatticeAuthOperations.All,
         };
 
         var index = 0;
@@ -88,7 +88,7 @@ public sealed class LatticeAuthorizationPolicyStoreIntegrationTests
             "durable-1",
             LatticeSubjectSelector.Group("ops"),
             LatticeScope.Prefix("dur-tree", "tenant-1/"),
-            LatticeOperation.Read | LatticeOperation.Enumerate,
+            LatticeOperation.Read | LatticeOperation.RangeRead,
             LatticeEffect.Allow);
 
         await _fixture.Store.PutRuleAsync(rule);
@@ -119,7 +119,7 @@ public sealed class LatticeAuthorizationPolicyStoreIntegrationTests
     {
         var store = _fixture.Store;
         var v1 = new LatticeAuthorizationRule("hist-1", LatticeSubjectSelector.User("bob"), LatticeScope.Tree("hist-tree"), LatticeOperation.Read, LatticeEffect.Allow);
-        var v2 = v1 with { Operations = LatticeOperation.All };
+        var v2 = v1 with { Operations = LatticeAuthOperations.All };
         await store.PutRuleAsync(v1);
         await store.PutRuleAsync(v2);
 
@@ -196,7 +196,7 @@ public sealed class LatticeAuthorizationPolicyStoreIntegrationTests
             "bad-1",
             LatticeSubjectSelector.User("u"),
             LatticeScope.Tree("sys-auth-policy"),
-            LatticeOperation.All,
+            LatticeAuthOperations.All,
             LatticeEffect.Allow);
 
         Assert.That(async () => await _fixture.Store.PutRuleAsync(rule), Throws.ArgumentException,

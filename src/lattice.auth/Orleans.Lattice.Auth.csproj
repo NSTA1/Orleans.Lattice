@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Auth</PackageId>
     <Version>7.7.1</Version>
-    <Description>Authorization and enforcement add-on for Orleans.Lattice. Scaffolding only: this release ships an empty, inert package that establishes the compiling, packaged home for later authorization features. It carries no public API beyond the namespace and no dependency on the core read/write path.</Description>
+    <Description>Authorization add-on for Orleans.Lattice. Ships the authorization rule model (subject selector, scope, operations, effect) and a durable, introspectable policy store backed by a reserved, dogfooded lattice tree with per-key history. The decision engine and read/write enforcement are layered by later releases.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
     <RepositoryType>git</RepositoryType>

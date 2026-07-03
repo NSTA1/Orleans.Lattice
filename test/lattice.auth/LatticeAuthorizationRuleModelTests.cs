@@ -165,10 +165,14 @@ public class LatticeAuthorizationRuleModelTests
     [Test]
     public void Operation_All_covers_every_defined_operation()
     {
-        Assert.That(LatticeOperation.All.HasFlag(LatticeOperation.Read), Is.True);
-        Assert.That(LatticeOperation.All.HasFlag(LatticeOperation.Write), Is.True);
-        Assert.That(LatticeOperation.All.HasFlag(LatticeOperation.Delete), Is.True);
-        Assert.That(LatticeOperation.All.HasFlag(LatticeOperation.Enumerate), Is.True);
-        Assert.That(LatticeOperation.All.HasFlag(LatticeOperation.Administer), Is.True);
+        Assert.That(LatticeAuthOperations.All.HasFlag(LatticeOperation.Read), Is.True);
+        Assert.That(LatticeAuthOperations.All.HasFlag(LatticeOperation.Write), Is.True);
+        Assert.That(LatticeAuthOperations.All.HasFlag(LatticeOperation.Delete), Is.True);
+        Assert.That(LatticeAuthOperations.All.HasFlag(LatticeOperation.RangeRead), Is.True);
+        Assert.That(LatticeAuthOperations.All.HasFlag(LatticeOperation.RangeDelete), Is.True);
+        Assert.That(LatticeAuthOperations.All.HasFlag(LatticeOperation.CrdtApply), Is.True);
+        Assert.That(LatticeAuthOperations.All.HasFlag(LatticeOperation.AtomicWrite), Is.True);
+        Assert.That(LatticeAuthOperations.All.HasFlag(LatticeOperation.BulkLoad), Is.True);
+        Assert.That(LatticeAuthOperations.All.HasFlag(LatticeOperation.Admin), Is.True);
     }
 }
