@@ -145,7 +145,7 @@ sub-issue closes, applying the correct release label.
 | 7 | #978 | Auth: authorization rule model & policy store | done (merged; gate batched with #977) |
 | 8 | #979 | Auth: compiled snapshot & decision engine | done (merged; 116 focused tests) |
 | 9 | #980 | Auth: enforcement wiring at LatticeGrain | done (merged; core boundary; closes OC-1/OC-2; sec-review remediated) |
-| 10 | #981 | State API: honour read-access visibility | in_progress (sub-agent; identity bridge + catalog scoping) |
+| 10 | #981 | State API: honour read-access visibility | done (merged; identity bridge + catalog scoping + change-feed gating; F-157) |
 | 11 | #1095 | Api.Data: external read-write data-plane API | pending |
 | 12 | #982 | Replication: replicate auth/membership trees | pending |
 | 13 | #983 | Auth: observability & audit | pending |
@@ -181,24 +181,37 @@ Out of scope: #1104 (admin UI follow-up).
   therefore be read ungated by a subject denied the source tree. View-level authz
   never existed and is out of #980 scope, but it is a real confidentiality gap.
   These scopes are `internal` (not client-settable), confirmed by the #980
-  security review. ACTION: close in #1103 (a view-level Read decision keyed by
-  view id or underlying source tree) - the epic MUST NOT reach the final PR with
-  a materialised view over restricted data readable ungated.
+  security review. NOTE (expanded during #981 review): this surface is ALSO
+  reachable through the read-only State API - `LatticeStateQuery` admits `view-*`
+  trees (`IsTreeReadHiddenAsync` returns not-hidden for them) and opens
+  `ViewReadContext` via `OpenViewReadScopeIfNeeded`, so `GetEntry` / `ScanEntries`
+  / structure / metrics on a `view-*` tree read the view ungated exactly as the
+  core view handle does. #981 deliberately leaves view trees observable (mirroring
+  the core reads) rather than silently diverging; the fix belongs with the core
+  view-level decision. ACTION: close in #1103 (a view-level Read decision keyed by
+  view id or underlying source tree, applied uniformly at the core view handle so
+  both the direct `ILatticeView` path and the State-API view path inherit it) -
+  the epic MUST NOT reach the final PR with a materialised view over restricted
+  data readable ungated by either surface.
 
-- **OC-6 (correctness, for #1103 / core follow-up): a strongly-consistent scan can
-  transiently omit a durably-written key while a second scan of the SAME grain
-  activation runs concurrently.** Surfaced by the two admin `ListRules*` store
-  tests (~1/6) once #980's active `PolicyAccessGate` makes the background policy
-  maintainer rescan the `sys-auth-policy` tree on every edit, overlapping the
-  test's own list scan. The resilient `ScanEntriesAsync` resume is correct
-  (resumes from `lastKey + "\u0000"`, never drops a committed successor), so the
-  omission is in the underlying single-pass `EntriesAsync` scan under a concurrent
-  same-activation scan - a pre-existing core concern, orthogonal to enforcement
-  (which reads the authoritative in-memory compiled snapshot, not a client list).
-  MITIGATION IN PLACE: the two admin-list tests assert eventual convergence
-  (durable keys converge on a subsequent pass). ACTION: root-cause the core scan
-  under a concurrent same-activation scan (Bug Hunter dispatched); if a genuine
-  key-drop, fix in core and revert the test convergence loop. Backstop: #1103.
+- **OC-6 (correctness) - RESOLVED by the Bug Hunter fix (merged into `feat/auth`,
+  ex-`hunt/oc6-scan-concurrency` commit 067d802f).** Root cause CONFIRMED: the
+  resilient strongly-consistent scan wrapper (`LatticeExtensions.ScanEntriesAsyncCore`
+  / `ScanKeysAsyncCore`) emulates one logical scan as a sequence of physical
+  `EntriesAsync` segments; a caller-established `EnterSystemOrigin()` scope is reset
+  by Orleans in the iterator's own execution flow after the first segment completes,
+  so a segment that reopened after a transient `EnumerationAbortedException` (raised
+  when a concurrent scan over the same activation evicts the enumerator) resolved to
+  an anonymous subject, the fail-closed gate returned a reject-all key-filter, and
+  the segment completed normally with zero rows - the wrapper trusted the clean
+  completion and silently truncated the scan at the resume floor. Fix: capture the
+  caller's system-origin intent once at method entry and re-assert it around every
+  physical segment (zero-cost when not system-origin). Coordinator-verified: core
+  resilient/strongly-consistent scan tests 38/38, auth policy-store + new
+  `ScanReopenPreservesSystemOriginTests` 46/46. The two admin `ListRules*` tests
+  keep their `ScanUntilAsync` convergence helper as harmless defense-in-depth; the
+  new dedicated racing regression test is the authoritative guard. No longer a
+  backstop for #1103.
 
 ## Decision log
 
@@ -214,6 +227,26 @@ Out of scope: #1104 (admin UI follow-up).
   finalize the degrade-vs-fail decision in the #1103 security review.
 
 ## Progress log
+
+- 2026-07-03 #981 (F-157, State API read visibility) MERGED into `feat/auth`, and
+  the OC-6 core scan fix MERGED alongside it. REVIEW of the sub-agent's work: built
+  clean; api.state 277/277, grpc 140/140. Fixed a tracker-id hygiene violation
+  (`F-117` in a grpc fixture comment). REMEDIATED a genuine in-scope read-around the
+  sub-agent missed: the live change feed (`LatticeStateObserver.ObserveAsync` / gRPC
+  `ObserveChanges`) tails the WAL DIRECTLY, not through the gated `ILattice` surface,
+  so it hid only system trees - any caller could subscribe to any non-system data
+  tree's change feed (keys/kinds/HLC/values). Added a `LatticeStateVisibilityFilter`
+  change-feed access resolver + observer gating: anonymous/unauthorized subscriber
+  refused (not-found), whole-tree grant streams all, partial (prefix) grant applies
+  the gate's per-key filter and NEVER emits a range delete (cannot be narrowed);
+  zero-cost when disabled. Added 5 change-feed visibility tests (18 auth-visibility
+  total green). OC-5 expanded to name the State-API view-read path (also reachable,
+  same deferral to #1103). OC-6: the Bug Hunter CONFIRMED a real core defect (the
+  resilient scan wrapper lost the caller's system-origin scope on segment reopen ->
+  anonymous subject -> fail-closed gate silently truncated the scan) and fixed it by
+  re-asserting system-origin per segment; coordinator-verified (core scan 38/38, auth
+  46/46) and MERGED - OC-6 now RESOLVED (convergence helper kept as harmless
+  defense-in-depth). CHANGELOG: F-157 Added entry landed.
 
 - 2026-07-03 DISPATCHED #981 (F-157, State API read visibility) Feature Dev
   sub-agent in worktree 981. Key design steer: State-API reads go through the
