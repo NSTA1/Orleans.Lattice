@@ -53,7 +53,7 @@ internal sealed class LatticeAuthorizationPolicyStore(
 
         var prefix = TreePrefix(treeId);
         await foreach (var entry in Policy
-            .EntriesAsync<LatticeAuthorizationRule>(prefix, PrefixUpperBound(prefix), cancellationToken: cancellationToken)
+            .ScanEntriesAsync<LatticeAuthorizationRule>(prefix, PrefixUpperBound(prefix), cancellationToken: cancellationToken)
             .ConfigureAwait(false))
         {
             if (entry.Value is { } rule)
@@ -67,8 +67,14 @@ internal sealed class LatticeAuthorizationPolicyStore(
     public async IAsyncEnumerable<LatticeAuthorizationRule> ListRulesAsync(
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        // ScanEntriesAsync (not EntriesAsync) so the scan transparently recovers
+        // from a mid-flight Orleans.Runtime.EnumerationAbortedException without
+        // duplicates or gaps. The compiled-policy snapshot maintainer rescans this
+        // same policy tree in the background on every edit, so a caller's list scan
+        // routinely overlaps a maintainer scan; the resilient scan converges rather
+        // than surfacing the transient abort.
         await foreach (var entry in Policy
-            .EntriesAsync<LatticeAuthorizationRule>(cancellationToken: cancellationToken)
+            .ScanEntriesAsync<LatticeAuthorizationRule>(cancellationToken: cancellationToken)
             .ConfigureAwait(false))
         {
             if (entry.Value is { } rule)

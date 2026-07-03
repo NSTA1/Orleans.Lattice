@@ -4,7 +4,8 @@ namespace Orleans.Lattice.Auth;
 
 /// <summary>
 /// Validates <see cref="LatticeAuthOptions"/> at silo start: rejects a
-/// non-positive history retention window and an undefined history retention mode.
+/// non-positive history retention window, an undefined history retention mode,
+/// and an undefined default effect.
 /// </summary>
 internal sealed class LatticeAuthOptionsValidator : IValidateOptions<LatticeAuthOptions>
 {
@@ -22,6 +23,11 @@ internal sealed class LatticeAuthOptionsValidator : IValidateOptions<LatticeAuth
         if (!Enum.IsDefined(options.HistoryRetentionMode))
         {
             failures.Add($"{nameof(LatticeAuthOptions.HistoryRetentionMode)} must be a defined HistoryRetentionMode value.");
+        }
+
+        if (!Enum.IsDefined(options.DefaultEffect))
+        {
+            failures.Add($"{nameof(LatticeAuthOptions.DefaultEffect)} must be a defined LatticeEffect value.");
         }
 
         return failures.Count > 0
