@@ -111,9 +111,24 @@ public static class LatticeAuthServiceCollectionExtensions
             sp => sp.GetRequiredService<CompiledPolicySnapshotMaintainer>());
 
         // The decision engine: the in-memory decision surface the enforcement
-        // gate consults. Registered once; the gate below replaces the core
-        // default no-op access gate with one that routes through this engine.
-        builder.Services.TryAddSingleton<ILatticeDecisionEngine, LatticeDecisionEngine>();
+        // gate consults. Registered once as the concrete type (which the gate and
+        // the audit path depend on for the detailed, rule-carrying evaluation)
+        // and mapped to the public interface for external consumers.
+        builder.Services.TryAddSingleton<LatticeDecisionEngine>();
+        builder.Services.TryAddSingleton<ILatticeDecisionEngine>(
+            sp => sp.GetRequiredService<LatticeDecisionEngine>());
+
+        // Observability and audit (issue #983). The decision observer records the
+        // orleans.lattice.auth meter and fans admissible decisions out to the
+        // audit sinks; it is called by the gate after every decision. The default
+        // logger sink is always present; the durable sys-auth-audit trail sink is
+        // always registered but no-ops unless the durable trail is enabled in
+        // options, so it stays zero-cost by default.
+        builder.Services.TryAddSingleton<LatticeAuthDecisionObserver>();
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<ILatticeAuthAuditSink, LoggerLatticeAuthAuditSink>());
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<ILatticeAuthAuditSink, DurableAuthAuditTrailSink>());
 
         // Enforcement wiring: replace the core default NullLatticeAccessGate
         // (registered by AddLattice via TryAddSingleton) with PolicyAccessGate,

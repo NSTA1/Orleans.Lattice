@@ -23,6 +23,15 @@ internal static class AuthConstants
     /// <summary>Tree holding authorization rules, keyed <c>{treeId}\u001f{ruleId}</c> so a tree's rules are a single prefix scan.</summary>
     internal const string PolicyTree = "sys-auth-policy";
 
+    /// <summary>
+    /// The optional append-only authorization audit tree that backs the durable
+    /// decision trail. Off by default; written only when the durable audit trail
+    /// is enabled. Mirrored publicly as <c>LatticeSystemTreeNames.AuthAudit</c>
+    /// in the replication package, kept in sync by the auth test project's drift
+    /// guard.
+    /// </summary>
+    internal const string AuditTree = "sys-auth-audit";
+
     /// <summary>Durable per-key history view name for <see cref="PolicyTree"/>.</summary>
     internal const string PolicyHistoryView = "sys-auth-policy-history";
 

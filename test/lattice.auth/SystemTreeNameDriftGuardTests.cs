@@ -23,12 +23,16 @@ public sealed class SystemTreeNameDriftGuardTests
     }
 
     [Test]
+    public void Auth_audit_tree_mirror_matches_the_canonical_constant()
+    {
+        Assert.That(LatticeSystemTreeNames.AuthAudit, Is.EqualTo(AuthConstants.AuditTree));
+    }
+
+    [Test]
     public void Auth_audit_tree_mirror_stays_within_the_reserved_auth_namespace()
     {
-        // The optional audit tree has no dogfooded backing constant today (auth
-        // derives its history as a view over the policy tree), so the invariant we
-        // can assert is that the mirrored id stays inside the reserved auth
-        // namespace and therefore can never collide with an application tree.
+        // The audit tree must stay inside the reserved auth namespace so it can
+        // never collide with an application tree.
         Assert.That(
             LatticeSystemTreeNames.AuthAudit,
             Does.StartWith(AuthConstants.ReservedTreePrefix));

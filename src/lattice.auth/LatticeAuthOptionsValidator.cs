@@ -5,8 +5,10 @@ namespace Orleans.Lattice.Auth;
 /// <summary>
 /// Validates <see cref="LatticeAuthOptions"/> at silo start: rejects a
 /// non-positive history retention window, an undefined history retention mode,
-/// an undefined default effect, a null-or-empty bootstrap administrator id, and
-/// a null-or-empty strict-consistency tree id.
+/// an undefined default effect, a null-or-empty bootstrap administrator id, a
+/// null-or-empty strict-consistency tree id, an undefined audit verbosity, an
+/// out-of-range audit sampling ratio, and a non-positive audit-trail
+/// time-to-live.
 /// </summary>
 internal sealed class LatticeAuthOptionsValidator : IValidateOptions<LatticeAuthOptions>
 {
@@ -44,6 +46,21 @@ internal sealed class LatticeAuthOptionsValidator : IValidateOptions<LatticeAuth
             && options.StrictConsistencyTrees.Any(string.IsNullOrEmpty))
         {
             failures.Add($"{nameof(LatticeAuthOptions.StrictConsistencyTrees)} must not contain a null or empty tree id.");
+        }
+
+        if (!Enum.IsDefined(options.AuditVerbosity))
+        {
+            failures.Add($"{nameof(LatticeAuthOptions.AuditVerbosity)} must be a defined LatticeAuthAuditVerbosity value.");
+        }
+
+        if (options.AuditSamplingRatio is < 0.0 or > 1.0 || double.IsNaN(options.AuditSamplingRatio))
+        {
+            failures.Add($"{nameof(LatticeAuthOptions.AuditSamplingRatio)} must be within the inclusive range [0.0, 1.0].");
+        }
+
+        if (options.AuditTrailTimeToLive is { } auditTtl && auditTtl <= TimeSpan.Zero)
+        {
+            failures.Add($"{nameof(LatticeAuthOptions.AuditTrailTimeToLive)} must be strictly positive when supplied.");
         }
 
         return failures.Count > 0

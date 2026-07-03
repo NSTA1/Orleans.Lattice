@@ -29,10 +29,12 @@ internal sealed class CompiledPolicySnapshotMaintainer : IMutationObserver
 {
     private readonly ILatticeAuthorizationPolicyStore _store;
     private readonly ILogger<CompiledPolicySnapshotMaintainer> _logger;
+    private readonly TimeProvider _time;
     private readonly SemaphoreSlim _rebuildLock = new(1, 1);
 
     private CompiledPolicy _current = CompiledPolicy.Empty;
     private long _epoch;
+    private long _lastRebuildUtcTicks;
 
     // Coalescing state for background rebuilds: 0 idle, 1 running, 2 running with
     // a queued follow-up.
@@ -41,14 +43,25 @@ internal sealed class CompiledPolicySnapshotMaintainer : IMutationObserver
     /// <summary>Initializes a new <see cref="CompiledPolicySnapshotMaintainer"/>.</summary>
     /// <param name="store">The policy store scanned to build the snapshot.</param>
     /// <param name="logger">The logger for background-rebuild failures.</param>
+    /// <param name="timeProvider">
+    /// The clock used to stamp the last-rebuild time that backs the snapshot-age
+    /// observable gauge; defaults to <see cref="TimeProvider.System"/>.
+    /// </param>
     public CompiledPolicySnapshotMaintainer(
         ILatticeAuthorizationPolicyStore store,
-        ILogger<CompiledPolicySnapshotMaintainer> logger)
+        ILogger<CompiledPolicySnapshotMaintainer> logger,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(logger);
         _store = store;
         _logger = logger;
+        _time = timeProvider ?? TimeProvider.System;
+
+        // Publish this maintainer as a source for the compiled-snapshot epoch and
+        // age observable gauges. Registration is idempotent and holds only a weak
+        // reference, so it never keeps a shut-down silo's maintainer alive.
+        AuthSnapshotGaugeRegistry.Register(this);
     }
 
     /// <summary>The current compiled snapshot. Read without locking; swapped atomically on rebuild.</summary>
@@ -56,6 +69,19 @@ internal sealed class CompiledPolicySnapshotMaintainer : IMutationObserver
 
     /// <summary>The monotonic epoch of the current snapshot; advances on every rebuild.</summary>
     public long CurrentEpoch => Interlocked.Read(ref _epoch);
+
+    /// <summary>
+    /// The wall-clock instant the snapshot was last rebuilt, or <c>null</c> when
+    /// it has never been built. Backs the snapshot-age observable gauge.
+    /// </summary>
+    public DateTimeOffset? LastRebuildUtc
+    {
+        get
+        {
+            var ticks = Interlocked.Read(ref _lastRebuildUtcTicks);
+            return ticks == 0 ? null : new DateTimeOffset(ticks, TimeSpan.Zero);
+        }
+    }
 
     /// <summary>
     /// Ensures the snapshot has been built at least once, building it
@@ -164,6 +190,13 @@ internal sealed class CompiledPolicySnapshotMaintainer : IMutationObserver
             var compiled = CompiledPolicy.Compile(rules);
             Volatile.Write(ref _current, compiled);
             Interlocked.Increment(ref _epoch);
+            Interlocked.Exchange(ref _lastRebuildUtcTicks, _time.GetUtcNow().UtcTicks);
+
+            // Observability only: count the rebuild. Never affects the snapshot.
+            if (LatticeAuthMetrics.SnapshotRebuilds.Enabled)
+            {
+                LatticeAuthMetrics.SnapshotRebuilds.Add(1);
+            }
         }
         finally
         {
