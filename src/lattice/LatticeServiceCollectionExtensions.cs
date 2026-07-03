@@ -162,6 +162,11 @@ public static class LatticeServiceCollectionExtensions
         // scoped so the underlying codec stays hot.
         builder.Services.TryAddSingleton<IWalRecordEncoder, OrleansBinaryWalRecordEncoder>();
         builder.Services.TryAddSingleton<ILatticeMergeModeResolver, DefaultLatticeMergeModeResolver>();
+        // Membership seam: default to the anonymous-resolving no-op so a
+        // consumer of ILatticeMembershipContext (for example the later
+        // access-gate) always resolves an instance. AddLatticeMembership
+        // replaces this with the real credential-resolving implementation.
+        builder.Services.TryAddSingleton<ILatticeMembershipContext, NullLatticeMembershipContext>();
         // CRDT shape registry: closed-shape modes (OrSet / PnCounter /
         // VersionVector / MvRegister) are pre-populated on construction
         // so no host registration is required for them. Generic OrMap

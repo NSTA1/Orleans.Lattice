@@ -1,0 +1,51 @@
+namespace Orleans.Lattice.Membership.Tests;
+
+/// <summary>
+/// A hand-written <see cref="ILatticeMembershipDirectory"/> fake that returns a
+/// fixed transitive-group set for <see cref="GroupsOfAsync"/> and counts how
+/// often it was queried, so tests can prove the resolution cache spares storage
+/// on a warm hit. All mutating members throw: the context under test only reads.
+/// </summary>
+internal sealed class CountingDirectory(IReadOnlyCollection<string> groups) : ILatticeMembershipDirectory
+{
+    public int GroupsOfCalls { get; private set; }
+
+    public Task<IReadOnlyCollection<string>> GroupsOfAsync(string memberId, CancellationToken cancellationToken = default)
+    {
+        GroupsOfCalls++;
+        return Task.FromResult(groups);
+    }
+
+    public Task<IReadOnlyCollection<string>> MembersOfAsync(string groupId, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException();
+
+    public Task UpsertUserAsync(MembershipUser user, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException();
+
+    public Task<MembershipUser?> GetUserAsync(string userId, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException();
+
+    public IAsyncEnumerable<MembershipUser> ListUsersAsync(CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException();
+
+    public Task RemoveUserAsync(string userId, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException();
+
+    public Task UpsertGroupAsync(MembershipGroup group, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException();
+
+    public Task<MembershipGroup?> GetGroupAsync(string groupId, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException();
+
+    public IAsyncEnumerable<MembershipGroup> ListGroupsAsync(CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException();
+
+    public Task RemoveGroupAsync(string groupId, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException();
+
+    public Task AddMemberAsync(string groupId, string memberId, MembershipMemberKind memberKind = MembershipMemberKind.User, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException();
+
+    public Task RemoveMemberAsync(string groupId, string memberId, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException();
+}
