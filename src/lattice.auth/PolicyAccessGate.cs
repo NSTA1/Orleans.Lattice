@@ -27,8 +27,9 @@ namespace Orleans.Lattice.Auth;
 /// </para>
 /// </remarks>
 internal sealed class PolicyAccessGate(
-    ILatticeDecisionEngine engine,
+    LatticeDecisionEngine engine,
     CompiledPolicySnapshotMaintainer maintainer,
+    LatticeAuthDecisionObserver observer,
     IOptionsMonitor<LatticeAuthOptions> options) : ILatticeAccessGate
 {
     /// <inheritdoc />
@@ -36,13 +37,17 @@ internal sealed class PolicyAccessGate(
         in LatticeAccessRequest request,
         CancellationToken cancellationToken = default)
     {
+        var start = LatticeAuthDecisionObserver.CaptureStart();
+
         // Root-of-trust: a bootstrap administrator is always Admin on every tree
         // and operation, so a policy misconfiguration can never lock every
         // operator out of the authorization tree itself. Checked before the
         // engine so it holds even against a cold snapshot.
         if (IsBootstrapAdministrator(request.Subject.SubjectId))
         {
-            return new ValueTask<LatticeAccessDecision>(LatticeAccessDecision.Allow());
+            var allow = LatticeAccessDecision.Allow();
+            observer.Observe(in request, in allow, default, maintainer.CurrentEpoch, start);
+            return new ValueTask<LatticeAccessDecision>(allow);
         }
 
         // Optional strict-consistency policy-epoch fence (issue #982), off by
@@ -56,7 +61,9 @@ internal sealed class PolicyAccessGate(
         // epoch.
         if (ShouldFence(in request, out var fenceReason))
         {
-            return new ValueTask<LatticeAccessDecision>(LatticeAccessDecision.Deny(fenceReason));
+            var deny = LatticeAccessDecision.Deny(fenceReason);
+            observer.Observe(in request, in deny, default, engine.CurrentEpoch, start);
+            return new ValueTask<LatticeAccessDecision>(deny);
         }
 
         // Warm fast path: once any rebuild has advanced the epoch, evaluation is
@@ -64,21 +71,53 @@ internal sealed class PolicyAccessGate(
         // machine.
         if (maintainer.CurrentEpoch > 0)
         {
-            return new ValueTask<LatticeAccessDecision>(Evaluate(in request));
+            return new ValueTask<LatticeAccessDecision>(EvaluateAndObserve(in request, start));
         }
 
         // Cold path (first request on this silo): warm the snapshot once, then
         // evaluate. The request is copied by value into the async helper because
         // an async method cannot take an 'in' parameter.
-        return WarmThenEvaluateAsync(request, cancellationToken);
+        return WarmThenEvaluateAsync(request, start, cancellationToken);
     }
 
     private async ValueTask<LatticeAccessDecision> WarmThenEvaluateAsync(
         LatticeAccessRequest request,
+        long start,
         CancellationToken cancellationToken)
     {
         await maintainer.EnsureWarmAsync(cancellationToken).ConfigureAwait(false);
-        return Evaluate(in request);
+        return EvaluateAndObserve(in request, start);
+    }
+
+    /// <summary>
+    /// Computes the decision and emits post-decision observability. On the
+    /// audit-enabled path the detailed evaluation additionally surfaces the
+    /// winning rule so the audit event can name it; on the default (audit-off)
+    /// path the byte-for-byte-unchanged fast evaluation is used and only the
+    /// (listener-guarded) metrics are recorded.
+    /// </summary>
+    private LatticeAccessDecision EvaluateAndObserve(in LatticeAccessRequest request, long start)
+    {
+        LatticeAccessDecision decision;
+        PolicyMatch match = default;
+        if (observer.IsAuditEnabled)
+        {
+            decision = engine.Evaluate(
+                request.Subject,
+                request.TreeId,
+                request.Operation,
+                request.Key,
+                request.RangeStart,
+                request.RangeEnd,
+                out match);
+        }
+        else
+        {
+            decision = Evaluate(in request);
+        }
+
+        observer.Observe(in request, in decision, in match, maintainer.CurrentEpoch, start);
+        return decision;
     }
 
     private LatticeAccessDecision Evaluate(in LatticeAccessRequest request) =>

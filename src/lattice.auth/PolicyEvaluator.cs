@@ -32,15 +32,47 @@ internal static class PolicyEvaluator
         LatticeOperation operation,
         string? key,
         string? rangeStart,
-        string? rangeEnd)
+        string? rangeEnd) =>
+        Evaluate(policy, options, subject, treeId, operation, key, rangeStart, rangeEnd, out _);
+
+    /// <summary>
+    /// Evaluates a request against <paramref name="policy"/> and returns the
+    /// access decision, additionally surfacing the winning
+    /// <paramref name="match"/> for observability / audit. For a point request
+    /// <paramref name="match"/> is the resolved rule match (or a default
+    /// unmatched value when the default effect applied); for a collection request
+    /// - whose admission can vary key-by-key - it is always the default unmatched
+    /// value, because no single rule decides the whole range.
+    /// </summary>
+    /// <param name="policy">The compiled snapshot to evaluate against.</param>
+    /// <param name="options">The tie-break and default-effect options.</param>
+    /// <param name="subject">The requesting subject (its group closure is a flat set).</param>
+    /// <param name="treeId">The target tree id.</param>
+    /// <param name="operation">The requested operation.</param>
+    /// <param name="key">The exact key for a point request, or <c>null</c> for a collection request.</param>
+    /// <param name="rangeStart">The inclusive range start, or <c>null</c>. Used only in the reason text.</param>
+    /// <param name="rangeEnd">The exclusive range end, or <c>null</c>. Used only in the reason text.</param>
+    /// <param name="match">The winning rule match, or a default (unmatched) value.</param>
+    /// <returns>The access decision.</returns>
+    public static LatticeAccessDecision Evaluate(
+        CompiledPolicy policy,
+        LatticeAuthOptions options,
+        in LatticeSubject subject,
+        string treeId,
+        LatticeOperation operation,
+        string? key,
+        string? rangeStart,
+        string? rangeEnd,
+        out PolicyMatch match)
     {
+        match = default;
         var hasTree = policy.TryGetTree(treeId, out var tree);
         var userBeatsGroup = options.UserRuleBeatsGroupRuleAtEqualScope;
 
         // Point request: resolve the single key.
         if (key is not null)
         {
-            var match = hasTree ? tree!.ResolvePoint(subject, operation, key, userBeatsGroup) : default;
+            match = hasTree ? tree!.ResolvePoint(subject, operation, key, userBeatsGroup) : default;
             return FromMatch(match, options.DefaultEffect, subject, treeId);
         }
 
@@ -52,6 +84,7 @@ internal static class PolicyEvaluator
         if (!hasTree || !tree!.HasPerKeyRules)
         {
             var uniform = hasTree ? tree!.ResolvePoint(subject, operation, key: null, userBeatsGroup) : default;
+            match = uniform;
             return FromMatch(uniform, options.DefaultEffect, subject, treeId);
         }
 

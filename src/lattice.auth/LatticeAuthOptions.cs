@@ -83,4 +83,50 @@ public sealed class LatticeAuthOptions
     /// </para>
     /// </remarks>
     public ISet<string>? StrictConsistencyTrees { get; set; }
+
+    /// <summary>
+    /// Master switch for the audit sink seam. When <c>false</c> (the default), a
+    /// gated decision builds no <see cref="LatticeAuthDecisionEvent"/> and
+    /// dispatches to no <see cref="ILatticeAuthAuditSink"/>, so auditing is
+    /// strictly zero-cost on the hot path. Set to <c>true</c> to fan every
+    /// admissible decision (per <see cref="AuditVerbosity"/> and
+    /// <see cref="AuditSamplingRatio"/>) out to the registered sinks. This switch
+    /// is independent of the observability meter, whose decision counters and
+    /// latency histogram are always available whenever an OpenTelemetry listener
+    /// is attached.
+    /// </summary>
+    public bool EnableAuditSink { get; set; }
+
+    /// <summary>
+    /// Which decisions are dispatched to the audit sinks when
+    /// <see cref="EnableAuditSink"/> is set. Defaults to
+    /// <see cref="LatticeAuthAuditVerbosity.DenyOnly"/> (audit refusals only).
+    /// </summary>
+    public LatticeAuthAuditVerbosity AuditVerbosity { get; set; } = LatticeAuthAuditVerbosity.DenyOnly;
+
+    /// <summary>
+    /// The fraction of admissible decisions (those passing the
+    /// <see cref="AuditVerbosity"/> filter) that are actually dispatched to the
+    /// audit sinks, in the inclusive range <c>0.0</c> to <c>1.0</c>. Defaults to
+    /// <c>1.0</c> (audit every admissible decision). A value of <c>0.0</c>
+    /// suppresses all audit dispatch even while <see cref="EnableAuditSink"/> is
+    /// set; a value such as <c>0.1</c> samples roughly one in ten. Sampling never
+    /// affects the observability meter.
+    /// </summary>
+    public double AuditSamplingRatio { get; set; } = 1.0;
+
+    /// <summary>
+    /// Whether to also append every dispatched decision event to the durable,
+    /// append-only <c>sys-auth-audit</c> lattice tree. Defaults to <c>false</c>:
+    /// the durable trail is opt-in and costs nothing until enabled. Requires
+    /// <see cref="EnableAuditSink"/> to be set for any event to be produced.
+    /// </summary>
+    public bool EnableDurableAuditTrail { get; set; }
+
+    /// <summary>
+    /// The time-to-live applied to each durable audit-trail row, or <c>null</c>
+    /// (the default) for no age bound. Must be strictly positive when supplied.
+    /// Only consulted when <see cref="EnableDurableAuditTrail"/> is set.
+    /// </summary>
+    public TimeSpan? AuditTrailTimeToLive { get; set; }
 }

@@ -17,4 +17,7 @@ internal static class AuthTypeAliases
 
     /// <summary>Alias for <see cref="LatticeScope"/>.</summary>
     internal const string LatticeScope = "olz.sc";
+
+    /// <summary>Alias for <see cref="LatticeAuthDecisionEvent"/>.</summary>
+    internal const string LatticeAuthDecisionEvent = "olz.de";
 }
