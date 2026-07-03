@@ -143,7 +143,7 @@ sub-issue closes, applying the correct release label.
 | 5 | #976 | Core: access-gate enforcement point | done (merged; gate batched with #977) |
 | 6 | #977 | Core: range-scan key-filter | done (merged; batched gate) |
 | 7 | #978 | Auth: authorization rule model & policy store | done (merged; gate batched with #977) |
-| 8 | #979 | Auth: compiled snapshot & decision engine | in_progress (sub-agent) |
+| 8 | #979 | Auth: compiled snapshot & decision engine | done (merged; 116 focused tests) |
 | 9 | #980 | Auth: enforcement wiring at LatticeGrain | pending |
 | 10 | #981 | State API: honour read-access visibility | pending |
 | 11 | #1095 | Api.Data: external read-write data-plane API | pending |
@@ -198,6 +198,27 @@ Out of scope: #1104 (admin UI follow-up).
   finalize the degrade-vs-fail decision in the #1103 security review.
 
 ## Progress log
+
+- 2026-07-03 #979 (F-155, compiled policy snapshot & decision engine) MERGED into
+  `feat/auth`. Adds an INERT, in-process decision surface: `ILatticeDecisionEngine`
+  (`CurrentEpoch` + synchronous allocation-light `Evaluate`), a `PolicyEvaluator`
+  (tiered precedence exact-key > prefix > tree; Deny-over-Allow; optional
+  User-over-Group at equal scope; range reads -> `Filtered` predicate whose inner
+  per-key resolve is allocation-free), and a `CompiledPolicySnapshotMaintainer`
+  (per-silo singleton; observes the core change-feed via `IMutationObserver`,
+  coalesced background rebuilds off the write path, atomic snapshot swap, monotonic
+  `PolicyEpoch` via Interlocked). NO `ILatticeAccessGate` registered - core gate
+  stays `NullLatticeAccessGate` (integration test asserts it); enforcement is #980.
+  All new types in-process (no aliases). Reviewed: evaluator precedence correct, DI
+  inert, epoch monotonic. COORDINATOR REMEDIATION: the sub-agent had worked around
+  a concurrent-scan `EnumerationAbortedException` (maintainer rescan overlaps a
+  caller's list scan) with a hand-rolled buffer-and-retry using a fragile
+  `ex.GetType().Name` string match. Replaced with core's blessed resilient
+  `ScanEntriesAsync<T>` (transparent reconnect, no duplicates/gaps) in the policy
+  store - deletes the bespoke retry + string-name predicate. OC-4 (was flag #1)
+  thereby CLOSED. Focused Auth suite 116/116, stable across 3 runs. #979 flag #4
+  (EnsureWarmAsync is on the concrete maintainer, not the interface) + flag #6
+  (`PolicyEpoch` feeds #982's strict fence) carried into #980/#982 scope.
 
 - 2026-07-03 #1101 (Membership.Entra, Entra ID authenticator) MERGED into
   `feat/auth` (parallel independent-package track). Two new packages:
