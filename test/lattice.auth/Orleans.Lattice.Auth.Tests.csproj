@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <Using Include="NUnit.Framework" />
+    <Using Include="Orleans.Lattice" />
   </ItemGroup>
 
   <ItemGroup>
