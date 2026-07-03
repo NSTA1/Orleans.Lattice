@@ -137,7 +137,7 @@ sub-issue closes, applying the correct release label.
 | # | Issue | Feature | Status |
 |---|-------|---------|--------|
 | 1 | #972 | Membership: project & package scaffolding | done (merged) |
-| 2 | #973 | Core: caller-credential propagation seam | pending |
+| 2 | #973 | Core: caller-credential propagation seam | done (merged) |
 | 3 | #974 | Membership: subject model, directory & resolution | pending |
 | 4 | #975 | Auth: project & package scaffolding | pending |
 | 5 | #976 | Core: access-gate enforcement point | pending |
@@ -165,6 +165,17 @@ Out of scope: #1104 (admin UI follow-up).
 
 ## Progress log
 
+- 2026-07-03 #973 (core credential seam) MERGED. `LatticeCredential` readonly
+  record struct (alias `ol.cdl`, unique/<=6) + `LatticeCredentialContext` ambient
+  marker (Current/IsActive/With/Use/Suppress), RequestContext key `ol.cred` placed
+  alongside existing keys, docs snippet in api.md. Edge->silo propagation proven via
+  IMutationObserver probe; zero-cost when absent. 19 focused + 283 hygiene green;
+  full solution build 0/0 post-merge.
+  GATING DECISION: #973 is additive-only (nothing else references it yet). Core
+  changes accumulate across #973/#974(core primitives)/#976/#977; rather than a full
+  suite after each, the first full non-chaos gate runs at the MEMBERSHIP boundary
+  (after #974), which also validates #973 + the core identity primitives. Core-seam
+  additions (#976/#977) get their own full gate when they land.
 - 2026-07-03 #972 (Membership scaffolding) MERGED. Empty `Orleans.Lattice.Membership`
   package + test project, slnx + docs skeleton, `LatticeMembershipMarker` + trivial
   green test. Version 7.7.1 (family lockstep with core/api.state). Post-merge focused
