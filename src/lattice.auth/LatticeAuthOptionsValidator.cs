@@ -5,7 +5,8 @@ namespace Orleans.Lattice.Auth;
 /// <summary>
 /// Validates <see cref="LatticeAuthOptions"/> at silo start: rejects a
 /// non-positive history retention window, an undefined history retention mode,
-/// and an undefined default effect.
+/// an undefined default effect, a null-or-empty bootstrap administrator id, and
+/// a null-or-empty strict-consistency tree id.
 /// </summary>
 internal sealed class LatticeAuthOptionsValidator : IValidateOptions<LatticeAuthOptions>
 {
@@ -37,6 +38,12 @@ internal sealed class LatticeAuthOptionsValidator : IValidateOptions<LatticeAuth
         else if (options.BootstrapAdministrators.Any(string.IsNullOrEmpty))
         {
             failures.Add($"{nameof(LatticeAuthOptions.BootstrapAdministrators)} must not contain a null or empty subject id.");
+        }
+
+        if (options.StrictConsistencyTrees is not null
+            && options.StrictConsistencyTrees.Any(string.IsNullOrEmpty))
+        {
+            failures.Add($"{nameof(LatticeAuthOptions.StrictConsistencyTrees)} must not contain a null or empty tree id.");
         }
 
         return failures.Count > 0

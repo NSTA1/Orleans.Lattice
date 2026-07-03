@@ -45,6 +45,20 @@ internal sealed class PolicyAccessGate(
             return new ValueTask<LatticeAccessDecision>(LatticeAccessDecision.Allow());
         }
 
+        // Optional strict-consistency policy-epoch fence (issue #982), off by
+        // default. Only user writes reach this gate at all - the core
+        // short-circuits system-origin and replication-applied writes before the
+        // gate is consulted - so this can only ever fence a user write. When no
+        // tree is opted into strict consistency the check is skipped with a single
+        // null/empty test, leaving the eventual path byte-for-byte unchanged and
+        // zero-cost. Placed after the bootstrap-admin bypass so the break-glass
+        // root of trust is never fenced out of repairing policy under a stale
+        // epoch.
+        if (ShouldFence(in request, out var fenceReason))
+        {
+            return new ValueTask<LatticeAccessDecision>(LatticeAccessDecision.Deny(fenceReason));
+        }
+
         // Warm fast path: once any rebuild has advanced the epoch, evaluation is
         // synchronous and in-memory, so complete without allocating a state
         // machine.
@@ -80,5 +94,70 @@ internal sealed class PolicyAccessGate(
     {
         var admins = options.CurrentValue.BootstrapAdministrators;
         return admins.Count > 0 && admins.Contains(subjectId);
+    }
+
+    /// <summary>
+    /// The operation bits that count as a write for the strict-consistency fence:
+    /// everything that mutates a tree. Pure reads (<see cref="LatticeOperation.Read"/>,
+    /// <see cref="LatticeOperation.RangeRead"/>) are deliberately excluded so a
+    /// read is never fenced.
+    /// </summary>
+    private const LatticeOperation FenceWriteMask =
+        LatticeOperation.Write
+        | LatticeOperation.Delete
+        | LatticeOperation.RangeDelete
+        | LatticeOperation.CrdtApply
+        | LatticeOperation.AtomicWrite
+        | LatticeOperation.BulkLoad
+        | LatticeOperation.Admin;
+
+    /// <summary>
+    /// Decides whether the strict-consistency epoch fence rejects this request.
+    /// Returns <c>false</c> (and leaves <paramref name="reason"/> empty) for the
+    /// zero-cost eventual path: no strict tree configured, a non-write operation,
+    /// a tree that is not opted in, no ambient epoch floor, or a local epoch that
+    /// has already caught up to the floor.
+    /// </summary>
+    private bool ShouldFence(in LatticeAccessRequest request, out string reason)
+    {
+        reason = string.Empty;
+
+        var strictTrees = options.CurrentValue.StrictConsistencyTrees;
+        if (strictTrees is null || strictTrees.Count == 0)
+        {
+            // Eventual path: no strict trees configured, nothing to fence.
+            return false;
+        }
+
+        if ((request.Operation & FenceWriteMask) == 0)
+        {
+            // Reads are never fenced.
+            return false;
+        }
+
+        if (!strictTrees.Contains(request.TreeId))
+        {
+            return false;
+        }
+
+        var required = LatticePolicyEpochFenceContext.RequiredEpoch;
+        if (required is not long floor)
+        {
+            // No caller-supplied floor -> eventual for this write.
+            return false;
+        }
+
+        var localEpoch = engine.CurrentEpoch;
+        if (localEpoch >= floor)
+        {
+            // Local policy has already converged to (or past) the required floor.
+            return false;
+        }
+
+        reason =
+            $"Strict-consistency fence: a write to tree '{request.TreeId}' requires policy epoch "
+            + $">= {floor} but this cluster's compiled policy is at epoch {localEpoch}. The write is "
+            + "rejected until cross-cluster replication and the policy change-feed settle.";
+        return true;
     }
 }

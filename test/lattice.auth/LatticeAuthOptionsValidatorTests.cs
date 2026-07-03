@@ -94,4 +94,36 @@ public class LatticeAuthOptionsValidatorTests
     {
         Assert.That(new LatticeAuthOptions().EnableDurableHistoryView, Is.True);
     }
+
+    [Test]
+    public void Strict_consistency_trees_is_null_by_default()
+    {
+        Assert.That(new LatticeAuthOptions().StrictConsistencyTrees, Is.Null);
+    }
+
+    [Test]
+    public void Populated_strict_consistency_trees_validate_successfully()
+    {
+        var options = new LatticeAuthOptions
+        {
+            StrictConsistencyTrees = new HashSet<string>(StringComparer.Ordinal) { "sys-auth-policy" },
+        };
+
+        var result = Validator.Validate(null, options);
+
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void Empty_strict_consistency_tree_id_fails_validation()
+    {
+        var options = new LatticeAuthOptions
+        {
+            StrictConsistencyTrees = new HashSet<string>(StringComparer.Ordinal) { string.Empty },
+        };
+
+        var result = Validator.Validate(null, options);
+
+        Assert.That(result.Failed, Is.True);
+    }
 }

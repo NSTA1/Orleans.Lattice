@@ -132,6 +132,21 @@ internal sealed partial class ReplicationApplier(
     /// <inheritdoc />
     public async Task<ApplyResult> ApplyAsync(WalRecord entry, CancellationToken cancellationToken = default)
     {
+        // SYSTEM-ORIGIN APPLY BYPASS (issue #982). Replication-applied writes to
+        // the reserved membership/auth system trees (and every other replicated
+        // tree) are receiver-side convergence, not user writes: the remote
+        // cluster already authorized the originating write, and the "caller" on
+        // this side has no user identity. Enter the system-origin scope for the
+        // whole apply so the core access gate is bypassed on every sub-path this
+        // method drives - both the LWW apply seam (which writes below the gate)
+        // and the CRDT/prepared paths that route through the gated public
+        // ILattice methods (ApplyCrdtDeltaAsync / SetAsync). Without this a
+        // replicated policy revoke would be rejected by the receiver's own gate
+        // because the apply has no subject. The scope flows on RequestContext to
+        // every outgoing grain call and is nest-safe/idempotent on dispose; it
+        // does not affect WAL capture, re-shipping, or the change feed.
+        using var systemOrigin = LatticeAccessGateContext.EnterSystemOrigin();
+
         // Apply-duration instrumentation: record the wall-clock duration
         // of every terminal apply outcome (success / dedup / failure /
         // parked-causal-buffer) into the apply.duration histogram. The
