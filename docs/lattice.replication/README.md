@@ -56,6 +56,7 @@ Behaviour is validated end-to-end by active-active convergence chaos tests acros
 | **Pluggable transport** | `IReplicationTransport` is the public seam. gRPC is the canonical implementation; in-process and custom transports plug into the same contract. | [Transport](transport.md) |
 | **Receiver-side flow control** | The receiver stamps optional `SuggestedBatchSize` / `PauseForMs` hints onto every ack; the sender clamps its per-tick batch cap and pauses on request. A struggling receiver throttles in-band without timing out RPCs; a recovered receiver re-accelerates by lifting the hints. | [Receiver Flow Control](receiver-flow-control.md) |
 | **Snapshot bootstrap** | New or re-seeded peers receive a point-in-time snapshot, then switch to incremental shipping at the snapshot's HLC. | [Snapshot Bootstrap](snapshot-bootstrap.md) |
+| **System-tree replication** | Enrol the reserved membership + auth-policy trees so identity and authorization converge across sites. Replication-applied writes bypass the access gate under a system-origin scope; an optional strict policy-epoch fence closes the revoke window per tree. | [System-Tree Replication](system-tree-replication.md) |
 | **Typed CRDT deltas** | The wire carries typed deltas for LWW-Register, OR-Set, PN-Counter, VersionVector, MV-Register, and OR-Map. Receivers merge by mode, not by opaque-byte LWW. | [Deltas](deltas.md) |
 
 ## Quick Start

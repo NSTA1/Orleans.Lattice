@@ -59,4 +59,28 @@ public sealed class LatticeAuthOptions
     /// source write-ahead-log window. Defaults to <c>true</c>.
     /// </summary>
     public bool EnableDurableHistoryView { get; set; } = true;
+
+    /// <summary>
+    /// The set of tree ids opted into the optional strict-consistency policy-epoch
+    /// fence (issue #982). Empty / <c>null</c> by default, which is the
+    /// <em>eventual</em> path: enforcement never consults the fence and the whole
+    /// check is skipped with a single null/empty test, so a deployment that does
+    /// not opt in pays zero added cost and gets byte-for-byte the last-writer-wins
+    /// convergence behaviour.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// When a tree id is listed here, a <b>user write</b> to that tree is rejected
+    /// if the caller has stamped a required policy-epoch floor onto the ambient
+    /// context (via <see cref="LatticePolicyEpochFenceContext.RequireAtLeast"/>)
+    /// and this cluster's locally compiled policy epoch has not yet caught up to
+    /// that floor. This closes the cross-cluster revoke window: after an operator
+    /// revokes a grant on one site, a client that observed the new epoch there can
+    /// require any subsequent write on another site to wait until that site's
+    /// policy has converged. Reads are never fenced, and internal / system-origin
+    /// / replication-applied writes never reach this gate, so they are never
+    /// fenced either. Entries must be non-null and non-empty.
+    /// </para>
+    /// </remarks>
+    public ISet<string>? StrictConsistencyTrees { get; set; }
 }

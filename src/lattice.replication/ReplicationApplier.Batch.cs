@@ -35,6 +35,14 @@ internal sealed partial class ReplicationApplier
             return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
         }
 
+        // SYSTEM-ORIGIN APPLY BYPASS (issue #982). Same rationale as ApplyAsync:
+        // enter the system-origin scope for the whole batch so every apply the
+        // multi-entry run path drives bypasses the receiver's access gate. The
+        // single-entry fast path below defers to ApplyAsync, which enters the
+        // scope itself; entering here as well is nest-safe (the inner enter
+        // saves and restores the outer state) so the double-cover is harmless.
+        using var systemOrigin = LatticeAccessGateContext.EnterSystemOrigin();
+
         // Single-entry: defer to the per-entry path so behaviour is
         // bit-identical with the legacy receiver. The per-entry path
         // already covers every classification (range delete, local-origin
