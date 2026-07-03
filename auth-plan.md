@@ -152,7 +152,7 @@ sub-issue closes, applying the correct release label.
 | 14 | #984 | Api.Auth: facade & model | done (merged; ILatticeAuthAdmin combined admin API, every op requires Admin verdict on sys-auth-policy, Explain gate-parity, oli.* aliases; 36 tests; F-160) |
 | 15 | #985 | Api.Auth.Grpc: gRPC binding, client, meta-auth | done (merged; LatticeAuthApiGrpcClient + DenyAll meta-authorizer + facade self-auth two-layer, deny->PermissionDenied, oli. wire aliases; grpc 89 + api.auth 36; F-161) |
 | 16 | #1101 | Membership.Entra: Entra ID authenticator | done (merged; 53 focused tests) |
-| 17 | #1102 | Explorer: connect to auth-enabled State API | pending |
+| 17 | #1102 | Explorer: connect to auth-enabled State API | in_progress (sub-agent dispatched; provider seam + Entra login + silent refresh + server scheme advertisement; F-164) |
 | 18 | #1103 | Security hardening: full security & design review | pending |
 | 19 | #986 | Docs, sample & end-to-end tests | pending |
 
