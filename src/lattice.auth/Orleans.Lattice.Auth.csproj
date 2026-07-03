@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>Orleans.Lattice.Auth</PackageId>
+    <Version>7.7.1</Version>
+    <Description>Authorization and enforcement add-on for Orleans.Lattice. Scaffolding only: this release ships an empty, inert package that establishes the compiling, packaged home for later authorization features. It carries no public API beyond the namespace and no dependency on the core read/write path.</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Auth.Tests" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\lattice\Orleans.Lattice.csproj" />
+    <ProjectReference Include="..\lattice.membership\Orleans.Lattice.Membership.csproj" />
+    <PackageReference Include="Microsoft.Orleans.Sdk" Version="10.2.0" />
+  </ItemGroup>
+
+</Project>
