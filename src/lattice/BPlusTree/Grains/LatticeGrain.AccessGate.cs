@@ -96,9 +96,10 @@ internal sealed partial class LatticeGrain
         string? rangeEnd,
         CancellationToken cancellationToken)
     {
-        // System-origin bypass: internal machinery (replication-apply, saga
-        // legs, maintenance) never self-filters. One RequestContext lookup.
-        if (LatticeAccessGateContext.IsSystemOrigin)
+        // Gate-bypass: internal machinery (replication-apply, saga legs,
+        // maintenance) and authorised view-maintenance traffic never
+        // self-filter. One RequestContext lookup.
+        if (LatticeAccessGateContext.IsGateBypassed)
         {
             return LatticeAccessDecision.Allow();
         }
@@ -135,6 +136,102 @@ internal sealed partial class LatticeGrain
     }
 
     /// <summary>
+    /// Fail-closed enforcement for a single-key mutation
+    /// (<see cref="LatticeOperation.Write"/> / <see cref="LatticeOperation.Delete"/>
+    /// / <see cref="LatticeOperation.CrdtApply"/>). Throws
+    /// <see cref="LatticeAuthorizationDeniedException"/> when the gate denies the
+    /// key. Inherits the null-gate / system-origin zero-cost short-circuits, so it
+    /// is allocation-free and never throws under the default null gate.
+    /// </summary>
+    private ValueTask EnforcePointAsync(LatticeOperation operation, string key, CancellationToken cancellationToken) =>
+        LatticeAccessGateEnforcement.EnforcePointAsync(AccessGate, MembershipContext, TreeId, operation, key, cancellationToken);
+
+    /// <summary>
+    /// Fail-closed enforcement for a batch of single-key mutations, resolving the
+    /// caller subject once and throwing on the first denied key. Used to authorize
+    /// every key of a batch (and every leg of an atomic batch) before any write is
+    /// applied.
+    /// </summary>
+    private ValueTask EnforceManyPointsAsync(LatticeOperation operation, IReadOnlyList<string> keys, CancellationToken cancellationToken) =>
+        LatticeAccessGateEnforcement.EnforceManyPointsAsync(AccessGate, MembershipContext, TreeId, operation, keys, cancellationToken);
+
+    /// <summary>
+    /// Fail-closed hard-deny enforcement for a <see cref="LatticeOperation.RangeDelete"/>:
+    /// a plain deny or a partial-coverage (filtered) allow both throw and delete
+    /// nothing; only a uniform whole-range allow proceeds.
+    /// </summary>
+    private ValueTask EnforceRangeDeleteAsync(string? startInclusive, string? endExclusive, CancellationToken cancellationToken) =>
+        LatticeAccessGateEnforcement.EnforceRangeDeleteAsync(AccessGate, MembershipContext, TreeId, startInclusive, endExclusive, cancellationToken);
+
+    /// <summary>
+    /// Fail-closed enforcement for a whole-tree operation carrying no key or range
+    /// (<see cref="LatticeOperation.Admin"/> / <see cref="LatticeOperation.BulkLoad"/>).
+    /// </summary>
+    private ValueTask EnforceWholeTreeAsync(LatticeOperation operation, CancellationToken cancellationToken) =>
+        LatticeAccessGateEnforcement.EnforceWholeTreeAsync(AccessGate, MembershipContext, TreeId, operation, cancellationToken);
+
+    /// <summary>
+    /// Fail-closed authorization check for a single-key point read
+    /// (<see cref="LatticeOperation.Read"/>). Returns <c>true</c> when the caller
+    /// may observe <paramref name="key"/>; a denied key returns <c>false</c> so
+    /// the read surface can report the key as absent (not-found / empty) rather
+    /// than throwing, matching point-read semantics. Inherits the null-gate /
+    /// system-origin zero-cost short-circuit, so the default path returns a
+    /// synchronously-completed <c>true</c> without resolving the subject.
+    /// </summary>
+    private async ValueTask<bool> IsPointReadAllowedAsync(string key, CancellationToken cancellationToken)
+    {
+        var decision = await AuthorizeAsync(
+            LatticeOperation.Read, key, rangeStart: null, rangeEnd: null, cancellationToken);
+        if (!decision.Allowed)
+        {
+            return false;
+        }
+
+        // A filtered allow (should not occur for a point request, but honour it
+        // defensively) admits the key only when its predicate keeps it.
+        return decision.KeyFilter is null || decision.KeyFilter(key);
+    }
+
+    /// <summary>
+    /// Fail-closed enforcement for a batch of entry writes, authorizing every
+    /// entry's key (plus any <paramref name="additionalDeleteKeys"/>) before any
+    /// write is applied. Materializes the key list only when a real gate is
+    /// active, so the default null-gate path allocates nothing and returns
+    /// synchronously. Used by the multi-key and atomic write surfaces so a single
+    /// denied key aborts the whole batch before commit.
+    /// </summary>
+    private ValueTask EnforceEntryWritesAsync(
+        IReadOnlyList<KeyValuePair<string, byte[]>> entries,
+        IReadOnlyList<string>? additionalDeleteKeys,
+        CancellationToken cancellationToken)
+    {
+        var gate = AccessGate;
+        var deleteCount = additionalDeleteKeys?.Count ?? 0;
+        if (LatticeAccessGateEnforcement.SkipsEnforcement(gate) || (entries.Count == 0 && deleteCount == 0))
+        {
+            return ValueTask.CompletedTask;
+        }
+
+        var keys = new List<string>(entries.Count + deleteCount);
+        for (var i = 0; i < entries.Count; i++)
+        {
+            keys.Add(entries[i].Key);
+        }
+
+        if (additionalDeleteKeys is not null)
+        {
+            for (var i = 0; i < additionalDeleteKeys.Count; i++)
+            {
+                keys.Add(additionalDeleteKeys[i]);
+            }
+        }
+
+        return LatticeAccessGateEnforcement.EnforceManyPointsAsync(
+            gate, MembershipContext, TreeId, LatticeOperation.Write, keys, cancellationToken);
+    }
+
+    /// <summary>
     /// Resolves the read-path key-filter for a range scan
     /// (<see cref="LatticeOperation.RangeRead"/>) over the half-open range
     /// [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>).
@@ -149,6 +246,15 @@ internal sealed partial class LatticeGrain
     {
         var decision = await AuthorizeAsync(
             LatticeOperation.RangeRead, key: null, startInclusive, endExclusive, cancellationToken);
+        // Fail-closed: a plain deny carries no key-filter, so translate it into a
+        // reject-all predicate here rather than returning null (which the scan
+        // surface reads as "no filtering required" and would fail OPEN, admitting
+        // every key of a range the caller is not authorized to read).
+        if (!decision.Allowed)
+        {
+            return static _ => false;
+        }
+
         return decision.KeyFilter;
     }
 
@@ -163,6 +269,13 @@ internal sealed partial class LatticeGrain
     {
         var decision = await AuthorizeAsync(
             LatticeOperation.Read, key: null, rangeStart: null, rangeEnd: null, cancellationToken);
+        // Fail-closed: see ResolveRangeReadKeyFilterAsync. A uniform deny must
+        // prune every requested key, not fall through to an unfiltered read.
+        if (!decision.Allowed)
+        {
+            return static _ => false;
+        }
+
         return decision.KeyFilter;
     }
 }

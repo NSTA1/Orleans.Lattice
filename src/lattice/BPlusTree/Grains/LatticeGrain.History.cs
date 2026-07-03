@@ -33,6 +33,23 @@ internal sealed partial class LatticeGrain
 
         var effectiveLimit = Math.Min(limit, EntryHistoryReader.MaxPageSize);
 
+        // Fail-closed read enforcement: a caller may only observe a key's change
+        // history if the access gate admits a point read of that key. A denied
+        // key reports an empty timeline (not-found semantics), never throwing,
+        // matching the point-read surfaces. Inherits the null-gate / gate-bypass
+        // zero-cost short-circuit, so the default host pays nothing here.
+        if (!await IsPointReadAllowedAsync(key, cancellationToken))
+        {
+            return new EntryHistoryPage
+            {
+                Revisions = Array.Empty<EntryRevision>(),
+                Continuation = null,
+                Truncated = false,
+                EarliestAvailable = HybridLogicalClock.Zero,
+                Source = EntryHistorySource.None,
+            };
+        }
+
         var registration = TryFindHistoryView();
         if (registration is not null)
         {

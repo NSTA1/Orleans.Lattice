@@ -93,15 +93,28 @@ public sealed class LatticeAuthorizationPolicyStoreIntegrationTests
 
         await _fixture.Store.PutRuleAsync(rule);
 
+        // Quiesce the snapshot maintainer: the PutRuleAsync above fires the
+        // mutation observer, which rebuilds the compiled snapshot by scanning the
+        // reserved policy tree. Awaiting an explicit rebuild here drains that
+        // in-flight scan so the raw diagnostic scan below does not race a
+        // concurrent enumeration of the same policy-tree activation.
+        await _fixture.RebuildPolicyAsync();
+
         // Read the rule directly from the durable reserved tree through a fresh
         // ILattice reference - exactly what a store would do after a restart.
+        // The policy tree is now enforced, so this raw (non-store) read is
+        // authorized as a bootstrap administrator; the store's own scans run
+        // under system-origin.
         var policyTree = _fixture.Cluster.GrainFactory.GetGrain<ILattice>(LatticeAuthReservedTrees.PolicyTreeId);
         LatticeAuthorizationRule? fromTree = null;
-        await foreach (var entry in policyTree.EntriesAsync<LatticeAuthorizationRule>())
+        using (AuthClusterFixture.AsSubject(AuthClusterFixture.BootstrapAdmin))
         {
-            if (entry.Value is { RuleId: "durable-1" } r)
+            await foreach (var entry in policyTree.EntriesAsync<LatticeAuthorizationRule>())
             {
-                fromTree = r;
+                if (entry.Value is { RuleId: "durable-1" } r)
+                {
+                    fromTree = r;
+                }
             }
         }
 
@@ -125,20 +138,25 @@ public sealed class LatticeAuthorizationPolicyStoreIntegrationTests
 
         var policyTree = _fixture.Cluster.GrainFactory.GetGrain<ILattice>(LatticeAuthReservedTrees.PolicyTreeId);
 
-        var retention = await policyTree.GetHistoryRetentionAsync();
-        Assert.That(retention.Mode, Is.EqualTo(HistoryRetentionMode.MetadataOnly),
-            "the policy tree must have durable history retention enabled by default");
-
-        var key = $"hist-tree\u001fhist-1";
-        var page = await PollAsync(async () =>
+        // Raw (non-store) reads of the now-enforced policy tree are authorized as
+        // a bootstrap administrator.
+        using (AuthClusterFixture.AsSubject(AuthClusterFixture.BootstrapAdmin))
         {
-            var history = await policyTree.ScanEntryHistoryAsync(key, null, null, 100, null);
-            return history.Revisions.Count > 0 ? history : null;
-        });
+            var retention = await policyTree.GetHistoryRetentionAsync();
+            Assert.That(retention.Mode, Is.EqualTo(HistoryRetentionMode.MetadataOnly),
+                "the policy tree must have durable history retention enabled by default");
 
-        Assert.That(page, Is.Not.Null);
-        Assert.That(page!.Revisions, Is.Not.Empty,
-            "successive rule writes must leave a durable revision timeline with no extra configuration");
+            var key = $"hist-tree\u001fhist-1";
+            var page = await PollAsync(async () =>
+            {
+                var history = await policyTree.ScanEntryHistoryAsync(key, null, null, 100, null);
+                return history.Revisions.Count > 0 ? history : null;
+            }, timeoutMs: 20000);
+
+            Assert.That(page, Is.Not.Null);
+            Assert.That(page!.Revisions, Is.Not.Empty,
+                "successive rule writes must leave a durable revision timeline with no extra configuration");
+        }
     }
 
     [Test]

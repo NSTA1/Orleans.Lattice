@@ -70,12 +70,12 @@ public sealed class LatticeDecisionEngineIntegrationTests
     }
 
     [Test]
-    public void Registering_the_engine_leaves_the_core_access_gate_a_no_op()
+    public void The_registered_access_gate_is_the_enforcing_policy_gate()
     {
         var gate = _fixture.SiloServices.GetRequiredService<ILatticeAccessGate>();
 
-        Assert.That(gate.GetType().Name, Is.EqualTo("NullLatticeAccessGate"),
-            "this feature adds a decision surface only; enforcement wiring is out of scope, so the gate must stay the default no-op");
+        Assert.That(gate.GetType().Name, Is.EqualTo("PolicyAccessGate"),
+            "AddLatticeAuth replaces the core default no-op gate with the enforcing policy gate, so this add-on is the enforcement control point");
     }
 
     private static async Task<bool> PollAsync(Func<bool?> probe, int timeoutMs = 5000)

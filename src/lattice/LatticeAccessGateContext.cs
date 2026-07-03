@@ -50,6 +50,39 @@ internal static class LatticeAccessGateContext
         RequestContext.Get(LatticeEventConstants.AccessGateSystemOriginRequestContextKey) is bool active && active;
 
     /// <summary>
+    /// Gets a value indicating whether the access gate must be skipped for the
+    /// current turn. This is <c>true</c> when an explicit
+    /// <see cref="EnterSystemOrigin"/> scope is active, or when the turn is an
+    /// authorised materialised-view maintenance read or write.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A <c>view-*</c> tree is library-owned derived state whose contents are
+    /// authored by its <see cref="Views.IViewMaintainerGrain"/> and read back
+    /// through the <see cref="Views.ILatticeView"/> read handle; both open a
+    /// <see cref="Views.ViewWriteContext"/> / <see cref="Views.ViewReadContext"/>
+    /// scope around their view-tree grain calls. Those scopes are the positive
+    /// signal that a turn is view-maintenance traffic rather than a direct user
+    /// operation on a data tree.
+    /// </para>
+    /// <para>
+    /// The history projection materialises a source tree's revision timeline by
+    /// writing the view tree under <see cref="Views.ViewWriteContext"/>; without
+    /// this bypass those maintenance writes resolve to
+    /// <see cref="LatticeSubject.Anonymous"/> and a fail-closed default-deny
+    /// policy would refuse them, so history would never materialise. Likewise a
+    /// normal caller reading its own materialised view opens
+    /// <see cref="Views.ViewReadContext"/>; view-tree content is not governed by
+    /// data-tree policy, so the gate is skipped there too (view-level
+    /// authorization is a separate concern, deliberately out of scope here).
+    /// </para>
+    /// </remarks>
+    public static bool IsGateBypassed =>
+        IsSystemOrigin
+        || Views.ViewWriteContext.IsAuthorised
+        || Views.ViewReadContext.IsAuthorised;
+
+    /// <summary>
     /// Marks the ambient context as a system-origin scope for the lifetime of
     /// the returned scope, restoring the prior value on
     /// <see cref="IDisposable.Dispose"/>. Safe to nest; disposal is idempotent.
