@@ -32,6 +32,15 @@ internal sealed class CompressedTwoSiteClusterFixture
     private static readonly ConcurrentDictionary<string, LoopbackTransport> Transports = new();
     private static readonly ConcurrentDictionary<string, RecordingReplogSink> Sinks = new();
 
+    /// <summary>
+    /// Per-tree merge-mode overrides consulted by the silo merge-mode resolver.
+    /// Defaults to <see cref="LatticeMergeMode.LwwRegister"/> for any tree not
+    /// listed. Lets a test declare a specific tree under a CRDT merge mode
+    /// (matching the single-shape values it authors locally) without
+    /// re-deploying the in-process cluster.
+    /// </summary>
+    public static readonly ConcurrentDictionary<string, LatticeMergeMode> TreeModeOverrides = new();
+
     /// <summary>The first site's two-silo test cluster.</summary>
     public TestCluster SiteA { get; private set; } = null!;
 
@@ -129,7 +138,8 @@ internal sealed class CompressedTwoSiteClusterFixture
 
     private sealed class AllowAllLwwRegisterResolver : ILatticeMergeModeResolver
     {
-        public LatticeMergeMode? Resolve(string treeId) => LatticeMergeMode.LwwRegister;
+        public LatticeMergeMode? Resolve(string treeId) =>
+            TreeModeOverrides.TryGetValue(treeId, out var mode) ? mode : LatticeMergeMode.LwwRegister;
     }
 
     private sealed class SiteASiloConfigurator : ISiloConfigurator

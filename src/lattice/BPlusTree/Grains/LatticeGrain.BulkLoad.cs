@@ -12,6 +12,7 @@ internal sealed partial class LatticeGrain
     {
         ThrowIfSystemTree();
         ThrowIfProtectedView();
+        ThrowIfLwwWriteToCrdtReplicatedTree();
         ArgumentNullException.ThrowIfNull(entries);
         cancellationToken.ThrowIfCancellationRequested();
         var (physicalTreeId, shardMap) = await GetRoutingAsync();

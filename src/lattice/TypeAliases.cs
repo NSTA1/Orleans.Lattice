@@ -98,6 +98,13 @@ internal static class TypeAliases
     // transition for that silo activation.
     internal const string LatticeSaturated = "ol.lsa";
 
+    // Single-shape-per-replicated-tree guard. Thrown by the public ILattice
+    // write surface when a write would violate the declared replication mode
+    // for a tree (a CRDT accessor whose mode differs from the declared mode,
+    // or a plain LWW write to a tree declared as a typed CRDT mode). Turns a
+    // silent receiver-side dead-letter into an immediate local error.
+    internal const string LatticeReplicationModeMismatch = "ol.lrm";
+
     // Online reshard
     internal const string TreeReshardState = "ol.txs";
     internal const string ReshardPhase = "ol.rxp";

@@ -48,6 +48,13 @@ internal sealed partial class LatticeGrain(
     private string? _treeIdCache;
     private string TreeId => _treeIdCache ??= context.GrainId.Key.ToString()!;
 
+    // Lazily-resolved, activation-cached replication merge-mode resolver used
+    // by the single-shape-per-replicated-tree write guards. The default core
+    // registration returns null for every tree, so single-cluster hosts pay a
+    // single service lookup and then take the unrestricted path.
+    private ILatticeMergeModeResolver? _replicationModeResolver;
+    private bool _replicationModeResolverResolved;
+
     /// <summary>
     /// Per-activation cached <c>(tag=tree, value=TreeId)</c> KeyValuePair
     /// used as the leading tag on every <c>set.duration</c> /
@@ -190,6 +197,123 @@ internal sealed partial class LatticeGrain(
             throw new InvalidOperationException(
                 $"Tree ID '{TreeId}' is reserved for internal Lattice system trees and cannot be addressed via the public ILattice surface. Choose a tree name that does not start with '{LatticeConstants.SystemTreePrefix}'.");
     }
+
+    /// <summary>
+    /// Resolves the declared replication <see cref="LatticeMergeMode"/> for
+    /// this grain's tree via the DI-registered
+    /// <see cref="ILatticeMergeModeResolver"/>, or <c>null</c> when the tree is
+    /// not replicated. The default core resolver returns <c>null</c> for every
+    /// tree, so single-cluster hosts always take the unrestricted path. The
+    /// resolver reference is cached for the activation and its own per-tree
+    /// cache makes each call an allocation-free O(1) dictionary read.
+    /// </summary>
+    private LatticeMergeMode? ResolveDeclaredReplicationMode()
+    {
+        if (!_replicationModeResolverResolved)
+        {
+            _replicationModeResolver = services.GetService<ILatticeMergeModeResolver>();
+            _replicationModeResolverResolved = true;
+        }
+        return _replicationModeResolver?.Resolve(TreeId);
+    }
+
+    /// <summary>
+    /// Maps a typed CRDT <see cref="LatticeMergeMode"/> to the
+    /// <see cref="ILattice"/> accessor that authors it, for use in the
+    /// single-shape guard's diagnostic messages.
+    /// </summary>
+    private static string CrdtAccessorHint(LatticeMergeMode mode) => mode switch
+    {
+        LatticeMergeMode.OrSet => "OrSet(key)",
+        LatticeMergeMode.PnCounter => "PnCounter(key)",
+        LatticeMergeMode.OrFlag => "OrFlag(key)",
+        LatticeMergeMode.RwFlag => "RwFlag(key)",
+        LatticeMergeMode.VersionVector => "VersionVector(key)",
+        LatticeMergeMode.MvRegister => "MvRegister<T>(key)",
+        LatticeMergeMode.OrMap => "OrMap<TKey, TValue>(key)",
+        LatticeMergeMode.Sequence => "Sequence<T>(key)",
+        _ => "the matching CRDT accessor",
+    };
+
+    /// <summary>
+    /// Guards the plain last-writer-wins write surface (<c>SetAsync</c>,
+    /// <c>SetManyAsync</c>, <c>SetManyAtomicAsync</c>, <c>SetIfVersionAsync</c>,
+    /// <c>GetOrSetAsync</c>, <c>DeleteAsync</c>, <c>DeleteRangeAsync</c>,
+    /// <c>BulkLoadAsync</c>). A tree declared for replication as a typed CRDT
+    /// mode is single-shape: a plain value/tombstone write to it would ship
+    /// bytes the receiver cannot decode under the declared shape, faulting the
+    /// apply and parking the entry on the peer's dead-letter queue. Rejects the
+    /// write with <see cref="LatticeReplicationModeMismatchException"/> before
+    /// it commits. No-op for non-replicated trees, for trees declared
+    /// <see cref="LatticeMergeMode.LwwRegister"/>, and for replication applies
+    /// (which re-enter this seam under a foreign origin scope).
+    /// </summary>
+    private void ThrowIfLwwWriteToCrdtReplicatedTree()
+    {
+        // Replication applies re-enter this public write surface under a foreign
+        // origin scope (see ReplicationApplier); they carry the declared shape by
+        // construction and must never be gated. Only locally-authored writes,
+        // which leave the ambient origin context unset, are subject to the guard.
+        if (LatticeOriginContext.Current is not null)
+            return;
+        // Atomic-write-saga commits re-enter SetManyAsync under a prepare scope to
+        // flush an already-validated batch (a plain-LWW SetManyAtomicAsync that
+        // passed this guard at its own entry point, or a staged CRDT write whose
+        // shape is fixed by construction). Those internal flushes are not direct
+        // user writes and must not be re-gated.
+        if (LatticePreparedContext.Current)
+            return;
+        var declared = ResolveDeclaredReplicationMode();
+        if (declared is { } mode && mode != LatticeMergeMode.LwwRegister)
+            throw new LatticeReplicationModeMismatchException(
+                $"Tree '{TreeId}' is declared for replication as '{mode}', a typed CRDT mode. A "
+                + "replicated tree is single-shape: every value must be authored through the matching "
+                + $"CRDT accessor (for example ILattice.{CrdtAccessorHint(mode)}). Plain last-writer-wins "
+                + "writes (SetAsync, SetManyAsync, SetManyAtomicAsync, SetIfVersionAsync, GetOrSetAsync, "
+                + "DeleteAsync, DeleteRangeAsync, BulkLoadAsync) are rejected because they would ship bytes "
+                + "the receiver cannot decode under the declared shape. Use the CRDT accessor, or declare "
+                + "the tree as LwwRegister if it holds plain values. See "
+                + "docs/lattice.replication/replication-modes.md.",
+                TreeId, mode, LatticeMergeMode.LwwRegister);
+    }
+
+    /// <summary>
+    /// Guards the CRDT accessor write path (<c>ApplyCrdtDeltaAsync</c>). A tree
+    /// declared for replication may only be written under its declared mode.
+    /// Rejects a CRDT write whose <paramref name="mode"/> differs from the
+    /// declared mode - whether the tree is declared as a different CRDT mode or
+    /// as <see cref="LatticeMergeMode.LwwRegister"/> - with
+    /// <see cref="LatticeReplicationModeMismatchException"/>. No-op for
+    /// non-replicated trees, when the declared mode equals the write mode, and
+    /// for replication applies (which re-enter this seam under a foreign origin
+    /// scope carrying the shipped entry's mode, and so are never gated).
+    /// </summary>
+    private void ThrowIfCrdtWriteViolatesReplicationMode(LatticeMergeMode mode)
+    {
+        // The receiver's CRDT apply path (ReplicationApplier) forwards deltas
+        // through this same public seam wrapped in a foreign origin scope, using
+        // the shipped entry's mode rather than the local declared mode. Those
+        // applies must not be gated; only locally-authored writes, which leave
+        // the ambient origin context unset, are subject to the guard.
+        if (LatticeOriginContext.Current is not null)
+            return;
+        // Atomic-write-saga commits re-enter this seam under a prepare scope to
+        // flush an already-shape-fixed staged CRDT write; those internal flushes
+        // are not direct user writes and must not be re-gated.
+        if (LatticePreparedContext.Current)
+            return;
+        var declared = ResolveDeclaredReplicationMode();
+        if (declared is { } d && d != mode)
+            throw new LatticeReplicationModeMismatchException(
+                $"Tree '{TreeId}' is declared for replication as '{d}', but this write uses '{mode}'. A "
+                + "replicated tree is single-shape: every value must be authored under the declared mode. "
+                + (d == LatticeMergeMode.LwwRegister
+                    ? "This tree replicates plain last-writer-wins values; author them with SetAsync instead of a CRDT accessor. "
+                    : $"Author values with the matching accessor (ILattice.{CrdtAccessorHint(d)}). ")
+                + "See docs/lattice.replication/replication-modes.md.",
+                TreeId, d, mode);
+    }
+
 
     /// <summary>
     /// Rejects a direct public <see cref="ILattice"/> <em>write</em> to a
@@ -914,6 +1038,7 @@ internal sealed partial class LatticeGrain(
         ThrowIfSystemTree();
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
+        ThrowIfLwwWriteToCrdtReplicatedTree();
         ArgumentNullException.ThrowIfNull(key);
         ValidateWriteSize(key, value);
         return LatticeIdempotencyContext.IsActive
@@ -1092,6 +1217,7 @@ internal sealed partial class LatticeGrain(
         ThrowIfSystemTree();
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
+        ThrowIfLwwWriteToCrdtReplicatedTree();
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
         ValidateWriteSize(key, value);
@@ -1140,6 +1266,7 @@ internal sealed partial class LatticeGrain(
         ThrowIfSystemTree();
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
+        ThrowIfLwwWriteToCrdtReplicatedTree();
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
         ValidateWriteSize(key, value);
@@ -1172,6 +1299,7 @@ internal sealed partial class LatticeGrain(
         ThrowIfSystemTree();
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
+        ThrowIfCrdtWriteViolatesReplicationMode(mode);
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(deltaBytes);
         ValidateWriteSize(key, deltaBytes);
@@ -1204,6 +1332,7 @@ internal sealed partial class LatticeGrain(
         ThrowIfSystemTree();
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
+        ThrowIfLwwWriteToCrdtReplicatedTree();
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
         ValidateWriteSize(key, value);
@@ -1237,6 +1366,7 @@ internal sealed partial class LatticeGrain(
         ThrowIfSystemTree();
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
+        ThrowIfLwwWriteToCrdtReplicatedTree();
         ArgumentNullException.ThrowIfNull(entries);
         {
             var sizeOptions = Options;
@@ -1399,6 +1529,7 @@ internal sealed partial class LatticeGrain(
         ThrowIfSystemTree();
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
+        ThrowIfLwwWriteToCrdtReplicatedTree();
         ArgumentNullException.ThrowIfNull(entries);
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
@@ -1499,6 +1630,7 @@ internal sealed partial class LatticeGrain(
         ThrowIfSystemTree();
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
+        ThrowIfLwwWriteToCrdtReplicatedTree();
         ArgumentNullException.ThrowIfNull(entries);
         cancellationToken.ThrowIfCancellationRequested();
         if (entries.Count == 0) return;
@@ -1542,6 +1674,7 @@ internal sealed partial class LatticeGrain(
         ThrowIfSystemTree();
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
+        ThrowIfLwwWriteToCrdtReplicatedTree();
         ArgumentNullException.ThrowIfNull(entries);
         ValidateOperationId(operationId);
         cancellationToken.ThrowIfCancellationRequested();
@@ -1596,6 +1729,7 @@ internal sealed partial class LatticeGrain(
         ThrowIfSystemTree();
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
+        ThrowIfLwwWriteToCrdtReplicatedTree();
         ArgumentNullException.ThrowIfNull(upserts);
         ArgumentNullException.ThrowIfNull(deletes);
         ValidateOperationId(operationId);
@@ -1642,6 +1776,7 @@ internal sealed partial class LatticeGrain(
         ThrowIfSystemTree();
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
+        ThrowIfLwwWriteToCrdtReplicatedTree();
         ArgumentNullException.ThrowIfNull(entries);
         cancellationToken.ThrowIfCancellationRequested();
         if (entries.Count == 0) return AtomicWriteOutcome.Committed;
@@ -1667,6 +1802,7 @@ internal sealed partial class LatticeGrain(
         ThrowIfSystemTree();
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
+        ThrowIfLwwWriteToCrdtReplicatedTree();
         ArgumentNullException.ThrowIfNull(entries);
         ValidateOperationId(operationId);
         cancellationToken.ThrowIfCancellationRequested();
@@ -1683,6 +1819,7 @@ internal sealed partial class LatticeGrain(
         ThrowIfSystemTree();
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
+        ThrowIfLwwWriteToCrdtReplicatedTree();
         return LatticeIdempotencyContext.IsActive
             ? RunMutationAsync(ct => DeleteAsyncCore(key, ct), cancellationToken)
             : DeleteAsyncCore(key, cancellationToken);
@@ -1718,6 +1855,7 @@ internal sealed partial class LatticeGrain(
         ThrowIfSystemTree();
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
+        ThrowIfLwwWriteToCrdtReplicatedTree();
         ArgumentNullException.ThrowIfNull(startInclusive);
         ArgumentNullException.ThrowIfNull(endExclusive);
         cancellationToken.ThrowIfCancellationRequested();
@@ -1737,6 +1875,7 @@ internal sealed partial class LatticeGrain(
         ThrowIfSystemTree();
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
+        ThrowIfLwwWriteToCrdtReplicatedTree();
         ArgumentNullException.ThrowIfNull(startInclusive);
         ArgumentNullException.ThrowIfNull(endExclusive);
         cancellationToken.ThrowIfCancellationRequested();
