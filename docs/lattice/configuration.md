@@ -81,6 +81,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`MaterialiserCheckpointInterval`](#materialisercheckpointinterval) | `TimeSpan` | 5 seconds | Yes |
 | [`MaxCacheValueBytes`](#maxcachevaluebytes) | `long?` | `null` (unbounded mirror) | Yes |
 | [`MaxConcurrentAutoSplits`](#maxconcurrentautosplits) | `int` | 2 | Yes |
+| [`MaxClusterConcurrentAutoSplits`](#maxclusterconcurrentautosplits) | `int?` | `null` (gate disabled) | Yes |
 | [`MaxConcurrentDrains`](#maxconcurrentdrains) | `int` | 4 | Yes |
 | [`MaxConcurrentMigrations`](#maxconcurrentmigrations) | `int` | 4 | Yes |
 | [`MaxConcurrentSnapshotCaptures`](#maxconcurrentsnapshotcaptures) | `int` | 4 | Yes |
@@ -348,6 +349,26 @@ Intended as deploy-time configuration; the budget is re-read on each cache refre
 Maximum number of in-flight adaptive splits per tree (default: 2). Because `HotShardMonitorGrain` is keyed per tree, this limit is enforced independently per tree in a multi-tree cluster.
 
 This option can be changed freely at any time.
+
+### `MaxClusterConcurrentAutoSplits`
+
+Optional cluster-wide ceiling on the total number of autonomic splits that may be in flight concurrently across **all** trees (default: `null` - disabled). Because `HotShardMonitorGrain` is keyed per tree, `MaxConcurrentAutoSplits` only bounds one tree's splits; in a multi-tenant or many-tree cluster the summed drain I/O from every tree splitting at once can saturate the storage provider even though no single tree exceeds its own cap. Set a positive value to opt in to a singleton admission gate that caps the aggregate concurrent split count.
+
+The cluster ceiling is enforced **in addition to** each tree's `MaxConcurrentAutoSplits` and can only ever **lower** the number of splits a tree triggers, never raise it. When left at its `null` default the gate is entirely off the path: no cluster singleton activates and the monitor issues no extra RPC per tick, so behaviour is identical to running without the option. Admission uses a per-tree heartbeat model: each monitor re-reports its tree's authoritative in-flight split count every pass and the gate expires any footprint that stops being refreshed, so a silo that crashes mid-split has its share of the ceiling reclaimed at expiry instead of wedging splitting cluster-wide.
+
+Per-group tuning composes naturally: low-traffic tree groups clamp their own `MaxConcurrentAutoSplits` down through named options, while a single global `MaxClusterConcurrentAutoSplits` bounds the aggregate.
+
+```csharp verify
+// Opt in to a cluster-wide ceiling of 4 concurrent autonomic splits,
+// regardless of how many trees are hot at once.
+siloBuilder.ConfigureLattice(o => o.MaxClusterConcurrentAutoSplits = 4);
+
+// A low-traffic tree group additionally clamps its own per-tree cap to 1;
+// all such trees still share the single global ceiling above.
+siloBuilder.ConfigureLattice("cold-archive", o => o.MaxConcurrentAutoSplits = 1);
+```
+
+Watch `orleans.lattice.split.in_flight` (summed across the `tree` tag) to size the ceiling, and `orleans.lattice.split.admission.deferred` to see whether it is binding. This option can be changed freely at any time.
 
 ### `MaxConcurrentDrains`
 

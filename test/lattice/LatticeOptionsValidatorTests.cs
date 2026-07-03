@@ -126,6 +126,30 @@ public class LatticeOptionsValidatorTests
     }
 
     [Test]
+    public void MaxClusterConcurrentAutoSplits_null_succeeds()
+    {
+        var result = Validate(o => o.MaxClusterConcurrentAutoSplits = null);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [TestCase(1)]
+    [TestCase(64)]
+    public void MaxClusterConcurrentAutoSplits_positive_succeeds(int value)
+    {
+        var result = Validate(o => o.MaxClusterConcurrentAutoSplits = value);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void MaxClusterConcurrentAutoSplits_below_one_fails(int value)
+    {
+        var result = Validate(o => o.MaxClusterConcurrentAutoSplits = value);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain("MaxClusterConcurrentAutoSplits"));
+    }
+
+    [Test]
     public void Valid_custom_values_pass()
     {
         var result = Validate(o =>

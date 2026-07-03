@@ -301,9 +301,32 @@ individually** when:
 | Resize / merge / snapshot in progress | Whole pass | `ILattice.IsResize/Merge/SnapshotCompleteAsync()` returns `false`. |
 | Any shard has a pending bulk graft | Whole pass | `IShardRootGrain.HasPendingBulkOperationAsync()` returns `true`. |
 | In-flight splits already at `MaxConcurrentAutoSplits` | Whole pass | Sum of `IsSplittingAsync()` results. |
+| Cluster-wide split ceiling reached (`MaxClusterConcurrentAutoSplits` set) | Per candidate | No cluster headroom left in the admission gate; the candidate is deferred to a later tick. |
 | Shard already splitting | Per shard | Excluded from candidate set. |
 | Per-shard cooldown active (default 2 min) | Per shard | In-memory cooldown timestamp. |
 | Shard owns a single virtual slot | Per shard | Cannot be subdivided further. |
+
+## Cluster-wide split concurrency (opt-in)
+
+`MaxConcurrentAutoSplits` is enforced **per tree**: because `HotShardMonitorGrain` is keyed by tree id, each tree counts only its own in-flight splits. In a multi-tenant or many-tree cluster the summed drain I/O from many trees splitting at once can saturate the storage provider even though no single tree exceeds its own cap.
+
+`MaxClusterConcurrentAutoSplits` (default `null` = disabled) opts in to a cluster-wide admission gate - a singleton `IClusterSplitConcurrencyGrain` (well-known integer key `0`) - that caps the aggregate number of concurrently in-flight autonomic splits across all trees. The ceiling is enforced **in addition to** each tree's `MaxConcurrentAutoSplits` and can only ever **lower** the number of splits a tree triggers, never raise it. When the option is `null` the monitor never resolves or calls the gate, so the disabled path issues no extra RPC per tick and is byte-for-byte identical to running without the option.
+
+### Per-tree heartbeat footprints (self-healing)
+
+Admission uses a per-tree heartbeat model rather than long-lived permits. On every sampling pass an enabled monitor reports its tree's authoritative in-flight split count (derived from real shard `IsSplitting` state) and how many new splits it wants; the gate drops any tree footprint whose time-to-live has lapsed, sums the live in-flight counts of the **other** trees, and grants new slots only up to the remaining cluster headroom. It then records this tree's footprint (its in-flight count plus any grant) with a fresh expiry of `HotShardSampleInterval * 3`. Because the count is re-reported from ground truth each pass, there is no permit to leak: a silo that crashes mid-split simply stops refreshing its footprint, so the stale entry lapses at its expiry and the next pass reclaims that share of the ceiling. This self-healing property is what makes the aggregate ceiling safe to enable.
+
+### Per-group override
+
+Per-tree options resolve through named `IOptionsMonitor<LatticeOptions>.Get(treeName)`, so a low-traffic tree group can clamp its own `MaxConcurrentAutoSplits` down (e.g. to `1`) while a high-traffic group keeps a higher per-tree cap - all bounded in aggregate by the single global `MaxClusterConcurrentAutoSplits` ceiling.
+
+### Operator questions and the metrics that answer them
+
+| Question | Metric | How to read it |
+|---|---|---|
+| (a) Do I need to enable this? | `orleans.lattice.split.in_flight` (summed across `tree`) and `orleans.lattice.split.candidates_suppressed` | Both emit **even when the gate is disabled**. A high steady-state cluster sum with chronically non-zero suppression across many trees means aggregate drain pressure the per-tree cap cannot see. |
+| (b) What ceiling should I pick? | `orleans.lattice.split.in_flight` peak / quantiles | Size the ceiling near the aggregate your storage provider absorbs without saturating (correlate with storage-latency panels), leaving headroom above typical peak so the gate only bites during pathological bursts. |
+| (c) How is the enabled gate affecting my system? | `orleans.lattice.split.admission.deferred` (`reason=cluster_cap`) | Flat-zero means the ceiling never binds (raise it or leave the gate off). Sustained non-zero with rising hot-shard latency means the ceiling is too low and is starving legitimate elasticity. |
 
 ## Tunables (`LatticeOptions`)
 
@@ -314,6 +337,7 @@ individually** when:
 | `HotShardSampleInterval` | `30 s` | How often the monitor polls hotness counters. |
 | `HotShardSplitCooldown` | `2 min` | Minimum interval between consecutive splits of the same physical shard. |
 | `MaxConcurrentAutoSplits` | `2` | Maximum concurrent splits per tree. Each split runs in its own per-shard coordinator activation; the cap bounds aggregate storage I/O. |
+| `MaxClusterConcurrentAutoSplits` | `null` | Optional cluster-wide ceiling on the aggregate number of concurrent autonomic splits across **all** trees. `null` disables the gate (per-tree caps only, zero cost); a positive value opts in to a singleton admission gate enforced in addition to each tree's `MaxConcurrentAutoSplits`. |
 | `SplitDrainBatchSize` | `1024` | Maximum number of moved-slot entries the drain accumulates in memory before flushing to the target shard. Caps coordinator allocation regardless of source shard size. |
 | `AutoSplitMinTreeAge` | `60 s` | Minimum tree age before autonomic splits are allowed; absorbs startup bursts. |
 | `MaxScanRetries` | `3` | Maximum bounded retries that a scan (`CountAsync`, `ScanKeysAsync`, `ScanEntriesAsync`) performs when `ShardMap.Version` keeps moving mid-scan due to concurrent splits. Throws `InvalidOperationException` on exhaustion. Increase if scans run during very-high split churn. See [Consistency](consistency.md). |

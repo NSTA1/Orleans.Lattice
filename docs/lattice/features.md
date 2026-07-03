@@ -246,7 +246,6 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [G-005](https://github.com/NSTA1/Orleans.Lattice/issues/422) - Quota / admission control per tree
 - [G-006](https://github.com/NSTA1/Orleans.Lattice/issues/423) - Admin CLI / `dotnet` tool
 - [G-007](https://github.com/NSTA1/Orleans.Lattice/issues/424) - Shard-affine grain placement
-- [G-008](https://github.com/NSTA1/Orleans.Lattice/issues/425) - Cluster-wide split concurrency control
 - [G-009](https://github.com/NSTA1/Orleans.Lattice/issues/426) - `AtomicWriteGrain` generalization to non-tree mutations
 - [G-010](https://github.com/NSTA1/Orleans.Lattice/issues/427) - Repository of point-in-time tree snapshots
 - [G-013](https://github.com/NSTA1/Orleans.Lattice/issues/430) - Observer-latency telemetry
@@ -256,6 +255,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 ### Shipped
 
 - [G-002](https://github.com/NSTA1/Orleans.Lattice/issues/419) - Compaction policy controls
+- [G-008](https://github.com/NSTA1/Orleans.Lattice/issues/425) - Cluster-wide split concurrency control
 - [G-011](https://github.com/NSTA1/Orleans.Lattice/issues/428) - Caller-supplied idempotency key for `SetManyAtomicAsync`
 - [G-012](https://github.com/NSTA1/Orleans.Lattice/issues/429) - `CoordinatorGrain<TSelf>` base class + `IsIdleAsync` rename
 - [G-014](https://github.com/NSTA1/Orleans.Lattice/issues/431) - WAL-as-sole-commit-point promotion (substantially shipped via F-047 -> F-052)

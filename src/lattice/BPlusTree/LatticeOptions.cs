@@ -385,6 +385,41 @@ public class LatticeOptions
     public const int DefaultMaxConcurrentAutoSplits = 2;
 
     /// <summary>
+    /// Optional cluster-wide ceiling on the total number of autonomic shard
+    /// splits that may be in flight concurrently across <em>all</em> trees.
+    /// <para>
+    /// <c>null</c> (the default) disables the cluster gate entirely: each tree's
+    /// autonomic monitor enforces only its own <see cref="MaxConcurrentAutoSplits"/>,
+    /// which is the current behaviour. In this mode no cluster singleton is
+    /// activated and no extra RPC is issued per monitor tick, so the disabled
+    /// path is byte-for-byte identical to running without this option and costs
+    /// nothing.
+    /// </para>
+    /// <para>
+    /// A positive value opts in to a cluster-wide admission gate that caps the
+    /// aggregate number of concurrently draining splits regardless of how many
+    /// trees are simultaneously hot. Because <c>HotShardMonitorGrain</c> is keyed
+    /// by tree, the per-tree <see cref="MaxConcurrentAutoSplits"/> cannot see
+    /// splits happening on other trees; in a multi-tenant or many-tree cluster
+    /// the summed drain I/O can saturate the storage provider even though no
+    /// single tree exceeds its own cap. The cluster ceiling is enforced
+    /// <em>in addition to</em> each tree's <see cref="MaxConcurrentAutoSplits"/>
+    /// and can only ever <em>lower</em> the number of splits a tree triggers,
+    /// never raise it. Admission is granted through lease-based, time-bounded
+    /// permits so a crashed or abandoned split releases its slot within the lease
+    /// window rather than wedging splitting cluster-wide.
+    /// </para>
+    /// <para>
+    /// Mirrors the <c>null</c> = disabled, zero-overhead-when-unset idiom used by
+    /// <see cref="MaxCacheValueBytes"/>.
+    /// </para>
+    /// </summary>
+    public int? MaxClusterConcurrentAutoSplits { get; set; } = DefaultMaxClusterConcurrentAutoSplits;
+
+    /// <summary>Default value for <see cref="MaxClusterConcurrentAutoSplits"/> (<c>null</c> - the cluster-wide split gate is disabled).</summary>
+    public static readonly int? DefaultMaxClusterConcurrentAutoSplits = null;
+
+    /// <summary>
     /// Maximum number of parallel <see cref="Orleans.Lattice.BPlusTree.ITreeShardSplitGrain"/> splits
     /// that an online reshard (<see cref="ILattice.ReshardAsync"/>) may drive
     /// concurrently. Each split drains one physical shard's upper-half
