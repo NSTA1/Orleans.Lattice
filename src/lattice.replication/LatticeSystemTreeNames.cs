@@ -20,8 +20,10 @@ namespace Orleans.Lattice.Replication;
 /// above it in the dependency graph), so these ids are mirrored here as the
 /// stable public contract they already are. They are kept in sync with the owning
 /// packages' <c>MembershipConstants</c> and <c>AuthConstants</c> by the
-/// drift-guard tests that can see both surfaces. Changing any string here is a
-/// wire-format and on-disk-key break and must never be done casually.
+/// <c>SystemTreeNameDriftGuardTests</c> in the membership and auth test projects
+/// (each references this package and can see its own package's canonical internal
+/// constants), which fail if a mirrored id ever drifts. Changing any string here
+/// is a wire-format and on-disk-key break and must never be done casually.
 /// </para>
 /// <para>
 /// Membership and policy trees replicate last-writer-wins
