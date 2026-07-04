@@ -11,7 +11,8 @@ namespace Orleans.Lattice.Membership;
 /// a subject is never served past its token's <c>exp</c>), and the cache is
 /// flushed whenever a <c>sys-membership-*</c> tree mutates (observed through the
 /// core <see cref="IMutationObserver"/> seam), so a membership change is
-/// reflected without a process restart.
+/// reflected without a process restart. Cache hits and misses are counted on the
+/// membership-owned meter through <see cref="LatticeMembershipMetrics"/>.
 /// </summary>
 internal sealed class MembershipResolutionCache(
     TimeProvider timeProvider,
@@ -37,9 +38,13 @@ internal sealed class MembershipResolutionCache(
             && timeProvider.GetUtcNow() < entry.ExpiresAt)
         {
             subject = entry.Subject;
+            LatticeMembershipMetrics.RecordResolutionCacheHit();
             return true;
         }
 
+        // A warm-path miss is not counted here: it is always followed by a
+        // ResolveAsync that records the miss when it actually resolves, so
+        // counting it in both places would double-count a single lookup.
         subject = default;
         return false;
     }
@@ -62,8 +67,13 @@ internal sealed class MembershipResolutionCache(
 
         if (ttl > TimeSpan.Zero && _entries.TryGetValue(cacheKey, out var entry) && now < entry.ExpiresAt)
         {
+            LatticeMembershipMetrics.RecordResolutionCacheHit();
             return entry.Subject;
         }
+
+        // No live entry: this is the authoritative cache miss - the resolver is
+        // about to run - so it is counted here rather than in TryGetCached.
+        LatticeMembershipMetrics.RecordResolutionCacheMiss();
 
         var resolved = await resolver(cancellationToken).ConfigureAwait(false);
 

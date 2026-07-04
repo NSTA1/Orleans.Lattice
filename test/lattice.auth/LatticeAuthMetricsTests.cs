@@ -6,10 +6,9 @@ namespace Orleans.Lattice.Auth.Tests;
 /// <summary>
 /// Unit tests for the <see cref="LatticeAuthMetrics"/> instruments on the
 /// <c>orleans.lattice.auth</c> meter: the canonical meter name, the effect tag
-/// helper, the subject-resolution cache counters, the snapshot-rebuild counter,
-/// and the compiled-snapshot epoch / age observable gauges. Each counter is
-/// asserted through a <see cref="MeterListener"/> so the wiring - not just the
-/// method - is covered.
+/// helper, the snapshot-rebuild counter, and the compiled-snapshot epoch / age
+/// observable gauges. Each counter is asserted through a
+/// <see cref="MeterListener"/> so the wiring - not just the method - is covered.
 /// </summary>
 [TestFixture]
 public sealed class LatticeAuthMetricsTests
@@ -28,30 +27,6 @@ public sealed class LatticeAuthMetricsTests
         Assert.That(LatticeAuthMetrics.EffectTag(false), Is.EqualTo(LatticeAuthMetrics.EffectDeny));
         Assert.That(LatticeAuthMetrics.EffectAllow, Is.EqualTo("allow"));
         Assert.That(LatticeAuthMetrics.EffectDeny, Is.EqualTo("deny"));
-    }
-
-    [Test]
-    public void RecordSubjectResolutionCacheHit_increments_the_hits_counter()
-    {
-        using var collector = new MeterCollector<long>(
-            LatticeAuthMetrics.MeterName, LatticeAuthMetrics.SubjectResolutionCacheHitsName);
-
-        LatticeAuthMetrics.RecordSubjectResolutionCacheHit();
-
-        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
-        Assert.That(collector.Measurements.Single().Value, Is.EqualTo(1));
-    }
-
-    [Test]
-    public void RecordSubjectResolutionCacheMiss_increments_the_misses_counter()
-    {
-        using var collector = new MeterCollector<long>(
-            LatticeAuthMetrics.MeterName, LatticeAuthMetrics.SubjectResolutionCacheMissesName);
-
-        LatticeAuthMetrics.RecordSubjectResolutionCacheMiss();
-
-        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
-        Assert.That(collector.Measurements.Single().Value, Is.EqualTo(1));
     }
 
     [Test]
