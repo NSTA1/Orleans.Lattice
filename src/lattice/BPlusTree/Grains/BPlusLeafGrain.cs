@@ -3013,6 +3013,42 @@ internal sealed partial class BPlusLeafGrain(
             BumpLocalRevision();
         }
 
+        // step 3 (observer) - publish each applied entry to the silo-wide
+        // IMutationObserver seam so downstream consumers (the compiled
+        // authorization-policy snapshot maintainer, the membership cache,
+        // the replication sink nudge) react to a replication-apply /
+        // tree-merge / snapshot-restore write exactly as they do to a
+        // foreground commit. Without this the receiver of a replicated
+        // reserved-tree write converges in state but never rebuilds the
+        // per-silo snapshot the enforcement path reads, so a cross-cluster
+        // grant or revoke lands durably yet is never enforced on the peer
+        // until an unrelated event happens to rebuild it.
+        //
+        // The cross-shard migration path is intentionally excluded: a
+        // migration is an internal topology move of an already-authored
+        // value, not a new logical mutation, so it must stay observationally
+        // silent (matching MergeEntriesAsync). The HasObservers guard keeps
+        // the common single-cluster case (no auth, no replication - no
+        // observer registered) at a single branch check with no added cost,
+        // and local foreground writes never reach this method, so no write
+        // is double-published. The publish runs under a commit-log scope so
+        // a replication-aware observer recognises the source and does not
+        // treat the apply as a fresh local authored write.
+        if (!isCrossShardMigration && appliedAny && mutationObservers.HasObservers)
+        {
+            using (LatticeCommitLogContext.BeginScope())
+            {
+                foreach (var (key, incoming) in entries)
+                {
+                    var published = Cache.TryGetRow(key, out var committed) ? committed : incoming;
+                    if (published.IsTombstone)
+                        await PublishDeleteAsync(key, published);
+                    else
+                        await PublishSetAsync(key, published);
+                }
+            }
+        }
+
         // Forward the projection-hash delta to the parent internal
         // node. See MergeEntriesAsync for the no-op semantics. CRDT
         // merge is a structural apply - bypass the c2-xxviii
