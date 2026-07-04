@@ -347,9 +347,9 @@ public partial class LatticeGrainReplicationApplyTests
 
     // ------------------------------------------------------------------
     // VC preservation through the receiver-side apply seam.
-    // Set/Delete apply paths route through MergeManyAsync (silent on the
-    // observer hook), so we read the persisted LwwEntry directly via
-    // IShardRootGrain.GetRawEntryAsync.
+    // Set/Delete apply paths route through MergeManyAsync; we read the
+    // persisted LwwEntry directly via IShardRootGrain.GetRawEntryAsync so the
+    // assertion is independent of the observer payload.
     // ------------------------------------------------------------------
 
     private async Task<LwwEntry?> ReadRawEntryAsync(string treeId, string key)

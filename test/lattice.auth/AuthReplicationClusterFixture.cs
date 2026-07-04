@@ -92,15 +92,15 @@ public sealed class AuthReplicationClusterFixture
         var entries = new List<KeyValuePair<string, byte[]>>();
         using (AsSubject(BootstrapAdmin))
         {
-            var cursor = await source.OpenEntryCursorAsync();
-            while (true)
+            // Resilient scan (not a raw OpenEntryCursor/NextEntries loop): the
+            // compiled-policy snapshot maintainer rescans this same policy tree in
+            // the background on every rule edit, so this scan routinely overlaps a
+            // maintainer scan and a raw cursor surfaces the transient
+            // EnumerationAbortedException. ScanEntriesAsync transparently reconnects,
+            // matching how LatticeAuthorizationPolicyStore.ListRulesAsync reads it.
+            await foreach (var entry in source.ScanEntriesAsync().ConfigureAwait(false))
             {
-                var page = await source.NextEntriesAsync(cursor, 128);
-                entries.AddRange(page.Entries);
-                if (!page.HasMore)
-                {
-                    break;
-                }
+                entries.Add(entry);
             }
         }
 
