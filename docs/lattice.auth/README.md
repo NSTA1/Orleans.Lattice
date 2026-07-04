@@ -118,7 +118,7 @@ siloBuilder.AddLatticeAuth(options =>
 
 ## Zero cost when disabled
 
-The authorization layer is opt-in. The core `AddLattice(...)` registration installs only the allow-all null gate; `AddLatticeAuth(...)` replaces it with the enforcing policy gate. A cluster that never registers authorization keeps the null gate, whose decision is a synchronously-completed, allocation-free allow that never resolves a subject - so the data path is byte-for-byte what it was before the authorization layer existed. The measured per-operation cost of enforcement when the layer **is** registered is documented on the [security posture](security-posture.md#enforcement-cost) page.
+The authorization layer is opt-in. The core `AddLattice(...)` registration installs only the allow-all null gate; `AddLatticeAuth(...)` replaces it with the enforcing policy gate. A cluster that never registers authorization keeps the null gate, whose decision is a synchronously-completed, allocation-free allow that never resolves a subject - so the data path is byte-for-byte what it was before the authorization layer existed.
 
 ## Observability
 
@@ -135,4 +135,3 @@ Every authorization decision, the decision latency, and the compiled-snapshot ep
 - [`Orleans.Lattice.Api.Auth`](../lattice.api.auth/README.md) - the transport-agnostic control facade for administering membership and policy and explaining decisions.
 - [`Orleans.Lattice.Replication`](../lattice.replication/README.md) - the system-tree replication that converges policy and membership across clusters.
 
-Feature planning is managed on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), not in roadmap files.

@@ -38,7 +38,9 @@ register its own. Resolution is cached with a configurable TTL.
 Two optional companions integrate a corporate identity provider:
 
 - [`Orleans.Lattice.Membership.Entra`](../lattice.membership.entra/README.md) -
-  a Microsoft Entra ID (Azure AD) credential authenticator.
+  a Microsoft Entra ID (Azure AD) credential authenticator. Its
+  [Azure CLI setup guide](../lattice.membership.entra/entra-setup.md) provisions
+  an app registration and shows the host wiring end to end.
 - [`Orleans.Lattice.Membership.Entra.Graph`](../lattice.membership.entra.graph/README.md) -
   a Microsoft Graph-backed resolver for subjects whose group claims overflow the
   token.

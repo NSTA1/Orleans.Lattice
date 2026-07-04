@@ -1,8 +1,11 @@
 # Authorization
 
 > This is the single-silo introduction to the Orleans.Lattice authorization
-> layer. For a multi-cluster deployment that also converges policy and
-> membership across sites, see the
+> layer, driven by a self-contained demo token. To authenticate a **real
+> Microsoft Entra ID user** on a single silo, see the
+> [Entra Authorization](../EntraAuthorization/README.md) sample. For a
+> multi-cluster deployment that also converges policy and membership across
+> sites, see the
 > [Cross-Cluster Authorization](../CrossClusterAuthorization/README.md) sample,
 > which builds on the same layer.
 
