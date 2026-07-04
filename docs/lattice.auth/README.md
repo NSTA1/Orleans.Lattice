@@ -135,4 +135,3 @@ Every authorization decision, the decision latency, and the compiled-snapshot ep
 - [`Orleans.Lattice.Api.Auth`](../lattice.api.auth/README.md) - the transport-agnostic control facade for administering membership and policy and explaining decisions.
 - [`Orleans.Lattice.Replication`](../lattice.replication/README.md) - the system-tree replication that converges policy and membership across clusters.
 
-Feature planning is managed on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), not in roadmap files.
