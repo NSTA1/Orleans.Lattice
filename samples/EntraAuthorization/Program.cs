@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using Azure.Core;
 using Azure.Identity;
 using Microsoft.Extensions.DependencyInjection;
@@ -9,32 +10,38 @@ using Orleans.Lattice;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Membership;
 using Orleans.Lattice.Membership.Entra;
-using Orleans.Lattice.Samples.EntraAuthorization;
 
 // ---------------------------------------------------------------------------
 // EntraAuthorization - the opt-in authorization layer on a single silo, driven
-// by a REAL Microsoft Entra ID (Azure AD) identity.
+// by a REAL Microsoft Entra ID (Azure AD) identity, with the signed-in user as
+// the tree's owner.
 //
 // Unlike the Authorization sample (which fakes a token with a demo scheme), this
 // sample acquires a genuine Entra access token for the user who is currently
-// signed in to the Azure CLI, resolves that token to a subject through the Entra
-// authenticator, and then writes a value to a tree *as that Entra identity*.
+// signed in to the Azure CLI, and makes THAT user the authorization root of
+// trust: their Entra object id (oid) is the sole bootstrap administrator. No
+// trusted-token shortcut, no seeding identity - the same signed Entra token that
+// authenticates the caller also authorizes them as the owner. This is the
+// recommended production shape: bind the bootstrap administrator to a real,
+// unforgeable identity and never map a plaintext token to an admin id.
 //
 // It therefore cannot run until you have provisioned an Entra app registration
-// and exported its ids as environment variables. The step-by-step `az` setup is
-// in this sample's README and in
-// docs/lattice.membership.entra/entra-setup.md. Without that setup this program
-// prints guidance and exits with a non-zero code - it never silently no-ops.
+// and signed in with the Azure CLI. The step-by-step `az` setup is in this
+// sample's README and in docs/lattice.membership.entra/entra-setup.md. Without
+// that setup this program prints guidance and exits non-zero - it never silently
+// no-ops.
 //
 // The flow is:
 //
-//   1. Acquire an Entra token for the signed-in az user (AzureCliCredential).
+//   1. Acquire an Entra token for the signed-in az user (AzureCliCredential) and
+//      read its oid, so the silo can name that oid the bootstrap administrator.
 //   2. Start a single in-process silo: Membership + the Entra authenticator +
-//      a default-deny Auth gate.
-//   3. Resolve the token to a subject and print the caller's object id (oid).
-//   4. Prove fail-closed: with no rule, the Entra user's write is DENIED.
-//   5. As a bootstrap administrator, author an allow rule for that exact oid.
-//   6. Write a value to the tree AS THE ENTRA USER, then read it back.
+//      a default-deny Auth gate whose only bootstrap administrator is the oid.
+//   3. Resolve the token to a subject and confirm it is the owner.
+//   4. As the Entra user (the owner), write a value to a tree and read it back.
+//   5. As an anonymous request (no credential), attempt the same read and write
+//      and watch the default-deny gate reject them - fail-closed for everyone
+//      who is not the owner.
 // ---------------------------------------------------------------------------
 
 const string Tree = "entra-demo";
@@ -56,7 +63,7 @@ if (string.IsNullOrWhiteSpace(tenantId) || string.IsNullOrWhiteSpace(clientId))
 // app exposes a specific delegated scope instead.
 scope = string.IsNullOrWhiteSpace(scope) ? $"api://{clientId}/.default" : scope;
 
-// -- 2. Acquire an Entra token for the signed-in az user --------------------
+// -- 1a. Acquire an Entra token for the signed-in az user -------------------
 Console.Write($"Acquiring an Entra token for scope '{scope}' via the Azure CLI...");
 string entraToken;
 try
@@ -75,7 +82,22 @@ catch (Exception ex)
     return 3;
 }
 
-// -- 3. Start the silo ------------------------------------------------------
+// -- 1b. Read the caller's oid so it can be named the bootstrap admin -------
+// The oid is a claim inside the token, so it is known before the silo starts.
+// This is what lets the signed-in user be configured as the owner up front.
+var ownerOid = TryReadOid(entraToken);
+if (string.IsNullOrWhiteSpace(ownerOid))
+{
+    PrintSetupHelp(
+        "The acquired token has no 'oid' claim. Confirm the app issues v2.0 tokens " +
+        "(entra-setup.md Step 3) so the caller's object id is present.");
+    return 4;
+}
+
+Console.WriteLine($"Signed-in Entra object id (oid): {ownerOid}");
+Console.WriteLine("  -> this oid is the tree owner (sole bootstrap administrator).\n");
+
+// -- 2. Start the silo ------------------------------------------------------
 using var host = Host.CreateDefaultBuilder(args)
     .ConfigureLogging(logging =>
     {
@@ -103,27 +125,16 @@ using var host = Host.CreateDefaultBuilder(args)
             options.Audiences.Add($"api://{clientId}");
         });
 
-        // A tiny trusted-token authenticator used only to seed the first rule as a
-        // bootstrap administrator. It handles its own scheme only, so it never
-        // shadows the Entra bearer tokens above.
-        //
-        // More secure alternative (the recommended production shape): drop this
-        // authenticator entirely and put the SIGNED-IN USER'S OWN Entra oid in
-        // BootstrapAdministrators below. The oid is available from the token
-        // before the host is built, so the same signed Entra token would then
-        // authenticate the seeding identity - no unsigned trusted-token secret at
-        // all. This demo keeps a SEPARATE seeding identity on purpose: if the
-        // Entra user were the bootstrap admin it would be cluster-wide god mode
-        // from the first call, so the fail-closed default-deny step and the
-        // rule-driven enforcement below (which act on the Entra user) could never
-        // be shown. Never copy this trusted-token shortcut into a real host.
-        silo.Services.AddSingleton<ILatticeCredentialAuthenticator, SetupAuthenticator>();
-
-        // Auth installs the fail-closed, default-deny enforcement gate.
+        // Auth installs the fail-closed, default-deny gate. The signed-in user's
+        // own Entra oid is the sole bootstrap administrator - the owner - so the
+        // same signed token that authenticates the caller also authorizes them.
+        // There is no trusted-token authenticator: the root of trust is a real,
+        // unforgeable identity. Keep this set to the smallest number of
+        // break-glass owner identities in a real deployment.
         silo.AddLatticeAuth(options =>
         {
             options.DefaultEffect = LatticeEffect.Deny;
-            options.BootstrapAdministrators.Add(SetupAuthenticator.SetupAdministrator);
+            options.BootstrapAdministrators.Add(ownerOid);
         });
     })
     .Build();
@@ -133,10 +144,9 @@ await host.StartAsync();
 Console.WriteLine(" ready.\n");
 
 var membership = host.Services.GetRequiredService<ILatticeMembershipContext>();
-var store = host.Services.GetRequiredService<ILatticeAuthorizationPolicyStore>();
 var tree = host.Services.GetRequiredService<IGrainFactory>().GetGrain<ILattice>(Tree);
 
-// -- 4. Resolve the Entra token to a subject --------------------------------
+// -- 3. Resolve the Entra token to a subject and confirm the owner ----------
 Console.WriteLine("== Resolve the signed-in Entra identity ==");
 LatticeSubject subject;
 using (LatticeCredentialContext.Use(entraToken, scheme: BearerScheme))
@@ -144,103 +154,103 @@ using (LatticeCredentialContext.Use(entraToken, scheme: BearerScheme))
     subject = await membership.ResolveCurrentAsync();
 }
 
-if (subject.IsAnonymous)
+if (subject.IsAnonymous || !string.Equals(subject.SubjectId, ownerOid, StringComparison.Ordinal))
 {
     PrintSetupHelp(
-        "The Entra token was not accepted by the authenticator (resolved to anonymous). " +
-        "Check that LATTICE_ENTRA_TENANT_ID matches the token's tenant and that " +
+        "The Entra token was not accepted by the authenticator (or resolved to a different " +
+        "subject). Check that LATTICE_ENTRA_TENANT_ID matches the token's tenant and that " +
         "LATTICE_ENTRA_CLIENT_ID is the app the token was issued for.");
     await host.StopAsync();
-    return 4;
+    return 5;
 }
 
-Console.WriteLine($"  Resolved subject (oid): {subject.SubjectId}");
-Console.WriteLine($"  Groups in token:        {(subject.GroupIds.Count == 0 ? "(none)" : string.Join(", ", subject.GroupIds))}");
-Console.WriteLine();
+Console.WriteLine($"  Resolved subject (oid): {subject.SubjectId}  (owner)\n");
 
 var key = $"greeting/{subject.SubjectId}";
 var value = $"Hello from Entra oid {subject.SubjectId} at {DateTimeOffset.UtcNow:u}";
 
-// -- 5. Fail-closed: the Entra user cannot write before a rule exists -------
-Console.WriteLine("== Fail-closed: write before any rule is authored ==");
-Console.WriteLine($"  write {key} -> {await EntraWriteOutcome(key, value)}   (default-deny)\n");
-
-// -- 6. Author an allow rule for exactly this oid ---------------------------
-Console.WriteLine("== Author an allow rule for this oid (as the bootstrap admin) ==");
-using (LatticeCredentialContext.Use(SetupAuthenticator.SetupAdministrator, scheme: SetupAuthenticator.Scheme))
+// -- 4. As the Entra user (the owner): write and read -----------------------
+Console.WriteLine("== As the signed-in Entra user (owner) ==");
+string ownerWrite;
+string? ownerRead;
+using (LatticeCredentialContext.Use(entraToken, scheme: BearerScheme))
 {
-    await store.PutRuleAsync(new LatticeAuthorizationRule(
-        "entra-user-readwrite",
-        LatticeSubjectSelector.User(subject.SubjectId),
-        LatticeScope.Tree(Tree),
-        LatticeOperation.Read | LatticeOperation.RangeRead | LatticeOperation.Write,
-        LatticeEffect.Allow));
-}
-Console.WriteLine($"  Allowed Read|RangeRead|Write on tree '{Tree}' for user '{subject.SubjectId}'.\n");
-
-// The compiled policy snapshot rebuilds off the policy-tree change feed, so poll
-// the actual write until the grant takes effect.
-Console.WriteLine("== Write a value to the tree AS THE ENTRA USER ==");
-var wrote = await WaitUntilAsync(
-    async () => string.Equals(await EntraWriteOutcome(key, value), "allowed", StringComparison.Ordinal),
-    TimeSpan.FromSeconds(15));
-
-string? readBack = null;
-if (wrote)
-{
-    using (LatticeCredentialContext.Use(entraToken, scheme: BearerScheme))
-    {
-        var stored = await tree.GetAsync(key);
-        readBack = stored is null ? null : Encoding.UTF8.GetString(stored);
-    }
+    ownerWrite = await WriteOutcome(key, value);
+    var stored = await tree.GetAsync(key);
+    ownerRead = stored is null ? null : Encoding.UTF8.GetString(stored);
 }
 
-Console.WriteLine($"  write {key} -> {(wrote ? "allowed" : "DENIED")}");
-Console.WriteLine($"  read  {key} -> {(readBack is null ? "(absent)" : $"'{readBack}'")}");
-Console.WriteLine();
+Console.WriteLine($"  write {key} -> {ownerWrite}   (owner: allowed)");
+Console.WriteLine($"  read  {key} -> {(ownerRead is null ? "(absent)" : $"'{ownerRead}'")}\n");
 
-var success = wrote && readBack == value;
+// -- 5. As an anonymous request (no credential): write and read -------------
+// No ambient credential is stamped, so membership resolves the caller to the
+// well-known anonymous subject. Under default-deny it is authorized for nothing.
+Console.WriteLine("== As an anonymous request (no credential) ==");
+var anonWrite = await WriteOutcome(key, "anon-overwrite");
+var anonStored = await tree.GetAsync(key);
+var anonRead = anonStored is null ? null : Encoding.UTF8.GetString(anonStored);
+
+Console.WriteLine($"  write {key} -> {anonWrite}   (default-deny)");
+Console.WriteLine($"  read  {key} -> {(anonRead is null ? "(absent)" : $"'{anonRead}'")}   (soft-denied)\n");
+
+var success =
+    ownerWrite == "allowed" &&
+    ownerRead == value &&
+    anonWrite == "DENIED" &&
+    anonRead is null;
+
 Console.WriteLine(success
-    ? "[OK] wrote and read back a value under the signed-in Entra identity."
-    : "[FAIL] the Entra identity could not write and read back its value.");
+    ? "[OK] the owner wrote and read a value; the anonymous request was denied."
+    : "[FAIL] the expected owner-allowed / anonymous-denied outcome did not hold.");
 
 await host.StopAsync();
 return success ? 0 : 1;
 
 // --- helpers ---------------------------------------------------------------
 
-// "allowed" / "DENIED" for a write attempted under the ambient Entra credential.
-async Task<string> EntraWriteOutcome(string k, string v)
+// "allowed" / "DENIED" for a write attempted under the current ambient credential.
+async Task<string> WriteOutcome(string k, string v)
 {
-    using (LatticeCredentialContext.Use(entraToken, scheme: BearerScheme))
+    try
     {
-        try
-        {
-            await tree.SetAsync(k, Encoding.UTF8.GetBytes(v));
-            return "allowed";
-        }
-        catch (LatticeAuthorizationDeniedException)
-        {
-            return "DENIED";
-        }
+        await tree.SetAsync(k, Encoding.UTF8.GetBytes(v));
+        return "allowed";
+    }
+    catch (LatticeAuthorizationDeniedException)
+    {
+        return "DENIED";
     }
 }
 
-// Polls the predicate until it is true or the budget elapses.
-async Task<bool> WaitUntilAsync(Func<Task<bool>> predicate, TimeSpan budget)
+// Reads the 'oid' claim from a JWT without validating it (validation is the
+// authenticator's job inside the silo). Returns null when the token is not a
+// readable JWT or carries no oid.
+static string? TryReadOid(string jwt)
 {
-    var deadline = DateTime.UtcNow + budget;
-    while (DateTime.UtcNow < deadline)
+    var parts = jwt.Split('.');
+    if (parts.Length < 2)
     {
-        if (await predicate())
-        {
-            return true;
-        }
-
-        await Task.Delay(TimeSpan.FromMilliseconds(500));
+        return null;
     }
 
-    return await predicate();
+    var payload = parts[1].Replace('-', '+').Replace('_', '/');
+    switch (payload.Length % 4)
+    {
+        case 2: payload += "=="; break;
+        case 3: payload += "="; break;
+    }
+
+    try
+    {
+        var json = Encoding.UTF8.GetString(Convert.FromBase64String(payload));
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.TryGetProperty("oid", out var oid) ? oid.GetString() : null;
+    }
+    catch
+    {
+        return null;
+    }
 }
 
 // Prints actionable setup guidance and where to find the full walkthrough.

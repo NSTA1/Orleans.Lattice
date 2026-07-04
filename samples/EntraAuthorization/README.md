@@ -10,24 +10,25 @@
 ## What it shows
 
 The Orleans.Lattice authorization layer on **one in-process Orleans silo**, gated
-by a genuine Entra identity. Where the [Authorization](../Authorization/README.md)
-sample fakes a token, this sample acquires a real Entra access token for the user
-who is currently signed in to the Azure CLI, resolves that token to a subject
-through the shipped
-[Entra authenticator](../../docs/lattice.membership.entra/README.md), and then
-writes a value to a tree **as that Entra identity**.
+by a genuine Entra identity where **the signed-in user is the tree's owner**.
+Where the [Authorization](../Authorization/README.md) sample fakes a token, this
+sample acquires a real Entra access token for the user who is currently signed in
+to the Azure CLI, makes that user's Entra object id (`oid`) the sole bootstrap
+administrator, and then reads and writes a value to a tree **as that Entra
+identity** - while an anonymous request is denied.
 
 The demo:
 
-1. Acquires an Entra token for the signed-in `az` user (`AzureCliCredential`).
+1. Acquires an Entra token for the signed-in `az` user (`AzureCliCredential`) and
+   reads its `oid` from the token.
 2. Starts a single silo: `AddLatticeMembership` + `AddEntraCredentialAuthenticator`
-   + a default-deny `AddLatticeAuth` gate.
-3. Resolves the token to a subject and prints the caller's Entra object id
-   (`oid`).
-4. Proves the gate is **fail-closed**: with no rule authored, the Entra user's
-   write is denied.
-5. As a bootstrap administrator, authors an allow rule for that exact `oid`.
-6. Writes a value to the tree as the Entra user and reads it back.
+   + a default-deny `AddLatticeAuth` gate whose **only bootstrap administrator is
+   the caller's own `oid`** - no trusted-token authenticator.
+3. Resolves the token to a subject and confirms it is the owner.
+4. As the Entra user (the owner), writes a value to the tree and reads it back -
+   allowed.
+5. As an anonymous request (no credential), attempts the same write and read and
+   watches the default-deny gate reject them.
 
 ## Prerequisites - run the Azure setup first
 
@@ -61,23 +62,23 @@ With the setup complete and `az login` active (ids abbreviated):
 
 ```
 Acquiring an Entra token for scope 'api://.../.default' via the Azure CLI... done.
+Signed-in Entra object id (oid): 8b1e...c4a2
+  -> this oid is the tree owner (sole bootstrap administrator).
+
 Silo starting... ready.
 
 == Resolve the signed-in Entra identity ==
-  Resolved subject (oid): 8b1e...c4a2
-  Groups in token:        (none)
+  Resolved subject (oid): 8b1e...c4a2  (owner)
 
-== Fail-closed: write before any rule is authored ==
-  write greeting/8b1e...c4a2 -> DENIED   (default-deny)
-
-== Author an allow rule for this oid (as the bootstrap admin) ==
-  Allowed Read|RangeRead|Write on tree 'entra-demo' for user '8b1e...c4a2'.
-
-== Write a value to the tree AS THE ENTRA USER ==
-  write greeting/8b1e...c4a2 -> allowed
+== As the signed-in Entra user (owner) ==
+  write greeting/8b1e...c4a2 -> allowed   (owner: allowed)
   read  greeting/8b1e...c4a2 -> 'Hello from Entra oid 8b1e...c4a2 at 2025-... UTC'
 
-[OK] wrote and read back a value under the signed-in Entra identity.
+== As an anonymous request (no credential) ==
+  write greeting/8b1e...c4a2 -> DENIED   (default-deny)
+  read  greeting/8b1e...c4a2 -> (absent)   (soft-denied)
+
+[OK] the owner wrote and read a value; the anonymous request was denied.
 ```
 
 ## When to use
@@ -99,38 +100,27 @@ Silo starting... ready.
 
 ## Notes on this sample
 
-- The rule targets the caller's Entra `oid` directly, so no groups claim is
-  required. The [setup guide](../../docs/lattice.membership.entra/entra-setup.md)
-  has an optional step to add a groups claim if you want to author group rules
-  instead.
-- A tiny bootstrap-token authenticator (`SetupAuthenticator`) is used only to seed
-  the first rule as a bootstrap administrator. It handles its own scheme only, so
-  it never claims the real Entra bearer tokens, and only this sample process can
-  stamp its credential.
-- **Do not copy the `SetupAuthenticator` pattern into a real host.** It maps a
-  plaintext token verbatim to the bootstrap-administrator subject id, which makes
-  that id an unsigned bearer secret - fine for a one-shot, in-process demo,
-  insecure anywhere untrusted can reach. A production deployment instead sets
-  `BootstrapAdministrators` to a real, unforgeable identity (an Entra `oid`) and
-  seeds rules by authenticating *as that identity* through the Entra
-  authenticator - no trusted-token shortcut. Remember that a bootstrap
-  administrator is cluster-wide god mode (every tree, every operation, exempt from
-  strict fencing), so keep the set tiny and treat it as break-glass only. See the
+- **The signed-in user is the owner.** The sample reads the caller's Entra `oid`
+  from the token *before* the host is built and puts exactly that `oid` in
+  `BootstrapAdministrators`. The same signed Entra token that authenticates the
+  caller therefore also authorizes them - there is no trusted-token authenticator
+  and no separate seeding identity. This is the recommended production shape: bind
+  the bootstrap administrator to a real, unforgeable identity rather than mapping a
+  plaintext token to an admin id.
+- **A bootstrap administrator is cluster-wide god mode.** It bypasses the gate for
+  every tree and every operation and is exempt from strict fencing, so in a real
+  deployment keep the set tiny and treat it as break-glass only. See the
   [security posture](../../docs/lattice.auth/security-posture.md#bootstrap-administrators-break-glass-root-of-trust)
-  for the full trust model.
-- **Why not just use the signed-in user's own oid as the bootstrap admin?** You
-  could - and that is the more secure shape: the `oid` is already in the token
-  before the host starts, so putting it in `BootstrapAdministrators` would let the
-  same signed Entra token authenticate the seeding identity and remove the
-  `SetupAuthenticator` entirely. This demo deliberately keeps a *separate* seeding
-  identity because a bootstrap administrator bypasses the gate completely: if the
-  Entra user were the bootstrap admin, it would be god mode from the first call,
-  and the fail-closed default-deny step and the rule-driven enforcement acting on
-  that same user could never be demonstrated. In a real host that does not need to
-  demonstrate denial, prefer the own-`oid` approach.
-- Enforcement reads a compiled policy snapshot that rebuilds off the policy-tree
-  change feed, so the sample polls briefly after authoring the rule before the
-  write succeeds.
+  for the full trust model. Beyond the break-glass owner, author ordinary
+  [allow rules](../../docs/lattice.auth/README.md) for day-to-day access instead of
+  adding more bootstrap administrators.
+- **Anonymous is genuinely denied.** The anonymous request stamps no credential, so
+  membership resolves it to the well-known anonymous subject, which the default-deny
+  gate authorizes for nothing - the fail-closed contrast to the owner.
+- Rules can target an Entra `oid` directly (as the owner grant here does implicitly)
+  or, with the optional groups claim, an Entra security group. The
+  [setup guide](../../docs/lattice.membership.entra/entra-setup.md) has an optional
+  step to add the groups claim.
 
 ## Feature docs
 
