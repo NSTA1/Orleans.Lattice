@@ -36,12 +36,13 @@ namespace Orleans.Lattice.Api.State;
 /// </para>
 /// <para>
 /// <b>Non-recursion.</b> Subject resolution reads the membership directory's own
-/// dogfooded trees through the gated surface, so it runs under
-/// <see cref="LatticeAccessGateContext.EnterSystemOrigin"/> to bypass the gate
-/// and avoid re-entering it. The per-tree read decision (<see cref="CanReadTreeAsync"/>)
-/// is a pure in-memory policy evaluation that performs no tree reads, so it is
-/// safe to call outside a system-origin scope (and its verdict is unaffected by
-/// one).
+/// dogfooded trees through the gated surface, so on a subject-cache miss it runs
+/// under <see cref="LatticeAccessGateContext.EnterSystemOrigin"/> to bypass the
+/// gate and avoid re-entering it; the warm cached/anonymous path resolves
+/// synchronously with no scope and no directory read. The per-tree read decision
+/// (<see cref="CanReadTreeAsync"/>) is a pure in-memory policy evaluation that
+/// performs no tree reads, so it is safe to call outside a system-origin scope
+/// (and its verdict is unaffected by one).
 /// </para>
 /// </remarks>
 internal sealed class LatticeStateVisibilityFilter
@@ -94,22 +95,23 @@ internal sealed class LatticeStateVisibilityFilter
     /// <summary>
     /// Resolves the caller subject for a state-API read, or <see langword="null"/>
     /// when <see cref="Enabled"/> is <see langword="false"/> (the caller then
-    /// applies no filtering). Resolution runs under a system-origin scope so the
-    /// membership directory's own reads bypass the gate and cannot recurse.
+    /// applies no filtering). Resolution runs under a system-origin scope - entered
+    /// only on a subject-cache miss - so the membership directory's own reads
+    /// bypass the gate and cannot recurse.
     /// </summary>
-    public async ValueTask<LatticeSubject?> ResolveSubjectAsync(CancellationToken cancellationToken)
+    public ValueTask<LatticeSubject?> ResolveSubjectAsync(CancellationToken cancellationToken)
     {
         if (!Enabled)
         {
-            return null;
+            return new ValueTask<LatticeSubject?>((LatticeSubject?)null);
         }
 
-        using (LatticeAccessGateContext.EnterSystemOrigin())
-        {
-            return await LatticeAccessGateSubjectResolver.ResolveAsync(_membership, cancellationToken)
-                .ConfigureAwait(false);
-        }
+        return ResolveEnabledAsync(cancellationToken);
     }
+
+    private async ValueTask<LatticeSubject?> ResolveEnabledAsync(CancellationToken cancellationToken) =>
+        await LatticeAccessGateSubjectResolver.ResolveAsync(_membership, cancellationToken)
+            .ConfigureAwait(false);
 
     /// <summary>
     /// <see langword="true"/> when every read must be denied for

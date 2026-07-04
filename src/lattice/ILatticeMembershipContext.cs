@@ -20,4 +20,29 @@ public interface ILatticeMembershipContext
     /// <param name="cancellationToken">Cancels the resolution.</param>
     /// <returns>The resolved subject, or <see cref="LatticeSubject.Anonymous"/>.</returns>
     ValueTask<LatticeSubject> ResolveCurrentAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Attempts to resolve the current caller <em>synchronously</em>, without any
+    /// directory read - served from a warm resolution cache, or an immediate
+    /// <see cref="LatticeSubject.Anonymous"/> when no credential is present. Lets
+    /// the access-gate enforcement point skip the gate-bypass scope (an ambient
+    /// request-context round-trip) on the warm path, which is only needed to
+    /// protect the dogfooded directory reads a cache miss performs.
+    /// </summary>
+    /// <param name="subject">
+    /// The resolved subject when this returns <see langword="true"/>; otherwise
+    /// <c>default</c>.
+    /// </param>
+    /// <returns>
+    /// <see langword="true"/> when the subject was resolved synchronously;
+    /// <see langword="false"/> when an asynchronous (directory-reading) resolution
+    /// via <see cref="ResolveCurrentAsync"/> is required. The default
+    /// implementation always returns <see langword="false"/>, so a context that
+    /// cannot resolve synchronously safely falls back to the async path.
+    /// </returns>
+    bool TryResolveCurrent(out LatticeSubject subject)
+    {
+        subject = default;
+        return false;
+    }
 }

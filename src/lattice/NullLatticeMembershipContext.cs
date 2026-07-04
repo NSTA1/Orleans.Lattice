@@ -16,4 +16,11 @@ internal sealed class NullLatticeMembershipContext : ILatticeMembershipContext
     /// <inheritdoc />
     public ValueTask<LatticeSubject> ResolveCurrentAsync(CancellationToken cancellationToken = default) =>
         AnonymousResult;
+
+    /// <inheritdoc />
+    public bool TryResolveCurrent(out LatticeSubject subject)
+    {
+        subject = LatticeSubject.Anonymous;
+        return true;
+    }
 }

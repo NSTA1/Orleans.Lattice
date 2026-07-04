@@ -121,15 +121,13 @@ internal sealed partial class LatticeGrain
         // Caller-identity resolution is itself infrastructure: the membership
         // context resolves the subject by reading its dogfooded directory trees
         // through the public scan surface, which would otherwise re-enter this
-        // gate and recurse. Resolve the subject under a system-origin scope so
-        // those internal directory reads bypass the gate; the gate is then
-        // consulted for the caller's actual request outside that scope.
-        LatticeSubject subject;
-        using (LatticeAccessGateContext.EnterSystemOrigin())
-        {
-            subject = await LatticeAccessGateSubjectResolver
-                .ResolveAsync(MembershipContext, cancellationToken);
-        }
+        // gate and recurse. The resolver enters a system-origin scope only on a
+        // subject-cache miss (when it actually reads the directory), so those
+        // internal reads bypass the gate; the warm cached/anonymous path
+        // resolves synchronously with no scope. The gate is then consulted for
+        // the caller's actual request.
+        var subject = await LatticeAccessGateSubjectResolver
+            .ResolveAsync(MembershipContext, cancellationToken);
 
         var request = new LatticeAccessRequest(TreeId, operation, subject, key, rangeStart, rangeEnd);
         return await gate.AuthorizeAsync(in request, cancellationToken);

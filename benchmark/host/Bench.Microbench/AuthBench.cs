@@ -1,7 +1,6 @@
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
-using NSubstitute;
 using Orleans.Lattice;
 using Orleans.Lattice.Auth;
 
@@ -80,16 +79,13 @@ internal static class AuthBench
     /// </summary>
     internal static IServiceProvider CreateServiceProvider()
     {
-        var provider = Substitute.For<IServiceProvider>();
         if (!Enabled)
         {
-            return provider;
+            return EmptyServiceProvider.Instance;
         }
 
         EnsureBuilt();
-        provider.GetService(typeof(ILatticeAccessGate)).Returns(_gate);
-        provider.GetService(typeof(ILatticeMembershipContext)).Returns(_membership);
-        return provider;
+        return new AuthServiceProvider(_gate!, _membership!);
     }
 
     private static void EnsureBuilt()
@@ -111,9 +107,13 @@ internal static class AuthBench
                 // Default-deny: only the explicit allow rules below grant access.
                 DefaultEffect = LatticeEffect.Deny,
             };
-            var options = Substitute.For<IOptionsMonitor<LatticeAuthOptions>>();
-            options.CurrentValue.Returns(authOptions);
-            options.Get(Arg.Any<string>()).Returns(authOptions);
+            // Use a real options monitor, not a mock. Production resolves
+            // IOptionsMonitor<LatticeAuthOptions> from DI as OptionsMonitor<T>,
+            // whose CurrentValue/Get is an allocation-free cached read; the gate
+            // reads it several times per decision. An NSubstitute mock intercepts
+            // every one of those reads and allocates ~1.5 KB/op, which would
+            // dominate (and grossly misrepresent) the measured enabled cost.
+            var options = new StaticOptionsMonitor<LatticeAuthOptions>(authOptions);
 
             var store = new BenchPolicyStore(BuildRules());
             var maintainer = new CompiledPolicySnapshotMaintainer(
@@ -184,6 +184,64 @@ internal static class AuthBench
     {
         public ValueTask<LatticeSubject> ResolveCurrentAsync(CancellationToken cancellationToken = default) =>
             new(subject);
+
+        public bool TryResolveCurrent(out LatticeSubject resolved)
+        {
+            resolved = subject;
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// A real, allocation-free <see cref="IOptionsMonitor{TOptions}"/> over a
+    /// fixed value, matching how production resolves the auth options from DI.
+    /// Using this instead of a mock keeps the measured per-operation cost faithful
+    /// to production - a substitute intercepts every <c>CurrentValue</c> read (the
+    /// gate does several per decision) and allocates ~1.5 KB/op of harness noise.
+    /// </summary>
+    private sealed class StaticOptionsMonitor<T>(T value) : IOptionsMonitor<T>
+    {
+        public T CurrentValue { get; } = value;
+
+        public T Get(string? name) => CurrentValue;
+
+        public IDisposable? OnChange(Action<T, string?> listener) => null;
+    }
+
+    /// <summary>
+    /// The disabled-baseline service provider: resolves nothing, so the grain's
+    /// gate/membership lookups return <c>null</c> exactly as the pre-feature host.
+    /// </summary>
+    private sealed class EmptyServiceProvider : IServiceProvider
+    {
+        internal static readonly EmptyServiceProvider Instance = new();
+
+        public object? GetService(Type serviceType) => null;
+    }
+
+    /// <summary>
+    /// The enforcing service provider: resolves only the shared gate and
+    /// membership context. A hand-written provider (rather than a mock) keeps
+    /// activation allocation-free and representative.
+    /// </summary>
+    private sealed class AuthServiceProvider(
+        ILatticeAccessGate gate,
+        ILatticeMembershipContext membership) : IServiceProvider
+    {
+        public object? GetService(Type serviceType)
+        {
+            if (serviceType == typeof(ILatticeAccessGate))
+            {
+                return gate;
+            }
+
+            if (serviceType == typeof(ILatticeMembershipContext))
+            {
+                return membership;
+            }
+
+            return null;
+        }
     }
 
     /// <summary>

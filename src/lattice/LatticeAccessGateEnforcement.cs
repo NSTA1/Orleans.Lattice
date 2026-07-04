@@ -253,18 +253,15 @@ internal static class LatticeAccessGateEnforcement
         return decision.KeyFilter;
     }
 
-    private static async ValueTask<LatticeSubject> ResolveSubjectAsync(
+    private static ValueTask<LatticeSubject> ResolveSubjectAsync(
         ILatticeMembershipContext? membership,
-        CancellationToken cancellationToken)
-    {
-        // Resolve the caller identity under a system-origin scope so the
-        // membership directory's own dogfooded reads bypass the gate and cannot
-        // re-enter this enforcer (the OC-2 non-recursion guarantee).
-        using (LatticeAccessGateContext.EnterSystemOrigin())
-        {
-            return await LatticeAccessGateSubjectResolver.ResolveAsync(membership, cancellationToken);
-        }
-    }
+        CancellationToken cancellationToken) =>
+        // The resolver enters a system-origin scope only when resolution must
+        // read the dogfooded directory (a subject-cache miss), so the membership
+        // directory's own reads bypass the gate and cannot re-enter this
+        // enforcer (the OC-2 non-recursion guarantee). The warm cached/anonymous
+        // path resolves synchronously with no scope and no allocation.
+        LatticeAccessGateSubjectResolver.ResolveAsync(membership, cancellationToken);
 
     private static void ThrowIfPointDenied(
         in LatticeAccessDecision decision,

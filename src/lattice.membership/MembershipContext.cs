@@ -69,6 +69,24 @@ internal sealed class MembershipContext : ILatticeMembershipContext
             cancellationToken);
     }
 
+    /// <inheritdoc />
+    public bool TryResolveCurrent(out LatticeSubject subject)
+    {
+        // No credential on the ambient context resolves to anonymous with no
+        // directory read, so it is always available synchronously.
+        if (!LatticeCredentialContext.IsActive)
+        {
+            subject = LatticeSubject.Anonymous;
+            return true;
+        }
+
+        // A warm cache hit serves the subject without re-authenticating or
+        // touching the directory; a miss returns false so the caller takes the
+        // async, gate-bypassing resolution path.
+        var cacheKey = LatticeCredentialContext.Current!.Value.Token ?? string.Empty;
+        return _cache.TryGetCached(cacheKey, out subject);
+    }
+
     private async ValueTask<ResolvedSubject> ResolveUncachedAsync(LatticeCredential credential, CancellationToken cancellationToken)
     {
         ILatticeCredentialAuthenticator? selected = null;
