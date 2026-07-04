@@ -154,7 +154,7 @@ sub-issue closes, applying the correct release label.
 | 16 | #1101 | Membership.Entra: Entra ID authenticator | done (merged; 53 focused tests) |
 | 17 | #1102 | Explorer: connect to auth-enabled State API | done (reviewed + merged; provider seam + Entra login + transparent single-flight token refresh + retry-once + tokens-never-persisted + unauthenticated GetAuthScheme advertisement; explorer 380 / entra 17 / api.state.grpc 151 green; F-164) |
 | 18 | #1103 | Security hardening: full security & design review | done (reviewed + merged; 4 findings A1-A4 fixed + regression test each + adversarial suite + capability-stripping IIncomingGrainCallFilter + security-posture doc; coordinator-verified core 5734 / auth 214 / api.state 284 / api.auth 40 / explorer 384 / membership 55 / entra 34; OC-5/OC-7 CLOSED; F-165) |
-| 19 | #986 | Docs, sample & end-to-end tests | pending |
+| 19 | #986 | Docs, sample & end-to-end tests | in_progress (Feature Dev: docs + sample + e2e + F-162 microbench harness/report + DOC-DEBT README rewrites + subject-cache-counter wiring; coordinator owns features.md + final CHANGELOG; F-162) |
 
 Out of scope: #1104 (admin UI follow-up).
 
