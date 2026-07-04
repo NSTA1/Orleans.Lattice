@@ -241,6 +241,7 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
     {
         var maxRetries = SnapshotSettings()?.MaxTransientRetries ?? 0;
         var attempt = 0;
+        var authRetried = false;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -280,6 +281,20 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
                     var backoff = SnapshotSettings()?.TransientRetryBackoff ?? TimeSpan.FromMilliseconds(250);
                     await Task.Delay(backoff, _timeProvider, cancellationToken).ConfigureAwait(false);
                     continue;
+                }
+
+                // Mid-session auth failure: give the live token provider one silent
+                // refresh-then-retry before surfacing anything to the user. Only a
+                // genuinely unrefreshable token (expired/revoked refresh material)
+                // falls through to a fatal auth failure that re-challenges.
+                if (IsAuthFailure(ex) && !authRetried &&
+                    SnapshotSettings()?.Authentication?.CredentialProvider is { } credentialProvider)
+                {
+                    authRetried = true;
+                    if (await credentialProvider.RefreshAsync(cancellationToken).ConfigureAwait(false))
+                    {
+                        continue;
+                    }
                 }
 
                 if (IsTransient(ex))

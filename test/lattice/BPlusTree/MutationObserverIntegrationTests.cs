@@ -362,12 +362,13 @@ public sealed partial class MutationObserverIntegrationTests
     // Replication apply seam preserves VectorClock end-to-end
     // ------------------------------------------------------------------
     //
-    // Set/Delete apply paths route through IShardRootGrain.MergeManyAsync,
-    // which is deliberately silent on the IMutationObserver hook by design,
-    // so VectorClock preservation for Set/Delete is asserted in
+    // Set/Delete apply paths route through IShardRootGrain.MergeManyAsync.
+    // That merge path now publishes per-key Set/Delete observer events (so a
+    // replicated reserved-tree write drives the receiver's snapshot rebuild),
+    // but VectorClock preservation for Set/Delete is still asserted in
     // LatticeGrainReplicationApplyTests via the raw LwwEntry. DeleteRange
-    // walks the leaf chain and *does* fire a per-shard observer event, so
-    // we verify VectorClock preservation here against the captured payload.
+    // walks the leaf chain and fires a per-shard observer event, so we verify
+    // VectorClock preservation here against the captured payload.
 
     [Test]
     public async Task ApplyDeleteRangeAsync_with_source_vector_clock_stamps_per_shard_observer_payload()

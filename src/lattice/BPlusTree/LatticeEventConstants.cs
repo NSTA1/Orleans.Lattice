@@ -351,4 +351,47 @@ public static class LatticeEventConstants
     /// because <c>RequestContext</c> flows automatically on outgoing calls.
     /// </summary>
     internal const string ViewReadRequestContextKey = "ol.vr";
+
+    /// <summary>
+    /// Orleans <c>RequestContext</c> key used to carry the opaque caller
+    /// credential (a <see cref="LatticeCredential"/>) from the client edge
+    /// down to the silo so the Membership layer can later resolve it into a
+    /// subject. Purely a transport seam - the core library never reads it, so
+    /// an unset credential adds no cost and changes no read/write semantics. A
+    /// library-internal system-origin call carries no user credential (see the
+    /// suppression contract on <see cref="LatticeCredentialContext"/>). Public
+    /// callers set this through <see cref="LatticeCredentialContext"/>; they
+    /// should never touch this key directly.
+    /// </summary>
+    internal const string CredentialRequestContextKey = "ol.cred";
+
+    /// <summary>
+    /// Orleans <c>RequestContext</c> key used to positively mark the current
+    /// logical call as <em>system-origin</em> (infrastructure-authored:
+    /// maintenance, replication-apply, or a saga leg) so the access-gate
+    /// enforcement point can skip authorization for it and never self-block.
+    /// Distinct from the maintenance-mutation flag
+    /// (<see cref="MaintenanceRequestContextKey"/>, which only sets
+    /// <see cref="LatticeMutation.Category"/>) and from an absent credential
+    /// (which is ambiguous between an anonymous user and a system call). Set
+    /// through <see cref="LatticeAccessGateContext"/>; consumers read
+    /// <see cref="LatticeAccessGateContext.IsSystemOrigin"/> rather than this
+    /// key directly.
+    /// </summary>
+    internal const string AccessGateSystemOriginRequestContextKey = "ol.sysorig";
+
+    /// <summary>
+    /// Orleans <c>RequestContext</c> key used to positively mark the current
+    /// inbound grain call as originating from <em>inside</em> the cluster's trust
+    /// boundary (a silo-to-silo / grain-to-grain hop) rather than from an external
+    /// Orleans client. It is re-derived fresh at every silo hop by
+    /// <see cref="LatticeCapabilityStrippingCallFilter"/> from the actual caller
+    /// identity - it is never trusted from the wire - so a malicious client cannot
+    /// forge it. The internal-origin assertion on the shard / leaf grains
+    /// (<see cref="LatticeInternalOriginContext.IsInternalGrainOrigin"/>) reads it
+    /// to reject a direct external grain call that tries to bypass the facade's
+    /// access gate. Present only when the authorization layer is registered; a
+    /// no-auth cluster never sets or reads it.
+    /// </summary>
+    internal const string InternalGrainOriginRequestContextKey = "ol.igo";
 }

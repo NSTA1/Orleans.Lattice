@@ -456,6 +456,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public Task<GetOrSetResult> GetOrSetAsync(string key, byte[] value)
     {
+        EnsureInternalOrigin(LatticeOperation.Write);
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         // Short-circuit: if the key already exists and is live (and not expired)
         // AND has no pending-tx mutation, return its value without writing.
@@ -481,6 +482,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public Task<CasResult> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion)
     {
+        EnsureInternalOrigin(LatticeOperation.Write);
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         // Pending-tx isolation: a key with an in-flight saga prepare is
         // invisible to CAS - treat it as absent so expectedVersion must
@@ -662,6 +664,7 @@ internal sealed partial class BPlusLeafGrain(
 
     private async Task<SplitResult?> SetCoreAsync(string key, byte[] value, long expiresAtTicks)
     {
+        EnsureInternalOrigin(LatticeOperation.Write);
         // Recovery: if a previous split was interrupted, complete it first.
         if (state.State.SplitState == Primitives.SplitState.SplitInProgress)
         {
@@ -854,6 +857,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task<SplitResult?> SetManyAsync(List<KeyValuePair<string, byte[]>> entries)
     {
+        EnsureInternalOrigin(LatticeOperation.Write);
         ArgumentNullException.ThrowIfNull(entries);
         if (entries.Count == 0)
         {
@@ -922,6 +926,7 @@ internal sealed partial class BPlusLeafGrain(
     public async Task<ConditionalSetManyResult> SetManyWherePredicateAsync(
         List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate)
     {
+        EnsureInternalOrigin(LatticeOperation.Write);
         ArgumentNullException.ThrowIfNull(entries);
         if (entries.Count == 0)
         {
@@ -1367,6 +1372,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task<bool> DeleteAsync(string key)
     {
+        EnsureInternalOrigin(LatticeOperation.Delete);
         var isPrepared = LatticePreparedContext.Current;
 
         // For non-prepared deletes, the absent / tombstoned short-circuit
@@ -1483,6 +1489,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task<RangeDeleteResult> DeleteRangeAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null)
     {
+        EnsureInternalOrigin(LatticeOperation.RangeDelete);
         // Collect matching keys. Entries is a SortedDictionary so we can
         // break early once we pass endExclusive - but we must still report
         // whether we observed a key >= endExclusive so the shard
@@ -2375,6 +2382,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task MergeEntriesAsync(Dictionary<string, LwwValue<byte[]>> entries)
     {
+        EnsureInternalOrigin(LatticeOperation.Write);
 #if LATTICE_DIAG
         // DIAG leaf-cross-leaf-merge: fires when a sibling leaf or
         // a split-source leaf hands a batch of LWW values into this
@@ -2771,6 +2779,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task<SplitResult?> MergeManyAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration = false)
     {
+        EnsureInternalOrigin(LatticeOperation.Write);
         // Recovery: if a previous split was interrupted, complete it first.
         if (state.State.SplitState == Primitives.SplitState.SplitInProgress)
         {
@@ -3002,6 +3011,42 @@ internal sealed partial class BPlusLeafGrain(
                 state.State.Clock = maxIncoming;
             PublishVersionAdvance(maxIncoming);
             BumpLocalRevision();
+        }
+
+        // step 3 (observer) - publish each applied entry to the silo-wide
+        // IMutationObserver seam so downstream consumers (the compiled
+        // authorization-policy snapshot maintainer, the membership cache,
+        // the replication sink nudge) react to a replication-apply /
+        // tree-merge / snapshot-restore write exactly as they do to a
+        // foreground commit. Without this the receiver of a replicated
+        // reserved-tree write converges in state but never rebuilds the
+        // per-silo snapshot the enforcement path reads, so a cross-cluster
+        // grant or revoke lands durably yet is never enforced on the peer
+        // until an unrelated event happens to rebuild it.
+        //
+        // The cross-shard migration path is intentionally excluded: a
+        // migration is an internal topology move of an already-authored
+        // value, not a new logical mutation, so it must stay observationally
+        // silent (matching MergeEntriesAsync). The HasObservers guard keeps
+        // the common single-cluster case (no auth, no replication - no
+        // observer registered) at a single branch check with no added cost,
+        // and local foreground writes never reach this method, so no write
+        // is double-published. The publish runs under a commit-log scope so
+        // a replication-aware observer recognises the source and does not
+        // treat the apply as a fresh local authored write.
+        if (!isCrossShardMigration && appliedAny && mutationObservers.HasObservers)
+        {
+            using (LatticeCommitLogContext.BeginScope())
+            {
+                foreach (var (key, incoming) in entries)
+                {
+                    var published = Cache.TryGetRow(key, out var committed) ? committed : incoming;
+                    if (published.IsTombstone)
+                        await PublishDeleteAsync(key, published);
+                    else
+                        await PublishSetAsync(key, published);
+                }
+            }
         }
 
         // Forward the projection-hash delta to the parent internal

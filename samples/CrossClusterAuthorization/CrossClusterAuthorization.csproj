@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>Orleans.Lattice.Samples.CrossClusterAuthorization</RootNamespace>
+    <AssemblyName>Orleans.Lattice.Samples.CrossClusterAuthorization</AssemblyName>
+  </PropertyGroup>
+
+  <!-- The reserved membership/auth system trees converge across sites over the
+       gRPC replication transport, which is served on an ASP.NET Core / Kestrel
+       HTTP/2 pipeline. Like CrossClusterReplication this sample hosts a web app
+       per site rather than a bare generic host. -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Orleans.Server" Version="10.2.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\lattice\Orleans.Lattice.csproj" />
+    <ProjectReference Include="..\..\src\lattice.membership\Orleans.Lattice.Membership.csproj" />
+    <ProjectReference Include="..\..\src\lattice.auth\Orleans.Lattice.Auth.csproj" />
+    <ProjectReference Include="..\..\src\lattice.replication\Orleans.Lattice.Replication.csproj" />
+    <ProjectReference Include="..\..\src\lattice.replication.grpc\Orleans.Lattice.Replication.Grpc.csproj" />
+  </ItemGroup>
+
+</Project>

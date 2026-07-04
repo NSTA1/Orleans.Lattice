@@ -24,6 +24,16 @@ public static class ExplorerAuthServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         services.TryAddSingleton<ICredentialStore, InMemoryCredentialStore>();
+
+        // The built-in Basic provider is always available so the original
+        // username/password flow keeps working. Optional providers (Entra,
+        // custom) add themselves as further IExplorerAuthMethod registrations.
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IExplorerAuthMethod, BasicExplorerAuthMethod>());
+
+        // The gRPC scheme-discovery probe. TryAdd so a head or test can override
+        // it (for example with a fake advertisement).
+        services.TryAddSingleton<IExplorerAuthSchemeProbe, GrpcExplorerAuthSchemeProbe>();
+
         services.TryAddSingleton<IExplorerAuthSession, ExplorerAuthSession>();
 
         return services;

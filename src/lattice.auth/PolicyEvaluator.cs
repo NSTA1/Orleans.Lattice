@@ -1,0 +1,175 @@
+namespace Orleans.Lattice.Auth;
+
+/// <summary>
+/// The pure, synchronous, allocation-light evaluation of a request against a
+/// compiled policy snapshot. Shared by the decision engine and directly unit
+/// testable without a maintainer, snapshot swap, or cluster. Does no I/O.
+/// </summary>
+internal static class PolicyEvaluator
+{
+    /// <summary>
+    /// Evaluates a request against <paramref name="policy"/> and returns the
+    /// access decision.
+    /// </summary>
+    /// <param name="policy">The compiled snapshot to evaluate against.</param>
+    /// <param name="options">The tie-break and default-effect options.</param>
+    /// <param name="subject">The requesting subject (its group closure is a flat set).</param>
+    /// <param name="treeId">The target tree id.</param>
+    /// <param name="operation">The requested operation.</param>
+    /// <param name="key">
+    /// The exact key for a point request, or <c>null</c> for a collection (range /
+    /// whole-tree) request whose per-key admission is expressed as a
+    /// <see cref="LatticeAccessDecision.KeyFilter"/>.
+    /// </param>
+    /// <param name="rangeStart">The inclusive range start, or <c>null</c>. Used only in the reason text.</param>
+    /// <param name="rangeEnd">The exclusive range end, or <c>null</c>. Used only in the reason text.</param>
+    /// <returns>The access decision.</returns>
+    public static LatticeAccessDecision Evaluate(
+        CompiledPolicy policy,
+        LatticeAuthOptions options,
+        in LatticeSubject subject,
+        string treeId,
+        LatticeOperation operation,
+        string? key,
+        string? rangeStart,
+        string? rangeEnd) =>
+        Evaluate(policy, options, subject, treeId, operation, key, rangeStart, rangeEnd, out _);
+
+    /// <summary>
+    /// Evaluates a request against <paramref name="policy"/> and returns the
+    /// access decision, additionally surfacing the winning
+    /// <paramref name="match"/> for observability / audit. For a point request
+    /// <paramref name="match"/> is the resolved rule match (or a default
+    /// unmatched value when the default effect applied); for a collection request
+    /// - whose admission can vary key-by-key - it is always the default unmatched
+    /// value, because no single rule decides the whole range.
+    /// </summary>
+    /// <param name="policy">The compiled snapshot to evaluate against.</param>
+    /// <param name="options">The tie-break and default-effect options.</param>
+    /// <param name="subject">The requesting subject (its group closure is a flat set).</param>
+    /// <param name="treeId">The target tree id.</param>
+    /// <param name="operation">The requested operation.</param>
+    /// <param name="key">The exact key for a point request, or <c>null</c> for a collection request.</param>
+    /// <param name="rangeStart">The inclusive range start, or <c>null</c>. Used only in the reason text.</param>
+    /// <param name="rangeEnd">The exclusive range end, or <c>null</c>. Used only in the reason text.</param>
+    /// <param name="match">The winning rule match, or a default (unmatched) value.</param>
+    /// <returns>The access decision.</returns>
+    public static LatticeAccessDecision Evaluate(
+        CompiledPolicy policy,
+        LatticeAuthOptions options,
+        in LatticeSubject subject,
+        string treeId,
+        LatticeOperation operation,
+        string? key,
+        string? rangeStart,
+        string? rangeEnd,
+        out PolicyMatch match)
+    {
+        match = default;
+        var hasTree = policy.TryGetTree(treeId, out var tree);
+        var userBeatsGroup = options.UserRuleBeatsGroupRuleAtEqualScope;
+
+        // Point request: resolve the single key.
+        if (key is not null)
+        {
+            match = hasTree ? tree!.ResolvePoint(subject, operation, key, userBeatsGroup) : default;
+            return FromMatch(match, options.DefaultEffect, subject, treeId);
+        }
+
+        // Collection request (range read / whole-tree). When the tree carries no
+        // per-key (exact/prefix) rules the decision is uniform, so return a plain
+        // allow/deny. Otherwise the decision can vary key-by-key, so return a
+        // Filtered decision whose predicate admits a key iff its point decision
+        // is an allow.
+        if (!hasTree || !tree!.HasPerKeyRules)
+        {
+            var uniform = hasTree ? tree!.ResolvePoint(subject, operation, key: null, userBeatsGroup) : default;
+            match = uniform;
+            return FromMatch(uniform, options.DefaultEffect, subject, treeId);
+        }
+
+        var defaultEffect = options.DefaultEffect;
+        var reason = BuildRangeReason(treeId, rangeStart, rangeEnd);
+        var capturedSubject = subject;
+        var capturedTree = tree!;
+        return LatticeAccessDecision.Filtered(
+            candidateKey =>
+            {
+                var m = capturedTree.ResolvePoint(capturedSubject, operation, candidateKey, userBeatsGroup);
+                var effect = m.Matched ? m.Effect : defaultEffect;
+                return effect == LatticeEffect.Allow;
+            },
+            reason);
+    }
+
+    /// <summary>
+    /// <c>true</c> when <paramref name="subject"/> can read at least one key of
+    /// <paramref name="treeId"/> under <paramref name="operation"/> - the
+    /// structural "any grant" signal that existence-hiding needs. A non-anonymous
+    /// subject reads by default when the tree's default effect is allow; otherwise
+    /// it needs at least one allow rule whose effective decision at its own scope
+    /// resolves to allow (see <see cref="CompiledTree.HasAnyResolvedAllow"/>). This
+    /// distinguishes a partial (prefix) grant - which must keep the tree visible -
+    /// from no grant at all, which a plain collection decision cannot do (that is
+    /// allow-with-filter for every subject once the tree carries per-key rules).
+    /// </summary>
+    public static bool HasAnyGrant(
+        CompiledPolicy policy,
+        LatticeAuthOptions options,
+        in LatticeSubject subject,
+        string treeId,
+        LatticeOperation operation)
+    {
+        if (options.DefaultEffect == LatticeEffect.Allow)
+        {
+            // Default-allow: a non-anonymous subject can read every tree it is not
+            // explicitly denied on, so it can always read at least one key.
+            return true;
+        }
+
+        if (!policy.TryGetTree(treeId, out var tree) || tree is null)
+        {
+            return false;
+        }
+
+        return tree.HasAnyResolvedAllow(subject, operation, options.UserRuleBeatsGroupRuleAtEqualScope);
+    }
+
+    private static LatticeAccessDecision FromMatch(
+        in PolicyMatch match,
+        LatticeEffect defaultEffect,
+        in LatticeSubject subject,
+        string treeId)
+    {
+        if (!match.Matched)
+        {
+            return defaultEffect == LatticeEffect.Allow
+                ? LatticeAccessDecision.Allow()
+                : LatticeAccessDecision.Deny(
+                    $"No matching rule for subject '{subject.SubjectId}' on tree '{treeId}'; applied default effect Deny.");
+        }
+
+        return match.Effect == LatticeEffect.Allow
+            ? LatticeAccessDecision.Allow()
+            : LatticeAccessDecision.Deny(BuildDenyReason(match, subject, treeId));
+    }
+
+    private static string BuildDenyReason(in PolicyMatch match, in LatticeSubject subject, string treeId)
+    {
+        var scope = match.ScopeKind switch
+        {
+            LatticeScopeKind.Key => $"key '{match.ScopeValue}'",
+            LatticeScopeKind.Prefix => $"prefix '{match.ScopeValue}'",
+            _ => "tree",
+        };
+
+        return $"Denied by rule '{match.RuleId}' ({scope} scope) for subject '{subject.SubjectId}' on tree '{treeId}'.";
+    }
+
+    private static string BuildRangeReason(string treeId, string? rangeStart, string? rangeEnd)
+    {
+        var start = rangeStart ?? "(start)";
+        var end = rangeEnd ?? "(end)";
+        return $"Range read over tree '{treeId}' [{start}, {end}) filtered per-key by policy.";
+    }
+}

@@ -308,13 +308,29 @@ internal sealed partial class LatticeCursorGrain
         var collected = new List<string>(PageBufferCapacity(pageSize));
         MergeSortedKeyLists(perShardLists, reverse, pageSize, collected);
 
+        // Pagination (continuation key + hasMore) is computed from the merged
+        // page BEFORE the authorization filter is applied, so a page whose keys
+        // are mostly (or wholly) pruned does not prematurely exhaust the cursor
+        // and hide authorized keys on later pages. The returned page is then
+        // pruned to the keys the caller may observe.
         var hasMore = collected.Count >= pageSize && AnyShardHasRemaining(perShardLists, pageSize);
+        var continuationKey = collected.Count > 0 ? collected[^1] : null;
+
+        // Snapshot cursors read snapshot leaf grains directly, bypassing the
+        // public filtered scan surface, so re-apply the caller's read-path
+        // key-filter here (fail-closed: a full deny prunes every key).
+        var snapshotKeyFilter = await ResolveSnapshotKeyFilterAsync(effStart, effEnd);
+        if (snapshotKeyFilter is not null)
+        {
+            collected.RemoveAll(k => !snapshotKeyFilter(k));
+        }
+
         var prevLastYieldedKey = state.State.LastYieldedKey;
         var prevPhase = state.State.Phase;
         var prevPersisted = state.State.SnapshotBaselinePersisted;
-        if (collected.Count > 0)
+        if (continuationKey is not null)
         {
-            state.State.LastYieldedKey = collected[^1];
+            state.State.LastYieldedKey = continuationKey;
         }
         if (!hasMore)
         {
@@ -361,13 +377,25 @@ internal sealed partial class LatticeCursorGrain
         var collected = new List<KeyValuePair<string, byte[]>>(PageBufferCapacity(pageSize));
         MergeSortedEntryLists(perShardLists, reverse, pageSize, collected);
 
+        // See NextSnapshotKeysAsync: pagination is computed from the pre-filter
+        // merged page so a pruned page does not prematurely exhaust the cursor.
         var hasMore = collected.Count >= pageSize && AnyShardEntryHasRemaining(perShardLists, pageSize);
+        var continuationKey = collected.Count > 0 ? collected[^1].Key : null;
+
+        // Re-apply the caller's read-path key-filter here because the snapshot
+        // leaf reads bypass the public filtered surface.
+        var snapshotEntryFilter = await ResolveSnapshotKeyFilterAsync(effStart, effEnd);
+        if (snapshotEntryFilter is not null)
+        {
+            collected.RemoveAll(e => !snapshotEntryFilter(e.Key));
+        }
+
         var prevLastYieldedKey = state.State.LastYieldedKey;
         var prevPhase = state.State.Phase;
         var prevPersisted = state.State.SnapshotBaselinePersisted;
-        if (collected.Count > 0)
+        if (continuationKey is not null)
         {
-            state.State.LastYieldedKey = collected[^1].Key;
+            state.State.LastYieldedKey = continuationKey;
         }
         if (!hasMore)
         {

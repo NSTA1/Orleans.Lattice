@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>Orleans.Lattice.Api.Data</PackageId>
+    <Version>7.7.0</Version>
+    <Description>Optional read-write external data-plane API add-on for Orleans.Lattice. Exposes a transport-agnostic facade (and, via a sibling binding, a gRPC surface) that lets non-.NET clients set, delete, atomically batch, point-read, and bounded-range-read tree entries. Every operation routes through the gated ILattice grain surface, so the authorization wired into the cluster fires automatically once the caller identity flows. Opt-in and absent by default; registered with a single AddLatticeDataApi(...) call.</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Data.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Data.Grpc" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Data.Grpc.Tests" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\lattice\Orleans.Lattice.csproj" />
+    <PackageReference Include="Microsoft.Orleans.Sdk" Version="10.2.0" />
+  </ItemGroup>
+
+</Project>

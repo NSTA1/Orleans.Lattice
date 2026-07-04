@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.State;
@@ -107,6 +108,15 @@ internal sealed class LatticeCrossTreeTxGrain(
     public async Task<CrossTreeAtomicWriteOutcome> CommitAsync(List<LatticeTreeBatch> batches)
     {
         ArgumentNullException.ThrowIfNull(batches);
+
+        // Fail-closed authorization of every leg up front, before any staging,
+        // prepare, or memoized-outcome re-attach. Each batch's write keys are
+        // authorized as Write and its tombstone-delete keys as Delete against the
+        // ORIGINAL caller's identity (RequestContext propagates from the client
+        // into this coordinator activation). A single denied leg throws and the
+        // saga is never dispatched, so no participant tree is mutated. Zero-cost
+        // and non-throwing under the default null gate / system-origin turn.
+        await EnforceCrossTreeLegsAsync(batches);
 
         // Idempotent re-attach to an already-decided coordinator: return the
         // memoized verdict (or rethrow the original failure) without re-running.
@@ -341,6 +351,72 @@ internal sealed class LatticeCrossTreeTxGrain(
             throw new InvalidOperationException(failure);
         }
         return state.State.Outcome ?? CrossTreeAtomicWriteOutcome.Committed;
+    }
+
+    private static readonly ILatticeAccessGate CrossTreeNullGateFallback = new NullLatticeAccessGate();
+
+    /// <summary>
+    /// Fail-closed per-leg authorization for a cross-tree atomic write. Resolves
+    /// the caller subject once per participating tree and authorizes every write
+    /// key (<see cref="LatticeOperation.Write"/>) and every tombstone-delete key
+    /// (<see cref="LatticeOperation.Delete"/>) before the saga is dispatched, so a
+    /// single denied leg aborts the whole cross-tree commit before any tree is
+    /// mutated. Short-circuits with no allocation and no subject resolution under
+    /// the default null gate or a system-origin turn.
+    /// </summary>
+    private async Task EnforceCrossTreeLegsAsync(List<LatticeTreeBatch> batches)
+    {
+        var gate = GrainContext.ActivationServices.GetService<ILatticeAccessGate>() ?? CrossTreeNullGateFallback;
+        if (LatticeAccessGateEnforcement.SkipsEnforcement(gate))
+        {
+            return;
+        }
+
+        var membership = GrainContext.ActivationServices.GetService<ILatticeMembershipContext>();
+        foreach (var batch in batches)
+        {
+            // Null / empty tree ids and null entry lists are rejected with a
+            // precise ArgumentException by BuildParticipants, which runs before
+            // any write; skip them here so enforcement never authorizes a
+            // malformed leg.
+            if (string.IsNullOrEmpty(batch.TreeId) || batch.Entries is null || batch.Entries.Count == 0)
+            {
+                continue;
+            }
+
+            List<string>? writeKeys = null;
+            List<string>? deleteKeys = null;
+            for (var i = 0; i < batch.Entries.Count; i++)
+            {
+                var key = batch.Entries[i].Key;
+                if (key is null)
+                {
+                    continue;
+                }
+
+                var isDelete = batch.EntryDeletes is { } deletes && i < deletes.Count && deletes[i];
+                if (isDelete)
+                {
+                    (deleteKeys ??= []).Add(key);
+                }
+                else
+                {
+                    (writeKeys ??= []).Add(key);
+                }
+            }
+
+            if (writeKeys is not null)
+            {
+                await LatticeAccessGateEnforcement.EnforceManyPointsAsync(
+                    gate, membership, batch.TreeId, LatticeOperation.Write, writeKeys, CancellationToken.None);
+            }
+
+            if (deleteKeys is not null)
+            {
+                await LatticeAccessGateEnforcement.EnforceManyPointsAsync(
+                    gate, membership, batch.TreeId, LatticeOperation.Delete, deleteKeys, CancellationToken.None);
+            }
+        }
     }
 
     /// <summary>

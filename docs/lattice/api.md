@@ -758,6 +758,40 @@ The slots are independent of `OriginClusterId`, `VectorClock`, and
 `Category`. Wire-compatible: missing slots on legacy persisted state
 decode to `0`.
 
+## Caller-credential propagation (`LatticeCredentialContext`)
+
+`LatticeCredentialContext` is a transport-only ambient seam that carries
+an opaque caller credential from the client edge down to the silo on the
+Orleans `RequestContext`, following the same marker idiom as
+`LatticeOriginContext` and `LatticeIdempotencyContext`. It is the channel
+the (separately registered) Membership layer resolves into a subject. The
+core library never reads it, so an unset credential adds no cost and
+changes no read/write semantics.
+
+Stamp a credential ergonomically at the boundary of a logical operation:
+
+```csharp verify
+using (LatticeCredentialContext.Use("edge-token", scheme: "Bearer"))
+{
+    await tree.SetAsync("k", new byte[] { 1 }, cancellationToken);
+}
+```
+
+`Use` accepts the opaque token plus three optional hints an authenticator
+can consult without re-parsing the token: a `scheme` / issuer hint, a
+pre-resolved `principalId`, and a small `metadata` bag. `With(LatticeCredential?)`
+takes the full payload directly. When no scope is entered, `Current` is
+`null` and `IsActive` is `false` (a single dictionary lookup, no
+allocation).
+
+The marker carries a *user* credential only. Library-internal system /
+maintenance / replication-origin calls are authored by infrastructure and
+carry no credential: they never open a credential scope. When
+infrastructure fans a system-origin sub-operation out from within a turn
+that did carry a user credential, it wraps that sub-operation in
+`LatticeCredentialContext.Suppress()` so the ambient credential is stripped
+for the duration and cannot leak onto a system-authored call.
+
 ## WAL saturation back-pressure
 
 Lattice publishes a per-tree, three-state saturation signal so callers driving offered load into `ILattice` can throttle their own input *before* the saturation regime's failure tail surfaces to them as a `TimeoutException` from `SetAsync` / `SetManyAsync`. The surface has three shapes - polling, await, and push - all backed by a single silo-scoped sampler that ticks at `LatticeOptions.WalSaturationSampleInterval` (default 200 ms).

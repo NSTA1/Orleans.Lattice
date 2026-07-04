@@ -56,6 +56,20 @@ internal sealed class HarnessConfig : ManualConfig
             // is not respawned per benchmark.
             job = Job.Dry.WithToolchain(InProcessEmitToolchain.Instance);
         }
+        else if (string.Equals(fidelity, "quick-oop", StringComparison.OrdinalIgnoreCase))
+        {
+            // Job.ShortRun on the DEFAULT (out-of-process, forking) toolchain.
+            // Same 3 warmup + 3 measured iterations as "quick", but each benchmark
+            // runs in its own child process. This is the fidelity to use for the
+            // gate-enabled configuration: enabling authorization adds a cold
+            // first-call cost to the multi-shard fan-out operations (SetMany over
+            // several shards, atomic and cross-tree writes, multi-shard scans) that
+            // is large enough for BenchmarkDotNet's in-process toolchain to refuse
+            // the benchmark with "takes too long to run". The out-of-process
+            // toolchain has no such guard, so it measures those operations cleanly.
+            // The tradeoff is a per-benchmark child-process + cluster startup cost.
+            job = Job.ShortRun;
+        }
         else
         {
             // Default "quick" path: Job.ShortRun + in-process toolchain.
@@ -64,6 +78,22 @@ internal sealed class HarnessConfig : ManualConfig
             // but the trend dashboard cares about run-over-run delta, not absolute
             // single-digit ns precision.
             job = Job.ShortRun.WithToolchain(InProcessEmitToolchain.Instance);
+        }
+
+        // Optional fixed invocation count. When BENCH_MICROBENCH_INVOCATIONS is set
+        // to a positive integer, the pilot stage is skipped and every benchmark runs
+        // exactly that many invocations per iteration. This is required for the
+        // in-process toolchain when a benchmarked path is slow enough that BDN's pilot
+        // would otherwise scale the invocation count into the toolchain's long-running
+        // guard (which throws "takes too long to run"). Fixing the count keeps the
+        // fast in-process toolchain, keeps the cluster alive for the whole session, and
+        // gives disabled and enabled runs an identical invocation budget for a fair
+        // per-operation delta. The value must be a multiple of the job's unroll factor
+        // (16 for ShortRun/Default, 1 for Dry); 16384 is a safe default.
+        var invocationsRaw = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_INVOCATIONS");
+        if (int.TryParse(invocationsRaw, out var invocations) && invocations > 0)
+        {
+            job = job.WithInvocationCount(invocations);
         }
 
         AddJob(job);

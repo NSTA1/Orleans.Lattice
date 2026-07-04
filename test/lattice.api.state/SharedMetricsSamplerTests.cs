@@ -11,7 +11,7 @@ namespace Orleans.Lattice.Api.State.Tests;
 /// entirely and serves a degraded, fan-out-free snapshot.
 /// </summary>
 [TestFixture]
-public class SharedMetricsSamplerTests
+public partial class SharedMetricsSamplerTests
 {
     private const string TreeId = "sampler-tree";
 

@@ -578,7 +578,21 @@ internal sealed partial class LatticeGrain(
     {
         ThrowIfSystemTree();
         ThrowIfProtectedViewRead();
-        return GetAsyncCore(key, cancellationToken);
+        ArgumentNullException.ThrowIfNull(key);
+        var allowed = IsPointReadAllowedAsync(key, cancellationToken);
+        if (allowed.IsCompletedSuccessfully)
+        {
+            return allowed.GetAwaiter().GetResult()
+                ? GetAsyncCore(key, cancellationToken)
+                : Task.FromResult<byte[]?>(null);
+        }
+        return GetEnforcedSlowAsync(allowed, key, cancellationToken);
+    }
+
+    private async Task<byte[]?> GetEnforcedSlowAsync(ValueTask<bool> allowed, string key, CancellationToken cancellationToken)
+    {
+        // Denied point read reads as absent (not-found), never throws.
+        return await allowed ? await GetAsyncCore(key, cancellationToken) : null;
     }
 
     async Task<byte[]?> ISystemLattice.GetAsync(string key, CancellationToken cancellationToken)
@@ -690,6 +704,12 @@ internal sealed partial class LatticeGrain(
         ThrowIfProtectedViewRead();
         ArgumentNullException.ThrowIfNull(key);
         cancellationToken.ThrowIfCancellationRequested();
+        // Denied point read reads as absent: an empty VersionedValue
+        // (Value=null, Version=Zero), matching missing-key semantics, never throws.
+        if (!await IsPointReadAllowedAsync(key, cancellationToken))
+        {
+            return new VersionedValue();
+        }
 
         // Caller-visible per-call envelope. GetWithVersionDuration is the
         // single-observation envelope histogram; no per-stage decomposition
@@ -768,7 +788,21 @@ internal sealed partial class LatticeGrain(
     {
         ThrowIfSystemTree();
         ThrowIfProtectedViewRead();
-        return ExistsAsyncCore(key, cancellationToken);
+        ArgumentNullException.ThrowIfNull(key);
+        var allowed = IsPointReadAllowedAsync(key, cancellationToken);
+        if (allowed.IsCompletedSuccessfully)
+        {
+            return allowed.GetAwaiter().GetResult()
+                ? ExistsAsyncCore(key, cancellationToken)
+                : Task.FromResult(false);
+        }
+        return ExistsEnforcedSlowAsync(allowed, key, cancellationToken);
+    }
+
+    private async Task<bool> ExistsEnforcedSlowAsync(ValueTask<bool> allowed, string key, CancellationToken cancellationToken)
+    {
+        // Denied point read reads as absent (not-found), never throws.
+        return await allowed && await ExistsAsyncCore(key, cancellationToken);
     }
 
     async Task<bool> ISystemLattice.ExistsAsync(string key, CancellationToken cancellationToken)
@@ -860,6 +894,25 @@ internal sealed partial class LatticeGrain(
         ThrowIfProtectedViewRead();
         ArgumentNullException.ThrowIfNull(keys);
         cancellationToken.ThrowIfCancellationRequested();
+
+        // Read-path access-gate key-filter. GetMany is a multi-key point read,
+        // so a single Read request is authorized for the tree and the returned
+        // filter (if any) prunes the requested keys up front - unauthorized keys
+        // are never fanned out to a leaf, so their values are never read on the
+        // silo, let alone returned to the caller. On the default (null gate /
+        // system-origin) path the filter is null and the caller's list is used
+        // unchanged with no per-key work or allocation.
+        var keyFilter = await ResolveMultiReadKeyFilterAsync(cancellationToken);
+        if (keyFilter is not null)
+        {
+            var filtered = new List<string>(keys.Count);
+            foreach (var k in keys)
+            {
+                if (k is not null && keyFilter(k))
+                    filtered.Add(k);
+            }
+            keys = filtered;
+        }
 
         // Caller-visible per-call envelope. GetManyDuration tracks the
         // wall-clock cost of one ILattice.GetManyAsync (including the
@@ -1183,9 +1236,24 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(key);
         ValidateWriteSize(key, value);
         EnforceAdmissionControl();
-        return LatticeIdempotencyContext.IsActive
-            ? RunMutationAsync(ct => SetAsyncCore(key, value, ct), cancellationToken)
-            : SetAsyncCore(key, value, cancellationToken);
+        var enforce = EnforcePointAsync(LatticeOperation.Write, key, cancellationToken);
+        if (enforce.IsCompletedSuccessfully)
+        {
+            enforce.GetAwaiter().GetResult();
+            return LatticeIdempotencyContext.IsActive
+                ? RunMutationAsync(ct => SetAsyncCore(key, value, ct), cancellationToken)
+                : SetAsyncCore(key, value, cancellationToken);
+        }
+        return SetEnforcedSlowAsync(enforce, key, value, cancellationToken);
+    }
+
+    private async Task SetEnforcedSlowAsync(ValueTask enforce, string key, byte[] value, CancellationToken cancellationToken)
+    {
+        await enforce;
+        if (LatticeIdempotencyContext.IsActive)
+            await RunMutationAsync(ct => SetAsyncCore(key, value, ct), cancellationToken);
+        else
+            await SetAsyncCore(key, value, cancellationToken);
     }
 
     async Task ISystemLattice.SetAsync(string key, byte[] value, CancellationToken cancellationToken)
@@ -1364,6 +1432,7 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(value);
         ValidateWriteSize(key, value);
         EnforceAdmissionControl();
+        await EnforcePointAsync(LatticeOperation.Write, key, cancellationToken);
         if (ttl <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(ttl), "TTL must be positive.");
         var nowUtc = DateTimeOffset.UtcNow;
@@ -1414,6 +1483,7 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(value);
         ValidateWriteSize(key, value);
         EnforceAdmissionControl();
+        await EnforcePointAsync(LatticeOperation.Write, key, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
@@ -1448,6 +1518,7 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(deltaBytes);
         ValidateWriteSize(key, deltaBytes);
         EnforceAdmissionControl();
+        await EnforcePointAsync(LatticeOperation.CrdtApply, key, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
@@ -1482,6 +1553,7 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(value);
         ValidateWriteSize(key, value);
         EnforceAdmissionControl();
+        await EnforcePointAsync(LatticeOperation.Write, key, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
@@ -1526,6 +1598,7 @@ internal sealed partial class LatticeGrain(
             }
         }
         EnforceAdmissionControl();
+        await EnforceEntryWritesAsync(entries, null, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
 
@@ -1678,6 +1751,7 @@ internal sealed partial class LatticeGrain(
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
         ArgumentNullException.ThrowIfNull(entries);
+        await EnforceEntryWritesAsync(entries, null, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
 
@@ -1782,6 +1856,7 @@ internal sealed partial class LatticeGrain(
         cancellationToken.ThrowIfCancellationRequested();
         if (entries.Count == 0) return;
 
+        await EnforceEntryWritesAsync(entries, null, cancellationToken);
         var operationId = Guid.NewGuid().ToString("N");
         var saga = grainFactory.GetGrain<IAtomicWriteGrain>($"{TreeId}/{operationId}");
 #if LATTICE_DIAG
@@ -1827,6 +1902,7 @@ internal sealed partial class LatticeGrain(
         cancellationToken.ThrowIfCancellationRequested();
         if (entries.Count == 0) return;
 
+        await EnforceEntryWritesAsync(entries, null, cancellationToken);
         var saga = grainFactory.GetGrain<IAtomicWriteGrain>($"{TreeId}/{operationId}");
 #if LATTICE_DIAG
         var swSetMany = System.Diagnostics.Stopwatch.StartNew();
@@ -1883,6 +1959,13 @@ internal sealed partial class LatticeGrain(
         cancellationToken.ThrowIfCancellationRequested();
         if (upserts.Count == 0 && deletes.Count == 0) return;
 
+        // Authorize every leg up front: upserts as Write, deletes as Delete. Any
+        // denied key throws before the batch is unioned or dispatched, so the
+        // atomic saga never sees a partially authorized batch and nothing persists.
+        await EnforceEntryWritesAsync(upserts, null, cancellationToken);
+        if (deletes.Count > 0)
+            await EnforceManyPointsAsync(LatticeOperation.Delete, deletes, cancellationToken);
+
         // Union the upserts and deletes into a single batch with a parallel
         // per-entry delete flag. Upserts keep their flag false; deletes carry
         // an empty (non-null) value buffer and a true flag so the leaf stages a
@@ -1928,6 +2011,7 @@ internal sealed partial class LatticeGrain(
         cancellationToken.ThrowIfCancellationRequested();
         if (entries.Count == 0) return AtomicWriteOutcome.Committed;
 
+        await EnforceEntryWritesAsync(entries, null, cancellationToken);
         var operationId = Guid.NewGuid().ToString("N");
         var saga = grainFactory.GetGrain<IAtomicWriteGrain>($"{TreeId}/{operationId}");
         return await ShardActivationRetry.RunAsync(
@@ -1955,6 +2039,7 @@ internal sealed partial class LatticeGrain(
         cancellationToken.ThrowIfCancellationRequested();
         if (entries.Count == 0) return AtomicWriteOutcome.Committed;
 
+        await EnforceEntryWritesAsync(entries, null, cancellationToken);
         var saga = grainFactory.GetGrain<IAtomicWriteGrain>($"{TreeId}/{operationId}");
         return await ShardActivationRetry.RunAsync(
             () => saga.ExecuteGuardedAsync(TreeId, entries, predicate),
@@ -1967,9 +2052,24 @@ internal sealed partial class LatticeGrain(
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
+        ArgumentNullException.ThrowIfNull(key);
+        var enforce = EnforcePointAsync(LatticeOperation.Delete, key, cancellationToken);
+        if (enforce.IsCompletedSuccessfully)
+        {
+            enforce.GetAwaiter().GetResult();
+            return LatticeIdempotencyContext.IsActive
+                ? RunMutationAsync(ct => DeleteAsyncCore(key, ct), cancellationToken)
+                : DeleteAsyncCore(key, cancellationToken);
+        }
+        return DeleteEnforcedSlowAsync(enforce, key, cancellationToken);
+    }
+
+    private async Task<bool> DeleteEnforcedSlowAsync(ValueTask enforce, string key, CancellationToken cancellationToken)
+    {
+        await enforce;
         return LatticeIdempotencyContext.IsActive
-            ? RunMutationAsync(ct => DeleteAsyncCore(key, ct), cancellationToken)
-            : DeleteAsyncCore(key, cancellationToken);
+            ? await RunMutationAsync(ct => DeleteAsyncCore(key, ct), cancellationToken)
+            : await DeleteAsyncCore(key, cancellationToken);
     }
 
     async Task<bool> ISystemLattice.DeleteAsync(string key, CancellationToken cancellationToken)
@@ -2006,6 +2106,7 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(startInclusive);
         ArgumentNullException.ThrowIfNull(endExclusive);
         cancellationToken.ThrowIfCancellationRequested();
+        await EnforceRangeDeleteAsync(startInclusive, endExclusive, cancellationToken);
         LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
         cancellationToken.ThrowIfCancellationRequested();
@@ -2026,6 +2127,7 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(startInclusive);
         ArgumentNullException.ThrowIfNull(endExclusive);
         cancellationToken.ThrowIfCancellationRequested();
+        await EnforceRangeDeleteAsync(startInclusive, endExclusive, cancellationToken);
         LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
         cancellationToken.ThrowIfCancellationRequested();
@@ -2095,6 +2197,17 @@ internal sealed partial class LatticeGrain(
         ThrowIfSystemTree();
         ThrowIfProtectedViewRead();
         cancellationToken.ThrowIfCancellationRequested();
+
+        // Read-path access-gate key-filter. When a filter is present the count
+        // must reflect only authorized keys, so it is computed by enumerating
+        // the (server-side) key stream and counting keys the filter admits -
+        // consistent by construction with the filtered KeysAsync enumeration.
+        // On the default (null gate / system-origin) path the filter is null and
+        // the cheap fan-out count path below is used unchanged.
+        var keyFilter = await ResolveRangeReadKeyFilterAsync(null, null, cancellationToken);
+        if (keyFilter is not null)
+            return await CountUnderFilterAsync(null, null, keyFilter, cancellationToken);
+
         try
         {
             return await CountAsyncCore(cancellationToken);
@@ -2116,6 +2229,14 @@ internal sealed partial class LatticeGrain(
         ThrowIfSystemTree();
         ThrowIfProtectedViewRead();
         cancellationToken.ThrowIfCancellationRequested();
+
+        // Read-path access-gate key-filter over the requested range: see the
+        // whole-tree CountAsync overload for the rationale. Null on the default
+        // path (cheap fan-out count is used unchanged).
+        var keyFilter = await ResolveRangeReadKeyFilterAsync(startInclusive, endExclusive, cancellationToken);
+        if (keyFilter is not null)
+            return await CountUnderFilterAsync(startInclusive, endExclusive, keyFilter, cancellationToken);
+
         try
         {
             return await RangedCountAsyncCore(startInclusive, endExclusive, cancellationToken);
@@ -2140,6 +2261,35 @@ internal sealed partial class LatticeGrain(
     /// </summary>
     private Task<int> CountAsyncCore(CancellationToken cancellationToken) =>
         RangedCountAsyncCore(null, null, cancellationToken);
+
+    /// <summary>
+    /// Counts only the keys an access-gate <see cref="LatticeAccessDecision.KeyFilter"/>
+    /// admits over the half-open range
+    /// [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>).
+    /// Used only when a read-path filter is present (the auth-enabled path); it
+    /// enumerates the server-side key stream (via <see cref="KeysAsyncCore"/>
+    /// with the gate already resolved, so the gate is not consulted a second
+    /// time) and counts keys the supplied <paramref name="keyFilter"/> keeps, so
+    /// the result is consistent by construction with the filtered
+    /// <c>KeysAsync</c> enumeration. Keys are streamed, never their values, so no
+    /// value crosses the wire.
+    /// </summary>
+    private async Task<int> CountUnderFilterAsync(
+        string? startInclusive,
+        string? endExclusive,
+        Func<string, bool> keyFilter,
+        CancellationToken cancellationToken)
+    {
+        var count = 0;
+        await foreach (var key in KeysAsyncCore(
+            startInclusive, endExclusive, reverse: false, prefetch: null,
+            predicate: null, enforceAccessGate: false, cancellationToken))
+        {
+            if (keyFilter(key))
+                count++;
+        }
+        return count;
+    }
 
     /// <summary>
     /// Strongly-consistent live key count over the half-open key range
@@ -2401,6 +2551,13 @@ internal sealed partial class LatticeGrain(
         ThrowIfSystemTree();
         ThrowIfProtectedViewRead();
         cancellationToken.ThrowIfCancellationRequested();
+
+        // Hard-deny fail-closed: a per-shard count exposes the physical shard
+        // count and per-shard key distribution, which cannot be narrowed by a
+        // per-key filter without full enumeration. A denied or partially-
+        // authorized caller is refused rather than shown real (or zero-padded)
+        // counts, so no structural information leaks across the authz boundary.
+        await EnforceUniformRangeReadAsync(null, null, cancellationToken);
         try
         {
             return await CountPerShardAsyncCore(cancellationToken);

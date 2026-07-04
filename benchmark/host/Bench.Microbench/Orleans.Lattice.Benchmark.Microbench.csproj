@@ -55,6 +55,13 @@
          to surface the per-batch allocation drop introduced by R-114 stages 3-4b
          on the shipper -> gRPC marshaller leg of the composite ship path. -->
     <ProjectReference Include="..\..\..\src\lattice.replication\Orleans.Lattice.Replication.csproj" />
+    <!-- The auth package is referenced so the microbench host can build a real
+         PolicyAccessGate and drive the enforcement hot path when the auth layer
+         is enabled (BENCH_MICROBENCH_AUTH=enforcing), measuring the per-operation
+         cost of the opt-in gate against the disabled baseline. Reached via
+         InternalsVisibleTo on the auth csproj so the internal decision engine,
+         snapshot maintainer and observer are constructable without a live silo. -->
+    <ProjectReference Include="..\..\..\src\lattice.auth\Orleans.Lattice.Auth.csproj" />
   </ItemGroup>
 
   <ItemGroup>

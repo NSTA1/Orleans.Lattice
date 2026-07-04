@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>Orleans.Lattice.Api.Auth.Grpc</PackageId>
+    <Version>7.7.0</Version>
+    <Description>gRPC transport binding for Orleans.Lattice.Api.Auth. Exposes the membership and authorization-policy control facade (user, group, membership, and rule CRUD, plus Explain and EffectivePermissions) as unary gRPC RPCs over a code-first, Orleans-serialized contract, with a header-based identity bridge, a pluggable coarse meta-authorization seam, and a default-deny posture. Administering policy is the most sensitive surface in the cluster, so the binding fails closed: with no authorizer registered every admin call is rejected. Registered with AddLatticeAuthApiGrpc(...) and mapped with MapLatticeAuthApiGrpc().</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Auth.Grpc.Tests" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\lattice.api.auth\Orleans.Lattice.Api.Auth.csproj" />
+    <PackageReference Include="Grpc.AspNetCore" Version="2.80.0" />
+    <PackageReference Include="Grpc.Net.ClientFactory" Version="2.80.0" />
+  </ItemGroup>
+
+</Project>

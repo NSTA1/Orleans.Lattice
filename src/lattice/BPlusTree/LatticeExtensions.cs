@@ -261,6 +261,13 @@ public static class LatticeExtensions
         var budget = maxAttempts ?? DefaultScanReconnectAttempts;
         if (budget < 0) budget = 0;
 
+        // See ScanEntriesAsyncCore: a caller-established system-origin scope is
+        // reset by Orleans in this iterator's execution flow after the first
+        // physical segment completes, so it must be re-asserted around every
+        // reopen or a resumed segment resolves to an anonymous subject and a
+        // fail-closed gate silently truncates the scan.
+        var reassertSystemOrigin = LatticeAccessGateContext.IsSystemOrigin;
+
         string? lastKey = null;
         var attempt = 0;
 
@@ -268,6 +275,7 @@ public static class LatticeExtensions
         {
             cancellationToken.ThrowIfCancellationRequested();
             var (s, e) = ComputeScanBounds(startInclusive, endExclusive, lastKey, reverse);
+            using var originScope = reassertSystemOrigin ? LatticeAccessGateContext.EnterSystemOrigin() : null;
             var enumerator = (predicate is null
                 ? lattice.KeysAsync(s, e, reverse, prefetch, cancellationToken)
                 : lattice.KeysWherePredicateAsync(predicate.Value, s, e, reverse, prefetch, cancellationToken))
@@ -382,6 +390,24 @@ public static class LatticeExtensions
         var budget = maxAttempts ?? DefaultScanReconnectAttempts;
         if (budget < 0) budget = 0;
 
+        // A resilient scan emulates one logical, strongly-consistent scan as a
+        // sequence of physical EntriesAsync segments, reopening after a transient
+        // EnumerationAbortedException (raised, for example, when a concurrent scan
+        // over the same activation evicts this enumerator). Each physical segment
+        // is a fresh grain call whose server-side authorization identity is
+        // resolved from the ambient RequestContext at send time. When the caller
+        // wraps the whole scan in a system-origin scope (see
+        // LatticeAccessGateContext.EnterSystemOrigin), Orleans resets the
+        // caller-established RequestContext in THIS iterator's execution flow once
+        // the first segment's call completes, so the scope is lost on every
+        // reopen. A resumed segment would then resolve to an anonymous subject; a
+        // fail-closed access gate denies its range-read and returns a reject-all
+        // key-filter, so the segment completes normally with zero rows and the
+        // scan is silently truncated at the resume point. Capture the caller's
+        // system-origin intent once and re-assert it around every segment so all
+        // segments share one stable identity.
+        var reassertSystemOrigin = LatticeAccessGateContext.IsSystemOrigin;
+
         string? lastKey = null;
         var attempt = 0;
 
@@ -389,6 +415,7 @@ public static class LatticeExtensions
         {
             cancellationToken.ThrowIfCancellationRequested();
             var (s, e) = ComputeScanBounds(startInclusive, endExclusive, lastKey, reverse);
+            using var originScope = reassertSystemOrigin ? LatticeAccessGateContext.EnterSystemOrigin() : null;
             var enumerator = (predicate is null
                 ? lattice.EntriesAsync(s, e, reverse, prefetch, cancellationToken)
                 : lattice.EntriesWherePredicateAsync(predicate.Value, s, e, reverse, prefetch, cancellationToken))

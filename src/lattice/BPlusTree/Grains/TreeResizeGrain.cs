@@ -62,6 +62,9 @@ internal sealed class TreeResizeGrain(
         if (newMaxInternalChildren <= 2)
             throw new ArgumentOutOfRangeException(nameof(newMaxInternalChildren), "Must be greater than 2.");
 
+        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
+            Context.ActivationServices, TreeId, LatticeOperation.Admin);
+
         if (state.State.InProgress)
         {
             // Idempotent if same parameters.
@@ -242,6 +245,9 @@ internal sealed class TreeResizeGrain(
 
     public async Task UndoResizeAsync()
     {
+        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
+            Context.ActivationServices, TreeId, LatticeOperation.Admin);
+
         // Undo is available in two windows:
         //   1. Before swap - while the online snapshot is draining and the
         //      alias has not yet been updated. Shadow-forwarding is active

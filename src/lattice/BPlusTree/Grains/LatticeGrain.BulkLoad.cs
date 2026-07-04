@@ -15,6 +15,7 @@ internal sealed partial class LatticeGrain
         ThrowIfLwwWriteToCrdtReplicatedTree();
         ArgumentNullException.ThrowIfNull(entries);
         cancellationToken.ThrowIfCancellationRequested();
+        await EnforceWholeTreeAsync(LatticeOperation.BulkLoad, cancellationToken);
         var (physicalTreeId, shardMap) = await GetRoutingAsync();
         cancellationToken.ThrowIfCancellationRequested();
         var physicalShards = shardMap.GetPhysicalShardIndices();
@@ -72,6 +73,7 @@ internal sealed partial class LatticeGrain
         ThrowIfSystemTree();
         ThrowIfProtectedView();
         cancellationToken.ThrowIfCancellationRequested();
+        await EnforceWholeTreeAsync(LatticeOperation.Admin, cancellationToken);
         await ThrowIfSourceOfMaterialisedViewAsync(cancellationToken);
         var deletion = grainFactory.GetGrain<ITreeDeletionGrain>(TreeId);
         await ShardActivationRetry.RunAsync(
@@ -110,6 +112,7 @@ internal sealed partial class LatticeGrain
         ThrowIfSystemTree();
         ThrowIfProtectedView();
         cancellationToken.ThrowIfCancellationRequested();
+        await EnforceWholeTreeAsync(LatticeOperation.Admin, cancellationToken);
         var deletion = grainFactory.GetGrain<ITreeDeletionGrain>(TreeId);
         await ShardActivationRetry.RunAsync(
             () => deletion.RecoverAsync(),
@@ -121,6 +124,7 @@ internal sealed partial class LatticeGrain
         ThrowIfSystemTree();
         ThrowIfProtectedView();
         cancellationToken.ThrowIfCancellationRequested();
+        await EnforceWholeTreeAsync(LatticeOperation.Admin, cancellationToken);
         var deletion = grainFactory.GetGrain<ITreeDeletionGrain>(TreeId);
         await ShardActivationRetry.RunAsync(
             () => deletion.PurgeNowAsync(),
@@ -132,6 +136,7 @@ internal sealed partial class LatticeGrain
         ThrowIfSystemTree();
         ThrowIfProtectedView();
         cancellationToken.ThrowIfCancellationRequested();
+        await EnforceWholeTreeAsync(LatticeOperation.Admin, cancellationToken);
         var resize = grainFactory.GetGrain<ITreeResizeGrain>(TreeId);
         await ShardActivationRetry.RunAsync(
             () => resize.ResizeAsync(newMaxLeafKeys, newMaxInternalChildren),
@@ -143,6 +148,7 @@ internal sealed partial class LatticeGrain
         ThrowIfSystemTree();
         ThrowIfProtectedView();
         cancellationToken.ThrowIfCancellationRequested();
+        await EnforceWholeTreeAsync(LatticeOperation.Admin, cancellationToken);
         var resize = grainFactory.GetGrain<ITreeResizeGrain>(TreeId);
         await ShardActivationRetry.RunAsync(
             () => resize.UndoResizeAsync(),
@@ -154,6 +160,7 @@ internal sealed partial class LatticeGrain
     {
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
+        await EnforceWholeTreeAsync(LatticeOperation.Admin, cancellationToken);
         var snapshot = grainFactory.GetGrain<ITreeSnapshotGrain>(TreeId);
         await ShardActivationRetry.RunAsync(
             () => snapshot.SnapshotAsync(destinationTreeId, mode, maxLeafKeys, maxInternalChildren),
@@ -180,6 +187,7 @@ internal sealed partial class LatticeGrain
     {
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
+        await EnforceWholeTreeAsync(LatticeOperation.Admin, cancellationToken);
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         await registry.SetPublishEventsAsync(TreeId, enabled);
         // Make sure this activation re-reads the registry next time it publishes
@@ -194,6 +202,7 @@ internal sealed partial class LatticeGrain
     {
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
+        await EnforceWholeTreeAsync(LatticeOperation.Admin, cancellationToken);
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         await registry.SetHistoryRetentionAsync(TreeId, mode, window);
         LatticeMetrics.ConfigChanged.Add(1,
@@ -221,6 +230,7 @@ internal sealed partial class LatticeGrain
         ThrowIfSystemTree();
         ThrowIfProtectedView();
         cancellationToken.ThrowIfCancellationRequested();
+        await EnforceWholeTreeAsync(LatticeOperation.Admin, cancellationToken);
         var merge = grainFactory.GetGrain<ITreeMergeGrain>(TreeId);
         await ShardActivationRetry.RunAsync(
             () => merge.MergeAsync(sourceTreeId),

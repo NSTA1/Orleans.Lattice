@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>Orleans.Lattice.Auth</PackageId>
+    <Version>7.7.1</Version>
+    <Description>Authorization add-on for Orleans.Lattice. Ships the authorization rule model (subject selector, scope, operations, effect) and a durable, introspectable policy store backed by a reserved, dogfooded lattice tree with per-key history. The decision engine and read/write enforcement are layered by later releases.</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Auth.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.State.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.State.Grpc.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Data.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Data.Grpc.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Auth.Tests" />
+    <!-- The microbench host builds a real PolicyAccessGate (via the internal
+         decision engine, snapshot maintainer and decision observer) to measure
+         the enforcement cost of the opt-in auth layer with Membership + Auth
+         registered and enforcing, alongside the disabled-baseline run. -->
+    <InternalsVisibleTo Include="Orleans.Lattice.Benchmark.Microbench" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\lattice\Orleans.Lattice.csproj" />
+    <ProjectReference Include="..\lattice.membership\Orleans.Lattice.Membership.csproj" />
+    <PackageReference Include="Microsoft.Orleans.Sdk" Version="10.2.0" />
+  </ItemGroup>
+
+</Project>

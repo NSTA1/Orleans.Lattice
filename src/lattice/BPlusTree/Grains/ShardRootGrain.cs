@@ -38,6 +38,30 @@ internal sealed partial class ShardRootGrain(
 
     private string? _treeId;
     private string TreeId => _treeId ??= ComputeTreeId();
+
+    private bool? _internalOriginEnforced;
+
+    /// <summary>
+    /// Defense-in-depth internal-origin assertion (issue #1103): refuses a direct
+    /// external grain call to this internal shard grain that would bypass the
+    /// <c>ILattice</c> facade's access gate. A no-op unless the authorization
+    /// layer's capability-stripping filter is registered (signalled by the
+    /// <see cref="LatticeInternalOriginEnforcementMarker"/> sentinel); a no-auth
+    /// cluster, or one with a custom gate but no filter, pays nothing. When active,
+    /// every legitimate caller (the facade, replication-apply, structural
+    /// maintenance, the atomic-write saga, and bulk-load) is silo-sourced and
+    /// carries the re-derived internal-origin marker, so only a direct external
+    /// client call is rejected.
+    /// </summary>
+    private void EnsureInternalOrigin(LatticeOperation operation)
+    {
+        _internalOriginEnforced ??=
+            context.ActivationServices.GetService<LatticeInternalOriginEnforcementMarker>() is not null;
+        if (_internalOriginEnforced is true)
+        {
+            LatticeInternalOriginContext.EnsureInternalGrainOrigin(TreeId, operation);
+        }
+    }
     private string ComputeTreeId()
     {
         var key = context.GrainId.Key.ToString()!;
@@ -354,6 +378,7 @@ internal sealed partial class ShardRootGrain(
 
     public async Task SetAsync(string key, byte[] value)
     {
+        EnsureInternalOrigin(LatticeOperation.Write);
         ThrowIfShuttingDown();
         await PrepareForOperationAsync();
         ThrowIfRejectedForKey(key);
@@ -389,6 +414,7 @@ internal sealed partial class ShardRootGrain(
     /// <inheritdoc />
     public async Task SetAsync(string key, byte[] value, long expiresAtTicks)
     {
+        EnsureInternalOrigin(LatticeOperation.Write);
         ThrowIfShuttingDown();
         await PrepareForOperationAsync();
         ThrowIfRejectedForKey(key);
@@ -421,6 +447,7 @@ internal sealed partial class ShardRootGrain(
 
     public async Task<byte[]?> GetOrSetAsync(string key, byte[] value)
     {
+        EnsureInternalOrigin(LatticeOperation.Write);
         ThrowIfShuttingDown();
         await PrepareForOperationAsync();
         ThrowIfRejectedForKey(key);
@@ -466,6 +493,7 @@ internal sealed partial class ShardRootGrain(
 
     public async Task<bool> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion)
     {
+        EnsureInternalOrigin(LatticeOperation.Write);
         ThrowIfShuttingDown();
         await PrepareForOperationAsync();
         ThrowIfRejectedForKey(key);
@@ -510,6 +538,7 @@ internal sealed partial class ShardRootGrain(
 
     public async Task<HybridLogicalClock> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes)
     {
+        EnsureInternalOrigin(LatticeOperation.CrdtApply);
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(deltaBytes);
         ThrowIfShuttingDown();
@@ -539,6 +568,7 @@ internal sealed partial class ShardRootGrain(
 
     public async Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries)
     {
+        EnsureInternalOrigin(LatticeOperation.Write);
         ThrowIfShuttingDown();
         await PrepareForOperationAsync();
         // Reject-check up-front so the batch fails fast rather than partially applying.
@@ -838,6 +868,7 @@ internal sealed partial class ShardRootGrain(
     public async Task<IReadOnlyList<string>> SetManyWherePredicateAsync(
         List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate)
     {
+        EnsureInternalOrigin(LatticeOperation.Write);
         ArgumentNullException.ThrowIfNull(entries);
         ThrowIfShuttingDown();
         await PrepareForOperationAsync();
@@ -1104,6 +1135,7 @@ internal sealed partial class ShardRootGrain(
 
     public async Task<bool> DeleteAsync(string key)
     {
+        EnsureInternalOrigin(LatticeOperation.Delete);
         ThrowIfShuttingDown();
         await PrepareForOperationAsync();
         ThrowIfRejectedForKey(key);
@@ -1159,6 +1191,7 @@ internal sealed partial class ShardRootGrain(
 
     public async Task<int> DeleteRangeAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null)
     {
+        EnsureInternalOrigin(LatticeOperation.RangeDelete);
         ThrowIfShuttingDown();
         await PrepareForOperationAsync();
         // range deletes do not currently shadow-forward tombstones - see
@@ -1658,6 +1691,7 @@ internal sealed partial class ShardRootGrain(
 
     public async Task MergeManyAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration = false)
     {
+        EnsureInternalOrigin(LatticeOperation.Write);
         await PrepareForOperationAsync();
         RecordWrite();
 

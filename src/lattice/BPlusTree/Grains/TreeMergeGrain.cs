@@ -50,6 +50,9 @@ internal sealed class TreeMergeGrain(
     {
         ArgumentNullException.ThrowIfNull(sourceTreeId);
 
+        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
+            context.ActivationServices, TargetTreeId, LatticeOperation.Admin);
+
         if (string.Equals(TargetTreeId, sourceTreeId, StringComparison.Ordinal))
             throw new ArgumentException("Source tree ID must differ from the target tree ID.", nameof(sourceTreeId));
 

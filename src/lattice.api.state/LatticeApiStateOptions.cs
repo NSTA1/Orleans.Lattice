@@ -1,6 +1,49 @@
 namespace Orleans.Lattice.Api.State;
 
 /// <summary>
+/// Controls whether the read-only state API filters every read through the
+/// data-plane access gate so it never returns state the caller lacks read
+/// permission for.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Auth-backed visibility is a no-op unless a real
+/// <see cref="ILatticeAccessGate"/> is registered (the
+/// <c>Orleans.Lattice.Auth</c> add-on replaces the core default no-op gate).
+/// When only <c>AddLattice</c> / <c>AddLatticeStateApi</c> are wired the state
+/// API behaves exactly as before at zero cost: no subject resolution and no
+/// per-tree filtering happens on the read path.
+/// </para>
+/// </remarks>
+public enum LatticeStateApiReadVisibility
+{
+    /// <summary>
+    /// Auto-detect: auth-backed visibility is on when a real access gate is
+    /// registered (the <c>Orleans.Lattice.Auth</c> add-on) and off otherwise.
+    /// The default, and the recommended posture.
+    /// </summary>
+    Auto = 0,
+
+    /// <summary>
+    /// Force auth-backed visibility on. Identical to <see cref="Auto"/> in
+    /// practice - visibility filtering still requires a real access gate to have
+    /// anything to enforce, so this is a no-op when the <c>Orleans.Lattice.Auth</c>
+    /// add-on is not registered. Provided so a deployment can make the intent
+    /// explicit.
+    /// </summary>
+    Enforced = 1,
+
+    /// <summary>
+    /// Turn auth-backed visibility off even when a real access gate is
+    /// registered. The state API then performs no per-tree read filtering and no
+    /// caller-subject resolution, restoring the pre-authorization behaviour.
+    /// Intended for trusted-network deployments where an outer boundary already
+    /// governs who may read cluster state.
+    /// </summary>
+    Disabled = 2,
+}
+
+/// <summary>
 /// Options for the optional <c>Orleans.Lattice.Api.State</c> add-on, the
 /// read-only cluster state API. Bound by
 /// <see cref="LatticeApiStateServiceCollectionExtensions.AddLatticeStateApi"/>
@@ -100,4 +143,15 @@ public sealed class LatticeApiStateOptions
     /// Defaults to one second.
     /// </summary>
     public TimeSpan MetricsSampleInterval { get; set; } = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// Whether the state API filters every read through the data-plane access
+    /// gate using the caller's resolved subject, so it never returns data (or
+    /// catalog / structure metadata) the caller lacks read permission for.
+    /// Defaults to <see cref="LatticeStateApiReadVisibility.Auto"/>: on when the
+    /// <c>Orleans.Lattice.Auth</c> add-on is registered, off (zero cost) when it
+    /// is not. Set to <see cref="LatticeStateApiReadVisibility.Disabled"/> to opt
+    /// out on a trusted-network deployment whose endpoint is guarded elsewhere.
+    /// </summary>
+    public LatticeStateApiReadVisibility ReadVisibility { get; set; } = LatticeStateApiReadVisibility.Auto;
 }

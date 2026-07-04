@@ -78,6 +78,14 @@ internal abstract class LatticeStateGrpcServiceBase
     public abstract Task<ClusterInfo> GetClusterInfo(ClusterInfoRequest request, ServerCallContext context);
 
     /// <summary>
+    /// Returns the endpoint's advertised auth schemes. Unauthenticated: this RPC
+    /// is exempt from the authorization interceptor so a client can learn how to
+    /// sign in before it holds any credential. Implemented in
+    /// <see cref="LatticeStateGrpcService"/>.
+    /// </summary>
+    public abstract Task<AuthSchemeAdvertisement> GetAuthScheme(AuthSchemeAdvertisementRequest request, ServerCallContext context);
+
+    /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at
     /// startup with <paramref name="serviceImpl"/> set to
     /// <see langword="null"/> to record method metadata; the actual service
@@ -112,6 +120,7 @@ internal abstract class LatticeStateGrpcServiceBase
             binder.AddMethod(methods.ObserveMetrics, (ServerStreamingServerMethod<TreeMetricsRequest, TreeMetricsSnapshot>?)null);
             binder.AddMethod(methods.GetMetricsSnapshot, (UnaryServerMethod<TreeMetricsRequest, TreeMetricsSnapshot>?)null);
             binder.AddMethod(methods.GetClusterInfo, (UnaryServerMethod<ClusterInfoRequest, ClusterInfo>?)null);
+            binder.AddMethod(methods.GetAuthScheme, (UnaryServerMethod<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>?)null);
             return;
         }
 
@@ -131,6 +140,7 @@ internal abstract class LatticeStateGrpcServiceBase
         binder.AddMethod(methods.ObserveMetrics, new ServerStreamingServerMethod<TreeMetricsRequest, TreeMetricsSnapshot>(serviceImpl.ObserveMetrics));
         binder.AddMethod(methods.GetMetricsSnapshot, new UnaryServerMethod<TreeMetricsRequest, TreeMetricsSnapshot>(serviceImpl.GetMetricsSnapshot));
         binder.AddMethod(methods.GetClusterInfo, new UnaryServerMethod<ClusterInfoRequest, ClusterInfo>(serviceImpl.GetClusterInfo));
+        binder.AddMethod(methods.GetAuthScheme, new UnaryServerMethod<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>(serviceImpl.GetAuthScheme));
     }
 }
 
@@ -146,6 +156,8 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
     private readonly ILatticeStateQuery _query;
     private readonly ILatticeStateObserver _observer;
     private readonly ILatticeStateMetricsObserver _metricsObserver;
+    private readonly ILatticeStateApiCredentialBridge _credentialBridge;
+    private readonly ILatticeStateApiAuthSchemeSource _authSchemeSource;
     private readonly ILogger<LatticeStateGrpcService> _logger;
 
     /// <summary>
@@ -162,18 +174,39 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
         ILatticeStateQuery query,
         ILatticeStateObserver observer,
         ILatticeStateMetricsObserver metricsObserver,
+        ILatticeStateApiCredentialBridge credentialBridge,
+        ILatticeStateApiAuthSchemeSource authSchemeSource,
         ILogger<LatticeStateGrpcService> logger)
     {
         ArgumentNullException.ThrowIfNull(methods);
         ArgumentNullException.ThrowIfNull(query);
         ArgumentNullException.ThrowIfNull(observer);
         ArgumentNullException.ThrowIfNull(metricsObserver);
+        ArgumentNullException.ThrowIfNull(credentialBridge);
+        ArgumentNullException.ThrowIfNull(authSchemeSource);
         ArgumentNullException.ThrowIfNull(logger);
 
         _query = query;
         _observer = observer;
         _metricsObserver = metricsObserver;
+        _credentialBridge = credentialBridge;
+        _authSchemeSource = authSchemeSource;
         _logger = logger;
+    }
+
+    /// <summary>
+    /// Bridges the caller identity on <paramref name="context"/> into the ambient
+    /// <see cref="LatticeCredentialContext"/> for the duration of the returned
+    /// scope, so the gated data-plane surface resolves the caller's subject and
+    /// filters the read. Returns <see langword="null"/> (no scope) when the call
+    /// carries no credential, leaving the caller anonymous - fail-closed when
+    /// auth-backed visibility is active. This is orthogonal to, and runs after,
+    /// the transport-level <see cref="ILatticeStateApiAuthorizer"/> gate.
+    /// </summary>
+    private IDisposable? StampCallerCredential(ServerCallContext context)
+    {
+        var credential = _credentialBridge.Resolve(context);
+        return credential is null ? null : LatticeCredentialContext.With(credential);
     }
 
     /// <inheritdoc />
@@ -305,6 +338,8 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
         ArgumentNullException.ThrowIfNull(responseStream);
         ArgumentNullException.ThrowIfNull(context);
 
+        using var credentialScope = StampCallerCredential(context);
+
         try
         {
             await foreach (var notification in _observer
@@ -351,6 +386,8 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
         ArgumentNullException.ThrowIfNull(responseStream);
         ArgumentNullException.ThrowIfNull(context);
 
+        using var credentialScope = StampCallerCredential(context);
+
         try
         {
             await foreach (var snapshot in _metricsObserver
@@ -385,6 +422,8 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(context);
 
+        using var credentialScope = StampCallerCredential(context);
+
         try
         {
             return await _metricsObserver.SampleAsync(request, context.CancellationToken).ConfigureAwait(false);
@@ -412,6 +451,17 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
     public override Task<ClusterInfo> GetClusterInfo(ClusterInfoRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (query, _, ct) => query.GetClusterInfoAsync(ct));
 
+    /// <inheritdoc />
+    public override Task<AuthSchemeAdvertisement> GetAuthScheme(AuthSchemeAdvertisementRequest request, ServerCallContext context)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(context);
+
+        // Unauthenticated by design (the interceptor exempts this method), so no
+        // credential is bridged and only the public advertisement is returned.
+        return Task.FromResult(_authSchemeSource.GetAdvertisement());
+    }
+
     private async Task<TResponse> InvokeAsync<TRequest, TResponse>(
         TRequest request,
         ServerCallContext context,
@@ -419,6 +469,8 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(context);
+
+        using var credentialScope = StampCallerCredential(context);
 
         try
         {

@@ -32,6 +32,173 @@ internal sealed class LatticeStateQuery(
     private readonly IServiceProvider _services = services
         ?? throw new ArgumentNullException(nameof(services));
 
+    private readonly LatticeStateVisibilityFilter _visibility =
+        new(services, (apiOptions ?? throw new ArgumentNullException(nameof(apiOptions))).Value);
+
+    /// <summary>
+    /// Applies auth-backed visibility to a tree-scoped read. Resolves the caller
+    /// subject (only when visibility is enabled) and returns <see langword="true"/>
+    /// when the read must be refused - reported as not-found - because the subject
+    /// may not read <paramref name="treeId"/>. Returns <see langword="false"/>
+    /// (proceed as normal) when visibility is disabled (zero cost, no subject
+    /// resolution), when the tree is a reserved system / materialised-view tree
+    /// governed elsewhere, or when the subject has read access. A partial (prefix)
+    /// grant proceeds: the gated <see cref="ILattice"/> data-plane surface prunes
+    /// the individual keys the subject may not observe.
+    /// </summary>
+    private async ValueTask<bool> IsTreeReadHiddenAsync(string treeId, CancellationToken cancellationToken)
+    {
+        var subject = await _visibility.ResolveSubjectAsync(cancellationToken).ConfigureAwait(false);
+        if (subject is not { } resolved)
+        {
+            return false;
+        }
+
+        // A materialised-view (view-*) tree read is authorised by the readability
+        // of its SOURCE tree, mirroring ListViewsAsync. This is essential: the
+        // read paths open a ViewReadContext scope that makes the access gate
+        // bypass itself (LatticeAccessGateContext.IsGateBypassed), so the source
+        // tree's read grant is the ONLY authorization boundary a view read has. An
+        // anonymous subject has no read grant on any source and is refused; a
+        // subject that can read the source sees the view; a prefix-granted subject
+        // still passes here and the gated data-plane surface prunes the individual
+        // keys it may not observe. Fail closed (hidden) when the source cannot be
+        // resolved.
+        if (IsViewTree(treeId))
+        {
+            var sourceTreeId = await ResolveViewSourceTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+            if (sourceTreeId is null)
+            {
+                return true;
+            }
+
+            return !await _visibility.CanReadAnyKeyAsync(sourceTreeId, resolved, cancellationToken).ConfigureAwait(false);
+        }
+
+        // System trees are already hidden at each call site by the existence
+        // checks; data-tree policy does not gate them here.
+        if (IsSystemTree(treeId))
+        {
+            return false;
+        }
+
+        return !await _visibility.CanReadAnyKeyAsync(treeId, resolved, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Resolves the source tree id backing a materialised-view (<c>view-*</c>)
+    /// tree so a view read can be gated by the readability of its source. Prefers
+    /// the allocation-free local <see cref="IViewCatalog"/> (every startup-declared
+    /// view and any runtime view rehydrated on this silo), then falls back to the
+    /// durable cluster-wide <see cref="IViewRegistryGrain"/> for a runtime view
+    /// created on another silo. Returns <see langword="null"/> when the view name
+    /// cannot be recovered or the source cannot be resolved, so the caller fails
+    /// closed and hides the view rather than leaking it.
+    /// </summary>
+    private async ValueTask<string?> ResolveViewSourceTreeIdAsync(string treeId, CancellationToken cancellationToken)
+    {
+        var viewName = ViewNameFromTreeId(treeId);
+        if (viewName.Length == 0)
+        {
+            return null;
+        }
+
+        var local = _services.GetService<IViewCatalog>()?.TryGet(viewName);
+        if (local is { } registration)
+        {
+            return registration.SourceTreeId;
+        }
+
+        try
+        {
+            IReadOnlyList<RuntimeViewRegistration> runtime;
+            using (LatticeAccessGateContext.EnterSystemOrigin())
+            {
+                var registry = _grainFactory.GetGrain<IViewRegistryGrain>(IViewRegistryGrain.SingletonKey);
+                runtime = await registry.ListAsync().ConfigureAwait(false);
+            }
+
+            foreach (var reg in runtime)
+            {
+                if (string.Equals(reg.ViewName, viewName, StringComparison.Ordinal))
+                {
+                    return reg.SourceTreeId;
+                }
+            }
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            // Fail closed below on any transient registry-activation failure.
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Decides whether a catalog entry may be surfaced to a subject with
+    /// visibility enabled: a materialised-view tree is gated by the readability of
+    /// its source (so it never leaks the existence of data over an unreadable
+    /// source), and every other reserved / ordinary tree is gated by its own read
+    /// grant (so a system tree is visible only to a caller that may read it). Fails
+    /// closed when a view's source cannot be resolved.
+    /// </summary>
+    private async ValueTask<bool> IsCatalogEntryVisibleAsync(
+        string treeId,
+        LatticeSubject subject,
+        CancellationToken cancellationToken)
+    {
+        if (IsViewTree(treeId))
+        {
+            var sourceTreeId = await ResolveViewSourceTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+            return sourceTreeId is not null
+                && await _visibility.CanReadAnyKeyAsync(sourceTreeId, subject, cancellationToken).ConfigureAwait(false);
+        }
+
+        return await _visibility.CanReadAnyKeyAsync(treeId, subject, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Resolves the per-key read predicate that must be applied to a
+    /// materialised-view (<c>view-*</c>) data read for the current caller. A view
+    /// read binds under a <c>ViewReadContext</c> scope that bypasses the data-plane
+    /// access gate, so - unlike an ordinary tree, whose gated cursor / point read
+    /// prunes unreadable keys automatically - the source tree's partial (prefix)
+    /// grant is not otherwise enforced on the view rows. This resolves the source
+    /// tree's key filter so the read paths can prune the view to exactly the keys
+    /// the caller may read on the source. Returns <see langword="null"/> when no
+    /// per-key pruning is required: visibility disabled, an anonymous / unresolved
+    /// caller (the whole-view hidden check has already refused that read), the tree
+    /// is not a view, the source cannot be resolved, or the caller holds a
+    /// whole-tree read grant on the source (a <see langword="null"/> filter admits
+    /// every key). The predicate keeps a key when it returns <see langword="true"/>.
+    /// </summary>
+    private async ValueTask<Func<string, bool>?> ResolveViewKeyFilterAsync(
+        string treeId,
+        CancellationToken cancellationToken)
+    {
+        if (!_visibility.Enabled || !IsViewTree(treeId))
+        {
+            return null;
+        }
+
+        var subject = await _visibility.ResolveSubjectAsync(cancellationToken).ConfigureAwait(false);
+        if (subject is not { } resolved)
+        {
+            return null;
+        }
+
+        var sourceTreeId = await ResolveViewSourceTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        if (sourceTreeId is null)
+        {
+            return null;
+        }
+
+        var (_, keyFilter) = await _visibility
+            .ResolveTreeReadAccessAsync(sourceTreeId, resolved, cancellationToken)
+            .ConfigureAwait(false);
+        return keyFilter;
+    }
+
     public async Task<TreeSummaryResult> GetTreeSummaryAsync(
         string treeId,
         bool deep = true,
@@ -39,6 +206,11 @@ internal sealed class LatticeStateQuery(
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         cancellationToken.ThrowIfCancellationRequested();
+
+        if (await IsTreeReadHiddenAsync(treeId, cancellationToken).ConfigureAwait(false))
+        {
+            return TreeSummaryResult.NotFound(treeId);
+        }
 
         var tree = _grainFactory.GetGrain<ILattice>(treeId);
         if (IsReservedTree(treeId) || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
@@ -63,6 +235,11 @@ internal sealed class LatticeStateQuery(
         // them). Bind under an authorised view-read scope and resolve the active
         // generation, exactly as the entry read paths do; only system trees stay
         // hidden. The result keeps the requested id so the caller keys on it.
+        if (await IsTreeReadHiddenAsync(treeId, cancellationToken).ConfigureAwait(false))
+        {
+            return ShardSummariesResult.NotFound(treeId);
+        }
+
         using var viewScope = OpenViewReadScopeIfNeeded(treeId);
         var bindTreeId = await ResolveReadTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
         var tree = bindTreeId is null ? null : _grainFactory.GetGrain<ILattice>(bindTreeId);
@@ -92,6 +269,11 @@ internal sealed class LatticeStateQuery(
         // Mirror GetShardSummariesAsync's view handling so the saturated-tree
         // degraded metrics path also serves materialised views rather than
         // dropping them; only system trees stay hidden.
+        if (await IsTreeReadHiddenAsync(treeId, cancellationToken).ConfigureAwait(false))
+        {
+            return null;
+        }
+
         using var viewScope = OpenViewReadScopeIfNeeded(treeId);
         var bindTreeId = await ResolveReadTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
         var tree = bindTreeId is null ? null : _grainFactory.GetGrain<ILattice>(bindTreeId);
@@ -113,8 +295,20 @@ internal sealed class LatticeStateQuery(
         ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
 
+        // Resolve the caller subject once for the whole page. Null means
+        // visibility is disabled (no auth gate registered, or opted out): the
+        // catalog is returned unfiltered exactly as before, at zero cost.
+        var subject = await _visibility.ResolveSubjectAsync(cancellationToken).ConfigureAwait(false);
+
         var registry = _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        var allIds = await registry.GetAllTreeIdsAsync().ConfigureAwait(false);
+
+        // Enumerating the registry is infrastructure: run it under a system-origin
+        // scope so the enumeration is not itself filtered or denied by the gate.
+        IEnumerable<string> allIds;
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            allIds = await registry.GetAllTreeIdsAsync().ConfigureAwait(false);
+        }
 
         var ordered = allIds
             .Where(id => !IsTagIndexTree(id))
@@ -135,9 +329,28 @@ internal sealed class LatticeStateQuery(
                 break;
             }
 
-            var entry = await registry.GetEntryAsync(id).ConfigureAwait(false);
-            var deletion = _grainFactory.GetGrain<ITreeDeletionGrain>(id);
-            var isDeleted = await deletion.IsDeletedAsync().ConfigureAwait(false);
+            // Scope the catalog to trees the subject may observe: omit any
+            // ordinary data tree the caller has no read access to, gate a
+            // materialised-view tree by the readability of its SOURCE (so it never
+            // leaks the existence of data over an unreadable source, mirroring
+            // ListViewsAsync), and gate a system tree by its own read grant (so it
+            // is visible only to a caller that may read it). An anonymous subject
+            // can observe none. Visibility disabled (subject null) returns the
+            // catalog unfiltered exactly as before, at zero cost.
+            if (subject is { } resolved
+                && !await IsCatalogEntryVisibleAsync(id, resolved, cancellationToken).ConfigureAwait(false))
+            {
+                continue;
+            }
+
+            TreeRegistryEntry? entry;
+            bool isDeleted;
+            using (LatticeAccessGateContext.EnterSystemOrigin())
+            {
+                entry = await registry.GetEntryAsync(id).ConfigureAwait(false);
+                var deletion = _grainFactory.GetGrain<ITreeDeletionGrain>(id);
+                isDeleted = await deletion.IsDeletedAsync().ConfigureAwait(false);
+            }
 
             entries.Add(MapCatalogEntry(id, entry, isDeleted));
         }
@@ -152,12 +365,46 @@ internal sealed class LatticeStateQuery(
         ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var registrations = await CollectViewsAsync(cancellationToken).ConfigureAwait(false);
+        // Resolve the caller subject once; null means visibility is disabled and
+        // the view catalog is returned unfiltered exactly as before.
+        var subject = await _visibility.ResolveSubjectAsync(cancellationToken).ConfigureAwait(false);
 
-        var ordered = registrations
+        // Enumerating the view registry is infrastructure: run it under a
+        // system-origin scope so it is not itself filtered by the gate.
+        IReadOnlyCollection<ViewListing> registrations;
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            registrations = await CollectViewsAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        var candidates = registrations
             .Where(r => request.PageToken is null || string.CompareOrdinal(r.ViewName, request.PageToken) > 0)
             .OrderBy(r => r.ViewName, StringComparer.Ordinal)
             .ToArray();
+
+        // Scope views to those whose source tree the subject may read, so a view
+        // does not leak the existence of data over an unreadable source. An
+        // anonymous subject sees no views.
+        ViewListing[] ordered;
+        if (subject is { } resolved)
+        {
+            var visible = new List<ViewListing>(candidates.Length);
+            foreach (var candidate in candidates)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (await _visibility.CanReadTreeAsync(candidate.SourceTreeId, resolved, cancellationToken)
+                        .ConfigureAwait(false))
+                {
+                    visible.Add(candidate);
+                }
+            }
+
+            ordered = visible.ToArray();
+        }
+        else
+        {
+            ordered = candidates;
+        }
 
         var pageSize = request.EffectivePageSize;
         var factory = request.IncludeViewStats ? _services.GetService<ILatticeViewFactory>() : null;
@@ -214,15 +461,31 @@ internal sealed class LatticeStateQuery(
         ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
 
+        // Resolve the caller subject once; null means visibility is disabled and
+        // the tag-index catalog is returned unfiltered exactly as before.
+        var subject = await _visibility.ResolveSubjectAsync(cancellationToken).ConfigureAwait(false);
+
         var registry = _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        var allIds = await registry.GetAllTreeIdsAsync().ConfigureAwait(false);
+
+        // Enumerating the registry is infrastructure: run it under a system-origin
+        // scope so the enumeration is not itself filtered or denied by the gate.
+        IEnumerable<string> allIds;
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            allIds = await registry.GetAllTreeIdsAsync().ConfigureAwait(false);
+        }
 
         var ordered = allIds
             .Where(IsTagIndexTree)
             .Where(id => request.PageToken is null || string.CompareOrdinal(id, request.PageToken) > 0)
             .OrderBy(id => id, StringComparer.Ordinal);
 
-        var tagFactory = request.SourceTreeId is null ? null : _services.GetService<ILatticeTagIndexFactory>();
+        // The source-tree filter needs a factory; auth-backed visibility also needs
+        // one to resolve each index's covered trees. Resolve it when either is in
+        // play. When visibility is on but no factory is registered we cannot prove
+        // readability, so the catalog is fail-closed to empty below.
+        var needsFactory = request.SourceTreeId is not null || subject is not null;
+        var tagFactory = needsFactory ? _services.GetService<ILatticeTagIndexFactory>() : null;
         var pageSize = request.EffectivePageSize;
         var entries = new List<TagIndexStateSummary>(pageSize);
         string? nextToken = null;
@@ -238,17 +501,44 @@ internal sealed class LatticeStateQuery(
 
             var indexName = id[LatticeConstants.TagIndexTreePrefix.Length..];
 
-            if (tagFactory is not null)
+            IReadOnlyList<string>? covered = null;
+            if (tagFactory is not null && (request.SourceTreeId is not null || subject is not null))
             {
-                var covered = await tagFactory.CreateMultiTree(indexName)
-                    .CoveredTreesAsync(cancellationToken).ConfigureAwait(false);
-                if (!covered.Contains(request.SourceTreeId!, StringComparer.Ordinal))
+                using (LatticeAccessGateContext.EnterSystemOrigin())
+                {
+                    covered = await tagFactory.CreateMultiTree(indexName)
+                        .CoveredTreesAsync(cancellationToken).ConfigureAwait(false);
+                }
+            }
+
+            if (request.SourceTreeId is not null)
+            {
+                if (covered is null || !covered.Contains(request.SourceTreeId, StringComparer.Ordinal))
                 {
                     continue;
                 }
             }
 
-            var entry = await registry.GetEntryAsync(id).ConfigureAwait(false);
+            // Auth-backed visibility: expose a tag index only when the subject can
+            // read at least one of its covered trees, so the catalog does not leak
+            // the existence of an index over data the caller cannot see. An
+            // anonymous subject, or the absence of a factory to resolve coverage,
+            // hides every index (fail-closed).
+            if (subject is { } resolved)
+            {
+                if (covered is null || !await AnyCoveredTreeReadableAsync(covered, resolved, cancellationToken)
+                        .ConfigureAwait(false))
+                {
+                    continue;
+                }
+            }
+
+            TreeRegistryEntry? entry;
+            using (LatticeAccessGateContext.EnterSystemOrigin())
+            {
+                entry = await registry.GetEntryAsync(id).ConfigureAwait(false);
+            }
+
             entries.Add(new TagIndexStateSummary
             {
                 IndexName = indexName,
@@ -260,6 +550,22 @@ internal sealed class LatticeStateQuery(
         return new TagIndexCatalogPage { Entries = entries, NextPageToken = nextToken };
     }
 
+    private async ValueTask<bool> AnyCoveredTreeReadableAsync(
+        IReadOnlyList<string> coveredTrees,
+        LatticeSubject subject,
+        CancellationToken cancellationToken)
+    {
+        foreach (var treeId in coveredTrees)
+        {
+            if (await _visibility.CanReadTreeAsync(treeId, subject, cancellationToken).ConfigureAwait(false))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public async Task<TagValueCatalogPage> ListTagValuesAsync(
         CatalogRequest request,
         CancellationToken cancellationToken = default)
@@ -268,6 +574,13 @@ internal sealed class LatticeStateQuery(
         ArgumentException.ThrowIfNullOrEmpty(request.SourceTreeId);
         ArgumentException.ThrowIfNullOrEmpty(request.IndexName);
         cancellationToken.ThrowIfCancellationRequested();
+
+        // Auth-backed visibility: tag values of a tree the caller may not read are
+        // not disclosed (they leak which values exist in unreadable data).
+        if (await IsTreeReadHiddenAsync(request.SourceTreeId, cancellationToken).ConfigureAwait(false))
+        {
+            return new TagValueCatalogPage();
+        }
 
         var tree = _grainFactory.GetGrain<ILattice>(request.SourceTreeId);
         if (IsReservedTree(request.SourceTreeId)
@@ -323,8 +636,18 @@ internal sealed class LatticeStateQuery(
             return new CoveredTreeCatalogPage();
         }
 
-        var covered = await tagFactory.CreateMultiTree(request.IndexName)
-            .CoveredTreesAsync(cancellationToken).ConfigureAwait(false);
+        // Resolve the caller subject once; null means visibility is disabled and
+        // the covered-tree list is returned unfiltered exactly as before.
+        var subject = await _visibility.ResolveSubjectAsync(cancellationToken).ConfigureAwait(false);
+
+        // Enumerating the covered set is infrastructure: run it under a
+        // system-origin scope so it is not itself filtered by the gate.
+        IReadOnlyCollection<string> covered;
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            covered = await tagFactory.CreateMultiTree(request.IndexName)
+                .CoveredTreesAsync(cancellationToken).ConfigureAwait(false);
+        }
 
         var pageSize = request.EffectivePageSize;
         var entries = new List<string>(Math.Min(pageSize, covered.Count));
@@ -335,6 +658,14 @@ internal sealed class LatticeStateQuery(
         foreach (var treeId in covered.OrderBy(id => id, StringComparer.Ordinal))
         {
             if (request.PageToken is not null && string.CompareOrdinal(treeId, request.PageToken) <= 0)
+            {
+                continue;
+            }
+
+            // Omit any covered tree the subject may not read (an anonymous subject
+            // sees none), so the covered-tree list does not leak unreadable trees.
+            if (subject is { } resolved
+                && !await _visibility.CanReadTreeAsync(treeId, resolved, cancellationToken).ConfigureAwait(false))
             {
                 continue;
             }
@@ -367,6 +698,32 @@ internal sealed class LatticeStateQuery(
         }
 
         var index = tagFactory.CreateMultiTree(request.IndexName);
+
+        // Auth-backed visibility: an index-wide tag list aggregates tags across
+        // every covered tree, so a single tag can reveal that a value exists in a
+        // covered tree the subject cannot read. This surface cannot attribute a
+        // tag to a specific tree, so it is conservatively all-or-nothing: the tag
+        // list is disclosed only when the subject can read every covered tree;
+        // otherwise it is empty. (Per-tree tag values remain available through
+        // ListTagValuesAsync, which is scoped to a single readable source tree.)
+        var subject = await _visibility.ResolveSubjectAsync(cancellationToken).ConfigureAwait(false);
+        if (subject is { } resolved)
+        {
+            IReadOnlyCollection<string> covered;
+            using (LatticeAccessGateContext.EnterSystemOrigin())
+            {
+                covered = await index.CoveredTreesAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            foreach (var treeId in covered)
+            {
+                if (!await _visibility.CanReadTreeAsync(treeId, resolved, cancellationToken).ConfigureAwait(false))
+                {
+                    return new TagValueCatalogPage();
+                }
+            }
+        }
+
         var pageSize = request.EffectivePageSize;
         var values = new List<string>(pageSize);
         string? nextToken = null;
@@ -404,6 +761,17 @@ internal sealed class LatticeStateQuery(
 
         var tagFactory = _services.GetService<ILatticeTagIndexFactory>();
         if (tagFactory is null)
+        {
+            return new TagMemberScanPage();
+        }
+
+        // Auth-backed visibility: an unresolved/anonymous caller is denied outright
+        // (fail-closed) regardless of the policy default effect. For a resolved
+        // subject the per-member presence probe (ExistsAsync) below runs through
+        // the gated data-plane surface, so members in trees the subject may not
+        // read are dropped automatically; no extra per-tree check is needed here.
+        var subject = await _visibility.ResolveSubjectAsync(cancellationToken).ConfigureAwait(false);
+        if (subject is { } resolved && LatticeStateVisibilityFilter.DeniesAllReads(resolved))
         {
             return new TagMemberScanPage();
         }
@@ -490,6 +858,14 @@ internal sealed class LatticeStateQuery(
         ArgumentNullException.ThrowIfNull(request);
         ArgumentException.ThrowIfNullOrEmpty(request.TreeId);
         cancellationToken.ThrowIfCancellationRequested();
+
+        // Auth-backed visibility: the structure of a tree the caller may not read
+        // is itself not disclosed (node shape leaks the existence of data). An
+        // unresolved/anonymous caller sees no structure.
+        if (await IsTreeReadHiddenAsync(request.TreeId, cancellationToken).ConfigureAwait(false))
+        {
+            return TreeStructureResult.NotFound(request.TreeId);
+        }
 
         // A materialised view is a read-only tree; permit it on the read path by
         // binding under an authorised view-read scope, while system trees stay
@@ -587,6 +963,15 @@ internal sealed class LatticeStateQuery(
         ArgumentException.ThrowIfNullOrEmpty(request.TreeId);
         cancellationToken.ThrowIfCancellationRequested();
 
+        // Auth-backed visibility: hide the whole tree from a caller with no read
+        // access (an unresolved/anonymous caller sees nothing), reported as
+        // not-found. A partial (prefix) grant proceeds; the gated cursor surface
+        // prunes the individual keys the subject may not observe.
+        if (await IsTreeReadHiddenAsync(request.TreeId, cancellationToken).ConfigureAwait(false))
+        {
+            return EntryScanResult.NotFound(request.TreeId);
+        }
+
         if (!string.IsNullOrEmpty(request.IndexName) && request.Tag is not null)
         {
             return await ScanByTagAsync(request, cancellationToken).ConfigureAwait(false);
@@ -676,10 +1061,22 @@ internal sealed class LatticeStateQuery(
         // record with it (null for an opaque last-writer-wins tree).
         var crdtShape = ResolveCrdtShape(request.TreeId);
 
+        // A view read bypasses the data-plane gate (it runs under a view-read
+        // scope), so a prefix-granted caller's per-key pruning on the source is
+        // applied here rather than by the gated cursor. Null for an ordinary tree
+        // or a whole-tree grant (every key admitted).
+        var viewKeyFilter = await ResolveViewKeyFilterAsync(request.TreeId, cancellationToken).ConfigureAwait(false);
+
         var records = new List<EntryRecord>(page.Entries.Count);
         foreach (var entry in page.Entries)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (viewKeyFilter is not null && !viewKeyFilter(entry.Key))
+            {
+                // Outside the caller's prefix grant on the view's source tree.
+                continue;
+            }
+
             var record = await BuildEntryRecordAsync(tree, entry.Key, entry.Value, previewBudget, crdtShape, cancellationToken)
                 .ConfigureAwait(false);
             // Decode current members off the full snapshot value bytes (before the
@@ -768,6 +1165,24 @@ internal sealed class LatticeStateQuery(
         ArgumentNullException.ThrowIfNull(key);
         cancellationToken.ThrowIfCancellationRequested();
 
+        // Auth-backed visibility: a caller with no read access to the tree (an
+        // unresolved/anonymous caller included) gets not-found, never a value.
+        // A partial (prefix) grant proceeds; the gated point read below returns
+        // not-found for any individual key the subject may not observe.
+        if (await IsTreeReadHiddenAsync(treeId, cancellationToken).ConfigureAwait(false))
+        {
+            return EntryDetailResult.TreeNotFound(treeId, key);
+        }
+
+        // A view point read bypasses the data-plane gate; apply the caller's
+        // per-key grant on the view's source so a prefix-granted caller cannot read
+        // a view key outside its grant. Null for an ordinary tree or whole-tree grant.
+        var viewKeyFilter = await ResolveViewKeyFilterAsync(treeId, cancellationToken).ConfigureAwait(false);
+        if (viewKeyFilter is not null && !viewKeyFilter(key))
+        {
+            return EntryDetailResult.KeyNotFound(treeId, key);
+        }
+
         // A materialised view is a read-only tree; permit it on the read path by
         // binding under an authorised view-read scope, while system trees stay
         // hidden everywhere.
@@ -817,6 +1232,23 @@ internal sealed class LatticeStateQuery(
         ArgumentException.ThrowIfNullOrEmpty(request.TreeId);
         ArgumentNullException.ThrowIfNull(request.Key);
         cancellationToken.ThrowIfCancellationRequested();
+
+        // Auth-backed visibility: hide the tree from a caller with no read access
+        // (unresolved/anonymous included). A partial grant proceeds; the gated
+        // history read below is already filtered per key.
+        if (await IsTreeReadHiddenAsync(request.TreeId, cancellationToken).ConfigureAwait(false))
+        {
+            return EntryHistoryResult.TreeNotFound(request.TreeId, request.Key);
+        }
+
+        // A view history read bypasses the data-plane gate; apply the caller's
+        // per-key grant on the view's source so a prefix-granted caller cannot read
+        // the history of a view key outside its grant.
+        var viewKeyFilter = await ResolveViewKeyFilterAsync(request.TreeId, cancellationToken).ConfigureAwait(false);
+        if (viewKeyFilter is not null && !viewKeyFilter(request.Key))
+        {
+            return EntryHistoryResult.KeyNotFound(request.TreeId, request.Key);
+        }
 
         // A materialised view is a read-only tree; permit it on the read path by
         // binding under an authorised view-read scope, while system trees stay

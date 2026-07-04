@@ -64,6 +64,21 @@
     -->
     <ProjectReference Include="..\..\src\lattice.api.state\Orleans.Lattice.Api.State.csproj" />
     <ProjectReference Include="..\..\src\lattice.api.state.grpc\Orleans.Lattice.Api.State.Grpc.csproj" />
+    <!--
+      Pulled in solely so docs/lattice.api.data/*.md can show the data-API
+      registration and client wiring as `csharp verify` snippets, on the same
+      DocsSnippetCompilationTests reference-graph mechanism as the state API above.
+    -->
+    <ProjectReference Include="..\..\src\lattice.api.data\Orleans.Lattice.Api.Data.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.data.grpc\Orleans.Lattice.Api.Data.Grpc.csproj" />
+    <!--
+      Pulled in solely so docs/lattice.membership/*.md and docs/lattice.auth/*.md
+      can show membership + authorization registration, rule authoring, and
+      options as `csharp verify` snippets, on the same DocsSnippetCompilationTests
+      reference-graph mechanism as the API packages above.
+    -->
+    <ProjectReference Include="..\..\src\lattice.membership\Orleans.Lattice.Membership.csproj" />
+    <ProjectReference Include="..\..\src\lattice.auth\Orleans.Lattice.Auth.csproj" />
   </ItemGroup>
 
 </Project>

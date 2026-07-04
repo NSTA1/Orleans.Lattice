@@ -38,10 +38,36 @@ internal sealed class GrpcLatticeStateClient : ILatticeStateClient, IDisposable
             AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
         }
 
-        var channel = GrpcChannel.ForAddress(settings.Address);
+        var auth = settings.Authentication;
+
+        // A live token provider must be consulted per call so the freshest token
+        // is attached. The insecure-channel safeguard is only lifted for an
+        // endpoint confirmed to be plaintext with an explicit operator opt-in;
+        // see BuildChannelOptions.
+        var channelOptions = BuildChannelOptions(settings);
+
+        var channel = GrpcChannel.ForAddress(settings.Address, channelOptions);
 
         CallInvoker invoker = channel.CreateCallInvoker();
-        if (settings.Authentication is { HasHeaders: true } auth)
+        if (auth is { HasCredentialProvider: true, CredentialProvider: { } provider })
+        {
+            // CallCredentials.FromInterceptor is invoked per RPC and may await, so
+            // the provider can refresh a near-expiry token before the header is
+            // written. The token is never captured statically on the channel.
+            var callCredentials = CallCredentials.FromInterceptor(async (context, metadata) =>
+            {
+                var header = await provider
+                    .GetAuthorizationHeaderAsync(context.CancellationToken)
+                    .ConfigureAwait(false);
+                if (!string.IsNullOrEmpty(header))
+                {
+                    metadata.Add(LatticeCallAuthentication.AuthorizationHeaderName, header);
+                }
+            });
+
+            invoker = invoker.Intercept(new CallCredentialsInterceptor(callCredentials));
+        }
+        else if (auth is { HasHeaders: true })
         {
             var headers = auth.Headers!;
             invoker = invoker.Intercept(metadata =>
@@ -58,6 +84,46 @@ internal sealed class GrpcLatticeStateClient : ILatticeStateClient, IDisposable
         var client = LatticeStateApiGrpcClient.Create(invoker, serializerProvider);
         return new GrpcLatticeStateClient(channel, client);
     }
+
+    /// <summary>
+    /// Builds the <see cref="GrpcChannelOptions"/> for <paramref name="settings"/>.
+    /// gRPC refuses to send per-call credentials over a channel it cannot confirm
+    /// is secure; that safeguard is only lifted
+    /// (<see cref="GrpcChannelOptions.UnsafeUseInsecureChannelCallCredentials"/>
+    /// set to <see langword="true"/>) when the endpoint is genuinely plaintext
+    /// (an <c>http</c> address) AND the operator has explicitly opted into
+    /// unencrypted transport via
+    /// <see cref="LatticeConnectionSettings.AllowUnencryptedHttp2"/>. For an
+    /// <c>https</c> endpoint the safeguard is left active (the flag stays
+    /// <see langword="false"/>) so credentials are never sent over a channel gRPC
+    /// cannot verify; credentials still attach over the confirmed-secure TLS
+    /// channel through the call-credentials interceptor. This mirrors the
+    /// replication transport's scheme gate.
+    /// </summary>
+    internal static GrpcChannelOptions BuildChannelOptions(LatticeConnectionSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        var channelOptions = new GrpcChannelOptions();
+        if (settings.Authentication is { HasCredentialProvider: true }
+            && settings.AllowUnencryptedHttp2
+            && !IsHttpsAddress(settings.Address))
+        {
+            channelOptions.UnsafeUseInsecureChannelCallCredentials = true;
+        }
+
+        return channelOptions;
+    }
+
+    /// <summary>
+    /// Returns <see langword="true"/> when <paramref name="address"/> is an
+    /// absolute <c>https</c> URI. A non-absolute or non-https address is treated
+    /// as non-https so the insecure-channel safeguard is only ever lifted for an
+    /// endpoint confirmed to be plaintext.
+    /// </summary>
+    private static bool IsHttpsAddress(string? address) =>
+        Uri.TryCreate(address, UriKind.Absolute, out var uri)
+        && string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase);
 
     public Task<TreeCatalogPage> ListTreesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
         => _client.ListTreesAsync(request, cancellationToken);

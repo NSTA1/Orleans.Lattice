@@ -26,7 +26,8 @@ namespace Orleans.Lattice.Api.State;
 internal sealed class LatticeStateObserver(
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeOptions> options,
-    IOptions<LatticeApiStateOptions> apiOptions) : ILatticeStateObserver
+    IOptions<LatticeApiStateOptions> apiOptions,
+    IServiceProvider services) : ILatticeStateObserver
 {
     private const string TokenVersion = "1";
 
@@ -38,6 +39,9 @@ internal sealed class LatticeStateObserver(
 
     private readonly LatticeApiStateOptions _apiOptions = (apiOptions
         ?? throw new ArgumentNullException(nameof(apiOptions))).Value;
+
+    private readonly LatticeStateVisibilityFilter _visibility =
+        new(services, (apiOptions ?? throw new ArgumentNullException(nameof(apiOptions))).Value);
 
     /// <inheritdoc />
     public async IAsyncEnumerable<StateChangeNotification> ObserveAsync(
@@ -72,6 +76,34 @@ internal sealed class LatticeStateObserver(
             ?? request.TreeId;
         var entry = await registry.GetEntryAsync(request.TreeId).ConfigureAwait(false);
         var partitions = Math.Max(1, entry?.WalPartitions ?? _options.Get(request.TreeId).WalPartitions);
+
+        // Auth-backed visibility. The change feed tails the write-ahead log
+        // directly rather than flowing through the gated ILattice surface, so it
+        // is the sole point that must honour the data-plane read policy for the
+        // live stream. When a real access gate is registered (and the host did
+        // not opt out) resolve the caller subject once and decide tree access:
+        //   * an anonymous or unauthorized subject is denied outright and, like
+        //     every other read surface, reported as not-found;
+        //   * a whole-tree grant streams every change (null filter);
+        //   * a partial (prefix) grant carries a per-key predicate applied to each
+        //     emitted change so a partially-authorized subscriber only observes
+        //     keys it may read.
+        // A range-delete notification cannot be safely narrowed to an authorized
+        // subset, so a partially-authorized subject never observes one.
+        Func<string, bool>? keyFilter = null;
+        var subject = await _visibility.ResolveSubjectAsync(cancellationToken).ConfigureAwait(false);
+        if (subject is { } resolved)
+        {
+            var (allowed, filter) = await _visibility
+                .ResolveTreeReadAccessAsync(request.TreeId, resolved, cancellationToken)
+                .ConfigureAwait(false);
+            if (!allowed)
+            {
+                throw new KeyNotFoundException($"Tree '{request.TreeId}' was not found.");
+            }
+
+            keyFilter = filter;
+        }
 
         var cursor = await SeedCursorAsync(physicalTreeId, partitions, request.ContinuationToken, cancellationToken)
             .ConfigureAwait(false);
@@ -108,6 +140,16 @@ internal sealed class LatticeStateObserver(
                     cursor[partition] = sequenced.Sequence + 1;
 
                     if (!TryProject(request, sequenced.Entry, out var kind))
+                    {
+                        continue;
+                    }
+
+                    // Prune the change to what the caller may observe. A range
+                    // delete cannot be narrowed to an authorized key subset, so a
+                    // partially-authorized subscriber (non-null filter) never sees
+                    // one; point changes are kept only when the key passes.
+                    if (keyFilter is not null &&
+                        (kind == StateChangeKind.DeleteRange || !keyFilter(sequenced.Entry.Key)))
                     {
                         continue;
                     }

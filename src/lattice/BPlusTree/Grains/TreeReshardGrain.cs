@@ -56,6 +56,9 @@ internal sealed class TreeReshardGrain(
     /// <inheritdoc />
     public async Task ReshardAsync(int newShardCount)
     {
+        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
+            Context.ActivationServices, TreeId, LatticeOperation.Admin);
+
         // Reshard activity counters: record the in-flight observation
         // (0 or 1 per call) and tag with TreeId so a wedge cohort can
         // correlate reshard activity with wedge onset directly. The

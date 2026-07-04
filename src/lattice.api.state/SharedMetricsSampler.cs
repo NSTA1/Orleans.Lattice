@@ -32,6 +32,16 @@ internal sealed class SharedMetricsSampler(
     private readonly LatticeApiStateOptions _apiOptions = (apiOptions
         ?? throw new ArgumentNullException(nameof(apiOptions))).Value;
 
+    // Resolves the caller subject so the shared sampling loops are keyed by
+    // visibility, never coalescing subscribers with different read access onto a
+    // single loop (issue #971). Constructed exactly as LatticeStateQuery does:
+    // when no real access gate is registered (or the host opted out) it reports
+    // Enabled == false and resolves no subject, so signatures stay identity-free
+    // and coalescing behaves byte-for-byte as before, at zero cost.
+    private readonly LatticeStateVisibilityFilter _visibility = new(
+        services ?? throw new ArgumentNullException(nameof(services)),
+        (apiOptions ?? throw new ArgumentNullException(nameof(apiOptions))).Value);
+
     // Best-effort: a host that did not register the core lattice services (for
     // example a transport-only test harness) resolves null here and simply
     // never pauses detail sampling. Mirrors the opt-in semantics the snapshot
@@ -79,7 +89,18 @@ internal sealed class SharedMetricsSampler(
             interval = TimeSpan.FromSeconds(1);
         }
 
-        var signature = BuildSignature(request, interval);
+        // Resolve the caller subject so the shared loop is keyed by visibility.
+        // The loop captures the first subscriber's ambient credential and samples
+        // the per-tree map filtered to that identity, then fans the SAME map to
+        // every subscriber on the signature; keying the signature by the resolved
+        // subject guarantees every co-attached subscriber has identical read
+        // access, so a lower-privilege subscriber can never receive metrics for a
+        // tree it cannot read. When visibility is disabled (no auth gate, or the
+        // host opted out) the subject is null and the signature is identity-free,
+        // so coalescing is unchanged and costs nothing.
+        var subject = await _visibility.ResolveSubjectAsync(cancellationToken).ConfigureAwait(false);
+
+        var signature = BuildSignature(request, interval, subject);
         var subscriber = Attach(signature, request, interval, out var loop);
         try
         {
@@ -392,7 +413,7 @@ internal sealed class SharedMetricsSampler(
         return rollups;
     }
 
-    private static string BuildSignature(TreeMetricsRequest request, TimeSpan interval)
+    private static string BuildSignature(TreeMetricsRequest request, TimeSpan interval, LatticeSubject? subject)
     {
         string ids;
         if (request.TreeIds is { Count: > 0 } treeIds)
@@ -409,9 +430,54 @@ internal sealed class SharedMetricsSampler(
             ids = "*";
         }
 
-        return string.Create(
+        var shape = string.Create(
             System.Globalization.CultureInfo.InvariantCulture,
             $"{ids}|h={(request.IncludeShardHotness ? 1 : 0)}|v={(request.IncludeViewLag ? 1 : 0)}|s={(request.IncludeSystemTrees ? 1 : 0)}|i={interval.Ticks}");
+
+        var identity = BuildIdentityComponent(subject);
+        return identity.Length == 0 ? shape : string.Concat(shape, "|id=", identity);
+    }
+
+    /// <summary>
+    /// Canonical, order-insensitive rendering of the visibility-determining
+    /// identity of the caller <paramref name="subject"/> - its stable id, the full
+    /// transitively-expanded group closure, and the claim bag the access gate
+    /// authorizes over. Two subscribers share a sampling loop only when this
+    /// matches, so the first subscriber's identity-filtered map is a correct view
+    /// for every subscriber attached to that loop. Empty when
+    /// <paramref name="subject"/> is <see langword="null"/> (visibility disabled),
+    /// preserving the identity-free legacy signature and its coalescing.
+    /// </summary>
+    private static string BuildIdentityComponent(LatticeSubject? subject)
+    {
+        if (subject is not { } resolved)
+        {
+            return string.Empty;
+        }
+
+        var groupPart = string.Empty;
+        if (resolved.GroupIds.Count > 0)
+        {
+            var groups = resolved.GroupIds.ToArray();
+            Array.Sort(groups, StringComparer.Ordinal);
+            groupPart = string.Join(',', groups);
+        }
+
+        var claimPart = string.Empty;
+        if (resolved.Claims is { Count: > 0 } claims)
+        {
+            var pairs = new string[claims.Count];
+            var i = 0;
+            foreach (var claim in claims)
+            {
+                pairs[i++] = string.Concat(claim.Key, "=", claim.Value);
+            }
+
+            Array.Sort(pairs, StringComparer.Ordinal);
+            claimPart = string.Join(',', pairs);
+        }
+
+        return string.Concat(resolved.SubjectId, "|g=", groupPart, "|c=", claimPart);
     }
 
     private static async Task DelayAsync(TimeSpan interval, CancellationToken cancellationToken)
