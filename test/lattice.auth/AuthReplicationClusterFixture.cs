@@ -124,6 +124,30 @@ public sealed class AuthReplicationClusterFixture
     }
 
     /// <summary>
+    /// Simulates replication of a rule <b>revocation</b> from site A to site B:
+    /// ships a delete of the removed rule's policy-tree entry through
+    /// <see cref="ApplierB"/> with a site-a origin and a high source clock, exactly
+    /// as a receiver would apply a shipped deletion. Pairs with
+    /// <see cref="ReplicatePolicyTreeAtoBAsync"/> (which ships present entries) so a
+    /// test can converge a revoke that the present-entry scan alone cannot express.
+    /// </summary>
+    /// <param name="treeId">The governed tree id of the revoked rule.</param>
+    /// <param name="ruleId">The revoked rule id.</param>
+    public async Task ReplicatePolicyRevokeAtoBAsync(string treeId, string ruleId)
+    {
+        var key = $"{treeId}{AuthConstants.RuleKeySeparator}{ruleId}";
+        await ApplierB.ApplyAsync(new WalRecord
+        {
+            TreeId = LatticeSystemTreeNames.AuthPolicy,
+            Op = MutationKind.Delete,
+            Key = key,
+            Timestamp = new HybridLogicalClock { WallClockTicks = DateTime.UtcNow.Ticks, Counter = 0 },
+            OriginClusterId = SiteAClusterId,
+            Mode = LatticeMergeMode.LwwRegister,
+        });
+    }
+
+    /// <summary>
     /// Stamps <paramref name="subject"/> (with optional token-asserted
     /// <paramref name="groups"/>) as the ambient caller for the lifetime of the
     /// returned scope.

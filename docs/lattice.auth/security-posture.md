@@ -129,6 +129,59 @@ capabilities from genuine external clients.
   deployments that terminate TLS at a trusted proxy; it should not be enabled on
   an endpoint that is reachable by an untrusted network.
 
+## Enforcement cost
+
+The enforcement path is opt-in: with Membership and Auth not registered,
+`LatticeGrain` resolves a null access gate and the enforcement path
+short-circuits with no subject resolution and no auth code on the hot path, so
+the disabled build is byte-for-byte the pre-feature baseline. The cost below is
+what a caller pays only once a default-deny policy and a membership context are
+registered.
+
+The numbers come from the microbenchmark harness under
+`benchmark/host/Bench.Microbench`, run in a disabled-vs-enabled matched pair.
+The enabled config wires a real default-deny `PolicyAccessGate` plus a
+fixed-subject membership context into every grain, with a representative
+tree/key/prefix allow ruleset for the benchmarked subject. The full report,
+methodology, and raw JSON are committed under
+`benchmark/host/Bench.Microbench/auth-f162/` (`report.md` plus the matched-pair
+`*.json`). The harness ran on a shared machine, so the honest way to read the
+result is: **allocation delta is the robust signal; latency delta is dominated
+by environment noise.**
+
+**Allocation (the robust signal).** The added allocation splits into two clean
+patterns:
+
+- **Flat per-call cost, about +1.5 KB per operation.** Single-key operations
+  (write, read, delete, get-or-set, CAS, apply-delta) and range/scan reads
+  (key scan, entry scan, predicate scan) evaluate the gate once. They add
+  roughly one decision plus subject-resolution allocation regardless of how many
+  keys the operation touches or returns. A 4-shard range scan adds the same
+  about +1.6 KB whether it returns a handful of keys or a full page.
+- **Per-entry cost, about +1.4 KB per key, on batch writes.** Bulk load,
+  multi-key `SetMany`, and atomic set-many evaluate the gate for each entry, so
+  the added allocation scales with the batch size: a bulk load adds about
+  +1.2 MB, a 4-shard `SetMany` about +1.3 MB, and a 64-key atomic set-many about
+  +93 KB. This is the dominant enforcement cost for large batch writes and is
+  the figure to size capacity against; single operations pay only the flat cost.
+
+**Latency.** On the shared benchmark machine the gate-independent control group
+(pure CRDT and version-vector merges, which never run the gate) showed a
+run-to-run noise band of about +/-68.5% at the 95th percentile. Most gated
+single-key operations landed within about x1.0 to x1.2 of the disabled build,
+which is inside or near that band; a few gated operations measured nominally
+faster when enabled, which is noise rather than a real speed-up. The one latency
+signal that stands clear of the band is the multi-shard batch write: a 4-shard
+`SetMany` and a bulk load both measured roughly 2x the disabled latency,
+consistent with the per-entry allocation cost above. For precise latency figures
+the harness should be re-run on a quiet machine; the wiring is kept in place
+(the enabled config is selected by an environment switch documented in
+`report.md`) so the run is reproducible.
+
+**Gate-independent paths pay nothing.** The control group's allocation delta was
+0 B, confirming that operations the policy does not guard (and, by construction,
+the entire disabled build) carry no enforcement overhead.
+
 ## Findings and resolutions
 
 The following findings were confirmed by the review and resolved. Each has a

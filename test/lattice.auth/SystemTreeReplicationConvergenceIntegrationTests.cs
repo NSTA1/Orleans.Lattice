@@ -88,4 +88,53 @@ public sealed class SystemTreeReplicationConvergenceIntegrationTests
             Assert.That(stored, Is.Not.Null, "the now-authorized write must have persisted on site B");
         }
     }
+
+    [Test]
+    public async Task Revoke_on_site_a_converges_to_site_b_and_denies_a_previously_allowed_write()
+    {
+        const string tree = "conv-revoke";
+        const string writer = "revoke-writer";
+
+        // Author the grant on site A and replicate it so site B allows the write.
+        await _fixture.StoreA.PutRuleAsync(new LatticeAuthorizationRule(
+            "revoke-grant",
+            LatticeSubjectSelector.User(writer),
+            LatticeScope.Tree(tree),
+            LatticeOperation.Write,
+            LatticeEffect.Allow));
+        await _fixture.RebuildAAsync();
+        await _fixture.ReplicatePolicyTreeAtoBAsync();
+        await _fixture.RebuildBAsync();
+
+        using (AuthReplicationClusterFixture.AsSubject(writer))
+        {
+            await _fixture.LatticeB(tree).SetAsync("before", Bytes("v"));
+        }
+
+        // Revoke the grant on site A and replicate the deletion to site B.
+        Assert.That(
+            await _fixture.StoreA.RemoveRuleAsync(tree, "revoke-grant"),
+            Is.True,
+            "the grant must have existed to be revoked");
+        await _fixture.RebuildAAsync();
+        await _fixture.ReplicatePolicyRevokeAtoBAsync(tree, "revoke-grant");
+        await _fixture.RebuildBAsync();
+
+        // The decision has flipped back: the writer is denied on site B once the
+        // revoke has converged, proving a revoke propagates through the same
+        // system-tree replication special case a grant does.
+        using (AuthReplicationClusterFixture.AsSubject(writer))
+        {
+            Assert.That(
+                async () => await _fixture.LatticeB(tree).SetAsync("after", Bytes("v")),
+                Throws.TypeOf<LatticeAuthorizationDeniedException>(),
+                "site B must deny the write once the revoke has replicated");
+        }
+
+        using (AuthReplicationClusterFixture.AsSubject(AuthReplicationClusterFixture.BootstrapAdmin))
+        {
+            Assert.That(await _fixture.LatticeB(tree).GetAsync("after"), Is.Null,
+                "the denied post-revoke write must not have persisted on site B");
+        }
+    }
 }

@@ -151,6 +151,8 @@ public sealed class DocsSnippetCompilationTests
             using Orleans.Hosting;
             using Orleans.Lattice;
             using Orleans.Lattice.BPlusTree;
+            using Orleans.Lattice.Membership;
+            using Orleans.Lattice.Auth;
             using Orleans.Lattice.Storage.AzureTable;
             using Orleans.Lattice.Replication;
             using Orleans.Lattice.Replication.Grpc;
