@@ -669,7 +669,7 @@ public class LatticeMicroBenchmarks
         // enabled (it is not in the default options), so a Substitute is safe.
         var latticeContext = Substitute.For<IGrainContext>();
         latticeContext.GrainId.Returns(GrainId.Create("lattice", TreeName));
-        var serviceProvider = Substitute.For<IServiceProvider>();
+        var serviceProvider = AuthBench.CreateServiceProvider();
         var lattice = new LatticeGrain(
             latticeContext,
             _grainFactory,
@@ -1421,7 +1421,7 @@ public class LatticeMicroBenchmarks
 
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("lattice", WriterTreeName));
-        var serviceProvider = Substitute.For<IServiceProvider>();
+        var serviceProvider = AuthBench.CreateServiceProvider();
         var lattice = new LatticeGrain(
             context,
             _grainFactory,
@@ -1498,7 +1498,7 @@ public class LatticeMicroBenchmarks
 
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("lattice", ReceiverBatchTreeName));
-        var serviceProvider = Substitute.For<IServiceProvider>();
+        var serviceProvider = AuthBench.CreateServiceProvider();
         var lattice = new LatticeGrain(
             context,
             _grainFactory,
@@ -1725,7 +1725,7 @@ public class LatticeMicroBenchmarks
 
         var fanoutContext = Substitute.For<IGrainContext>();
         fanoutContext.GrainId.Returns(GrainId.Create("lattice", FanoutTreeName));
-        var fanoutSp = Substitute.For<IServiceProvider>();
+        var fanoutSp = AuthBench.CreateServiceProvider();
         var fanoutLattice = new LatticeGrain(
             fanoutContext,
             _grainFactory,
@@ -2152,7 +2152,7 @@ public class LatticeMicroBenchmarks
 
         var deepContext = Substitute.For<IGrainContext>();
         deepContext.GrainId.Returns(GrainId.Create("lattice", DeepTreeName));
-        var deepSp = Substitute.For<IServiceProvider>();
+        var deepSp = AuthBench.CreateServiceProvider();
         var deepLattice = new LatticeGrain(
             deepContext,
             _grainFactory,
@@ -2231,7 +2231,7 @@ public class LatticeMicroBenchmarks
 
         var deeperContext = Substitute.For<IGrainContext>();
         deeperContext.GrainId.Returns(GrainId.Create("lattice", DeeperTreeName));
-        var deeperSp = Substitute.For<IServiceProvider>();
+        var deeperSp = AuthBench.CreateServiceProvider();
         var deeperLattice = new LatticeGrain(
             deeperContext,
             _grainFactory,
@@ -2297,7 +2297,7 @@ public class LatticeMicroBenchmarks
 
         var atomicContext = Substitute.For<IGrainContext>();
         atomicContext.GrainId.Returns(GrainId.Create("lattice", AtomicTreeName));
-        var atomicSp = Substitute.For<IServiceProvider>();
+        var atomicSp = AuthBench.CreateServiceProvider();
         var atomicLattice = new LatticeGrain(
             atomicContext,
             _grainFactory,
@@ -2354,7 +2354,7 @@ public class LatticeMicroBenchmarks
 
         var atomicFanoutContext = Substitute.For<IGrainContext>();
         atomicFanoutContext.GrainId.Returns(GrainId.Create("lattice", AtomicFanoutTreeName));
-        var atomicFanoutSp = Substitute.For<IServiceProvider>();
+        var atomicFanoutSp = AuthBench.CreateServiceProvider();
         var atomicFanoutLattice = new LatticeGrain(
             atomicFanoutContext,
             _grainFactory,
@@ -2568,7 +2568,7 @@ public class LatticeMicroBenchmarks
 
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("lattice", treeId));
-        var serviceProvider = Substitute.For<IServiceProvider>();
+        var serviceProvider = AuthBench.CreateServiceProvider();
         var lattice = new LatticeGrain(
             context,
             _grainFactory,

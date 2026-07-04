@@ -24,6 +24,11 @@
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Data.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Data.Grpc.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Auth.Tests" />
+    <!-- The microbench host builds a real PolicyAccessGate (via the internal
+         decision engine, snapshot maintainer and decision observer) to measure
+         the enforcement cost of the opt-in auth layer with Membership + Auth
+         registered and enforcing, alongside the disabled-baseline run. -->
+    <InternalsVisibleTo Include="Orleans.Lattice.Benchmark.Microbench" />
     <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
   </ItemGroup>
 

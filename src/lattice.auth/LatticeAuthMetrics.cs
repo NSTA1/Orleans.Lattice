@@ -107,25 +107,47 @@ public static class LatticeAuthMetrics
             description: "Compiled authorization policy snapshot rebuilds.");
 
     /// <summary>
-    /// Counter of subject-resolution cache hits. Recorded through
-    /// <see cref="RecordSubjectResolutionCacheHit"/> by whichever layer caches
-    /// resolved caller identities, so operators can read the cache hit ratio on
-    /// the authorization meter.
+    /// Counter of subject-resolution cache hits, recorded through
+    /// <see cref="RecordSubjectResolutionCacheHit"/>.
+    /// <para>
+    /// <b>Reserved seam; not emitted in this version.</b> The instrument and its
+    /// <see cref="RecordSubjectResolutionCacheHit"/> entry point are published so
+    /// operators and custom exporters can bind to a stable name and so a future
+    /// version can begin emitting without a surface change, but nothing in the
+    /// shipped resolution pipeline calls it, so no value is currently reported.
+    /// The resolution cache that would source the signal lives in the
+    /// <c>Orleans.Lattice.Membership</c> package, which does not (and, to keep
+    /// the layering acyclic, must not) reference this authorization meter;
+    /// wiring it therefore awaits a dedicated cross-package instrumentation seam
+    /// rather than a backward package dependency. Until then this counter reads
+    /// zero.
+    /// </para>
     /// </summary>
     public static readonly Counter<long> SubjectResolutionCacheHits =
         Meter.CreateCounter<long>(SubjectResolutionCacheHitsName, unit: "{lookup}",
-            description: "Subject-resolution cache hits.");
+            description: "Subject-resolution cache hits (reserved seam; not emitted in this version).");
 
-    /// <summary>Counter of subject-resolution cache misses. See <see cref="RecordSubjectResolutionCacheMiss"/>.</summary>
+    /// <summary>
+    /// Counter of subject-resolution cache misses, recorded through
+    /// <see cref="RecordSubjectResolutionCacheMiss"/>. Like
+    /// <see cref="SubjectResolutionCacheHits"/> this is a <b>reserved seam not
+    /// emitted in this version</b>: the entry point is published for forward
+    /// compatibility but the shipped resolution pipeline never calls it, so the
+    /// counter reads zero. See <see cref="SubjectResolutionCacheHits"/> for why
+    /// the wiring awaits a cross-package instrumentation seam.
+    /// </summary>
     public static readonly Counter<long> SubjectResolutionCacheMisses =
         Meter.CreateCounter<long>(SubjectResolutionCacheMissesName, unit: "{lookup}",
-            description: "Subject-resolution cache misses.");
+            description: "Subject-resolution cache misses (reserved seam; not emitted in this version).");
 
     /// <summary>
     /// Records a subject-resolution cache hit on
     /// <see cref="SubjectResolutionCacheHits"/>. Cheap no-op when no listener is
-    /// attached. Exposed as the public seam through which the caller-identity
-    /// resolution layer reports cache hits into the authorization meter.
+    /// attached. This is the published entry point of a <b>reserved seam</b>: it
+    /// is not called by the shipped caller-identity resolution pipeline in this
+    /// version (see <see cref="SubjectResolutionCacheHits"/>), so the hits
+    /// counter reads zero until a future cross-package instrumentation seam
+    /// begins reporting through it.
     /// </summary>
     public static void RecordSubjectResolutionCacheHit()
     {
@@ -138,7 +160,10 @@ public static class LatticeAuthMetrics
     /// <summary>
     /// Records a subject-resolution cache miss on
     /// <see cref="SubjectResolutionCacheMisses"/>. Cheap no-op when no listener
-    /// is attached.
+    /// is attached. Like <see cref="RecordSubjectResolutionCacheHit"/> this is
+    /// the published entry point of a <b>reserved seam</b> that the shipped
+    /// resolution pipeline does not call in this version, so the misses counter
+    /// reads zero.
     /// </summary>
     public static void RecordSubjectResolutionCacheMiss()
     {
