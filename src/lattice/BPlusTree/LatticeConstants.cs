@@ -76,6 +76,26 @@ internal static class LatticeConstants
     public const string TagIndexTreePrefix = "tag-";
 
     /// <summary>
+    /// Reserved tree-name prefix for the dogfooded system-data trees owned by
+    /// the identity / authorization add-ons - <c>Orleans.Lattice.Membership</c>
+    /// (<c>sys-membership-*</c>) and <c>Orleans.Lattice.Auth</c>
+    /// (<c>sys-auth-*</c>).
+    /// <para>
+    /// Unlike <see cref="SystemTreePrefix"/>, these are real registered
+    /// <see cref="ILattice"/> trees: they self-register, are durable, and stay
+    /// individually readable / scannable / history-inspectable so their contents
+    /// remain auditable through the ordinary read and change-feed surface. They
+    /// are, however, hidden from the default cluster-state tree catalog
+    /// (<see cref="ILatticeRegistry"/> enumeration surfaced through the state
+    /// API), appearing only when a catalog request explicitly opts in to system
+    /// trees, so an operator browsing user data is not shown the internal
+    /// identity / policy stores. Exposed as a named constant so the discovery /
+    /// catalog layer can classify these trees without hardcoding the literal.
+    /// </para>
+    /// </summary>
+    public const string SystemDataTreePrefix = "sys-";
+
+    /// <summary>
     /// The tree ID of the internal registry tree that stores tree metadata
     /// (existence and per-tree <see cref="LatticeOptions"/> overrides).
     /// Each key is a user tree ID; each value is the serialized
