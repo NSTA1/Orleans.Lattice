@@ -154,7 +154,8 @@ sub-issue closes, applying the correct release label.
 | 16 | #1101 | Membership.Entra: Entra ID authenticator | done (merged; 53 focused tests) |
 | 17 | #1102 | Explorer: connect to auth-enabled State API | done (reviewed + merged; provider seam + Entra login + transparent single-flight token refresh + retry-once + tokens-never-persisted + unauthenticated GetAuthScheme advertisement; explorer 380 / entra 17 / api.state.grpc 151 green; F-164) |
 | 18 | #1103 | Security hardening: full security & design review | done (reviewed + merged; 4 findings A1-A4 fixed + regression test each + adversarial suite + capability-stripping IIncomingGrainCallFilter + security-posture doc; coordinator-verified core 5734 / auth 214 / api.state 284 / api.auth 40 / explorer 384 / membership 55 / entra 34; OC-5/OC-7 CLOSED; F-165) |
-| 19 | #986 | Docs, sample & end-to-end tests | in_progress (Feature Dev: docs + sample + e2e + F-162 microbench harness/report + DOC-DEBT README rewrites + subject-cache-counter wiring; coordinator owns features.md + final CHANGELOG; F-162) |
+| 19 | #986 | Docs, sample & end-to-end tests | done (reviewed + merged; docs READMEs rewritten + observability/security-posture; sample samples/AuthorizedAccess builds 0-warn; F-162 benchmark disabled==baseline + full enabled report at benchmark/host/Bench.Microbench/auth-f162/; subject-cache counters documented-as-reserved; coordinator-verified new-auth 11 / DocsSnippet 281 / core Hygiene 11; F-162). SURFACED convergence gap -> row 20. |
+| 20 | (remediation) | Cross-cluster policy auto-convergence gap | in_progress (Bug Hunter: replicated LWW policy write to sys-auth-policy does NOT fire the receiver's IMutationObserver, so CompiledPolicySnapshotMaintainer never auto-rebuilds -> a replicated revoke converges in STATE but never in ENFORCEMENT without a forced RebuildNowAsync / unrelated local write. Convergence e2e masks it by forcing RebuildBAsync; #986 sample observed no rebuild in 60s; maintainer has no periodic timer. Prove with a failing regression test that a replicated policy write flips the peer decision WITHOUT a forced rebuild; fix by publishing the mutation on the replication-apply seam OR a maintainer fallback. Security-critical: voids F-158 eventual path. NOT rule-6 blocking (wiring defect).) |
 
 Out of scope: #1104 (admin UI follow-up).
 
@@ -256,6 +257,27 @@ Out of scope: #1104 (admin UI follow-up).
   finalize the degrade-vs-fail decision in the #1103 security review.
 
 ## Progress log
+
+- 2026-07-04 REVIEWED + MERGED #986 (F-162, docs/sample/e2e/benchmark closeout). Verified
+  myself: new auth fixtures 11/11 (AuthApiStateGroupVisibility, AuthGroupAndPrecedence,
+  SubjectResolutionCacheCounterReserved, SystemTreeReplicationConvergence,
+  UnregisteredAccessGateZeroCost); DocsSnippet 281/281; core Hygiene 11/11; sample
+  samples/AuthorizedAccess builds 0-warn. Benchmark report satisfies F-162: disabled==byte-for-byte
+  baseline (null gate short-circuit) + control group 0 B alloc delta (a); full enabled report
+  across 53 matched cases, +~1.5 KB/op flat + ~+1.4 KB/entry batch, latency vs +/-68.5% noise band (b).
+  Core-test edits minimal + appropriate (DocsSnippet ambient usings + csproj refs to membership/auth
+  for snippet verify). Metrics change = subject-cache counters documented-as-reserved (no behaviour
+  change; matches decision). Merged --no-ff (feat/auth tip 47607653). CHANGELOG F-162 landed.
+  *** CRITICAL FINDING surfaced by #986 residual-risk note + confirmed by me: cross-cluster policy
+  auto-convergence gap. CompiledPolicySnapshotMaintainer rebuilds ONLY via OnMutationAsync (policy-tree
+  IMutationObserver), EnsureWarmAsync (cold), or test-only RebuildNowAsync - NO periodic timer. A
+  replicated LWW write to sys-auth-policy converges in STATE (~1s) but the sample saw no gate rebuild
+  in 60s; the convergence e2e only passes because it forces RebuildBAsync. => replicated policy writes
+  do not fire the receiver's mutation observer, so a cross-cluster REVOKE replicates but is never
+  ENFORCED on the peer until an unrelated event rebuilds. Voids F-158 eventual path (security-critical).
+  Judged a fixable wiring defect, NOT a rule-6 blocker. Dispatching Bug Hunter (row 20) to prove with a
+  failing regression test (replicated policy write flips peer decision WITHOUT forced rebuild) + fix.
+  Staying resident.
 
 - 2026-07-03 REVIEWED + MERGED #1103 (F-165, security hardening). Feature Dev fixed all 4
   findings; I verified each myself. A1 (view-read authz): new ILatticeReadGrantProbe.
