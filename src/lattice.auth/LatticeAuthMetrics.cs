@@ -20,7 +20,7 @@ namespace Orleans.Lattice.Auth;
 /// is zero-cost on the hot path when nobody is listening.
 /// </para>
 /// <para>
-/// The compiled-snapshot <c>epoch</c> and <c>age</c> gauges are
+/// The compiled-snapshot <c>epoch</c>, <c>age</c> and <c>subjects</c> gauges are
 /// <see cref="ObservableGauge{T}"/> instruments backed by the live snapshot
 /// maintainers (see <see cref="AuthSnapshotGaugeRegistry"/>); their measurement
 /// callbacks run only on scrape.
@@ -64,6 +64,13 @@ public static class LatticeAuthMetrics
 
     /// <summary>Canonical name of the compiled-snapshot age observable gauge.</summary>
     public const string SnapshotAgeName = "orleans.lattice.auth.snapshot.age";
+
+    /// <summary>
+    /// Canonical name of the compiled-snapshot subjects observable gauge - the
+    /// number of distinct members (users and groups) for which an authorization
+    /// policy is configured.
+    /// </summary>
+    public const string SnapshotSubjectsName = "orleans.lattice.auth.snapshot.subjects";
 
     /// <summary>
     /// The meter that owns every authorization instrument. Exposed publicly so

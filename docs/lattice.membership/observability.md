@@ -30,6 +30,10 @@ Together they give the cache's hit ratio, which is the signal for tuning `Resolu
 
 The counters live on the membership meter, not the authorization meter, because the cache they measure lives in this package. `Orleans.Lattice.Membership` sits **below** `Orleans.Lattice.Auth` in the package graph, so sourcing the signal here keeps the layering acyclic - membership never references the authorization meter.
 
+## Related: policy-coverage on the authorization meter
+
+How many of the members this package resolves actually have an authorization policy configured is an **authorization** signal, not a membership one: it is derived from the compiled policy in `Orleans.Lattice.Auth`, which sits above membership in the package graph. It is published as the `orleans.lattice.auth.snapshot.subjects` observable gauge (distinct users and groups referenced by policy rules) rather than on this meter, so membership never has to reference the authorization policy store. See [Authorization observability](../lattice.auth/observability.md#policy-coverage-gauge).
+
 ## See also
 
 - [`Orleans.Lattice.Membership`](README.md) - the identity directory and subject-resolution pipeline these instruments observe.

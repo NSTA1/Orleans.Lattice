@@ -70,4 +70,18 @@ public enum LatticeDashboardKind
     /// registered and do not require the replication package.
     /// </summary>
     MaterialisedViews = 4,
+
+    /// <summary>
+    /// Identity and authorization operator view. Charts the enforcement gate's
+    /// decision throughput (by <c>effect</c> and by <c>operation</c>),
+    /// decision-latency percentiles (<c>decision.duration</c>), compiled-snapshot
+    /// rebuild rate and the snapshot <c>epoch</c> / <c>age</c> gauges from the
+    /// <c>orleans.lattice.auth</c> meter, alongside the subject-resolution cache
+    /// hit-ratio and hit / miss throughput from the
+    /// <c>orleans.lattice.membership</c> meter. Sources the
+    /// <c>orleans.lattice.auth</c> and <c>orleans.lattice.membership</c> meters;
+    /// useful only when the authentication / authorization packages are
+    /// registered on the silo.
+    /// </summary>
+    Authorization = 5,
 }

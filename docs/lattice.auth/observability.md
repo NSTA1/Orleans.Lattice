@@ -21,6 +21,11 @@ Recording is guarded by each instrument's `Enabled` flag: when no listener is at
 | Snapshot rebuilds | `orleans.lattice.auth.snapshot.rebuilds` | Counter | Yes | One per successful compiled-policy snapshot rebuild. |
 | Snapshot epoch | `orleans.lattice.auth.snapshot.epoch` | Observable gauge | Yes (on scrape) | The current compiled-policy epoch. |
 | Snapshot age | `orleans.lattice.auth.snapshot.age` | Observable gauge | Yes (on scrape) | Age of the current compiled snapshot. |
+| Snapshot subjects | `orleans.lattice.auth.snapshot.subjects` | Observable gauge | Yes (on scrape) | Distinct members (users and groups) for which a policy is configured. |
+
+### Policy-coverage gauge
+
+`orleans.lattice.auth.snapshot.subjects` reports how many **distinct** members - users and groups - are referenced by at least one rule in the current compiled policy. It is the count of members for which an authorization policy is configured: a user and a group that share an id count separately, and a member referenced by many rules or across many governed trees counts once. The gauge is computed when the snapshot is (re)built, so it moves in step with `snapshot.epoch`, and it reads from the compiled snapshot on scrape without touching storage. Watch it for unexpected drops (a policy edit that removed coverage) or unbounded growth (per-member rules accumulating where a group rule would do).
 
 ### Tags
 
