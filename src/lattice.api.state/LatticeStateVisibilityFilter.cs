@@ -48,6 +48,7 @@ internal sealed class LatticeStateVisibilityFilter
 {
     private readonly ILatticeAccessGate _gate;
     private readonly ILatticeMembershipContext? _membership;
+    private readonly ILatticeReadGrantProbe? _grantProbe;
 
     /// <summary>
     /// Builds the filter from the silo service provider and the resolved state
@@ -59,7 +60,8 @@ internal sealed class LatticeStateVisibilityFilter
             (services ?? throw new ArgumentNullException(nameof(services)))
                 .GetService<ILatticeAccessGate>() ?? NullGate,
             services.GetService<ILatticeMembershipContext>(),
-            (options ?? throw new ArgumentNullException(nameof(options))).ReadVisibility)
+            (options ?? throw new ArgumentNullException(nameof(options))).ReadVisibility,
+            services.GetService<ILatticeReadGrantProbe>())
     {
     }
 
@@ -70,10 +72,12 @@ internal sealed class LatticeStateVisibilityFilter
     internal LatticeStateVisibilityFilter(
         ILatticeAccessGate gate,
         ILatticeMembershipContext? membership,
-        LatticeStateApiReadVisibility visibility)
+        LatticeStateApiReadVisibility visibility,
+        ILatticeReadGrantProbe? grantProbe = null)
     {
         _gate = gate ?? throw new ArgumentNullException(nameof(gate));
         _membership = membership;
+        _grantProbe = grantProbe;
         Enabled = visibility != LatticeStateApiReadVisibility.Disabled && gate is not NullLatticeAccessGate;
     }
 
@@ -136,6 +140,38 @@ internal sealed class LatticeStateVisibilityFilter
         var request = new LatticeAccessRequest(treeId, LatticeOperation.RangeRead, subject);
         var decision = await _gate.AuthorizeAsync(in request, cancellationToken).ConfigureAwait(false);
         return decision.Allowed;
+    }
+
+    /// <summary>
+    /// <see langword="true"/> when <paramref name="subject"/> can read at least
+    /// one key of <paramref name="treeId"/> - the structural existence-hiding
+    /// signal. Unlike <see cref="CanReadTreeAsync"/>, this distinguishes a subject
+    /// with a partial (prefix) grant, which must keep the tree visible, from a
+    /// subject with no grant at all, which must not learn the tree exists: a
+    /// per-key gate decision reports allow-with-filter for both once the tree
+    /// carries per-key rules. Uses the registered
+    /// <see cref="ILatticeReadGrantProbe"/> when present; when it is absent (no
+    /// auth add-on, so nothing is being hidden) it falls back to the plain
+    /// per-tree decision. An anonymous subject is always <see langword="false"/>.
+    /// </summary>
+    public async ValueTask<bool> CanReadAnyKeyAsync(
+        string treeId,
+        LatticeSubject subject,
+        CancellationToken cancellationToken)
+    {
+        if (subject.IsAnonymous)
+        {
+            return false;
+        }
+
+        if (_grantProbe is { } probe)
+        {
+            return await probe
+                .HasAnyGrantAsync(treeId, subject, LatticeOperation.RangeRead, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        return await CanReadTreeAsync(treeId, subject, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

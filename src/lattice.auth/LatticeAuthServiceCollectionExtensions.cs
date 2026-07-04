@@ -135,9 +135,40 @@ public static class LatticeAuthServiceCollectionExtensions
         // so this add-on becomes the enforcement control point. Replace (not
         // TryAdd) guarantees exactly one ILatticeAccessGate resolves and it is
         // the policy gate; the LatticeGrain choke point already routes every
-        // user-originated operation through the resolved gate.
+        // user-originated operation through the resolved gate. The gate is
+        // registered as its own singleton so both the enforcement interface and
+        // the read-grant probe below resolve the same instance.
+        builder.Services.TryAddSingleton<PolicyAccessGate>();
         builder.Services.Replace(
-            ServiceDescriptor.Singleton<ILatticeAccessGate, PolicyAccessGate>());
+            ServiceDescriptor.Singleton<ILatticeAccessGate>(sp => sp.GetRequiredService<PolicyAccessGate>()));
+
+        // Existence-hiding probe (issue #1103): the state API resolves this to
+        // decide whether a caller that cannot read any key of a tree should even
+        // learn the tree (or a view over it) exists. It is the structural "any
+        // grant" signal a plain per-key decision cannot give (a tree with per-key
+        // rules yields allow-with-filter for every subject). Same instance as the
+        // gate; absent on a no-auth cluster, so the consumer falls back.
+        builder.Services.TryAddSingleton<ILatticeReadGrantProbe>(
+            sp => sp.GetRequiredService<PolicyAccessGate>());
+
+        // Trust-boundary wiring (issue #1103): install the silo-wide incoming
+        // call filter that re-derives the internal capability markers from the
+        // real caller identity on every hop - stripping any reserved capability
+        // key (system-origin, view scopes, internal-origin, replication /
+        // maintenance origin) that an external client tried to forge - the
+        // caller credential is exempt, as it is a re-validated authentication
+        // input rather than a bypass capability - and stamping the
+        // internal-origin marker on genuine silo-to-silo
+        // calls so the shard / leaf internal-origin assertion passes. Registered
+        // only here, so a no-auth cluster never installs it and pays nothing.
+        builder.AddIncomingGrainCallFilter<LatticeCapabilityStrippingCallFilter>();
+
+        // Sentinel signalling that the stripping filter above is active, so the
+        // shard / leaf internal-origin assertion enforces (rather than short-
+        // circuiting). Keyed on the filter's presence, not merely on a non-null
+        // access gate, so a cluster with a custom gate but no filter is never
+        // rejected on its own legitimate facade-to-shard hops.
+        builder.Services.TryAddSingleton<LatticeInternalOriginEnforcementMarker>();
 
         return builder;
     }

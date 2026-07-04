@@ -62,6 +62,36 @@ public class JwtCredentialAuthenticatorTests
         return new JsonWebTokenHandler().CreateToken(descriptor);
     }
 
+    // Mints an unsigned token (the "alg":"none" downgrade attack): a well-formed
+    // JWT with a header and payload but no signature part.
+    private static string MintUnsignedToken(string issuer = Issuer, string subject = "user-1")
+    {
+        var descriptor = new SecurityTokenDescriptor
+        {
+            Issuer = issuer,
+            Audience = Audience,
+            Subject = new ClaimsIdentity(new[] { new Claim("sub", subject) }),
+            Expires = DateTime.UtcNow.AddHours(1),
+        };
+
+        return new JsonWebTokenHandler().CreateToken(descriptor);
+    }
+
+    // Mints a validly-signed token but for an untrusted audience.
+    private static string MintTokenForAudience(string audience, string subject = "user-1")
+    {
+        var descriptor = new SecurityTokenDescriptor
+        {
+            Issuer = Issuer,
+            Audience = audience,
+            Subject = new ClaimsIdentity(new[] { new Claim("sub", subject) }),
+            Expires = DateTime.UtcNow.AddHours(1),
+            SigningCredentials = new SigningCredentials(SigningKey, SecurityAlgorithms.HmacSha256),
+        };
+
+        return new JsonWebTokenHandler().CreateToken(descriptor);
+    }
+
     [Test]
     public void Constructor_null_options_throws()
     {
@@ -159,6 +189,46 @@ public class JwtCredentialAuthenticatorTests
         var authenticator = CreateAuthenticator();
 
         var principal = await authenticator.AuthenticateAsync(new LatticeCredential(string.Empty));
+
+        Assert.That(principal, Is.Null);
+    }
+
+    [Test]
+    public async Task AuthenticateAsync_unsigned_alg_none_token_returns_null()
+    {
+        // A silo that accepted an "alg":"none" token would let any client forge an
+        // identity with no key at all. The authenticator requires a trusted
+        // signature, so the unsigned token must resolve to no principal.
+        var authenticator = CreateAuthenticator();
+        var credential = new LatticeCredential(MintUnsignedToken(subject: "attacker"));
+
+        var principal = await authenticator.AuthenticateAsync(credential);
+
+        Assert.That(principal, Is.Null);
+    }
+
+    [Test]
+    public async Task AuthenticateAsync_wrong_audience_token_returns_null()
+    {
+        // A token minted for a different relying party must not authenticate here,
+        // even though it is validly signed by the trusted key.
+        var authenticator = CreateAuthenticator();
+        var credential = new LatticeCredential(MintTokenForAudience("some-other-service"));
+
+        var principal = await authenticator.AuthenticateAsync(credential);
+
+        Assert.That(principal, Is.Null);
+    }
+
+    [Test]
+    public async Task AuthenticateAsync_wrong_issuer_token_returns_null()
+    {
+        // A validly-signed token from an untrusted issuer must be rejected: the
+        // configured issuer is the anchor of trust for the whole token.
+        var authenticator = CreateAuthenticator();
+        var credential = new LatticeCredential(MintToken(issuer: "https://evil.example/"));
+
+        var principal = await authenticator.AuthenticateAsync(credential);
 
         Assert.That(principal, Is.Null);
     }

@@ -177,6 +177,42 @@ public class EntraCredentialAuthenticatorTests
     }
 
     [Test]
+    public async Task AuthenticateAsync_wildcard_common_issuer_token_is_rejected()
+    {
+        // A token whose tenant id is on the allow-list but whose issuer is the
+        // multi-tenant "common" authority (not the concrete per-tenant issuer)
+        // must be rejected: the validator pins the concrete tenant issuer, so a
+        // wildcard-issuer token cannot impersonate a listed tenant.
+        using var authority = new EntraTestAuthority();
+        var authenticator = CreateAuthenticator(authority);
+        var token = authority.MintToken(
+            tenantId: EntraTestAuthority.TenantId,
+            issuer: "https://login.microsoftonline.com/common/v2.0");
+
+        var principal = await authenticator.AuthenticateAsync(new LatticeCredential(token));
+
+        Assert.That(principal, Is.Null);
+    }
+
+    [Test]
+    public async Task AuthenticateAsync_templated_placeholder_issuer_token_is_rejected()
+    {
+        // A token whose issuer carries the literal "{tenantid}" template placeholder
+        // rather than a resolved tenant guid must be rejected: issuer validation
+        // resolves the template to the concrete allowed tenant and does not accept
+        // the unresolved placeholder.
+        using var authority = new EntraTestAuthority();
+        var authenticator = CreateAuthenticator(authority);
+        var token = authority.MintToken(
+            tenantId: EntraTestAuthority.TenantId,
+            issuer: "https://login.microsoftonline.com/{tenantid}/v2.0");
+
+        var principal = await authenticator.AuthenticateAsync(new LatticeCredential(token));
+
+        Assert.That(principal, Is.Null);
+    }
+
+    [Test]
     public async Task AuthenticateAsync_overage_with_resolver_expands_full_membership()
     {
         using var authority = new EntraTestAuthority();

@@ -111,6 +111,7 @@ internal sealed partial class BPlusLeafGrain
     /// <inheritdoc />
     public async Task<CrdtApplyResult> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes)
     {
+        EnsureInternalOrigin(LatticeOperation.CrdtApply);
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(deltaBytes);
         if (mode == LatticeMergeMode.LwwRegister)

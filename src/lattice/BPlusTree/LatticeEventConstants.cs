@@ -379,4 +379,19 @@ public static class LatticeEventConstants
     /// key directly.
     /// </summary>
     internal const string AccessGateSystemOriginRequestContextKey = "ol.sysorig";
+
+    /// <summary>
+    /// Orleans <c>RequestContext</c> key used to positively mark the current
+    /// inbound grain call as originating from <em>inside</em> the cluster's trust
+    /// boundary (a silo-to-silo / grain-to-grain hop) rather than from an external
+    /// Orleans client. It is re-derived fresh at every silo hop by
+    /// <see cref="LatticeCapabilityStrippingCallFilter"/> from the actual caller
+    /// identity - it is never trusted from the wire - so a malicious client cannot
+    /// forge it. The internal-origin assertion on the shard / leaf grains
+    /// (<see cref="LatticeInternalOriginContext.IsInternalGrainOrigin"/>) reads it
+    /// to reject a direct external grain call that tries to bypass the facade's
+    /// access gate. Present only when the authorization layer is registered; a
+    /// no-auth cluster never sets or reads it.
+    /// </summary>
+    internal const string InternalGrainOriginRequestContextKey = "ol.igo";
 }

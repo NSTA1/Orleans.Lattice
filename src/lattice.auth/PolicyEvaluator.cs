@@ -102,6 +102,39 @@ internal static class PolicyEvaluator
             reason);
     }
 
+    /// <summary>
+    /// <c>true</c> when <paramref name="subject"/> can read at least one key of
+    /// <paramref name="treeId"/> under <paramref name="operation"/> - the
+    /// structural "any grant" signal that existence-hiding needs. A non-anonymous
+    /// subject reads by default when the tree's default effect is allow; otherwise
+    /// it needs at least one allow rule whose effective decision at its own scope
+    /// resolves to allow (see <see cref="CompiledTree.HasAnyResolvedAllow"/>). This
+    /// distinguishes a partial (prefix) grant - which must keep the tree visible -
+    /// from no grant at all, which a plain collection decision cannot do (that is
+    /// allow-with-filter for every subject once the tree carries per-key rules).
+    /// </summary>
+    public static bool HasAnyGrant(
+        CompiledPolicy policy,
+        LatticeAuthOptions options,
+        in LatticeSubject subject,
+        string treeId,
+        LatticeOperation operation)
+    {
+        if (options.DefaultEffect == LatticeEffect.Allow)
+        {
+            // Default-allow: a non-anonymous subject can read every tree it is not
+            // explicitly denied on, so it can always read at least one key.
+            return true;
+        }
+
+        if (!policy.TryGetTree(treeId, out var tree) || tree is null)
+        {
+            return false;
+        }
+
+        return tree.HasAnyResolvedAllow(subject, operation, options.UserRuleBeatsGroupRuleAtEqualScope);
+    }
+
     private static LatticeAccessDecision FromMatch(
         in PolicyMatch match,
         LatticeEffect defaultEffect,
