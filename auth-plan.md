@@ -155,7 +155,7 @@ sub-issue closes, applying the correct release label.
 | 17 | #1102 | Explorer: connect to auth-enabled State API | done (reviewed + merged; provider seam + Entra login + transparent single-flight token refresh + retry-once + tokens-never-persisted + unauthenticated GetAuthScheme advertisement; explorer 380 / entra 17 / api.state.grpc 151 green; F-164) |
 | 18 | #1103 | Security hardening: full security & design review | done (reviewed + merged; 4 findings A1-A4 fixed + regression test each + adversarial suite + capability-stripping IIncomingGrainCallFilter + security-posture doc; coordinator-verified core 5734 / auth 214 / api.state 284 / api.auth 40 / explorer 384 / membership 55 / entra 34; OC-5/OC-7 CLOSED; F-165) |
 | 19 | #986 | Docs, sample & end-to-end tests | done (reviewed + merged; docs READMEs rewritten + observability/security-posture; sample samples/AuthorizedAccess builds 0-warn; F-162 benchmark disabled==baseline + full enabled report at benchmark/host/Bench.Microbench/auth-f162/; subject-cache counters documented-as-reserved; coordinator-verified new-auth 11 / DocsSnippet 281 / core Hygiene 11; F-162). SURFACED convergence gap -> row 20. |
-| 20 | (remediation) | Cross-cluster policy auto-convergence gap | in_progress (Bug Hunter: replicated LWW policy write to sys-auth-policy does NOT fire the receiver's IMutationObserver, so CompiledPolicySnapshotMaintainer never auto-rebuilds -> a replicated revoke converges in STATE but never in ENFORCEMENT without a forced RebuildNowAsync / unrelated local write. Convergence e2e masks it by forcing RebuildBAsync; #986 sample observed no rebuild in 60s; maintainer has no periodic timer. Prove with a failing regression test that a replicated policy write flips the peer decision WITHOUT a forced rebuild; fix by publishing the mutation on the replication-apply seam OR a maintainer fallback. Security-critical: voids F-158 eventual path. NOT rule-6 blocking (wiring defect).) |
+| 20 | (remediation) | Cross-cluster policy auto-convergence gap | done (reviewed + merged; Bug Hunter root-caused: the LWW replication-apply merge path BPlusLeafGrain.MergeIntoStateAsync applied+WAL'd+digested but never published IMutationObserver, so the receiver snapshot never auto-rebuilt. FIX: publish per-key Set/Delete observers on the non-migration merge-apply path under a commit-log scope, gated by HasObservers; core takes no auth dependency; gate bypass untouched; observer is a nudge-only seam so no re-ship loop (shipper origin filter unchanged); MergeIntoStateAsync is off the local write path so no double-publish; migration stays silent; zero-cost when no observers. Proven by 2 new no-forced-rebuild convergence tests fail-before/pass-after. Coordinator-verified: convergence 4/4, core MutationObserver|ReplicationApply|MergeMany|CrossShardMigration 141/141. Beneficial side effect: membership cache now also invalidates on replicated membership writes.) |
 
 Out of scope: #1104 (admin UI follow-up).
 
@@ -257,6 +257,30 @@ Out of scope: #1104 (admin UI follow-up).
   finalize the degrade-vs-fail decision in the #1103 security review.
 
 ## Progress log
+
+- 2026-07-04 REVIEWED + MERGED convergence remediation (row 20; the F-158 eventual-enforcement gap).
+  Bug Hunter root-caused: replicated LWW writes route ApplySetAsync/ApplyDeleteAsync -> ApplyMergeOneAsync
+  -> MergeManyAsync -> BPlusLeafGrain.MergeIntoStateAsync, which applied+WAL'd+advanced-clock+digested but
+  never called PublishSet/DeleteAsync (documented "silent by design"), so the receiver's policy-tree
+  IMutationObserver never fired and CompiledPolicySnapshotMaintainer never auto-rebuilt. FIX (36 LoC in
+  BPlusLeafGrain.MergeIntoStateAsync): publish per-key Set/Delete observers on the non-migration merge path
+  under LatticeCommitLogContext.BeginScope(), gated `!isCrossShardMigration && appliedAny &&
+  mutationObservers.HasObservers`, publishing the committed row (tombstone-aware). I VERIFIED MYSELF: (a)
+  ReplicationMutationObserver.OnMutationAsync is a NUDGE-only seam (line 173-178: "durable change-feed
+  record was already written to the leaf WAL ... nothing is built here"; just _sink.WriteAsync) so capture
+  stays WAL-tail-driven and loop-prevention is the shipper origin filter (UNCHANGED) -> no re-ship
+  loop/amplification, only makes the receiver pump its own outbound shipper sooner (which then skips the
+  foreign-origin entry); (b) MergeIntoStateAsync is reached ONLY via MergeManyAsync (replication apply /
+  split-recovery re-merge / migration) NOT the local CommitSet path -> no double-publish; (c) migration
+  stays silent; (d) gate system-origin bypass untouched (only observer publication wired, core takes no
+  auth dependency); (e) zero-cost when no observers. Proof: 2 new no-forced-rebuild convergence tests
+  fail-before (timeout waiting for auto-rebuild) / pass-after. Coordinator-verified focused: convergence
+  4/4 (2 old forced + 2 new auto), core MutationObserver|ReplicationApply|MergeMany|CrossShardMigration
+  141/141. No CHANGELOG entry needed (F-158 is unreleased; its "the policy change-feed settles" wording is
+  now truthful). Beneficial side effect: MembershipResolutionCache (same seam) now also invalidates on
+  replicated membership writes - the identical latent gap for lattice.membership, now closed. Merged
+  --no-ff into feat/auth. ALL 20 rows DONE. NEXT: rule-7 closeout (full suite incl chaos -> features.md
+  Shipped -> epic PR Closes #971).
 
 - 2026-07-04 REVIEWED + MERGED #986 (F-162, docs/sample/e2e/benchmark closeout). Verified
   myself: new auth fixtures 11/11 (AuthApiStateGroupVisibility, AuthGroupAndPrecedence,
