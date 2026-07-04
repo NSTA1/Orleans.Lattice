@@ -161,6 +161,7 @@ Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Is
 - [F-164](https://github.com/NSTA1/Orleans.Lattice/issues/1102) - Orleans.Lattice.Explorer: connect to an auth-enabled State API with extensible login challenge
 - [F-165](https://github.com/NSTA1/Orleans.Lattice/issues/1103) - Membership/Auth: security hardening - full security & design review with regression coverage
 - [F-166](https://github.com/NSTA1/Orleans.Lattice/issues/1095) - Orleans.Lattice.Api.Data: external read-write data-plane API for non-.NET clients
+- [F-167](https://github.com/NSTA1/Orleans.Lattice/issues/1101) - Orleans.Lattice.Membership.Entra: first-class Microsoft Entra ID authenticator specializing the built-in JWT base (OIDC discovery, `oid`/`tid`/`groups`, groups-overage via Graph)
 - [P-000](https://github.com/NSTA1/Orleans.Lattice/issues/555) - Server-side predicate filtering (expression-tree push-down) for typed reads, scans, cursors, and conditional mutations
 - [P-001](https://github.com/NSTA1/Orleans.Lattice/issues/556) - Expression-tree predicate IR + server-side document-model evaluator (umbrella spine)
 - [P-002](https://github.com/NSTA1/Orleans.Lattice/issues/557) - `GetManyAsync<T>` server-side predicate push-down
