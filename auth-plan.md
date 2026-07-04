@@ -153,7 +153,7 @@ sub-issue closes, applying the correct release label.
 | 15 | #985 | Api.Auth.Grpc: gRPC binding, client, meta-auth | done (merged; LatticeAuthApiGrpcClient + DenyAll meta-authorizer + facade self-auth two-layer, deny->PermissionDenied, oli. wire aliases; grpc 89 + api.auth 36; F-161) |
 | 16 | #1101 | Membership.Entra: Entra ID authenticator | done (merged; 53 focused tests) |
 | 17 | #1102 | Explorer: connect to auth-enabled State API | done (reviewed + merged; provider seam + Entra login + transparent single-flight token refresh + retry-once + tokens-never-persisted + unauthenticated GetAuthScheme advertisement; explorer 380 / entra 17 / api.state.grpc 151 green; F-164) |
-| 18 | #1103 | Security hardening: full security & design review | in_progress (security-review agent enumerating findings; then Feature Dev implements adversarial suite + IIncomingGrainCallFilter + closes OC-3/5/7; F-165) |
+| 18 | #1103 | Security hardening: full security & design review | done (reviewed + merged; 4 findings A1-A4 fixed + regression test each + adversarial suite + capability-stripping IIncomingGrainCallFilter + security-posture doc; coordinator-verified core 5734 / auth 214 / api.state 284 / api.auth 40 / explorer 384 / membership 55 / entra 34; OC-5/OC-7 CLOSED; F-165) |
 | 19 | #986 | Docs, sample & end-to-end tests | pending |
 
 Out of scope: #1104 (admin UI follow-up).
@@ -256,6 +256,33 @@ Out of scope: #1104 (admin UI follow-up).
   finalize the degrade-vs-fail decision in the #1103 security review.
 
 ## Progress log
+
+- 2026-07-03 REVIEWED + MERGED #1103 (F-165, security hardening). Feature Dev fixed all 4
+  findings; I verified each myself. A1 (view-read authz): new ILatticeReadGrantProbe.
+  HasAnyGrantAsync gates view entry reads + tree catalog on CanRead(sourceTree), anonymous
+  denied; HasAnyResolvedAllow resolves each scope via ResolvePoint so equal-scope allow+deny
+  correctly hides (safe direction); residual over-report only under DefaultEffect=Allow
+  (open posture, documented) - primary no-grant/anonymous read-around CLOSED -> OC-5 CLOSED.
+  A2 (control-plane isolation): PolicyAccessGate.EvaluateControlPlane forces Deny on unmatched
+  reserved sys-auth-* regardless of DefaultEffect; bootstrap admin allowed earlier; data-plane
+  default-allow UNAFFECTED -> OC-7 CLOSED. A3 (Explorer insecure-channel): flag now gated on
+  http+AllowUnencryptedHttp2 like replication transports; https keeps gRPC refusal. A4 (internal
+  grain bypass): sentinel-keyed internal-origin assertion on shard/leaf mutations; verified the
+  full core suite (5734) still green so no legit facade/replication/maintenance/bulk-load path
+  broke. Capability-stripping IIncomingGrainCallFilter: strips ol.sysorig/view/internal/maint/
+  replication keys from external-client calls, re-stamps internal-origin on in-cluster hops;
+  DISCRIMINATOR VERIFIED NOT SPOOFABLE - external Orleans client id is always a random GUID key
+  (LocalClientDetails -> ClientGrainId.Create()); only the in-silo HostedClient uses hosted-
+  {siloAddress}, no operator override (checked Orleans 10.2.0 source). ol.cred deliberately NOT
+  stripped (re-validated by authenticator; forged -> anonymous). Coordinator dependency CVE scan:
+  all 39 projects CLEAN. Coordinator-verified focused suites all green (core 5734 / auth 214 /
+  api.state 284 / api.auth 40 / explorer 384 / membership 55 / entra 34). Filter adds a bounded
+  per-internal-call RequestContext.Set when auth is ON (zero when off) - to be captured by the
+  F-162 microbench in #986. security-posture.md added. CHANGELOG F-165 landed. ALL OPEN CONCERNS
+  now closed except DOC-DEBT (stale package READMEs + subject-cache counters -> #986). NEXT +
+  FINAL feature: #986 (docs/sample/e2e + F-162 benchmark: zero-impact-when-disabled proof + full
+  microbench report when enabled + rewrite stale READMEs). Then rule-7 full suite incl chaos ->
+  features.md Shipped -> epic PR Closes #971.
 
 - 2026-07-03 #1103 SECURITY REVIEW findings (security-review agent, read-only). 4 findings +
   clean conclusions. Dependency CVE scan (coordinator): all 39 projects CLEAN (item 12).
