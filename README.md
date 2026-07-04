@@ -60,6 +60,7 @@ Behaviour is validated end-to-end by a suite of [chaos tests](docs/lattice/chaos
 | **Resize** | Change `MaxLeafKeys` or `MaxInternalChildren` on a live tree, undoable within the retention window. | [Tree Sizing](docs/lattice/tree-sizing.md) | [sample](samples/Resize/README.md) |
 | **Retry policy** | Opt-in retry surface for transient storage faults with caller-supplied idempotency keys. Library default is zero ambient cost. | [Retry Policy](docs/lattice/retry-policy.md) | [sample](samples/RetryPolicy/README.md) |
 | **Scalable writes** | Keys are sharded across many independent sub-trees. No single-root bottleneck. | [Architecture](docs/lattice/architecture.md) | n/a |
+| **Security** | Opt-in identity, authorization, and enforcement: authenticate callers (JWT, Entra, or a custom scheme), resolve them to subjects with nested-group membership, and enforce fail-closed default-deny policy per tree, prefix, or key on the core data path and the external APIs. | [Security](docs/lattice/security.md) | [sample](samples/AuthorizedAccess/README.md) |
 | **Snapshots** | Point-in-time copy of a tree - offline (source locked) or online (source available). | [Snapshots](docs/lattice/snapshots.md) | [sample](samples/Snapshots/README.md) |
 | **Snapshot cursors** | Zero-observable-writes server-checkpointed iterators: every page reflects the tree state captured at open time, isolated from foreground writes, sagas, range deletes, and replication. | [Snapshot Cursors](docs/lattice/snapshot-cursors.md) | [sample](samples/SnapshotCursors/README.md) |
 | **Soft delete & recovery** | Trees can be soft-deleted with a configurable retention window. Recovery restores full access; purge permanently removes all data. | [Tree Deletion](docs/lattice/tree-deletion.md) | [sample](samples/SoftDeleteRecovery/README.md) |
@@ -104,6 +105,7 @@ Use these documents for day-to-day use and operations:
 
 - [API Reference](docs/lattice/api.md) - the public `ILattice` interface, batch operations, options, and serializable types.
 - [Configuration](docs/lattice/configuration.md) - options reference, per-tree overrides, immutability constraints, storage provider.
+- [Security](docs/lattice/security.md) - opt-in identity, authorization, and enforcement: how membership, policy, fail-closed enforcement, the external APIs, and cross-cluster convergence fit together, with links to each package.
 - [Predicate Operations](docs/lattice/predicated-operations.md) - server-side predicate push-down for typed reads, conditional and atomic writes, scans, cursors, and range deletes.
 - [Queues](docs/lattice/queues.md) - the public `ILatticeQueue<T>` cluster-internal FIFO primitive, bounded-queue eviction, and throughput guidance.
 - [Compression](docs/lattice/compression.md) - the public `ILatticeCompressor` seam, `AddLatticeCompressor` registration, tag-space partitioning, and how to plug in a custom algorithm.
@@ -141,8 +143,13 @@ Each optional add-on ships as its own NuGet package with its own documentation s
 | `Orleans.Lattice.Api.State.Grpc` | The code-first gRPC binding and public client for the read-only state API. | [README](docs/lattice.api.state.grpc/README.md) |
 | `Orleans.Lattice.Storage.AzureTable` | The durable Azure Table Storage write-ahead-log backend. | [README](docs/lattice.storage.azuretable/README.md) |
 | `Orleans.Lattice.Membership` | Identity directory and credential-to-subject resolution: users, groups, transitive membership, and pluggable authenticators. | [README](docs/lattice.membership/README.md) |
+| `Orleans.Lattice.Membership.Entra` | Microsoft Entra ID (Azure AD) credential authenticator for the membership layer. | [README](docs/lattice.membership.entra/README.md) |
+| `Orleans.Lattice.Membership.Entra.Graph` | Microsoft Graph-backed group-overflow resolver for the Entra authenticator, for subjects whose group claims exceed the token. | [README](docs/lattice.membership.entra.graph/README.md) |
 | `Orleans.Lattice.Auth` | Authorization and enforcement: durable policy store, decision engine, and the fail-closed access gate the data path consults. | [README](docs/lattice.auth/README.md) |
 | `Orleans.Lattice.Api.Auth` | Transport-agnostic control facade for administering membership and policy and explaining authorization decisions. | [README](docs/lattice.api.auth/README.md) |
+| `Orleans.Lattice.Api.Auth.Grpc` | The code-first gRPC binding and public client for the authorization control facade. | [README](docs/lattice.api.auth.grpc/README.md) |
+| `Orleans.Lattice.Api.Data` | Write-capable external data-plane facade: point set/delete, point and bounded-range reads, and single- and cross-tree atomic batches for non-.NET clients, each authorized through the core gate. | [README](docs/lattice.api.data/README.md) |
+| `Orleans.Lattice.Api.Data.Grpc` | The code-first gRPC binding and public client for the read-write data-plane API. | [README](docs/lattice.api.data/README.md) |
 | `Orleans.Lattice.Dashboards` | Bundled Grafana dashboards and provisioning templates for the `orleans.lattice` and `orleans.lattice.replication` meters. | [README](docs/lattice.dashboards/README.md) |
 
 ## Releases
