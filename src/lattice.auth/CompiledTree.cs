@@ -217,6 +217,53 @@ internal sealed class CompiledTree
     }
 
     /// <summary>
+    /// <c>true</c> when <paramref name="subject"/> has at least one allow grant on
+    /// this tree for <paramref name="operation"/> whose effective decision at its
+    /// own scope resolves to allow - a whole-tree rule, or an exact / prefix rule
+    /// that is not shadowed by a deny at the same or a more specific scope. This is
+    /// the structural "can read at least one key" signal that existence-hiding
+    /// needs: unlike a collection decision (which is allow-with-filter for any
+    /// subject once the tree carries per-key rules), this distinguishes a subject
+    /// that holds a partial grant from one that holds none. Walks every scope tier
+    /// once; used only off the hot path (a visibility probe), never on a data-plane
+    /// read.
+    /// </summary>
+    public bool HasAnyResolvedAllow(
+        in LatticeSubject subject,
+        LatticeOperation operation,
+        bool userRuleBeatsGroupRule)
+    {
+        // Whole-tree (least specific) grant covers every key.
+        var treeWide = ResolvePoint(subject, operation, key: null, userRuleBeatsGroupRule);
+        if (treeWide.Matched && treeWide.Effect == LatticeEffect.Allow)
+        {
+            return true;
+        }
+
+        // Any exact-key grant whose decision at that key resolves to allow.
+        foreach (var key in _exact.Keys)
+        {
+            var m = ResolvePoint(subject, operation, key, userRuleBeatsGroupRule);
+            if (m.Matched && m.Effect == LatticeEffect.Allow)
+            {
+                return true;
+            }
+        }
+
+        // Any prefix grant whose decision at the prefix boundary resolves to allow.
+        foreach (var prefix in _prefixes)
+        {
+            var m = ResolvePoint(subject, operation, prefix, userRuleBeatsGroupRule);
+            if (m.Matched && m.Effect == LatticeEffect.Allow)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Compiles the rules governing one tree into the tiered index. All supplied
     /// rules must share the same governed tree id.
     /// </summary>

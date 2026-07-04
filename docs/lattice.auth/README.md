@@ -17,6 +17,7 @@ There is nothing to register and nothing to call yet. Everything else is tracked
 
 ## Reference
 
+- [Security posture](security-posture.md) - threat model, attack surface, fail-closed guarantees, the internal-grain trust boundary, TLS expectations, and the security-review findings with their resolutions.
 - [Auth Feature Index](features.md) - grouped, issue-linked index of the `Orleans.Lattice.Auth` package's tracked features.
 
 Feature planning is managed on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), not in roadmap files.

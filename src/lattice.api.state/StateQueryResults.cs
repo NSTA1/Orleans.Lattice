@@ -298,4 +298,15 @@ public sealed record EntryHistoryResult
         ArgumentNullException.ThrowIfNull(key);
         return new EntryHistoryResult { Status = StateQueryStatus.TreeNotFound, TreeId = treeId, Key = key };
     }
+
+    /// <summary>
+    /// Builds a key-not-found result: the tree exists and is readable, but the
+    /// requested key is not readable by (or not present for) the caller.
+    /// </summary>
+    public static EntryHistoryResult KeyNotFound(string treeId, string key)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentNullException.ThrowIfNull(key);
+        return new EntryHistoryResult { Status = StateQueryStatus.KeyNotFound, TreeId = treeId, Key = key };
+    }
 }

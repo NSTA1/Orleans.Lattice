@@ -30,7 +30,7 @@ internal sealed class PolicyAccessGate(
     LatticeDecisionEngine engine,
     CompiledPolicySnapshotMaintainer maintainer,
     LatticeAuthDecisionObserver observer,
-    IOptionsMonitor<LatticeAuthOptions> options) : ILatticeAccessGate
+    IOptionsMonitor<LatticeAuthOptions> options) : ILatticeAccessGate, ILatticeReadGrantProbe
 {
     /// <inheritdoc />
     public ValueTask<LatticeAccessDecision> AuthorizeAsync(
@@ -48,6 +48,27 @@ internal sealed class PolicyAccessGate(
             var allow = LatticeAccessDecision.Allow();
             observer.Observe(in request, in allow, default, maintainer.CurrentEpoch, start);
             return new ValueTask<LatticeAccessDecision>(allow);
+        }
+
+        // Control-plane isolation (issue #1103). The reserved authorization
+        // namespace (sys-auth-*) governs the gate itself - membership and policy -
+        // so its access decision must be independent of the data-plane
+        // DefaultEffect. A non-bootstrap caller only reaches this point because it
+        // is not a break-glass administrator; since no rule may be scoped at the
+        // reserved namespace (the store rejects it), an unmatched request MUST
+        // fail closed to Deny even under DefaultEffect=Allow. Without this, an
+        // unmatched admin request would inherit Allow and any caller (including an
+        // anonymous one) could rewrite membership and policy - a full
+        // control-plane takeover. The infrastructure's own reads and writes of
+        // this namespace run system-origin and never reach the gate, so they are
+        // unaffected; only a genuine external control-plane request is governed
+        // here. An explicit matched Allow (a future separately-modelled grant) is
+        // still honoured.
+        if (LatticeAuthReservedTrees.IsReserved(request.TreeId))
+        {
+            var controlPlane = EvaluateControlPlane(in request);
+            observer.Observe(in request, in controlPlane, default, maintainer.CurrentEpoch, start);
+            return new ValueTask<LatticeAccessDecision>(controlPlane);
         }
 
         // Optional strict-consistency policy-epoch fence (issue #982), off by
@@ -129,10 +150,76 @@ internal sealed class PolicyAccessGate(
             request.RangeStart,
             request.RangeEnd);
 
+    /// <summary>
+    /// Evaluates a request that targets the reserved authorization namespace
+    /// (<c>sys-auth-*</c>) with <b>control-plane isolation</b>: the decision is
+    /// forced closed (Deny) on every outcome that is not an explicit matched
+    /// Allow, so the data-plane <see cref="LatticeAuthOptions.DefaultEffect"/> can
+    /// never grant control of the gate. Bootstrap administrators never reach here
+    /// (they are allowed earlier), so this governs only non-bootstrap callers,
+    /// which - absent a rule that can be scoped at the reserved namespace - always
+    /// resolve to Deny.
+    /// </summary>
+    private LatticeAccessDecision EvaluateControlPlane(in LatticeAccessRequest request)
+    {
+        var decision = engine.Evaluate(
+            request.Subject,
+            request.TreeId,
+            request.Operation,
+            request.Key,
+            request.RangeStart,
+            request.RangeEnd,
+            out var match);
+
+        if (match.Matched && match.Effect == LatticeEffect.Allow && decision.Allowed)
+        {
+            return decision;
+        }
+
+        return LatticeAccessDecision.Deny(
+            "Control-plane isolation: the reserved authorization namespace is governed only by "
+            + "bootstrap administrators (or an explicit matched allow rule); an unmatched request is "
+            + "denied independently of the data-plane default effect.");
+    }
+
     private bool IsBootstrapAdministrator(string subjectId)
     {
         var admins = options.CurrentValue.BootstrapAdministrators;
         return admins.Count > 0 && admins.Contains(subjectId);
+    }
+
+    /// <inheritdoc />
+    public ValueTask<bool> HasAnyGrantAsync(
+        string treeId,
+        LatticeSubject subject,
+        LatticeOperation operation,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+
+        // An unauthenticated caller can never read any key.
+        if (subject.IsAnonymous)
+        {
+            return new ValueTask<bool>(false);
+        }
+
+        // Root-of-trust: a bootstrap administrator can read every tree.
+        if (IsBootstrapAdministrator(subject.SubjectId))
+        {
+            return new ValueTask<bool>(true);
+        }
+
+        // Control-plane isolation: the reserved authorization namespace is never
+        // visible to a non-bootstrap caller by default effect - only an explicit
+        // matched allow grant makes it so. Mirror the enforcement path so a caller
+        // that cannot administer the namespace also cannot learn it exists.
+        if (LatticeAuthReservedTrees.IsReserved(treeId))
+        {
+            var reserved = engine.Evaluate(subject, treeId, operation, key: null, rangeStart: null, rangeEnd: null, out var match);
+            return new ValueTask<bool>(match.Matched && match.Effect == LatticeEffect.Allow && reserved.Allowed);
+        }
+
+        return new ValueTask<bool>(engine.HasAnyGrant(subject, treeId, operation));
     }
 
     /// <summary>

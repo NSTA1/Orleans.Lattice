@@ -73,4 +73,30 @@ internal sealed class LatticeDecisionEngine(
             rangeEnd,
             out match);
     }
+
+    /// <summary>
+    /// <c>true</c> when <paramref name="subject"/> can read at least one key of
+    /// <paramref name="treeId"/> under <paramref name="operation"/>: it holds an
+    /// allow grant whose effective decision at its own scope resolves to allow, or
+    /// the tree's default effect is allow. The structural existence-hiding signal;
+    /// see <see cref="PolicyEvaluator.HasAnyGrant"/>.
+    /// </summary>
+    /// <param name="subject">The requesting subject.</param>
+    /// <param name="treeId">The target tree id. Must not be <c>null</c> or empty.</param>
+    /// <param name="operation">The operation whose grant is probed.</param>
+    /// <returns><see langword="true"/> when the subject can read at least one key.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    internal bool HasAnyGrant(
+        LatticeSubject subject,
+        string treeId,
+        LatticeOperation operation)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return PolicyEvaluator.HasAnyGrant(
+            maintainer.Current,
+            options.CurrentValue,
+            subject,
+            treeId,
+            operation);
+    }
 }

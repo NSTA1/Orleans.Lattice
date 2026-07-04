@@ -10,6 +10,7 @@ internal sealed partial class ShardRootGrain
 {
     public async Task BulkLoadAsync(string operationId, List<KeyValuePair<string, byte[]>> sortedEntries)
     {
+        EnsureInternalOrigin(LatticeOperation.BulkLoad);
         ThrowIfDeleted();
         if (state.State.LastCompletedBulkOperationId == operationId) return;
 
@@ -69,6 +70,7 @@ internal sealed partial class ShardRootGrain
         string operationId,
         List<LwwEntry> sortedEntries)
     {
+        EnsureInternalOrigin(LatticeOperation.BulkLoad);
         ThrowIfDeleted();
         if (state.State.LastCompletedBulkOperationId == operationId) return;
 
@@ -196,6 +198,7 @@ internal sealed partial class ShardRootGrain
 
     public async Task BulkAppendAsync(string operationId, List<KeyValuePair<string, byte[]>> sortedEntries)
     {
+        EnsureInternalOrigin(LatticeOperation.BulkLoad);
         ThrowIfDeleted();
         if (state.State.LastCompletedBulkOperationId == operationId) return;
         RecordWrite();
