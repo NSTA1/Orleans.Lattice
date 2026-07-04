@@ -143,9 +143,9 @@ The numbers come from the microbenchmark harness under
 The enabled config wires a real default-deny `PolicyAccessGate` plus a
 fixed-subject membership context into every grain, with a representative
 tree/key/prefix allow ruleset for the benchmarked subject. The full report,
-methodology, and raw JSON are committed under
-`benchmark/host/Bench.Microbench/auth-f162/` (`report.md` plus the matched-pair
-`*.json`). The harness ran on a shared machine, so the honest way to read the
+methodology, and raw JSON are produced by the harness on demand and are not
+committed to the repository; the headline results are summarized below and on
+the epic pull request. The harness ran on a shared machine, so the honest way to read the
 result is: **allocation delta is the robust signal; latency delta is dominated
 by environment noise.**
 
