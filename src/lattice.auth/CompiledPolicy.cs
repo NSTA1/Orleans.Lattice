@@ -15,11 +15,15 @@ internal sealed class CompiledPolicy
 {
     private readonly IReadOnlyDictionary<string, CompiledTree> _trees;
 
-    private CompiledPolicy(IReadOnlyDictionary<string, CompiledTree> trees) => _trees = trees;
+    private CompiledPolicy(IReadOnlyDictionary<string, CompiledTree> trees, int distinctSubjectCount)
+    {
+        _trees = trees;
+        DistinctSubjectCount = distinctSubjectCount;
+    }
 
     /// <summary>The empty snapshot: no rules for any tree. Used before the first compile.</summary>
     public static CompiledPolicy Empty { get; } =
-        new(new Dictionary<string, CompiledTree>(0, StringComparer.Ordinal));
+        new(new Dictionary<string, CompiledTree>(0, StringComparer.Ordinal), 0);
 
     /// <summary>Attempts to get the compiled rules governing <paramref name="treeId"/>.</summary>
     /// <param name="treeId">The governed tree id.</param>
@@ -29,6 +33,15 @@ internal sealed class CompiledPolicy
 
     /// <summary>The number of governed trees in the snapshot. Exposed for tests.</summary>
     internal int TreeCount => _trees.Count;
+
+    /// <summary>
+    /// The number of <b>distinct</b> subjects (users and groups) any rule in the
+    /// snapshot references - the count of members for which an authorization
+    /// policy is configured. A user and a group that happen to share an id count
+    /// separately; the same subject referenced by many rules or across many trees
+    /// counts once. Backs the compiled-snapshot <c>subjects</c> observable gauge.
+    /// </summary>
+    public int DistinctSubjectCount { get; }
 
     /// <summary>
     /// Compiles a full rule set into an immutable snapshot. Rules are grouped by
@@ -43,8 +56,11 @@ internal sealed class CompiledPolicy
         ArgumentNullException.ThrowIfNull(rules);
 
         var byTree = new Dictionary<string, List<LatticeAuthorizationRule>>(StringComparer.Ordinal);
+        var distinctSubjects = new HashSet<(LatticeSubjectSelectorKind Kind, string Id)>();
         foreach (var rule in rules)
         {
+            distinctSubjects.Add((rule.Subject.Kind, rule.Subject.Id));
+
             var treeId = rule.Scope.TreeId;
             if (!byTree.TryGetValue(treeId, out var list))
             {
@@ -66,6 +82,6 @@ internal sealed class CompiledPolicy
             trees[treeId] = CompiledTree.Build(treeRules);
         }
 
-        return new CompiledPolicy(trees);
+        return new CompiledPolicy(trees, distinctSubjects.Count);
     }
 }

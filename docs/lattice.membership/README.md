@@ -16,7 +16,7 @@ It is the identity foundation the [`Orleans.Lattice.Auth`](../lattice.auth/READM
 - **Opt-in and absent by default.** Nothing registers unless the host calls `AddLatticeMembership()` on the silo. A cluster that does not add the package has no directory and no resolution pipeline, and the core read/write path is byte-for-byte unchanged.
 - **Subject = id + group closure.** A resolved subject is a stable subject id and the transitively-expanded set of groups it belongs to, so a group-scoped authorization rule applies to every member without the rule naming them.
 - **Pluggable authentication.** A credential is turned into a principal by one or more `ILatticeCredentialAuthenticator`s, selected by the credential's scheme. The package ships an anonymous authenticator and a JWT authenticator; a host can register its own.
-- **Resolution is cached.** Subject resolution is memoised with a configurable TTL (`ResolutionCacheTtl`, default 5 minutes) so a burst of calls from the same caller does not re-expand its group closure every time.
+- **Resolution is cached.** Subject resolution is memoised with a configurable TTL (`ResolutionCacheTtl`, default 5 minutes) so a burst of calls from the same caller does not re-expand its group closure every time. Cache hit and miss rates are exposed as counters on the `orleans.lattice.membership` meter (see [Observability](observability.md)).
 
 ## Setup
 
@@ -96,6 +96,7 @@ Membership produces subjects; [`Orleans.Lattice.Auth`](../lattice.auth/README.md
 
 ## See also
 
+- [Observability](observability.md) - the `orleans.lattice.membership` meter and the subject-resolution cache hit / miss counters.
 - [`Orleans.Lattice.Auth`](../lattice.auth/README.md) - the policy store, decision engine, and enforcing access gate that consume the subjects this package resolves.
 - [`Orleans.Lattice.Api.Auth`](../lattice.api.auth/README.md) - the transport-agnostic control facade for administering this directory and the policy store.
 

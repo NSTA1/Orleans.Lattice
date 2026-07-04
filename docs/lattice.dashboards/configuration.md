@@ -11,6 +11,8 @@ builder.Services.AddOpenTelemetry()
     .WithMetrics(b => b
         .AddMeter("orleans.lattice")              // Overview, CommitPath, AtomicWrites, MaterialisedViews
         .AddMeter("orleans.lattice.replication")  // Replication (only if the replication package is registered)
+        .AddMeter("orleans.lattice.auth")         // Authorization (only if the auth package is registered)
+        .AddMeter("orleans.lattice.membership")   // Authorization (only if the membership package is registered)
         .AddPrometheusExporter());
 ```
 
@@ -18,6 +20,7 @@ builder.Services.AddOpenTelemetry()
 |---|---|---|
 | `orleans.lattice` | the core library, always | `Overview`, `CommitPath`, `AtomicWrites`, `MaterialisedViews` |
 | `orleans.lattice.replication` | the replication package, only when registered on the silo | `Replication` |
+| `orleans.lattice.auth`, `orleans.lattice.membership` | the auth / membership packages, only when registered on the silo | `Authorization` |
 
 If you do not register the replication package, omit the replication meter and do not import the `Replication` dashboard - its panels would resolve to no data.
 

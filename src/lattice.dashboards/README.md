@@ -4,7 +4,7 @@ Pre-built Grafana dashboards and provisioning templates for `Orleans.Lattice` an
 
 ## What's in the box
 
-Five Grafana dashboards (Grafana schema v39, Prometheus data source) shipped as embedded resources and accessed via `LatticeDashboards.GetGrafanaDashboardJson(kind)`:
+Grafana dashboards (Grafana schema v39, Prometheus data source) shipped as embedded resources and accessed via `LatticeDashboards.GetGrafanaDashboardJson(kind)`:
 
 | Kind | Focus |
 |------|-------|
@@ -13,6 +13,7 @@ Five Grafana dashboards (Grafana schema v39, Prometheus data source) shipped as 
 | `Replication` | Cross-cluster replication: ship / apply / lag, WAL append-vs-trim, dead-letter churn, apply violations, dependency wait, fell-off-log, per-peer cursor lag, cross-cluster atomic-batch staging. |
 | `AtomicWrites` | `SetManyAtomicAsync` saga deep-dive: outcome rate, saga duration and batch-size percentiles, per-tree committed throughput, and a dedicated saga-failure-rate panel. |
 | `MaterialisedViews` | Cluster-wide materialised-view health: apply-lag and drain-backlog-depth percentiles, filter / re-project and aggregation apply throughput, and warning panels for lag-budget evictions, re-key collisions, atomic-staging backstop fall-backs, and cross-tree joint-atomicity violations. |
+| `Authorization` | Identity and authorization: enforcement-gate decision throughput (by effect and operation), decision-latency percentiles, compiled-snapshot rebuild rate and epoch / age gauges, plus subject-resolution cache hit-ratio and hit / miss throughput. Sources the `orleans.lattice.auth` and `orleans.lattice.membership` meters. |
 
 Plus Grafana provisioning templates under `Provisioning/`:
 

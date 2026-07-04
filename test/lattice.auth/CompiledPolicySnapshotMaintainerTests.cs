@@ -36,6 +36,22 @@ public sealed class CompiledPolicySnapshotMaintainerTests
     }
 
     [Test]
+    public async Task CurrentSubjectCount_reflects_distinct_members_after_warmup()
+    {
+        var store = new FakePolicyStore();
+        store.Rules.Add(new("r1", LatticeSubjectSelector.User("alice"), LatticeScope.Tree("app"), LatticeOperation.Read, LatticeEffect.Allow));
+        store.Rules.Add(new("r2", LatticeSubjectSelector.User("alice"), LatticeScope.Tree("app"), LatticeOperation.Write, LatticeEffect.Allow));
+        store.Rules.Add(new("r3", LatticeSubjectSelector.Group("admins"), LatticeScope.Tree("app"), LatticeOperation.Read, LatticeEffect.Allow));
+        var maintainer = CreateMaintainer(store);
+
+        Assert.That(maintainer.CurrentSubjectCount, Is.EqualTo(0), "a cold maintainer reports no configured members");
+
+        await maintainer.EnsureWarmAsync();
+
+        Assert.That(maintainer.CurrentSubjectCount, Is.EqualTo(2), "alice (referenced twice) and admins are two distinct members");
+    }
+
+    [Test]
     public void Fresh_maintainer_starts_at_epoch_zero_with_empty_snapshot()
     {
         var maintainer = CreateMaintainer(new FakePolicyStore());

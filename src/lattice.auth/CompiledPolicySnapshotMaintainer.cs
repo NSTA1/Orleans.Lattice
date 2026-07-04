@@ -71,6 +71,13 @@ internal sealed class CompiledPolicySnapshotMaintainer : IMutationObserver
     public long CurrentEpoch => Interlocked.Read(ref _epoch);
 
     /// <summary>
+    /// The number of distinct subjects (users and groups) the current snapshot
+    /// references - the count of members for which an authorization policy is
+    /// configured. Backs the compiled-snapshot <c>subjects</c> observable gauge.
+    /// </summary>
+    public int CurrentSubjectCount => Current.DistinctSubjectCount;
+
+    /// <summary>
     /// The wall-clock instant the snapshot was last rebuilt, or <c>null</c> when
     /// it has never been built. Backs the snapshot-age observable gauge.
     /// </summary>

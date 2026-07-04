@@ -2,6 +2,8 @@
 
 Every instrument on the `orleans.lattice` and `orleans.lattice.replication` meters is referenced by at least one panel in the bundled dashboards. The drift-guard test in `Orleans.Lattice.Dashboards.Tests` enforces the inverse direction: every metric name a dashboard references must resolve to a live instrument.
 
+The add-on `orleans.lattice.auth` and `orleans.lattice.membership` meters are charted by the bundled Identity & Authorization dashboard. Their coverage is enforced from the owning packages: `Orleans.Lattice.Auth.Tests` and `Orleans.Lattice.Membership.Tests` each derive from the shared `MeterDashboardCoverageTestsBase`, which asserts every instrument on the meter is referenced by that dashboard (and that every token the dashboard references for the meter resolves to a live instrument).
+
 ## `orleans.lattice` meter
 
 | Instrument | Type | Tags | Dashboard | Panel(s) |
@@ -162,3 +164,25 @@ Every instrument on the `orleans.lattice` and `orleans.lattice.replication` mete
 | `orleans.lattice.replication.receiver.content_manifest_exchanges` | counter | `tree`, `peer` | Receiver content-hash exchanges handled (rate) |
 | `orleans.lattice.replication.receiver.content_entries_elided` | counter | `tree`, `peer` | Receiver content entries elided (rate) |
 | `orleans.lattice.replication.receiver.content_hwm_advances` | counter | `tree`, `peer` | Receiver metadata-only HWM advances (rate) |
+
+## `orleans.lattice.auth` meter
+
+Charted by the Identity & Authorization dashboard.
+
+| Instrument | Type | Tags | Dashboard | Panel(s) |
+|------------|------|------|-----------|----------|
+| `orleans.lattice.auth.decisions` | counter | `operation`, `tree`, `effect` | Authorization | Authorization decisions (rate by effect); Decisions by operation (rate) |
+| `orleans.lattice.auth.decision.duration` | histogram (ms) | `operation`, `tree`, `effect` | Authorization | Decision latency p50/p95/p99 (ms) |
+| `orleans.lattice.auth.snapshot.rebuilds` | counter | (none) | Authorization | Compiled snapshot rebuilds (rate) |
+| `orleans.lattice.auth.snapshot.epoch` | observable gauge | `instance` | Authorization | Compiled snapshot epoch |
+| `orleans.lattice.auth.snapshot.age` | observable gauge | `instance` | Authorization | Compiled snapshot age |
+| `orleans.lattice.auth.snapshot.subjects` | observable gauge | `instance` | Authorization | Members with policies configured |
+
+## `orleans.lattice.membership` meter
+
+Charted by the Identity & Authorization dashboard.
+
+| Instrument | Type | Tags | Dashboard | Panel(s) |
+|------------|------|------|-----------|----------|
+| `orleans.lattice.membership.resolution_cache.hits` | counter | (none) | Authorization | Subject-resolution cache hit ratio; Subject-resolution cache hits vs misses (rate) |
+| `orleans.lattice.membership.resolution_cache.misses` | counter | (none) | Authorization | Subject-resolution cache hit ratio; Subject-resolution cache hits vs misses (rate) |

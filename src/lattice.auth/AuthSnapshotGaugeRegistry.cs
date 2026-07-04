@@ -3,10 +3,10 @@ using System.Diagnostics.Metrics;
 namespace Orleans.Lattice.Auth;
 
 /// <summary>
-/// Backs the compiled-snapshot <c>epoch</c> and <c>age</c> observable gauges on
-/// the <see cref="LatticeAuthMetrics.Meter"/>. Each
+/// Backs the compiled-snapshot <c>epoch</c>, <c>age</c> and <c>subjects</c>
+/// observable gauges on the <see cref="LatticeAuthMetrics.Meter"/>. Each
 /// <see cref="CompiledPolicySnapshotMaintainer"/> registers itself here on
-/// construction; the two gauges are created once (process-wide, idempotent) and
+/// construction; the gauges are created once (process-wide, idempotent) and
 /// their measurement callbacks - which run only when an OpenTelemetry listener
 /// scrapes the meter - report one measurement per live maintainer.
 /// </summary>
@@ -49,6 +49,12 @@ internal static class AuthSnapshotGaugeRegistry
                     unit: "s",
                     description: "Seconds since the compiled authorization policy snapshot was last rebuilt.");
 
+                LatticeAuthMetrics.Meter.CreateObservableGauge(
+                    LatticeAuthMetrics.SnapshotSubjectsName,
+                    ObserveSubjects,
+                    unit: "{subject}",
+                    description: "Distinct members (users and groups) for which an authorization policy is configured.");
+
                 _registered = true;
             }
         }
@@ -72,6 +78,14 @@ internal static class AuthSnapshotGaugeRegistry
                 var seconds = Math.Max(0d, (now - last).TotalSeconds);
                 yield return new Measurement<double>(seconds);
             }
+        }
+    }
+
+    private static IEnumerable<Measurement<long>> ObserveSubjects()
+    {
+        foreach (var maintainer in LiveSources())
+        {
+            yield return new Measurement<long>(maintainer.CurrentSubjectCount);
         }
     }
 

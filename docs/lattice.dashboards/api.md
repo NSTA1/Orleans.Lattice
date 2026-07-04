@@ -13,7 +13,7 @@ string json = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Ove
 | Type | Kind | Purpose | Key public members |
 |---|---|---|---|
 | `LatticeDashboards` | static class | Retrieves the bundled Grafana dashboard JSON. | `GetGrafanaDashboardJson(LatticeDashboardKind)`, `All` |
-| `LatticeDashboardKind` | enum | Identifies one bundled dashboard, each resolving to a focused operator workflow. | `Overview`, `CommitPath`, `Replication`, `AtomicWrites`, `MaterialisedViews` |
+| `LatticeDashboardKind` | enum | Identifies one bundled dashboard, each resolving to a focused operator workflow. | `Overview`, `CommitPath`, `Replication`, `AtomicWrites`, `MaterialisedViews`, `Authorization` |
 
 ### `LatticeDashboards`
 
@@ -31,6 +31,7 @@ string json = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Ove
 | `Replication` | `orleans.lattice.replication` | Cross-cluster operator view: ship / apply / lag durations, WAL append vs trim throughput, dead-letter churn, apply FIFO and causal violations, fall-off-log events, and per-peer cursor lag. Useful only when the replication package is registered on the silo. |
 | `AtomicWrites` | `orleans.lattice` | `SetManyAtomicAsync` saga deep-dive: outcome rate, saga duration and batch-size percentiles, per-tree committed throughput, and a dedicated saga-failure-rate panel. |
 | `MaterialisedViews` | `orleans.lattice` | Cluster-wide materialised-view health: apply-lag and drain-backlog-depth percentiles, filter / re-project and aggregation apply throughput, and warning panels for lag-budget evictions, re-key collisions, atomic-staging backstop fall-backs, and cross-tree joint-atomicity violations. Keyed by view name (and cluster); no per-silo filter, because a view's maintainer is a single grain activation that migrates between silos. Does not require the replication package. |
+| `Authorization` | `orleans.lattice.auth`, `orleans.lattice.membership` | Identity and authorization operator view: enforcement-gate decision throughput (by effect and operation), decision-latency percentiles, compiled-snapshot rebuild rate and the snapshot epoch / age gauges, plus subject-resolution cache hit-ratio and hit / miss throughput. Useful only when the authentication / authorization packages are registered on the silo. |
 
 ## Enumerating every dashboard
 

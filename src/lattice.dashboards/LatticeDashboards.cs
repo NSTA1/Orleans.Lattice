@@ -11,8 +11,10 @@ namespace Orleans.Lattice.Dashboards;
 /// <para>
 /// Every dashboard targets the <c>orleans.lattice</c> meter
 /// (and, for <see cref="LatticeDashboardKind.Replication"/>, the
-/// <c>orleans.lattice.replication</c> meter) over a Prometheus
-/// data source. Import the JSON in Grafana via
+/// <c>orleans.lattice.replication</c> meter; for
+/// <see cref="LatticeDashboardKind.Authorization"/>, the
+/// <c>orleans.lattice.auth</c> and <c>orleans.lattice.membership</c>
+/// meters) over a Prometheus data source. Import the JSON in Grafana via
 /// <em>Dashboards → New → Import</em> or drop it into a
 /// provisioning directory referenced by
 /// <c>Provisioning/dashboards.yaml</c>.
@@ -64,6 +66,7 @@ public static class LatticeDashboards
         LatticeDashboardKind.Replication => "Orleans.Lattice.Dashboards.Grafana.OrleansLatticeReplication.json",
         LatticeDashboardKind.AtomicWrites => "Orleans.Lattice.Dashboards.Grafana.OrleansLatticeAtomicWrites.json",
         LatticeDashboardKind.MaterialisedViews => "Orleans.Lattice.Dashboards.Grafana.OrleansLatticeMaterialisedViews.json",
+        LatticeDashboardKind.Authorization => "Orleans.Lattice.Dashboards.Grafana.OrleansLatticeAuthorization.json",
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown dashboard kind."),
     };
 }
