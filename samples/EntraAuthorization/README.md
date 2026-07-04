@@ -105,8 +105,29 @@ Silo starting... ready.
   instead.
 - A tiny bootstrap-token authenticator (`SetupAuthenticator`) is used only to seed
   the first rule as a bootstrap administrator. It handles its own scheme only, so
-  it never claims the real Entra bearer tokens. A production host would not ship
-  it; it exists so this one-shot demo can provision policy on a fresh silo.
+  it never claims the real Entra bearer tokens, and only this sample process can
+  stamp its credential.
+- **Do not copy the `SetupAuthenticator` pattern into a real host.** It maps a
+  plaintext token verbatim to the bootstrap-administrator subject id, which makes
+  that id an unsigned bearer secret - fine for a one-shot, in-process demo,
+  insecure anywhere untrusted can reach. A production deployment instead sets
+  `BootstrapAdministrators` to a real, unforgeable identity (an Entra `oid`) and
+  seeds rules by authenticating *as that identity* through the Entra
+  authenticator - no trusted-token shortcut. Remember that a bootstrap
+  administrator is cluster-wide god mode (every tree, every operation, exempt from
+  strict fencing), so keep the set tiny and treat it as break-glass only. See the
+  [security posture](../../docs/lattice.auth/security-posture.md#bootstrap-administrators-break-glass-root-of-trust)
+  for the full trust model.
+- **Why not just use the signed-in user's own oid as the bootstrap admin?** You
+  could - and that is the more secure shape: the `oid` is already in the token
+  before the host starts, so putting it in `BootstrapAdministrators` would let the
+  same signed Entra token authenticate the seeding identity and remove the
+  `SetupAuthenticator` entirely. This demo deliberately keeps a *separate* seeding
+  identity because a bootstrap administrator bypasses the gate completely: if the
+  Entra user were the bootstrap admin, it would be god mode from the first call,
+  and the fail-closed default-deny step and the rule-driven enforcement acting on
+  that same user could never be demonstrated. In a real host that does not need to
+  demonstrate denial, prefer the own-`oid` approach.
 - Enforcement reads a compiled policy snapshot that rebuilds off the policy-tree
   change feed, so the sample polls briefly after authoring the rule before the
   write succeeds.

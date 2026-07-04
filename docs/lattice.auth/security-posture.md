@@ -116,6 +116,44 @@ id prefix, so the filter exempts it from stripping and lets it establish the
 internal capabilities it legitimately needs, while still stripping forged
 capabilities from genuine external clients.
 
+## Bootstrap administrators (break-glass root of trust)
+
+`LatticeAuthOptions.BootstrapAdministrators` is a set of **subject ids** that the
+gate treats as a break-glass root of trust. A request whose resolved subject id
+is in the set is short-circuited to allow *before* the decision engine is
+consulted, so it works even against a cold or empty policy snapshot. It exists
+for one reason: to stop a deployment locking every operator out of the
+authorization tree itself. Under the recommended deny-by-default posture the
+reserved control-plane namespace is forced closed (see finding A2), so with no
+rules yet authored nobody could seed the first one. A bootstrap administrator
+seeds that first policy and repairs a misconfiguration that would otherwise be
+unrecoverable.
+
+Its security properties, and the constraints that keep it safe, are worth stating
+plainly:
+
+- **It is only as strong as the authenticator that resolves the subject.** The
+  gate matches `request.Subject.SubjectId`, which is the output of the membership
+  resolution pipeline, not a string the caller supplies to the gate. Binding a
+  bootstrap id to an unforgeable, cryptographically-validated identity (for
+  example a Microsoft Entra `oid` from a signed token) means impersonating it
+  requires forging a signed token. Binding it to an identity minted by a
+  trusted-token authenticator that maps a plaintext token verbatim to a subject
+  id (as the shipped samples do for brevity) turns the bootstrap id into an
+  unsigned bearer secret - acceptable for an in-process demo, **never** for a
+  deployment reachable by anything untrusted.
+- **The bypass is cluster-wide god mode, not just policy repair.** A bootstrap
+  administrator is allowed every operation on every tree - the data plane as well
+  as the control plane - and is exempt from strict epoch fencing. It is a
+  break-glass identity, not a day-to-day admin role. Grant ordinary
+  administrative rights through explicit rules; reserve the bootstrap set for
+  recovery.
+- **Keep the set as small as possible.** It is empty by default. Every id in it
+  is a full-cluster master key, so the set should hold the smallest possible
+  number of break-glass operator identities, be sourced from a strong identity
+  provider, and be audited. The option is live-reloadable, so an id can be added
+  for a recovery window and removed again afterwards.
+
 ## Transport-security (TLS) expectations
 
 - **Credentials only flow over a transport the runtime can confirm is secure.**

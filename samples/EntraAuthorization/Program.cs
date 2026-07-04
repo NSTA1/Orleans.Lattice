@@ -106,6 +106,17 @@ using var host = Host.CreateDefaultBuilder(args)
         // A tiny trusted-token authenticator used only to seed the first rule as a
         // bootstrap administrator. It handles its own scheme only, so it never
         // shadows the Entra bearer tokens above.
+        //
+        // More secure alternative (the recommended production shape): drop this
+        // authenticator entirely and put the SIGNED-IN USER'S OWN Entra oid in
+        // BootstrapAdministrators below. The oid is available from the token
+        // before the host is built, so the same signed Entra token would then
+        // authenticate the seeding identity - no unsigned trusted-token secret at
+        // all. This demo keeps a SEPARATE seeding identity on purpose: if the
+        // Entra user were the bootstrap admin it would be cluster-wide god mode
+        // from the first call, so the fail-closed default-deny step and the
+        // rule-driven enforcement below (which act on the Entra user) could never
+        // be shown. Never copy this trusted-token shortcut into a real host.
         silo.Services.AddSingleton<ILatticeCredentialAuthenticator, SetupAuthenticator>();
 
         // Auth installs the fail-closed, default-deny enforcement gate.
