@@ -1,6 +1,6 @@
 using Orleans.Lattice.Membership;
 
-namespace Orleans.Lattice.Samples.AuthorizedAccess;
+namespace Orleans.Lattice.Samples.CrossClusterAuthorization;
 
 /// <summary>
 /// A minimal demo <see cref="ILatticeCredentialAuthenticator"/> that trusts the
@@ -21,7 +21,7 @@ internal sealed class DemoAuthenticator : ILatticeCredentialAuthenticator
     public const string Scheme = "demo-scheme";
 
     /// <summary>The issuer stamped on the resolved principal.</summary>
-    public const string Issuer = "https://issuer.authorized-access.sample/";
+    public const string Issuer = "https://issuer.cross-cluster-authorization.sample/";
 
     /// <inheritdoc />
     public bool CanHandle(in LatticeCredential credential) =>

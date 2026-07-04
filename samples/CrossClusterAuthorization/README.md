@@ -1,4 +1,9 @@
-# Authorized Access
+# Cross-Cluster Authorization
+
+> Looking for a minimal, single-silo introduction to the authorization layer?
+> Start with the [Authorization](../Authorization/README.md) sample, which
+> demonstrates users, groups, and nested groups on one silo. This sample adds a
+> second cluster and cross-cluster policy convergence on top of that same layer.
 
 ## What it shows
 
@@ -40,7 +45,7 @@ exists.
 ## Run it
 
 ```
-dotnet run --project samples/AuthorizedAccess
+dotnet run --project samples/CrossClusterAuthorization
 ```
 
 ## Expected output
@@ -109,7 +114,8 @@ converged either way - the rule is gone from `site-b`.
 
 - Single-cluster deployments that do not replicate - you still get the full
   authorization layer from `AddLatticeMembership` + `AddLatticeAuth`, without the
-  replication and gRPC wiring this sample adds for the cross-cluster act.
+  replication and gRPC wiring this sample adds for the cross-cluster act. See the
+  single-silo [Authorization](../Authorization/README.md) sample for that shape.
 - Deployments that do not need authorization at all. The layer is opt-in; a host
   that never calls `AddLatticeAuth` pays nothing on the data path.
 

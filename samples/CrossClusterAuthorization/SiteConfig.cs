@@ -1,8 +1,8 @@
-namespace Orleans.Lattice.Samples.AuthorizedAccess;
+namespace Orleans.Lattice.Samples.CrossClusterAuthorization;
 
 /// <summary>
 /// Immutable description of one in-process Orleans cluster ("site") in the
-/// authorized-access topology: its cluster id, its Orleans silo/gateway ports,
+/// cross-cluster authorization topology: its cluster id, its Orleans silo/gateway ports,
 /// the local Kestrel port that serves its inbound replication gRPC endpoint, and
 /// the single peer it ships the reserved membership/auth system trees to.
 /// </summary>

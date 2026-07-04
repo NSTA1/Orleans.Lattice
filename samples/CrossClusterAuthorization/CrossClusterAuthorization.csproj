@@ -6,8 +6,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
-    <RootNamespace>Orleans.Lattice.Samples.AuthorizedAccess</RootNamespace>
-    <AssemblyName>Orleans.Lattice.Samples.AuthorizedAccess</AssemblyName>
+    <RootNamespace>Orleans.Lattice.Samples.CrossClusterAuthorization</RootNamespace>
+    <AssemblyName>Orleans.Lattice.Samples.CrossClusterAuthorization</AssemblyName>
   </PropertyGroup>
 
   <!-- The reserved membership/auth system trees converge across sites over the

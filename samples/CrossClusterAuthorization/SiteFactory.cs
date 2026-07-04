@@ -9,7 +9,7 @@ using Orleans.Lattice.Membership;
 using Orleans.Lattice.Replication;
 using Orleans.Lattice.Replication.Grpc;
 
-namespace Orleans.Lattice.Samples.AuthorizedAccess;
+namespace Orleans.Lattice.Samples.CrossClusterAuthorization;
 
 /// <summary>
 /// Builds one in-process Orleans cluster wired with the full authorization
@@ -45,7 +45,7 @@ internal static class SiteFactory
             silo.UseLocalhostClustering(
                 siloPort: site.SiloPort,
                 gatewayPort: site.GatewayPort,
-                serviceId: "authorized-access-sample",
+                serviceId: "cross-cluster-authorization-sample",
                 clusterId: site.ClusterId);
             silo.AddMemoryGrainStorageAsDefault();
             silo.UseInMemoryReminderService();

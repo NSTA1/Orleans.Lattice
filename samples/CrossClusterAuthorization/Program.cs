@@ -4,10 +4,11 @@ using Microsoft.Extensions.Hosting;
 using Orleans.Lattice;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Membership;
-using Orleans.Lattice.Samples.AuthorizedAccess;
+using Orleans.Lattice.Samples.CrossClusterAuthorization;
 
 // ---------------------------------------------------------------------------
-// AuthorizedAccess - the opt-in authorization layer end to end.
+// CrossClusterAuthorization - the opt-in authorization layer end to end,
+// converging across two clusters.
 //
 // Two in-process Orleans clusters (site-a, site-b) run the full stack:
 // Membership (identity) + Auth (a default-deny enforcement gate), with the

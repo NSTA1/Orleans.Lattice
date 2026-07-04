@@ -9,9 +9,11 @@ Minimal, single-feature samples - one per row in the [README feature table](../.
 | Sample | What it shows |
 |---|---|
 | [AtomicWrites](../../samples/AtomicWrites/README.md) | `SetManyAtomicAsync` all-or-nothing multi-key writes, a failed-guard batch that leaves no partial state, and the cross-tree `IGrainFactory` overload. |
+| [Authorization](../../samples/Authorization/README.md) | Single-silo default-deny authorization with group and nested-group membership: a group nested inside another group, per-tree/prefix/key rules, read-visibility range pruning, and a runtime grant via nesting. |
 | [BulkLoading](../../samples/BulkLoading/README.md) | Seeding an empty tree via one-shot `BulkLoadAsync` and streaming `IAsyncEnumerable` ingestion. |
 | [ChangeHistory](../../samples/ChangeHistory/README.md) | Reading a key's revision timeline with `ScanEntryHistoryAsync`. |
 | [ConflictFreeMerges](../../samples/ConflictFreeMerges/README.md) | Two CRDT writers converging to the same result regardless of merge order. |
+| [CrossClusterAuthorization](../../samples/CrossClusterAuthorization/README.md) | Two in-process clusters where the reserved membership and authorization-policy system trees converge over gRPC replication, so a grant or revoke authored on one site becomes enforced on the other. |
 | [CrossClusterReplication](../../samples/CrossClusterReplication/README.md) | Two in-process clusters over gRPC where a write on one converges onto the other. |
 | [Diagnostics](../../samples/Diagnostics/README.md) | The `DiagnoseAsync` per-tree health snapshot: shard depth, live keys, tombstones, hotness. |
 | [DurableCursors](../../samples/DurableCursors/README.md) | A server-checkpointed cursor resuming from its last yielded key after a client restart. |
