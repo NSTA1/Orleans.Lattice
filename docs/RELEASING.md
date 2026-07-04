@@ -15,6 +15,14 @@ The package family ships from this repository:
 | `Orleans.Lattice.Dashboards` | `src/lattice.dashboards/Orleans.Lattice.Dashboards.csproj` |
 | `Orleans.Lattice.Api.State` | `src/lattice.api.state/Orleans.Lattice.Api.State.csproj` |
 | `Orleans.Lattice.Api.State.Grpc` | `src/lattice.api.state.grpc/Orleans.Lattice.Api.State.Grpc.csproj` |
+| `Orleans.Lattice.Membership` | `src/lattice.membership/Orleans.Lattice.Membership.csproj` |
+| `Orleans.Lattice.Membership.Entra` | `src/lattice.membership.entra/Orleans.Lattice.Membership.Entra.csproj` |
+| `Orleans.Lattice.Membership.Entra.Graph` | `src/lattice.membership.entra.graph/Orleans.Lattice.Membership.Entra.Graph.csproj` |
+| `Orleans.Lattice.Auth` | `src/lattice.auth/Orleans.Lattice.Auth.csproj` |
+| `Orleans.Lattice.Api.Auth` | `src/lattice.api.auth/Orleans.Lattice.Api.Auth.csproj` |
+| `Orleans.Lattice.Api.Auth.Grpc` | `src/lattice.api.auth.grpc/Orleans.Lattice.Api.Auth.Grpc.csproj` |
+| `Orleans.Lattice.Api.Data` | `src/lattice.api.data/Orleans.Lattice.Api.Data.csproj` |
+| `Orleans.Lattice.Api.Data.Grpc` | `src/lattice.api.data.grpc/Orleans.Lattice.Api.Data.Grpc.csproj` |
 
 Major and minor digits move in lockstep across the family. Patch digits may advance independently per package.
 
@@ -31,6 +39,14 @@ The publish workflow's per-tag trigger globs match these tag shapes:
 | `Orleans.Lattice.Dashboards` | `lattice.dashboards-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.State` | `lattice.api.state-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.State.Grpc` | `lattice.api.state.grpc-v<X.Y.Z>` |
+| `Orleans.Lattice.Membership` | `lattice.membership-v<X.Y.Z>` |
+| `Orleans.Lattice.Membership.Entra` | `lattice.membership.entra-v<X.Y.Z>` |
+| `Orleans.Lattice.Membership.Entra.Graph` | `lattice.membership.entra.graph-v<X.Y.Z>` |
+| `Orleans.Lattice.Auth` | `lattice.auth-v<X.Y.Z>` |
+| `Orleans.Lattice.Api.Auth` | `lattice.api.auth-v<X.Y.Z>` |
+| `Orleans.Lattice.Api.Auth.Grpc` | `lattice.api.auth.grpc-v<X.Y.Z>` |
+| `Orleans.Lattice.Api.Data` | `lattice.api.data-v<X.Y.Z>` |
+| `Orleans.Lattice.Api.Data.Grpc` | `lattice.api.data.grpc-v<X.Y.Z>` |
 
 For historical compatibility, the `v<X.Y.Z>` family tag (e.g. `v3.2.0`) is reserved for "the whole family at this version". When the family moves in lockstep, push **both** the family tag *and* each per-package tag - the publish workflow keys off the per-package tags.
 

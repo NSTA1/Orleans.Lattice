@@ -12,6 +12,14 @@ on:
       #   lattice.dashboards-v3.3.0
       #   lattice.api.state-v3.3.0
       #   lattice.api.state.grpc-v3.3.0
+      #   lattice.membership-v7.8.0
+      #   lattice.membership.entra-v7.8.0
+      #   lattice.membership.entra.graph-v7.8.0
+      #   lattice.auth-v7.8.0
+      #   lattice.api.auth-v7.8.0
+      #   lattice.api.auth.grpc-v7.8.0
+      #   lattice.api.data-v7.8.0
+      #   lattice.api.data.grpc-v7.8.0
       # The tag prefix is the literal folder name under src/, dots and all.
       - 'lattice-v*'
       - 'lattice.replication-v*'
@@ -20,6 +28,14 @@ on:
       - 'lattice.dashboards-v*'
       - 'lattice.api.state-v*'
       - 'lattice.api.state.grpc-v*'
+      - 'lattice.membership-v*'
+      - 'lattice.membership.entra-v*'
+      - 'lattice.membership.entra.graph-v*'
+      - 'lattice.auth-v*'
+      - 'lattice.api.auth-v*'
+      - 'lattice.api.auth.grpc-v*'
+      - 'lattice.api.data-v*'
+      - 'lattice.api.data.grpc-v*'
 
 jobs:
   publish:

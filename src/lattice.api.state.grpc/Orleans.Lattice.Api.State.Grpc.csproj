@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Api.State.Grpc</PackageId>
-    <Version>7.7.0</Version>
+    <Version>7.8.0</Version>
     <Description>gRPC transport binding for Orleans.Lattice.Api.State. Exposes the read-only cluster state API (discovery, tree structure, entry inspection) as unary gRPC RPCs over a code-first, Orleans-serialized contract, with a pluggable authorization seam and a default-deny posture. Registered with AddLatticeStateApiGrpc(...) and mapped with MapLatticeStateApiGrpc().</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
