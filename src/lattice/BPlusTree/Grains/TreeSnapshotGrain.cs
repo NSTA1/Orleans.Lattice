@@ -59,6 +59,9 @@ internal sealed class TreeSnapshotGrain(
         ArgumentException.ThrowIfNullOrEmpty(operationId);
         ArgumentNullException.ThrowIfNull(logicalTreeId);
 
+        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
+            Context.ActivationServices, SourceTreeId, LatticeOperation.Admin);
+
         if (maxLeafKeys is not null && maxLeafKeys <= 1)
             throw new ArgumentOutOfRangeException(nameof(maxLeafKeys), "Must be greater than 1.");
         if (maxInternalChildren is not null && maxInternalChildren <= 2)
@@ -662,6 +665,9 @@ internal sealed class TreeSnapshotGrain(
     public async Task AbortAsync(string operationId)
     {
         ArgumentException.ThrowIfNullOrEmpty(operationId);
+
+        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
+            Context.ActivationServices, SourceTreeId, LatticeOperation.Admin);
 
         // Idempotent - nothing to abort.
         if (!state.State.InProgress) return;

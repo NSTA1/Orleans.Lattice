@@ -137,6 +137,39 @@ public class EntraCredentialAuthenticatorTests
     }
 
     [Test]
+    public async Task AuthenticateAsync_token_with_reserved_sentinel_oid_returns_null()
+    {
+        // A token whose oid collides with a reserved sentinel (here the system
+        // subject) must never resolve to an authorized principal, even though it is
+        // validly signed by a trusted tenant and carries groups / roles.
+        using var authority = new EntraTestAuthority();
+        var authenticator = CreateAuthenticator(authority);
+        var token = authority.MintToken(
+            objectId: LatticeSubject.SystemSubjectId,
+            groups: new[] { "group-a" },
+            roles: new[] { "Admin" });
+
+        var principal = await authenticator.AuthenticateAsync(new LatticeCredential(token));
+
+        Assert.That(principal, Is.Null);
+    }
+
+    [Test]
+    public async Task AuthenticateAsync_token_with_no_usable_subject_but_groups_returns_null()
+    {
+        // A validly-signed Entra token that carries groups but no usable oid/sub
+        // must resolve to the anonymous subject (null principal), not an
+        // anonymous-labelled principal that still carries those groups.
+        using var authority = new EntraTestAuthority();
+        var authenticator = CreateAuthenticator(authority);
+        var token = authority.MintToken(objectId: string.Empty, groups: new[] { "group-a" });
+
+        var principal = await authenticator.AuthenticateAsync(new LatticeCredential(token));
+
+        Assert.That(principal, Is.Null);
+    }
+
+    [Test]
     public async Task AuthenticateAsync_token_from_unlisted_tenant_returns_null()
     {
         using var authority = new EntraTestAuthority();

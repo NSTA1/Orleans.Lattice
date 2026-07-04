@@ -207,6 +207,9 @@ internal sealed class AtomicWriteGrain(
         ArgumentNullException.ThrowIfNull(treeId);
         ArgumentNullException.ThrowIfNull(entries);
 
+        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
+            GrainContext.ActivationServices, treeId, LatticeOperation.AtomicWrite);
+
         // Empty batch: fast success, no saga work, no reminder needed.
         if (entries.Count == 0) return;
 
@@ -300,6 +303,9 @@ internal sealed class AtomicWriteGrain(
         ArgumentNullException.ThrowIfNull(treeId);
         ArgumentNullException.ThrowIfNull(entries);
 
+        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
+            GrainContext.ActivationServices, treeId, LatticeOperation.AtomicWrite);
+
         // Empty batch: vacuously all-match, nothing to write, commit outcome.
         if (entries.Count == 0) return AtomicWriteOutcome.Committed;
 
@@ -365,6 +371,9 @@ internal sealed class AtomicWriteGrain(
         ArgumentNullException.ThrowIfNull(entries);
         ArgumentException.ThrowIfNullOrEmpty(coordinatorKey);
         ArgumentNullException.ThrowIfNull(participants);
+
+        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
+            GrainContext.ActivationServices, treeId, LatticeOperation.AtomicWrite);
 
         // Empty batch: vacuously prepared, nothing to stage.
         if (entries.Count == 0) return CrossTreePrepareVote.Prepared;
@@ -469,6 +478,9 @@ internal sealed class AtomicWriteGrain(
     /// <inheritdoc />
     public async Task FinalizeAsync(bool commit)
     {
+        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
+            GrainContext.ActivationServices, state.State.TreeId ?? string.Empty, LatticeOperation.AtomicWrite);
+
         // Only a parked (Prepared) sub-saga can be finalized. Any other phase is
         // a no-op: NotStarted / PreconditionFailed / Completed are already
         // terminal or never staged; Prepare / Execute / Compensate mean the

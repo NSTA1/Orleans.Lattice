@@ -96,4 +96,36 @@ public class DefaultLatticeSubjectMapperTests
         Assert.That(subject.SubjectId, Is.EqualTo("alice"));
         Assert.That(subject.Claims, Is.EqualTo(claims));
     }
+
+    [Test]
+    public void Map_reserved_anonymous_subject_collapses_to_anonymous_without_groups()
+    {
+        // Defense in depth: even if an authenticator hands the mapper a principal
+        // whose subject collides with a reserved sentinel while carrying groups,
+        // the mapper must strip it to the well-known anonymous subject (no groups)
+        // so a group Allow rule can never apply to it.
+        var mapper = CreateMapper(new LatticeMembershipOptions { GroupMergeMode = SubjectGroupMergeMode.Union });
+        var principal = new LatticePrincipal(
+            LatticeSubject.AnonymousSubjectId, "issuer", assertedGroups: new[] { "admins" });
+
+        var subject = mapper.Map(principal, new[] { "dir-a" });
+
+        Assert.That(subject.IsAnonymous, Is.True);
+        Assert.That(subject.GroupIds, Is.Empty);
+    }
+
+    [Test]
+    public void Map_reserved_system_subject_collapses_to_anonymous_without_groups()
+    {
+        // The system sentinel must likewise never be reachable via a mapped
+        // principal, and must carry no group authority.
+        var mapper = CreateMapper(new LatticeMembershipOptions { GroupMergeMode = SubjectGroupMergeMode.Union });
+        var principal = new LatticePrincipal(
+            LatticeSubject.SystemSubjectId, "issuer", assertedGroups: new[] { "admins" });
+
+        var subject = mapper.Map(principal, new[] { "dir-a" });
+
+        Assert.That(subject.IsAnonymous, Is.True);
+        Assert.That(subject.GroupIds, Is.Empty);
+    }
 }

@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Security.Claims;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
@@ -116,13 +117,28 @@ public class JwtCredentialAuthenticator : ILatticeCredentialAuthenticator
     /// first present <see cref="JwtAuthenticatorOptions.SubjectClaimTypes"/>,
     /// collects group ids from <see cref="JwtAuthenticatorOptions.GroupClaimTypes"/>,
     /// copies the remaining claims into a flat bag, and surfaces the token
-    /// expiry. Override for provider-specific claim shapes.
+    /// expiry. Returns <c>null</c> when the token has no authorizable subject (a
+    /// missing subject claim, or a subject that collides with a reserved
+    /// well-known sentinel id), so the caller resolves to the anonymous subject
+    /// rather than to an anonymous-labelled principal that still carries the
+    /// token's groups. Override for provider-specific claim shapes.
     /// </summary>
     /// <param name="token">The validated token.</param>
     /// <param name="identity">The claims identity produced by validation.</param>
-    protected virtual LatticePrincipal MapPrincipal(JsonWebToken token, ClaimsIdentity identity)
+    protected virtual LatticePrincipal? MapPrincipal(JsonWebToken token, ClaimsIdentity identity)
     {
         var subjectId = ResolveSubjectId(identity);
+        if (!IsAuthorizableSubjectId(subjectId))
+        {
+            // A validated token that asserts no subject, or whose subject collides
+            // with a reserved well-known sentinel (anonymous / system), must not
+            // resolve to an authorized principal: it would otherwise be granted
+            // access through a group / role rule while wearing the anonymous label,
+            // or impersonate the system subject. Return null so the caller resolves
+            // it to the anonymous subject (no groups).
+            return null;
+        }
+
         var groups = ResolveGroups(identity);
         var claims = ResolveClaims(identity);
         DateTimeOffset? expiresAt = token.ValidTo == default ? null : new DateTimeOffset(token.ValidTo, TimeSpan.Zero);
@@ -130,9 +146,16 @@ public class JwtCredentialAuthenticator : ILatticeCredentialAuthenticator
         return new LatticePrincipal(subjectId, Options.Issuer, claims, groups, expiresAt);
     }
 
-    /// <summary>Resolves the subject id from the first present subject claim, falling back to the issuer-qualified token subject.</summary>
+    /// <summary>
+    /// Resolves the subject id from the first present configured subject claim,
+    /// falling back to the standard name-identifier claim. Returns <c>null</c>
+    /// when the token asserts no subject claim: such a token has no authorizable
+    /// identity, so <see cref="MapPrincipal"/> resolves it to the anonymous
+    /// subject rather than to an anonymous-labelled principal that still carries
+    /// the token's group / role claims.
+    /// </summary>
     /// <param name="identity">The validated claims identity.</param>
-    protected string ResolveSubjectId(ClaimsIdentity identity)
+    protected string? ResolveSubjectId(ClaimsIdentity identity)
     {
         ArgumentNullException.ThrowIfNull(identity);
         foreach (var claimType in Options.SubjectClaimTypes)
@@ -144,9 +167,25 @@ public class JwtCredentialAuthenticator : ILatticeCredentialAuthenticator
             }
         }
 
-        return identity.FindFirst(ClaimTypes.NameIdentifier)?.Value
-            ?? LatticeSubject.AnonymousSubjectId;
+        return identity.FindFirst(ClaimTypes.NameIdentifier)?.Value;
     }
+
+    /// <summary>
+    /// Determines whether <paramref name="subjectId"/> is a usable, authorizable
+    /// identity: non-empty and not a reserved well-known sentinel
+    /// (<see cref="LatticeSubject.AnonymousSubjectId"/> or
+    /// <see cref="LatticeSubject.SystemSubjectId"/>). A validated token whose
+    /// subject is missing or reserved must not resolve to an authorized principal
+    /// - it would let a token carrying only group / role claims be granted through
+    /// a group rule while labelled anonymous, or impersonate the system subject.
+    /// Shared by the built-in authenticators (and available to subclasses) so the
+    /// convention lives in exactly one place.
+    /// </summary>
+    /// <param name="subjectId">The candidate subject id, or <c>null</c>.</param>
+    protected static bool IsAuthorizableSubjectId([NotNullWhen(true)] string? subjectId) =>
+        !string.IsNullOrEmpty(subjectId)
+        && !string.Equals(subjectId, LatticeSubject.AnonymousSubjectId, StringComparison.Ordinal)
+        && !string.Equals(subjectId, LatticeSubject.SystemSubjectId, StringComparison.Ordinal);
 
     /// <summary>Collects token-asserted group ids from the configured group claim types.</summary>
     /// <param name="identity">The validated claims identity.</param>

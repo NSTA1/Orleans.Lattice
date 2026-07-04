@@ -19,7 +19,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
-public sealed class InternalOriginGuardIntegrationTests
+public sealed partial class InternalOriginGuardIntegrationTests
 {
     private InternalOriginGuardClusterFixture _fixture = null!;
     private TestCluster _cluster = null!;

@@ -106,6 +106,9 @@ internal sealed class TreeShardSplitGrain(
         if (sourceShardIndex < 0)
             throw new ArgumentOutOfRangeException(nameof(sourceShardIndex), "Must be non-negative.");
 
+        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
+            Context.ActivationServices, TreeId, LatticeOperation.Admin);
+
         var keyShard = SourceShardIndexFromKey;
         if (keyShard >= 0 && keyShard != sourceShardIndex)
             throw new ArgumentException(

@@ -37,6 +37,9 @@ internal sealed class TreeDeletionGrain(
 
     public async Task DeleteTreeAsync()
     {
+        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
+            context.ActivationServices, TreeId, LatticeOperation.Admin);
+
         if (state.State.IsDeleted) return;
 
         var resolved = await optionsResolver.ResolveAsync(TreeId);
@@ -96,6 +99,9 @@ internal sealed class TreeDeletionGrain(
 
     public async Task RecoverAsync()
     {
+        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
+            context.ActivationServices, TreeId, LatticeOperation.Admin);
+
         if (!state.State.IsDeleted)
             throw new InvalidOperationException("Cannot recover a tree that has not been deleted.");
 
@@ -148,6 +154,9 @@ internal sealed class TreeDeletionGrain(
 
     public async Task PurgeNowAsync()
     {
+        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
+            context.ActivationServices, TreeId, LatticeOperation.Admin);
+
         if (!state.State.IsDeleted)
             throw new InvalidOperationException("Cannot purge a tree that has not been deleted.");
 

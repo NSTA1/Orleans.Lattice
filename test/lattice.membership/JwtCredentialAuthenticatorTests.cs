@@ -92,6 +92,29 @@ public class JwtCredentialAuthenticatorTests
         return new JsonWebTokenHandler().CreateToken(descriptor);
     }
 
+    // Mints a validly-signed token that carries group claims but no subject claim
+    // at all: the case that must resolve to the anonymous subject (no groups)
+    // rather than an anonymous-labelled principal that still carries the groups.
+    private static string MintTokenWithoutSubject(IEnumerable<string> groups)
+    {
+        var claims = new List<Claim>();
+        foreach (var group in groups)
+        {
+            claims.Add(new Claim("groups", group));
+        }
+
+        var descriptor = new SecurityTokenDescriptor
+        {
+            Issuer = Issuer,
+            Audience = Audience,
+            Subject = new ClaimsIdentity(claims),
+            Expires = DateTime.UtcNow.AddHours(1),
+            SigningCredentials = new SigningCredentials(SigningKey, SecurityAlgorithms.HmacSha256),
+        };
+
+        return new JsonWebTokenHandler().CreateToken(descriptor);
+    }
+
     [Test]
     public void Constructor_null_options_throws()
     {
@@ -227,6 +250,50 @@ public class JwtCredentialAuthenticatorTests
         // configured issuer is the anchor of trust for the whole token.
         var authenticator = CreateAuthenticator();
         var credential = new LatticeCredential(MintToken(issuer: "https://evil.example/"));
+
+        var principal = await authenticator.AuthenticateAsync(credential);
+
+        Assert.That(principal, Is.Null);
+    }
+
+    [Test]
+    public async Task AuthenticateAsync_token_with_no_subject_but_groups_returns_null()
+    {
+        // A validly-signed token that asserts group claims but no subject must NOT
+        // resolve to an "anonymous"-labelled principal carrying those groups: that
+        // would grant it access through any group Allow rule. It resolves to the
+        // anonymous subject (a null principal, no groups) instead.
+        var authenticator = CreateAuthenticator();
+        var credential = new LatticeCredential(MintTokenWithoutSubject(new[] { "admins" }));
+
+        var principal = await authenticator.AuthenticateAsync(credential);
+
+        Assert.That(principal, Is.Null);
+    }
+
+    [Test]
+    public async Task AuthenticateAsync_token_with_reserved_anonymous_subject_returns_null()
+    {
+        // A subject id that collides with the reserved anonymous sentinel must not
+        // resolve to an authorized principal - it would let a token impersonate the
+        // well-known anonymous identity while carrying real groups.
+        var authenticator = CreateAuthenticator();
+        var credential = new LatticeCredential(
+            MintToken(subject: LatticeSubject.AnonymousSubjectId, groups: new[] { "admins" }));
+
+        var principal = await authenticator.AuthenticateAsync(credential);
+
+        Assert.That(principal, Is.Null);
+    }
+
+    [Test]
+    public async Task AuthenticateAsync_token_with_reserved_system_subject_returns_null()
+    {
+        // The system sentinel is the most dangerous collision: a validly-signed
+        // token must never resolve to the well-known system subject.
+        var authenticator = CreateAuthenticator();
+        var credential = new LatticeCredential(
+            MintToken(subject: LatticeSubject.SystemSubjectId, groups: new[] { "admins" }));
 
         var principal = await authenticator.AuthenticateAsync(credential);
 

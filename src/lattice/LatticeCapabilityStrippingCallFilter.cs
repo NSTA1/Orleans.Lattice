@@ -37,12 +37,16 @@ namespace Orleans.Lattice;
 /// </item>
 /// <item>
 /// A <b>silo-sourced</b> call, or a call from this cluster's own in-silo hosted
-/// client (the co-hosted gRPC gateway and other in-silo infrastructure, identified
-/// by the Orleans <c>hosted-</c> client-id prefix), is inside the trust boundary,
-/// so the internal-origin marker is stamped fresh (never trusted from the wire) for
-/// the shard / leaf internal-origin assertion to consult. Legitimate silo-to-silo
-/// propagation is preserved because the marker is re-established at each hop from
-/// the caller identity rather than carried as trusted state.
+/// client (the co-hosted gRPC gateway and other in-silo infrastructure), is inside
+/// the trust boundary, so the internal-origin marker is stamped fresh (never trusted
+/// from the wire) for the shard / leaf internal-origin assertion to consult.
+/// Legitimate silo-to-silo propagation is preserved because the marker is
+/// re-established at each hop from the caller identity rather than carried as trusted
+/// state. Crucially, the in-silo hosted client is <em>not</em> recognised by its
+/// <c>hosted-</c> client-id prefix alone - that prefix is a client-supplied value an
+/// external Orleans client can trivially forge - but by validating the silo address
+/// embedded in the hosted-client id against this silo's own address and the live
+/// cluster membership; see <see cref="IsInSiloHostedClient"/>.
 /// </item>
 /// </list>
 /// <para>
@@ -55,6 +59,29 @@ namespace Orleans.Lattice;
 /// </remarks>
 internal sealed class LatticeCapabilityStrippingCallFilter : IIncomingGrainCallFilter
 {
+    private readonly ISiloStatusOracle _siloStatusOracle;
+    private readonly byte[] _localHostedClientKey;
+
+    /// <summary>
+    /// Initializes the filter with the local silo's status oracle, used to
+    /// distinguish a genuine in-silo / in-cluster hosted client from an external
+    /// Orleans client that has forged a <c>hosted-</c> client id.
+    /// </summary>
+    /// <param name="siloStatusOracle">The local silo status oracle. Must not be <c>null</c>.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="siloStatusOracle"/> is <c>null</c>.</exception>
+    public LatticeCapabilityStrippingCallFilter(ISiloStatusOracle siloStatusOracle)
+    {
+        ArgumentNullException.ThrowIfNull(siloStatusOracle);
+        _siloStatusOracle = siloStatusOracle;
+
+        // Precompute this silo's own hosted-client key ("hosted-{localSiloAddress}")
+        // as UTF-8 bytes so the common in-process case (the co-hosted gRPC gateway
+        // and other co-hosted infrastructure calling grains on this silo) is an
+        // allocation-free byte-span compare on the hot path.
+        _localHostedClientKey = System.Text.Encoding.UTF8.GetBytes(
+            "hosted-" + siloStatusOracle.SiloAddress.ToParsableString());
+    }
+
     /// <summary>
     /// The reserved <see cref="RequestContext"/> keys that confer a trust,
     /// bypass, or internal-origin capability - each causes access-gate
@@ -120,9 +147,60 @@ internal sealed class LatticeCapabilityStrippingCallFilter : IIncomingGrainCallF
     /// services) issues grain calls through this hosted client, so it is inside the
     /// trust boundary and must be allowed to carry the internal capability keys it
     /// legitimately establishes.
+    /// <para>
+    /// The <c>hosted-</c> prefix alone is <b>not</b> a trust signal: the caller's
+    /// <c>SourceId</c> is supplied by the client in the connection preamble, and
+    /// Orleans' gateway accepts any client-typed grain id (it validates only the
+    /// grain type and cluster id, never the key), so an external client can announce
+    /// an arbitrary <c>hosted-*</c> id. Trust is therefore derived from the
+    /// <see cref="SiloAddress"/> embedded in the key: it must be either this silo's
+    /// own address (the fast, allocation-free common path) or a currently
+    /// <see cref="SiloStatus.Active"/> member of the local cluster. A forged
+    /// <c>hosted-*</c> id whose embedded address is not a live cluster silo is
+    /// treated as an external client and has every reserved capability key stripped.
+    /// </para>
     /// </summary>
-    private static bool IsInSiloHostedClient(GrainId sourceId)
-        => sourceId.Key.AsSpan().StartsWith(HostedClientKeyPrefix);
+    private bool IsInSiloHostedClient(GrainId sourceId)
+    {
+        var key = sourceId.Key.AsSpan();
+
+        // Fast path: this silo's own in-silo hosted client (the co-hosted gRPC
+        // gateway and other co-hosted infrastructure). Exact byte compare, no parse,
+        // no allocation - this is the overwhelmingly common trusted case.
+        if (key.SequenceEqual(_localHostedClientKey))
+        {
+            return true;
+        }
+
+        if (!key.StartsWith(HostedClientKeyPrefix))
+        {
+            return false;
+        }
+
+        // Cross-silo hosted client (rare: another silo's co-hosted infrastructure
+        // calling a grain activated on this silo). Trust it only when the embedded
+        // silo address is a live member of this cluster - an external client that
+        // forged a "hosted-{garbage}" or "hosted-{some-dead-silo}" id fails this
+        // check and is treated as external.
+        return TryParseHostedSiloAddress(key, out var siloAddress)
+            && _siloStatusOracle.GetApproximateSiloStatus(siloAddress) == SiloStatus.Active;
+    }
+
+    private static bool TryParseHostedSiloAddress(ReadOnlySpan<byte> key, out SiloAddress siloAddress)
+    {
+        try
+        {
+            siloAddress = SiloAddress.FromUtf8String(key[HostedClientKeyPrefix.Length..]);
+            return true;
+        }
+        catch (Exception ex) when (ex is FormatException or ArgumentException or IndexOutOfRangeException or OverflowException)
+        {
+            // A malformed "hosted-*" suffix is the signature of a forged id: fail
+            // closed by treating it as a non-hosted (external) client.
+            siloAddress = SiloAddress.Zero;
+            return false;
+        }
+    }
 
     private static readonly byte[] HostedClientKeyPrefix =
         System.Text.Encoding.UTF8.GetBytes("hosted-");

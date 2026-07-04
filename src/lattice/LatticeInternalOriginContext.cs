@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Orleans.Runtime;
 
 namespace Orleans.Lattice;
@@ -90,5 +91,39 @@ internal static class LatticeInternalOriginContext
             + "enforcement lives on the ILattice facade; the physical grains it delegates to require "
             + "an internal-origin marker that is established only inside the cluster trust boundary and "
             + "is stripped from any call arriving from an external client.");
+    }
+
+    /// <summary>
+    /// Convenience overload that first resolves whether internal-origin enforcement
+    /// is active (the capability-stripping filter is registered, signalled by the
+    /// <see cref="LatticeInternalOriginEnforcementMarker"/> sentinel in the
+    /// activation's service provider) and returns without cost when it is not.
+    /// Intended for the internal coordinator / saga grains (the atomic-write saga
+    /// and the structural lifecycle coordinators), whose mutating entry points are
+    /// reachable by a direct external grain call that would bypass the
+    /// <c>ILattice</c> facade's access gate. A single singleton service lookup per
+    /// entry call is negligible for these low-frequency coordinators, so - unlike
+    /// the shard / leaf hot path - they need not cache the enforcement flag.
+    /// </summary>
+    /// <param name="activationServices">
+    /// The calling grain activation's <see cref="IServiceProvider"/>
+    /// (<c>IGrainContext.ActivationServices</c>).
+    /// </param>
+    /// <param name="treeId">The tree id of the coordinator being driven, for the thrown exception.</param>
+    /// <param name="operation">The operation being attempted, for the thrown exception.</param>
+    /// <exception cref="LatticeAuthorizationDeniedException">
+    /// Enforcement is active and the turn is not internal-origin.
+    /// </exception>
+    public static void EnsureInternalGrainOrigin(
+        IServiceProvider activationServices,
+        string treeId,
+        LatticeOperation operation)
+    {
+        if (activationServices.GetService<LatticeInternalOriginEnforcementMarker>() is null)
+        {
+            return;
+        }
+
+        EnsureInternalGrainOrigin(treeId, operation);
     }
 }

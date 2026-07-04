@@ -157,16 +157,26 @@ public class EntraCredentialAuthenticator : JwtCredentialAuthenticator
     /// Maps Entra v2.0 claims: the subject id from <c>oid</c> (falling back to
     /// <c>sub</c>), the asserted groups from the union of the <c>groups</c> and
     /// <c>roles</c> claims, and the token issuer verbatim so the principal records
-    /// the concrete tenant issuer.
+    /// the concrete tenant issuer. A token with neither <c>oid</c> nor <c>sub</c>
+    /// (or a subject that collides with a reserved well-known sentinel) maps to
+    /// <c>null</c> so the caller resolves to the anonymous subject.
     /// </remarks>
-    protected override LatticePrincipal MapPrincipal(JsonWebToken token, ClaimsIdentity identity)
+    protected override LatticePrincipal? MapPrincipal(JsonWebToken token, ClaimsIdentity identity)
     {
         ArgumentNullException.ThrowIfNull(token);
         ArgumentNullException.ThrowIfNull(identity);
 
         var subjectId = identity.FindFirst(EntraClaimNames.ObjectId)?.Value
-            ?? identity.FindFirst(EntraClaimNames.Subject)?.Value
-            ?? LatticeSubject.AnonymousSubjectId;
+            ?? identity.FindFirst(EntraClaimNames.Subject)?.Value;
+        if (!IsAuthorizableSubjectId(subjectId))
+        {
+            // No oid/sub claim, or a reserved sentinel subject: resolve to the
+            // anonymous subject (no groups) rather than an anonymous-labelled
+            // principal that still carries the token's groups / roles. See
+            // JwtCredentialAuthenticator.IsAuthorizableSubjectId.
+            return null;
+        }
+
         var groups = CollectGroupsAndRoles(identity);
         var claims = ResolveClaims(identity);
         DateTimeOffset? expiresAt = token.ValidTo == default
