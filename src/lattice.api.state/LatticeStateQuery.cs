@@ -312,7 +312,7 @@ internal sealed class LatticeStateQuery(
 
         var ordered = allIds
             .Where(id => !IsTagIndexTree(id))
-            .Where(id => request.IncludeSystemTrees || !IsReservedTree(id))
+            .Where(id => request.IncludeSystemTrees || (!IsReservedTree(id) && !IsSystemDataTree(id)))
             .Where(id => request.PageToken is null || string.CompareOrdinal(id, request.PageToken) > 0)
             .OrderBy(id => id, StringComparer.Ordinal);
 
@@ -1824,6 +1824,18 @@ internal sealed class LatticeStateQuery(
     private static bool IsReservedTree(string treeId) =>
         treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal)
         || treeId.StartsWith(LatticeConstants.ViewTreePrefix, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Tests whether <paramref name="treeId"/> names a dogfooded system-data tree
+    /// (the <see cref="LatticeConstants.SystemDataTreePrefix"/>) owned by the
+    /// identity / authorization add-ons. These are real registered, individually
+    /// inspectable trees - so they are deliberately <b>not</b> treated as
+    /// <see cref="IsReservedTree"/> for the per-tree read / scan / cursor paths -
+    /// but they are hidden from the default tree catalog, appearing only when a
+    /// <see cref="CatalogRequest.IncludeSystemTrees"/> request opts in.
+    /// </summary>
+    private static bool IsSystemDataTree(string treeId) =>
+        treeId.StartsWith(LatticeConstants.SystemDataTreePrefix, StringComparison.Ordinal);
 
     /// <summary>
     /// Tests whether <paramref name="treeId"/> names a silo-internal system tree

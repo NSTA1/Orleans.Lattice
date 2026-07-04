@@ -80,6 +80,13 @@ internal sealed class CatalogClusterFixture
     public Task RegisterTagIndexTreeAsync(string indexName, int shardCount = 1) =>
         Registry.RegisterAsync(LatticeConstants.TagIndexTreePrefix + indexName, new TreeRegistryEntry { ShardCount = shardCount });
 
+    /// <summary>
+    /// Registers a dogfooded <c>sys-</c> system-data tree (as the identity /
+    /// authorization add-ons do) directly in the registry.
+    /// </summary>
+    public Task RegisterSystemDataTreeAsync(string treeId, int shardCount = 1) =>
+        Registry.RegisterAsync(treeId, new TreeRegistryEntry { ShardCount = shardCount });
+
     /// <summary>Opens the tag index <paramref name="indexName"/> bound to <paramref name="sourceTreeId"/>.</summary>
     public ILatticeTagIndex CreateTagIndex(string sourceTreeId, string indexName)
     {

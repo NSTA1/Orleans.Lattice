@@ -100,6 +100,29 @@ public sealed class LatticeCatalogIntegrationTests
     }
 
     [Test]
+    public async Task ListTreesAsync_hides_sys_system_data_trees_by_default_and_shows_when_requested()
+    {
+        // The identity / authorization add-ons dogfood registered "sys-" trees
+        // (sys-membership-*, sys-auth-*). They must not leak into the default
+        // tree catalog an operator browsing user data sees, but stay reachable
+        // when a caller explicitly opts in to system trees.
+        await _fixture.RegisterTreeAsync("tree-user");
+        await _fixture.RegisterSystemDataTreeAsync("sys-membership-users");
+        await _fixture.RegisterSystemDataTreeAsync("sys-auth-policy");
+
+        var hidden = await _fixture.Query.ListTreesAsync(new CatalogRequest());
+        var hiddenIds = hidden.Entries.Select(e => e.TreeId).ToArray();
+        Assert.That(hiddenIds, Does.Contain("tree-user"));
+        Assert.That(hiddenIds, Does.Not.Contain("sys-membership-users"));
+        Assert.That(hiddenIds, Does.Not.Contain("sys-auth-policy"));
+
+        var shown = await _fixture.Query.ListTreesAsync(new CatalogRequest { IncludeSystemTrees = true });
+        var shownIds = shown.Entries.Select(e => e.TreeId).ToArray();
+        Assert.That(shownIds, Does.Contain("sys-membership-users"));
+        Assert.That(shownIds, Does.Contain("sys-auth-policy"));
+    }
+
+    [Test]
     public async Task ListTreesAsync_pages_completely_without_overlap()
     {
         for (var i = 0; i < 5; i++)
