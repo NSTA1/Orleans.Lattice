@@ -86,7 +86,7 @@ In scope: #1120-#1130 and #1133. Out of scope (deferred follow-on): #1131 (manag
 | Wave | Issue | Feature | Status | Landed commit |
 |------|-------|---------|--------|---------------|
 | W0 | #1120 | Project & package scaffolding | LANDED | 1323b29f |
-| W1 | #1121 | Permission model | DISPATCHED (session 9841f3aa) | - |
+| W1 | #1121 | Permission model | LANDED | 356072c4 |
 | W1 | #1122 | Sink + manifest + catalog hiding | DISPATCHED (session a4b42cc8) | - |
 | W2 | #1123 | Full capture | not started | - |
 | W2 | #1127 | AzureBlob sink | not started | - |
@@ -98,7 +98,7 @@ In scope: #1120-#1130 and #1133. Out of scope (deferred follow-on): #1131 (manag
 | W5 | #1129 | gRPC binding + client | not started | - |
 | W6 | #1130 | Observability + samples + e2e + docs | not started | - |
 
-Last updated: 2026-07-05 (W0 #1120 LANDED as 1323b29f; W1 #1121+#1122 dispatched in parallel off feat/backup tip 95bc6627).
+Last updated: 2026-07-05 (W1 #1121 LANDED as 356072c4; grpc regression from #1120 repaired as 35c53427; #1122 still in flight).
 
 ## Review notes / ratified deviations
 
@@ -115,6 +115,26 @@ Last updated: 2026-07-05 (W0 #1120 LANDED as 1323b29f; W1 #1121+#1122 dispatched
     trio + DynamicProxyGenAssembly2, core reference only); slnx placement consistent with auth
     ordering; targeted build/test/pack all green (7/1/1 tests). backup-plan.md base-drift from
     the sub-agent branch was excluded at integration (coordinator owns this file).
+
+- **#1121 (landed 356072c4; grpc repair 35c53427):** Backup/restore permission model reviewed
+  against source (LatticeOperation.cs, LatticeAccessGateEnforcement.cs, PolicyAccessGate.cs).
+  - Ratified deviation 1 (prefix-as-point): prefix/key scope routes through the point-check branch
+    (EnforcePointAsync with key=prefix), whole-tree through EnforceWholeTreeAsync. Verified
+    fail-closed: a narrower grant cannot escalate to a broader backup; whole-tree refuses a
+    filtered/partial allow; deny-overrides + prefix-specificity honoured at the scope root. The
+    intentional coarseness (a deeper sub-scope deny does not narrow a broader Backup grant) matches
+    the resolved design decision that Backup is high-privilege and bypasses per-key read filtering.
+    NOTE for #1123: within-prefix denies are intentionally NOT narrowed by the capture authorizer.
+  - Ratified deviation 2 (Restore in FenceWriteMask, Backup excluded): correct - Restore bulk-loads
+    like BulkLoad; Backup is a read.
+  - Ratified deviations 3-4: no AddLatticeBackup DI entrypoint yet (deferred to #1123 consumer);
+    BackupScope/Kind/Authorizer kept internal, only LatticeOperation.Backup/Restore new public.
+  - Deviation 5 (full-solution build break) was a GENUINE catch: my #1120 grpc alias fix-up was
+    applied to the working tree but never committed, so committed feat/backup referenced the
+    removed ApiBackupGrpcTypeAliases. Repaired as a distinct commit (35c53427) before landing #1121.
+  - Targeted tests green: core LatticeOperation 5/5, auth 236/236 (behaviour unchanged), backup
+    authorizer 21/21, grpc scaffolding 1/1. Hygiene scan (em-dash/non-ASCII/tracker-id) clean.
+    backup-plan.md base-drift excluded at integration.
 
 ## Coordinator-owned carve-outs (NOT delegated to sub-agents)
 
