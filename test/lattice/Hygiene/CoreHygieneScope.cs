@@ -32,6 +32,7 @@ internal static class CoreHygieneScope
         "src/lattice.replication", "test/lattice.replication",
         "src/lattice.replication.grpc", "test/lattice.replication.grpc",
         "src/lattice.storage.azuretable", "test/lattice.storage.azuretable",
+        "src/lattice.backup.azureblob", "test/lattice.backup.azureblob",
         "test/microbench",
     };
 
