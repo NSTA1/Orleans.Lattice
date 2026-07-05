@@ -27,6 +27,52 @@ internal static class BackupConstants
     internal const string ReservedTreePrefix = "sys-backup-";
 
     /// <summary>
+    /// The reserved, dogfooded <c>ILattice</c> tree the default in-cluster sink
+    /// stores backup artifacts and manifests into. Keyed
+    /// <c>m\u001f{backupId}</c> for manifests and
+    /// <c>a\u001f{artifactId}\u001f{chunkIndex}</c> for streamed artifact chunks.
+    /// Nested under the reserved prefix so it inherits state-catalog hiding.
+    /// </summary>
+    internal const string StoreTree = "sys-backup-store";
+
+    /// <summary>
+    /// The reserved, dogfooded <c>ILattice</c> tree that indexes backup manifests
+    /// for enumeration and audit, keyed by backup id. This is the in-cluster
+    /// catalog the backup API enumerates; a durable per-key history view is
+    /// created over it so the catalog stays auditable.
+    /// </summary>
+    internal const string CatalogTree = "sys-backup-catalog";
+
+    /// <summary>Durable per-key history view name for <see cref="CatalogTree"/>.</summary>
+    internal const string CatalogHistoryView = "sys-backup-catalog-history";
+
+    /// <summary>Field separator used inside composite sink / catalog keys.</summary>
+    internal const char KeySeparator = '\u001f';
+
+    /// <summary>Key discriminator for a manifest row in the in-cluster sink store.</summary>
+    internal const char ManifestKeyPrefix = 'm';
+
+    /// <summary>Key discriminator for an artifact chunk row in the in-cluster sink store.</summary>
+    internal const char ArtifactKeyPrefix = 'a';
+
+    /// <summary>Enumerates the reserved backing tree names owned by the backup package.</summary>
+    internal static IReadOnlyList<string> AllTrees { get; } = new[] { StoreTree, CatalogTree };
+
+    /// <summary>
+    /// The exclusive upper bound of every key sharing <paramref name="prefix"/>:
+    /// the prefix with its final character advanced to the next code point. Used to
+    /// bound a prefix scan of the in-cluster sink / catalog trees.
+    /// </summary>
+    /// <param name="prefix">The inclusive key prefix. Must not be empty.</param>
+    /// <returns>The exclusive upper bound of the prefix range.</returns>
+    internal static string PrefixUpperBound(string prefix)
+    {
+        var chars = prefix.ToCharArray();
+        chars[^1] = (char)(chars[^1] + 1);
+        return new string(chars);
+    }
+
+    /// <summary>
     /// Rejects a tree id that collides with the reserved <c>sys-backup-*</c>
     /// namespace, mirroring the guard the authorization and membership packages
     /// enforce on their own reserved namespaces.

@@ -21,4 +21,28 @@ internal static class BackupTypeAliases
     /// constant added here must start with this value.
     /// </summary>
     internal const string AliasPrefix = "olb.";
+
+    /// <summary>Alias for <see cref="BackupManifest"/>.</summary>
+    internal const string BackupManifest = "olb.mf";
+
+    /// <summary>Alias for <see cref="BackupScopeSelector"/>.</summary>
+    internal const string BackupScopeSelector = "olb.sc";
+
+    /// <summary>Alias for <see cref="BackupConsistencyCut"/>.</summary>
+    internal const string BackupConsistencyCut = "olb.cc";
+
+    /// <summary>Alias for <see cref="BackupTopologySnapshot"/>.</summary>
+    internal const string BackupTopologySnapshot = "olb.tp";
+
+    /// <summary>Alias for <see cref="BackupKeyDescriptor"/>.</summary>
+    internal const string BackupKeyDescriptor = "olb.kd";
+
+    /// <summary>Alias for <see cref="BackupContentDescriptor"/>.</summary>
+    internal const string BackupContentDescriptor = "olb.cd";
+
+    /// <summary>Alias for <see cref="BackupOriginProvenance"/>.</summary>
+    internal const string BackupOriginProvenance = "olb.pv";
+
+    /// <summary>Alias for <see cref="BackupCompressionDictionaryRef"/>.</summary>
+    internal const string BackupCompressionDictionaryRef = "olb.dr";
 }

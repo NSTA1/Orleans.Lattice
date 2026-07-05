@@ -31,7 +31,7 @@ public sealed class BackupAccessAuthorizerTests
         var gate = new CapturingAccessGate();
         var authorizer = Create(gate);
 
-        await authorizer.AuthorizeBackupAsync(BackupScope.Tree(Tree));
+        await authorizer.AuthorizeBackupAsync(BackupScopeSelector.WholeTree(Tree));
 
         Assert.Multiple(() =>
         {
@@ -49,7 +49,7 @@ public sealed class BackupAccessAuthorizerTests
         var gate = new CapturingAccessGate();
         var authorizer = Create(gate);
 
-        await authorizer.AuthorizeRestoreAsync(BackupScope.Tree(Tree));
+        await authorizer.AuthorizeRestoreAsync(BackupScopeSelector.WholeTree(Tree));
 
         Assert.Multiple(() =>
         {
@@ -65,7 +65,7 @@ public sealed class BackupAccessAuthorizerTests
         var gate = new CapturingAccessGate();
         var authorizer = Create(gate);
 
-        await authorizer.AuthorizeBackupAsync(BackupScope.Key(Tree, "k-42"));
+        await authorizer.AuthorizeBackupAsync(BackupScopeSelector.Key(Tree, "k-42"));
 
         Assert.Multiple(() =>
         {
@@ -81,7 +81,7 @@ public sealed class BackupAccessAuthorizerTests
         var gate = new CapturingAccessGate();
         var authorizer = Create(gate);
 
-        await authorizer.AuthorizeRestoreAsync(BackupScope.Prefix(Tree, "tenant-a/"));
+        await authorizer.AuthorizeRestoreAsync(BackupScopeSelector.Prefix(Tree, "tenant-a/"));
 
         Assert.Multiple(() =>
         {
@@ -99,9 +99,9 @@ public sealed class BackupAccessAuthorizerTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(async () => await authorizer.AuthorizeBackupAsync(BackupScope.Tree(Tree)), Throws.Nothing);
-            Assert.That(async () => await authorizer.AuthorizeBackupAsync(BackupScope.Prefix(Tree, "p/")), Throws.Nothing);
-            Assert.That(async () => await authorizer.AuthorizeBackupAsync(BackupScope.Key(Tree, "k")), Throws.Nothing);
+            Assert.That(async () => await authorizer.AuthorizeBackupAsync(BackupScopeSelector.WholeTree(Tree)), Throws.Nothing);
+            Assert.That(async () => await authorizer.AuthorizeBackupAsync(BackupScopeSelector.Prefix(Tree, "p/")), Throws.Nothing);
+            Assert.That(async () => await authorizer.AuthorizeBackupAsync(BackupScopeSelector.Key(Tree, "k")), Throws.Nothing);
         });
     }
 
@@ -114,7 +114,7 @@ public sealed class BackupAccessAuthorizerTests
         var authorizer = Create(gate);
 
         var ex = Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
-            async () => await authorizer.AuthorizeBackupAsync(BackupScope.Tree(Tree)));
+            async () => await authorizer.AuthorizeBackupAsync(BackupScopeSelector.WholeTree(Tree)));
 
         Assert.Multiple(() =>
         {
@@ -131,7 +131,7 @@ public sealed class BackupAccessAuthorizerTests
         var authorizer = Create(gate);
 
         var ex = Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
-            async () => await authorizer.AuthorizeRestoreAsync(BackupScope.Key(Tree, "k")));
+            async () => await authorizer.AuthorizeRestoreAsync(BackupScopeSelector.Key(Tree, "k")));
 
         Assert.That(ex!.Operation, Is.EqualTo(LatticeOperation.Restore));
     }
@@ -143,7 +143,7 @@ public sealed class BackupAccessAuthorizerTests
         var authorizer = Create(gate);
 
         Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
-            async () => await authorizer.AuthorizeBackupAsync(BackupScope.Tree(Tree)),
+            async () => await authorizer.AuthorizeBackupAsync(BackupScopeSelector.WholeTree(Tree)),
             "a whole-tree backup cannot be narrowed and a filtered allow is refused");
     }
 
@@ -154,7 +154,7 @@ public sealed class BackupAccessAuthorizerTests
         var authorizer = Create(gate);
 
         Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
-            async () => await authorizer.AuthorizeBackupAsync(BackupScope.Key(Tree, "k")),
+            async () => await authorizer.AuthorizeBackupAsync(BackupScopeSelector.Key(Tree, "k")),
             "a point-scope grant whose per-key filter excludes the key fails closed");
     }
 
@@ -168,7 +168,7 @@ public sealed class BackupAccessAuthorizerTests
         var authorizer = Create(gate, membership);
 
         var ex = Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
-            async () => await authorizer.AuthorizeBackupAsync(BackupScope.Tree(Tree)));
+            async () => await authorizer.AuthorizeBackupAsync(BackupScopeSelector.WholeTree(Tree)));
 
         Assert.Multiple(() =>
         {
@@ -184,7 +184,7 @@ public sealed class BackupAccessAuthorizerTests
         var authorizer = Create(gate);
 
         var ex = Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
-            async () => await authorizer.AuthorizeBackupAsync(BackupScope.Tree(Tree)));
+            async () => await authorizer.AuthorizeBackupAsync(BackupScopeSelector.WholeTree(Tree)));
 
         Assert.That(ex!.SubjectId, Is.EqualTo(LatticeSubject.AnonymousSubjectId));
     }
@@ -200,34 +200,34 @@ public sealed class BackupAccessAuthorizerTests
     // ---- Scope factory guards -------------------------------------------
 
     [Test]
-    public void BackupScope_factories_reject_null_or_empty_arguments()
+    public void BackupScopeSelector_factories_reject_null_or_empty_arguments()
     {
         Assert.Multiple(() =>
         {
-            Assert.That(() => BackupScope.Tree(null!), Throws.InstanceOf<ArgumentException>());
-            Assert.That(() => BackupScope.Tree(""), Throws.InstanceOf<ArgumentException>());
-            Assert.That(() => BackupScope.Prefix(Tree, null!), Throws.InstanceOf<ArgumentException>());
-            Assert.That(() => BackupScope.Prefix(Tree, ""), Throws.InstanceOf<ArgumentException>());
-            Assert.That(() => BackupScope.Key(Tree, null!), Throws.InstanceOf<ArgumentException>());
-            Assert.That(() => BackupScope.Key("", "k"), Throws.InstanceOf<ArgumentException>());
+            Assert.That(() => BackupScopeSelector.WholeTree(null!), Throws.InstanceOf<ArgumentException>());
+            Assert.That(() => BackupScopeSelector.WholeTree(""), Throws.InstanceOf<ArgumentException>());
+            Assert.That(() => BackupScopeSelector.Prefix(Tree, null!), Throws.InstanceOf<ArgumentException>());
+            Assert.That(() => BackupScopeSelector.Prefix(Tree, ""), Throws.InstanceOf<ArgumentException>());
+            Assert.That(() => BackupScopeSelector.Key(Tree, null!), Throws.InstanceOf<ArgumentException>());
+            Assert.That(() => BackupScopeSelector.Key("", "k"), Throws.InstanceOf<ArgumentException>());
         });
     }
 
     [Test]
-    public void BackupScope_factories_populate_the_expected_shape()
+    public void BackupScopeSelector_factories_populate_the_expected_shape()
     {
         Assert.Multiple(() =>
         {
-            var tree = BackupScope.Tree(Tree);
-            Assert.That(tree.Kind, Is.EqualTo(BackupScopeKind.Tree));
+            var tree = BackupScopeSelector.WholeTree(Tree);
+            Assert.That(tree.Kind, Is.EqualTo(BackupScopeKind.WholeTree));
             Assert.That(tree.TreeId, Is.EqualTo(Tree));
             Assert.That(tree.KeyOrPrefix, Is.Null);
 
-            var prefix = BackupScope.Prefix(Tree, "p/");
+            var prefix = BackupScopeSelector.Prefix(Tree, "p/");
             Assert.That(prefix.Kind, Is.EqualTo(BackupScopeKind.Prefix));
             Assert.That(prefix.KeyOrPrefix, Is.EqualTo("p/"));
 
-            var key = BackupScope.Key(Tree, "k");
+            var key = BackupScopeSelector.Key(Tree, "k");
             Assert.That(key.Kind, Is.EqualTo(BackupScopeKind.Key));
             Assert.That(key.KeyOrPrefix, Is.EqualTo("k"));
         });

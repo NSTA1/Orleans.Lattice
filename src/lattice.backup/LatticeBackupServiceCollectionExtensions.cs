@@ -1,0 +1,101 @@
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Options;
+using Orleans.Hosting;
+
+namespace Orleans.Lattice.Backup;
+
+/// <summary>
+/// Extension methods for configuring <c>Orleans.Lattice.Backup</c> on an Orleans
+/// silo.
+/// </summary>
+public static class LatticeBackupServiceCollectionExtensions
+{
+    /// <summary>
+    /// Adds the <c>Orleans.Lattice.Backup</c> storage surface to the silo: the
+    /// default in-cluster <see cref="ILatticeBackupSink"/>, the introspectable
+    /// <see cref="ILatticeBackupCatalogStore"/> backed by the reserved
+    /// <c>sys-backup-catalog</c> tree, its options, and the once-per-silo history
+    /// bootstrap. Also ensures the view infrastructure is present so the catalog
+    /// tree gets durable per-key history out of the box. The reserved
+    /// <c>sys-backup-*</c> trees carry the core <c>sys-</c> prefix, so they are
+    /// hidden from the default cluster-state tree catalog and the backup surface is
+    /// the sole enumeration point for backups.
+    /// <para>
+    /// Must be called <i>after</i>
+    /// <see cref="LatticeServiceCollectionExtensions.AddLattice(ISiloBuilder, Action{ISiloBuilder, string})"/>:
+    /// the core registration is the source of truth for the tree registry and
+    /// options system this add-on builds on. Calling it first fails fast with a
+    /// clear message, mirroring how the other add-ons guard their ordering.
+    /// </para>
+    /// </summary>
+    /// <param name="builder">The silo builder.</param>
+    /// <param name="configure">Optional delegate that populates <see cref="LatticeBackupOptions"/>.</param>
+    /// <returns>The same <paramref name="builder"/> for chaining.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="builder"/> is <c>null</c>.</exception>
+    /// <exception cref="InvalidOperationException"><c>AddLattice(...)</c> was not called first.</exception>
+    public static ISiloBuilder AddLatticeBackup(
+        this ISiloBuilder builder,
+        Action<LatticeBackupOptions>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        // Ordering guard: AddLattice registers the core options validator
+        // (IValidateOptions<LatticeOptions>). Its absence means the catalog store
+        // would have no tree registry to dogfood, so fail fast at registration
+        // with an actionable message.
+        if (!builder.Services.Any(d => d.ServiceType == typeof(IValidateOptions<LatticeOptions>)))
+        {
+            throw new InvalidOperationException(
+                "AddLatticeBackup() must be called after AddLattice(). Register the core " +
+                "lattice (siloBuilder.AddLattice(...)) before adding backup.");
+        }
+
+        // A repeat call still layers any supplied configure delegate above but
+        // performs the structural wiring only once.
+        var alreadyRegistered = builder.Services.Any(d => d.ServiceType == typeof(BackupRegistrationMarker));
+        if (configure is not null)
+        {
+            builder.Services.Configure(configure);
+        }
+
+        if (alreadyRegistered)
+        {
+            return builder;
+        }
+
+        builder.Services.AddSingleton<BackupRegistrationMarker>();
+
+        // Durable per-key history for the sys-backup-catalog tree rides on the
+        // view infrastructure; ensure it is present (idempotent).
+        builder.AddLatticeViews();
+
+        builder.Services.AddOptions<LatticeBackupOptions>();
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<LatticeBackupOptions>, LatticeBackupOptionsValidator>());
+
+        builder.Services.TryAddSingleton<BackupInitializer>();
+        builder.Services.TryAddSingleton<ILatticeBackupSink, InClusterLatticeBackupSink>();
+        builder.Services.TryAddSingleton<ILatticeBackupCatalogStore, LatticeBackupCatalogStore>();
+
+        return builder;
+    }
+
+    /// <summary>
+    /// Layers an additional <see cref="LatticeBackupOptions"/> configuration
+    /// delegate. Use to adjust backup options after <see cref="AddLatticeBackup"/>.
+    /// </summary>
+    /// <param name="builder">The silo builder.</param>
+    /// <param name="configure">The options configuration delegate.</param>
+    /// <returns>The same <paramref name="builder"/> for chaining.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="builder"/> or <paramref name="configure"/> is <c>null</c>.</exception>
+    public static ISiloBuilder ConfigureLatticeBackup(
+        this ISiloBuilder builder,
+        Action<LatticeBackupOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(configure);
+        builder.Services.Configure(configure);
+        return builder;
+    }
+}

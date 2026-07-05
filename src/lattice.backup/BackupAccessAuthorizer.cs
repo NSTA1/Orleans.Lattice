@@ -4,7 +4,7 @@ namespace Orleans.Lattice.Backup;
 
 /// <summary>
 /// The backup / restore authorization seam. Given the resolved caller and a
-/// <see cref="BackupScope"/> (tree, prefix, or key), it consults the registered
+/// <see cref="BackupScopeSelector"/> (tree, prefix, or key), it consults the registered
 /// core <see cref="ILatticeAccessGate"/> for the dedicated
 /// <see cref="LatticeOperation.Backup"/> (capture) or
 /// <see cref="LatticeOperation.Restore"/> (author / bulk-load) capability and
@@ -73,7 +73,7 @@ internal sealed class BackupAccessAuthorizer
     /// <param name="cancellationToken">Cancels the authorization.</param>
     /// <returns>A task that completes when the capture is authorized.</returns>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to back up the scope.</exception>
-    public ValueTask AuthorizeBackupAsync(BackupScope scope, CancellationToken cancellationToken = default) =>
+    public ValueTask AuthorizeBackupAsync(BackupScopeSelector scope, CancellationToken cancellationToken = default) =>
         AuthorizeAsync(LatticeOperation.Backup, scope, cancellationToken);
 
     /// <summary>
@@ -87,13 +87,15 @@ internal sealed class BackupAccessAuthorizer
     /// <param name="cancellationToken">Cancels the authorization.</param>
     /// <returns>A task that completes when the restore is authorized.</returns>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to restore the scope.</exception>
-    public ValueTask AuthorizeRestoreAsync(BackupScope scope, CancellationToken cancellationToken = default) =>
+    public ValueTask AuthorizeRestoreAsync(BackupScopeSelector scope, CancellationToken cancellationToken = default) =>
         AuthorizeAsync(LatticeOperation.Restore, scope, cancellationToken);
 
-    private ValueTask AuthorizeAsync(LatticeOperation operation, BackupScope scope, CancellationToken cancellationToken) =>
-        scope.Kind switch
+    private ValueTask AuthorizeAsync(LatticeOperation operation, BackupScopeSelector scope, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        return scope.Kind switch
         {
-            BackupScopeKind.Tree => LatticeAccessGateEnforcement.EnforceWholeTreeAsync(
+            BackupScopeKind.WholeTree => LatticeAccessGateEnforcement.EnforceWholeTreeAsync(
                 _gate, _membership, scope.TreeId, operation, cancellationToken),
             BackupScopeKind.Prefix => LatticeAccessGateEnforcement.EnforcePointAsync(
                 _gate, _membership, scope.TreeId, operation, scope.KeyOrPrefix!, cancellationToken),
@@ -102,4 +104,5 @@ internal sealed class BackupAccessAuthorizer
             _ => throw new ArgumentOutOfRangeException(
                 nameof(scope), scope.Kind, "Unknown backup scope kind."),
         };
+    }
 }
