@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>Orleans.Lattice.Api.Backup</PackageId>
+    <Version>0.1.0</Version>
+    <Description>Optional transport-agnostic control facade add-on for Orleans.Lattice backup and restore. Scaffolding release: reserves the package and its serialization-alias prefix so the backup admin surface (list, create, and restore backups) can be layered by later releases. No runtime behaviour yet.</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Backup.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Backup.Grpc" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Backup.Grpc.Tests" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\lattice\Orleans.Lattice.csproj" />
+    <ProjectReference Include="..\lattice.backup\Orleans.Lattice.Backup.csproj" />
+    <PackageReference Include="Microsoft.Orleans.Sdk" Version="10.2.0" />
+  </ItemGroup>
+
+</Project>

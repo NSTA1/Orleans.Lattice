@@ -6,10 +6,13 @@
   <Project Path="src/lattice.api.data.grpc/Orleans.Lattice.Api.Data.Grpc.csproj" />
   <Project Path="src/lattice.api.auth/Orleans.Lattice.Api.Auth.csproj" />
   <Project Path="src/lattice.api.auth.grpc/Orleans.Lattice.Api.Auth.Grpc.csproj" />
+  <Project Path="src/lattice.api.backup/Orleans.Lattice.Api.Backup.csproj" />
+  <Project Path="src/lattice.api.backup.grpc/Orleans.Lattice.Api.Backup.Grpc.csproj" />
   <Project Path="src/lattice.membership/Orleans.Lattice.Membership.csproj" />
   <Project Path="src/lattice.membership.entra/Orleans.Lattice.Membership.Entra.csproj" />
   <Project Path="src/lattice.membership.entra.graph/Orleans.Lattice.Membership.Entra.Graph.csproj" />
   <Project Path="src/lattice.auth/Orleans.Lattice.Auth.csproj" />
+  <Project Path="src/lattice.backup/Orleans.Lattice.Backup.csproj" />
   <Project Path="src/lattice.dashboards/Orleans.Lattice.Dashboards.csproj" />
   <Project Path="src/lattice.replication/Orleans.Lattice.Replication.csproj" />
   <Project Path="src/lattice.replication.grpc/Orleans.Lattice.Replication.Grpc.csproj" />
@@ -27,10 +30,13 @@
   <Project Path="test/lattice.api.data.grpc/Orleans.Lattice.Api.Data.Grpc.Tests.csproj" />
   <Project Path="test/lattice.api.auth/Orleans.Lattice.Api.Auth.Tests.csproj" />
   <Project Path="test/lattice.api.auth.grpc/Orleans.Lattice.Api.Auth.Grpc.Tests.csproj" />
+  <Project Path="test/lattice.api.backup/Orleans.Lattice.Api.Backup.Tests.csproj" />
+  <Project Path="test/lattice.api.backup.grpc/Orleans.Lattice.Api.Backup.Grpc.Tests.csproj" />
   <Project Path="test/lattice.membership/Orleans.Lattice.Membership.Tests.csproj" />
   <Project Path="test/lattice.membership.entra/Orleans.Lattice.Membership.Entra.Tests.csproj" />
   <Project Path="test/lattice.membership.entra.graph/Orleans.Lattice.Membership.Entra.Graph.Tests.csproj" />
   <Project Path="test/lattice.auth/Orleans.Lattice.Auth.Tests.csproj" />
+  <Project Path="test/lattice.backup/Orleans.Lattice.Backup.Tests.csproj" />
   <Project Path="test/lattice.dashboards/Orleans.Lattice.Dashboards.Tests.csproj" />
   <Project Path="test/lattice.replication/Orleans.Lattice.Replication.Tests.csproj" />
   <Project Path="test/lattice.replication.grpc/Orleans.Lattice.Replication.Grpc.Tests.csproj" />
