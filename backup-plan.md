@@ -89,7 +89,7 @@ In scope: #1120-#1130 and #1133. Out of scope (deferred follow-on): #1131 (manag
 | W1 | #1121 | Permission model | LANDED | 356072c4 |
 | W1 | #1122 | Sink + manifest + catalog hiding | LANDED | 3c010829 |
 | W2 | #1123 | Full capture | DISPATCHED | - |
-| W2 | #1127 | AzureBlob sink | DISPATCHED | - |
+| W2 | #1127 | AzureBlob sink | LANDED | de70a56b |
 | W3 | #1133 | Cross-tree fence | not started | - |
 | W3 | #1124 | Incremental | not started | - |
 | W3 | #1125 | Scheduling + retention | not started | - |
