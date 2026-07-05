@@ -88,8 +88,8 @@ In scope: #1120-#1130 and #1133. Out of scope (deferred follow-on): #1131 (manag
 | W0 | #1120 | Project & package scaffolding | LANDED | 1323b29f |
 | W1 | #1121 | Permission model | LANDED | 356072c4 |
 | W1 | #1122 | Sink + manifest + catalog hiding | LANDED | 3c010829 |
-| W2 | #1123 | Full capture | not started | - |
-| W2 | #1127 | AzureBlob sink | not started | - |
+| W2 | #1123 | Full capture | DISPATCHED | - |
+| W2 | #1127 | AzureBlob sink | DISPATCHED | - |
 | W3 | #1133 | Cross-tree fence | not started | - |
 | W3 | #1124 | Incremental | not started | - |
 | W3 | #1125 | Scheduling + retention | not started | - |
@@ -98,7 +98,7 @@ In scope: #1120-#1130 and #1133. Out of scope (deferred follow-on): #1131 (manag
 | W5 | #1129 | gRPC binding + client | not started | - |
 | W6 | #1130 | Observability + samples + e2e + docs | not started | - |
 
-Last updated: 2026-07-05 (W1 COMPLETE: #1121 356072c4, #1122 3c010829; scope types unified; full-solution build green 0/0; W2 #1123+#1127 ready to dispatch).
+Last updated: 2026-07-05 (W2 DISPATCHED: #1123 full capture [scoped snapshot; raw-entry full-metadata export; per-key merge mode from log record; fail-fast size gate; honour snapshot/leaf/shed options] + #1127 AzureBlob sink [new package src/lattice.backup.azureblob mirroring lattice.storage.azuretable; append/block blobs; DI-selected ILatticeBackupSink] running in parallel off feat/backup tip. Coordinator created the lattice.backup.azureblob package label. Full non-chaos suite due at end of W2.).
 
 ## Review notes / ratified deviations
 
