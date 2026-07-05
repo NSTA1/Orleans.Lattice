@@ -90,6 +90,7 @@ public class ShardRootGrainSplitShadowForwardTests
 
         var shadowTarget = Substitute.For<IShardRootGrain>();
         shadowTarget.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()).Returns(Task.CompletedTask);
+        shadowTarget.MarkSagaShadowAsync(Arg.Any<Guid>(), Arg.Any<IReadOnlyList<string>>()).Returns(Task.CompletedTask);
         shadowTarget.MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>(), Arg.Any<bool>()).Returns(Task.CompletedTask);
         shadowTarget.AppendTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>(), Arg.Any<bool>())
             .Returns(Task.FromResult<WalRecord?>(null));
@@ -160,6 +161,46 @@ public class ShardRootGrainSplitShadowForwardTests
         // The forward must use SetAsync on the destination, NOT MergeManyAsync.
         await h.ShadowTarget.Received().SetAsync("k", Arg.Any<byte[]>());
         await h.ShadowTarget.DidNotReceive().MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>(), Arg.Any<bool>());
+    }
+
+    [Test]
+    public async Task SetAsync_under_prepared_context_installs_destination_shadow_marker()
+    {
+        // Regression for the mid-saga reshard atomic-visibility torn read
+        // (ReshardTopologyTests round=N: split (pre=k, post=m)). A saga
+        // prepare-phase write to a moved slot during an active split must
+        // install a destination-side shadow marker for the key, mirroring
+        // TreeShardSplitGrain.RetroactiveSweepPreparedMutationsAsync. The
+        // sweep installs the marker only for sagas in flight at split-begin;
+        // a saga that prepares later (during Drain/Swap, after the sweep
+        // walked its leaf) must get the marker via this live shadow-forward.
+        //
+        // Without the marker, the drain that migrates the source's pre-saga
+        // value into the destination's Entries (IsMigrated=true) leaves the
+        // destination able to serve that stale value: a reader routed to the
+        // destination after the shard-map swap, observing the saga Committed
+        // but before its backstop terminal lands, surfaces the pre-saga value
+        // for this key while every sibling key shows the post-saga value -
+        // the non-atomic mixed-round batch the reshard chaos fixture catches.
+        var h = CreateHarness(NewSplit(ShardSplitPhase.Swap));
+
+        var txid = Guid.NewGuid();
+        LatticeTransactionContext.Set(txid);
+        try
+        {
+            using (LatticePreparedContext.BeginScope())
+            {
+                await h.Grain.SetAsync("k", [1, 2]);
+            }
+        }
+        finally
+        {
+            LatticeTransactionContext.Set(Guid.Empty);
+        }
+
+        await h.ShadowTarget.Received().MarkSagaShadowAsync(
+            txid,
+            Arg.Is<IReadOnlyList<string>>(keys => keys != null && keys.Contains("k")));
     }
 
     [Test]

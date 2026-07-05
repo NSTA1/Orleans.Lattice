@@ -436,10 +436,44 @@ internal sealed partial class ShardRootGrain
         // XML doc.
         if (LatticePreparedContext.Current && LatticeTransactionContext.Current != Guid.Empty)
         {
+            var shadowTxId = LatticeTransactionContext.Current;
             if (expiresAtTicks > 0L)
                 await ForwardWithDeadlineAsync(() => target.SetAsync(key, value, expiresAtTicks));
             else
                 await ForwardWithDeadlineAsync(() => target.SetAsync(key, value));
+
+            // Install the destination-side shadow marker for this in-flight
+            // saga, mirroring TreeShardSplitGrain.RetroactiveSweepPreparedMutationsAsync.
+            // The retroactive sweep installs this marker for sagas that were
+            // in flight when the split began; a saga that prepares LATER -
+            // during Drain / Swap, after the sweep has already walked past
+            // this leaf - reaches the destination only through this live
+            // shadow-forward, so the marker must be installed here too.
+            //
+            // Why it is required: the coordinator's drain migrates the
+            // source's pre-saga value into the destination's Entries with
+            // IsMigrated=true. Without a marker naming this saga as the owner
+            // of the key, a reader that routes to the destination after the
+            // shard-map swap - observing the saga as Committed (post
+            // MarkCommittedAsync) but BEFORE the saga's backstop terminal
+            // reaches the destination - surfaces that migrated pre-saga value
+            // for this key while every sibling key already shows the post-saga
+            // value. That is the non-atomic mixed-round batch the reshard
+            // chaos fixture catches (round=N: split (pre=k, post=m)). The
+            // marker makes the destination read gate raise
+            // StaleShardRoutingException for the Committed-without-backstop
+            // window (see BPlusLeafGrain.IsShadowedReadSafeAsync), forcing the
+            // LatticeGrain deadline-bounded retry loop to re-fan once the
+            // backstop lands.
+            //
+            // Ordering matches the sweep: target.SetAsync above registers the
+            // destination as a saga participant (RecordAffectedLeafIfPreparedAsync)
+            // BEFORE the marker lands, and the read gate keys its safety
+            // decision off the per-leaf _recentlyTerminal set rather than
+            // marker presence, so a terminal that races ahead of the marker
+            // cannot strand an un-clearable guard - the marker degenerates to
+            // a harmless no-op once the terminal has been applied.
+            await ForwardWithDeadlineAsync(() => target.MarkSagaShadowAsync(shadowTxId, new[] { key }));
             return;
         }
 
