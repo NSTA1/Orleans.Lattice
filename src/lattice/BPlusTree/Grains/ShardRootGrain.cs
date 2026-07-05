@@ -1176,9 +1176,13 @@ internal sealed partial class ShardRootGrain(
                 await MarkLeafDirtyAsync(leafId);
                 result = await leafGrain.DeleteAsync(key);
 
-                // tombstone forwarding for adaptive splits is handled by the
-                // comprehensive cleanup phase of the split coordinator. See
-                // ForwardLocalWriteToShadowIfNeededAsync XML doc for rationale.
+                // Shadow-forward the prepared tombstone to the split
+                // destination and install the destination-side shadow marker
+                // (issue 1117 - the delete flavour of the PR 1115 write fix).
+                // Non-prepared deletes remain deferred to the split
+                // coordinator's cleanup phase; only a saga prepare needs the
+                // marker to close the mid-saga atomic-visibility torn read.
+                await ForwardLocalDeleteToShadowIfNeededAsync(key);
                 await forwardTask;
                 return result;
             }

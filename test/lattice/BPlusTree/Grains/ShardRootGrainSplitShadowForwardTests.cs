@@ -90,6 +90,7 @@ public class ShardRootGrainSplitShadowForwardTests
 
         var shadowTarget = Substitute.For<IShardRootGrain>();
         shadowTarget.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()).Returns(Task.CompletedTask);
+        shadowTarget.DeleteAsync(Arg.Any<string>()).Returns(Task.FromResult(true));
         shadowTarget.MarkSagaShadowAsync(Arg.Any<Guid>(), Arg.Any<IReadOnlyList<string>>()).Returns(Task.CompletedTask);
         shadowTarget.MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>(), Arg.Any<bool>()).Returns(Task.CompletedTask);
         shadowTarget.AppendTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>(), Arg.Any<bool>())
@@ -608,5 +609,100 @@ public class ShardRootGrainSplitShadowForwardTests
 
         await h.ShadowTarget.DidNotReceive().MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>(), Arg.Any<bool>());
         await h.ShadowTarget.DidNotReceive().SetAsync(Arg.Any<string>(), Arg.Any<byte[]>());
+    }
+
+    // ============================================================================
+    // Delete flavour (issue 1117) - prepared-context tombstone shadow-forward
+    // installs the destination marker, mirroring the SetAsync fix (PR 1115).
+    // ============================================================================
+
+    [Test]
+    public async Task DeleteAsync_under_prepared_context_installs_destination_shadow_marker()
+    {
+        // Regression for the DELETE flavour of the mid-saga reshard
+        // atomic-visibility torn read (issue 1117; the SetAsync analogue is
+        // SetAsync_under_prepared_context_installs_destination_shadow_marker
+        // / PR 1115). A saga prepare-phase DELETE to a moved slot during an
+        // active split must install a destination-side shadow marker for the
+        // key, mirroring TreeShardSplitGrain.RetroactiveSweepPreparedMutationsAsync
+        // and the write path's ForwardLocalWriteToShadowIfNeededAsync. The
+        // retroactive sweep installs the marker only for sagas in flight at
+        // split-begin; a delete saga that prepares later (during Drain/Swap,
+        // after the sweep walked its leaf) reaches the destination only
+        // through this live shadow-forward, so the marker must be installed
+        // here too.
+        //
+        // Without the marker, the coordinator drain migrates the source's
+        // pre-saga LIVE value into the destination's Entries (IsMigrated=true);
+        // a reader routed to the destination after the shard-map swap -
+        // observing the delete saga Committed but before its backstop
+        // tombstone lands - surfaces that stale live value for this key while
+        // every sibling key in the same atomic batch already shows the
+        // post-saga (deleted) state: the non-atomic mixed-round batch the
+        // reshard chaos fixture catches (round=N: split (pre=k, post=m)),
+        // violating the SetManyAtomicAsync all-or-nothing visibility contract.
+        var h = CreateHarness(NewSplit(ShardSplitPhase.Swap));
+
+        var txid = Guid.NewGuid();
+        LatticeTransactionContext.Set(txid);
+        try
+        {
+            using (LatticePreparedContext.BeginScope())
+            {
+                await h.Grain.DeleteAsync("k");
+            }
+        }
+        finally
+        {
+            LatticeTransactionContext.Set(Guid.Empty);
+        }
+
+        await h.ShadowTarget.Received().MarkSagaShadowAsync(
+            txid,
+            Arg.Is<IReadOnlyList<string>>(keys => keys != null && keys.Contains("k")));
+    }
+
+    [Test]
+    public async Task DeleteAsync_under_prepared_context_forwards_split_shadow_via_DeleteAsync()
+    {
+        // The prepared tombstone must reach the destination as a DELETE so
+        // the destination buckets it into _pendingTx[txid][key] (registering
+        // the destination as a saga participant) and the saga's backstop
+        // terminal flips it into a tombstone in the destination's Entries -
+        // the delete-side mirror of the write path's target.SetAsync forward.
+        var h = CreateHarness(NewSplit(ShardSplitPhase.Swap));
+
+        var txid = Guid.NewGuid();
+        LatticeTransactionContext.Set(txid);
+        try
+        {
+            using (LatticePreparedContext.BeginScope())
+            {
+                await h.Grain.DeleteAsync("k");
+            }
+        }
+        finally
+        {
+            LatticeTransactionContext.Set(Guid.Empty);
+        }
+
+        await h.ShadowTarget.Received().DeleteAsync("k");
+    }
+
+    [Test]
+    public async Task DeleteAsync_outside_prepared_context_does_not_install_shadow_marker()
+    {
+        // Non-saga deletes remain deferred to the split coordinator's
+        // comprehensive cleanup phase (see the Coverage note on
+        // ForwardLocalWriteToShadowIfNeededAsync). Only a saga prepare can
+        // tear a cross-key atomic batch, so only the prepared path forwards
+        // the tombstone / installs the marker - a plain delete during a split
+        // must not.
+        var h = CreateHarness(NewSplit(ShardSplitPhase.Swap));
+
+        await h.Grain.DeleteAsync("k");
+
+        await h.ShadowTarget.DidNotReceive().MarkSagaShadowAsync(Arg.Any<Guid>(), Arg.Any<IReadOnlyList<string>>());
+        await h.ShadowTarget.DidNotReceive().DeleteAsync(Arg.Any<string>());
     }
 }
