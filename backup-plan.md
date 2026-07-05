@@ -85,7 +85,7 @@ In scope: #1120-#1130 and #1133. Out of scope (deferred follow-on): #1131 (manag
 
 | Wave | Issue | Feature | Status | Landed commit |
 |------|-------|---------|--------|---------------|
-| W0 | #1120 | Project & package scaffolding | not started | - |
+| W0 | #1120 | Project & package scaffolding | in progress (sub-agent) | - |
 | W1 | #1121 | Permission model | not started | - |
 | W1 | #1122 | Sink + manifest + catalog hiding | not started | - |
 | W2 | #1123 | Full capture | not started | - |
@@ -98,4 +98,16 @@ In scope: #1120-#1130 and #1133. Out of scope (deferred follow-on): #1131 (manag
 | W5 | #1129 | gRPC binding + client | not started | - |
 | W6 | #1130 | Observability + samples + e2e + docs | not started | - |
 
-Last updated: 2026-07-05 (coordinator init).
+Last updated: 2026-07-05 (W0 #1120 dispatched to sub-agent; package labels created by coordinator).
+
+## Coordinator-owned carve-outs (NOT delegated to sub-agents)
+
+- GitHub package labels (`lattice.backup`, `lattice.api.backup`, `lattice.api.backup.grpc`):
+  created up front by the coordinator.
+- All `docs/**` prose, per-package README/api/configuration/architecture, package `features.md`,
+  the root README documentation-table rows, `CHANGELOG.md`, and `docs/lattice/features.md`:
+  written by the coordinator at epic close (issue #1130), consistent with the auth epic
+  (per-package docs + top-level `backup.md` feature entry point linked from root README +
+  a sample added to the `samples.md` gallery, with one sample chosen as the README entry point).
+- Sub-agent #1120 therefore delivers code/projects/tests/slnx/alias-reservations only; the
+  doc skeletons and README table row from that issue are produced by the coordinator.
