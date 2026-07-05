@@ -63,4 +63,4 @@ See the
 [Auth documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.auth/README.md)
 and the
 [security posture](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.auth/security-posture.md)
-for the full guide and the tracked feature index.
+for the full guide.

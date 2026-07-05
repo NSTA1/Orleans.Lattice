@@ -12,7 +12,7 @@ The facade mirrors the read-only `Orleans.Lattice.Api.State` and the read-write
 `Orleans.Lattice.Api.Data` facades: the facade is the contract, transports bind
 over it, and it costs nothing until it is registered.
 
-One combined admin surface (`ILatticeAuthAdmin`) carries:
+One combined admin surface carries:
 
 - **Membership admin.** CRUD users and groups, add / remove membership edges,
   and list them.
@@ -52,5 +52,6 @@ siloBuilder
     .AddLatticeAuthApi();
 ```
 
-Resolve `ILatticeAuthAdmin` from the silo service provider and administer
-membership and policy through it.
+Bind a transport over the facade to administer membership and policy remotely:
+the sibling `Orleans.Lattice.Api.Auth.Grpc` package projects it onto a
+code-first gRPC surface.

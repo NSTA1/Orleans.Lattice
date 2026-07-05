@@ -46,6 +46,7 @@ The unary RPCs return a `Task<TResponse>`; the streaming RPCs return an `IAsyncE
 - `CancelScanAsync` - release a server-side scan cursor early.
 - `GetMetricsSnapshotAsync` - one-shot metrics.
 - `GetClusterInfoAsync` - connected-cluster identity (cluster id, service id).
+- `GetAuthSchemeAsync` - the endpoint's advertised auth schemes (unauthenticated; callable before a credential is acquired).
 - `ObserveChangesAsync` - server-streamed live mutations.
 - `ObserveMetricsAsync` - server-streamed live metric deltas.
 

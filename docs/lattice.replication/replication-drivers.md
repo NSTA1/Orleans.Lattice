@@ -20,10 +20,10 @@ Two Orleans-native grain types, both registered as cluster singletons via
 their grain key. Cluster-singleton placement gives automatic activation
 migration on silo loss without leader election.
 
-| Grain | Key | Cadence | Purpose |
+| Driver | Key | Cadence | Purpose |
 |---|---|---|---|
-| `IReplicationShipperGrain` | `{treeName}/{peerClusterId}` | 100 ms phase timer + 90 s reminder backstop + writer-side doorbell | Drains the per-tree change feed from the per-peer cursor, applies producer-side filters and the cycle-break, calls `IReplicationTransport.SendAsync`, advances the cursor on ack, applies exponential backoff on transient failure, parks malformed batches on the per-tree DLQ. |
-| `IReplicationMaintenanceGrain` | `{treeName}` | 5 s phase timer + 60 s reminder backstop | Schedules WAL garbage collection (`ILatticeWalGc.RunOnceAsync`) and per-peer fall-off-the-log probes (`ILatticeFallOffLogDetector.CheckAndTriggerAsync`) on independent cadences. |
+| Per-peer shipper | `{treeName}/{peerClusterId}` | 100 ms phase timer + 90 s reminder backstop + writer-side doorbell | Drains the per-tree change feed from the per-peer cursor, applies producer-side filters and the cycle-break, calls `IReplicationTransport.SendAsync`, advances the cursor on ack, applies exponential backoff on transient failure, parks malformed batches on the per-tree DLQ. |
+| Per-tree maintenance | `{treeName}` | 5 s phase timer + 60 s reminder backstop | Schedules WAL garbage collection (`ILatticeWalGc.RunOnceAsync`) and per-peer fall-off-the-log probes (`ILatticeFallOffLogDetector.CheckAndTriggerAsync`) on independent cadences. |
 
 The shipper is per-peer because per-peer back-pressure isolation must not
 couple peers to each other; one slow peer cannot block any other.
@@ -33,8 +33,7 @@ N-fold-redundant work that scales with peer count.
 
 ### Activation
 
-A hosted background service (`ReplicationDriverActivationService`,
-`BackgroundService`) calls `EnsureActiveAsync` on the cluster-singleton
+A hosted background service (a `BackgroundService`) calls `EnsureActiveAsync` on the cluster-singleton
 grain for every replicated tree on startup. Calls are idempotent - Orleans
 deduplicates concurrent activations via grain identity, and
 `StartCoordinatorAsync` short-circuits when a reminder + phase timer are
@@ -66,8 +65,8 @@ siloBuilder.AddLatticeReplication(opts =>
 
 Peer membership is sourced from `IReplicationTopology`, the
 runtime-observable peer topology seam - not snapshotted once at silo
-startup. The default implementation, `OptionsReplicationTopology`,
-projects `LatticeReplicationOptions.ReplicationPeers` via
+startup. The default implementation projects
+`LatticeReplicationOptions.ReplicationPeers` via
 `IOptionsMonitor<LatticeReplicationOptions>.OnChange` and diffs each
 reload against the last-seen set so callers see one `PeerChanged` event
 per net add and per net remove.
@@ -109,7 +108,7 @@ topology only needs to implement the two-member surface:
 `IReadOnlyCollection<string> CurrentPeers` and
 `IDisposable Subscribe(Action<PeerChanged>)`.
 
-`ReplicationDriverActivationService` subscribes for the lifetime of the
+The driver activation background service subscribes for the lifetime of the
 silo: when a peer arrives at runtime (`PeerChangeKind.Added`), one
 shipper grain is activated per replicated tree under the same
 retry-with-backoff loop as the startup pass, without a silo restart.
@@ -127,7 +126,7 @@ directly - the question of "who wins on mismatch" collapses by
 construction. `ReplicationPeers` is the canonical *configuration*
 surface, not a runtime input: it is one of several possible feeds into
 an `IReplicationTopology` implementation, and the default
-`OptionsReplicationTopology` is the only thing in the pipeline that
+options-backed topology is the only thing in the pipeline that
 reads it.
 
 ##### Membership-sensitive consumers
@@ -138,15 +137,15 @@ are currently reachable. Every one of them reads
 
 | Consumer | Source it reads | Effect of a topology change |
 |---|---|---|
-| `ReplicationDriverActivationService` (startup pass + runtime adds) | `CurrentPeers` at startup + `Subscribe(...)` for the silo's lifetime | On `Added`, activates one `IReplicationShipperGrain` per replicated tree under a retry-with-backoff loop. No silo restart required. |
-| `ShardedReplogSink` (doorbell fan-out per commit) | `CurrentPeers` (live read per commit) | The next commit rings doorbells for exactly the current snapshot. A peer added 1 ms ago is rung; a peer removed 1 ms ago is not. |
-| `ReplicationMaintenanceGrain.ProbeFallOffAsync` (per-cadence fall-off probe) | `CurrentPeers` (live read per cadence tick) | The next cadence tick probes exactly the current snapshot - a removed peer is dropped from the probe set; an added peer joins it on the next tick. |
-| `ReplicationShipperGrain` (per-peer pump) | The grain key it was activated under - neither topology nor options is re-read | The shipper is bound to a specific `(tree, peer)` for its activation lifetime. See *Shipper-lifetime asymmetry* below. |
+| Driver activation background service (startup pass + runtime adds) | `CurrentPeers` at startup + `Subscribe(...)` for the silo's lifetime | On `Added`, activates one per-peer shipper per replicated tree under a retry-with-backoff loop. No silo restart required. |
+| Commit-time doorbell sink (doorbell fan-out per commit) | `CurrentPeers` (live read per commit) | The next commit rings doorbells for exactly the current snapshot. A peer added 1 ms ago is rung; a peer removed 1 ms ago is not. |
+| Per-tree fall-off probe (per-cadence) | `CurrentPeers` (live read per cadence tick) | The next cadence tick probes exactly the current snapshot - a removed peer is dropped from the probe set; an added peer joins it on the next tick. |
+| Per-peer shipper pump | The grain key it was activated under - neither topology nor options is re-read | The shipper is bound to a specific `(tree, peer)` for its activation lifetime. See *Shipper-lifetime asymmetry* below. |
 
 ##### What `LatticeReplicationOptions.ReplicationPeers` does
 
 `ReplicationPeers` is read by exactly one component:
-`OptionsReplicationTopology`. That component is the
+the options-backed default topology. That component is the
 `TryAddSingleton`-registered default `IReplicationTopology` and it
 turns each `IOptionsMonitor<LatticeReplicationOptions>.OnChange`
 reload into a diff against the last-projected set, deduplicates and
@@ -303,14 +302,14 @@ collapse steady-state throughput under a write burst.
 The shipper grain is the log-first replication producer: it tails the
 single per-shard leaf write-ahead log (the leaf commit-log writer is the
 sole WAL appender) from a durable per-partition cursor and is the only
-ship driver. The commit-time `ShardedReplogSink` does not append to the
+ship driver. The commit-time doorbell sink does not append to the
 WAL and does not ship; it maintains no producer-side vector clock state
 and is reduced to a low-latency tree-id nudge that rings shipper
 doorbells so an idle or deactivated shipper is woken to drain the fresh
 append.
 
 In addition to the phase timer, the shipper exposes
-`OnDoorbellAsync(CancellationToken)`. The producer-side `ShardedReplogSink`
+`OnDoorbellAsync(CancellationToken)`. The producer-side doorbell sink
 rings the doorbell after every commit for the affected
 `(tree, peer)` activations. The doorbell is a **cheap, edge-triggered
 wake**: it does not run the drain+ship pump inline. Its sole effect is to
@@ -336,7 +335,7 @@ dropped as expired before they run, and the keepalive reminder that drives
 shipping would be starved behind the backlog - so shipping stalls exactly
 when the peer has the most to ship.
 
-`ShardedReplogSink` therefore coalesces at the source. It keeps a per-`(tree,
+The commit-time doorbell sink therefore coalesces at the source. It keeps a per-`(tree,
 peer)` coalescer and collapses a burst of ring requests into **at most one
 in-flight ring plus one pending follow-up**:
 
@@ -381,7 +380,7 @@ When `IReplicationBatchEncoder.Encode` throws an `ArgumentException` or
 recover from in their current form - the shipper:
 
 1. Parks every entry in the offending batch on the per-tree
-   `IReplicationDeadLetterGrain` tagged with
+   dead-letter store tagged with
    `LatticeReplicationMetrics.ReasonSchema` so a single poison entry never
    stalls the stream forever.
 2. Advances the cursor past the batch so the stream makes forward
@@ -416,9 +415,9 @@ shipper writes per tick.
 ### Partition resume cursor
 
 The steady-state ship loop bypasses `IChangeFeed` and reads each WAL
-partition directly via `IWalShardGrain.ReadAsync(fromSequence, …)`
+partition directly via the per-shard WAL grain's sequence-ranged read (from a sequence lower bound)
 starting at a durable per-partition resume cursor stored on
-`ReplicationShipperState.PartitionCursors`. Per pump tick the shipper
+the shipper's persisted partition-cursor state. Per pump tick the shipper
 fetches up to `ShipPartitionPageSize` (default 256) entries from each
 partition and merges them by HLC ascending via a heap-free O(P) linear
 scan-for-min over partition heads. The merge collapses to O(1) for the
@@ -434,15 +433,15 @@ A defensive HLC predicate at the top of the merge loop drops any entry
 whose timestamp is at-or-below the durable HLC `Cursor`. This is the
 single insurance line that handles the legacy-state-decode case (an
 upgraded shipper resuming with a populated HLC cursor but an empty
-`PartitionCursors` dictionary), the bootstrap case (the receiver
+partition-cursor dictionary), the bootstrap case (the receiver
 applies a snapshot that pushes the HLC cursor past pending WAL
 entries), and the cross-shipper-HWM case (another peer advanced the
 receiver's frontier past ours and the next ack reflects that). Steady
 state never matches the predicate because partition cursors move
 strictly forward on every positive ack.
 
-Wire-compat is additive: the new `[Id(2)] PartitionCursors` slot on
-`ReplicationShipperState` decodes as the empty dictionary for legacy
+Wire-compat is additive: the new `[Id(2)]` partition-cursor slot on
+the shipper's persisted state decodes as the empty dictionary for legacy
 persisted state, which the cold-start path treats identically to a
 fresh activation. Setting `ReplogPartitions=1` reduces the merge to a
 single read per tick; the shipping default is `8` (kept in lockstep

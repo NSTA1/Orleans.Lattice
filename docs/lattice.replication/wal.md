@@ -6,20 +6,20 @@ Every replicated mutation in `Orleans.Lattice.Replication` is committed to a per
 
 ## Topology
 
-A WAL grain is keyed by `{treeId}/{partition}` and persists an append-only list of `WalShardSequencedEntry` records. Each entry has a dense, monotonically increasing `Sequence` (starts at 0 and increments by one per append) and the captured `WalRecord`.
+A WAL grain is keyed by `{treeId}/{partition}` and persists an append-only list of sequenced WAL-entry records. Each entry has a dense, monotonically increasing `Sequence` (starts at 0 and increments by one per append) and the captured `WalRecord`.
 
 Routing of a mutation to a partition is deterministic and process-independent: a stable FNV-1a 32-bit hash of the entry's key, modulo `LatticeReplicationOptions.ReplogPartitions` (default `8`, kept in lockstep with `LatticeOptions.WalPartitions` so the shipper reads every partition the commit-log writer fanned across). A `null` key hashes as the empty string.
 
 ```text
-        commit (BPlusLeafGrain / ShardRootGrain)
+        commit (leaf / shard-root grains)
                        │
                        ▼
-       commit-log writer (WalCommitLogWriter)   <- single WAL appender
+       commit-log writer   <- single WAL appender
                        │
               hash(key) % partitions
                       │
                       ▼
-   IWalShardGrain "{treeId}/{partition}"
+   per-shard WAL grain "{treeId}/{partition}"
                       │
                       ▼
                 IWalStorageProvider
@@ -28,17 +28,17 @@ Routing of a mutation to a partition is deterministic and process-independent: a
         IMutationObserver chain
                        │
                        ▼
-        ReplicationMutationObserver
+        replication mutation observer
                       │
                       ▼
-               ShardedReplogSink
+              commit-time doorbell sink
         commit-time nudge: ring each peer
         shipper's doorbell to wake it if idle
 ```
 
-The leaf commit-log writer is the single WAL appender: every commit reaches the per-shard `IWalShardGrain` exactly once through it. The commit-time `ShardedReplogSink` does **not** write the WAL and maintains no producer-side vector clock state - it is reduced to a low-latency tree-id doorbell nudge that rings each per-`(tree, peer)` shipper's doorbell. The shipper is the log-first replication producer: it tails the same leaf WAL from a durable per-partition cursor and ships to peers. The causal frontier the shipper sends is read from the leaf WAL itself, not from any in-memory commit-time mirror.
+The leaf commit-log writer is the single WAL appender: every commit reaches the per-shard WAL grain exactly once through it. The commit-time doorbell sink does **not** write the WAL and maintains no producer-side vector clock state - it is reduced to a low-latency tree-id doorbell nudge that rings each per-`(tree, peer)` shipper's doorbell. The shipper is the log-first replication producer: it tails the same leaf WAL from a durable per-partition cursor and ships to peers. The causal frontier the shipper sends is read from the leaf WAL itself, not from any in-memory commit-time mirror.
 
-For the `IWalShardGrain` API surface (`AppendAsync`, `ReadAsync`, `GetNextSequenceAsync`, `GetLiveEntryCountAsync`) and the turn-safe batching
+For the per-shard WAL grain API surface (append, read, next-sequence, and live-entry-count operations) and the turn-safe batching
 
 ## Configuration
 
@@ -82,7 +82,7 @@ The maintenance gate runs **before** mode resolution and per-key filters: a main
 
 WAL-append failures propagate. The leaf commit-log writer's append runs inside the originating grain's foreground commit path, so a storage-provider failure surfaces as the same exception the calling `ILattice.SetAsync` / `DeleteAsync` / `DeleteRangeAsync` observes. Because the WAL is the single source of truth for replication, this guarantees that every committed mutation is durably captured for replication before the write reports success.
 
-The commit-time replication nudge is, by contrast, best-effort. `ShardedReplogSink` does not append to the WAL and holds no producer-side vector clock state; it rings each peer shipper's doorbell fire-and-forget. A doorbell ring that fails (silo loss, transient fault, missing activation) is logged at `Trace` and swallowed, so the commit path never fails on a nudge failure - a missed doorbell only delays the affected peer by one shipper timer tick.
+The commit-time replication nudge is, by contrast, best-effort. The commit-time doorbell sink does not append to the WAL and holds no producer-side vector clock state; it rings each peer shipper's doorbell fire-and-forget. A doorbell ring that fails (silo loss, transient fault, missing activation) is logged at `Trace` and swallowed, so the commit path never fails on a nudge failure - a missed doorbell only delays the affected peer by one shipper timer tick.
 
 There is intentionally no opt-in "best-effort" mode that would catch the WAL-append exception and let the primary write report success while silently dropping the log record. Silent log drops are exactly the hazard commit-time capture exists to remove; a host that wants different semantics for a specific tree should compose its own `IMutationObserver` rather than configure correctness away.
 
@@ -102,7 +102,7 @@ Direct grain access is the low-level entry point; in-process consumers should us
 
 ## Pluggable durability (replication-only override)
 
-The replication WAL grain shape (`IWalShardGrain`) is the WAL's **logical** contract; the **durability backend** is the same pluggable `IWalStorageProvider` seam the core library uses. See [`../lattice/wal-storage-providers.md`](../lattice/wal-storage-providers.md) for the provider contract and the shipped in-memory / Azure Table implementations.
+The replication WAL grain shape is the WAL's **logical** contract; the **durability backend** is the same pluggable `IWalStorageProvider` seam the core library uses. See [`../lattice/wal-storage-providers.md`](../lattice/wal-storage-providers.md) for the provider contract and the shipped in-memory / Azure Table implementations.
 
 `LatticeReplicationOptions` adds one replication-only override on top of that seam: a per-tree resolver delegate that lets a host pick a different provider per tree.
 

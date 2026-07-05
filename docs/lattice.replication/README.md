@@ -151,7 +151,3 @@ For internals (the "how"):
 - [Wire Format](wire-format.md) - `ReplicationBatchEnvelope`, `IReplicationBatchEncoder`, wire version negotiation.
 - [Deltas](deltas.md) - typed CRDT delta records on the wire.
 - [WAL](wal.md) - per-shard replication write-ahead log, turn-safe batching, causal+ entry schema.
-
-## Feature tracking
-
-Feature planning - including the items still ahead and the ones already shipped - is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues?q=label%3Alattice.replication). The [feature index](features.md) is a grouped, human-readable summary that links each tracked item to its issue.

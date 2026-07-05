@@ -26,7 +26,7 @@ cross-tree), point-read, and bounded-range-read tree entries.
   `PermissionDenied` until the host registers a permissive authorizer or turns
   `RequireAuthorization` off.
 - **Identity bridge.** A header-based `ILatticeDataApiCredentialBridge` (default
-  header `authorization`, `Bearer ` scheme stripped) lifts the caller credential
+  header `authorization`, `Bearer` scheme stripped) lifts the caller credential
   onto the ambient context so the gated `ILattice` surface enforces per-tree /
   per-key authorization.
 - **Gate-denial mapping.** A `LatticeAuthorizationDeniedException` from the data

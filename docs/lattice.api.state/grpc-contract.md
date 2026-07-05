@@ -4,7 +4,7 @@
 
 ## Service
 
-The service name on the wire is `orleans.lattice.api.state` (so each method's full path is `/orleans.lattice.api.state/<Rpc>`). It exposes a set of unary and server-streaming RPCs, each mapping one-to-one onto a facade verb.
+The service name on the wire is `orleans.lattice.api.state` (so each method's full path is `/orleans.lattice.api.state/<Rpc>`). It exposes a set of unary and server-streaming RPCs: one per read-only facade verb, plus an unauthenticated `GetAuthScheme` advertisement RPC.
 
 | RPC | Kind | Request | Response | Surface |
 |---|---|---|---|---|
@@ -22,10 +22,13 @@ The service name on the wire is `orleans.lattice.api.state` (so each method's fu
 | `CancelScan` | unary | `EntryScanCancelRequest` | `EntryScanCancelResponse` | [Entries](surfaces.md#entries) |
 | `GetMetricsSnapshot` | unary | `TreeMetricsRequest` | `TreeMetricsSnapshot` | [Metrics](surfaces.md#metrics) |
 | `GetClusterInfo` | unary | `ClusterInfoRequest` | `ClusterInfo` | [Cluster info](surfaces.md#cluster-info) |
+| `GetAuthScheme` | unary | `AuthSchemeAdvertisementRequest` | `AuthSchemeAdvertisement` | [Security](security.md) |
 | `ObserveChanges` | server-streaming | `StateObserveRequest` | `StateChangeNotification` | [Change observation](surfaces.md#change-observation) |
 | `ObserveMetrics` | server-streaming | `TreeMetricsRequest` | `TreeMetricsSnapshot` | [Metrics](surfaces.md#metrics) |
 
 `CancelScan` is a best-effort, idempotent cleanup verb: it releases the server-side snapshot cursor named by a scan continuation token, freeing its WAL-retention pin and per-shard baseline promptly rather than waiting for the cursor's idle TTL. A client that abandons a multi-page scan before draining it (refresh, re-filter, navigate away) should call it. Cancelling an empty token, or one that names an unknown, already-drained, or already-closed cursor, is a tolerated no-op; the empty `EntryScanCancelResponse` is a bare acknowledgement.
+
+`GetAuthScheme` is the one **unauthenticated** RPC: it returns the endpoint's advertised authentication schemes (an ordered set of `AuthSchemeDescriptor`) so a client can discover how to sign in before it holds any credential. The authorization interceptor exempts it; every other RPC is authorized.
 
 ## Messages
 

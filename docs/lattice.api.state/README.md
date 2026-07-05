@@ -100,8 +100,6 @@ For day-to-day use:
 - [Efficiency](efficiency.md) - shared sampling, reader-less zero cost, and the overhead guardrails.
 - [Client](client.md) - building and driving `LatticeStateApiGrpcClient`, and reusing the facade in-process for an MCP bridge.
 
-For feature tracking (the "what's planned / what shipped"):
+For feature indexes:
 
-- [Api.State Feature Index](features.md) - grouped, issue-linked index of the `Orleans.Lattice.Api.State` package's tracked features.
-
-Feature planning is managed on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), not in roadmap files.
+- [Api.State Feature Index](features.md) - grouped index of the `Orleans.Lattice.Api.State` package's features.

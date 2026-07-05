@@ -274,7 +274,7 @@ re-anchored by a keepalive reminder. On each tick (default every 30 s) it:
    Because `HotShardMonitorGrain` is keyed per-tree, the cap is enforced
    independently per tree - in a multi-tree cluster each tree may have up
    to `MaxConcurrentAutoSplits` concurrent splits running simultaneously.
-4. Selects the top-`(MaxConcurrentAutoSplits − inFlight)` hottest shards
+4. Selects the top-`(MaxConcurrentAutoSplits - inFlight)` hottest shards
    whose rate exceeds `HotShardOpsPerSecondThreshold` (default 200 ops/s),
    skipping any shard already splitting, on cooldown, or owning a single
    virtual slot.

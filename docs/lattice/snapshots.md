@@ -95,8 +95,9 @@ its own tombstone compaction reminder registered upon snapshot completion.
 
 ## Grain Interface
 
-The snapshot is orchestrated by `ITreeSnapshotGrain`, keyed by the source tree
-ID. This grain interface is **declared `internal`** - external callers
+The snapshot is orchestrated by an internal per-source-tree coordinator grain,
+keyed by the source tree
+ID. That coordinator is **declared `internal`** - external callers
 cannot reference or invoke it. The `ILattice` interface delegates to it via
 `SnapshotAsync`:
 
@@ -105,8 +106,8 @@ cannot reference or invoke it. The `ILattice` interface delegates to it via
 await lattice.SnapshotAsync("my-snapshot", SnapshotMode.Offline);
 ```
 
-Internally, `ITreeSnapshotGrain` exposes `RunSnapshotPassAsync` which processes
-all remaining shards synchronously in a single call. This method is used by
+Internally, the coordinator can process all remaining shards synchronously in a
+single call - a synchronous entry point used by
 integration tests that drive snapshot passes deterministically.
 
 ## Relationship to Resize

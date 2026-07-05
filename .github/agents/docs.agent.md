@@ -57,6 +57,7 @@ Identify the **claim categories** to audit. The repeatable axes for this repo:
 | **Per-project configuration completeness** | every `public` option property in the project's `*Options.cs` | union-diff the option set against `docs/<project>/configuration.md`; every knob, its type, and its default must appear |
 | **Per-project architecture coverage** | the project's grain/seam pipeline in `src/<project>/**` | confirm `docs/<project>/architecture.md` describes the end-to-end pipeline and the seams it attaches to, by behaviour (public seam names only) |
 | **Internal-name leakage** | accessibility in `src/**` | extract back-tick-wrapped type/member tokens from in-scope docs, set-diff against `internal`-declared source symbols; any hit is a leak to behaviourise |
+| **XML doc crefs** (`<see cref>` / `<seealso cref>` / `<paramref>` / `<typeparamref>` in `src/**/*.cs`) | the referenced symbol in source | build each affected packable project with `-p:GenerateDocumentationFile=true -p:NoWarn=CS1591` and confirm no `CS1574` / `CS1580` / `CS1584` warnings, and that the generated `bin/**/<Assembly>.xml` contains no `cref="!:` markers (the `!:` prefix is an unresolved cref). Use brace syntax for generics (`cref="LwwValue{T}"`), never put a nullable `?` in a cref, and qualify out-of-scope members. See the documentation skill for the full cref rules. |
 | **Per-project layout** | `docs/<project>/README.md` | confirm each project README mirrors the root README structure and links its sub-feature docs (including `api.md`, `configuration.md`, `architecture.md`, `chaos-tests.md` where they exist) |
 | **Relative links** | filesystem | the link scanner described in Phase 6 |
 
@@ -111,7 +112,13 @@ Documentation edits trip three repo-wide gates. Run them, paste the tail of each
    dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~RoadmapIdentifierHygieneTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
    ```
 
-If a gate is red, fix and re-run from the top of Phase 5 before continuing.
+4. **XML doc cref resolution** - every `<see cref>` / `<seealso cref>` / `<paramref>` / `<typeparamref>` in the source you touched (and, on a full sweep, across every packable project) must resolve to a real symbol, because the generated XML ships inside the NuGet package. `Directory.Build.targets` suppresses the cref-warning family for normal builds, so re-expose it explicitly:
+
+   ```powershell
+   dotnet build src/lattice/Orleans.Lattice.csproj -c Release -p:GenerateDocumentationFile=true -p:NoWarn=CS1591
+   ```
+
+   Repeat for each affected packable project. Confirm no `CS1574` / `CS1580` / `CS1584` warnings and that the generated `bin/**/<Assembly>.xml` contains no `cref="!:` markers. Fix any dead cref per the documentation skill's cref rules (brace syntax for generics, no nullable `?` in a cref, qualify out-of-scope members, and prefer `<c>...</c>` over a guessed cref).
 
 ### Phase 6 - Broken-link pass
 
