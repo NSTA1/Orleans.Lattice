@@ -4,14 +4,14 @@ The state API is a read-only surface, but read-only is not the same as public. T
 
 ## The authorization seam
 
-`ILatticeStateApiAuthorizer` is the single per-call authorization seam. The binding installs an interceptor that calls it on every unary and streaming RPC before the request reaches the service. The package ships two reference implementations:
+`ILatticeStateApiAuthorizer` is the single per-call authorization seam. The binding installs an interceptor that calls it on every unary and streaming RPC before the request reaches the service - except the unauthenticated `GetAuthScheme` advertisement RPC, which the interceptor exempts so a client can discover how to sign in before it holds a credential. The package ships two reference implementations:
 
 - `DenyAllStateApiAuthorizer` - rejects every call. This is the **default**, registered with `TryAdd` so it only applies when you have not registered your own.
 - `AllowAllStateApiAuthorizer` - accepts every call. Use it only behind an already-authenticated outer boundary (a service mesh, a gateway, or mutual-TLS termination that has already established trust).
 
 `AddLatticeStateApiGrpc` registers `DenyAllStateApiAuthorizer` via `TryAddSingleton`, so a custom authorizer registered before or after it wins.
 
-The seam describes each call faithfully: the `LatticeStateApiAuthorizationContext` carries the specific `LatticeStateApiOperation` (every RPC maps to its own member) and the `TargetTreeId` the call acts on, so a policy can scope by operation and by tree. A method the binding does not recognise maps to `LatticeStateApiOperation.Unknown` rather than a benign default, so a deny-by-default policy refuses anything unmapped instead of letting it pass as a catalog read.
+The seam describes each call faithfully: the `LatticeStateApiAuthorizationContext` carries the specific `LatticeStateApiOperation` (every authorized RPC maps to its own member) and the `TargetTreeId` the call acts on, so a policy can scope by operation and by tree. A method the binding does not recognise maps to `LatticeStateApiOperation.Unknown` rather than a benign default, so a deny-by-default policy refuses anything unmapped instead of letting it pass as a catalog read.
 
 The three index-wide tag-browsing operations (`ListCoveredTrees`, `ListIndexTags`, `ScanTagMembers`) span every tree a tag index covers, so they present a `null` `TargetTreeId` - they authorize at the cluster / index level like `ListTrees` and `ListViews`, not per subject tree. A policy that grants tag-index browsing therefore grants it across all covered trees; scope it by operation (deny these three) rather than by target tree if a tenant must not see cross-tree membership. The subject-tree-scoped `ListTagValues` (which does carry a `TargetTreeId`) remains available for per-tree tag enumeration.
 

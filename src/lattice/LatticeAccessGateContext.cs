@@ -59,7 +59,7 @@ internal static class LatticeAccessGateContext
     /// <para>
     /// A <c>view-*</c> tree is library-owned derived state whose contents are
     /// authored by its <see cref="Views.IViewMaintainerGrain"/> and read back
-    /// through the <see cref="Views.ILatticeView"/> read handle; both open a
+    /// through the <see cref="ILatticeView"/> read handle; both open a
     /// <see cref="Views.ViewWriteContext"/> / <see cref="Views.ViewReadContext"/>
     /// scope around their view-tree grain calls. Those scopes are the positive
     /// signal that a turn is view-maintenance traffic rather than a direct user

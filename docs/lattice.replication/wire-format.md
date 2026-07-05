@@ -66,7 +66,7 @@ This strip does not require a `WireVersion` bump: an absent `[Id]` slot decodes 
 
 ## Default encoder: Orleans serializer (binary)
 
-The default DI registration is `OrleansBinaryReplicationBatchEncoder`. It serialises the envelope through `Serializer<ReplicationBatchEnvelope>` and tags the payload with the canonical content type:
+The default DI registration is the Orleans-binary batch encoder. It serialises the envelope through `Serializer<ReplicationBatchEnvelope>` and tags the payload with the canonical content type:
 
 ```text
 application/x-orleans-lattice-replog+binary
@@ -230,7 +230,7 @@ siloBuilder.AddLatticeReplication(o =>
 });
 ```
 
-`LatticeReplicationOptionsValidator` rejects a `MinimumSupportedWireVersion` outside `[1, EncodedBatchHeader.CurrentWireVersion]` and an `UnknownPeerWireVersionFloor` outside `[MinimumSupportedWireVersion, EncodedBatchHeader.CurrentWireVersion]` at first-resolve time.
+Startup options validation rejects a `MinimumSupportedWireVersion` outside `[1, EncodedBatchHeader.CurrentWireVersion]` and an `UnknownPeerWireVersionFloor` outside `[MinimumSupportedWireVersion, EncodedBatchHeader.CurrentWireVersion]` at first-resolve time.
 
 ### Scope and current posture
 

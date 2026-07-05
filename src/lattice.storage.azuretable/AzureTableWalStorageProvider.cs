@@ -284,7 +284,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     /// <summary>
     /// Initialises the provider with the supplied options and Orleans
     /// serializer. Resolved from DI in the standard registration path
-    /// (<see cref="LatticeAzureTableServiceCollectionExtensions.AddAzureTableWalStorage}/>);
+    /// (<see cref="LatticeAzureTableServiceCollectionExtensions.AddAzureTableWalStorage"/>);
     /// tests construct it directly with a serializer pulled from
     /// <c>new ServiceCollection().AddSerializer().BuildServiceProvider()</c>.
     /// <para>

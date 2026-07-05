@@ -50,7 +50,7 @@ dotnet run --project samples/HelloWorld
 
 [`samples/MultiSiteManufacturing`](../../samples/MultiSiteManufacturing)
 
-Regulated process-engineering traceability demo built on Blazor Server + gRPC + Orleans + Orleans.Lattice, backed by Azure Table Storage and Azure Storage Queues (Azurite for local development). Models a turbine-blade lifecycle (forge → heat-treat → machining → NDT → MRB → FAI) across seven process sites, with a bulk-loaded inventory, operator-driven fact emission, a chaos fly-out for injecting site-level pause/delay/reorder, and a live divergence feed comparing a baseline LWW backend against the Orleans.Lattice fact store.
+Regulated process-engineering traceability demo built on Blazor Server + gRPC + Orleans + Orleans.Lattice, backed by Azure Table Storage and Azure Storage Queues (Azurite for local development). Models a turbine-blade lifecycle (forge -> heat-treat -> machining -> NDT -> MRB -> FAI) across seven process sites, with a bulk-loaded inventory, operator-driven fact emission, a chaos fly-out for injecting site-level pause/delay/reorder, and a live divergence feed comparing a baseline LWW backend against the Orleans.Lattice fact store.
 
 The sample runs as **two independent Orleans clusters** (`us` and `eu`), each with two silos, connected by an opt-in cross-cluster replication link over gRPC so changes in one cluster converge on the other.
 

@@ -113,8 +113,10 @@ step.
 | `Phase` | `LatticeCursorPhase` | `NotStarted` / `Open` / `Exhausted` / `Closed` |
 | `LastYieldedKey` | `string?` | Last key returned or tombstoned. `null` before the first step. |
 | `DeletedTotal` | `int` | Cumulative tombstone count (delete-range cursors only) |
-| `PointInTimeSnapshot` | `Dictionary<Guid, TxStatus>?` | The `ITxRegistryGrain.SnapshotAsync()` captured at `OpenAsync` time. Persisted only for point-in-time cursors; `null` for live-mode cursors. |
+| `PointInTimeSnapshot` | `Dictionary<Guid, TxStatus>?` | The per-tree transaction-registry snapshot captured at `OpenAsync` time. Persisted only for point-in-time cursors; `null` for live-mode cursors. |
 | `SnapshotPinId` | `Guid` | The registry-side pin handle returned by `PinSnapshotAsync`. Empty for live-mode cursors and for point-in-time cursors whose captured snapshot was empty (no in-flight sagas at open). |
+| `SnapshotCoordinate` | `LatticeSnapshotCoordinate?` | Tree-wide WAL coordinate captured at `OpenAsync` for zero-observable-writes snapshot cursors. Pairs with `PointInTimeSnapshot` to fix the projection as of one tree-wide moment (WAL offsets fix the foreground-write view, the registry snapshot fixes saga decisions), so a reactivated cursor keeps serving the view it opened with. `null` for non-snapshot cursors. |
+| `SnapshotBaselinePersisted` | `bool` | `true` once a snapshot cursor has durably flushed its per-shard frozen baselines. The baselines seed the transient snapshot leaves in memory at open and are flushed lazily only the first time a page reports more results (the cursor must now survive past page 1 across failover or eviction); a cursor that drains in a single page never sets it and can skip the durable baseline delete on close. `false` for non-snapshot cursors. |
 
 ### Step sequence
 
@@ -282,7 +284,7 @@ sequenceDiagram
 
     Note over R: CursorIdleTtl elapses with no calls
     R->>G: ReceiveReminder("cursor-ttl")
-    G->>G: OnTtlExpiredAsync() → state.ClearStateAsync()
+    G->>G: OnTtlExpiredAsync() -> state.ClearStateAsync()
     G->>R: UnregisterReminder("cursor-ttl")
     G->>G: DeactivateOnIdle()
 ```
@@ -318,12 +320,12 @@ round-trips above a direct stateless scan call:
 
 | Cost component | Magnitude | Notes |
 |----------------|-----------|-------|
-| `WriteStateAsync` - checkpoint | 1 × storage write per step | Serialises `LatticeCursorState` (< 10 KB). On memory provider: negligible. On Azure Table / SQL: ~1–5 ms. |
-| `RegisterOrUpdateReminder` - TTL slide | 1 × reminder-table write per step | ~1–5 ms round-trip. See [debounce](#reducing-reminder-write-frequency) below. |
+| `WriteStateAsync` - checkpoint | 1 x storage write per step | Serialises `LatticeCursorState` (< 10 KB). On memory provider: negligible. On Azure Table / SQL: ~1-5 ms. |
+| `RegisterOrUpdateReminder` - TTL slide | 1 x reminder-table write per step | ~1-5 ms round-trip. See [debounce](#reducing-reminder-write-frequency) below. |
 | Extra grain round-trip | +1 Orleans call per step | `ILatticeCursorGrain` sits between `ILattice` and the shard fan-out. Typically < 1 ms on a local cluster. |
 | Shard fan-out | Same as `ScanKeysAsync` / `ScanEntriesAsync` | Each step is a normal sharded scan - no additional shard calls. |
 
-**Total per-step overhead: ~2–10 ms**, dominated by the storage provider
+**Total per-step overhead: ~2-10 ms**, dominated by the storage provider
 round-trip.
 
 ### Large-export scenario
@@ -335,8 +337,8 @@ For a 10 million key export with `pageSize = 500` (20 000 steps):
 | Steps | 20 000 |
 | Checkpoint writes | 20 000 |
 | Reminder slides | 20 000 |
-| Extra wall-clock time at 2 ms/step | ≈ 40 s |
-| Extra wall-clock time at 5 ms/step | ≈ 100 s |
+| Extra wall-clock time at 2 ms/step | ~= 40 s |
+| Extra wall-clock time at 5 ms/step | ~= 100 s |
 
 This overhead is typically small relative to the actual I/O cost of streaming
 10 M keys across the network, but it is not zero.
@@ -371,16 +373,16 @@ stateless scans, plus the per-step overhead per cursor.
 
 | Dimension | Stateless (`ScanKeysAsync` / `ScanEntriesAsync`) | Durable cursor (live mode) | Durable cursor (point-in-time) |
 |-----------|------------------------------------------|----------------|----------------|
-| Survives silo failover | ✗ - stream terminates | ✓ - resumes from checkpoint | ✓ - resumes from checkpoint *and* retained registry pin |
-| Survives client restart | ✗ | ✓ - cursor ID is the resume token | ✓ |
+| Survives silo failover | No - stream terminates | Yes - resumes from checkpoint | Yes - resumes from checkpoint *and* retained registry pin |
+| Survives client restart | No | Yes - cursor ID is the resume token | Yes |
 | Caller retry code needed | Required for robustness under splits | None needed | None needed |
 | Per-page overhead | Zero | ~2-10 ms (checkpoint + reminder slide) | ~2-10 ms (adds one registry refresh RPC) |
 | Ordering under splits | Per-call reconciliation (see [Shard Splitting](shard-splitting.md)) | Per-step reconciliation | Per-step reconciliation |
 | Atomic visibility | Scan-lifetime tree-wide | Per-step tree-wide; *not* preserved across pages | **Cursor-lifetime tree-wide** - identical saga view on every page |
 | Max scan duration | Bounded by `MaxScanRetries` | Unbounded - each step has its own budget | Bounded by `MaxCursorSnapshotPinTtl` (default 7 d, slides on activity) |
 | Idle cleanup | No state to clean up | Automatic via idle-TTL reminder | Idle-TTL reminder + registry-pin TTL |
-| Cursor ID transferable across processes | ✗ | ✓ | ✓ |
-| Available for range delete | ✗ | ✓ via `OpenDeleteRangeCursorAsync` | ✗ - range deletes are mutations, not snapshot reads |
+| Cursor ID transferable across processes | No | Yes | Yes |
+| Available for range delete | No | Yes via `OpenDeleteRangeCursorAsync` | No - range deletes are mutations, not snapshot reads |
 | Best for | Interactive queries, short scans | Long exports, ETL, background sweeps | Long exports that must observe a single saga-decision view across every page |
 
 ## See also

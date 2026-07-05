@@ -9,7 +9,7 @@
 
 ## Replication-lag histogram (`apply.lag`)
 
-`orleans.lattice.replication.apply.lag` is recorded by the canonical `ReplicationApplier` immediately after a successful point apply (`Set` / `Delete`). The sample is `now - entry.Timestamp.WallClockTicks` in milliseconds, **clamped to a non-negative value** so a future-dated source HLC (e.g. a faster-moving peer's wall clock) reports as `0` rather than corrupting the histogram with a negative sample.
+`orleans.lattice.replication.apply.lag` is recorded by the canonical applier immediately after a successful point apply (`Set` / `Delete`). The sample is `now - entry.Timestamp.WallClockTicks` in milliseconds, **clamped to a non-negative value** so a future-dated source HLC (e.g. a faster-moving peer's wall clock) reports as `0` rather than corrupting the histogram with a negative sample.
 
 | Property | Value |
 |---|---|
@@ -30,7 +30,7 @@ A receiver that operates entirely under HWM dedupe (i.e. every entry it sees has
 
 ## Apply-duration histogram (`apply.duration`)
 
-`orleans.lattice.replication.apply.duration` records the wall-clock time the canonical `ReplicationApplier` spends inside `ApplyAsync`, from entry through every terminal return path. The body is wrapped in a `try { ... } finally { Record(...); }` so an uncaught exception still records a sample tagged with the failure outcome before unwinding. The duration is read via `Stopwatch.GetElapsedTime(long)`, which is allocation-free.
+`orleans.lattice.replication.apply.duration` records the wall-clock time the canonical applier spends inside `ApplyAsync`, from entry through every terminal return path. The body is wrapped in a `try { ... } finally { Record(...); }` so an uncaught exception still records a sample tagged with the failure outcome before unwinding. The duration is read via `Stopwatch.GetElapsedTime(long)`, which is allocation-free.
 
 | Property | Value |
 |---|---|
@@ -86,7 +86,7 @@ Operators monitor `rate(wal_entries_shipped)` per tree-peer pair against the WAL
 | `oversized` | Reserved. Future receiver decorators that wrap the canonical applier with a size-validating check will tag this value when a single entry exceeds the configured per-entry size ceiling. |
 | `unknown` | Catch-all for terminal failure shapes the canonical decorator could not classify (e.g. transport / IO / `TimeoutException`). |
 
-The mapping lives in `DeadLetterTrackingReplicationApplier.ClassifyFailure` and is intentionally conservative: only failure shapes whose source is under the package's control are matched explicitly, so the `reason` dimension stays stable across publishers and operators can alert on `unknown` rising without false positives from future schema-shape additions.
+The failure-to-reason mapping is intentionally conservative: only failure shapes whose source is under the package's control are matched explicitly, so the `reason` dimension stays stable across publishers and operators can alert on `unknown` rising without false positives from future schema-shape additions.
 
 ## Sender-side pipelining depth (`peer.ship_in_flight`)
 
@@ -104,7 +104,7 @@ Operators read the gauge against the configured window: a value at or near `Ship
 
 ## Content-hash payload re-send rate (`ship.redundant_payloads` / `ship.redundant_payload_bytes`)
 
-These two counters fire by default: `LatticeReplicationOptions.ContentHashDedupEnabled` defaults to `true`, so a stock build records the payload re-send rate out of the box. Setting `ContentHashDedupEnabled = false` opts out - the shipper then does no extra work and never records them. They measure how often the sender ships a `Set` whose value bytes are byte-identical to the value most recently shipped for the same key - the idempotent-re-write rate that decides whether a sender-manifest / receiver-pull-missing dedup round trip would pay for its extra latency.
+These counters fire by default: `LatticeReplicationOptions.ContentHashDedupEnabled` defaults to `true`, so a stock build records the payload re-send rate out of the box. Setting `ContentHashDedupEnabled = false` opts out - the shipper then does no extra work and never records them. They measure how often the sender ships a `Set` whose value bytes are byte-identical to the value most recently shipped for the same key - the idempotent-re-write rate that decides whether a sender-manifest / receiver-pull-missing dedup round trip would pay for its extra latency.
 
 | Counter | Constant | Unit | Tags | Recorded |
 |---|---|---|---|---|
@@ -117,7 +117,7 @@ The measurement is **observability-only**: it never elides, reorders, or alters 
 
 ## Sender-side adaptive batch sizing (`ship.effective_batch_size` / `ship.ack_latency`)
 
-These two histograms instrument the sender-side AIMD batch-size controller behind `LatticeReplicationOptions.AdaptiveBatchSizingEnabled` (see [Sender-side adaptive batch sizing](receiver-flow-control.md#sender-side-adaptive-batch-sizing)). **Both emit once per acknowledged batch regardless of the flag** - they are pure observability and are useful even with static sizing, where `ship.effective_batch_size` collapses onto the configured `ShipBatchSize` (modulated only by any active receiver hint).
+These histograms instrument the sender-side AIMD batch-size controller behind `LatticeReplicationOptions.AdaptiveBatchSizingEnabled` (see [Sender-side adaptive batch sizing](receiver-flow-control.md#sender-side-adaptive-batch-sizing)). **Both emit once per acknowledged batch regardless of the flag** - they are pure observability and are useful even with static sizing, where `ship.effective_batch_size` collapses onto the configured `ShipBatchSize` (modulated only by any active receiver hint).
 
 | Property | `ship.effective_batch_size` | `ship.ack_latency` |
 |---|---|---|
@@ -146,7 +146,7 @@ Coalescing runs on both last-writer-wins and recognised CRDT trees, but by diffe
 
 ## Doorbell coalescing (`doorbell.rung` / `doorbell.coalesced`)
 
-Separate from the *pre-ship* coalescing above (which reduces the bytes a batch carries), these two counters measure how the commit-time nudge that *wakes* the shipper is coalesced at the source. A doorbell is an idempotent, edge-triggered "there is work" signal, so the commit-time `ShardedReplogSink` collapses a burst of per-commit ring requests for the same `(tree, peer)` into at most one in-flight ring plus one pending follow-up, rather than dispatching one `OnDoorbellAsync` grain call per commit onto the non-reentrant shipper activation (see [Writer-side coalescing](replication-drivers.md#writer-side-coalescing)). Both counters fire whenever `LatticeReplicationOptions.ShipDoorbellEnabled` is `true` (the default).
+Separate from the *pre-ship* coalescing above (which reduces the bytes a batch carries), these counters measure how the commit-time nudge that *wakes* the shipper is coalesced at the source. A doorbell is an idempotent, edge-triggered "there is work" signal, so the commit-time doorbell sink collapses a burst of per-commit ring requests for the same `(tree, peer)` into at most one in-flight ring plus one pending follow-up, rather than dispatching one `OnDoorbellAsync` grain call per commit onto the non-reentrant shipper activation (see [Writer-side coalescing](replication-drivers.md#writer-side-coalescing)). Both counters fire whenever `LatticeReplicationOptions.ShipDoorbellEnabled` is `true` (the default).
 
 | Counter | Constant | Unit | Tags | Recorded |
 |---|---|---|---|---|
@@ -157,7 +157,7 @@ Read the coalescing win as `rate(doorbell_coalesced) / (rate(doorbell_coalesced)
 
 ## Shared-dictionary compression ratio (`compress.dictionary.bytes_in` / `compress.dictionary.bytes_out`)
 
-These two counters are **opt-in** and fire only when shared-dictionary compression is selected (`LatticeReplicationOptions.FramingCompression = LatticeCompression.ZstdDictionary` with a non-zero `FramingCompressionDictionaryId`, and the requested dictionary resolves on the sending silo); the default build never records them. They quantify the before/after win of compressing the batch tail against a shared Zstandard dictionary (see [Shared-dictionary Zstandard compression](../lattice/compression.md#shared-dictionary-zstandard-compression)).
+These counters are **opt-in** and fire only when shared-dictionary compression is selected (`LatticeReplicationOptions.FramingCompression = LatticeCompression.ZstdDictionary` with a non-zero `FramingCompressionDictionaryId`, and the requested dictionary resolves on the sending silo); the default build never records them. They quantify the before/after win of compressing the batch tail against a shared Zstandard dictionary (see [Shared-dictionary Zstandard compression](../lattice/compression.md#shared-dictionary-zstandard-compression)).
 
 | Counter | Constant | Unit | Tags | Recorded |
 |---|---|---|---|---|
@@ -190,7 +190,7 @@ listener.Start();
 
 ## Causal+ instruments
 
-Four instruments surface the receiver-side causal-apply buffer (`CausalApplyBuffer`) used by the causal-plus dependency check. They share the meter and tag conventions of the rest of the package - `tree` always identifies the logical tree, and `shard` is reserved as a second tag dimension on the buffer-state instruments so a future per-shard buffer partitioning can populate it without a wire-format break. The current implementation is one-buffer-per-tree, so `shard` is always `"0"`.
+The following instruments surface the receiver-side causal-apply buffer used by the causal-plus dependency check. They share the meter and tag conventions of the rest of the package - `tree` always identifies the logical tree, and `shard` is reserved as a second tag dimension on the buffer-state instruments so a future per-shard buffer partitioning can populate it without a wire-format break. The current implementation is one-buffer-per-tree, so `shard` is always `"0"`.
 
 | Instrument | Kind | Tags | Recorded when |
 |---|---|---|---|
@@ -199,7 +199,7 @@ Four instruments surface the receiver-side causal-apply buffer (`CausalApplyBuff
 | `orleans.lattice.replication.apply.dependency_wait_ms` | `Histogram<double>` (ms) | `tree` | One sample per drained entry: `now - parked_at`, clamped non-negative. Evicted entries do not contribute - only successful waits are observed. |
 | `orleans.lattice.replication.apply.causal_violations_blocked` | `Counter<long>` | `tree` | Incremented once per successful park. Duplicate-tuple parks do not count. An alert on `rate > 0` flags causal-skew health regardless of whether buffered entries eventually drain or evict. |
 
-Operators monitor the four together:
+Operators monitor them together:
 
 - A steady-state replicating peer keeps `buffered_entries` near zero and emits `dependency_wait_ms` samples close to the round-trip-time of a single ack cycle.
 - A persistent rise in `buffered_entries` or `buffer_bytes` paired with a low or zero `causal_violations_blocked` rate is the classic "bounded buffer absorbing transient skew, then draining" pattern - healthy.
@@ -216,7 +216,7 @@ The receiver-side apply pipeline relies on a per-origin FIFO contract for its ca
 | Unit | `{entry}` |
 | Tags | `tree`, `origin` |
 
-The canonical `ReplicationApplier` records the most recently applied source HLC per `(treeId, originClusterId)` in process-local memory and increments `apply.fifo_violations` when a successfully applied entry's HLC is **strictly less** than the prior recorded value for the same pair. The counter is recorded:
+The canonical applier records the most recently applied source HLC per `(treeId, originClusterId)` in process-local memory and increments `apply.fifo_violations` when a successfully applied entry's HLC is **strictly less** than the prior recorded value for the same pair. The counter is recorded:
 
 - **After a successful apply** (direct or drained from the causal-apply buffer) - never on park. The invariant tracks "what has been merged" rather than "what has been observed", so a transient park of a higher-HLC entry that drains after a lower-HLC arrival does not falsely register a violation.
 - **For point operations only** (`Set` / `Delete`). `DeleteRange` carries `HybridLogicalClock.Zero` by design and is excluded - it neither records a violation nor overwrites the recorded HLC.
@@ -227,7 +227,7 @@ Cross-shard interleaving for the same origin is permitted by design and is **not
 
 ## Bootstrap instruments
 
-The receiver-side bootstrap coordinator (`LatticeBootstrapCoordinatorGrain`) emits four instruments tracking the cross-cluster snapshot-drain pipeline plus a structured phase-transition log line. Together they let an operator dashboard the lifecycle of an in-flight bootstrap and tail a single run end-to-end through the silo log.
+The receiver-side bootstrap coordinator emits the following instruments tracking the cross-cluster snapshot-drain pipeline plus a structured phase-transition log line. Together they let an operator dashboard the lifecycle of an in-flight bootstrap and tail a single run end-to-end through the silo log.
 
 | Instrument | Kind | Tags | Recorded when |
 |---|---|---|---|
@@ -242,7 +242,7 @@ The histogram's `outcome` values are exposed as `LatticeReplicationMetrics.Boots
 
 The duration timer is anchored on a per-activation in-memory stopwatch captured at kickoff (or lazy-initialised on the first drain pass after a silo failover). It records `Stopwatch.GetElapsedTime` from that anchor to the terminal transition; a silo failover between kickoff and completion therefore truncates the measured interval to the span since the most recent reactivation. Operators monitoring cross-failover total durations should pair the histogram with the per-entry counters, which are restartable across reactivations.
 
-Phase-transition structured logs are emitted at `LogLevel.Information` from `LatticeBootstrapCoordinatorGrain` with the message template
+Phase-transition structured logs are emitted at `LogLevel.Information` from the bootstrap coordinator with the message template
 
 ```
 Bootstrap phase transition for tree '{TreeName}' from source '{SourceClusterId}': {Previous} -> {Next} (LastAppliedHlc={LastAppliedHlc})
@@ -262,8 +262,8 @@ Tailing the silo log for a single bootstrap run is `(treeName, sourceClusterId)`
 
 `peer.last_contact_seconds` and `peer.consecutive_errors` carry a `direction` tag with two values:
 
-- `direction="outbound"` - recorded by `ReplicationShipperGrain` after a peer accepts a shipped batch. Includes the periodic empty **liveness probe** the shipper fires when the drain buffer is empty and the wall-clock interval since the last successful outbound contact has elapsed. The probe is configured by `LatticeReplicationOptions.LivenessProbeInterval` (default `30 s`; set to `Timeout.InfiniteTimeSpan` to disable). The probe interval timer is anchored on the first idle pump tick after activation, so the first idle tick is silent and the probe begins one interval after activation. The payload is the 16-byte framing header alone; no entries are shipped.
-- `direction="inbound"` - recorded by `ReplicationApplier`'s batch path after a per-origin run of inbound entries applies (or fails) on the local receiver. Keyed by the entries' `WalRecord.OriginClusterId`. Range-delete and local-origin entries skip the recording.
+- `direction="outbound"` - recorded by the per-peer shipper after a peer accepts a shipped batch. Includes the periodic empty **liveness probe** the shipper fires when the drain buffer is empty and the wall-clock interval since the last successful outbound contact has elapsed. The probe is configured by `LatticeReplicationOptions.LivenessProbeInterval` (default `30 s`; set to `Timeout.InfiniteTimeSpan` to disable). The probe interval timer is anchored on the first idle pump tick after activation, so the first idle tick is silent and the probe begins one interval after activation. The payload is the 16-byte framing header alone; no entries are shipped.
+- `direction="inbound"` - recorded by the canonical applier's batch path after a per-origin run of inbound entries applies (or fails) on the local receiver. Keyed by the entries' `WalRecord.OriginClusterId`. Range-delete and local-origin entries skip the recording.
 
 The two directions are independent: a peer that this silo only ships to never produces an inbound row; a peer that this silo only receives from never produces an outbound row. `Snapshot()` returns one row per `(tree, peer, direction)` triple, each carrying a `Direction` property of type `ReplicationContactDirection`.
 

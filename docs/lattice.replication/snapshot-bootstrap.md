@@ -29,7 +29,7 @@ before calling `AddLatticeReplication`.
 - **`asOfHlc > Zero`** filters out entries whose stamped commit-time
   HLC is strictly greater than `asOfHlc`. The receiver resumes
   incremental replication from `asOfHlc`; the post-drain
-  `IReplicationHighWaterMarkGrain.PinSnapshotAsync` installs the
+  snapshot pin installs the
   per-origin HWM at `asOfHlc` atomically and the steady-state
   HWM dedupe in `IReplicationApplier` makes the handoff
   exactly-once across the snapshot/incremental boundary. See
@@ -43,9 +43,9 @@ before calling `AddLatticeReplication`.
   consumer has reported a VC-shaped cursor (single-peer cluster, fresh
   deployment, host using the legacy HLC-only overload), the provider
   falls back to the producer's per-tree local vector clock from
-  `IReplicationHighWaterMarkGrain.GetVectorAsync` - a strict superset
+  the per-tree high-water-mark store's current vector - a strict superset
   of the meet that is safe as a snapshot cut-point. Receivers pin
-  this on `IReplicationHighWaterMarkGrain.PinSnapshotAsync(asOfHlc, frontier)`
+  this `(asOfHlc, frontier)` snapshot cut-point on the per-tree high-water-mark store
   before draining the entry stream so the causal dependency check on
   the first incremental entry runs from a non-empty frontier.
 - **Tombstoned and expired keys are not emitted.** Only live entries
@@ -54,7 +54,7 @@ before calling `AddLatticeReplication`.
 
 ## Default implementation
 
-The default `LatticeSnapshotProvider` enumerates the **local** tree
+The default snapshot provider enumerates the **local** tree
 via the public `ILattice.EntriesAsync` surface and stamps each entry
 with its commit-time HLC via `ILattice.GetWithVersionAsync`. It is
 correct for **intra-cluster** seeding (snapshot-as-a-tool: an operator
@@ -62,13 +62,12 @@ snapshots a tree and restores it later in the same cluster, where the
 local tree is the authoritative source) but pays a per-key version
 round-trip on top of the leaf-chain enumeration. A future revision
 will swap to a single-pass streaming HLC-threshold scan once the core
-library exposes a version-bearing leaf-scan primitive (tracked on
-[GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues?q=label%3Alattice)); hosts that need a
+library exposes a version-bearing leaf-scan primitive; hosts that need a
 faster export today can register their own `ISnapshotProvider` via DI.
 
 **Cross-cluster bootstrap uses a separate receiver-side seam.**
 On a receiver whose local tree is empty (e.g. a fresh cluster joining
-an existing federation), the default `LatticeSnapshotProvider` would
+an existing federation), the default snapshot provider would
 yield zero entries because it reads the receiver's own tree rather
 than the sender's. The "Cross-cluster transport contract" section
 below documents the `IRemoteSnapshotTransport` abstraction and the
@@ -106,7 +105,7 @@ disturbing the live tail pipeline.
   `RequestSnapshotAsync` with the same `treeName` /
   `sourceClusterId` / `fromAsOfHlc` tuple to drain the stream. The
   metadata RPC returns the `(AsOfHlc, CausalStableFrontier)` pair the
-  receiver pins on `IReplicationHighWaterMarkGrain.PinSnapshotAsync`
+  receiver pins on the per-tree high-water-mark store
   before the drain begins, so the snapshot/incremental handoff stays
   exactly-once even though metadata and stream travel on separate
   calls.
@@ -177,7 +176,7 @@ concrete binding the host registers.
   `SnapshotStream.AsOfHlc` and `CausalStableFrontier`. A paired
   `RequestSnapshotAsync` call invokes `ExportAsync` again with the
   same `fromAsOfHlc` filter and drains `SnapshotStream.Entries`.
-- **Point-in-time view.** The canonical `LatticeSnapshotProvider`
+- **Point-in-time view.** The canonical default snapshot provider
   reads the producer's causal-stable frontier once at the start of
   the export and applies the receiver-supplied `fromAsOfHlc` filter
   at entry-emission time. Writes committed on the sender after the
@@ -201,8 +200,8 @@ concrete binding the host registers.
 machine drains from `IBootstrapSnapshotSource`; `AddLatticeReplication`
 registers a factory that resolves the seam to `RemoteSnapshotProvider`
 when an `IRemoteSnapshotTransport` is registered alongside it (the
-active-active default), or to a `LocalBootstrapSnapshotSource`
-wrapper over the silo's local `ISnapshotProvider` otherwise (the
+active-active default), or to a local snapshot-source wrapper
+over the silo's local `ISnapshotProvider` otherwise (the
 single-cluster recovery path). The silo's local `ISnapshotProvider`
 is untouched in either case, so a silo that is also a snapshot
 sender keeps serving outbound requests from peer receivers via
@@ -213,7 +212,7 @@ the registered transport.
 |------|---------|
 | `IBootstrapSnapshotSource` | Receiver-side seam consumed by the bootstrap state machine. Split from `ISnapshotProvider` so sender and receiver roles can coexist on a single silo without one DI slot overwriting the other. |
 | `RemoteSnapshotProvider` | Cross-cluster `IBootstrapSnapshotSource`. Calls `IRemoteSnapshotTransport.GetMetadataAsync` once to capture the sender-side cut-point, then drains `RequestSnapshotAsync` and yields each entry through the existing `SnapshotStream` shape. Stateless and safe for concurrent invocation across distinct `(treeName, sourceClusterId)` pairs. |
-| `LocalBootstrapSnapshotSource` | Single-cluster default `IBootstrapSnapshotSource`. Forwards both `ExportAsync` overloads to the silo's local `ISnapshotProvider`. |
+| Local snapshot-source wrapper | Single-cluster default `IBootstrapSnapshotSource`. Forwards both `ExportAsync` overloads to the silo's local `ISnapshotProvider`. |
 
 #### Semantics
 
@@ -223,7 +222,7 @@ the registered transport.
   `InvalidOperationException` because the adapter cannot address a
   sender peer without the sender cluster id. The bootstrap coordinator
   always invokes the three-arg overload with the value read from
-  `BootstrapCoordinatorState.SourceClusterId`, so this branch is
+  the coordinator's persisted source-cluster id, so this branch is
   unreachable in the normal flow and indicates an integration bug
   when it fires.
 - **Metadata-then-stream consistency.** The adapter calls
@@ -289,8 +288,8 @@ channel-reuse conventions.
 
 | Type | Role |
 |------|------|
-| `GrpcRemoteSnapshotTransport` | Client-side `IRemoteSnapshotTransport` that hosts the cross-cluster `GetMetadataAsync` unary call and the `RequestSnapshotAsync` server-streaming call. One gRPC channel is cached per `sourceClusterId` and shared with the live-push transport. |
-| `LatticeRemoteSnapshotGrpcService` | Sender-side ASP.NET Core gRPC service that delegates each call to the local `LatticeRemoteSnapshotService` (which in turn drives the host-registered `ISnapshotProvider`). |
+| Client-side gRPC snapshot transport | Client-side `IRemoteSnapshotTransport` that hosts the cross-cluster `GetMetadataAsync` unary call and the `RequestSnapshotAsync` server-streaming call. One gRPC channel is cached per `sourceClusterId` and shared with the live-push transport. |
+| Sender-side gRPC snapshot service | Sender-side ASP.NET Core gRPC service that delegates each call to the local `LatticeRemoteSnapshotService` (which in turn drives the host-registered `ISnapshotProvider`). |
 | `LatticeReplicationGrpcOptions` | Per-peer endpoint map (`Peers`), TLS-required-by-default gate (`AllowPlaintextEndpoints`), optional per-channel configuration hook (`ConfigureChannel`), and an override for the local cluster id used in outbound headers. The same options instance drives both the live-push transport and the snapshot transport. |
 
 A silo can simultaneously serve outbound snapshot requests *and*
@@ -363,9 +362,9 @@ _ = (frontier, asOf);
 ```
 
 In a host the `ISnapshotProvider` is resolved from DI on the sender
-side; `LatticeSnapshotProvider` is shown above for illustration. The
+side; the default snapshot provider is shown above for illustration. The
 receiver pins the snapshot's `CausalStableFrontier` on its per-tree
-`IReplicationHighWaterMarkGrain` via `PinSnapshotAsync` before
+high-water-mark store before
 draining the entry stream so the causal dependency check on the first
 incremental entry runs from a non-empty frontier.
 
@@ -408,8 +407,8 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   long-running snapshot drains and decouples caller liveness from
   the bootstrap workflow.
 - **One bootstrap per tree at a time, cluster-wide.** The state
-  machine is hosted in an internal per-tree Orleans grain
-  (`ILatticeBootstrapCoordinatorGrain`), so every silo's
+  machine is hosted in an internal per-tree Orleans grain,
+  so every silo's
   `BootstrapAsync` call for a given tree id routes to the same
   activation. The grain reads the persisted `InProgress` flag on
   entry: a concurrent call from the same source cluster is a no-op
@@ -476,11 +475,11 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   that catches up via the WAL tail, so UI live-update hooks and
   audit observers see the bootstrap window rather than missing it.
 - **Bootstrap drain bypasses the per-origin HWM gate.** The applier
-  reads an ambient `LatticeBootstrapApplyContext` flag on every
+  reads an ambient bootstrap-apply flag on every
   inbound call; when the flag is set (the bootstrap coordinator
   opens one scope around the entire drain) the per-origin
   high-water-mark check and the post-apply
-  `TryAdvanceAsync` are skipped, and the steady-state
+  watermark advance are skipped, and the steady-state
   `orleans.lattice.replication.apply.fifo_violations` counter is
   suppressed. This is required because the snapshot exporter
   enumerates shards/leaves in arbitrary order rather than HLC order:
@@ -496,16 +495,16 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
     arrivals of the same key by `(HLC, originClusterId)`, so a
     re-applied snapshot entry that has already been delivered is a
     no-op rather than an over-write.
-  - The per-leaf `_recentlyTerminal` short-circuit on
-    `BPlusLeafGrain` suppresses a re-arriving saga terminal whose
+  - The per-leaf recently-terminal short-circuit on
+    the leaf grain suppresses a re-arriving saga terminal whose
     bucket has already drained, so saga-terminal re-delivery is
     correctness-preserving.
-  - The per-tree `ITxRegistryGrain` "repeat-same-outcome no-op"
+  - The per-tree transaction registry's "repeat-same-outcome no-op"
     drops a commit/abort mark that matches a transaction id already
     in the requested terminal state.
 
   The post-drain
-  `IReplicationHighWaterMarkGrain.PinSnapshotAsync` atomically
+  snapshot pin atomically
   installs the per-origin HWM at the snapshot's `AsOfHlc`, so the
   bootstrap-to-incremental handoff retains exactly-once semantics on
   the live tail. Range deletes, terminal records, and tombstone-reap
@@ -518,8 +517,8 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   `AsOfHlc`, so the first live entry below or at the pin is deduped
   canonically.
 - **Snapshot/incremental handoff is exactly-once.** The coordinator
-  pins `(AsOfHlc, CausalStableFrontier)` on
-  `IReplicationHighWaterMarkGrain.PinSnapshotAsync` *after* every
+  pins `(AsOfHlc, CausalStableFrontier)` on the per-origin
+  high-water-mark store *after* every
   snapshot entry has been applied. The per-origin HWM dedupe in
   `IReplicationApplier` then makes any incremental entry whose
   timestamp is at or below the pinned frontier a no-op, so the
@@ -639,7 +638,7 @@ bootstrapped peer either at every key or at none, never at a strict
 subset.
 
 The export operates in two passes against a single frozen view of the
-producer's per-tree `ITxRegistryGrain` decisions:
+producer's per-tree transaction-registry decisions:
 
 1. **Prepared rows pass (runs first).** Walks every shard's leaf
    chain and emits a `SnapshotEntry` with `IsPrepared = true` for
@@ -653,8 +652,8 @@ producer's per-tree `ITxRegistryGrain` decisions:
 
 2. **Committed projection pass.** Drains the source tree's entries
    via the resilient `ScanEntriesAsync` wrapper over
-   `ILattice.EntriesAsync`, under the same frozen registry scope (via
-   `LatticeRegistrySnapshotContext`). Sagas the snapshot recorded as
+   `ILattice.EntriesAsync`, under the same frozen registry scope.
+   Sagas the snapshot recorded as
    `Committed` surface their prepared value as the live one; sagas
    recorded as `Aborted` are dropped; sagas still `InFlight` against
    the snapshot are hidden from the committed scan because the
@@ -671,12 +670,12 @@ producer's per-tree `ITxRegistryGrain` decisions:
    re-triggering the fall-off detector on its next tick).
 
 The receiver replays prepared rows through
-`IReplicationApplyGrain.ApplyPreparedSetAsync` /
-`ApplyPreparedDeleteAsync` into its per-tx pending bucket. The
+the receiver-side prepared-set and prepared-delete apply paths
+into its per-tx pending bucket. The
 matching terminal record - delivered subsequently by the
 post-snapshot incremental WAL stream - flips visibility atomically
-via `ApplyTxTerminalAsync` and the receiver's local
-`ITxRegistryGrain` linearization point.
+via the transaction-terminal apply path and the receiver's local
+transaction-registry linearization point.
 
 **Ordering matters.** The prepared rows pass runs before the
 committed projection pass because a source-side terminal that drains

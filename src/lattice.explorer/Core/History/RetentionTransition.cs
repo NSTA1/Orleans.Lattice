@@ -4,7 +4,7 @@ namespace Orleans.Lattice.Explorer.Core.History;
 /// Describes a retention-shape transition between two chronologically adjacent
 /// revisions of the same key - the "retention changed here" boundary the History
 /// tab renders as an inline divider. Derived purely from the per-row
-/// <see cref="RevisionRetention"/> descriptors already on the revisions, never
+/// <see cref="Orleans.Lattice.Api.State.RevisionRetention"/> descriptors already on the revisions, never
 /// from a separate backend call. The boundary is attached to the first (newer)
 /// revision whose retention differs from the older one.
 /// </summary>

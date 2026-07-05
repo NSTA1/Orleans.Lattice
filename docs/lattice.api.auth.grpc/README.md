@@ -8,7 +8,7 @@ Code-first gRPC binding for [Orleans.Lattice.Api.Auth](../lattice.api.auth/READM
 
 It provides:
 
-- **A code-first gRPC service.** Nineteen unary RPCs, one per facade operation, bound from C# definitions rather than a `.proto`.
+- **A code-first gRPC service.** A unary RPC per facade operation, bound from C# definitions rather than a `.proto`.
 - **A public typed client.** `LatticeAuthApiGrpcClient` exposes one method per RPC over a caller-supplied gRPC channel.
 - **Shared Orleans marshalling.** Every message is one of the package's `[GenerateSerializer]` records, serialized with the Orleans binary serializer, so client and server stay in lock-step by construction.
 - **Two-layer, fail-closed authorization.** A transport meta-authorizer gates every RPC at the edge, and the facade's own administrator check re-authorizes the resolved caller. Both default to deny.

@@ -25,4 +25,4 @@ Register it after the Entra authenticator; the authenticator picks it up
 automatically for the overage case.
 
 See the [Entra Graph documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.membership.entra.graph/README.md)
-for configuration and the tracked feature index.
+for configuration.

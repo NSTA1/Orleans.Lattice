@@ -79,7 +79,7 @@ The probe respects the core library's `MaintainProjectionDigest` opt-out. A tree
 
 ## Observability
 
-Two counters on the `orleans.lattice.replication` meter chart cross-cluster divergence:
+Counters on the `orleans.lattice.replication` meter chart cross-cluster divergence:
 
 | Metric | Tags | Emitted |
 |---|---|---|
@@ -92,7 +92,7 @@ The metric name constants are exposed for dashboards that build queries from the
 
 ## Transport seam
 
-The probe RPC travels over the existing replication push transport but is exposed through its own pluggable seam, `IReplicationDigestProbeTransport`, so it can be substituted independently of the live-push `IReplicationTransport`. The default DI registration is a no-op (`NoOpReplicationDigestProbeTransport`) that lets the detection pipeline be wired up in isolation; the gRPC binding replaces it with a real implementation that invokes the probe over the same per-peer channel cache the push transport uses. A host can register its own transport before `AddLatticeReplication`:
+The probe RPC travels over the existing replication push transport but is exposed through its own pluggable seam, `IReplicationDigestProbeTransport`, so it can be substituted independently of the live-push `IReplicationTransport`. The default DI registration is a no-op that lets the detection pipeline be wired up in isolation; the gRPC binding replaces it with a real implementation that invokes the probe over the same per-peer channel cache the push transport uses. A host can register its own transport before `AddLatticeReplication`:
 
 ```csharp verify
 public sealed class MyProbeTransport : IReplicationDigestProbeTransport

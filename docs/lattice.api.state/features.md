@@ -1,6 +1,6 @@
 # Orleans.Lattice.Api.State Feature Index
 
-Feature planning for the `Orleans.Lattice.Api.State` package - a read-only cluster state-query / observe / subscribe API layered on top of `Orleans.Lattice` - is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), not in roadmap files. See the [package overview](./README.md) for the user-facing description. This page is a grouped, human-readable index that links each tracked item to its issue. Keep it in sync whenever an issue is opened, closed, or retitled.
+A grouped, human-readable index of the `Orleans.Lattice.Api.State` package - a read-only cluster state-query / observe / subscribe API layered on top of `Orleans.Lattice`. See the [package overview](./README.md) for the user-facing description. Each item links to its issue.
 
 - **Browse all api.state issues:** https://github.com/NSTA1/Orleans.Lattice/issues?q=Orleans.Lattice.Api.State
 

@@ -99,5 +99,3 @@ Membership produces subjects; [`Orleans.Lattice.Auth`](../lattice.auth/README.md
 - [Observability](observability.md) - the `orleans.lattice.membership` meter and the subject-resolution cache hit / miss counters.
 - [`Orleans.Lattice.Auth`](../lattice.auth/README.md) - the policy store, decision engine, and enforcing access gate that consume the subjects this package resolves.
 - [`Orleans.Lattice.Api.Auth`](../lattice.api.auth/README.md) - the transport-agnostic control facade for administering this directory and the policy store.
-
-Feature planning is managed on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), not in roadmap files.

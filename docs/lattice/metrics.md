@@ -113,7 +113,7 @@ drives autonomic splitting.
 
 ### Per-tree admission control
 
-Opt-in, fail-open per-tree quota enforcement. All six instruments are on the `orleans.lattice` meter and tagged `tree`; the three prefixed with a dimension additionally carry a low-cardinality `dimension` tag whose value is `keys` or `bytes`. The four gauges are observed lazily from the same cached, TTL-coalesced per-tree aggregate that backs the storage-usage gauges, so they cost nothing on the write path; they populate once the per-tree storage-usage aggregator has sampled the tree (which happens on any `GetStorageUsageAsync` call, whenever `StorageUsageDeepPollInterval` is enabled, and automatically whenever a cap or advisory ceiling is configured, because the write guard refreshes the aggregate at most once per `StorageUsageCacheTtl`).
+Opt-in, fail-open per-tree quota enforcement. These per-tree instruments are on the `orleans.lattice` meter and tagged `tree`; the two counters (`admission.rejected`, `admission.would_reject`) and the `admission.utilization` gauge additionally carry a low-cardinality `dimension` tag whose value is `keys` or `bytes`. The observable gauges are observed lazily from the same cached, TTL-coalesced per-tree aggregate that backs the storage-usage gauges, so they cost nothing on the write path; they populate once the per-tree storage-usage aggregator has sampled the tree (which happens on any `GetStorageUsageAsync` call, whenever `StorageUsageDeepPollInterval` is enabled, and automatically whenever a cap or advisory ceiling is configured, because the write guard refreshes the aggregate at most once per `StorageUsageCacheTtl`).
 
 | Name | Kind | Unit | Description |
 |---|---|---|---|

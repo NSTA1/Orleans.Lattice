@@ -53,7 +53,7 @@ The applier tracks two distinct per-`(TreeId, OriginClusterId)` quantities on th
 
 Before applying a point entry the applier reads the pinned floor; if `entry.Timestamp <= floor` the call is a no-op (`Applied = false`), because everything at or below a pinned snapshot frontier is already durably present. Otherwise the entry is admitted and its at-most-once guarantee rests on per-key last-writer-wins idempotence at the leaf (a superseded or duplicate write merges to the same state) plus the shadow-forward identity cache below. After a successful point apply the HWM advances monotonically; a laggard's lower advance becomes a no-op.
 
-This is deliberately **not** a `entry.Timestamp <= hwm` drop. The per-origin HLC stream is not monotonic in write-ahead-log / ship order: HLCs are stamped per leaf (each `BPlusLeafGrain` carries its own clock) and the write-ahead-log partitions by key hash, so many leaves interleave in one partition and a genuinely-new point write can arrive with a source HLC below the running max-applied HLC. Dropping such an entry on a scalar `hwm` comparison silently strands it - the cross-cluster data-loss regime this seam is designed to avoid. A legitimately out-of-order-but-new entry that lands below the current HWM is applied and increments `apply.fifo_violations` (observability only). Typed CRDT modes consult the floor and advance the HWM the same way; state-based merge is naturally idempotent, so the floor gate just short-circuits redundant grain calls for the below-snapshot backlog.
+This is deliberately **not** a `entry.Timestamp <= hwm` drop. The per-origin HLC stream is not monotonic in write-ahead-log / ship order: HLCs are stamped per leaf (each leaf carries its own clock) and the write-ahead-log partitions by key hash, so many leaves interleave in one partition and a genuinely-new point write can arrive with a source HLC below the running max-applied HLC. Dropping such an entry on a scalar `hwm` comparison silently strands it - the cross-cluster data-loss regime this seam is designed to avoid. A legitimately out-of-order-but-new entry that lands below the current HWM is applied and increments `apply.fifo_violations` (observability only). Typed CRDT modes consult the floor and advance the HWM the same way; state-based merge is naturally idempotent, so the floor gate just short-circuits redundant grain calls for the below-snapshot backlog.
 
 Range deletes bypass the floor by design. Range applies are naturally idempotent at the leaf layer: re-running a range delete on already-tombstoned keys merges to the same state, so dedupe is unnecessary.
 
@@ -119,7 +119,7 @@ The pinned causal floor is the explicit handoff contract for the bootstrap proto
 
 Inbound transports deliver batches of `WalRecord` records, not single entries: a 256-entry gRPC push from a single producer is one network round-trip carrying 256 mutations. `ApplyBatchAsync` is the seam that lets the receiver process such a batch as one logical operation rather than 256 independent `ApplyAsync` calls - it collapses the per-entry per-origin HWM grain RPCs to one `GetAsync` + one `GetPinnedFloorAsync` + one `TryAdvanceAsync` per distinct origin per batch and drains the causal-apply buffer once at the end of the batch instead of after every successful apply.
 
-The default-interface-method body provides backward-compatible semantics: it loops over `ApplyAsync` and aggregates the per-entry results, so any custom `IReplicationApplier` written before the batch seam existed continues to work without changes. The shipped `ReplicationApplier` overrides the batch path with the optimised implementation described below.
+The default-interface-method body provides backward-compatible semantics: it loops over `ApplyAsync` and aggregates the per-entry results, so any custom `IReplicationApplier` written before the batch seam existed continues to work without changes. The shipped applier overrides the batch path with the optimised implementation described below.
 
 ### Run grouping
 
@@ -146,7 +146,7 @@ Every classification the per-entry path produces survives the batch path:
 
 ### Failure model
 
-Per-entry failures inside the batch surface as `ApplyAsync`-equivalent exceptions. The `LatticeReplicationGrpcService.Push` receiver wraps the batch call in a transport-level exception so the sender's backoff/retry loop kicks in for the whole batch - partial-batch acceptance is not a guarantee the seam offers. A `DeadLetterTrackingReplicationApplier` decorator detects retry history on any entry in the batch and falls back to per-entry routing so its DLQ accounting is exact.
+Per-entry failures inside the batch surface as `ApplyAsync`-equivalent exceptions. The gRPC receiver endpoint wraps the batch call in a transport-level exception so the sender's backoff/retry loop kicks in for the whole batch - partial-batch acceptance is not a guarantee the seam offers. The dead-letter-tracking applier decorator detects retry history on any entry in the batch and falls back to per-entry routing so its DLQ accounting is exact.
 
 ### Parallel apply across independent runs
 
@@ -171,18 +171,18 @@ emits a `Set` / `Delete` `WalRecord` with `IsPrepared = true` and a
 non-empty `TransactionId`, and the saga's terminal phase emits one
 `TxCommit` (or `TxAbort`) `WalRecord` per touched shard. The shipper
 preserves these records verbatim; the receiver seam interprets them
-through three additional internal hops on `IReplicationApplyGrain`:
+through three additional internal apply hops:
 
-| Method | Wire trigger | Receiver behaviour |
+| Apply hop | Wire trigger | Receiver behaviour |
 |---|---|---|
-| `ApplyPreparedSetAsync` | `Op == Set` && `IsPrepared == true` | Stages the write under the saga's `TransactionId` in the destination leaf's per-tx pending bucket. The visible projection is unchanged - public readers (`GetAsync`, `KeysAsync`, etc.) do not observe the prepared entry. |
-| `ApplyPreparedDeleteAsync` | `Op == Delete` && `IsPrepared == true` | Stages a tombstone under the saga's `TransactionId` in the same pending bucket. The pre-saga value remains visible to public readers until the terminal arrives. |
-| `ApplyTxTerminalAsync` | `Op == TxCommit` or `Op == TxAbort` | Calls `ITxRegistryGrain.RecordTerminalArrivalAsync(txid, sourceShardIndex, committed, atomicShardCount)` to tally this per-source-shard arrival. While the tally is not final the registry mark stays unset and the receiver leaves' pending buckets stay in place so reads remain all-or-nothing. Only on the final arrival does the receiver mark the per-tree `ITxRegistry` entry and pre-fan the terminal across the transitive split-forward closure of every observed source-shard in a single parallel hop. On commit every pending entry under the `TransactionId` flips into the visible projection; on abort the pending entries are dropped. |
+| Prepared set | `Op == Set` && `IsPrepared == true` | Stages the write under the saga's `TransactionId` in the destination leaf's per-tx pending bucket. The visible projection is unchanged - public readers (`GetAsync`, `KeysAsync`, etc.) do not observe the prepared entry. |
+| Prepared delete | `Op == Delete` && `IsPrepared == true` | Stages a tombstone under the saga's `TransactionId` in the same pending bucket. The pre-saga value remains visible to public readers until the terminal arrives. |
+| Transaction terminal | `Op == TxCommit` or `Op == TxAbort` | Records this per-source-shard terminal arrival in the per-tree transaction registry (keyed by txid, source shard index, commit/abort outcome, and atomic shard count) to tally arrivals. While the tally is not final the registry mark stays unset and the receiver leaves' pending buckets stay in place so reads remain all-or-nothing. Only on the final arrival does the receiver mark the per-tree transaction-registry entry and pre-fan the terminal across the transitive split-forward closure of every observed source-shard in a single parallel hop. On commit every pending entry under the `TransactionId` flips into the visible projection; on abort the pending entries are dropped. |
 
-The `ReplicationApplier.ApplyBatchAsync` classifier excludes any
+The batch-apply classifier excludes any
 entry with `IsPrepared == true` from the batched LWW fast-path so
 prepared `Set` / `Delete` records are always routed through the
-per-entry `ApplyPreparedSetAsync` / `ApplyPreparedDeleteAsync` seam.
+per-entry prepared-set / prepared-delete apply hops.
 Without this exclusion the prepared writes would commit directly
 into the receiver leaf's visible `Entries` and the saga's terminal
 mark would find no matching pending entries to flip - so the
@@ -198,14 +198,14 @@ shard, that ship through the change feed under independent
 backpressure / batching cadences. Each terminal carries the saga's
 authoritative touched-shard count in the additive
 `WalRecord.AtomicShardCount` slot, which the receiver feeds into
-`RecordTerminalArrivalAsync` to compute `IsFinal`. A receiver
+the terminal-arrival tally to compute finality. A receiver
 running a pre-gate producer sees `atomicShardCount == 0` on every
 terminal, which the gate treats as "no expected-total information"
 and falls back to first-terminal-wins semantics - equivalent to the
 pre-gate behaviour and wire-compatible across mixed-version
 deployments.
 
-The transport-level filter (`ShouldShip`) explicitly bypasses
+The producer-side ship filter explicitly bypasses
 per-tree `KeyFilter` and `KeyPrefixes` for `TxCommit` and `TxAbort`
 records: a saga whose prepared keys passed the filter must have its
 terminal delivered or the receiver-side pending bucket leaks. The
@@ -218,7 +218,7 @@ A terminal that belongs to a **cross-tree** atomic write
 (`IGrainFactory.SetManyAtomicAsync`) carries two additional slots -
 `WalRecord.CrossTreeOperationId` and `WalRecord.CrossTreeParticipants`
 (the canonical participant tree-id set). The applier threads these into
-`ApplyTxTerminalAsync` as a `crossTreeOperationId` plus a receiver-scoped
+the transaction-terminal apply hop as a `crossTreeOperationId` plus a receiver-scoped
 **wait set**. The wait set is the participant set intersected with the
 trees this receiver actually replicates
 (`LatticeReplicationOptions.ReplicatedTrees`); the tree that received the
@@ -230,7 +230,7 @@ subset rather than waiting forever on a tree that never ships here.
 Once a tree's per-source-shard gate is final, a cross-tree terminal does
 **not** flip that tree's registry directly. Instead the receiver durably
 registers the tree's local txid as delegated to a **receiver coordinator
-grain** (`ILatticeCrossTreeReceiverGrain`, keyed by
+grain** (keyed by
 `(originClusterId, operationId)`) and notifies it of this tree's arrival
 and commit/abort vote. The coordinator decides only once a terminal has
 arrived for every tree in the wait set, committing iff every arrived tree
@@ -238,7 +238,7 @@ voted commit. Before the decision, a delegated read on any participating
 tree's registry resolves `InFlight` against the coordinator, so every
 tree stays invisible; after it, the receiver flips every participating
 tree together. The coordinator only ever returns the decision (it never
-calls back into a tree grain); the calling `LatticeGrain` performs the
+calls back into a tree grain); the calling tree grain performs the
 per-tree finalizes - itself inline, siblings via their apply grains - so
 there is no circular wait. A null/empty `crossTreeOperationId` routes the
 terminal through the legacy single-tree gate unchanged.
@@ -270,7 +270,7 @@ What ships today:
   `Orleans.Lattice` uses the same point-apply seam as a non-saga
   write, with the `IsPrepared` flag selecting the staging behaviour.
 - Local single-tree atomic visibility (within one cluster) is
-  shipped end-to-end via the per-tree `ITxRegistryGrain`
+  shipped end-to-end via the per-tree transaction registry
   linearization point; see
   [Atomic Writes](../lattice/atomic-writes.md) for the protocol
   and [Consistency](../lattice/consistency.md#atomic-visibility)

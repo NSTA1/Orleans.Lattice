@@ -64,7 +64,7 @@ builder.Services.AddSingleton<ILatticeAuthApiAuthorizer, MyTokenAuthorizer>();
 app.MapLatticeAuthApiGrpc();
 ```
 
-The host must expose `ILatticeAuthAdmin` in the same service provider - typically
+The host must register the admin facade in the same service provider - typically
 by co-hosting Orleans with `AddLattice(...).AddLatticeAuth(...).AddLatticeAuthApi()`.
 
 ## Client

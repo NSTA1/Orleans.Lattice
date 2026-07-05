@@ -87,7 +87,7 @@ A few commonly-needed variants:
 
 ## Scenarios
 
-The suite ships **eighteen** scenarios spanning seven lattice-usage profiles
+The suite ships a broad set of scenarios spanning the lattice-usage profiles
 plus a micro-benchmark control. A condensed table is reproduced below; the
 authoritative list with per-scenario knobs is in
 [`benchmark/benchmark-scenarios.md`](../../benchmark/benchmark-scenarios.md).
@@ -172,7 +172,7 @@ stack:
 ```
 
 Then visit <http://localhost:3001>. The history Grafana hosts an Overview
-dashboard plus seven persona dashboards (one per lattice-usage profile) so
+dashboard plus one persona dashboard per lattice-usage profile so
 each dashboard answers a single regression question without templating-var
 juggling. See the
 [Trend dashboard section](../../benchmark/README.md#trend-dashboard-history-stack)
@@ -181,8 +181,9 @@ of the benchmark stack README for the full dashboard catalogue.
 ## The `microbench` scenario
 
 `microbench` is the in-process tier - no Docker, no Orleans cluster boot. It
-hand-instantiates the `LatticeGrain` -> `ShardRootGrain` -> `BPlusLeafGrain`
-vertical and routes `IGrainFactory` calls through NSubstitute mocks, then
+hand-instantiates the full lattice grain vertical (tree root, shard root, and
+leaf)
+and routes `IGrainFactory` calls through NSubstitute mocks, then
 exercises a fixed set of `[Benchmark]` methods (point reads/writes, bulk
 loads, mixed workloads, atomic-write sagas) via
 [BenchmarkDotNet](https://benchmarkdotnet.org/) with the `InProcessEmitToolchain`.

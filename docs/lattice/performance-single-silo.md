@@ -10,7 +10,7 @@ regenerated together against a freshly-provisioned Azure VM by
 `benchmark/performance-report.ps1`. Layer 2 write cells reflect a fully
 durable WAL-before-Apply path with real Azure round-trips; Layer 2 read
 cells are the caller-visible envelope that includes the per-silo
-`LeafCacheGrain` read-through cache (see the read-side caching note
+read-through leaf cache (see the read-side caching note
 below).
 
 The figures are **steady-state averages** taken from the productive window
@@ -274,7 +274,7 @@ production read path is cache-served**, not because they exhaust Azure
 Tables' read budget. The `GetAsync` and `GetManyAsync` per-call
 latencies in the Layer 2 table above are each
 roughly two orders of magnitude faster than a single Azure Tables
-round-trip - the difference is the per-silo `LeafCacheGrain`. The
+round-trip - the difference is the per-silo read-through leaf cache. The
 single-account read budget itself (the same ~2,500 transactions/sec
 empirical ceiling that gates the write path - the Azure-published
 per-account TPS target is higher but the binder for both shapes is
@@ -285,13 +285,13 @@ the read envelope grows toward the round-trip cost and the read budget
 starts to matter.
 
 **A note on read-side caching.** The `GetAsync` / `GetManyAsync` per-call cells above are the caller-visible envelope, which
-includes whatever the `LeafCacheGrain` read-through cache served. In the
+includes whatever the per-silo read-through leaf cache served. In the
 steady state of a workload that re-reads recently-written keys (the
 producer-driven telemetry stream the benchmark drives is a representative
 case - vehicles cycle through the same key set tick after tick), the
 local-silo cache absorbs most of the cost: a same-silo revision-cookie
 short-circuit skips the cross-grain delta fetch entirely, the read
-collapses to a `Dictionary<string, LwwValue<byte[]>>.TryGetValue`, and
+collapses to an in-memory dictionary `TryGetValue`, and
 the envelope p50 settles into the tens-of-microseconds range you see
 above. On a cache miss (the key has not been seen, or its TTL elapsed),
 the cache fetches a delta from the primary leaf and the envelope grows
@@ -337,8 +337,8 @@ consequences follow:
 - **WAL shipping defaults.** Layer 2 cells are measured against the
   library's shipping `WalPartitions` and `WalMaxPendingBatches` defaults
   recorded in the marker block's meta-header above. Both the foreground
-  commit-log writer and the activation-time WAL replay loop on
-  `BPlusLeafGrain` fan across every configured partition (two-pass replay
+  commit-log writer and the activation-time WAL replay loop on the
+  leaf grain fan across every configured partition (two-pass replay
   with a post-pass reconciliation that advances every partition's
   checkpoint to the highest applied offset once deferred terminal
   mutations are drained), so a cold leaf reactivation under

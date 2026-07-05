@@ -142,9 +142,7 @@ Every layer above is opt-in. The core registration installs only the allow-all
 null gate, whose decision is a synchronously-completed, allocation-free allow
 that never resolves a subject. A cluster that never registers authorization keeps
 that null gate, so the data path is byte-for-byte what it was before the security
-layer existed. The measured cost once enforcement **is** registered is reported
-on the [security posture](../lattice.auth/security-posture.md#enforcement-cost)
-page.
+layer existed.
 
 ## Registration order
 

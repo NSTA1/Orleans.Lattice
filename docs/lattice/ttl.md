@@ -35,7 +35,7 @@ Every entry is stored as an `LwwValue<byte[]>`:
 |---|---|
 | `Value` | The stored bytes (or tombstone marker). |
 | `Timestamp` | HLC timestamp used for last-writer-wins conflict resolution. |
-| `Deleted` | Tombstone flag. |
+| `IsTombstone` | Tombstone flag. |
 | `ExpiresAtTicks` | Absolute UTC ticks at which the entry expires. `0` means "no expiry" - this is the default and keeps pre-TTL snapshots wire-compatible. |
 
 `LwwValue<T>.IsExpired(long nowUtcTicks)` is the single predicate used by every read path to decide whether to hide an entry.

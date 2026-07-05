@@ -112,5 +112,3 @@ This is a write-capable external surface, so its default posture is closed:
 - Public client: `LatticeDataApiGrpcClient` (`Set`, `Delete`, `SetManyAtomic`, `SetManyAtomicCrossTree`, `Get`, `ReadRange`).
 - Authorization seam: `ILatticeDataApiAuthorizer` (`DenyAllDataApiAuthorizer`, `AllowAllDataApiAuthorizer`).
 - Identity seam: `ILatticeDataApiCredentialBridge`.
-
-Feature planning is managed on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), not in roadmap files. This package was introduced by [#1095](https://github.com/NSTA1/Orleans.Lattice/issues/1095).

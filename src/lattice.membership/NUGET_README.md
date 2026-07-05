@@ -51,4 +51,4 @@ configured through `LatticeMembershipOptions`.
 
 See the
 [Membership documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.membership/README.md)
-for the full guide and the tracked feature index.
+for the full guide.

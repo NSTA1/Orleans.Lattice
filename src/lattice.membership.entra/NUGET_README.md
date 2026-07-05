@@ -21,4 +21,4 @@ isolated in the separate `Orleans.Lattice.Membership.Entra.Graph` package, so
 this package stays free of the Graph SDK.
 
 See the [Entra membership documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.membership.entra/README.md)
-for configuration and the tracked feature index.
+for configuration.
