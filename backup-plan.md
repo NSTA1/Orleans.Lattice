@@ -87,7 +87,7 @@ In scope: #1120-#1130 and #1133. Out of scope (deferred follow-on): #1131 (manag
 |------|-------|---------|--------|---------------|
 | W0 | #1120 | Project & package scaffolding | LANDED | 1323b29f |
 | W1 | #1121 | Permission model | LANDED | 356072c4 |
-| W1 | #1122 | Sink + manifest + catalog hiding | DISPATCHED (session a4b42cc8) | - |
+| W1 | #1122 | Sink + manifest + catalog hiding | LANDED | 3c010829 |
 | W2 | #1123 | Full capture | not started | - |
 | W2 | #1127 | AzureBlob sink | not started | - |
 | W3 | #1133 | Cross-tree fence | not started | - |
@@ -98,7 +98,7 @@ In scope: #1120-#1130 and #1133. Out of scope (deferred follow-on): #1131 (manag
 | W5 | #1129 | gRPC binding + client | not started | - |
 | W6 | #1130 | Observability + samples + e2e + docs | not started | - |
 
-Last updated: 2026-07-05 (W1 #1121 LANDED as 356072c4; grpc regression from #1120 repaired as 35c53427; #1122 still in flight).
+Last updated: 2026-07-05 (W1 COMPLETE: #1121 356072c4, #1122 3c010829; scope types unified; full-solution build green 0/0; W2 #1123+#1127 ready to dispatch).
 
 ## Review notes / ratified deviations
 
@@ -135,6 +135,28 @@ Last updated: 2026-07-05 (W1 #1121 LANDED as 356072c4; grpc regression from #112
   - Targeted tests green: core LatticeOperation 5/5, auth 236/236 (behaviour unchanged), backup
     authorizer 21/21, grpc scaffolding 1/1. Hygiene scan (em-dash/non-ASCII/tracker-id) clean.
     backup-plan.md base-drift excluded at integration.
+
+- **#1122 (landed 3c010829):** Sink abstraction + manifest/catalog model + catalog hiding reviewed
+  against source and the auth/membership dogfood pattern.
+  - Verified: ILatticeBackupSink is async-streaming (chunked artifact write/read, never buffered
+    whole) + manifest CRUD, content-addressed via BackupContentHash (idempotent). Catalog store
+    dogfoods the reserved sys-backup-catalog tree with a durable per-key history view; both
+    sys-backup- trees inherit the core sys- catalog-hiding filter (no core change), proven by a new
+    api.state catalog test (hidden by default, shown with IncludeSystemTrees). AddLatticeBackup has a
+    fail-fast ordering guard after AddLattice, is idempotent, and folds in the view infrastructure.
+    All implementation types internal; only wire-contract records, enums, the two seams, options and
+    registration are public. Manifest carries topology snapshot + shard-root digests, per-key
+    shape/merge-mode, per-origin provenance, compression-dictionary ref; no artifact encryption.
+  - Ratified deviations: (1) a second reserved tree sys-backup-store for the in-cluster sink bytes
+    alongside sys-backup-catalog; (2) BackupContentHash public static SHA-256 helper; (3) the hiding
+    proof added to the api.state test project (test-only, no prod/csproj change); (4) AddLatticeBackup
+    folds in AddLatticeViews (idempotent) and defaults history to MetadataOnly + durable view on.
+  - COORDINATOR RECONCILIATION with #1121: both features independently introduced a scope descriptor
+    and a BackupScopeKind enum (hard duplicate-type collision). Unified on the public serializable
+    BackupScopeSelector + public BackupScopeKind (WholeTree/Prefix/Key); deleted #1121's redundant
+    internal BackupScope struct and repointed the authorization seam + its tests. The package now
+    carries a single scope type so #1123 consumes one model. All 55 backup tests + 64 api.state
+    catalog tests green; full-solution Release build green (0/0) at the W1 boundary.
 
 ## Coordinator-owned carve-outs (NOT delegated to sub-agents)
 
