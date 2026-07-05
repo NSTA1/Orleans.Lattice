@@ -85,7 +85,7 @@ In scope: #1120-#1130 and #1133. Out of scope (deferred follow-on): #1131 (manag
 
 | Wave | Issue | Feature | Status | Landed commit |
 |------|-------|---------|--------|---------------|
-| W0 | #1120 | Project & package scaffolding | in progress (sub-agent) | - |
+| W0 | #1120 | Project & package scaffolding | LANDED | 1323b29f |
 | W1 | #1121 | Permission model | not started | - |
 | W1 | #1122 | Sink + manifest + catalog hiding | not started | - |
 | W2 | #1123 | Full capture | not started | - |
@@ -98,7 +98,23 @@ In scope: #1120-#1130 and #1133. Out of scope (deferred follow-on): #1131 (manag
 | W5 | #1129 | gRPC binding + client | not started | - |
 | W6 | #1130 | Observability + samples + e2e + docs | not started | - |
 
-Last updated: 2026-07-05 (W0 #1120 dispatched to sub-agent; package labels created by coordinator).
+Last updated: 2026-07-05 (W0 #1120 LANDED as 1323b29f; W1 unblocked).
+
+## Review notes / ratified deviations
+
+- **#1120 (landed 1323b29f):** Sub-agent scaffold reviewed against spec and the auth trio.
+  - Ratified: NO core change for the reserved system-tree prefix. Verified against source that
+    core `LatticeConstants.SystemDataTreePrefix = "sys-"` trees are hidden from the default
+    State API catalog (LatticeConstants.cs:84-96), so `sys-backup-` inherits hiding for free,
+    exactly as `sys-auth-` / `sys-membership-` do. More minimal than the brief's "likely core"
+    hint; matches precedent.
+  - Coordinator fix-up at integration: removed the redundant `obg.` gRPC alias registry and
+    made `ApiBackupTypeAliases` public so the gRPC binding reuses the parent `oib.` registry
+    (matches the auth gRPC precedent; resolves the sub-agent's own doc contradiction).
+  - Verified: csproj is a faithful auth mirror (0.1.0, InternalsVisibleTo scoped to the backup
+    trio + DynamicProxyGenAssembly2, core reference only); slnx placement consistent with auth
+    ordering; targeted build/test/pack all green (7/1/1 tests). backup-plan.md base-drift from
+    the sub-agent branch was excluded at integration (coordinator owns this file).
 
 ## Coordinator-owned carve-outs (NOT delegated to sub-agents)
 
