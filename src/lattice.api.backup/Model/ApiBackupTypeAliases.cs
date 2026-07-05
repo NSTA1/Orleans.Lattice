@@ -14,11 +14,11 @@ namespace Orleans.Lattice.Api.Backup;
 /// <c>oib.</c>-prefixed constants here.
 /// </para>
 /// </summary>
-internal static class ApiBackupTypeAliases
+public static class ApiBackupTypeAliases
 {
     /// <summary>
     /// The reserved alias prefix owned by the backup control-API package. Every
     /// alias constant added here must start with this value.
     /// </summary>
-    internal const string AliasPrefix = "oib.";
+    public const string AliasPrefix = "oib.";
 }
