@@ -86,8 +86,8 @@ In scope: #1120-#1130 and #1133. Out of scope (deferred follow-on): #1131 (manag
 | Wave | Issue | Feature | Status | Landed commit |
 |------|-------|---------|--------|---------------|
 | W0 | #1120 | Project & package scaffolding | LANDED | 1323b29f |
-| W1 | #1121 | Permission model | not started | - |
-| W1 | #1122 | Sink + manifest + catalog hiding | not started | - |
+| W1 | #1121 | Permission model | DISPATCHED (session 9841f3aa) | - |
+| W1 | #1122 | Sink + manifest + catalog hiding | DISPATCHED (session a4b42cc8) | - |
 | W2 | #1123 | Full capture | not started | - |
 | W2 | #1127 | AzureBlob sink | not started | - |
 | W3 | #1133 | Cross-tree fence | not started | - |
@@ -98,7 +98,7 @@ In scope: #1120-#1130 and #1133. Out of scope (deferred follow-on): #1131 (manag
 | W5 | #1129 | gRPC binding + client | not started | - |
 | W6 | #1130 | Observability + samples + e2e + docs | not started | - |
 
-Last updated: 2026-07-05 (W0 #1120 LANDED as 1323b29f; W1 unblocked).
+Last updated: 2026-07-05 (W0 #1120 LANDED as 1323b29f; W1 #1121+#1122 dispatched in parallel off feat/backup tip 95bc6627).
 
 ## Review notes / ratified deviations
 
