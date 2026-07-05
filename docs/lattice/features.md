@@ -37,6 +37,7 @@ A grouped, human-readable index of the core `Orleans.Lattice` package's features
 - [F-178](https://github.com/NSTA1/Orleans.Lattice/issues/1129) - Orleans.Lattice.Api.Backup.Grpc: gRPC binding & client with server streaming
 - [F-179](https://github.com/NSTA1/Orleans.Lattice/issues/1130) - Orleans.Lattice.Backup: observability, docs, samples & end-to-end tests
 - [F-180](https://github.com/NSTA1/Orleans.Lattice/issues/1131) - Orleans.Lattice: backup/restore management UI (Explorer follow-on)
+- [F-181](https://github.com/NSTA1/Orleans.Lattice/issues/1133) - Orleans.Lattice.Backup: cross-tree-consistent backup set (causal fence)
 
 ### Shipped
 
