@@ -71,6 +71,7 @@ The safe technique for editing long markdown files (`docs/**/*.md`, the `feature
   - `ci` - CI/CD workflow changes
   - `dependencies` - dependency updates
   - `breaking` - breaking changes
+- Also apply a **package label** (one per `src/<package>/` directory, named exactly after it) for every package the pull request touches. The changed-files -> package mapping and the label-naming rule live in the **pr-labels** skill (`.github/skills/pr-labels/SKILL.md`); the equivalent rule for issues lives in the **issue-labels** skill (`.github/skills/issue-labels/SKILL.md`).
 - Do not commit, push, or create PRs unless explicitly requested.
 
 ## Testing
