@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Explorer.Core.Configuration;
 /// <list type="bullet">
 /// <item><description>
 /// <see cref="EndpointVariable"/> (<c>LATTICE_EXPLORER_ENDPOINT</c>) - the
-/// state-API endpoint URL. When unset, <see cref="TrySeed"/> returns
+/// state-API endpoint URL. When unset, <see cref="IExplorerConfigurationSeed.TrySeed"/> returns
 /// <see langword="null"/> and the explorer falls back to its normal first-run
 /// (unconfigured) flow.
 /// </description></item>

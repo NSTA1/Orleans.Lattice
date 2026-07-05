@@ -73,7 +73,7 @@ A transient degraded blip (one or two probes) is usually noise; a sustained degr
 
 Default is 60 seconds, sized to absorb one or two probe-cadence blips while escalating within an interactive operator-response window.
 
-The per-peer "first-degraded-at" map lives on the `LatticeReplicationHealthCheck` instance itself, so `AddLatticeReplicationHealthCheck` registers the check as a **singleton** on the underlying `ServiceCollection` (the default `IHealthChecksBuilder.AddCheck<T>` lifetime is transient, which would discard the escalation map on every probe). A custom registration that wants to replace the check must respect that lifetime, otherwise sustained-degraded escalation will silently stop firing.
+The per-peer "first-degraded-at" map lives on the health-check instance itself, so `AddLatticeReplicationHealthCheck` registers the check as a **singleton** on the underlying `ServiceCollection` (the default `IHealthChecksBuilder.AddCheck<T>` lifetime is transient, which would discard the escalation map on every probe). A custom registration that wants to replace the check must respect that lifetime, otherwise sustained-degraded escalation will silently stop firing.
 
 ## NaN contact samples
 

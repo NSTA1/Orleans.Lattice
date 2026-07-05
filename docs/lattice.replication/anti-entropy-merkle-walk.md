@@ -61,7 +61,7 @@ The caps bound the cost of a single pass so a pathological tree cannot turn a ba
 
 ## Observability
 
-Two counters on the `orleans.lattice.replication` meter:
+Counters on the `orleans.lattice.replication` meter:
 
 | Metric | Tags | Emitted |
 |---|---|---|

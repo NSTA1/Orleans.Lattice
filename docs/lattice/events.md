@@ -25,16 +25,16 @@ DateTimeOffset at = evt.AtUtc;                // silo-side timestamp
 |---|---|---|---|
 | `Set` | key written | routing shard | `ILattice.SetAsync`, `SetAsync` + TTL, `GetOrSetAsync` (only when newly written), `SetIfVersionAsync` (only when applied), `SetManyAsync` (per entry), `SetManyAtomicAsync` (per entry, stamped with the saga's `OperationId`; emitted as the prepare-phase `SetAsync` calls return - see [the rollback note below](#rollback-emits-prepared-set-events-but-no-terminal-event)) |
 | `Delete` | key deleted | routing shard | `ILattice.DeleteAsync` (only when the key existed) |
-| `DeleteRange` | `"{start}..{end}"` | `null` | `ILattice.DeleteRangeAsync` (one event when ≥ 1 key was deleted) |
-| `AtomicWriteCompleted` | `null` | `null` | `AtomicWriteGrain` on terminal success only. `OperationId` is the saga's idempotency key. Rolled-back sagas do **not** publish a completion event. |
-| `SplitCommitted` | `null` | source shard | `TreeShardSplitGrain` after the finalise phase. |
-| `CompactionCompleted` | `null` | compacted shard | `TombstoneCompactionGrain` after a successful pass. |
-| `SnapshotCompleted` | `null` | `null` | `TreeSnapshotGrain` on terminal success. |
-| `ResizeCompleted` | `null` | `null` | `TreeResizeGrain` on terminal success. |
-| `ReshardCompleted` | `null` | `null` | `TreeReshardGrain` on terminal success. |
-| `TreeDeleted` | `null` | `null` | `ILattice.DeleteTreeAsync` (via `TreeDeletionGrain.DeleteTreeAsync`). |
-| `TreeRecovered` | `null` | `null` | `ILattice.RecoverTreeAsync` (via `TreeDeletionGrain.RecoverAsync`). |
-| `TreePurged` | `null` | `null` | `ILattice.PurgeTreeAsync` (via `TreeDeletionGrain.PurgeNowAsync`) or the soft-delete-expiry purge reminder. |
+| `DeleteRange` | `"{start}..{end}"` | `null` | `ILattice.DeleteRangeAsync` (one event when >= 1 key was deleted) |
+| `AtomicWriteCompleted` | `null` | `null` | The atomic-write coordinator on terminal success only. `OperationId` is the saga's idempotency key. Rolled-back sagas do **not** publish a completion event. |
+| `SplitCommitted` | `null` | source shard | The shard-split coordinator after the finalise phase. |
+| `CompactionCompleted` | `null` | compacted shard | The tombstone-compaction pass after a successful run. |
+| `SnapshotCompleted` | `null` | `null` | The snapshot coordinator on terminal success. |
+| `ResizeCompleted` | `null` | `null` | The tree-resize coordinator on terminal success. |
+| `ReshardCompleted` | `null` | `null` | The reshard coordinator on terminal success. |
+| `TreeDeleted` | `null` | `null` | `ILattice.DeleteTreeAsync`. |
+| `TreeRecovered` | `null` | `null` | `ILattice.RecoverTreeAsync`. |
+| `TreePurged` | `null` | `null` | `ILattice.PurgeTreeAsync` or the soft-delete-expiry purge reminder. |
 
 ### Correlation
 
@@ -132,7 +132,7 @@ The override is persisted on the tree's registry entry (`TreeRegistryEntry.Publi
 
 - **Not a change log.** `LatticeTreeEvent` is not persisted; a silo restart without subscribers attached loses any in-flight events. For durable audit trails use a durable stream provider (EventHubs, AzureQueue) or maintain a secondary projection tree.
 - **Not transactional.** Events are published after the write is durable, not as part of the same commit. A silo crash between the write and the publish loses the event; the write survives.
-- **Not totally ordered across shards.** Events for the same key are ordered by the originating `IShardRootGrain`'s single-activation serialisation. Events for different keys (or different shards) may be interleaved by the stream provider.
+- **Not totally ordered across shards.** Events for the same key are ordered by the originating shard root's single-activation serialisation. Events for different keys (or different shards) may be interleaved by the stream provider.
 
 ## See also
 

@@ -29,7 +29,7 @@ primitive types directly.
    OR-set add survives: the final count is exact, with zero lost updates.
 2. **Every CRDT type converges regardless of merge order** - two replicas
    diverge in isolation, then exchange and merge each other's state. Each of the
-   eight CRDT accessors reaches an identical result whichever side merges first.
+   CRDT accessors the sample exercises reaches an identical result whichever side merges first.
 
 ## CRDT types (via the `ILattice` extension surface)
 

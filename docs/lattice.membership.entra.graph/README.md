@@ -28,5 +28,3 @@ The Graph resolver is registered on the silo builder after the Entra authenticat
 
 - [Entra authenticator](../lattice.membership.entra/README.md) - the authenticator that consumes this resolver.
 - [Membership documentation](../lattice.membership/README.md) - the base identity and authorization add-on.
-
-Feature planning is managed on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), not in roadmap files.

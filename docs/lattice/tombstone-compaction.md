@@ -16,7 +16,7 @@ A single **`TombstoneCompactionGrain`** per tree owns one [grain reminder](https
 
 **Recovery:** If the silo restarts mid-compaction, the keepalive reminder fires within one minute and the grain resumes from the persisted `NextShardIndex`. Once the pass completes, the keepalive is unregistered. If `InProgress` is already `false` when the keepalive fires, it simply unregisters itself.
 
-Each leaf compares every tombstone's `HLC.WallClockTicks` against `now − gracePeriod`. Tombstones older than the cutoff are durably reaped: for each removed entry the leaf appends a single `LatticeMutation { Kind = MutationKind.Tombstone, IsMerge = true }` envelope to the per-shard WAL **before** the entry is removed from the in-memory `SortedDictionary`. The envelope's HLC is the existing tombstone's own timestamp (not a fresh tick) so activation-time replay can use a straight `existing.Timestamp <= mutation.Timestamp` dominance check to skip a reap when a fresher live rewrite has already landed. Expired live entries past the same grace period are reaped through the same envelope shape.
+Each leaf compares every tombstone's `HLC.WallClockTicks` against `now - gracePeriod`. Tombstones older than the cutoff are durably reaped: for each removed entry the leaf appends a single `LatticeMutation { Kind = MutationKind.Tombstone, IsMerge = true }` envelope to the per-shard WAL **before** the entry is removed from the in-memory `SortedDictionary`. The envelope's HLC is the existing tombstone's own timestamp (not a fresh tick) so activation-time replay can use a straight `existing.Timestamp <= mutation.Timestamp` dominance check to skip a reap when a fresher live rewrite has already landed. Expired live entries past the same grace period are reaped through the same envelope shape.
 
 The entire `CompactTombstonesAsync` body runs under a `LatticeMaintenanceContext` scope, so every emitted envelope is stamped `Category = MutationCategory.Maintenance`. This classification is what keeps reap envelopes off the replication wire: the producer-side observer in `Orleans.Lattice.Replication` skips `MutationCategory.Maintenance` writes entirely before any per-key filter runs, and the change feed plus the outbound shipper apply a defence-in-depth filter that drops `MutationKind.Tombstone` envelopes if they ever reach those layers. Every converged peer reaps its own copy of the data independently against its own grace window; replicating reap events would inflate every peer's vector clock with edges the user never authored.
 
@@ -37,14 +37,14 @@ sequenceDiagram
     R->>C: ReceiveReminder("tombstone-compaction")
     C->>C: Persist InProgress = true, NextShardIndex = 0
     C->>R: Register keepalive reminder (1 min)
-    C->>C: Start grain timer (2s ticks)
+    C->>C: Start grain timer (500 ms ticks)
 
     Note over C: Timer tick 1 - shard 0
     C->>S0: GetLeftmostLeafIdAsync()
-    S0-->>C: leafId₀
+    S0-->>C: leafId0
     C->>L0: CompactTombstonesAsync(gracePeriod)
     C->>L0: GetNextSiblingAsync()
-    L0-->>C: leafId₁
+    L0-->>C: leafId1
     C->>L1: CompactTombstonesAsync(gracePeriod)
     C->>L1: GetNextSiblingAsync()
     L1-->>C: null (end of chain)
@@ -52,7 +52,7 @@ sequenceDiagram
 
     Note over C: Timer tick 2 - shard 1
     C->>S1: GetLeftmostLeafIdAsync()
-    S1-->>C: leafId₂
+    S1-->>C: leafId2
     C->>L2: CompactTombstonesAsync(gracePeriod)
     C->>L2: GetNextSiblingAsync()
     L2-->>C: null

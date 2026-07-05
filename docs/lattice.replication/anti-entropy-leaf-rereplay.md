@@ -15,7 +15,7 @@ An entry is a candidate when it is the local cluster's own origin, its clock is 
 
 ## Scope and limitations
 
-- **Peer cursor seam over gRPC.** Reading the peer's applied watermark needs a read-only RPC. The `Orleans.Lattice.Replication.Grpc` binding now implements `IReplicationDigestProbeTransport.GetPeerHighWaterMarkAsync` by resolving the peer's per-origin `IReplicationHighWaterMarkGrain.GetAsync`, so the pass re-ships only entries whose clock is strictly greater than the peer's reported cursor instead of every in-range retained entry. An un-upgraded peer that has not bound the `GetPeerHighWaterMark` method answers `Unimplemented` and the seam falls back to `HybridLogicalClock.Zero` (re-ship everything, rely on the receiver's per-origin idempotent dedup) - rolling-upgrade safe. A custom transport can still override the method directly.
+- **Peer cursor seam over gRPC.** Reading the peer's applied watermark needs a read-only RPC. The `Orleans.Lattice.Replication.Grpc` binding now implements `IReplicationDigestProbeTransport.GetPeerHighWaterMarkAsync` by resolving the peer's per-origin applied watermark, so the pass re-ships only entries whose clock is strictly greater than the peer's reported cursor instead of every in-range retained entry. An un-upgraded peer that has not bound the `GetPeerHighWaterMark` method answers `Unimplemented` and the seam falls back to `HybridLogicalClock.Zero` (re-ship everything, rely on the receiver's per-origin idempotent dedup) - rolling-upgrade safe. A custom transport can still override the method directly.
 - **Cross-cluster push needs a real transport.** The re-ship goes through `IReplicationTransport`; the default no-op transport acks but does not deliver. Wire the gRPC binding (or a custom transport) for genuine cross-cluster repair.
 - **Bounded read window.** The pass reads the oldest retained entries per partition up to a bounded budget; a divergence larger than the window makes partial progress per cadence as the peer's cursor advances.
 - **`wal_trimmed` is operator-only.** When the local WAL has been garbage-collected past the divergence point, the missing entries are gone. The pass emits the `leaf_rereplay.skipped{reason=wal_trimmed}` alert and does **not** attempt repair; bootstrap-snapshot remediation (issue #517) is the follow-up.
@@ -54,7 +54,7 @@ The byte cap is applied to a cheap estimate of each entry's payload (value + del
 
 ## Observability
 
-Two counters on the `orleans.lattice.replication` meter:
+Counters on the `orleans.lattice.replication` meter:
 
 | Metric | Tags | Emitted |
 |---|---|---|

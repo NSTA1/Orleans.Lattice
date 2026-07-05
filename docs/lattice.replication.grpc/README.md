@@ -84,7 +84,3 @@ For internals (the "how"):
 - [Wire Format](../lattice.replication/wire-format.md) - `ReplicationBatchEnvelope` encoding and wire-version compatibility.
 - [Replication Apply](../lattice.replication/replication-apply.md) - receiver high-water-mark dedup and causal apply.
 - [Replication package index](../lattice.replication/README.md) - the full producer, WAL, shipper, apply, and bootstrap pipeline.
-
-## Feature tracking
-
-Transport work is tracked with the rest of replication on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues?q=label%3Alattice.replication). The grouped summary lives in the [replication feature index](../lattice.replication/features.md).

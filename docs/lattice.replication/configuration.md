@@ -36,7 +36,7 @@ siloBuilder.ConfigureLatticeReplication("orders", o =>
 });
 ```
 
-`LatticeReplicationOptionsValidator` validates startup options. It rejects empty cluster ids, invalid replicated-tree declarations, non-positive sizes, invalid intervals, invalid jitter and factor ranges, and incompatible wire-version, compression, adaptive-batch, and remediation bounds.
+Startup options validation rejects empty cluster ids, invalid replicated-tree declarations, non-positive sizes, invalid intervals, invalid jitter and factor ranges, and incompatible wire-version, compression, adaptive-batch, and remediation bounds.
 
 ## Options Reference - `LatticeReplicationOptions`
 

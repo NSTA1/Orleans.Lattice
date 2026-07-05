@@ -1,6 +1,6 @@
 # Orleans.Lattice Feature Index
 
-Feature planning for the core `Orleans.Lattice` package is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues?q=label%3Alattice), not in roadmap files. This page is a grouped, human-readable index that links each tracked item to its issue. Keep it in sync whenever an issue is opened, closed, or retitled (see the agent instructions in `.github/copilot-instructions.md`).
+A grouped, human-readable index of the core `Orleans.Lattice` package's features, follow-up fixes, and gaps. Each item links to its issue.
 
 - **Browse all core issues:** https://github.com/NSTA1/Orleans.Lattice/issues?q=label%3Alattice
 - **Open core issues:** https://github.com/NSTA1/Orleans.Lattice/issues?q=is%3Aopen+label%3Alattice

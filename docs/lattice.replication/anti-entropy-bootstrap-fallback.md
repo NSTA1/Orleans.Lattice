@@ -52,7 +52,7 @@ siloBuilder.AddLatticeReplication(o =>
 
 ## Observability
 
-Three counters on the `orleans.lattice.replication` meter:
+Counters on the `orleans.lattice.replication` meter:
 
 | Metric | Tags | Emitted |
 |---|---|---|

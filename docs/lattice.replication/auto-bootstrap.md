@@ -7,8 +7,8 @@ snapshot. Two seams collaborate to detect and react to this condition:
 
 | Seam | Side | Default | Purpose |
 |------|------|---------|---------|
-| `ILatticeWalIntrospection` | sender | `LatticeWalIntrospection` | Returns the oldest still-available WAL entry HLC for a tree by walking each `IWalShardGrain` and taking the minimum head timestamp. |
-| `ILatticeFallOffLogDetector` | receiver | `LatticeFallOffLogDetector` | Compares the receiver's per-origin high-water-mark against the sender's oldest-available HLC, records the `peer.fell_off_log` metric on detection, and (when configured) invokes `ILatticeBootstrapCoordinator.BootstrapAsync`. |
+| `ILatticeWalIntrospection` | sender | Built-in | Returns the oldest still-available WAL entry HLC for a tree by walking each per-shard WAL grain and taking the minimum head timestamp. |
+| `ILatticeFallOffLogDetector` | receiver | Built-in | Compares the receiver's per-origin high-water-mark against the sender's oldest-available HLC, records the `peer.fell_off_log` metric on detection, and (when configured) invokes `ILatticeBootstrapCoordinator.BootstrapAsync`. |
 
 ## Detection rule
 

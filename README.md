@@ -123,13 +123,11 @@ For internals (the "how"):
 - [WAL Tuning](docs/lattice/wal-tuning.md) - how `WalMaxPendingBatches` and `WalPartitions` interact with a durable backend's throughput envelope; default sizing rules and the storage-account ceiling above which the cap stops helping.
 - [WAL Saturation Signal](docs/lattice/wal-saturation-signal.md) - the per-tree, three-state back-pressure surface (`IWalSaturationSignal`, `IWalSaturationObserver`) that lets callers throttle offered load before silent queueing on the writer-side admission gate.
 
-For feature tracking (the "what's planned / what shipped"):
+For feature indexes:
 
-- [Core Feature Index](docs/lattice/features.md) - grouped, issue-linked index of the core `Orleans.Lattice` package's tracked features, fixes, and gaps.
-- [Replication Feature Index](docs/lattice.replication/features.md) - grouped, issue-linked index of the `Orleans.Lattice.Replication` package's tracked features, fixes, and gaps.
-- [Api.State Feature Index](docs/lattice.api.state/features.md) - grouped, issue-linked index of the read-only `Orleans.Lattice.Api.State` cluster state-API package's tracked features.
-
-Feature planning is managed on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), not in roadmap files. The feature-index pages above summarize and link to those issues.
+- [Core Feature Index](docs/lattice/features.md) - grouped index of the core `Orleans.Lattice` package's features, fixes, and gaps.
+- [Replication Feature Index](docs/lattice.replication/features.md) - grouped index of the `Orleans.Lattice.Replication` package's features, fixes, and gaps.
+- [Api.State Feature Index](docs/lattice.api.state/features.md) - grouped index of the read-only `Orleans.Lattice.Api.State` cluster state-API package's features.
 
 ## Child Packages
 

@@ -8,7 +8,7 @@ Code-first gRPC binding for [Orleans.Lattice.Api.State](../lattice.api.state/REA
 
 It provides:
 
-- **A code-first gRPC service.** Sixteen RPCs - fourteen unary and two server-streaming - one per facade verb, bound from C# definitions rather than a `.proto`.
+- **A code-first gRPC service.** A unary RPC per read-only facade verb plus two server-streaming subscriptions (change and metric observation) and an unauthenticated auth-scheme advertisement RPC, all bound from C# definitions rather than a `.proto`.
 - **A public typed client.** `LatticeStateApiGrpcClient` exposes one method per RPC over a caller-supplied gRPC channel.
 - **Shared Orleans marshalling.** Every message is one of the package's `[GenerateSerializer]` records, serialized with the Orleans binary serializer, so client and server stay in lock-step by construction.
 - **Fail-closed authorization.** A per-call `ILatticeStateApiAuthorizer` seam gates every RPC; the default denies all traffic until configured.
@@ -26,7 +26,7 @@ The package is **read-only** and has no external broker and no `.proto` file to 
 
 | Feature | What it gives you | Docs |
 |---|---|---|
-| **Code-first service** | Sixteen RPCs bound from C# - no `.proto` to author or keep in sync. | [gRPC Contract](../lattice.api.state/grpc-contract.md) |
+| **Code-first service** | Unary and server-streaming RPCs bound from C# - no `.proto` to author or keep in sync. | [gRPC Contract](../lattice.api.state/grpc-contract.md) |
 | **Public typed client** | `LatticeStateApiGrpcClient` over a caller-supplied channel, one method per RPC. | [Client](../lattice.api.state/client.md) |
 | **Fail-closed authorization** | Per-call `ILatticeStateApiAuthorizer` seam, default-deny. | [Security](../lattice.api.state/security.md) |
 

@@ -26,5 +26,3 @@ The authenticator is registered on the silo builder after the base membership se
 - [Azure CLI setup guide](entra-setup.md) - provision an app registration and wire the authenticator into a silo, end to end.
 - [Membership documentation](../lattice.membership/README.md) - the base identity and authorization add-on this package extends.
 - [Graph group resolver](../lattice.membership.entra.graph/README.md) - the opt-in Microsoft Graph-backed overflow resolver.
-
-Feature planning is managed on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), not in roadmap files.

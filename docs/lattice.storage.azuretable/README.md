@@ -86,7 +86,3 @@ Related package docs:
 - [WAL saturation signal](../lattice/wal-saturation-signal.md) - classifier and observer model used by saturation-aware retries.
 - [Replication WAL](../lattice.replication/wal.md) - how replication consumes retained WAL entries.
 - [Replication package](../lattice.replication/README.md) - end-to-end cross-cluster replication overview.
-
-## Feature tracking
-
-Feature planning remains in GitHub Issues. The replication [feature index](../lattice.replication/features.md) links the tracked replication and durable-WAL work items that depend on this provider.

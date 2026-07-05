@@ -66,7 +66,7 @@ The configuration section binds to a record with `Secret`, `AcceptedSecrets`, an
 
 ## Hostile-config scan
 
-`LatticeReplicationConfigurationSafetyValidator` runs as an `IHostedService` and inspects every registered `IConfigurationProvider` at startup. If it finds a key whose name matches the secret-shaped pattern (`*Secret*`, `*Password*`, `*Token*`) **and** that key resolves through a file-backed provider rooted under the application directory, startup fails with a diagnostic that names the offending key and file path.
+A hosted startup validator runs as an `IHostedService` and inspects every registered `IConfigurationProvider` at startup. If it finds a key whose name matches the secret-shaped pattern (`*Secret*`, `*Password*`, `*Token*`) **and** that key resolves through a file-backed provider rooted under the application directory, startup fails with a diagnostic that names the offending key and file path.
 
 The check exists because the most common path to a leaked secret is a developer pasting it into `appsettings.json` (or its `Development` / `Production` variants), committing the file to source control, and discovering the leak weeks later. The scan does not inspect values; only the (key name, provider type, file path) tuple, so it cannot itself surface a secret.
 
@@ -81,7 +81,7 @@ Tests and minimal hosts that do not register an `IConfiguration` root are unaffe
 | Member | Default | Semantics |
 |---|---|---|
 | `RequireAuthentication` | `true` | When `true`, the gRPC server interceptor rejects unauthenticated calls. Setting to `false` is appropriate only for in-process loopback test fixtures that do not provision a secret. |
-| `SecretRefreshInterval` | `30 s` | How often `CachingReplicationSecretProvider` re-queries the underlying source. Lower values reduce rotation latency at the cost of more calls into the secret store. |
+| `SecretRefreshInterval` | `30 s` | How often the caching secret provider re-queries the underlying source. Lower values reduce rotation latency at the cost of more calls into the secret store. |
 | `ScanConfigurationForSecrets` | `true` | Disables the hostile-config scan when set to `false`. The environment-variable escape hatch is preferred for opt-out because it is auditable in deployment manifests. |
 
 Configure via the standard options pattern:
@@ -95,13 +95,13 @@ siloBuilder.ConfigureLatticeReplicationSecurity(o =>
 
 ## gRPC transport behavior
 
-The gRPC package (`Orleans.Lattice.Replication.Grpc`) layers transport mechanics on top of the core secret-source seam. The sender (`GrpcPushTransport`):
+The gRPC package (`Orleans.Lattice.Replication.Grpc`) layers transport mechanics on top of the core secret-source seam. The sender:
 
 - **Refuses non-`https://` endpoints** unless `LatticeReplicationGrpcOptions.AllowPlaintextEndpoints` is explicitly set. The check runs at channel-resolution time, so a misconfigured `Peers` entry fails fast on the first batch dispatched to that peer rather than silently downgrading.
 - **Attaches the outbound secret as gRPC `CallCredentials`** whenever the secret source returns a non-empty value. The credentials are added to the channel options the package builds, then `ConfigureChannel(...)` runs - so a host that needs to replace the credentials chain entirely (e.g. mTLS-only with no shared secret) can do so unconditionally.
 - **Stamps the local cluster id** as the `x-lattice-replication-origin` header on every call, sourced from `LatticeReplicationGrpcOptions.LocalClusterId` or, if unset, from `LatticeReplicationOptions.ClusterId`.
 
-The receiver (`LatticeReplicationGrpcAuthInterceptor`) is registered globally on the gRPC service, scoped by service-name prefix so co-hosted gRPC services in the same ASP.NET Core app are unaffected. It rejects:
+The receiver-side auth interceptor is registered globally on the gRPC service, scoped by service-name prefix so co-hosted gRPC services in the same ASP.NET Core app are unaffected. It rejects:
 
 - **Calls without the `x-lattice-replication-secret` header** with `StatusCode.Unauthenticated`.
 - **Calls whose secret is not in the accepted-set snapshot** with `StatusCode.PermissionDenied`.
@@ -128,7 +128,7 @@ A host that needs mTLS-only and no shared secret can do so by registering a cust
 Zero-downtime rotation uses the accepted-set:
 
 1. Generate the new secret on one silo and publish it as `LATTICE_REPLICATION_ACCEPTED_SECRETS=<old>,<new>` on every silo. The receiver now accepts both the old and the new secret.
-2. Wait for `SecretRefreshInterval` plus a small margin on every silo so the new accepted-set propagates through `CachingReplicationSecretProvider`.
+2. Wait for `SecretRefreshInterval` plus a small margin on every silo so the new accepted-set propagates through the caching secret provider.
 3. Flip `LATTICE_REPLICATION_SECRET=<new>` on every silo. Outbound batches now ship the new secret.
 4. Remove the old secret from `LATTICE_REPLICATION_ACCEPTED_SECRETS`. Receivers now reject the old secret.
 

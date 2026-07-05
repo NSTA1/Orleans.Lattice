@@ -87,7 +87,7 @@ Implementations are required to be safe for concurrent invocation across distinc
 siloBuilder.AddLatticeReplication(o => o.ClusterId = "site-a");
 ```
 
-The default registration is `NoOpReplicationTransport` - it validates routing fields, discards the payload, and returns `default(ReplicationAck)` (i.e. `Accepted = false, HighestAppliedHlc = HybridLogicalClock.Zero`). The sender's cursor stays put, which is exactly the right behaviour while the rest of the replication pipeline is being wired up but no real transport is configured. Production hosts replace it via standard DI:
+The default registration is a no-op transport - it validates routing fields, discards the payload, and returns `default(ReplicationAck)` (i.e. `Accepted = false, HighestAppliedHlc = HybridLogicalClock.Zero`). The sender's cursor stays put, which is exactly the right behaviour while the rest of the replication pipeline is being wired up but no real transport is configured. Production hosts replace it via standard DI:
 
 ```csharp verify
 sealed class MyTransport : IReplicationTransport
@@ -114,7 +114,7 @@ The canonical sender + receiver pair ships in the `Orleans.Lattice.Replication.G
 
 The shipper's outbound path is unconditionally framing-only. Every batch the shipper hands to `SendAsync` carries a populated `ReplicationBatch.EncodedEnvelope` (a fixed 32-byte header plus length-prefixed pre-encoded entry segments produced by `IReplicationBatchEncoder.EncodeFraming`). Each entry's bytes are the verbatim segment the WAL stored at append time via `IWalStorageProvider.ReadShippingAsync` - no per-tick re-encode through an envelope-level Orleans serializer call, and no producer-side typed-envelope path. `ReplicationBatch.Payload` and `ReplicationBatch.Envelope` remain on the contract for receiver-side and test-fixture compatibility, but the producer-side shipper writes only `EncodedEnvelope`.
 
-Custom transports that want to consume the framing bytes directly read them off `ReplicationBatch.EncodedEnvelope`. There is no separate typed-transport interface or sender-side capability probe - the shipper does not branch on transport type at activation. Bytes-only transports (the default `NoOpReplicationTransport`, host-supplied HTTP-framed transports) lift the framing bytes off `EncodedEnvelope` and forward them as-is.
+Custom transports that want to consume the framing bytes directly read them off `ReplicationBatch.EncodedEnvelope`. There is no separate typed-transport interface or sender-side capability probe - the shipper does not branch on transport type at activation. Bytes-only transports (the default no-op transport, host-supplied HTTP-framed transports) lift the framing bytes off `EncodedEnvelope` and forward them as-is.
 
 ## Caveats
 
@@ -130,7 +130,7 @@ The transport stays dumb about the entries it carries. Specifically, every `IRep
 
 The transport must not reorder entries, mutate either slot, synthesise an empty frontier when the producer left the slot `null` (legacy peers and pre-causal-plus entries decode `null` and the receiver treats that as the empty frontier), or merge the two slots together. Any normalisation, summary derivation, or merge belongs in the producer / receiver, never in the wire layer.
 
-The contract is pinned by `TransportMetadataPassthroughContractTests` in both `Orleans.Lattice.Replication.Tests` (LoopbackTransport) and `Orleans.Lattice.Replication.Grpc.Tests` (GrpcPushTransport). A new transport implementation should ship a mirror of that fixture parameterised over its own seam.
+The contract is pinned by `TransportMetadataPassthroughContractTests` in both `Orleans.Lattice.Replication.Tests` (loopback transport) and `Orleans.Lattice.Replication.Grpc.Tests` (the gRPC push transport). A new transport implementation should ship a mirror of that fixture parameterised over its own seam.
 
 ## Content-hash payload-elision round trip (opt-in, default off)
 
