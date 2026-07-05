@@ -27,6 +27,8 @@ public class LatticeOperationTests
             Assert.That((int)LatticeOperation.AtomicWrite, Is.EqualTo(64));
             Assert.That((int)LatticeOperation.BulkLoad, Is.EqualTo(128));
             Assert.That((int)LatticeOperation.Admin, Is.EqualTo(256));
+            Assert.That((int)LatticeOperation.Backup, Is.EqualTo(512));
+            Assert.That((int)LatticeOperation.Restore, Is.EqualTo(1024));
         });
     }
 
@@ -38,6 +40,7 @@ public class LatticeOperationTests
             LatticeOperation.Read, LatticeOperation.Write, LatticeOperation.Delete,
             LatticeOperation.RangeRead, LatticeOperation.RangeDelete, LatticeOperation.CrdtApply,
             LatticeOperation.AtomicWrite, LatticeOperation.BulkLoad, LatticeOperation.Admin,
+            LatticeOperation.Backup, LatticeOperation.Restore,
         };
 
         var union = LatticeOperation.None;

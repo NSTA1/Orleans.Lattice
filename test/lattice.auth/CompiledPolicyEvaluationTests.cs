@@ -295,4 +295,84 @@ public sealed class CompiledPolicyEvaluationTests
     {
         Assert.That(() => CompiledPolicy.Compile(null!), Throws.ArgumentNullException);
     }
+
+    // ---- Backup / restore capabilities ----------------------------------
+
+    [Test]
+    public void Evaluate_backup_tree_allow_grants_backup_and_nothing_else()
+    {
+        var rules = new[] { User("r", "alice", LatticeScope.Tree(Tree), LatticeOperation.Backup, LatticeEffect.Allow) };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Eval(rules, Subject("alice"), LatticeOperation.Backup, key: null).Allowed, Is.True);
+            Assert.That(Eval(rules, Subject("alice"), LatticeOperation.Read, key: "k").Allowed, Is.False,
+                "a backup grant is distinct from read");
+            Assert.That(Eval(rules, Subject("alice"), LatticeOperation.Restore, key: null).Allowed, Is.False,
+                "a backup grant does not confer restore");
+        });
+    }
+
+    [Test]
+    public void Evaluate_backup_denies_by_default_absent_a_grant()
+    {
+        var decision = Eval(Array.Empty<LatticeAuthorizationRule>(), Subject("alice"), LatticeOperation.Backup, key: null);
+
+        Assert.That(decision.Allowed, Is.False);
+    }
+
+    [Test]
+    public void Evaluate_restore_tree_allow_grants_restore_without_a_separate_write_grant()
+    {
+        var rules = new[] { User("r", "alice", LatticeScope.Tree(Tree), LatticeOperation.Restore, LatticeEffect.Allow) };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Eval(rules, Subject("alice"), LatticeOperation.Restore, key: null).Allowed, Is.True);
+            Assert.That(Eval(rules, Subject("alice"), LatticeOperation.Write, key: "k").Allowed, Is.False,
+                "restore is modelled as its own capability at the rule level; the subsumption of write is enforced at the backup seam");
+        });
+    }
+
+    [Test]
+    public void Evaluate_backup_prefix_allow_is_scoped_to_the_prefix()
+    {
+        var rules = new[] { User("r", "alice", LatticeScope.Prefix(Tree, "tenant-a/"), LatticeOperation.Backup, LatticeEffect.Allow) };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Eval(rules, Subject("alice"), LatticeOperation.Backup, key: "tenant-a/").Allowed, Is.True);
+            Assert.That(Eval(rules, Subject("alice"), LatticeOperation.Backup, key: "tenant-b/").Allowed, Is.False);
+        });
+    }
+
+    [Test]
+    public void Evaluate_backup_deny_overrides_a_broader_allow_at_equal_scope()
+    {
+        var rules = new[]
+        {
+            User("allow", "alice", LatticeScope.Key(Tree, "k"), LatticeOperation.Backup, LatticeEffect.Allow),
+            User("deny", "alice", LatticeScope.Key(Tree, "k"), LatticeOperation.Backup, LatticeEffect.Deny),
+        };
+
+        Assert.That(Eval(rules, Subject("alice"), LatticeOperation.Backup, key: "k").Allowed, Is.False,
+            "deny wins over allow at equal specificity");
+    }
+
+    [Test]
+    public void Evaluate_restore_more_specific_deny_beats_less_specific_allow()
+    {
+        var rules = new[]
+        {
+            User("tree", "alice", LatticeScope.Tree(Tree), LatticeOperation.Restore, LatticeEffect.Allow),
+            User("key", "alice", LatticeScope.Key(Tree, "locked"), LatticeOperation.Restore, LatticeEffect.Deny),
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Eval(rules, Subject("alice"), LatticeOperation.Restore, key: "open").Allowed, Is.True);
+            Assert.That(Eval(rules, Subject("alice"), LatticeOperation.Restore, key: "locked").Allowed, Is.False,
+                "the more specific key-scope deny beats the tree-scope allow");
+        });
+    }
 }

@@ -49,6 +49,7 @@
     <InternalsVisibleTo Include="Orleans.Lattice.Replication" />
     <InternalsVisibleTo Include="Orleans.Lattice.Replication.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Auth" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Backup" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.State" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.State.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.State.Grpc.Tests" />
