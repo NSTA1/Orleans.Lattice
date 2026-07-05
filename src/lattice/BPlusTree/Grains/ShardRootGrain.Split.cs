@@ -302,6 +302,60 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <summary>
+    /// Resolves the split-shadow-forward target shard for
+    /// <paramref name="key"/>, or <c>null</c> when no active or
+    /// post-complete split routes the key off this shard. Two windows are
+    /// covered (shared verbatim by the write and delete shadow-forward
+    /// paths):
+    /// <list type="bullet">
+    /// <item><description><b>(A) Active split</b> - <c>SplitInProgress</c>
+    /// is non-null and the slot is moved. Phases admitted: BeginShadowWrite,
+    /// Drain, Swap, AND Reject (closes the Swap → Reject race where an
+    /// in-flight mutation that passed <c>ThrowIfRejectedForKey</c> at phase
+    /// ≤ Swap reaches this helper after the coordinator advanced to
+    /// Reject).</description></item>
+    /// <item><description><b>(B) Post-complete</b> - <c>SplitInProgress</c>
+    /// is null but <c>MovedAwaySlots</c> records the slot's post-split owner
+    /// (closes the Reject → Complete race where the split state is cleared
+    /// and <c>MovedAwaySlots</c> populated between the local mutation and
+    /// this helper).</description></item>
+    /// </list>
+    /// </summary>
+    private IShardRootGrain? TryResolveSplitShadowTarget(string key)
+    {
+        int? targetShardIndex = null;
+
+        var sip = state.State.SplitInProgress;
+        if (sip is not null
+            && sip.ShadowTargetShardIndex != MyShardIndex
+            && (sip.Phase == ShardSplitPhase.BeginShadowWrite
+                || sip.Phase == ShardSplitPhase.Drain
+                || sip.Phase == ShardSplitPhase.Swap
+                || sip.Phase == ShardSplitPhase.Reject))
+        {
+            var slot = ShardMap.GetVirtualSlot(key, sip.VirtualShardCount);
+            if (sip.IsMovedSlot(slot))
+                targetShardIndex = sip.ShadowTargetShardIndex;
+        }
+
+        if (targetShardIndex is null
+            && state.State.MovedAwaySlots.Count > 0
+            && state.State.MovedAwayVirtualShardCount is { } movedVsc)
+        {
+            var movedSlot = ShardMap.GetVirtualSlot(key, movedVsc);
+            if (state.State.MovedAwaySlots.TryGetValue(movedSlot, out var newOwner)
+                && newOwner != MyShardIndex)
+            {
+                targetShardIndex = newOwner;
+            }
+        }
+
+        if (targetShardIndex is null) return null;
+
+        return grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{targetShardIndex.Value}");
+    }
+
+    /// <summary>
     /// After a successful local write, forward the post-write LWW value to the
     /// shadow target if a split is active and the key falls in a moved virtual
     /// slot. For non-prepared writes the post-write value is captured by reading
@@ -361,50 +415,8 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private async Task ForwardLocalWriteToShadowIfNeededAsync(string key, byte[] value, long expiresAtTicks = 0L)
     {
-        // Resolve the shadow-forward target. Two windows are covered:
-        //
-        //   (A) Active split - sip is non-null and the slot is moved.
-        //       Phases admitted: BeginShadowWrite, Drain, Swap, AND
-        //       Reject (closes the Swap → Reject race where an
-        //       in-flight write that passed ThrowIfRejectedForKey at
-        //       phase ≤ Swap reaches this helper after the coordinator
-        //       advanced to Reject).
-        //
-        //   (B) Post-complete - sip is null but MovedAwaySlots records
-        //       the slot's post-split owner (closes the
-        //       Reject → Complete race where sip is cleared and
-        //       MovedAwaySlots populated between the local write and
-        //       this helper).
-        int? targetShardIndex = null;
-
-        var sip = state.State.SplitInProgress;
-        if (sip is not null
-            && sip.ShadowTargetShardIndex != MyShardIndex
-            && (sip.Phase == ShardSplitPhase.BeginShadowWrite
-                || sip.Phase == ShardSplitPhase.Drain
-                || sip.Phase == ShardSplitPhase.Swap
-                || sip.Phase == ShardSplitPhase.Reject))
-        {
-            var slot = ShardMap.GetVirtualSlot(key, sip.VirtualShardCount);
-            if (sip.IsMovedSlot(slot))
-                targetShardIndex = sip.ShadowTargetShardIndex;
-        }
-
-        if (targetShardIndex is null
-            && state.State.MovedAwaySlots.Count > 0
-            && state.State.MovedAwayVirtualShardCount is { } movedVsc)
-        {
-            var movedSlot = ShardMap.GetVirtualSlot(key, movedVsc);
-            if (state.State.MovedAwaySlots.TryGetValue(movedSlot, out var newOwner)
-                && newOwner != MyShardIndex)
-            {
-                targetShardIndex = newOwner;
-            }
-        }
-
-        if (targetShardIndex is null) return;
-
-        var target = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{targetShardIndex.Value}");
+        var target = TryResolveSplitShadowTarget(key);
+        if (target is null) return;
 
         // Saga prepare-phase shadow-forward branch. When the local write is
         // a saga prepare (LatticePreparedContext active and a non-empty
@@ -492,6 +504,74 @@ internal sealed partial class ShardRootGrain
 
         await ForwardWithDeadlineAsync(() =>
             target.MergeManyAsync(new Dictionary<string, LwwValue<byte[]>>(1) { [key] = raw.Value.ToLwwValue() }, isCrossShardMigration: true));
+    }
+
+    /// <summary>
+    /// Delete analogue of <see cref="ForwardLocalWriteToShadowIfNeededAsync"/>'s
+    /// prepared-context branch. A saga prepare-phase DELETE to a moved slot
+    /// during an active split must forward the prepared tombstone to the
+    /// destination shard AND install the destination-side shadow marker,
+    /// exactly as the write path does for a prepared set.
+    /// <para>
+    /// Why it is required: the coordinator's drain migrates the source's
+    /// pre-saga LIVE value into the destination's <c>Entries</c> with
+    /// <c>IsMigrated=true</c>. Without a marker naming this saga as the owner
+    /// of the key, a reader that routes to the destination after the
+    /// shard-map swap - observing the saga as Committed (post
+    /// <c>MarkCommittedAsync</c>) but BEFORE the saga's backstop terminal
+    /// (the tombstone) reaches the destination - surfaces that migrated
+    /// pre-saga live value for this key while every sibling key in the same
+    /// atomic batch already shows the post-saga (deleted) state. That is the
+    /// delete flavour of the non-atomic mixed-round batch the reshard chaos
+    /// fixture catches (<c>ReshardTopologyTests</c> round=N: split
+    /// (pre=k, post=m)), violating the <c>SetManyAtomicAsync</c>
+    /// all-or-nothing visibility contract (issue 1117).
+    /// </para>
+    /// <para>
+    /// Forwarding the tombstone as a <c>DeleteAsync</c> buckets it into the
+    /// destination leaf's <c>_pendingTx[txid][key]</c> and registers the
+    /// destination as a saga participant
+    /// (<c>RecordAffectedLeafIfPreparedAsync</c>), so the saga's backstop
+    /// terminal flips it into a tombstone in the destination's
+    /// <c>Entries</c> - the delete-side mirror of the write path's
+    /// <c>target.SetAsync</c> forward. Ordering matches the sweep and the
+    /// write path: the value-forward registers participation BEFORE the
+    /// marker lands, and the read gate keys its safety decision off the
+    /// per-leaf <c>_recentlyTerminal</c> set (not marker presence), so a
+    /// terminal that races ahead of the marker cannot strand an un-clearable
+    /// guard - the marker degenerates to a harmless no-op once the terminal
+    /// has been applied.
+    /// </para>
+    /// <para>
+    /// Non-prepared deletes are intentionally NOT forwarded here: tombstone
+    /// convergence for non-saga deletes is restored by the split
+    /// coordinator's comprehensive cleanup phase after the swap (see the
+    /// Coverage note on <see cref="ForwardLocalWriteToShadowIfNeededAsync"/>).
+    /// Only a saga prepare can produce the cross-key atomic-visibility
+    /// violation, so only the saga prepare path needs the marker.
+    /// </para>
+    /// </summary>
+    private async Task ForwardLocalDeleteToShadowIfNeededAsync(string key)
+    {
+        // Only a saga prepare-phase delete can tear a cross-key atomic
+        // batch; non-prepared deletes converge via the coordinator cleanup
+        // phase and must not be forwarded here.
+        if (!LatticePreparedContext.Current || LatticeTransactionContext.Current == Guid.Empty)
+            return;
+
+        var target = TryResolveSplitShadowTarget(key);
+        if (target is null) return;
+
+        var shadowTxId = LatticeTransactionContext.Current;
+
+        // Forward the prepared tombstone (registers the destination as a
+        // participant and buckets the tombstone into _pendingTx[txid][key]),
+        // then install the destination-side shadow marker. Each hop is
+        // ForwardWithDeadlineAsync-bounded so a forward parked against a
+        // shard whose ownership is changing during the swap cannot pin the
+        // foreground turn.
+        await ForwardWithDeadlineAsync(() => target.DeleteAsync(key));
+        await ForwardWithDeadlineAsync(() => target.MarkSagaShadowAsync(shadowTxId, new[] { key }));
     }
 
     private static bool SlotsEqual(int[] sortedExisting, int[] candidate)
