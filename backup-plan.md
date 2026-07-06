@@ -88,7 +88,7 @@ In scope: #1120-#1130 and #1133. Out of scope (deferred follow-on): #1131 (manag
 | W0 | #1120 | Project & package scaffolding | LANDED | 1323b29f |
 | W1 | #1121 | Permission model | LANDED | 356072c4 |
 | W1 | #1122 | Sink + manifest + catalog hiding | LANDED | 3c010829 |
-| W2 | #1123 | Full capture | DISPATCHED | - |
+| W2 | #1123 | Full capture | LANDED | 72c49323 |
 | W2 | #1127 | AzureBlob sink | LANDED | de70a56b |
 | W3 | #1133 | Cross-tree fence | not started | - |
 | W3 | #1124 | Incremental | not started | - |
@@ -98,7 +98,7 @@ In scope: #1120-#1130 and #1133. Out of scope (deferred follow-on): #1131 (manag
 | W5 | #1129 | gRPC binding + client | not started | - |
 | W6 | #1130 | Observability + samples + e2e + docs | not started | - |
 
-Last updated: 2026-07-05 (W2 DISPATCHED: #1123 full capture [scoped snapshot; raw-entry full-metadata export; per-key merge mode from log record; fail-fast size gate; honour snapshot/leaf/shed options] + #1127 AzureBlob sink [new package src/lattice.backup.azureblob mirroring lattice.storage.azuretable; append/block blobs; DI-selected ILatticeBackupSink] running in parallel off feat/backup tip. Coordinator created the lattice.backup.azureblob package label. Full non-chaos suite due at end of W2.).
+Last updated: 2026-07-05 (W2 LANDED: #1123 full capture engine [public ILatticeBackupCaptureService.CaptureAsync; causal cut via public snapshot entry cursor + additive internal raw-entry seam emitting full LWW envelope; whole-tree/prefix/key scope-to-range mapping; content-addressed streaming into the sink; fail-fast size gate; manifest consistency cut + topology + per-key descriptors] committed 72c49323, and #1127 AzureBlob sink de70a56b. Coordinator refinement folded into #1123: the per-key merge-mode LABEL is now resolved from the declared per-tree merge mode via the producer-side merge-mode resolver (CRDT-declared tree -> Crdt; LWW/non-replicated -> LastWriterWins) instead of hard-coding LWW; 3 added mode-labelling tests. Ratified deviation: a local-only tree that mixes LWW and CRDT shapes cannot recover per-key mode from durable snapshot state alone (needs a durable-state schema change) - filed as a follow-up. Full non-chaos suite GREEN at W2 boundary: core lattice 5770, replication 2521, api.state 293, backup 67, explorer 384, all Failed 0. Next: W3 dispatch (#1133, #1124, #1125, #1126 - all need #1123).).
 
 ## Review notes / ratified deviations
 
