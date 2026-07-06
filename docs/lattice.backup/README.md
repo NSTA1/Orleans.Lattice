@@ -42,9 +42,15 @@ The package registers the storage and engine surface; the [`Orleans.Lattice.Api.
 
 Register the core lattice, then the backup package, on the silo. Backup must be added after the core registration.
 
-```csharp
+```csharp verify
+using Orleans.Lattice;
+using Orleans.Lattice.Backup;
+
 siloBuilder
-    .AddLattice(/* core tree configuration */)
+    .AddLattice((silo, storageName) =>
+    {
+        // Configure the storage provider named by storageName.
+    })
     .AddLatticeBackup(options =>
     {
         // Durable per-key history on the catalog tree is on by default;
@@ -55,22 +61,33 @@ siloBuilder
 
 Capture and restore through the registered services:
 
-```csharp
+```csharp verify
+using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice.Backup;
+
+IServiceProvider serviceProvider = null!;
+var captureService = serviceProvider.GetRequiredService<ILatticeBackupCaptureService>();
+var restoreService = serviceProvider.GetRequiredService<ILatticeBackupRestoreService>();
+
 // Capture a full backup of a whole tree.
 var capture = await captureService.CaptureAsync(
-    new LatticeBackupCaptureRequest("nightly", BackupScopeSelector.WholeTree("orders")));
+    new LatticeBackupCaptureRequest("nightly", BackupScopeSelector.WholeTree("orders")),
+    cancellationToken);
 
 // Restore it later into a fresh tree via an atomic shadow-cutover.
 await restoreService.RestoreAsync(
     new LatticeRestoreRequest(
         capture.BackupId,
         targetTreeId: "orders",
-        mode: LatticeRestoreMode.ShadowCutover));
+        mode: LatticeRestoreMode.ShadowCutover),
+    cancellationToken);
 ```
 
 Enable a recurring schedule and retention for a scope (opt-in; everything is disabled by default):
 
-```csharp
+```csharp verify
+using Orleans.Lattice.Backup;
+
 siloBuilder.ConfigureLatticeBackupSchedule("orders-scope-key", options =>
 {
     options.FullBackupScheduleEnabled = true;

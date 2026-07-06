@@ -19,9 +19,17 @@ Backups are laid out under two deterministic prefixes in the container - manifes
 
 Register the sink on the silo. It may be called before or after `AddLatticeBackup` because it replaces the sink registration outright.
 
-```csharp
+```csharp verify
+using Azure.Identity;
+using Orleans.Lattice;
+using Orleans.Lattice.Backup;
+using Orleans.Lattice.Backup.AzureBlob;
+
 siloBuilder
-    .AddLattice(/* core tree configuration */)
+    .AddLattice((silo, storageName) =>
+    {
+        // Configure the storage provider named by storageName.
+    })
     .AddLatticeBackup()
     .AddLatticeBackupAzureBlob(options =>
     {

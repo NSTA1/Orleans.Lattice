@@ -43,7 +43,12 @@ The gRPC service name is `orleans.lattice.api.backup`.
 
 Register the binding on a silo that already has `AddLatticeBackupApi`, then map its routes:
 
-```csharp
+```csharp verify
+using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice.Api.Backup.Grpc;
+
+var builder = WebApplication.CreateBuilder();
 builder.Services.AddLatticeBackupApiGrpc(o => o.RequireAuthorization = true);
 builder.Services.AddSingleton<ILatticeBackupApiAuthorizer, AllowAllBackupApiAuthorizer>();
 
@@ -56,14 +61,20 @@ The host must expose the control facade in the same service provider - typically
 
 ## Client
 
-```csharp
-var channel = GrpcChannel.ForAddress("https://backup-admin.example:443");
-var client = LatticeBackupApiGrpcClient.Create(channel.CreateCallInvoker(), serializerProvider);
+```csharp verify
+using Grpc.Net.Client;
+using Orleans.Lattice.Api.Backup.Grpc;
+using Orleans.Lattice.Backup;
 
-var capture = await client.CreateBackupAsync(
-    new LatticeBackupCaptureRequest("nightly", BackupScopeSelector.WholeTree("orders")));
+IServiceProvider serializerProvider = null!;
+using var channel = GrpcChannel.ForAddress("https://backup-admin.example:443");
+var backupClient = LatticeBackupApiGrpcClient.Create(channel.CreateCallInvoker(), serializerProvider);
 
-await foreach (var manifest in client.StreamBackupsAsync())
+var capture = await backupClient.CreateBackupAsync(
+    new LatticeBackupCaptureRequest("nightly", BackupScopeSelector.WholeTree("orders")),
+    cancellationToken);
+
+await foreach (var manifest in backupClient.StreamBackupsAsync(cancellationToken))
 {
     // enumerate the readable catalog with bounded memory
 }

@@ -72,6 +72,17 @@
     <ProjectReference Include="..\..\src\lattice.api.data\Orleans.Lattice.Api.Data.csproj" />
     <ProjectReference Include="..\..\src\lattice.api.data.grpc\Orleans.Lattice.Api.Data.Grpc.csproj" />
     <!--
+      Pulled in solely so docs/lattice.backup*, docs/lattice.api.backup,
+      and docs/lattice.api.backup.grpc can show backup capture, restore,
+      storage, and control-API wiring as `csharp verify` snippets, on the same
+      DocsSnippetCompilationTests reference-graph mechanism as the other API
+      packages above.
+    -->
+    <ProjectReference Include="..\..\src\lattice.backup\Orleans.Lattice.Backup.csproj" />
+    <ProjectReference Include="..\..\src\lattice.backup.azureblob\Orleans.Lattice.Backup.AzureBlob.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.backup\Orleans.Lattice.Api.Backup.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.backup.grpc\Orleans.Lattice.Api.Backup.Grpc.csproj" />
+    <!--
       Pulled in solely so docs/lattice.membership/*.md and docs/lattice.auth/*.md
       can show membership + authorization registration, rule authoring, and
       options as `csharp verify` snippets, on the same DocsSnippetCompilationTests
