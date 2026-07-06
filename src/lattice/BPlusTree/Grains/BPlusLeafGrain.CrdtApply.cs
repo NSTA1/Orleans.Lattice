@@ -333,6 +333,12 @@ internal sealed partial class BPlusLeafGrain
             Cache.StoreTyped(key, typedState);
         }
 
+        // Record the per-key merge mode so a snapshot capture of this leaf's
+        // committed cache labels the key with its true CRDT mode rather than the
+        // coarse declared tree mode. Set after both StoreEntry/StoreTyped paths
+        // because StoreEntry's byte-row write evicts any prior recorded mode.
+        Cache.SetMergeMode(key, mode);
+
         var options = await GetOptionsAsync();
         SplitResult? splitResult = null;
         if (Cache.Count > options.MaxLeafKeys)

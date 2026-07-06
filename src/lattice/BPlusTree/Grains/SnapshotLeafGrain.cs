@@ -298,7 +298,7 @@ internal sealed class SnapshotLeafGrain(
         foreach (var row in baseline.Rows)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            _folder.SeedRow(row.Key, row.Value);
+            _folder.SeedRow(row.Key, row.Value, row.MergeMode);
         }
 
         _materialised = true;
@@ -421,7 +421,7 @@ internal sealed class SnapshotLeafGrain(
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (IsKeyOwned(row.Key))
-                folder.SeedRow(row.Key, row.Value);
+                folder.SeedRow(row.Key, row.Value, row.MergeMode);
         }
     }
 
@@ -618,7 +618,7 @@ internal sealed class SnapshotLeafGrain(
             // backup capture path records causally-complete metadata.
             if (!IsKeyOwned(key))
                 continue;
-            result.Add(new LwwEntry(key, value));
+            result.Add(new LwwEntry(key, value, _folder!.GetMode(key)));
             if (reverse)
             {
                 if (result.Count > limit)

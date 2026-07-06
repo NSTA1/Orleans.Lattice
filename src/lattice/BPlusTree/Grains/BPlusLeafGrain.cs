@@ -637,7 +637,7 @@ internal sealed partial class BPlusLeafGrain(
     public Task<LwwEntry?> GetRawEntryAsync(string key)
     {
         if (Cache.TryGetRow(key, out var lww))
-            return Task.FromResult<LwwEntry?>(new LwwEntry(key, lww));
+            return Task.FromResult<LwwEntry?>(new LwwEntry(key, lww, Cache.GetMergeMode(key)));
         return Task.FromResult<LwwEntry?>(null);
     }
 
@@ -655,7 +655,7 @@ internal sealed partial class BPlusLeafGrain(
         foreach (var key in keys)
         {
             if (cache.TryGetRow(key, out var lww))
-                result.Add(new LwwEntry(key, lww));
+                result.Add(new LwwEntry(key, lww, cache.GetMergeMode(key)));
             else
                 result.Add(null);
         }
@@ -2752,7 +2752,7 @@ internal sealed partial class BPlusLeafGrain(
                 // (pre-saga visibility). See GetWithPendingAsync.
             }
             if (lww.IsTombstone || lww.IsExpired(nowTicks)) continue;
-            result.Add(new LwwEntry(key, lww));
+            result.Add(new LwwEntry(key, lww, Cache.GetMergeMode(key)));
         }
         foreach (var (key, pending) in pendingKeys)
         {

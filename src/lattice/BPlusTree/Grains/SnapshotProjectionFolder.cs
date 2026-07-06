@@ -47,6 +47,12 @@ internal sealed class SnapshotProjectionFolder(string treeId, CrdtShapeRegistry 
     private readonly Dictionary<Guid, Dictionary<string, LwwValue<byte[]>>> _pendingTx = new();
     private readonly Dictionary<Guid, Dictionary<string, (byte[] Delta, LatticeMergeMode Mode)>> _pendingTxDeltas = new();
 
+    // Per-key durable merge-mode discriminator, mirroring the live leaf cache's
+    // _mergeModes map: only CRDT keys are present (a plain last-writer-wins
+    // fold removes the key), so an absent key materialises a null discriminator
+    // and the capture path falls back to the declared tree mode.
+    private readonly Dictionary<string, LatticeMergeMode> _modes = new(StringComparer.Ordinal);
+
     /// <summary>
     /// The folded committed projection, sorted by key. Live values and
     /// tombstones; tombstones are retained so the caller's scan-time filter
@@ -69,9 +75,43 @@ internal sealed class SnapshotProjectionFolder(string treeId, CrdtShapeRegistry 
     /// <summary>
     /// Seeds a committed row directly into the projection, merging under LWW
     /// against any existing value. Used to pre-load a leaf's frozen cache
-    /// baseline before the tail fold.
+    /// baseline before the tail fold. The optional <paramref name="mergeMode"/>
+    /// carries the durable per-key merge-mode discriminator through from the
+    /// seed row so a materialised baseline (or a raw-entry scan served off the
+    /// fold) stays mode-faithful.
     /// </summary>
-    public void SeedRow(string key, LwwValue<byte[]> value) => MergeIntoEntries(key, value);
+    public void SeedRow(string key, LwwValue<byte[]> value, LatticeMergeMode? mergeMode = null)
+    {
+        MergeIntoEntries(key, value);
+        if (mergeMode is { } mode)
+        {
+            RecordMode(key, mode);
+        }
+    }
+
+    /// <summary>
+    /// Returns the folded per-key merge-mode discriminator for
+    /// <paramref name="key"/>, or <see langword="null"/> when the key is a plain
+    /// last-writer-wins row. Consumed by the snapshot-leaf raw-entry scan so a
+    /// backup capture reads each key's true merge mode.
+    /// </summary>
+    public LatticeMergeMode? GetMode(string key) =>
+        _modes.TryGetValue(key, out var mode) ? mode : null;
+
+    // Records (CRDT) or clears (LWW) the per-key merge-mode discriminator,
+    // keeping parity with the live leaf cache: a LwwRegister fold removes the
+    // key so the row materialises a null discriminator.
+    private void RecordMode(string key, LatticeMergeMode mode)
+    {
+        if (mode == LatticeMergeMode.LwwRegister)
+        {
+            _modes.Remove(key);
+        }
+        else
+        {
+            _modes[key] = mode;
+        }
+    }
 
     /// <summary>
     /// Seeds a prepared (but not yet terminal) saga mutation into the pending
@@ -96,15 +136,24 @@ internal sealed class SnapshotProjectionFolder(string treeId, CrdtShapeRegistry 
                 if (mutation.IsPrepared)
                     AddPreparedMutation(mutation.TransactionId, mutation.Key, BuildLww(mutation, isTombstone: mutation.IsTombstone), mutation.Delta, mutation.Mode);
                 else if (mutation.Mode != LatticeMergeMode.LwwRegister && mutation.Delta is not null)
+                {
                     MergeIntoEntries(mutation.Key, BuildFoldedCrdtSet(mutation));
+                    RecordMode(mutation.Key, mutation.Mode);
+                }
                 else
+                {
                     MergeIntoEntries(mutation.Key, BuildLww(mutation, isTombstone: mutation.IsTombstone));
+                    _modes.Remove(mutation.Key);
+                }
                 break;
             case MutationKind.Delete:
                 if (mutation.IsPrepared)
                     AddPreparedMutation(mutation.TransactionId, mutation.Key, BuildLww(mutation, isTombstone: true));
                 else
+                {
                     MergeIntoEntries(mutation.Key, BuildLww(mutation, isTombstone: true));
+                    _modes.Remove(mutation.Key);
+                }
                 break;
             case MutationKind.DeleteRange:
                 ApplyDeleteRange(mutation);
@@ -133,7 +182,7 @@ internal sealed class SnapshotProjectionFolder(string treeId, CrdtShapeRegistry 
         var rows = new List<LeafSnapshotRow>(_entries.Count);
         foreach (var (key, value) in _entries)
         {
-            rows.Add(new LeafSnapshotRow(key, value));
+            rows.Add(new LeafSnapshotRow(key, value, GetMode(key)));
         }
         return rows;
     }
@@ -255,6 +304,7 @@ internal sealed class SnapshotProjectionFolder(string treeId, CrdtShapeRegistry 
         foreach (var key in toRewrite)
         {
             MergeIntoEntries(key, tombstone);
+            _modes.Remove(key);
         }
     }
 
@@ -269,10 +319,12 @@ internal sealed class SnapshotProjectionFolder(string treeId, CrdtShapeRegistry 
             {
                 var folded = FoldPreparedCrdtDelta(key, dm.Delta, dm.Mode);
                 MergeIntoEntries(key, value with { Value = folded });
+                RecordMode(key, dm.Mode);
             }
             else
             {
                 MergeIntoEntries(key, value);
+                _modes.Remove(key);
             }
         }
     }
@@ -317,5 +369,6 @@ internal sealed class SnapshotProjectionFolder(string treeId, CrdtShapeRegistry 
         if (!existing.IsTombstone && !existing.IsExpired(nowTicks))
             return;
         _entries.Remove(mutation.Key);
+        _modes.Remove(mutation.Key);
     }
 }

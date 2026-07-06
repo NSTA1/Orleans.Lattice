@@ -174,6 +174,16 @@ internal sealed class IncrementalDeltaCollector : IWalSubscriptionHandler
 
         var origin = string.IsNullOrEmpty(mutation.OriginClusterId) ? null : mutation.OriginClusterId;
 
+        // The WAL mutation carries the authoring merge mode per record, so the
+        // incremental path reads the true per-key mode directly - no durable
+        // snapshot discriminator needed. A CRDT-mode record labels its key
+        // Crdt; a plain last-writer-wins record (Mode == LwwRegister) carries no
+        // per-key mode and falls back to the declared tree mode, matching the
+        // full-capture fallback.
+        var perKeyMode = mutation.Mode != LatticeMergeMode.LwwRegister
+            ? (LatticeMergeMode?)mutation.Mode
+            : null;
+
         _pending.Add(new LwwEntry
         {
             Key = mutation.Key,
@@ -183,11 +193,13 @@ internal sealed class IncrementalDeltaCollector : IWalSubscriptionHandler
             ExpiresAtTicks = mutation.ExpiresAtTicks,
             OriginClusterId = origin,
             VectorClock = mutation.VectorClock,
+            MergeMode = perKeyMode,
         });
 
         if (!string.IsNullOrEmpty(mutation.Key))
         {
-            _keyDescriptors.Add(new BackupKeyDescriptor(mutation.Key, _mergeMode, origin));
+            var descriptorMode = perKeyMode is not null ? BackupKeyMergeMode.Crdt : _mergeMode;
+            _keyDescriptors.Add(new BackupKeyDescriptor(mutation.Key, descriptorMode, origin));
         }
 
         if (origin is { } originId)

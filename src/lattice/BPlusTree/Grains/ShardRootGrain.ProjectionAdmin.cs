@@ -212,6 +212,7 @@ internal sealed partial class ShardRootGrain
         // keeps the highest-timestamp variant (the snapshot leaf's read-time
         // IsKeyOwned filter then drops the orphan for the non-owning shard).
         var union = new SortedDictionary<string, LwwValue<byte[]>>(StringComparer.Ordinal);
+        var unionModes = new Dictionary<string, LatticeMergeMode>(StringComparer.Ordinal);
         foreach (var (leaf, freeze) in frozen)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -219,9 +220,28 @@ internal sealed partial class ShardRootGrain
             foreach (var row in rows)
             {
                 if (union.TryGetValue(row.Key, out var existing))
-                    union[row.Key] = LwwValue<byte[]>.Merge(existing, row.Value);
+                {
+                    var merged = LwwValue<byte[]>.Merge(existing, row.Value);
+                    union[row.Key] = merged;
+                    // On a donor-orphan collision the per-key merge mode must
+                    // follow whichever value the LWW merge kept. If the incoming
+                    // row won (its timestamp is the survivor), adopt its mode;
+                    // otherwise leave the existing mode untouched.
+                    if (ReferenceEquals(merged.Value, row.Value.Value)
+                        || merged.Timestamp.Equals(row.Value.Timestamp))
+                    {
+                        if (row.MergeMode is { } wonMode)
+                            unionModes[row.Key] = wonMode;
+                        else
+                            unionModes.Remove(row.Key);
+                    }
+                }
                 else
+                {
                     union[row.Key] = row.Value;
+                    if (row.MergeMode is { } mode)
+                        unionModes[row.Key] = mode;
+                }
             }
         }
 
@@ -229,7 +249,8 @@ internal sealed partial class ShardRootGrain
         long rowBytes = 0;
         foreach (var (key, value) in union)
         {
-            materialised.Add(new LeafSnapshotRow(key, value));
+            var mergeMode = unionModes.TryGetValue(key, out var m) ? m : (LatticeMergeMode?)null;
+            materialised.Add(new LeafSnapshotRow(key, value, mergeMode));
             rowBytes += LeafEntryCache.EntryBytes(key, value.IsTombstone ? null : value.Value);
         }
 

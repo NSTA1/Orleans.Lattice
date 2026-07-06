@@ -8,12 +8,13 @@ namespace Orleans.Lattice.Backup.Tests;
 
 /// <summary>
 /// Coverage for the per-key merge-mode label a capture stamps onto its
-/// <see cref="BackupKeyDescriptor"/>s. Merge mode is a per-tree property resolved
-/// from the producer-side merge-mode seam, not a per-key field on the durable
-/// snapshot row: a tree that declares a CRDT mode labels every captured key
-/// <see cref="BackupKeyMergeMode.Crdt"/>, while a last-writer-wins or
-/// non-replicated (local-only) tree labels them
-/// <see cref="BackupKeyMergeMode.LastWriterWins"/>.
+/// <see cref="BackupKeyDescriptor"/>s. A key's mode is read from the durable
+/// per-key discriminator on the snapshot row when present, falling back to the
+/// declared per-tree mode otherwise: a tree that declares a CRDT mode labels
+/// every captured key <see cref="BackupKeyMergeMode.Crdt"/>, a last-writer-wins
+/// or non-replicated tree labels plain keys
+/// <see cref="BackupKeyMergeMode.LastWriterWins"/>, and a local-only tree that
+/// mixes LWW and CRDT keys now labels each key with its true per-key mode.
 /// </summary>
 [Category("Integration")]
 public sealed class LatticeBackupCaptureMergeModeTests
@@ -68,6 +69,26 @@ public sealed class LatticeBackupCaptureMergeModeTests
             Is.All.EqualTo(BackupKeyMergeMode.Crdt));
     }
 
+    [Test]
+    public async Task CaptureAsync_labels_each_key_with_its_true_mode_for_a_mixed_local_only_tree()
+    {
+        // A local-only tree (no declared mode -> resolver returns null) that mixes
+        // plain LWW keys with CRDT keys. Before the per-key discriminator the
+        // resolver's null was treated as LWW and every key was mislabelled
+        // LastWriterWins; now each key must carry its true mode.
+        await DeployAsync(declaredMode: null);
+        var descriptors = await CaptureDescriptorsAsync(SeedMixedAsync);
+
+        var byKey = descriptors.ToDictionary(d => d.Key, d => d.MergeMode);
+        Assert.Multiple(() =>
+        {
+            Assert.That(byKey["lww1"], Is.EqualTo(BackupKeyMergeMode.LastWriterWins));
+            Assert.That(byKey["lww2"], Is.EqualTo(BackupKeyMergeMode.LastWriterWins));
+            Assert.That(byKey["crdt1"], Is.EqualTo(BackupKeyMergeMode.Crdt));
+            Assert.That(byKey["crdt2"], Is.EqualTo(BackupKeyMergeMode.Crdt));
+        });
+    }
+
     private static async Task SeedLwwAsync(ILattice tree)
     {
         await tree.SetAsync("k1", Encoding.UTF8.GetBytes("v1"));
@@ -80,6 +101,16 @@ public sealed class LatticeBackupCaptureMergeModeTests
         // keys through the matching CRDT accessor.
         await tree.OrSet("k1").AddAsync(Encoding.UTF8.GetBytes("e1"), "r1");
         await tree.OrSet("k2").AddAsync(Encoding.UTF8.GetBytes("e2"), "r1");
+    }
+
+    private static async Task SeedMixedAsync(ILattice tree)
+    {
+        // Local-only tree: plain LWW keys and CRDT keys coexist because nothing is
+        // declared for replication.
+        await tree.SetAsync("lww1", Encoding.UTF8.GetBytes("v1"));
+        await tree.SetAsync("lww2", Encoding.UTF8.GetBytes("v2"));
+        await tree.OrSet("crdt1").AddAsync(Encoding.UTF8.GetBytes("e1"), "r1");
+        await tree.OrSet("crdt2").AddAsync(Encoding.UTF8.GetBytes("e2"), "r1");
     }
 
     private async Task DeployAsync(LatticeMergeMode? declaredMode)
