@@ -6,10 +6,9 @@ namespace Orleans.Lattice.Api.Backup;
 /// <c>ApiAuthTypeAliases</c> table: every constant must use the reserved
 /// <c>oib.</c> prefix, be at most 6 characters, and be unique.
 /// <para>
-/// This scaffolding release declares no concrete aliases - it reserves the
-/// <c>oib.</c> prefix namespace so later releases can add backup control-API DTO
-/// and gRPC wire types (the sibling gRPC binding reuses this same registry)
-/// without colliding with the core (<c>ol.</c>) or the sibling control-API
+/// The <c>oib.</c> prefix namespace keeps the backup control-API DTO and gRPC
+/// wire types (the sibling gRPC binding reuses this same registry) from
+/// colliding with the core (<c>ol.</c>) or the sibling control-API
 /// (<c>oli.</c>) namespaces. New serializable types append new
 /// <c>oib.</c>-prefixed constants here.
 /// </para>
@@ -21,4 +20,13 @@ public static class ApiBackupTypeAliases
     /// alias constant added here must start with this value.
     /// </summary>
     public const string AliasPrefix = "oib.";
+
+    /// <summary>Alias for <see cref="BackupCatalogRequest"/>.</summary>
+    public const string BackupCatalogRequest = "oib.cr";
+
+    /// <summary>Alias for <see cref="BackupCatalogPage"/>.</summary>
+    public const string BackupCatalogPage = "oib.cp";
+
+    /// <summary>Alias for <see cref="BackupChainDescription"/>.</summary>
+    public const string BackupChainDescription = "oib.cd";
 }
