@@ -204,6 +204,7 @@ internal static class TypeAliases
     internal const string LatticeCursorState = "ol.lcs";
     internal const string LatticeCursorKeysPage = "ol.lkp";
     internal const string LatticeCursorEntriesPage = "ol.lep";
+    internal const string LatticeCursorRawEntriesPage = "ol.lrp";
     internal const string LatticeCursorDeleteProgress = "ol.ldp";
 
     // Zero-observable-writes snapshot cursor: coordinate captured at

@@ -393,6 +393,48 @@ internal sealed partial class LatticeCursorGrain(
     }
 
     /// <inheritdoc />
+    public async Task<LatticeCursorRawEntriesPage> NextRawEntriesAsync(int pageSize)
+    {
+        EnsureOpenFor(LatticeCursorKind.Entries);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pageSize);
+
+        // Raw metadata is only well-defined against a pinned point-in-time cut.
+        if (!state.State.Spec.ZeroObservableWrites)
+        {
+            throw new InvalidOperationException(
+                $"Cursor '{CursorKey}' is not a snapshot cursor; raw-entry drain requires "
+                + "a zero-observable-writes point-in-time cursor.");
+        }
+
+        if (state.State.Phase == LatticeCursorPhase.Exhausted)
+        {
+            return new LatticeCursorRawEntriesPage
+            {
+                Entries = Array.Empty<LwwEntry>(),
+                HasMore = false,
+            };
+        }
+
+        return await NextSnapshotRawEntriesAsync(pageSize);
+    }
+
+    /// <inheritdoc />
+    public Task<LatticeSnapshotCoordinate> GetSnapshotCoordinateAsync()
+    {
+        if (state.State.Phase is LatticeCursorPhase.NotStarted or LatticeCursorPhase.Closed)
+        {
+            throw new InvalidOperationException(
+                $"Cursor '{CursorKey}' is not open.");
+        }
+        if (state.State.SnapshotCoordinate is not { } coord)
+        {
+            throw new InvalidOperationException(
+                $"Cursor '{CursorKey}' is not a snapshot cursor; no coordinate is available.");
+        }
+        return Task.FromResult(coord);
+    }
+
+    /// <inheritdoc />
     public async Task<LatticeCursorDeleteProgress> DeleteRangeStepAsync(int maxToDelete)
     {
         EnsureOpenFor(LatticeCursorKind.DeleteRange);

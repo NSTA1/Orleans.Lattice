@@ -78,6 +78,12 @@ public static class LatticeBackupServiceCollectionExtensions
         builder.Services.TryAddSingleton<ILatticeBackupSink, InClusterLatticeBackupSink>();
         builder.Services.TryAddSingleton<ILatticeBackupCatalogStore, LatticeBackupCatalogStore>();
 
+        // The fail-closed backup authorization seam and the capture engine. The
+        // authorizer resolves the core access gate and (optional) membership
+        // context registered by AddLattice.
+        builder.Services.TryAddSingleton<BackupAccessAuthorizer>();
+        builder.Services.TryAddSingleton<ILatticeBackupCaptureService, LatticeBackupCaptureService>();
+
         return builder;
     }
 
