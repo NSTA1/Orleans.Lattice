@@ -78,18 +78,33 @@ public sealed class EntryHistoryReadIntegrationTests
     {
         var maintainer = _cluster.Client.GetGrain<IViewMaintainerGrain>(viewName);
         await maintainer.EnsureActiveAsync();
-        for (var attempt = 0; attempt < 50; attempt++)
+
+        // Deadline-based convergence wait rather than a fixed attempt count. The
+        // maintainer's apply advances the checkpoint (and therefore drops lag to
+        // zero) only after every projected revision has been durably applied to
+        // the view tree, so lag == 0 is an authoritative "all revisions visible"
+        // barrier. A fixed 50 x 20ms = 1s budget can spuriously expire when the
+        // whole non-parallel test assembly is saturating the box and each async
+        // grain round-trip in this loop slows down, which surfaces as a flaky
+        // "did not catch up" failure rather than a genuine convergence stall. A
+        // generous wall-clock deadline removes that timing sensitivity while
+        // still failing fast on a real stall.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        long lag;
+        do
         {
             await maintainer.DrainAsync();
-            if (await maintainer.GetLagAsync() == 0)
+            lag = await maintainer.GetLagAsync();
+            if (lag == 0)
             {
                 return;
             }
 
             await Task.Delay(20);
         }
+        while (DateTime.UtcNow < deadline);
 
-        Assert.Fail($"History view '{viewName}' did not catch up to the source head.");
+        Assert.Fail($"History view '{viewName}' did not catch up to the source head (residual lag {lag}).");
     }
 
     [Test]
