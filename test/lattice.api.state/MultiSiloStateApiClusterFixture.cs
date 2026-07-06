@@ -16,6 +16,17 @@ namespace Orleans.Lattice.Api.State.Tests;
 /// every facade call exercises real cross-silo grain fan-out. In-memory grain
 /// storage is backed by cluster-wide storage grains, so a grain's state survives
 /// regardless of which silo it activates on.
+/// <para>
+/// Pins <see cref="LatticeOptions.DigestCoalescingWindowMs"/> to 0 so the
+/// pushed-up shard-root topology (the live/tombstone counts folded from leaf
+/// digests) settles synchronously with each write rather than behind the default
+/// coalescing timer. Without this, a structure read taken immediately after a
+/// write burst can observe a shard root whose <c>LiveCount</c> has not yet
+/// caught up, so two facades read at slightly different instants disagree on the
+/// total - the source of the intermittent
+/// <c>GetTreeStructure_aggregates_across_silos</c> "expected 78 but was 80"
+/// failure. Matches every sibling state-api fixture.
+/// </para>
 /// </summary>
 internal sealed class MultiSiloStateApiClusterFixture
 {
@@ -141,7 +152,16 @@ internal sealed class MultiSiloStateApiClusterFixture
         public void Configure(ISiloBuilder siloBuilder)
         {
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
-            siloBuilder.ConfigureLattice(o => o.WalPartitions = WalPartitions);
+            siloBuilder.ConfigureLattice(o =>
+            {
+                o.WalPartitions = WalPartitions;
+
+                // Settle the pushed-up shard-root topology synchronously with
+                // each write so cross-silo structure reads are deterministic
+                // (see the class summary). Matches every sibling state-api
+                // fixture.
+                o.DigestCoalescingWindowMs = 0;
+            });
             siloBuilder.UseInMemoryReminderService();
             siloBuilder.AddLatticeViews();
             siloBuilder.AddLatticeStateApi(o =>
