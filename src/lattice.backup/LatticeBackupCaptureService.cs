@@ -22,6 +22,7 @@ internal sealed class LatticeBackupCaptureService(
     ILatticeBackupCatalogStore catalog,
     BackupAccessAuthorizer authorizer,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
+    ILatticeMergeModeResolver mergeModeResolver,
     Serializer serializer,
     ILogger<LatticeBackupCaptureService> logger)
     : ILatticeBackupCaptureService
@@ -77,7 +78,7 @@ internal sealed class LatticeBackupCaptureService(
             // per-key descriptors, the content digest, the byte length, and the
             // chunk count. WriteArtifactAsync fully drains the enumerable, so the
             // collector is complete once it returns.
-            var collector = new RawEntryCollector(serializer);
+            var collector = new RawEntryCollector(serializer, ResolveTreeMergeMode(treeId));
             await sink.WriteArtifactAsync(
                 artifactId,
                 collector.StreamAsync(cursor, request.PageSize, cancellationToken),
@@ -130,6 +131,19 @@ internal sealed class LatticeBackupCaptureService(
             await lattice.CloseCursorAsync(cursorId, CancellationToken.None).ConfigureAwait(false);
         }
     }
+
+    /// <summary>
+    /// Resolves the declared per-tree merge mode into the backup's coarse merge
+    /// label. Merge mode is declared per tree (for replication) rather than stored
+    /// per key: a replicated tree that declares any CRDT mode captures as
+    /// <see cref="BackupKeyMergeMode.Crdt"/>, while a last-writer-wins or
+    /// non-replicated (local-only) tree captures as
+    /// <see cref="BackupKeyMergeMode.LastWriterWins"/>.
+    /// </summary>
+    private BackupKeyMergeMode ResolveTreeMergeMode(string treeId) =>
+        mergeModeResolver.Resolve(treeId) is { } declaredMode and not LatticeMergeMode.LwwRegister
+            ? BackupKeyMergeMode.Crdt
+            : BackupKeyMergeMode.LastWriterWins;
 
     /// <summary>
     /// Maps a scope to the half-open snapshot range bounds: whole-tree is

@@ -14,7 +14,7 @@ namespace Orleans.Lattice.Backup;
 /// at a time - while the descriptors (inherently part of the manifest) and the
 /// small running aggregates accumulate.
 /// </summary>
-internal sealed class RawEntryCollector(Serializer serializer)
+internal sealed class RawEntryCollector(Serializer serializer, BackupKeyMergeMode treeMergeMode)
 {
     private readonly IncrementalHash _hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
     private readonly List<BackupKeyDescriptor> _keyDescriptors = new();
@@ -88,13 +88,18 @@ internal sealed class RawEntryCollector(Serializer serializer)
 
     private void RecordEntry(LwwEntry entry)
     {
-        // Deviation (ratified with the coordinator): the snapshot baseline layer
-        // stores post-merge LwwValue<byte[]> with no per-key CRDT discriminator,
-        // so the merge-mode LABEL is defaulted to LastWriterWins. The captured
-        // VALUE bytes are the faithful post-merge (converged) state for CRDT keys.
+        // Merge mode is a per-tree property in this system: it is declared for a
+        // replicated tree (resolved from the producer-side merge-mode resolver)
+        // and is not persisted per key on the durable snapshot row. A replicated
+        // CRDT tree therefore labels every captured key Crdt; a last-writer-wins
+        // or non-replicated tree labels them LastWriterWins. The captured VALUE
+        // bytes are the faithful post-merge (converged) state either way. A
+        // local-only tree that mixes LWW and CRDT keys cannot be distinguished per
+        // key from durable state alone - that faithful per-key labelling needs a
+        // durable-state schema change and is tracked as a follow-up.
         _keyDescriptors.Add(new BackupKeyDescriptor(
             entry.Key,
-            BackupKeyMergeMode.LastWriterWins,
+            treeMergeMode,
             entry.OriginClusterId));
 
         if (entry.OriginClusterId is { } origin)
