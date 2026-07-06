@@ -793,6 +793,8 @@ public class LatticeMicroBenchmarks
         BuildVersionVectorFixture();
         BuildOrMapFixture();
         BuildOrSetFixture();
+        BuildOrSetOpsFixture();
+        BuildOrMapBulkSetFixture();
         BuildLeafQueueFixture();
         BuildCrdtGrowStateFixture();
         BuildCrdtGrowStateWriterFixture();
@@ -3063,6 +3065,21 @@ public class LatticeMicroBenchmarks
     private OrSet _orSetLeft = null!;
     private OrSet _orSetRight = null!;
 
+    // ===== OrSet element-operation micro-suite operands =====
+    // A pre-seeded OrSet plus the element array used to drive the
+    // Contains read path (now allocation-free via the span-keyed lookup)
+    // and the bulk-Add path. Sized by BENCH_MICROBENCH_ORSET_KEYS.
+    private OrSet _orSetContainsTarget = null!;
+    private byte[][] _orSetProbeElements = null!;
+    private int _orSetProbeCursor;
+
+    // ===== OrMap bulk-load micro-suite operands =====
+    // Pre-built key strings and a shared alloc-free value so OrMap_BulkSet
+    // isolates the per-Set NextCounter cost (O(1) counter cache) from key
+    // and value allocation. Sized by BENCH_MICROBENCH_ORMAP_BULK_KEYS.
+    private string[] _orMapBulkSetKeys = null!;
+    private readonly PnCounter _orMapBulkSetValue = new();
+
     private void BuildShipFramingFixture()
     {
         // Self-contained ServiceProvider for the two Orleans serializers
@@ -3463,6 +3480,108 @@ public class LatticeMicroBenchmarks
     /// </summary>
     [Benchmark(Description = "Crdt orset merge")]
     public OrSet OrSet_Merge() => OrSet.Merge(_orSetLeft, _orSetRight);
+
+    /// <summary>
+    /// Builds the pre-seeded OR-set and probe-element array for the
+    /// <see cref="OrSet_Contains"/> / <see cref="OrSet_Add"/> micro-suite.
+    /// Elements are 24 bytes (a realistic content-addressed key size whose
+    /// base64 encoding still keys through the stack buffer), sized by
+    /// <c>BENCH_MICROBENCH_ORSET_KEYS</c> (default 16). This isolates the
+    /// per-operation base64 key handling that the span-keyed lookup makes
+    /// allocation-free on the read path.
+    /// </summary>
+    private void BuildOrSetOpsFixture()
+    {
+        var keys = ReadIntEnv("BENCH_MICROBENCH_ORSET_KEYS", 16);
+        if (keys < 1) keys = 1;
+
+        _orSetContainsTarget = new OrSet();
+        _orSetProbeElements = new byte[keys][];
+        for (var i = 0; i < keys; i++)
+        {
+            var element = new byte[24];
+            element[0] = (byte)i;
+            element[1] = (byte)(i >> 8);
+            element[2] = (byte)(i >> 16);
+            element[3] = (byte)(i >> 24);
+            _orSetProbeElements[i] = element;
+            _orSetContainsTarget.Add(element, "replica", i + 1);
+        }
+    }
+
+    /// <summary>
+    /// Builds the pre-computed key strings for the <see cref="OrMap_BulkSet"/>
+    /// micro-suite. Sized by <c>BENCH_MICROBENCH_ORMAP_BULK_KEYS</c>
+    /// (default 256) so the O(1)-per-Set counter cache is exercised across
+    /// a bulk load large enough that the former O(total-dots) rescan showed
+    /// as O(N^2).
+    /// </summary>
+    private void BuildOrMapBulkSetFixture()
+    {
+        var keys = ReadIntEnv("BENCH_MICROBENCH_ORMAP_BULK_KEYS", 256);
+        if (keys < 1) keys = 1;
+
+        _orMapBulkSetKeys = new string[keys];
+        for (var i = 0; i < keys; i++)
+        {
+            _orMapBulkSetKeys[i] = $"key-{i:D6}";
+        }
+    }
+
+    /// <summary>
+    /// Read-path instrument: a single <see cref="OrSet.Contains(byte[])"/>
+    /// against a pre-seeded set. The span-keyed alternate lookup encodes
+    /// the element's base64 into a stack buffer, so the probe no longer
+    /// allocates a fresh key string per read - the allocation reduction
+    /// this benchmark exists to quantify.
+    /// </summary>
+    [Benchmark(Description = "OrSet contains")]
+    public bool OrSet_Contains()
+    {
+        var elements = _orSetProbeElements;
+        var i = unchecked(_orSetProbeCursor++) & int.MaxValue;
+        return _orSetContainsTarget.Contains(elements[i % elements.Length]);
+    }
+
+    /// <summary>
+    /// Write-path instrument: bulk <see cref="OrSet.Add(byte[], string, long)"/>
+    /// of every probe element into a fresh set. Each distinct element still
+    /// materialises one backing key string (unavoidable - it is stored), but
+    /// the base64 is now encoded once via <c>TryToBase64Chars</c> rather than
+    /// through an intermediate throwaway string on every call.
+    /// </summary>
+    [Benchmark(Description = "OrSet add (bulk)")]
+    public OrSet OrSet_Add()
+    {
+        var elements = _orSetProbeElements;
+        var set = new OrSet();
+        for (var i = 0; i < elements.Length; i++)
+        {
+            set.Add(elements[i], "replica", i + 1);
+        }
+        return set;
+    }
+
+    /// <summary>
+    /// Bulk-load instrument: <c>N</c> sequential
+    /// <see cref="OrMap{TKey, TValue}.Set(TKey, string, TValue)"/> calls on
+    /// one replica into a fresh map. With the per-replica counter cache each
+    /// Set mints its dot in O(1), so the whole load is O(N); before the cache
+    /// every Set rescanned every existing dot, making the load O(N^2). A
+    /// shared alloc-free value keeps the measurement on the counter path.
+    /// </summary>
+    [Benchmark(Description = "OrMap bulk set (O(N) counter)")]
+    public OrMap<string, PnCounter> OrMap_BulkSet()
+    {
+        var keys = _orMapBulkSetKeys;
+        var value = _orMapBulkSetValue;
+        var map = new OrMap<string, PnCounter>();
+        for (var i = 0; i < keys.Length; i++)
+        {
+            map.Set(keys[i], "replica", value);
+        }
+        return map;
+    }
 }
 
 /// <summary>

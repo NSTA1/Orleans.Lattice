@@ -57,6 +57,27 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
     [Id(1)]
     public Dictionary<TKey, List<OrSetDot>> Tombstones { get; set; } = new();
 
+    /// <summary>
+    /// Dot context: per-replica highest counter ever minted or observed
+    /// for that replica across every dot in the map (live or tombstoned).
+    /// Lets <c>NextCounter</c> mint a fresh dot in O(1) instead of
+    /// rescanning every dot on every <see cref="Set(TKey, string, TValue)"/>.
+    /// <para>
+    /// This is a serialized cache, not a semantic witness: it never
+    /// influences the lattice merge (which unions dots directly), only the
+    /// counter chosen for the next local write. It is kept consistent by
+    /// every mutator (<see cref="Set(TKey, string, TValue)"/>,
+    /// <see cref="MergeFrom(OrMap{TKey, TValue})"/>,
+    /// <see cref="MergeDelta(OrMapDelta{TKey, TValue})"/>,
+    /// <see cref="Clone"/>) and is rebuilt lazily from the dots on the
+    /// first write after loading a legacy payload that predates this field
+    /// (older payloads deserialize it as empty, which is backward
+    /// compatible).
+    /// </para>
+    /// </summary>
+    [Id(2)]
+    public Dictionary<string, long> Context { get; set; } = [];
+
     /// <summary>Returns <c>true</c> when no key has any live (un-tombstoned) dot.</summary>
     public bool IsEmpty
     {
@@ -98,7 +119,8 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
     /// <c>(<paramref name="replicaId"/>, <c>NextCounter</c>)</c> where
     /// <c>NextCounter</c> is one greater than the highest counter
     /// observed for <paramref name="replicaId"/> across every dot in
-    /// the map (live or tombstoned). The previous value snapshots at
+    /// the map (live or tombstoned), read in O(1) from
+    /// <see cref="Context"/>. The previous value snapshots at
     /// the same key are not removed - the next merge folds every live
     /// entry's <see cref="OrMapEntry{TValue}.Value"/> through the
     /// value CRDT's <see cref="ICrdt{TSelf}.MergeFrom(TSelf)"/>.
@@ -124,6 +146,10 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
             Counter = counter,
             Value = value,
         });
+
+        // counter is strictly greater than any prior counter for this
+        // replica, so record it as the new per-replica maximum.
+        Context[replicaId] = counter;
     }
 
     /// <summary>
@@ -303,6 +329,11 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
     {
         ArgumentNullException.ThrowIfNull(other);
 
+        // Capture this map's own per-replica maxima before merging so a
+        // legacy self (empty Context, non-empty dots) is not left with a
+        // Context that reflects only the incoming side.
+        EnsureContextRebuilt();
+
         // Tombstones first so the per-dot dedup in the Adds pass below
         // sees every observed-removed dot before it folds value
         // snapshots.
@@ -391,6 +422,8 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
                 }
             }
         }
+
+        MergeContextFrom(other);
     }
 
     private static OrMapEntry<TValue>? FindByDot(List<OrMapEntry<TValue>> entries, string replicaId, long counter)
@@ -419,11 +452,16 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
     /// </param>
     public void MergeDelta(OrMapDelta<TKey, TValue> delta)
     {
+        // Keep the counter cache dominating every dot, including on a
+        // legacy map whose Context is still empty on first delta apply.
+        EnsureContextRebuilt();
+
         var adds = delta.Adds;
         if (adds is { Count: > 0 })
         {
             foreach (var add in adds)
             {
+                BumpContext(add.ReplicaId, add.Counter);
                 if (!Adds.TryGetValue(add.Key, out var entries))
                 {
                     entries = new List<OrMapEntry<TValue>>(1);
@@ -456,6 +494,7 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
         {
             foreach (var t in tombs)
             {
+                BumpContext(t.ReplicaId, t.Counter);
                 if (!Tombstones.TryGetValue(t.Key, out var existing))
                 {
                     existing = new List<OrSetDot>(1);
@@ -478,6 +517,7 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
             // copies are unchanged.
             Adds = new Dictionary<TKey, List<OrMapEntry<TValue>>>(Adds.Count),
             Tombstones = new Dictionary<TKey, List<OrSetDot>>(Tombstones.Count),
+            Context = new Dictionary<string, long>(Context, StringComparer.Ordinal),
         };
         foreach (var (key, entries) in Adds)
         {
@@ -492,22 +532,64 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
 
     private long NextCounter(string replicaId)
     {
-        long max = 0;
+        EnsureContextRebuilt();
+        return (Context.TryGetValue(replicaId, out var current) ? current : 0) + 1;
+    }
+
+    /// <summary>
+    /// Rebuilds <see cref="Context"/> from the dots the first time it is
+    /// needed on a map loaded from a legacy payload that predates the
+    /// field (deserialized with an empty <see cref="Context"/> but
+    /// non-empty dots). A no-op once the cache is populated - every
+    /// mutator keeps it consistent from then on - and a no-op on a
+    /// genuinely empty map. O(total dots) exactly once per legacy load.
+    /// </summary>
+    private void EnsureContextRebuilt()
+    {
+        if (Context.Count > 0) return;
+        if (Adds.Count == 0 && Tombstones.Count == 0) return;
+
         foreach (var entries in Adds.Values)
         {
-            foreach (var e in entries)
-            {
-                if (string.Equals(e.ReplicaId, replicaId, StringComparison.Ordinal) && e.Counter > max) max = e.Counter;
-            }
+            foreach (var e in entries) BumpContext(e.ReplicaId, e.Counter);
         }
         foreach (var dots in Tombstones.Values)
         {
-            foreach (var d in dots)
+            foreach (var d in dots) BumpContext(d.ReplicaId, d.Counter);
+        }
+    }
+
+    private void BumpContext(string replicaId, long counter)
+    {
+        if (!Context.TryGetValue(replicaId, out var current) || counter > current)
+        {
+            Context[replicaId] = counter;
+        }
+    }
+
+    /// <summary>
+    /// Folds <paramref name="other"/>'s per-replica maxima into this
+    /// map's <see cref="Context"/> so the cache still dominates every dot
+    /// after a merge. New payloads carry a maintained <see cref="Context"/>
+    /// (pointwise-max fold); a legacy <paramref name="other"/> with an
+    /// empty context but non-empty dots is folded directly from its dots
+    /// without mutating it.
+    /// </summary>
+    private void MergeContextFrom(OrMap<TKey, TValue> other)
+    {
+        foreach (var (replicaId, counter) in other.Context) BumpContext(replicaId, counter);
+
+        if (other.Context.Count == 0 && (other.Adds.Count > 0 || other.Tombstones.Count > 0))
+        {
+            foreach (var entries in other.Adds.Values)
             {
-                if (string.Equals(d.ReplicaId, replicaId, StringComparison.Ordinal) && d.Counter > max) max = d.Counter;
+                foreach (var e in entries) BumpContext(e.ReplicaId, e.Counter);
+            }
+            foreach (var dots in other.Tombstones.Values)
+            {
+                foreach (var d in dots) BumpContext(d.ReplicaId, d.Counter);
             }
         }
-        return max + 1;
     }
 
     private int LiveEntryCount(TKey key, List<OrMapEntry<TValue>> entries)

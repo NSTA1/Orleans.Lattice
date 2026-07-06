@@ -1,3 +1,5 @@
+using System.Buffers;
+
 namespace Orleans.Lattice;
 
 /// <summary>
@@ -26,6 +28,13 @@ public sealed class OrSet : ICrdt<OrSet>
     // concurrent dots. Matches the LiveDotCount fast-path threshold.
     private const int DotLinearScanThreshold = 4;
 
+    // Elements whose base64 encoding fits in this many chars are keyed
+    // through a stack buffer; larger elements rent from the shared pool.
+    // 256 chars covers elements up to 192 bytes with no allocation.
+    private const int MaxStackBase64Chars = 256;
+
+    private static int Base64CharCount(int byteCount) => checked((byteCount + 2) / 3 * 4);
+
     /// <summary>
     /// Per-element live-add dots, keyed by the base64 encoding of the
     /// element bytes. An element is a member of the set if and only if its
@@ -48,7 +57,8 @@ public sealed class OrSet : ICrdt<OrSet>
         {
             foreach (var (key, dots) in Adds)
             {
-                if (LiveDotCount(key, dots) > 0) return false;
+                Tombstones.TryGetValue(key, out var tomb);
+                if (LiveDotCount(dots, tomb) > 0) return false;
             }
             return true;
         }
@@ -69,13 +79,29 @@ public sealed class OrSet : ICrdt<OrSet>
     {
         ArgumentNullException.ThrowIfNull(element);
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
-        var key = Convert.ToBase64String(element);
-        if (!Adds.TryGetValue(key, out var dots))
+
+        var charCount = Base64CharCount(element.Length);
+        char[]? rented = charCount > MaxStackBase64Chars ? ArrayPool<char>.Shared.Rent(charCount) : null;
+        Span<char> buffer = rented ?? stackalloc char[MaxStackBase64Chars];
+        try
         {
-            dots = [];
-            Adds[key] = dots;
+            Convert.TryToBase64Chars(element, buffer, out var written);
+            var key = buffer[..written];
+            var adds = Adds.GetAlternateLookup<ReadOnlySpan<char>>();
+            if (!adds.TryGetValue(key, out var dots))
+            {
+                // Only materialise the base64 string when the element is
+                // genuinely new; a re-add of an existing element hits the
+                // span lookup above with no allocation.
+                dots = [];
+                Adds[new string(key)] = dots;
+            }
+            dots.Add(new OrSetDot { ReplicaId = replicaId, Counter = counter });
         }
-        dots.Add(new OrSetDot { ReplicaId = replicaId, Counter = counter });
+        finally
+        {
+            if (rented is not null) ArrayPool<char>.Shared.Return(rented);
+        }
     }
 
     /// <summary>
@@ -87,44 +113,75 @@ public sealed class OrSet : ICrdt<OrSet>
     public bool Remove(byte[] element)
     {
         ArgumentNullException.ThrowIfNull(element);
-        var key = Convert.ToBase64String(element);
-        if (!Adds.TryGetValue(key, out var dots) || dots.Count == 0) return false;
 
-        // Build a tombstone HashSet once so the membership checks below are O(1)
-        // regardless of how many dots have already been tombstoned for this key.
-        if (!Tombstones.TryGetValue(key, out var tomb))
+        var charCount = Base64CharCount(element.Length);
+        char[]? rented = charCount > MaxStackBase64Chars ? ArrayPool<char>.Shared.Rent(charCount) : null;
+        Span<char> buffer = rented ?? stackalloc char[MaxStackBase64Chars];
+        try
         {
-            tomb = [];
-            Tombstones[key] = tomb;
-        }
-        var anyAdded = false;
-        if (tomb.Count <= DotLinearScanThreshold)
-        {
-            // Tiny tombstone list: linear Contains beats hashing.
+            Convert.TryToBase64Chars(element, buffer, out var written);
+            var key = buffer[..written];
+            var adds = Adds.GetAlternateLookup<ReadOnlySpan<char>>();
+            if (!adds.TryGetValue(key, out var dots) || dots.Count == 0) return false;
+
+            // Build a tombstone list once so the membership checks below are O(1)
+            // regardless of how many dots have already been tombstoned for this key.
+            var tombstones = Tombstones.GetAlternateLookup<ReadOnlySpan<char>>();
+            if (!tombstones.TryGetValue(key, out var tomb))
+            {
+                // Only materialise the base64 string when a tombstone list
+                // must be created for this key.
+                tomb = [];
+                Tombstones[new string(key)] = tomb;
+            }
+            var anyAdded = false;
+            if (tomb.Count <= DotLinearScanThreshold)
+            {
+                // Tiny tombstone list: linear Contains beats hashing.
+                foreach (var dot in dots)
+                {
+                    if (!tomb.Contains(dot)) { tomb.Add(dot); anyAdded = true; }
+                }
+                return anyAdded;
+            }
+            var tombSet = new HashSet<OrSetDot>(tomb);
             foreach (var dot in dots)
             {
-                if (!tomb.Contains(dot)) { tomb.Add(dot); anyAdded = true; }
+                if (tombSet.Add(dot))
+                {
+                    tomb.Add(dot);
+                    anyAdded = true;
+                }
             }
             return anyAdded;
         }
-        var tombSet = new HashSet<OrSetDot>(tomb);
-        foreach (var dot in dots)
+        finally
         {
-            if (tombSet.Add(dot))
-            {
-                tomb.Add(dot);
-                anyAdded = true;
-            }
+            if (rented is not null) ArrayPool<char>.Shared.Return(rented);
         }
-        return anyAdded;
     }
 
     /// <summary>Returns <c>true</c> when <paramref name="element"/> has any live (un-tombstoned) dot.</summary>
     public bool Contains(byte[] element)
     {
         ArgumentNullException.ThrowIfNull(element);
-        var key = Convert.ToBase64String(element);
-        return Adds.TryGetValue(key, out var dots) && LiveDotCount(key, dots) > 0;
+
+        var charCount = Base64CharCount(element.Length);
+        char[]? rented = charCount > MaxStackBase64Chars ? ArrayPool<char>.Shared.Rent(charCount) : null;
+        Span<char> buffer = rented ?? stackalloc char[MaxStackBase64Chars];
+        try
+        {
+            Convert.TryToBase64Chars(element, buffer, out var written);
+            var key = buffer[..written];
+            var adds = Adds.GetAlternateLookup<ReadOnlySpan<char>>();
+            if (!adds.TryGetValue(key, out var dots)) return false;
+            Tombstones.GetAlternateLookup<ReadOnlySpan<char>>().TryGetValue(key, out var tomb);
+            return LiveDotCount(dots, tomb) > 0;
+        }
+        finally
+        {
+            if (rented is not null) ArrayPool<char>.Shared.Return(rented);
+        }
     }
 
     /// <summary>
@@ -135,10 +192,22 @@ public sealed class OrSet : ICrdt<OrSet>
     /// </summary>
     public IEnumerable<byte[]> Elements()
     {
-        foreach (var key in Adds.Keys.OrderBy(static k => k, StringComparer.Ordinal))
+        if (Adds.Count == 0) yield break;
+
+        // Collect the live keys first (single dictionary walk, one
+        // LiveDotCount per key) then sort only the survivors, avoiding
+        // both the OrderBy allocation over dead keys and the former
+        // redundant second Adds[key] lookup in the yield loop.
+        var live = new List<string>(Adds.Count);
+        foreach (var (key, dots) in Adds)
         {
-            if (LiveDotCount(key, Adds[key]) > 0)
-                yield return Convert.FromBase64String(key);
+            Tombstones.TryGetValue(key, out var tomb);
+            if (LiveDotCount(dots, tomb) > 0) live.Add(key);
+        }
+        live.Sort(StringComparer.Ordinal);
+        foreach (var key in live)
+        {
+            yield return Convert.FromBase64String(key);
         }
     }
 
@@ -150,7 +219,8 @@ public sealed class OrSet : ICrdt<OrSet>
             var n = 0;
             foreach (var (key, dots) in Adds)
             {
-                if (LiveDotCount(key, dots) > 0) n++;
+                Tombstones.TryGetValue(key, out var tomb);
+                if (LiveDotCount(dots, tomb) > 0) n++;
             }
             return n;
         }
@@ -219,24 +289,40 @@ public sealed class OrSet : ICrdt<OrSet>
         var removes = delta.Removes;
         if (removes is { Count: > 0 })
         {
+            // Hoist a single reusable scratch buffer out of the loop so
+            // the stackalloc is not repeated per element (CA2014).
+            Span<char> scratch = stackalloc char[MaxStackBase64Chars];
             foreach (var dot in removes)
             {
                 if (dot.Element is null) continue;
-                var key = Convert.ToBase64String(dot.Element);
-                if (!Tombstones.TryGetValue(key, out var tomb))
+                var element = dot.Element;
+                var charCount = Base64CharCount(element.Length);
+                char[]? rented = charCount > scratch.Length ? ArrayPool<char>.Shared.Rent(charCount) : null;
+                Span<char> buffer = rented ?? scratch;
+                try
                 {
-                    tomb = [];
-                    Tombstones[key] = tomb;
+                    Convert.TryToBase64Chars(element, buffer, out var written);
+                    var key = buffer[..written];
+                    var tombstones = Tombstones.GetAlternateLookup<ReadOnlySpan<char>>();
+                    if (!tombstones.TryGetValue(key, out var tomb))
+                    {
+                        tomb = [];
+                        Tombstones[new string(key)] = tomb;
+                    }
+                    var entry = new OrSetDot { ReplicaId = dot.ReplicaId, Counter = dot.Counter };
+                    if (!tomb.Contains(entry)) tomb.Add(entry);
                 }
-                var entry = new OrSetDot { ReplicaId = dot.ReplicaId, Counter = dot.Counter };
-                if (!tomb.Contains(entry)) tomb.Add(entry);
+                finally
+                {
+                    if (rented is not null) ArrayPool<char>.Shared.Return(rented);
+                }
             }
         }
     }
 
-    private int LiveDotCount(string key, List<OrSetDot> dots)
+    private static int LiveDotCount(List<OrSetDot> dots, List<OrSetDot>? tomb)
     {
-        if (!Tombstones.TryGetValue(key, out var tomb) || tomb.Count == 0) return dots.Count;
+        if (tomb is null || tomb.Count == 0) return dots.Count;
         if (tomb.Count <= DotLinearScanThreshold)
         {
             // Tiny tombstone list: linear scan beats hashing.
