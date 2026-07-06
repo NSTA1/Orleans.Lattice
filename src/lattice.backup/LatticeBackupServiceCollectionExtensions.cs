@@ -84,19 +84,27 @@ public static class LatticeBackupServiceCollectionExtensions
 
         // The fail-closed backup authorization seam and the capture engine. The
         // authorizer resolves the core access gate and (optional) membership
-        // context registered by AddLattice.
+        // context registered by AddLattice. The capture engine is registered as a
+        // single concrete instance and forwarded to both its full-capture and
+        // incremental-capture interfaces so the WAL cursor pin and per-tree state
+        // are shared across both entry points.
         builder.Services.TryAddSingleton<BackupAccessAuthorizer>();
-        builder.Services.TryAddSingleton<ILatticeBackupCaptureService, LatticeBackupCaptureService>();
+        builder.Services.TryAddSingleton<LatticeBackupCaptureService>();
+        builder.Services.TryAddSingleton<ILatticeBackupCaptureService>(
+            sp => sp.GetRequiredService<LatticeBackupCaptureService>());
 
         // The causally-faithful restore engine: replays a manifest chain back
         // through the HLC-preserving merge / bulk-load shard seams.
         builder.Services.TryAddSingleton<ILatticeBackupRestoreService, LatticeBackupRestoreService>();
 
-        // The incremental-capture seam and the scheduling / retention facade. The
-        // incremental service is a baseline stand-in registered with
-        // TryAddSingleton so a dedicated differential-capture engine can override
-        // it. The scheduler forwards to the per-scope BackupSchedulerGrain.
-        builder.Services.TryAddSingleton<ILatticeBackupIncrementalCaptureService, BaselineIncrementalBackupCaptureService>();
+        // The incremental-capture seam is served by the same capture-engine
+        // singleton: it emits a true forward-WAL delta (as a uniform entry-array
+        // artifact so the restore chain decodes base and increments through one
+        // path), falling back to a full backup when the base resume point has been
+        // trimmed off the WAL or a range delete surfaces in the delta window. The
+        // scheduler forwards to the per-scope BackupSchedulerGrain.
+        builder.Services.TryAddSingleton<ILatticeBackupIncrementalCaptureService>(
+            sp => sp.GetRequiredService<LatticeBackupCaptureService>());
         builder.Services.TryAddSingleton<ILatticeBackupScheduler, LatticeBackupScheduler>();
 
         return builder;

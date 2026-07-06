@@ -3,6 +3,8 @@ using System.Security.Cryptography;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.Wal;
 using Orleans.Serialization;
 
 namespace Orleans.Lattice.Backup;
@@ -26,8 +28,12 @@ internal sealed class LatticeBackupCaptureService(
     IOptions<LatticeBackupOptions> backupOptions,
     ILatticeMergeModeResolver mergeModeResolver,
     Serializer serializer,
+    ICommitLogReader commitLogReader,
+    IWalSubscriber walSubscriber,
+    LatticeOptionsResolver optionsResolver,
+    IWalCursorRegistry cursorRegistry,
     ILogger<LatticeBackupCaptureService> logger)
-    : ILatticeBackupCaptureService
+    : ILatticeBackupCaptureService, ILatticeBackupIncrementalCaptureService
 {
     /// <inheritdoc />
     public Task<LatticeBackupCaptureResult> CaptureAsync(
@@ -36,6 +42,151 @@ internal sealed class LatticeBackupCaptureService(
     {
         ArgumentNullException.ThrowIfNull(request);
         return CaptureTreeAsync(request.Name, request.Scope, request.PageSize, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<LatticeBackupCaptureResult> CaptureIncrementalAsync(
+        LatticeBackupIncrementalCaptureRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var baseManifest = await sink.ReadManifestAsync(request.BaseBackupId, cancellationToken).ConfigureAwait(false)
+            ?? throw new KeyNotFoundException(
+                $"No base backup was found for id '{request.BaseBackupId}'. An incremental backup "
+                + "requires an existing base backup to layer on.");
+
+        // The increment inherits the base backup's scope so the chain restores as a
+        // coherent region; the request scope is advisory (the scheduler passes the
+        // scope it holds, which is the base's scope).
+        var scope = baseManifest.Scope;
+        var treeId = scope.TreeId;
+
+        // Fail-closed authorization before anything else is touched, matching the
+        // full-capture path.
+        await authorizer.AuthorizeBackupAsync(scope, cancellationToken).ConfigureAwait(false);
+
+        var partitions = await optionsResolver.GetWalPartitionsAsync(treeId).ConfigureAwait(false);
+        var baseOffsets = ResolveBaseOffsets(baseManifest.ConsistencyCut, partitions);
+
+        // Fall-off detection: if retention trimmed the WAL past the base resume
+        // point on any partition, a clean forward delta is impossible - fall back
+        // to a fresh full backup with the base's scope rather than emit a torn
+        // increment.
+        if (await HasFallenOffAsync(treeId, partitions, baseOffsets, cancellationToken).ConfigureAwait(false))
+        {
+            logger.LogWarning(
+                "Base backup {BaseBackupId} resume point fell off the WAL for tree {TreeId}; "
+                + "falling back to a full backup.",
+                request.BaseBackupId, treeId);
+            return await CaptureTreeAsync(request.Name, scope, request.PageSize, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        // Pin the WAL at the base frontier so garbage collection cannot trim
+        // entries we still need to read while we drain forward. The pin is a fixed
+        // floor for the duration of the drain and is advanced to the increment
+        // frontier once the delta is captured.
+        var consumerId = IncrementalConsumerId(treeId);
+        var baseFrontier = new HybridLogicalClock { WallClockTicks = baseManifest.ConsistencyCut.HlcTimestamp };
+        if (baseFrontier > HybridLogicalClock.Zero)
+        {
+            await cursorRegistry.ReportCursorAsync(treeId, consumerId, baseFrontier, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        var (startInclusive, endExclusive) = ResolveRange(scope);
+        var createdAtUtc = DateTimeOffset.UtcNow;
+        var artifactId = BuildArtifactId(scope, createdAtUtc);
+
+        var collector = new IncrementalDeltaCollector(
+            serializer,
+            walSubscriber,
+            treeId,
+            consumerId,
+            partitions,
+            baseOffsets,
+            startInclusive,
+            endExclusive,
+            ResolveTreeMergeMode(treeId),
+            request.BaseBackupId,
+            request.PageSize);
+
+        // Stream the delta pages to the sink; the collector accumulates the
+        // manifest metadata and the new per-partition offset frontier as each page
+        // passes through.
+        await sink.WriteArtifactAsync(
+            artifactId,
+            collector.StreamAsync(cancellationToken),
+            cancellationToken).ConfigureAwait(false);
+
+        // A trim that raced the up-front check, or a range delete that the uniform
+        // point-keyed artifact cannot faithfully encode, abandons the delta for a
+        // fresh full backup. The partial artifact is content-addressed and simply
+        // orphaned.
+        if (collector.FellOffLog || collector.RequiresFullFallback)
+        {
+            logger.LogWarning(
+                "Incremental capture on base {BaseBackupId} for tree {TreeId} fell back to a full backup ({Reason}).",
+                request.BaseBackupId,
+                treeId,
+                collector.FellOffLog
+                    ? "the WAL trimmed past the base resume point mid-drain"
+                    : "a range delete surfaced in the delta window");
+            return await CaptureTreeAsync(request.Name, scope, request.PageSize, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        var backupId = collector.BackupId;
+        var lattice = grainFactory.GetGrain<ILattice>(treeId);
+        var topology = await BuildTopologyAsync(lattice, startInclusive, endExclusive, cancellationToken)
+            .ConfigureAwait(false);
+        var consistencyCut = BuildIncrementalCut(
+            baseManifest.ConsistencyCut,
+            collector.NewPartitionOffsets(),
+            collector.HighestHlc,
+            collector.PerOriginHighWater);
+        var provenance = BuildProvenance(collector.PerOriginHighWater);
+
+        var contentDescriptor = new BackupContentDescriptor(
+            artifactId,
+            collector.ContentHash,
+            collector.ByteLength,
+            collector.ChunkCount,
+            scope);
+
+        var manifest = new BackupManifest(
+            id: backupId,
+            name: request.Name,
+            createdAtUtc: createdAtUtc,
+            kind: BackupKind.Incremental,
+            scope: scope,
+            consistencyCut: consistencyCut,
+            topology: topology,
+            structuralDigest: ComputeStructuralDigest(topology.ShardRootDigests),
+            keyDescriptors: collector.KeyDescriptors,
+            contentDescriptors: new[] { contentDescriptor },
+            provenance: provenance,
+            baseBackupId: request.BaseBackupId,
+            compressionDictionary: null);
+
+        await sink.WriteManifestAsync(manifest, cancellationToken).ConfigureAwait(false);
+        await catalog.RegisterAsync(manifest, cancellationToken).ConfigureAwait(false);
+
+        // Advance the WAL pin to the increment frontier so GC can now reclaim the
+        // entries we have captured; the next increment re-pins from its own base.
+        if (collector.HighestHlc > HybridLogicalClock.Zero)
+        {
+            await cursorRegistry.ReportCursorAsync(treeId, consumerId, collector.HighestHlc, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        logger.LogInformation(
+            "Captured incremental backup {BackupId} of tree {TreeId} on base {BaseBackupId} "
+            + "({KeyCount} delta entries, {ByteLength} bytes).",
+            backupId, treeId, request.BaseBackupId, collector.KeyDescriptors.Count, collector.ByteLength);
+
+        return new LatticeBackupCaptureResult(backupId, manifest);
     }
 
     /// <inheritdoc />
@@ -299,6 +450,13 @@ internal sealed class LatticeBackupCaptureService(
                 + $"({nameof(LatticeOptions.MaxSnapshotReplayEntries)}). Narrow the scope or raise the budget.");
         }
 
+        // Capture the per-partition WAL head frontier BEFORE opening the snapshot
+        // cursor so a later incremental resumes its forward WAL read from exactly
+        // this cut. Any entry that lands between this read and the snapshot freeze
+        // is re-read forward by the increment (a benign last-writer-wins overlap)
+        // rather than lost.
+        var walPartitionOffsets = await CaptureWalHeadsAsync(treeId, cancellationToken).ConfigureAwait(false);
+
         // Open the point-in-time cut through the public snapshot cursor surface;
         // this consults the core shedding / budget policy and surfaces
         // LatticeSaturatedException / LatticeCursorSnapshotExpiredException for us.
@@ -330,7 +488,7 @@ internal sealed class LatticeBackupCaptureService(
 
             var topology = await BuildTopologyAsync(lattice, startInclusive, endExclusive, cancellationToken)
                 .ConfigureAwait(false);
-            var consistencyCut = BuildConsistencyCut(coordinate, collector.PerOriginHighWater);
+            var consistencyCut = BuildConsistencyCut(coordinate, collector.PerOriginHighWater, walPartitionOffsets);
             var provenance = BuildProvenance(collector.PerOriginHighWater);
 
             var contentDescriptor = new BackupContentDescriptor(
@@ -402,7 +560,8 @@ internal sealed class LatticeBackupCaptureService(
     /// </summary>
     private static BackupConsistencyCut BuildConsistencyCut(
         LatticeSnapshotCoordinate coordinate,
-        IReadOnlyDictionary<string, long> perOriginHighWater)
+        IReadOnlyDictionary<string, long> perOriginHighWater,
+        IReadOnlyDictionary<int, long> walPartitionOffsets)
     {
         long walSequence = 0;
         foreach (var offset in coordinate.PerShardWalOffsets.Values)
@@ -423,8 +582,126 @@ internal sealed class LatticeBackupCaptureService(
             ? new Dictionary<string, long>(perOriginHighWater)
             : null;
 
-        return new BackupConsistencyCut(walSequence, hlcTimestamp, perOriginFrontier);
+        return new BackupConsistencyCut(walSequence, hlcTimestamp, perOriginFrontier, walPartitionOffsets);
     }
+
+    /// <summary>
+    /// Reads the current per-partition WAL head (next-to-assign offset) for every
+    /// partition of <paramref name="treeId"/>. Recorded on a full capture so a
+    /// later incremental resumes its forward read from exactly this frontier.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<int, long>> CaptureWalHeadsAsync(
+        string treeId,
+        CancellationToken cancellationToken)
+    {
+        var partitions = await optionsResolver.GetWalPartitionsAsync(treeId).ConfigureAwait(false);
+        var heads = new Dictionary<int, long>(partitions);
+        for (var partition = 0; partition < partitions; partition++)
+        {
+            heads[partition] = await commitLogReader
+                .GetHeadOffsetAsync(treeId, partition, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        return heads;
+    }
+
+    /// <summary>
+    /// Resolves the base backup's per-partition resume frontier: the recorded
+    /// per-partition offsets when present, or a from-the-start frontier (offset
+    /// <c>0</c> on every partition) for a legacy manifest captured before the field
+    /// existed.
+    /// </summary>
+    private static IReadOnlyDictionary<int, long> ResolveBaseOffsets(
+        BackupConsistencyCut cut,
+        int partitions)
+    {
+        var offsets = new Dictionary<int, long>(partitions);
+        var recorded = cut.WalPartitionOffsets;
+        for (var partition = 0; partition < partitions; partition++)
+        {
+            offsets[partition] = recorded is not null && recorded.TryGetValue(partition, out var offset)
+                ? offset
+                : 0L;
+        }
+
+        return offsets;
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when the WAL has been trimmed past the base resume point
+    /// on any partition, so a forward delta cannot be emitted without a gap.
+    /// </summary>
+    private async Task<bool> HasFallenOffAsync(
+        string treeId,
+        int partitions,
+        IReadOnlyDictionary<int, long> baseOffsets,
+        CancellationToken cancellationToken)
+    {
+        for (var partition = 0; partition < partitions; partition++)
+        {
+            var resumeNext = baseOffsets.GetValueOrDefault(partition, 0L);
+            if (resumeNext <= 0)
+            {
+                // Nothing was consumed from this partition at the base, so the
+                // increment reads from the start and cannot have fallen off.
+                continue;
+            }
+
+            var tail = await commitLogReader
+                .GetTailOffsetAsync(treeId, partition, cancellationToken)
+                .ConfigureAwait(false);
+            if (tail > resumeNext)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Builds the incremental manifest's consistency cut: the new per-partition
+    /// offset frontier reached by the drain, the highest consumed HLC as the
+    /// frontier timestamp (never regressing below the base), and the per-origin
+    /// high-water of the delta.
+    /// </summary>
+    private static BackupConsistencyCut BuildIncrementalCut(
+        BackupConsistencyCut baseCut,
+        IReadOnlyDictionary<int, long> newOffsets,
+        HybridLogicalClock highestHlc,
+        IReadOnlyDictionary<string, long> perOriginHighWater)
+    {
+        long walSequence = 0;
+        foreach (var offset in newOffsets.Values)
+        {
+            if (offset > walSequence)
+            {
+                walSequence = offset;
+            }
+        }
+
+        var hlcTimestamp = highestHlc.WallClockTicks;
+        if (hlcTimestamp < baseCut.HlcTimestamp)
+        {
+            // An increment with no intervening writes carries the base frontier
+            // forward so the chain's timestamp never regresses.
+            hlcTimestamp = baseCut.HlcTimestamp;
+        }
+        if (hlcTimestamp < 0)
+        {
+            hlcTimestamp = 0;
+        }
+
+        var perOriginFrontier = perOriginHighWater.Count > 0
+            ? new Dictionary<string, long>(perOriginHighWater)
+            : null;
+
+        return new BackupConsistencyCut(walSequence, hlcTimestamp, perOriginFrontier, newOffsets);
+    }
+
+    /// <summary>The stable cursor-registry consumer id the backup engine pins the WAL under.</summary>
+    private static string IncrementalConsumerId(string treeId) => $"backup:{treeId}";
 
     /// <summary>
     /// Builds the per-origin provenance list from the captured entries'

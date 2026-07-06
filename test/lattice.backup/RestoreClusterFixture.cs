@@ -30,6 +30,10 @@ public sealed class RestoreClusterFixture
     public ILatticeBackupCaptureService Capture =>
         SiloServices.GetRequiredService<ILatticeBackupCaptureService>();
 
+    /// <summary>The silo-side incremental-capture service, used to author increment chains under restore.</summary>
+    public ILatticeBackupIncrementalCaptureService Incremental =>
+        SiloServices.GetRequiredService<ILatticeBackupIncrementalCaptureService>();
+
     /// <summary>The silo-side restore service under test.</summary>
     public ILatticeBackupRestoreService Restore =>
         SiloServices.GetRequiredService<ILatticeBackupRestoreService>();

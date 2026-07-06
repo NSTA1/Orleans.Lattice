@@ -79,6 +79,47 @@ public sealed class LatticeBackupRestoreIntegrationTests
         }
     }
 
+    // ---- Incremental chain ----------------------------------------------
+
+    [Test]
+    public async Task RestoreAsync_base_plus_incremental_chain_folds_the_delta_over_the_base()
+    {
+        await _fixture.InitializeAsync();
+        var source = _fixture.GrainFactory.GetGrain<ILattice>(Source);
+        await source.SetAsync("k1", Bytes("v1"));
+        await source.SetAsync("k2", Bytes("v2"));
+        await source.SetAsync("k3", Bytes("v3"));
+
+        var baseBackup = await _fixture.Capture.CaptureAsync(
+            new LatticeBackupCaptureRequest("base", BackupScopeSelector.WholeTree(Source)));
+
+        // Writes after the base cut: an overwrite, a new key, and a delete. These
+        // are exactly what the increment must carry so the restored chain differs
+        // from the base.
+        await source.SetAsync("k1", Bytes("v1-updated"));
+        await source.SetAsync("k4", Bytes("v4"));
+        await source.DeleteAsync("k2");
+
+        var increment = await _fixture.Incremental.CaptureIncrementalAsync(
+            new LatticeBackupIncrementalCaptureRequest("inc", BackupScopeSelector.WholeTree(Source), baseBackup.BackupId));
+
+        Assert.That(increment.Manifest.Kind, Is.EqualTo(BackupKind.Incremental));
+
+        // Restore the increment tip: the engine walks back to the base and replays
+        // base-first, then folds the delta.
+        var target = "orders-chain-restore";
+        await _fixture.Restore.RestoreAsync(new LatticeRestoreRequest(increment.BackupId, target));
+
+        var restored = _fixture.GrainFactory.GetGrain<ILattice>(target);
+        Assert.Multiple(() =>
+        {
+            Assert.That(Str(restored.GetAsync("k1").Result!), Is.EqualTo("v1-updated"), "overwrite folded");
+            Assert.That(restored.GetAsync("k2").Result, Is.Null, "delete folded");
+            Assert.That(Str(restored.GetAsync("k3").Result!), Is.EqualTo("v3"), "untouched base entry survives");
+            Assert.That(Str(restored.GetAsync("k4").Result!), Is.EqualTo("v4"), "new key folded");
+        });
+    }
+
     // ---- Idempotency ----------------------------------------------------
 
     [Test]
