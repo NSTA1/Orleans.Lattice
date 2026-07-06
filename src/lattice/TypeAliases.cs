@@ -179,6 +179,7 @@ internal static class TypeAliases
     internal const string TerminalTallyResult = "ol.ttr";
     internal const string SnapshotPin = "ol.sp";
     internal const string TxRegistrySnapshot = "ol.tsn";
+    internal const string CrossTreeInFlightObservation = "ol.cio";
 
     // Cross-tree (multi-tree) atomic writes
     internal const string LatticeTreeBatch = "ol.ltb";

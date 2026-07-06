@@ -45,4 +45,10 @@ internal static class BackupTypeAliases
 
     /// <summary>Alias for <see cref="BackupCompressionDictionaryRef"/>.</summary>
     internal const string BackupCompressionDictionaryRef = "olb.dr";
+
+    /// <summary>Alias for <see cref="BackupSetFence"/>.</summary>
+    internal const string BackupSetFence = "olb.fn";
+
+    /// <summary>Alias for <see cref="BackupSetManifest"/>.</summary>
+    internal const string BackupSetManifest = "olb.sm";
 }

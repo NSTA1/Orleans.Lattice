@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -22,19 +23,258 @@ internal sealed class LatticeBackupCaptureService(
     ILatticeBackupCatalogStore catalog,
     BackupAccessAuthorizer authorizer,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
+    IOptions<LatticeBackupOptions> backupOptions,
     ILatticeMergeModeResolver mergeModeResolver,
     Serializer serializer,
     ILogger<LatticeBackupCaptureService> logger)
     : ILatticeBackupCaptureService
 {
     /// <inheritdoc />
-    public async Task<LatticeBackupCaptureResult> CaptureAsync(
+    public Task<LatticeBackupCaptureResult> CaptureAsync(
         LatticeBackupCaptureRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        return CaptureTreeAsync(request.Name, request.Scope, request.PageSize, cancellationToken);
+    }
 
-        var scope = request.Scope;
+    /// <inheritdoc />
+    public async Task<LatticeBackupSetCaptureResult> CaptureSetAsync(
+        LatticeBackupSetCaptureRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var scopes = request.Scopes;
+
+        // Single-tree or non-flagged sets issue no cross-tree coordination: each
+        // member takes the cheap per-tree cut, exactly as a direct CaptureAsync
+        // would. This keeps the common case free of the fence machinery.
+        if (!request.CrossTreeConsistent || scopes.Count == 1)
+        {
+            var plainMembers = new List<LatticeBackupCaptureResult>(scopes.Count);
+            foreach (var scope in scopes)
+            {
+                plainMembers.Add(
+                    await CaptureTreeAsync(request.Name, scope, request.PageSize, cancellationToken)
+                        .ConfigureAwait(false));
+            }
+
+            var plainManifest = BuildSetManifest(request.Name, plainMembers, crossTreeConsistent: false, fence: null);
+            return new LatticeBackupSetCaptureResult(plainManifest, plainMembers);
+        }
+
+        return await CaptureFencedSetAsync(request, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Captures a cross-tree-consistent set behind a single causal fence. Each
+    /// attempt drains every in-flight cross-tree saga touching the set to a
+    /// terminal decision, selects the fence, captures every tree, then
+    /// re-observes: the attempt is accepted only when no cross-tree saga
+    /// registered on the set during the capture window (each registry's monotonic
+    /// epoch is unchanged and nothing is in-flight). Because the per-tree snapshot
+    /// resolves a cross-tree batch's visibility against the single coordinator
+    /// decision, a batch terminal before every capture is uniformly visible and a
+    /// batch not yet started is uniformly absent - so no cross-tree batch is torn
+    /// across the set boundary.
+    /// </summary>
+    private async Task<LatticeBackupSetCaptureResult> CaptureFencedSetAsync(
+        LatticeBackupSetCaptureRequest request,
+        CancellationToken cancellationToken)
+    {
+        var scopes = request.Scopes;
+        var options = backupOptions.Value;
+        var registries = new ITxRegistryGrain[scopes.Count];
+        for (var i = 0; i < scopes.Count; i++)
+        {
+            registries[i] = grainFactory.GetGrain<ITxRegistryGrain>(scopes[i].TreeId);
+        }
+
+        var totalDrainWait = TimeSpan.Zero;
+        var totalDrained = 0;
+
+        for (var attempt = 1; attempt <= options.MaxCrossTreeFenceAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Step 1: drain in-flight cross-tree sagas touching the set and
+            // capture the per-tree registration epoch at the drained moment.
+            var (epochBefore, drained, waited) = await DrainCrossTreeInFlightAsync(
+                registries, options, cancellationToken).ConfigureAwait(false);
+            totalDrainWait += waited;
+            totalDrained += drained;
+
+            // Step 2: select the fence and capture every tree as of it.
+            var fenceHlc = DateTimeOffset.UtcNow.UtcTicks;
+            var members = new List<LatticeBackupCaptureResult>(scopes.Count);
+            foreach (var scope in scopes)
+            {
+                members.Add(
+                    await CaptureTreeAsync(request.Name, scope, request.PageSize, cancellationToken)
+                        .ConfigureAwait(false));
+            }
+
+            // Step 3: re-observe. The window is stable iff no cross-tree saga
+            // registered on any set tree during the capture (epoch unchanged) and
+            // nothing is in-flight now.
+            var stable = true;
+            for (var i = 0; i < registries.Length; i++)
+            {
+                var after = await registries[i].ObserveCrossTreeInFlightAsync().ConfigureAwait(false);
+                if (after.RegistrationEpoch != epochBefore[i] || after.InFlightCount != 0)
+                {
+                    stable = false;
+                    break;
+                }
+            }
+
+            if (stable)
+            {
+                var fence = new BackupSetFence(
+                    fenceHlc, totalDrained, totalDrainWait.TotalMilliseconds, attempt);
+
+                BackupMetrics.CrossTreeFenceSelections.Add(
+                    1, new KeyValuePair<string, object?>(BackupMetrics.TagTreeCount, scopes.Count));
+                if (totalDrained > 0)
+                {
+                    BackupMetrics.CrossTreeFenceDrainedInFlight.Add(totalDrained);
+                }
+                BackupMetrics.CrossTreeFenceDrainWaitMilliseconds.Record(totalDrainWait.TotalMilliseconds);
+
+                logger.LogInformation(
+                    "Captured cross-tree-consistent backup set '{SetName}' over {TreeCount} trees at fence hlc={FenceHlc} "
+                    + "(attempt {Attempt}, drained {Drained} in-flight sagas over {DrainWaitMs}ms).",
+                    request.Name, scopes.Count, fenceHlc, attempt, totalDrained, totalDrainWait.TotalMilliseconds);
+
+                var manifest = BuildSetManifest(request.Name, members, crossTreeConsistent: true, fence);
+                return new LatticeBackupSetCaptureResult(manifest, members);
+            }
+
+            // A cross-tree saga registered on the set mid-capture: the captured
+            // members may be torn. Discard them (they remain as content-addressed
+            // orphan per-tree backups) and retry with a fresh fence.
+            BackupMetrics.CrossTreeFenceRetries.Add(1);
+            logger.LogDebug(
+                "Backup set '{SetName}' fence attempt {Attempt} saw a cross-tree saga register during capture; retrying.",
+                request.Name, attempt);
+        }
+
+        throw new LatticeBackupCrossTreeFenceException(
+            $"Could not establish a stable cross-tree fence for backup set '{request.Name}' over "
+            + $"{scopes.Count} trees within {options.MaxCrossTreeFenceAttempts} attempts: a cross-tree atomic "
+            + "write kept registering on the set during each capture window. Retry when the set is quieter or "
+            + $"raise {nameof(LatticeBackupOptions.MaxCrossTreeFenceAttempts)}.");
+    }
+
+    /// <summary>
+    /// Polls every set tree's registry until no cross-tree saga is in-flight,
+    /// returning the per-tree registration epoch observed at that drained moment,
+    /// the peak number of in-flight sagas waited on, and the total wait. Throws
+    /// <see cref="LatticeBackupCrossTreeFenceException"/> if the sagas do not
+    /// drain within <see cref="LatticeBackupOptions.CrossTreeFenceDrainTimeout"/>.
+    /// </summary>
+    private static async Task<(long[] EpochBefore, int Drained, TimeSpan Waited)> DrainCrossTreeInFlightAsync(
+        ITxRegistryGrain[] registries,
+        LatticeBackupOptions options,
+        CancellationToken cancellationToken)
+    {
+        var sw = Stopwatch.StartNew();
+        var epoch = new long[registries.Length];
+        var peakInFlight = 0;
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var totalInFlight = 0;
+            for (var i = 0; i < registries.Length; i++)
+            {
+                var obs = await registries[i].ObserveCrossTreeInFlightAsync().ConfigureAwait(false);
+                epoch[i] = obs.RegistrationEpoch;
+                totalInFlight += obs.InFlightCount;
+            }
+
+            if (totalInFlight > peakInFlight)
+            {
+                peakInFlight = totalInFlight;
+            }
+
+            if (totalInFlight == 0)
+            {
+                return (epoch, peakInFlight, sw.Elapsed);
+            }
+
+            if (sw.Elapsed >= options.CrossTreeFenceDrainTimeout)
+            {
+                throw new LatticeBackupCrossTreeFenceException(
+                    $"Timed out after {options.CrossTreeFenceDrainTimeout.TotalMilliseconds}ms waiting for "
+                    + $"{totalInFlight} in-flight cross-tree atomic saga(s) touching the backup set to drain. "
+                    + $"Retry when the set is quieter or raise {nameof(LatticeBackupOptions.CrossTreeFenceDrainTimeout)}.");
+            }
+
+            await Task.Delay(options.CrossTreeFencePollInterval, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Builds the set manifest from the ordered member results: the set id is the
+    /// content address (lowercase hex SHA-256) of the newline-joined member backup
+    /// ids, so a set of identical members registers the same set id.
+    /// </summary>
+    private static BackupSetManifest BuildSetManifest(
+        string name,
+        IReadOnlyList<LatticeBackupCaptureResult> members,
+        bool crossTreeConsistent,
+        BackupSetFence? fence)
+    {
+        var memberIds = new List<string>(members.Count);
+        foreach (var member in members)
+        {
+            memberIds.Add(member.BackupId);
+        }
+
+        using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        foreach (var id in memberIds)
+        {
+            hasher.AppendData(System.Text.Encoding.UTF8.GetBytes(id));
+            hasher.AppendData("\n"u8);
+        }
+        var setId = Convert.ToHexStringLower(hasher.GetHashAndReset());
+
+        return new BackupSetManifest(
+            setId,
+            name,
+            DateTimeOffset.UtcNow,
+            crossTreeConsistent,
+            fence,
+            memberIds);
+    }
+
+    /// <summary>
+    /// Resolves the declared per-tree merge mode into the backup's coarse merge
+    /// label. Merge mode is declared per tree (for replication) rather than stored
+    /// per key: a replicated tree that declares any CRDT mode captures as
+    /// <see cref="BackupKeyMergeMode.Crdt"/>, while a last-writer-wins or
+    /// non-replicated (local-only) tree captures as
+    /// <see cref="BackupKeyMergeMode.LastWriterWins"/>.
+    /// </summary>
+    private BackupKeyMergeMode ResolveTreeMergeMode(string treeId) =>
+        mergeModeResolver.Resolve(treeId) is { } declaredMode and not LatticeMergeMode.LwwRegister
+            ? BackupKeyMergeMode.Crdt
+            : BackupKeyMergeMode.LastWriterWins;
+
+    /// <summary>
+    /// Captures one tree's full backup for the given scope and page size: the
+    /// shared body behind both <see cref="CaptureAsync"/> and each member of
+    /// <see cref="CaptureSetAsync"/>.
+    /// </summary>
+    private async Task<LatticeBackupCaptureResult> CaptureTreeAsync(
+        string name,
+        BackupScopeSelector scope,
+        int pageSize,
+        CancellationToken cancellationToken)
+    {
         var treeId = scope.TreeId;
 
         // Fail-closed authorization before anything else is touched.
@@ -81,7 +321,7 @@ internal sealed class LatticeBackupCaptureService(
             var collector = new RawEntryCollector(serializer, ResolveTreeMergeMode(treeId));
             await sink.WriteArtifactAsync(
                 artifactId,
-                collector.StreamAsync(cursor, request.PageSize, cancellationToken),
+                collector.StreamAsync(cursor, pageSize, cancellationToken),
                 cancellationToken).ConfigureAwait(false);
 
             // The manifest id is the content address of the streamed payload, so a
@@ -102,7 +342,7 @@ internal sealed class LatticeBackupCaptureService(
 
             var manifest = new BackupManifest(
                 id: backupId,
-                name: request.Name,
+                name: name,
                 createdAtUtc: createdAtUtc,
                 kind: BackupKind.Full,
                 scope: scope,
@@ -131,19 +371,6 @@ internal sealed class LatticeBackupCaptureService(
             await lattice.CloseCursorAsync(cursorId, CancellationToken.None).ConfigureAwait(false);
         }
     }
-
-    /// <summary>
-    /// Resolves the declared per-tree merge mode into the backup's coarse merge
-    /// label. Merge mode is declared per tree (for replication) rather than stored
-    /// per key: a replicated tree that declares any CRDT mode captures as
-    /// <see cref="BackupKeyMergeMode.Crdt"/>, while a last-writer-wins or
-    /// non-replicated (local-only) tree captures as
-    /// <see cref="BackupKeyMergeMode.LastWriterWins"/>.
-    /// </summary>
-    private BackupKeyMergeMode ResolveTreeMergeMode(string treeId) =>
-        mergeModeResolver.Resolve(treeId) is { } declaredMode and not LatticeMergeMode.LwwRegister
-            ? BackupKeyMergeMode.Crdt
-            : BackupKeyMergeMode.LastWriterWins;
 
     /// <summary>
     /// Maps a scope to the half-open snapshot range bounds: whole-tree is

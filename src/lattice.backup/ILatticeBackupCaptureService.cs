@@ -32,4 +32,29 @@ public interface ILatticeBackupCaptureService
     Task<LatticeBackupCaptureResult> CaptureAsync(
         LatticeBackupCaptureRequest request,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Captures a backup <i>set</i> described by <paramref name="request"/>: one
+    /// full backup per scope, grouped under a single set manifest. When
+    /// <see cref="LatticeBackupSetCaptureRequest.CrossTreeConsistent"/> is
+    /// <c>true</c> and the set covers more than one tree, every tree is captured
+    /// as of a single causal fence selected after all in-flight cross-tree atomic
+    /// sagas touching the set have drained, so a cross-tree atomic write is never
+    /// torn across the set boundary: for each such batch either all members are
+    /// present at or under the fence, or none are. A single-tree set (or a set
+    /// with the flag left <c>false</c>) issues no extra coordination and captures
+    /// each member with the cheap per-tree cut.
+    /// </summary>
+    /// <param name="request">The set capture request (name, per-tree scopes, cross-tree flag, page size). Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancels the capture.</param>
+    /// <returns>The set manifest and the per-tree member results in scope order.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to back up a scope in the set.</exception>
+    /// <exception cref="LatticeSnapshotReplayBudgetExceededException">A scope's in-scope size exceeds the configured snapshot replay budget.</exception>
+    /// <exception cref="LatticeSaturatedException">A tree shed the snapshot open because it was saturated.</exception>
+    /// <exception cref="LatticeCursorSnapshotExpiredException">A pinned snapshot expired mid-capture.</exception>
+    /// <exception cref="LatticeBackupCrossTreeFenceException">A stable cross-tree fence could not be established within the configured attempts or drain timeout.</exception>
+    Task<LatticeBackupSetCaptureResult> CaptureSetAsync(
+        LatticeBackupSetCaptureRequest request,
+        CancellationToken cancellationToken = default);
 }

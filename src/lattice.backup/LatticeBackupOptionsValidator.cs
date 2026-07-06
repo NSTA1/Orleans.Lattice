@@ -24,6 +24,21 @@ internal sealed class LatticeBackupOptionsValidator : IValidateOptions<LatticeBa
             failures.Add($"{nameof(LatticeBackupOptions.HistoryRetentionMode)} must be a defined HistoryRetentionMode value.");
         }
 
+        if (options.CrossTreeFenceDrainTimeout <= TimeSpan.Zero)
+        {
+            failures.Add($"{nameof(LatticeBackupOptions.CrossTreeFenceDrainTimeout)} must be strictly positive.");
+        }
+
+        if (options.CrossTreeFencePollInterval <= TimeSpan.Zero)
+        {
+            failures.Add($"{nameof(LatticeBackupOptions.CrossTreeFencePollInterval)} must be strictly positive.");
+        }
+
+        if (options.MaxCrossTreeFenceAttempts < 1)
+        {
+            failures.Add($"{nameof(LatticeBackupOptions.MaxCrossTreeFenceAttempts)} must be at least 1.");
+        }
+
         return failures.Count > 0
             ? ValidateOptionsResult.Fail(failures)
             : ValidateOptionsResult.Success;

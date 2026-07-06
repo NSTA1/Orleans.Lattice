@@ -67,7 +67,14 @@ public sealed class CaptureClusterFixture
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             siloBuilder.ConfigureLattice(o => o.MaxSnapshotReplayEntries = s_maxSnapshotReplayEntries);
             siloBuilder.UseInMemoryReminderService();
-            siloBuilder.AddLatticeBackup();
+            siloBuilder.AddLatticeBackup(o =>
+            {
+                // Generous fence budget so a brief concurrent cross-tree write
+                // never exhausts the retry/drain allowance in CI.
+                o.MaxCrossTreeFenceAttempts = 50;
+                o.CrossTreeFenceDrainTimeout = TimeSpan.FromSeconds(15);
+                o.CrossTreeFencePollInterval = TimeSpan.FromMilliseconds(10);
+            });
         }
     }
 }
