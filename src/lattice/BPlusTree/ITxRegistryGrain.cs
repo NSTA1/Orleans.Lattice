@@ -90,6 +90,21 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     Task RegisterReceiverDecisionAuthorityAsync(Guid txid, string receiverCoordinatorKey);
 
     /// <summary>
+    /// Observes this tree's cross-tree atomic-write delegation state for the
+    /// cross-tree-consistent backup fence. Resolves every active delegation
+    /// against its coordinator first (caching any newly-terminal verdict and
+    /// dropping the delegation), then reports how many cross-tree sagas remain
+    /// genuinely in-flight together with the monotonic
+    /// <see cref="State.TxRegistryState.CrossTreeRegistrationEpoch"/>. The fence
+    /// drains until <see cref="CrossTreeInFlightObservation.InFlightCount"/> is
+    /// zero, then re-observes after capturing to confirm the epoch did not move
+    /// (no cross-tree saga registered during the capture window). Safe to
+    /// interleave with reads.
+    /// </summary>
+    /// <returns>The current in-flight cross-tree saga count and registration epoch.</returns>
+    Task<CrossTreeInFlightObservation> ObserveCrossTreeInFlightAsync();
+
+    /// <summary>
     /// Returns the recorded outcome for <paramref name="txid"/>. Returns
     /// <see cref="TxStatus.InFlight"/> when no decision has been recorded
     /// (the saga is still preparing or has been forgotten via

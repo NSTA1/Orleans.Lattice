@@ -426,7 +426,66 @@ internal sealed partial class LatticeCursorGrain
     }
 
     /// <summary>
-    /// Fans out a per-shard keys fetch across every shard the snapshot
+    /// Raw-entry companion of <see cref="NextSnapshotEntriesAsync"/>. Drains the
+    /// same pinned point-in-time cut but k-way merges <see cref="LwwEntry"/>
+    /// carriers so the causal envelope (HLC timestamp, tombstone flag, expiry,
+    /// origin cluster id, version vector) reaches the backup capture engine
+    /// intact. Progress bookkeeping (continuation key, exhaustion, baseline
+    /// flush, TTL / pin refresh) is identical to the projection path.
+    /// </summary>
+    private async Task<LatticeCursorRawEntriesPage> NextSnapshotRawEntriesAsync(int pageSize)
+    {
+        var coord = state.State.SnapshotCoordinate!.Value;
+        var (effStart, effEnd) = ComputeEffectiveRange();
+        var reverse = state.State.Spec.Reverse;
+
+        var perShardLists = await FetchPerShardRawEntriesAsync(coord, effStart, effEnd, pageSize, state.State.Spec.Predicate, reverse);
+        var collected = new List<LwwEntry>(PageBufferCapacity(pageSize));
+        MergeSortedRawEntryLists(perShardLists, reverse, pageSize, collected);
+
+        var hasMore = collected.Count >= pageSize && AnyShardRawEntryHasRemaining(perShardLists, pageSize);
+        var continuationKey = collected.Count > 0 ? collected[^1].Key : null;
+
+        // Re-apply the caller's read-path key-filter here because the snapshot
+        // leaf reads bypass the public filtered surface.
+        var snapshotEntryFilter = await ResolveSnapshotKeyFilterAsync(effStart, effEnd);
+        if (snapshotEntryFilter is not null)
+        {
+            collected.RemoveAll(e => !snapshotEntryFilter(e.Key));
+        }
+
+        var prevLastYieldedKey = state.State.LastYieldedKey;
+        var prevPhase = state.State.Phase;
+        var prevPersisted = state.State.SnapshotBaselinePersisted;
+        if (continuationKey is not null)
+        {
+            state.State.LastYieldedKey = continuationKey;
+        }
+        if (!hasMore)
+        {
+            state.State.Phase = LatticeCursorPhase.Exhausted;
+        }
+        else if (!state.State.SnapshotBaselinePersisted)
+        {
+            await EnsureSnapshotBaselinesPersistedAsync(coord);
+            state.State.SnapshotBaselinePersisted = true;
+        }
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.LastYieldedKey = prevLastYieldedKey;
+            state.State.Phase = prevPhase;
+            state.State.SnapshotBaselinePersisted = prevPersisted;
+            throw;
+        }
+        await TryReportSnapshotPinAsync();
+        await SlideTtlAsync();
+
+        return new LatticeCursorRawEntriesPage { Entries = collected, HasMore = hasMore };
+    }
     /// coordinate covers. Concurrent activation of per-shard snapshot
     /// leaves is intentional - replay is read-only and CPU-bound, so
     /// the fan-out reduces wall-clock per-page latency. Any per-shard
@@ -507,8 +566,43 @@ internal sealed partial class LatticeCursorGrain
         return await Task.WhenAll(tasks);
     }
 
+    private async Task<List<LwwEntry>> FetchSnapshotShardRawEntriesAsync(
+        int shardIndex,
+        IReadOnlyList<long> capturedOffsetsByPartition,
+        LatticeSnapshotCoordinate coord,
+        string? effStart,
+        string? effEnd,
+        int pageSize,
+        LatticePredicateNode? predicate,
+        bool reverse)
+    {
+        var leaf = grainFactory.GetGrain<ISnapshotLeafGrain>(BuildSnapshotLeafKey(coord, shardIndex));
+        var (ownedSlots, vsc) = ResolveOwnedSlots(coord, shardIndex);
+        await leaf.OpenAsync(state.State.TreeId, shardIndex, capturedOffsetsByPartition, ownedSlots, vsc, coord.SnapshotBaselineToken, default);
+        return await leaf.GetRawEntriesAsync(effStart, effEnd, limit: pageSize, predicate: predicate, reverse: reverse);
+    }
+
     /// <summary>
-    /// Resolves the per-shard per-partition WAL offsets the snapshot
+    /// Raw-entry companion of <see cref="FetchPerShardEntriesAsync"/>.
+    /// </summary>
+    private async Task<List<LwwEntry>[]> FetchPerShardRawEntriesAsync(
+        LatticeSnapshotCoordinate coord,
+        string? effStart,
+        string? effEnd,
+        int pageSize,
+        LatticePredicateNode? predicate,
+        bool reverse)
+    {
+        var shards = ResolvePerShardPerPartitionOffsets(coord);
+        var tasks = new Task<List<LwwEntry>>[shards.Count];
+        var index = 0;
+        foreach (var (shardIdx, capturedOffsets) in shards)
+        {
+            tasks[index++] = FetchSnapshotShardRawEntriesAsync(shardIdx, capturedOffsets, coord, effStart, effEnd, pageSize, predicate, reverse);
+        }
+
+        return await Task.WhenAll(tasks);
+    }
     /// leaves replay against. Prefers
     /// <see cref="LatticeSnapshotCoordinate.PerShardPerPartitionWalOffsets"/>
     /// when non-null (multi-partition capture path); falls back to
@@ -679,6 +773,69 @@ internal sealed partial class LatticeCursorGrain
         for (var s = 0; s < perShard.Length; s++)
         {
             // See AnyShardHasRemaining for the rationale.
+            if (perShard[s].Count > 0) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Raw-entry companion of <see cref="MergeSortedEntryLists"/>: k-way merges
+    /// per-shard <see cref="LwwEntry"/> runs on <see cref="LwwEntry.Key"/>.
+    /// </summary>
+    private static void MergeSortedRawEntryLists(
+        List<LwwEntry>[] perShard,
+        bool reverse,
+        int pageSize,
+        List<LwwEntry> output)
+    {
+        var cursors = new int[perShard.Length];
+        for (var s = 0; s < perShard.Length; s++)
+        {
+            cursors[s] = reverse ? perShard[s].Count - 1 : 0;
+        }
+
+        while (output.Count < pageSize)
+        {
+            var pickShard = -1;
+            string? pickKey = null;
+            for (var s = 0; s < perShard.Length; s++)
+            {
+                var c = cursors[s];
+                if (reverse)
+                {
+                    if (c < 0) continue;
+                }
+                else
+                {
+                    if (c >= perShard[s].Count) continue;
+                }
+                var candidate = perShard[s][c].Key;
+                if (pickKey is null)
+                {
+                    pickKey = candidate;
+                    pickShard = s;
+                    continue;
+                }
+                var cmp = string.CompareOrdinal(candidate, pickKey);
+                if (reverse ? cmp > 0 : cmp < 0)
+                {
+                    pickKey = candidate;
+                    pickShard = s;
+                }
+            }
+            if (pickShard < 0) return;
+            var picked = perShard[pickShard][cursors[pickShard]];
+            cursors[pickShard] += reverse ? -1 : 1;
+            if (output.Count > 0 && string.CompareOrdinal(output[^1].Key, picked.Key) == 0)
+                continue;
+            output.Add(picked);
+        }
+    }
+
+    private static bool AnyShardRawEntryHasRemaining(List<LwwEntry>[] perShard, int pageSize)
+    {
+        for (var s = 0; s < perShard.Length; s++)
+        {
             if (perShard[s].Count > 0) return true;
         }
         return false;

@@ -225,8 +225,11 @@ internal sealed class PolicyAccessGate(
     /// <summary>
     /// The operation bits that count as a write for the strict-consistency fence:
     /// everything that mutates a tree. Pure reads (<see cref="LatticeOperation.Read"/>,
-    /// <see cref="LatticeOperation.RangeRead"/>) are deliberately excluded so a
-    /// read is never fenced.
+    /// <see cref="LatticeOperation.RangeRead"/>, and the read-only
+    /// <see cref="LatticeOperation.Backup"/> capture capability) are deliberately
+    /// excluded so a read is never fenced;
+    /// <see cref="LatticeOperation.Restore"/> is included because it bulk-loads a
+    /// tree exactly as <see cref="LatticeOperation.BulkLoad"/> does.
     /// </summary>
     private const LatticeOperation FenceWriteMask =
         LatticeOperation.Write
@@ -235,7 +238,8 @@ internal sealed class PolicyAccessGate(
         | LatticeOperation.CrdtApply
         | LatticeOperation.AtomicWrite
         | LatticeOperation.BulkLoad
-        | LatticeOperation.Admin;
+        | LatticeOperation.Admin
+        | LatticeOperation.Restore;
 
     /// <summary>
     /// Decides whether the strict-consistency epoch fence rejects this request.

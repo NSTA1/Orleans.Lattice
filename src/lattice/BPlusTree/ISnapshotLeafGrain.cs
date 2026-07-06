@@ -155,4 +155,20 @@ internal interface ISnapshotLeafGrain : IGrainWithStringKey
     /// <paramref name="reverse"/> top-of-range selection.
     /// </summary>
     Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, int limit = int.MaxValue, LatticePredicateNode? predicate = null, bool reverse = false);
+
+    /// <summary>
+    /// Returns the sorted list of live raw entries this snapshot leaf observes
+    /// in the optional [<paramref name="startInclusive"/>,
+    /// <paramref name="endExclusive"/>) range, each carrying the full
+    /// last-writer-wins envelope (value, hybrid-logical-clock timestamp,
+    /// tombstone flag, expiry, origin cluster id, and version vector) via
+    /// <see cref="LwwEntry"/>. Same filter contract as
+    /// <see cref="GetEntriesAsync"/> - tombstoned, expired, donor-orphan, and
+    /// (when a <paramref name="predicate"/> is supplied) non-matching entries
+    /// are excluded, and the <paramref name="limit"/> / <paramref name="reverse"/>
+    /// selection matches. This is the metadata-complete companion of
+    /// <see cref="GetEntriesAsync"/> used by the backup capture path, which
+    /// needs the causal metadata the plain key/value projection discards.
+    /// </summary>
+    Task<List<LwwEntry>> GetRawEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, int limit = int.MaxValue, LatticePredicateNode? predicate = null, bool reverse = false);
 }

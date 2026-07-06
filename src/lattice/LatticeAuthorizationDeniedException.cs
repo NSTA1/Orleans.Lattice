@@ -2,10 +2,11 @@ namespace Orleans.Lattice;
 
 /// <summary>
 /// Thrown by the public <see cref="ILattice"/> write, delete, CRDT, atomic,
-/// range-delete, bulk-load, and lifecycle surface when the registered
-/// <see cref="ILatticeAccessGate"/> denies the caller's request. The offending
-/// operation is <b>fail-closed</b>: nothing is persisted before this exception
-/// is raised, so a denial never leaves a partial write behind.
+/// range-delete, bulk-load, and lifecycle surface (and by the backup / restore
+/// authorization seam) when the registered <see cref="ILatticeAccessGate"/>
+/// denies the caller's request. The offending operation is <b>fail-closed</b>:
+/// nothing is persisted before this exception is raised, so a denial never
+/// leaves a partial write behind.
 /// </summary>
 /// <remarks>
 /// <para>

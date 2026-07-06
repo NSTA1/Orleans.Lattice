@@ -244,4 +244,27 @@ internal sealed class TxRegistryState
     /// </para>
     /// </summary>
     [Id(8)] public Dictionary<Guid, string> ReceiverDecisionAuthorities { get; set; } = [];
+
+    /// <summary>
+    /// Monotonically non-decreasing count of distinct cross-tree atomic sagas
+    /// that have ever registered a delegation on this tree (via
+    /// <see cref="Grains.TxRegistryGrain.RegisterExternalDecisionAuthorityAsync(Guid, string)"/>
+    /// or
+    /// <see cref="Grains.TxRegistryGrain.RegisterReceiverDecisionAuthorityAsync(Guid, string)"/>).
+    /// Bumped only on the first registration of a given txid, so it counts
+    /// distinct cross-tree sagas rather than idempotent re-registrations.
+    /// Surfaced through
+    /// <see cref="Grains.TxRegistryGrain.ObserveCrossTreeInFlightAsync"/> so the
+    /// cross-tree-consistent backup fence can detect a saga that both registered
+    /// and completed inside a capture window (which leaves no trace in the
+    /// delegation maps before or after).
+    /// <para>
+    /// Wire-compatibility: legacy persisted state with no Id-9 slot decodes to
+    /// <c>0L</c>, the correct semantic default (no cross-tree saga has registered
+    /// yet). The counter is opaque - only equality across two observations
+    /// matters - so its absolute value carries no meaning across reactivations
+    /// beyond monotonicity.
+    /// </para>
+    /// </summary>
+    [Id(9)] public long CrossTreeRegistrationEpoch { get; set; }
 }

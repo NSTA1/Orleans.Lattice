@@ -323,6 +323,13 @@ public interface ILattice : IGrainWithStringKey
     /// <see cref="LatticeOptions.PrefetchKeysScan"/> is enabled), the next page from
     /// each shard is fetched in parallel while the current page is being consumed.
     /// </summary>
+    /// <remarks>
+    /// This raw stream surfaces <c>Orleans.Runtime.EnumerationAbortedException</c>
+    /// if the remote enumerator is reclaimed mid-scan (silo failover, cold start,
+    /// idle expiry, or scale-down). For long-running scans prefer
+    /// <see cref="LatticeExtensions.ScanKeysAsync"/>, which transparently recovers
+    /// from that abort and resumes deterministically (no duplicates, no gaps).
+    /// </remarks>
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
     IAsyncEnumerable<string> KeysAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool? prefetch = null, CancellationToken cancellationToken = default);
 
@@ -347,6 +354,14 @@ public interface ILattice : IGrainWithStringKey
     /// Because entries carry <c>byte[]</c> values, pre-fetched pages hold extra
     /// memory proportional to <c>shardCount × KeysPageSize × avgValueSize</c>.
     /// </summary>
+    /// <remarks>
+    /// This raw stream surfaces <c>Orleans.Runtime.EnumerationAbortedException</c>
+    /// if the remote enumerator is reclaimed mid-scan (silo failover, cold start,
+    /// idle expiry, or scale-down). For long-running exports prefer
+    /// <see cref="LatticeExtensions.ScanEntriesAsync"/>, which transparently
+    /// recovers from that abort and resumes deterministically (no duplicates,
+    /// no gaps).
+    /// </remarks>
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
     IAsyncEnumerable<KeyValuePair<string, byte[]>> EntriesAsync(string? startInclusive = null, string? endExclusive = null, bool reverse = false, bool? prefetch = null, CancellationToken cancellationToken = default);
 

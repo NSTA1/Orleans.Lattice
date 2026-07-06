@@ -73,6 +73,28 @@ internal interface ILatticeCursorGrain : IGrainWithStringKey
     Task<LatticeCursorEntriesPage> NextEntriesAsync(int pageSize);
 
     /// <summary>
+    /// Returns the next page of up to <paramref name="pageSize"/> raw entries,
+    /// each carrying the complete last-writer-wins envelope (hybrid-logical-clock
+    /// timestamp, tombstone flag, expiry, origin cluster id, and version vector)
+    /// via <see cref="LwwEntry"/>. Valid only on a zero-observable-writes
+    /// snapshot cursor opened with <see cref="LatticeCursorKind.Entries"/> (the
+    /// metadata is only well-defined against the pinned point-in-time cut);
+    /// throws <see cref="InvalidOperationException"/> otherwise. This is the
+    /// metadata-complete companion of <see cref="NextEntriesAsync"/> consumed by
+    /// the backup capture engine.
+    /// </summary>
+    Task<LatticeCursorRawEntriesPage> NextRawEntriesAsync(int pageSize);
+
+    /// <summary>
+    /// Returns the tree-wide snapshot coordinate this cursor was opened against.
+    /// Valid only on a zero-observable-writes snapshot cursor; throws
+    /// <see cref="InvalidOperationException"/> otherwise. The backup capture
+    /// engine maps these per-shard WAL offsets and registry HLC into the
+    /// manifest's consistency cut.
+    /// </summary>
+    Task<LatticeSnapshotCoordinate> GetSnapshotCoordinateAsync();
+
+    /// <summary>
     /// Deletes up to <paramref name="maxToDelete"/> keys from the cursor's
     /// range and returns the resulting progress. Valid only when the cursor
     /// was opened with <see cref="LatticeCursorKind.DeleteRange"/>; throws

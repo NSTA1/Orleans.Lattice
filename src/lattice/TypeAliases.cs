@@ -179,6 +179,7 @@ internal static class TypeAliases
     internal const string TerminalTallyResult = "ol.ttr";
     internal const string SnapshotPin = "ol.sp";
     internal const string TxRegistrySnapshot = "ol.tsn";
+    internal const string CrossTreeInFlightObservation = "ol.cio";
 
     // Cross-tree (multi-tree) atomic writes
     internal const string LatticeTreeBatch = "ol.ltb";
@@ -204,6 +205,7 @@ internal static class TypeAliases
     internal const string LatticeCursorState = "ol.lcs";
     internal const string LatticeCursorKeysPage = "ol.lkp";
     internal const string LatticeCursorEntriesPage = "ol.lep";
+    internal const string LatticeCursorRawEntriesPage = "ol.lrp";
     internal const string LatticeCursorDeleteProgress = "ol.ldp";
 
     // Zero-observable-writes snapshot cursor: coordinate captured at

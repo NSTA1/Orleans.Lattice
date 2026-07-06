@@ -180,6 +180,15 @@ internal sealed class TxRegistryGrain(
         }
 
         state.State.ExternalAuthorities[txid] = coordinatorKey;
+        // First registration of this txid: advance the monotonic cross-tree
+        // registration epoch so the backup fence can detect a saga that both
+        // registers and completes inside a capture window.
+        var isNewRegistration = existing is null;
+        var prevEpoch = state.State.CrossTreeRegistrationEpoch;
+        if (isNewRegistration)
+        {
+            state.State.CrossTreeRegistrationEpoch = prevEpoch + 1;
+        }
         try
         {
             await state.WriteStateAsync();
@@ -188,6 +197,7 @@ internal sealed class TxRegistryGrain(
         {
             if (existing is not null) state.State.ExternalAuthorities[txid] = existing;
             else state.State.ExternalAuthorities.Remove(txid);
+            state.State.CrossTreeRegistrationEpoch = prevEpoch;
             throw;
         }
     }
@@ -213,6 +223,14 @@ internal sealed class TxRegistryGrain(
         }
 
         state.State.ReceiverDecisionAuthorities[txid] = receiverCoordinatorKey;
+        // First registration of this txid: advance the monotonic cross-tree
+        // registration epoch (see RegisterExternalDecisionAuthorityAsync).
+        var isNewRegistration = existing is null;
+        var prevEpoch = state.State.CrossTreeRegistrationEpoch;
+        if (isNewRegistration)
+        {
+            state.State.CrossTreeRegistrationEpoch = prevEpoch + 1;
+        }
         try
         {
             await state.WriteStateAsync();
@@ -221,6 +239,7 @@ internal sealed class TxRegistryGrain(
         {
             if (existing is not null) state.State.ReceiverDecisionAuthorities[txid] = existing;
             else state.State.ReceiverDecisionAuthorities.Remove(txid);
+            state.State.CrossTreeRegistrationEpoch = prevEpoch;
             throw;
         }
     }
@@ -378,6 +397,21 @@ internal sealed class TxRegistryGrain(
                 await ResolveReceiverDelegatedAsync(txid, receiverKey);
             }
         }
+    }
+
+    /// <inheritdoc />
+    public async Task<CrossTreeInFlightObservation> ObserveCrossTreeInFlightAsync()
+    {
+        // Resolve every active delegation against its coordinator first, so a
+        // saga whose coordinator has already decided is caches-and-dropped and
+        // no longer counts as in-flight. What remains delegated afterwards is
+        // genuinely still preparing.
+        await ResolveAllDelegatedAsync();
+
+        var inFlight = state.State.ExternalAuthorities.Count
+            + state.State.ReceiverDecisionAuthorities.Count;
+
+        return new CrossTreeInFlightObservation(inFlight, state.State.CrossTreeRegistrationEpoch);
     }
 
     /// <inheritdoc />

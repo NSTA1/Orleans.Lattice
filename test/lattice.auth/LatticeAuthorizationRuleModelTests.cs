@@ -174,5 +174,7 @@ public class LatticeAuthorizationRuleModelTests
         Assert.That(LatticeAuthOperations.All.HasFlag(LatticeOperation.AtomicWrite), Is.True);
         Assert.That(LatticeAuthOperations.All.HasFlag(LatticeOperation.BulkLoad), Is.True);
         Assert.That(LatticeAuthOperations.All.HasFlag(LatticeOperation.Admin), Is.True);
+        Assert.That(LatticeAuthOperations.All.HasFlag(LatticeOperation.Backup), Is.True);
+        Assert.That(LatticeAuthOperations.All.HasFlag(LatticeOperation.Restore), Is.True);
     }
 }

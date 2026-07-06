@@ -282,8 +282,8 @@ internal sealed partial class LatticeCursorGrain(
         using (BeginPointInTimeScopeIfNeeded())
         {
             var keys = predicate is { } pred
-                ? lattice.KeysWherePredicateAsync(pred, effStart, effEnd, state.State.Spec.Reverse)
-                : lattice.KeysAsync(effStart, effEnd, state.State.Spec.Reverse);
+                ? lattice.ScanKeysWhereAsync(pred, effStart, effEnd, state.State.Spec.Reverse)
+                : lattice.ScanKeysAsync(effStart, effEnd, state.State.Spec.Reverse);
             await foreach (var key in keys)
             {
                 collected.Add(key);
@@ -354,8 +354,8 @@ internal sealed partial class LatticeCursorGrain(
         using (BeginPointInTimeScopeIfNeeded())
         {
             var entries = predicate is { } pred
-                ? lattice.EntriesWherePredicateAsync(pred, effStart, effEnd, state.State.Spec.Reverse)
-                : lattice.EntriesAsync(effStart, effEnd, state.State.Spec.Reverse);
+                ? lattice.ScanEntriesWhereAsync(pred, effStart, effEnd, state.State.Spec.Reverse)
+                : lattice.ScanEntriesAsync(effStart, effEnd, state.State.Spec.Reverse);
             await foreach (var entry in entries)
             {
                 collected.Add(entry);
@@ -390,6 +390,48 @@ internal sealed partial class LatticeCursorGrain(
         await SlideTtlAsync();
 
         return new LatticeCursorEntriesPage { Entries = collected, HasMore = hasMore };
+    }
+
+    /// <inheritdoc />
+    public async Task<LatticeCursorRawEntriesPage> NextRawEntriesAsync(int pageSize)
+    {
+        EnsureOpenFor(LatticeCursorKind.Entries);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pageSize);
+
+        // Raw metadata is only well-defined against a pinned point-in-time cut.
+        if (!state.State.Spec.ZeroObservableWrites)
+        {
+            throw new InvalidOperationException(
+                $"Cursor '{CursorKey}' is not a snapshot cursor; raw-entry drain requires "
+                + "a zero-observable-writes point-in-time cursor.");
+        }
+
+        if (state.State.Phase == LatticeCursorPhase.Exhausted)
+        {
+            return new LatticeCursorRawEntriesPage
+            {
+                Entries = Array.Empty<LwwEntry>(),
+                HasMore = false,
+            };
+        }
+
+        return await NextSnapshotRawEntriesAsync(pageSize);
+    }
+
+    /// <inheritdoc />
+    public Task<LatticeSnapshotCoordinate> GetSnapshotCoordinateAsync()
+    {
+        if (state.State.Phase is LatticeCursorPhase.NotStarted or LatticeCursorPhase.Closed)
+        {
+            throw new InvalidOperationException(
+                $"Cursor '{CursorKey}' is not open.");
+        }
+        if (state.State.SnapshotCoordinate is not { } coord)
+        {
+            throw new InvalidOperationException(
+                $"Cursor '{CursorKey}' is not a snapshot cursor; no coordinate is available.");
+        }
+        return Task.FromResult(coord);
     }
 
     /// <inheritdoc />
@@ -433,8 +475,8 @@ internal sealed partial class LatticeCursorGrain(
         // counts and bounds the keys actually tombstoned.
         var probe = new List<string>(PageBufferCapacity(maxToDelete) + 1);
         var probeKeys = predicate is { } pred
-            ? lattice.KeysWherePredicateAsync(pred, effStart, effEnd)
-            : lattice.KeysAsync(effStart, effEnd);
+            ? lattice.ScanKeysWhereAsync(pred, effStart, effEnd)
+            : lattice.ScanKeysAsync(effStart, effEnd);
         await foreach (var key in probeKeys)
         {
             probe.Add(key);

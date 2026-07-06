@@ -589,6 +589,49 @@ internal sealed class SnapshotLeafGrain(
         return Task.FromResult(result);
     }
 
+    /// <inheritdoc />
+    public Task<List<LwwEntry>> GetRawEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, int limit = int.MaxValue, LatticePredicateNode? predicate = null, bool reverse = false)
+    {
+        EnsureOpened();
+        if (limit <= 0)
+            return Task.FromResult(new List<LwwEntry>());
+        var result = new List<LwwEntry>();
+        var nowTicks = DateTimeOffset.UtcNow.Ticks;
+        foreach (var (key, value) in _folder!.Entries)
+        {
+            if (!InRange(key, startInclusive, endExclusive, afterExclusive, beforeExclusive))
+            {
+                if (endExclusive is not null && string.CompareOrdinal(key, endExclusive) >= 0)
+                    break;
+                if (beforeExclusive is not null && string.CompareOrdinal(key, beforeExclusive) >= 0)
+                    break;
+                continue;
+            }
+            if (value.IsTombstone || value.IsExpired(nowTicks))
+                continue;
+            if (value.Value is null)
+                continue;
+            if (predicate is { } pred && !LatticePredicateEvaluator.Matches(value.Value, pred))
+                continue;
+            // Drop donor orphans: see GetEntriesAsync. The full LWW envelope
+            // (HLC, expiry, origin, version vector) is preserved verbatim so the
+            // backup capture path records causally-complete metadata.
+            if (!IsKeyOwned(key))
+                continue;
+            result.Add(new LwwEntry(key, value));
+            if (reverse)
+            {
+                if (result.Count > limit)
+                    result.RemoveAt(0);
+            }
+            else if (result.Count >= limit)
+            {
+                break;
+            }
+        }
+        return Task.FromResult(result);
+    }
+
     /// <summary>
     /// Mutation deferred during pass 1 of the snapshot-leaf replay to
     /// be applied in pass 2 once every partition's per-key Set/Delete

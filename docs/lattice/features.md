@@ -24,20 +24,7 @@ A grouped, human-readable index of the core `Orleans.Lattice` package's features
 - [F-095](https://github.com/NSTA1/Orleans.Lattice/issues/664) - Orleans.Lattice.GrainIndex: reminder-driven background backfill
 - [F-096](https://github.com/NSTA1/Orleans.Lattice/issues/665) - Orleans.Lattice.GrainIndex: observability (OTel metrics & IGrainIndexAdmin)
 - [F-097](https://github.com/NSTA1/Orleans.Lattice/issues/666) - Orleans.Lattice.GrainIndex: docs, sample & end-to-end convergence tests
-- [F-168](https://github.com/NSTA1/Orleans.Lattice/issues/1119) - Orleans.Lattice.Backup: causally consistent backup & restore (epic)
-- [F-169](https://github.com/NSTA1/Orleans.Lattice/issues/1120) - Orleans.Lattice.Backup: project & package scaffolding
-- [F-170](https://github.com/NSTA1/Orleans.Lattice/issues/1121) - Orleans.Lattice.Backup: backup/restore permission model
-- [F-171](https://github.com/NSTA1/Orleans.Lattice/issues/1122) - Orleans.Lattice.Backup: storage-sink abstraction, manifest model & catalog hiding
-- [F-172](https://github.com/NSTA1/Orleans.Lattice/issues/1123) - Orleans.Lattice.Backup: causally consistent full backup capture
-- [F-173](https://github.com/NSTA1/Orleans.Lattice/issues/1124) - Orleans.Lattice.Backup: incremental backup maintenance
-- [F-174](https://github.com/NSTA1/Orleans.Lattice/issues/1125) - Orleans.Lattice.Backup: manual & scheduled triggering and chain retention
-- [F-175](https://github.com/NSTA1/Orleans.Lattice/issues/1126) - Orleans.Lattice.Backup: causally faithful restore
-- [F-176](https://github.com/NSTA1/Orleans.Lattice/issues/1127) - Orleans.Lattice.Backup.AzureBlob: durable append-blob storage sink
-- [F-177](https://github.com/NSTA1/Orleans.Lattice/issues/1128) - Orleans.Lattice.Api.Backup: backup/restore control facade with async streaming
-- [F-178](https://github.com/NSTA1/Orleans.Lattice/issues/1129) - Orleans.Lattice.Api.Backup.Grpc: gRPC binding & client with server streaming
-- [F-179](https://github.com/NSTA1/Orleans.Lattice/issues/1130) - Orleans.Lattice.Backup: observability, docs, samples & end-to-end tests
 - [F-180](https://github.com/NSTA1/Orleans.Lattice/issues/1131) - Orleans.Lattice: backup/restore management UI (Explorer follow-on)
-- [F-181](https://github.com/NSTA1/Orleans.Lattice/issues/1133) - Orleans.Lattice.Backup: cross-tree-consistent backup set (causal fence)
 
 ### Shipped
 
@@ -176,6 +163,19 @@ A grouped, human-readable index of the core `Orleans.Lattice` package's features
 - [F-165](https://github.com/NSTA1/Orleans.Lattice/issues/1103) - Membership/Auth: security hardening - full security & design review with regression coverage
 - [F-166](https://github.com/NSTA1/Orleans.Lattice/issues/1095) - Orleans.Lattice.Api.Data: external read-write data-plane API for non-.NET clients
 - [F-167](https://github.com/NSTA1/Orleans.Lattice/issues/1101) - Orleans.Lattice.Membership.Entra: first-class Microsoft Entra ID authenticator specializing the built-in JWT base (OIDC discovery, `oid`/`tid`/`groups`, groups-overage via Graph)
+- [F-168](https://github.com/NSTA1/Orleans.Lattice/issues/1119) - Orleans.Lattice.Backup: causally consistent backup & restore (epic)
+- [F-169](https://github.com/NSTA1/Orleans.Lattice/issues/1120) - Orleans.Lattice.Backup: project & package scaffolding
+- [F-170](https://github.com/NSTA1/Orleans.Lattice/issues/1121) - Orleans.Lattice.Backup: backup/restore permission model
+- [F-171](https://github.com/NSTA1/Orleans.Lattice/issues/1122) - Orleans.Lattice.Backup: storage-sink abstraction, manifest model & catalog hiding
+- [F-172](https://github.com/NSTA1/Orleans.Lattice/issues/1123) - Orleans.Lattice.Backup: causally consistent full backup capture
+- [F-173](https://github.com/NSTA1/Orleans.Lattice/issues/1124) - Orleans.Lattice.Backup: incremental backup maintenance
+- [F-174](https://github.com/NSTA1/Orleans.Lattice/issues/1125) - Orleans.Lattice.Backup: manual & scheduled triggering and chain retention
+- [F-175](https://github.com/NSTA1/Orleans.Lattice/issues/1126) - Orleans.Lattice.Backup: causally faithful restore
+- [F-176](https://github.com/NSTA1/Orleans.Lattice/issues/1127) - Orleans.Lattice.Backup.AzureBlob: durable append-blob storage sink
+- [F-177](https://github.com/NSTA1/Orleans.Lattice/issues/1128) - Orleans.Lattice.Api.Backup: backup/restore control facade with async streaming
+- [F-178](https://github.com/NSTA1/Orleans.Lattice/issues/1129) - Orleans.Lattice.Api.Backup.Grpc: gRPC binding & client with server streaming
+- [F-179](https://github.com/NSTA1/Orleans.Lattice/issues/1130) - Orleans.Lattice.Backup: observability, docs, samples & end-to-end tests
+- [F-181](https://github.com/NSTA1/Orleans.Lattice/issues/1133) - Orleans.Lattice.Backup: cross-tree-consistent backup set (causal fence)
 - [P-000](https://github.com/NSTA1/Orleans.Lattice/issues/555) - Server-side predicate filtering (expression-tree push-down) for typed reads, scans, cursors, and conditional mutations
 - [P-001](https://github.com/NSTA1/Orleans.Lattice/issues/556) - Expression-tree predicate IR + server-side document-model evaluator (umbrella spine)
 - [P-002](https://github.com/NSTA1/Orleans.Lattice/issues/557) - `GetManyAsync<T>` server-side predicate push-down

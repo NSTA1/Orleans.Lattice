@@ -23,5 +23,7 @@ public static class LatticeAuthOperations
         | LatticeOperation.CrdtApply
         | LatticeOperation.AtomicWrite
         | LatticeOperation.BulkLoad
-        | LatticeOperation.Admin;
+        | LatticeOperation.Admin
+        | LatticeOperation.Backup
+        | LatticeOperation.Restore;
 }

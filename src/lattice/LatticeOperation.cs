@@ -56,4 +56,24 @@ public enum LatticeOperation
     /// drop, or reconfigure) that is not an ordinary data read or write.
     /// </summary>
     Admin = 256,
+
+    /// <summary>
+    /// Capture (back up) the entire authorized scope of a tree, prefix, or key.
+    /// A high-privilege read capability that is deliberately <b>distinct</b> from
+    /// <see cref="Read"/> / <see cref="RangeRead"/>: holding it authorizes reading
+    /// the whole requested scope for capture, and by design it bypasses the
+    /// per-key read key-filter that an ordinary read honours, so a partial read
+    /// grant never silently narrows a backup. Granting it does not grant any
+    /// other capability.
+    /// </summary>
+    Backup = 512,
+
+    /// <summary>
+    /// Author / bulk-load a captured backup into a target tree, prefix, or key.
+    /// This capability <b>subsumes</b> the target-scope write / bulk-load
+    /// authority: holding it authorizes populating the scope from a backup, so no
+    /// separate <see cref="Write"/> or <see cref="BulkLoad"/> grant is required to
+    /// restore into that scope.
+    /// </summary>
+    Restore = 1024,
 }
