@@ -222,6 +222,28 @@ public sealed class LatticeBackupApiGrpcClient
         CancellationToken cancellationToken = default)
         => UnaryAsync(_methods.GetAuthScheme, request, cancellationToken);
 
+    /// <summary>
+    /// Probes, with no side effects, which backup / restore operations the calling
+    /// credential may perform over <paramref name="scope"/>. Never fails on a
+    /// permission denial: each capability is reported as an allowed / denied flag,
+    /// default-deny. The flags are advisory (a UX affordance); the server still
+    /// authorizes each real operation fail-closed on attempt.
+    /// </summary>
+    /// <param name="scope">The scope to probe. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The caller's allowed-operation set for <paramref name="scope"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="scope"/> is <c>null</c>.</exception>
+    public Task<BackupScopeCapabilities> ProbeCapabilitiesAsync(
+        BackupScopeSelector scope,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        return UnaryAsync(
+            _methods.ProbeCapabilities,
+            new BackupCapabilityProbeRequest { Scope = scope },
+            cancellationToken);
+    }
+
     private async Task<TResponse> UnaryAsync<TRequest, TResponse>(
         Method<TRequest, TResponse> method,
         TRequest request,

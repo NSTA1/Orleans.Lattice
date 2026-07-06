@@ -68,4 +68,7 @@ public static class GrpcBackupTypeAliases
 
     /// <summary>Alias for <see cref="AuthSchemeAdvertisement"/>.</summary>
     public const string AuthSchemeAdvertisement = "oibg.asadv";
+
+    /// <summary>Alias for <see cref="BackupCapabilityProbeRequest"/>.</summary>
+    public const string BackupCapabilityProbeRequest = "oibg.cpreq";
 }

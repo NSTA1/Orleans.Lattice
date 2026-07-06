@@ -7,12 +7,14 @@
         <ConfigurationGate>
             <div class="explorer-body">
                 <ClusterBadge />
-                <div class="explorer-layout">
-                    <NavigationPanel />
-                    <main class="explorer-main">
-                        @Body
-                    </main>
-                </div>
+                <AppAreaShell>
+                    <div class="explorer-layout">
+                        <NavigationPanel />
+                        <main class="explorer-main">
+                            @Body
+                        </main>
+                    </div>
+                </AppAreaShell>
             </div>
         </ConfigurationGate>
     </div>

@@ -17,6 +17,7 @@ It is built the same way as the read-only [`Orleans.Lattice.Api.State`](../latti
 - **Fail-closed by construction.** Every operation authorizes its scope through the same backup access gate the engine uses, before touching data. A capture / incremental / restore authorizes its target scope; a list / describe / delete authorizes the scope carried by each manifest, and a manifest whose scope the caller may not read is hidden from list and inventory results.
 - **Bounded-memory enumeration.** Catalog listing is cursor-resumable and page-bounded; whole-catalog draining and artifact export are streamed, so a large catalog or artifact enumerates with bounded memory rather than being materialized whole.
 - **Safe deletion.** Deleting a backup removes its manifest and only the artifacts it owns that no other retained manifest still references, so a shared base artifact is never orphaned out from under a retained increment.
+- **Read-only capability probe.** A caller can ask, with no side effects, which backup and restore operations it may perform over a given scope. The probe runs the same fail-closed access gate every operation uses and reports the result as an allowed-operation set, so a UI can grey out actions the caller cannot perform without ever mutating state. The probe is advisory only: it never replaces the per-operation authorization each real call still performs.
 
 ## Ordering
 
@@ -39,6 +40,7 @@ The facade operations (each reached over the gRPC binding as one RPC):
 | Export artifact | Stream one of a backup's artifacts back chunk-wise. |
 | Get inventory | A catalog-wide inventory summary of every readable backup. |
 | Get scope status | A single scope's schedule and last-run status. |
+| Probe capabilities | Report, with no side effects, which backup and restore operations the caller may perform over a scope. |
 
 ## Reference
 

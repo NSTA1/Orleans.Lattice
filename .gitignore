@@ -262,6 +262,11 @@ Backup*/
 # junk) does not silently ignore new sample files added under them.
 !/samples/MultiSiteManufacturing/src/MultiSiteManufacturing.Host/Backup/
 !/samples/MultiSiteManufacturing/test/MultiSiteManufacturing.Tests/Backup/
+# The Explorer's backup-management project head is a real source directory, not a
+# Visual Studio upgrade-backup folder; re-include it past the Backup*/ rule above.
+!/src/lattice.explorer/Backup/
+# The Explorer backup tests likewise live in a real Backup/ source directory.
+!/test/lattice.explorer/Backup/
 UpgradeLog*.XML
 UpgradeLog*.htm
 ServiceFabricBackup/

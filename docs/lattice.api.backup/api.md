@@ -40,6 +40,7 @@ The control facade (internal) exposes these operations; each is projected as one
 | Export artifact | takes a backup id and artifact id | `IAsyncEnumerable<ReadOnlyMemory<byte>>` |
 | Get inventory | (none) | `BackupInventoryReport` |
 | Get scope status | takes a `BackupScopeSelector` | `BackupScopeStatus?` (null when unknown) |
+| Probe capabilities | takes a `BackupScopeSelector` | `BackupScopeCapabilities` |
 
 The request / result types prefixed `LatticeBackup*` / `LatticeRestore*` and `BackupManifest` / `BackupScopeSelector` are defined in [`Orleans.Lattice.Backup`](../lattice.backup/api.md); the package's own model records are documented below.
 
@@ -75,6 +76,17 @@ A catalog-wide inventory summary.
 - Properties: `long TotalBackupCount`, `long TotalCatalogBytes`, `long FullBackupCount`, `long IncrementalBackupCount`, `DateTimeOffset? OldestBackupUtc`, `DateTimeOffset? NewestBackupUtc`, `long CaptureFailureCount`, `long RestoreFailureCount`, `long BytesReclaimed`.
 
 The counts and byte totals are computed from the durable catalog (excluding manifests the caller may not read); the failure and bytes-reclaimed tallies are the process-lifetime figures from the in-memory metric registry.
+
+### `BackupScopeCapabilities`
+
+The allowed-operation set the read-only capability probe reports for one scope. Every flag is default-deny (`false` means "not known to be permitted"), and the flags are advisory: the server still authorizes each real operation fail-closed. The probe distinguishes the two authorization grants the access gate models - one covering list / read / capture / delete, the other covering restore - so the capture, incremental, list, and delete flags move together and the restore flag is separate.
+
+- `required BackupScopeSelector Scope` - the probed scope.
+- `bool CanList` - whether the caller may list / read / describe backups in the scope.
+- `bool CanCapture` - whether the caller may capture a full backup of the scope.
+- `bool CanCaptureIncremental` - whether the caller may capture an incremental backup of the scope.
+- `bool CanRestore` - whether the caller may restore a backup into the scope.
+- `bool CanDelete` - whether the caller may delete a backup in the scope.
 
 ### `BackupScopeStatus`
 

@@ -4,28 +4,30 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <RootNamespace>Orleans.Lattice.Explorer.Core</RootNamespace>
+    <RootNamespace>Orleans.Lattice.Explorer.Backup</RootNamespace>
+    <IsPackable>false</IsPackable>
   </PropertyGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="Orleans.Lattice.Explorer.Tests" />
-    <InternalsVisibleTo Include="Orleans.Lattice.Explorer.Backup" />
     <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
   </ItemGroup>
 
   <!--
-    The explorer's ONLY cluster dependency is the public read-only state API
-    gRPC client. It must never reference Orleans.Lattice core or any grain
-    interface - all cluster access flows through this client (see the
-    connection layer). This single ProjectReference is the enforcement point.
+    Unlike Explorer.Core (which is walled off to the state-API client), this
+    feature project is allowed to reference the backup control-API gRPC client,
+    which transitively pulls in the backup engine and core. It bridges that
+    client to the pure navigation / capability model in Core.
   -->
   <ItemGroup>
-    <ProjectReference Include="..\..\lattice.api.state.grpc\Orleans.Lattice.Api.State.Grpc.csproj" />
+    <ProjectReference Include="..\Core\Orleans.Lattice.Explorer.Core.csproj" />
+    <ProjectReference Include="..\..\lattice.api.backup.grpc\Orleans.Lattice.Api.Backup.Grpc.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Grpc.Net.Client" Version="2.80.0" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.5" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.5" />
     <PackageReference Include="Microsoft.Orleans.Serialization" Version="10.2.0" />
   </ItemGroup>
 

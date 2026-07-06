@@ -1,3 +1,5 @@
+using Orleans.Lattice.Explorer.Core.Connection;
+
 namespace Orleans.Lattice.Explorer.Core.Authentication;
 
 /// <summary>
@@ -17,6 +19,14 @@ public interface IExplorerAuthSession
 
     /// <summary>The scheme id of the current sign-in, or <see langword="null"/> when anonymous.</summary>
     string? CurrentScheme { get; }
+
+    /// <summary>
+    /// The authentication seam currently applied to the connection, or
+    /// <see langword="null"/> when signed out. Exposed so sibling API clients
+    /// (for example the backup control-API client) can attach the same
+    /// credential to their own channel. Reading it has no side effects.
+    /// </summary>
+    LatticeCallAuthentication? CurrentAuthentication { get; }
 
     /// <summary>The scheme ids the registered auth-method providers can service.</summary>
     IReadOnlyCollection<string> AvailableSchemes { get; }

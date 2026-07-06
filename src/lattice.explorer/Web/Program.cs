@@ -7,6 +7,7 @@ using Orleans.Lattice.Explorer.Core.History;
 using Orleans.Lattice.Explorer.Core.Metrics;
 using Orleans.Lattice.Explorer.Core.Session;
 using Orleans.Lattice.Explorer.Core.Topology;
+using Orleans.Lattice.Explorer.Backup;
 using Orleans.Lattice.Explorer.UI.Authentication;
 using Orleans.Lattice.Explorer.Web;
 using Orleans.Lattice.Explorer.Web.Components;
@@ -58,6 +59,11 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton<ICredentialStore, CookieCredentialStore>();
 builder.Services.AddSingleton(new ExplorerAuthUiOptions { UseServerFormPost = true });
 builder.Services.AddExplorerAuth();
+
+// The Backups management area: the backup control-API client (over the same
+// endpoint / sign-in as the state connection), its catalog reader, and the
+// capability probe that gates the area and its per-scope actions.
+builder.Services.AddExplorerBackup();
 
 var app = builder.Build();
 

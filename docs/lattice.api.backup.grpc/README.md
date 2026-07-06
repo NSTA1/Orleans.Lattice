@@ -38,6 +38,7 @@ The gRPC service name is `orleans.lattice.api.backup`.
 | `RevertRestore` | unary | Revert restore |
 | `ExportArtifact` | server-streaming | Export artifact |
 | `GetAuthScheme` | unary (unauthenticated) | Advertise accepted auth schemes |
+| `ProbeCapabilities` | unary | Probe capabilities (read-only, no side effects) |
 
 ## Quick Start
 

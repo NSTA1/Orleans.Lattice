@@ -2013,3 +2013,114 @@ code, .explorer-mono {
     width: 100%;
 }
 
+
+/* App-level area switcher (Explore / Backups). */
+.explorer-areastrip {
+    display: flex;
+    gap: 0.25rem;
+    padding: 0 1rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+}
+
+.explorer-area-tab {
+    padding: 0.6rem 1.1rem;
+    border: none;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: color var(--motion-fast) var(--motion-ease),
+                border-color var(--motion-fast) var(--motion-ease);
+}
+
+.explorer-area-tab:hover:not(:disabled) {
+    color: var(--text);
+}
+
+.explorer-area-tab.is-active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+}
+
+.explorer-area-tab:focus-visible {
+    outline: none;
+    color: var(--accent);
+    box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+.explorer-area-tab:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.explorer-area-content {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+}
+
+/* Backups management area. */
+.explorer-backups {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+    flex: 1;
+    min-width: 0;
+    padding: 1rem 1.25rem;
+    overflow: auto;
+}
+
+.explorer-backups-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.explorer-backups-scope {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 0.6rem;
+}
+
+.explorer-backups-scope label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.explorer-backups-actions {
+    display: flex;
+    gap: 0.35rem;
+    align-items: center;
+}
+
+.explorer-backups-result {
+    margin: 0;
+    padding: 0.5rem 0.75rem;
+    border-radius: 6px;
+    font-size: 0.85rem;
+}
+
+.explorer-backups-result.is-success {
+    background: var(--success-surface, rgba(46, 160, 67, 0.15));
+    color: var(--success, #2ea043);
+}
+
+.explorer-backups-result.is-denied,
+.explorer-backups-result.is-failed {
+    background: var(--danger-surface, rgba(248, 81, 73, 0.15));
+    color: var(--danger, #f85149);
+}
+
+.explorer-backups-empty {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}

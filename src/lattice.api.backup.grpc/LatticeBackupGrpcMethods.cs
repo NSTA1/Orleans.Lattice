@@ -60,6 +60,9 @@ internal sealed class LatticeBackupGrpcMethods
     /// <summary>The unary, unauthenticated auth-scheme advertisement RPC method name.</summary>
     public const string GetAuthSchemeMethodName = "GetAuthScheme";
 
+    /// <summary>The unary capability-probe RPC method name.</summary>
+    public const string ProbeCapabilitiesMethodName = "ProbeCapabilities";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeBackupGrpcMethods(
         Serializer<BackupCaptureRequestMessage> captureRequestSerializer,
@@ -79,7 +82,9 @@ internal sealed class LatticeBackupGrpcMethods
         Serializer<ArtifactExportRequest> artifactExportRequestSerializer,
         Serializer<ArtifactChunk> artifactChunkSerializer,
         Serializer<AuthSchemeAdvertisementRequest> authSchemeRequestSerializer,
-        Serializer<AuthSchemeAdvertisement> authSchemeAdvertisementSerializer)
+        Serializer<AuthSchemeAdvertisement> authSchemeAdvertisementSerializer,
+        Serializer<BackupCapabilityProbeRequest> capabilityProbeRequestSerializer,
+        Serializer<Orleans.Lattice.Api.Backup.BackupScopeCapabilities> capabilitiesSerializer)
     {
         ArgumentNullException.ThrowIfNull(captureRequestSerializer);
         ArgumentNullException.ThrowIfNull(incrementalCaptureRequestSerializer);
@@ -99,6 +104,8 @@ internal sealed class LatticeBackupGrpcMethods
         ArgumentNullException.ThrowIfNull(artifactChunkSerializer);
         ArgumentNullException.ThrowIfNull(authSchemeRequestSerializer);
         ArgumentNullException.ThrowIfNull(authSchemeAdvertisementSerializer);
+        ArgumentNullException.ThrowIfNull(capabilityProbeRequestSerializer);
+        ArgumentNullException.ThrowIfNull(capabilitiesSerializer);
 
         CreateBackup = new Method<BackupCaptureRequestMessage, BackupCaptureResponse>(
             type: MethodType.Unary,
@@ -169,6 +176,13 @@ internal sealed class LatticeBackupGrpcMethods
             name: GetAuthSchemeMethodName,
             requestMarshaller: LatticeBackupGrpcMarshallers.Create(authSchemeRequestSerializer),
             responseMarshaller: LatticeBackupGrpcMarshallers.Create(authSchemeAdvertisementSerializer));
+
+        ProbeCapabilities = new Method<BackupCapabilityProbeRequest, Orleans.Lattice.Api.Backup.BackupScopeCapabilities>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: ProbeCapabilitiesMethodName,
+            requestMarshaller: LatticeBackupGrpcMarshallers.Create(capabilityProbeRequestSerializer),
+            responseMarshaller: LatticeBackupGrpcMarshallers.Create(capabilitiesSerializer));
     }
 
     /// <summary>The unary <c>CreateBackup</c> full-capture RPC.</summary>
@@ -201,6 +215,9 @@ internal sealed class LatticeBackupGrpcMethods
     /// <summary>The unary, unauthenticated <c>GetAuthScheme</c> advertisement RPC.</summary>
     public Method<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement> GetAuthScheme { get; }
 
+    /// <summary>The unary <c>ProbeCapabilities</c> capability-probe RPC.</summary>
+    public Method<BackupCapabilityProbeRequest, Orleans.Lattice.Api.Backup.BackupScopeCapabilities> ProbeCapabilities { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out
     /// of <paramref name="serializerProvider"/>. Shared by the server-side DI
@@ -228,7 +245,9 @@ internal sealed class LatticeBackupGrpcMethods
             serializerProvider.GetRequiredService<Serializer<ArtifactExportRequest>>(),
             serializerProvider.GetRequiredService<Serializer<ArtifactChunk>>(),
             serializerProvider.GetRequiredService<Serializer<AuthSchemeAdvertisementRequest>>(),
-            serializerProvider.GetRequiredService<Serializer<AuthSchemeAdvertisement>>());
+            serializerProvider.GetRequiredService<Serializer<AuthSchemeAdvertisement>>(),
+            serializerProvider.GetRequiredService<Serializer<BackupCapabilityProbeRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<Orleans.Lattice.Api.Backup.BackupScopeCapabilities>>());
     }
 }
 

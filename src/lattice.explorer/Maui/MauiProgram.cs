@@ -8,6 +8,7 @@ using Orleans.Lattice.Explorer.Core.History;
 using Orleans.Lattice.Explorer.Core.Metrics;
 using Orleans.Lattice.Explorer.Core.Session;
 using Orleans.Lattice.Explorer.Core.Topology;
+using Orleans.Lattice.Explorer.Backup;
 using Orleans.Lattice.Explorer.UI.Authentication;
 
 namespace Orleans.Lattice.Explorer;
@@ -69,6 +70,9 @@ public static class MauiProgram
             new DpapiCredentialStore(Path.Combine(FileSystem.AppDataDirectory, "credential.bin")));
         builder.Services.AddSingleton(new ExplorerAuthUiOptions { UseServerFormPost = false });
         builder.Services.AddExplorerAuth();
+
+        // The Backups management area (see the web head for the rationale).
+        builder.Services.AddExplorerBackup();
 
 #if DEBUG
         builder.Services.AddBlazorWebViewDeveloperTools();

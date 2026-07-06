@@ -392,6 +392,31 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
             chainDepth);
     }
 
+    /// <inheritdoc />
+    public async Task<BackupScopeCapabilities> ProbeCapabilitiesAsync(
+        BackupScopeSelector scope,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+
+        // The gate exposes two backup capabilities for a scope: the capture / read
+        // authority (Backup) and the author / bulk-load authority (Restore). Probe
+        // both with no side effects; list, capture, incremental, and delete all
+        // require the Backup authority, restore requires the Restore authority.
+        var canBackup = await IsBackupAuthorizedAsync(scope, cancellationToken).ConfigureAwait(false);
+        var canRestore = await IsRestoreAuthorizedAsync(scope, cancellationToken).ConfigureAwait(false);
+
+        return new BackupScopeCapabilities
+        {
+            Scope = scope,
+            CanList = canBackup,
+            CanCapture = canBackup,
+            CanCaptureIncremental = canBackup,
+            CanDelete = canBackup,
+            CanRestore = canRestore,
+        };
+    }
+
     /// <summary>
     /// Computes the base-chain depth of a scope's latest backup by finding the
     /// newest manifest whose scope matches and walking its
@@ -449,19 +474,49 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         && string.Equals(a.KeyOrPrefix, b.KeyOrPrefix, StringComparison.Ordinal);
 
     /// <summary>
-    /// Applies the fail-closed read gate to a manifest's scope, returning
-    /// <see langword="true"/> when the caller may read it and
-    /// <see langword="false"/> when the gate denies it, so a listing hides
-    /// manifests the caller has no read grant for rather than faulting the whole
-    /// enumeration.
+    /// Applies the fail-closed capture / read gate to a scope, returning
+    /// <see langword="true"/> when the caller holds the backup (capture / read)
+    /// authority and <see langword="false"/> when the gate denies it, so a listing
+    /// hides manifests the caller has no read grant for rather than faulting the
+    /// whole enumeration - and so a capability probe reports a clean allow / deny.
     /// </summary>
-    private async ValueTask<bool> IsReadAuthorizedAsync(
+    private ValueTask<bool> IsReadAuthorizedAsync(
+        BackupScopeSelector scope,
+        CancellationToken cancellationToken) =>
+        IsBackupAuthorizedAsync(scope, cancellationToken);
+
+    /// <summary>
+    /// Probes the fail-closed <see cref="LatticeOperation.Backup"/> (capture /
+    /// read) authority over a scope with no side effects, translating the gate's
+    /// throw-on-deny into a boolean.
+    /// </summary>
+    private async ValueTask<bool> IsBackupAuthorizedAsync(
         BackupScopeSelector scope,
         CancellationToken cancellationToken)
     {
         try
         {
             await _authorizer.AuthorizeBackupAsync(scope, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch (LatticeAuthorizationDeniedException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Probes the fail-closed <see cref="LatticeOperation.Restore"/> (author /
+    /// bulk-load) authority over a scope with no side effects, translating the
+    /// gate's throw-on-deny into a boolean.
+    /// </summary>
+    private async ValueTask<bool> IsRestoreAuthorizedAsync(
+        BackupScopeSelector scope,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _authorizer.AuthorizeRestoreAsync(scope, cancellationToken).ConfigureAwait(false);
             return true;
         }
         catch (LatticeAuthorizationDeniedException)

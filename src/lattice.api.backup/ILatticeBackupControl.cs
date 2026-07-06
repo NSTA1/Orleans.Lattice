@@ -168,4 +168,23 @@ internal interface ILatticeBackupControl
     Task<BackupScopeStatus?> GetScopeStatusAsync(
         BackupScopeSelector scope,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Probes, with <b>no side effects</b>, which backup / restore operations the
+    /// current caller may perform over <paramref name="scope"/>. Runs the same
+    /// fail-closed backup access gate the real operations use but reads, captures,
+    /// restores, and deletes nothing, reporting each capability as an
+    /// allowed / denied flag. Unlike every other operation on this facade it never
+    /// throws <see cref="LatticeAuthorizationDeniedException"/>: a denial is
+    /// reported as a <see langword="false"/> flag, default-deny, so a management
+    /// UI can grey out controls the caller cannot use. The reported flags are
+    /// advisory; the server still authorizes each real operation on attempt.
+    /// </summary>
+    /// <param name="scope">The scope to probe. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The caller's allowed-operation set for <paramref name="scope"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="scope"/> is <c>null</c>.</exception>
+    Task<BackupScopeCapabilities> ProbeCapabilitiesAsync(
+        BackupScopeSelector scope,
+        CancellationToken cancellationToken = default);
 }

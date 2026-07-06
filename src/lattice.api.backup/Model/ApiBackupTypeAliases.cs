@@ -35,4 +35,7 @@ public static class ApiBackupTypeAliases
 
     /// <summary>Alias for <see cref="BackupScopeStatus"/>.</summary>
     public const string BackupScopeStatus = "oib.st";
+
+    /// <summary>Alias for <see cref="BackupScopeCapabilities"/>.</summary>
+    public const string BackupScopeCapabilities = "oib.ca";
 }

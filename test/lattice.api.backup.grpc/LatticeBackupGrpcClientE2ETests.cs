@@ -90,6 +90,30 @@ public sealed class LatticeBackupGrpcClientE2ETests
     }
 
     [Test]
+    public async Task ProbeCapabilitiesAsync_round_trips_the_capability_set_over_the_wire()
+    {
+        var caps = await _host.Client.ProbeCapabilitiesAsync(BackupScopeSelector.WholeTree(Source));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(caps.Scope, Is.EqualTo(BackupScopeSelector.WholeTree(Source)));
+            Assert.That(caps.CanList, Is.True);
+            Assert.That(caps.CanCapture, Is.True);
+            Assert.That(caps.CanCaptureIncremental, Is.True);
+            Assert.That(caps.CanRestore, Is.True);
+            Assert.That(caps.CanDelete, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task ProbeCapabilitiesAsync_null_scope_throws()
+    {
+        Assert.That(
+            async () => await _host.Client.ProbeCapabilitiesAsync(null!),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
     public async Task DescribeBackupAsync_returns_null_for_an_unknown_backup_over_the_wire()
     {
         var description = await _host.Client.DescribeBackupAsync(

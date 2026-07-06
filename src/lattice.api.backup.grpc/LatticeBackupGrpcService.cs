@@ -67,6 +67,9 @@ internal abstract class LatticeBackupGrpcServiceBase
     /// </summary>
     public abstract Task<AuthSchemeAdvertisement> GetAuthScheme(AuthSchemeAdvertisementRequest request, ServerCallContext context);
 
+    /// <summary>Probes the caller's backup / restore capabilities for a scope. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<BackupScopeCapabilities> ProbeCapabilities(BackupCapabilityProbeRequest request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at
     /// startup with <paramref name="serviceImpl"/> set to
@@ -96,6 +99,7 @@ internal abstract class LatticeBackupGrpcServiceBase
             binder.AddMethod(methods.RevertRestore, (UnaryServerMethod<RestoreResponse, RevertRestoreResponse>?)null);
             binder.AddMethod(methods.ExportArtifact, (ServerStreamingServerMethod<ArtifactExportRequest, ArtifactChunk>?)null);
             binder.AddMethod(methods.GetAuthScheme, (UnaryServerMethod<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>?)null);
+            binder.AddMethod(methods.ProbeCapabilities, (UnaryServerMethod<BackupCapabilityProbeRequest, BackupScopeCapabilities>?)null);
             return;
         }
 
@@ -109,6 +113,7 @@ internal abstract class LatticeBackupGrpcServiceBase
         binder.AddMethod(methods.RevertRestore, new UnaryServerMethod<RestoreResponse, RevertRestoreResponse>(serviceImpl.RevertRestore));
         binder.AddMethod(methods.ExportArtifact, new ServerStreamingServerMethod<ArtifactExportRequest, ArtifactChunk>(serviceImpl.ExportArtifact));
         binder.AddMethod(methods.GetAuthScheme, new UnaryServerMethod<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>(serviceImpl.GetAuthScheme));
+        binder.AddMethod(methods.ProbeCapabilities, new UnaryServerMethod<BackupCapabilityProbeRequest, BackupScopeCapabilities>(serviceImpl.ProbeCapabilities));
     }
 }
 
@@ -349,6 +354,10 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
         // credential is bridged and only the public advertisement is returned.
         return Task.FromResult(_authSchemeSource.GetAdvertisement());
     }
+
+    /// <inheritdoc />
+    public override Task<BackupScopeCapabilities> ProbeCapabilities(BackupCapabilityProbeRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.ProbeCapabilitiesAsync(req.Scope, ct));
 
     private async Task<TResponse> InvokeAsync<TRequest, TResponse>(
         TRequest request,

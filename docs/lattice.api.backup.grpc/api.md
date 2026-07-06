@@ -40,8 +40,9 @@ Methods (one per RPC):
 | `RevertRestoreAsync` | `Task RevertRestoreAsync(LatticeRestoreResult restore, CancellationToken cancellationToken = default)` |
 | `ExportArtifactAsync` | `IAsyncEnumerable<ReadOnlyMemory<byte>> ExportArtifactAsync(string backupId, string artifactId, CancellationToken cancellationToken = default)` |
 | `GetAuthSchemeAsync` | `Task<AuthSchemeAdvertisement> GetAuthSchemeAsync(AuthSchemeAdvertisementRequest request, CancellationToken cancellationToken = default)` |
+| `ProbeCapabilitiesAsync` | `Task<BackupScopeCapabilities> ProbeCapabilitiesAsync(BackupScopeSelector scope, CancellationToken cancellationToken = default)` |
 
-`CreateBackupAsync`, `CreateIncrementalBackupAsync`, `RestoreBackupAsync`, and `RevertRestoreAsync` throw `ArgumentNullException` on a null request; `DescribeBackupAsync`, `DeleteBackupAsync`, and `ExportArtifactAsync` throw `ArgumentException` on a null or empty id. `DescribeBackupAsync` returns `null` when the server reports the backup absent. `GetAuthSchemeAsync` is unauthenticated - callable before any credential is acquired.
+`CreateBackupAsync`, `CreateIncrementalBackupAsync`, `RestoreBackupAsync`, and `RevertRestoreAsync` throw `ArgumentNullException` on a null request; `DescribeBackupAsync`, `DeleteBackupAsync`, and `ExportArtifactAsync` throw `ArgumentException` on a null or empty id. `DescribeBackupAsync` returns `null` when the server reports the backup absent. `ProbeCapabilitiesAsync` throws `ArgumentNullException` on a null scope and reports the caller's allowed-operation set (`BackupScopeCapabilities`) with no side effects, so a UI can grey out actions the caller cannot perform; it never replaces the fail-closed authorization each real RPC still performs. `GetAuthSchemeAsync` is unauthenticated - callable before any credential is acquired.
 
 ## Server-side options
 
@@ -112,8 +113,9 @@ Each RPC's request and response is one of these Orleans-serialized records. Prop
 | `AuthSchemeAdvertisementRequest` | (empty). |
 | `AuthSchemeAdvertisement` | `IReadOnlyList<AuthSchemeDescriptor> Schemes`. |
 | `AuthSchemeDescriptor` | `required string SchemeId`, `string DisplayName`, `IReadOnlyDictionary<string, string> Parameters`. |
+| `BackupCapabilityProbeRequest` | `required BackupScopeSelector Scope` - the scope the read-only capability probe reports on. |
 
-The `RevertRestore` RPC reuses `RestoreResponse` as its request shape (the client sends back the restore result to revert) and returns `RevertRestoreResponse`.
+The `RevertRestore` RPC reuses `RestoreResponse` as its request shape (the client sends back the restore result to revert) and returns `RevertRestoreResponse`. The `ProbeCapabilities` RPC takes a `BackupCapabilityProbeRequest` and returns a `BackupScopeCapabilities` (defined in [`Orleans.Lattice.Api.Backup`](../lattice.api.backup/api.md)).
 
 ## Serialization aliases
 

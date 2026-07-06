@@ -20,6 +20,7 @@
   <Project Path="src/lattice.storage.azuretable/Orleans.Lattice.Storage.AzureTable.csproj" />
   <Project Path="src/lattice.backup.azureblob/Orleans.Lattice.Backup.AzureBlob.csproj" />
   <Project Path="src/lattice.explorer/Core/Orleans.Lattice.Explorer.Core.csproj" />
+  <Project Path="src/lattice.explorer/Backup/Orleans.Lattice.Explorer.Backup.csproj" />
   <Project Path="src/lattice.explorer.entra/Orleans.Lattice.Explorer.Entra.csproj" />
   <Project Path="src/lattice.explorer/UI/Orleans.Lattice.Explorer.UI.csproj" />
   <Project Path="src/lattice.explorer/Web/Orleans.Lattice.Explorer.Web.csproj" />
