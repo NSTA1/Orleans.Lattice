@@ -173,6 +173,72 @@ public sealed class LeafEntryCacheTests
     }
 
     [Test]
+    public void GetMergeMode_returns_null_when_no_mode_recorded()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        cache.StoreRow("k", Row([1]));
+        Assert.That(cache.GetMergeMode("k"), Is.Null);
+    }
+
+    [Test]
+    public void SetMergeMode_then_GetMergeMode_round_trips_the_recorded_mode()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        cache.StoreRow("k", Row([1]));
+        cache.SetMergeMode("k", LatticeMergeMode.OrSet);
+        Assert.That(cache.GetMergeMode("k"), Is.EqualTo(LatticeMergeMode.OrSet));
+    }
+
+    [Test]
+    public void StoreRow_evicts_a_recorded_merge_mode()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        cache.StoreRow("k", Row([1]));
+        cache.SetMergeMode("k", LatticeMergeMode.PnCounter);
+
+        // A later plain LWW byte-row write supersedes the CRDT state, so the
+        // recorded per-key mode must fall back to null (declared tree mode).
+        cache.StoreRow("k", Row([2], ticks: 2));
+        Assert.That(cache.GetMergeMode("k"), Is.Null);
+    }
+
+    [Test]
+    public void Remove_evicts_a_recorded_merge_mode()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        cache.StoreRow("k", Row([1]));
+        cache.SetMergeMode("k", LatticeMergeMode.OrSet);
+
+        cache.Remove("k");
+        Assert.That(cache.GetMergeMode("k"), Is.Null);
+    }
+
+    [Test]
+    public void Clear_evicts_every_recorded_merge_mode()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        cache.StoreRow("a", Row([1]));
+        cache.SetMergeMode("a", LatticeMergeMode.OrSet);
+
+        cache.Clear();
+        Assert.That(cache.GetMergeMode("a"), Is.Null);
+    }
+
+    [Test]
+    public void SetMergeMode_throws_on_null_key()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        Assert.That(() => cache.SetMergeMode(null!, LatticeMergeMode.OrSet), Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void GetMergeMode_throws_on_null_key()
+    {
+        var cache = new LeafEntryCache(NewBackingStore());
+        Assert.That(() => cache.GetMergeMode(null!), Throws.ArgumentNullException);
+    }
+
+    [Test]
     public void Remove_returns_true_when_present_and_false_when_absent()
     {
         var cache = new LeafEntryCache(NewBackingStore());

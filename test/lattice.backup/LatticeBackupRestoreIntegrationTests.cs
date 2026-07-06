@@ -205,6 +205,56 @@ public sealed class LatticeBackupRestoreIntegrationTests
         });
     }
 
+    // ---- Per-key merge mode round-trips through capture + restore -------
+
+    [Test]
+    public async Task Capture_then_restore_carries_per_key_merge_mode_and_restores_values_for_a_mixed_tree()
+    {
+        await _fixture.InitializeAsync();
+
+        // A local-only tree (no declared mode) mixing plain LWW keys with a CRDT
+        // key. The per-key discriminator must let the capture stream label each
+        // key with its true mode, and the values must restore faithfully.
+        var source = _fixture.GrainFactory.GetGrain<ILattice>(Source);
+        await source.SetAsync("lww1", Bytes("v1"));
+        await source.OrSet("crdt1").AddAsync(Bytes("e1"), "r1");
+
+        var backup = await _fixture.Capture.CaptureAsync(
+            new LatticeBackupCaptureRequest("mixed", BackupScopeSelector.WholeTree(Source)));
+
+        // The streamed artifact carries the per-key discriminator: the CRDT key
+        // is tagged with its true CRDT mode, the plain key carries no per-key mode
+        // (it falls back to the declared tree default at read time).
+        var streamed = (await DecodeAsync(backup.Manifest)).ToDictionary(e => e.Key);
+        Assert.Multiple(() =>
+        {
+            Assert.That(streamed["crdt1"].MergeMode, Is.EqualTo(LatticeMergeMode.OrSet));
+            Assert.That(streamed["lww1"].MergeMode, Is.Null);
+        });
+
+        // The manifest descriptors mirror that: crdt1 -> Crdt, lww1 -> LWW.
+        var descriptors = backup.Manifest.KeyDescriptors.ToDictionary(d => d.Key, d => d.MergeMode);
+        Assert.Multiple(() =>
+        {
+            Assert.That(descriptors["crdt1"], Is.EqualTo(BackupKeyMergeMode.Crdt));
+            Assert.That(descriptors["lww1"], Is.EqualTo(BackupKeyMergeMode.LastWriterWins));
+        });
+
+        // Restore reproduces both values faithfully: the plain register and the
+        // converged CRDT state both land in the target.
+        const string target = "orders-mixed-restore";
+        await _fixture.Restore.RestoreAsync(new LatticeRestoreRequest(backup.BackupId, target));
+
+        var restored = _fixture.GrainFactory.GetGrain<ILattice>(target);
+        var crdtHasElement = await restored.OrSet("crdt1").ContainsAsync(Bytes("e1"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(Str(restored.GetAsync("lww1").Result!), Is.EqualTo("v1"));
+            Assert.That(crdtHasElement, Is.True,
+                "the converged CRDT state restores as valid CRDT bytes.");
+        });
+    }
+
     // ---- Mode-faithful last-writer-wins merge into existing data --------
 
     [Test]

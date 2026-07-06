@@ -238,4 +238,92 @@ public sealed class SnapshotProjectionFolderTests
         var folded = JsonSerializer.Deserialize<PnCounter>(row.Value.Value!);
         Assert.That(folded!.Value, Is.EqualTo(9), "r1=max(3,5)=5 plus r2=4 totals 9.");
     }
+
+    [Test]
+    public void Apply_crdt_delta_set_records_per_key_merge_mode_on_the_row()
+    {
+        var folder = NewFolder();
+        var shape = CrdtShape.ForPnCounter();
+        var delta = new PnCounterDelta
+        {
+            Increments = new Dictionary<string, long> { ["r1"] = 1 },
+            Decrements = new Dictionary<string, long>(),
+        };
+        folder.Apply(new LatticeMutation
+        {
+            TreeId = TreeId,
+            Kind = MutationKind.Set,
+            Key = "c",
+            Value = null,
+            Delta = shape.SerializeDelta!(delta),
+            Mode = LatticeMergeMode.PnCounter,
+            Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+        });
+
+        var row = folder.Materialize().Single(r => r.Key == "c");
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.MergeMode, Is.EqualTo(LatticeMergeMode.PnCounter));
+            Assert.That(folder.GetMode("c"), Is.EqualTo(LatticeMergeMode.PnCounter));
+        });
+    }
+
+    [Test]
+    public void Apply_lww_set_leaves_the_per_key_merge_mode_null()
+    {
+        var folder = NewFolder();
+        folder.Apply(new LatticeMutation
+        {
+            TreeId = TreeId,
+            Kind = MutationKind.Set,
+            Key = "k",
+            Value = [1],
+            Mode = LatticeMergeMode.LwwRegister,
+            Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+        });
+
+        var row = folder.Materialize().Single(r => r.Key == "k");
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.MergeMode, Is.Null, "A plain LWW key carries no per-key discriminator.");
+            Assert.That(folder.GetMode("k"), Is.Null);
+        });
+    }
+
+    [Test]
+    public void SeedRow_carries_the_per_key_merge_mode_through_to_materialize()
+    {
+        var folder = NewFolder();
+        folder.SeedRow("crdt", Lww([1], HybridLogicalClock.Zero), LatticeMergeMode.OrSet);
+        folder.SeedRow("lww", Lww([2], HybridLogicalClock.Zero));
+
+        var rows = folder.Materialize().ToDictionary(r => r.Key, r => r.MergeMode);
+        Assert.Multiple(() =>
+        {
+            Assert.That(rows["crdt"], Is.EqualTo(LatticeMergeMode.OrSet),
+                "A seeded CRDT mode must survive the fold so a reload-from-baseline stays mode-faithful.");
+            Assert.That(rows["lww"], Is.Null);
+        });
+    }
+
+    [Test]
+    public void Apply_lww_set_over_a_crdt_key_clears_the_recorded_merge_mode()
+    {
+        var folder = NewFolder();
+        folder.SeedRow("k", Lww([1], HybridLogicalClock.Zero), LatticeMergeMode.OrSet);
+
+        // A later plain LWW write to the same key supersedes the CRDT state, so
+        // the discriminator must fall back to null (declared tree mode).
+        folder.Apply(new LatticeMutation
+        {
+            TreeId = TreeId,
+            Kind = MutationKind.Set,
+            Key = "k",
+            Value = [9],
+            Mode = LatticeMergeMode.LwwRegister,
+            Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Tick(HybridLogicalClock.Zero)),
+        });
+
+        Assert.That(folder.GetMode("k"), Is.Null);
+    }
 }

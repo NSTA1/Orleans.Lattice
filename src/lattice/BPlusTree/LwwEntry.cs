@@ -62,11 +62,24 @@ internal readonly record struct LwwEntry
     [Id(6)] public VersionVector? VectorClock { get; init; }
 
     /// <summary>
+    /// Durable per-key convergence discriminator: the
+    /// <see cref="LatticeMergeMode"/> the key was last written under, carried
+    /// verbatim from the snapshot projection so the backup capture engine can
+    /// label each key with its true merge mode rather than the coarse declared
+    /// tree mode. <c>null</c> for a plain last-writer-wins key and for legacy
+    /// entries authored before the discriminator existed, in which case the
+    /// consumer falls back to the declared tree mode. Wire-compatible: legacy
+    /// persisted / streamed state decodes to <c>null</c>.
+    /// </summary>
+    [Id(7)] public LatticeMergeMode? MergeMode { get; init; }
+
+    /// <summary>
     /// Constructs an <see cref="LwwEntry"/> from a <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/>,
     /// preserving all LWW metadata (value, timestamp, tombstone flag,
-    /// expiry, origin cluster id, and vector clock).
+    /// expiry, origin cluster id, and vector clock) and, optionally, the
+    /// per-key <see cref="LatticeMergeMode"/> discriminator.
     /// </summary>
-    public LwwEntry(string key, LwwValue<byte[]> lww)
+    public LwwEntry(string key, LwwValue<byte[]> lww, LatticeMergeMode? mergeMode = null)
     {
         Key = key;
         Value = lww.Value;
@@ -75,6 +88,7 @@ internal readonly record struct LwwEntry
         ExpiresAtTicks = lww.ExpiresAtTicks;
         OriginClusterId = lww.OriginClusterId;
         VectorClock = lww.VectorClock;
+        MergeMode = mergeMode;
     }
 
     /// <summary>

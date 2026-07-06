@@ -130,7 +130,7 @@ internal sealed partial class BPlusLeafGrain
             var rows = new List<LeafSnapshotRow>(Cache.Count);
             foreach (var kv in Cache.EnumerateRows())
             {
-                rows.Add(new LeafSnapshotRow(kv.Key, kv.Value));
+                rows.Add(new LeafSnapshotRow(kv.Key, kv.Value, Cache.GetMergeMode(kv.Key)));
             }
 
             var blob = new LeafSnapshotBlob
@@ -356,6 +356,13 @@ internal sealed partial class BPlusLeafGrain
             foreach (var row in rows)
             {
                 Cache.StoreRow(row.Key, row.Value);
+                if (row.MergeMode is { } mode)
+                {
+                    // Recover the durable per-key merge-mode discriminator from
+                    // the checkpoint so a freeze/capture after a rehydrate-from-
+                    // checkpoint (without a full WAL replay) stays mode-faithful.
+                    Cache.SetMergeMode(row.Key, mode);
+                }
             }
         }
 

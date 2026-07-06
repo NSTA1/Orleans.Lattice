@@ -53,6 +53,19 @@ internal sealed class LeafEntryCache
     private Dictionary<string, Func<byte[]>>? _deferredMaterializers;
     private Dictionary<string, long>? _deferredLengths;
 
+    // Lazily allocated; null until the first CRDT mode is recorded. Maps a key
+    // to the LatticeMergeMode it was last written under, recorded by the CRDT
+    // apply / commit paths and rebuilt on activation from the WAL-replay and
+    // checkpoint-rehydrate seams. Only CRDT keys are present: a plain
+    // last-writer-wins StoreRow evicts the key from this map (like it evicts the
+    // typed shadow), so an absent key means "no CRDT mode recorded" and the
+    // snapshot row carries a null discriminator. This is the durable per-key
+    // merge-mode source the snapshot/backup capture path reads in preference to
+    // the declared tree mode. Reads/writes are O(1) and only touched on the CRDT
+    // path, so the dominant LWW write path pays nothing beyond the eviction
+    // already performed for the typed shadow.
+    private Dictionary<string, LatticeMergeMode>? _mergeModes;
+
     /// <summary>
     /// Wraps an existing sorted dictionary of leaf rows. The cache does not copy
     /// the dictionary; mutations through the cache are visible to the underlying
@@ -281,6 +294,10 @@ internal sealed class LeafEntryCache
         _stateBytes += RowBytes(key, row);
         _rows[key] = row;
         _typedShadows?.Remove(key);
+        // A byte-level LWW write supersedes any recorded CRDT mode: the key is
+        // now a plain last-writer-wins row, so its snapshot discriminator must
+        // fall back to the declared tree mode.
+        _mergeModes?.Remove(key);
     }
 
     /// <summary>
@@ -304,6 +321,7 @@ internal sealed class LeafEntryCache
         }
         _deferredMaterializers?.Remove(key);
         _deferredLengths?.Remove(key);
+        _mergeModes?.Remove(key);
         return _rows.Remove(key);
     }
 
@@ -314,6 +332,7 @@ internal sealed class LeafEntryCache
         _typedShadows?.Clear();
         _deferredMaterializers?.Clear();
         _deferredLengths?.Clear();
+        _mergeModes?.Clear();
         _stateBytes = 0;
         _liveCount = 0;
     }
@@ -375,6 +394,42 @@ internal sealed class LeafEntryCache
 
         typed = default!;
         return false;
+    }
+
+    /// <summary>
+    /// Records the <see cref="LatticeMergeMode"/> the CRDT key
+    /// <paramref name="key"/> was last written under, so a snapshot capture of
+    /// the row carries a faithful per-key merge-mode discriminator. Callers
+    /// invoke this only from the CRDT apply / commit paths, immediately after
+    /// the byte row and typed shadow have been stored (the byte-row
+    /// <see cref="StoreRow"/> evicts any prior recorded mode, so the record must
+    /// follow it). A plain last-writer-wins write never calls this, leaving the
+    /// key absent so <see cref="GetMergeMode"/> reports <see langword="null"/>.
+    /// </summary>
+    /// <param name="key">The entry key.</param>
+    /// <param name="mode">The merge mode the key was written under.</param>
+    internal void SetMergeMode(string key, LatticeMergeMode mode)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        (_mergeModes ??= new Dictionary<string, LatticeMergeMode>(StringComparer.Ordinal))[key] = mode;
+    }
+
+    /// <summary>
+    /// Returns the recorded per-key <see cref="LatticeMergeMode"/> for
+    /// <paramref name="key"/>, or <see langword="null"/> when the key is a plain
+    /// last-writer-wins row (or no mode has been recorded). The
+    /// snapshot-baseline capture path stamps this onto the durable
+    /// <see cref="State.LeafSnapshotRow.MergeMode"/> discriminator.
+    /// </summary>
+    /// <param name="key">The entry key.</param>
+    internal LatticeMergeMode? GetMergeMode(string key)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        if (_mergeModes is not null && _mergeModes.TryGetValue(key, out var mode))
+        {
+            return mode;
+        }
+        return null;
     }
 
     /// <summary>

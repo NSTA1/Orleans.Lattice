@@ -330,6 +330,11 @@ internal sealed partial class BPlusLeafGrain
                 VectorClock = mutation.VectorClock,
             };
             MergeIntoProjection(mutation.Key, folded);
+            // Record the per-key CRDT merge mode so a snapshot capture built
+            // from this replayed projection labels the key faithfully. Set
+            // after MergeIntoProjection because its StoreRow write evicts any
+            // prior recorded mode.
+            Cache.SetMergeMode(mutation.Key, mutation.Mode);
             AdvanceProjectionClock(mutation.Timestamp);
             return;
         }

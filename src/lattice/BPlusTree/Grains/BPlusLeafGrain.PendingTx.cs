@@ -471,6 +471,13 @@ internal sealed partial class BPlusLeafGrain
                     toStore = kvp.Value with { Value = folded, Timestamp = foldStamp };
                 }
                 StoreEntry(kvp.Key, toStore);
+                if (deltaBucket is not null && deltaBucket.TryGetValue(kvp.Key, out var dmMode))
+                {
+                    // CRDT commit: record the per-key merge mode after StoreEntry
+                    // (whose byte-row write evicts any prior recorded mode) so a
+                    // snapshot capture labels the committed key faithfully.
+                    Cache.SetMergeMode(kvp.Key, dmMode.Mode);
+                }
                 AdvanceProjectionClock(toStore.Timestamp);
             }
         }
@@ -588,6 +595,9 @@ internal sealed partial class BPlusLeafGrain
                 {
                     var foldedFg = FoldPreparedCrdtDelta(kvp.Key, dmFg.Delta, dmFg.Mode);
                     StoreEntry(kvp.Key, kvp.Value with { Value = foldedFg, Timestamp = terminalStamp });
+                    // CRDT commit: record the per-key merge mode after StoreEntry
+                    // so a snapshot capture labels the committed key faithfully.
+                    Cache.SetMergeMode(kvp.Key, dmFg.Mode);
                     continue;
                 }
 

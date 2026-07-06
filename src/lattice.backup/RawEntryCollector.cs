@@ -88,18 +88,24 @@ internal sealed class RawEntryCollector(Serializer serializer, BackupKeyMergeMod
 
     private void RecordEntry(LwwEntry entry)
     {
-        // Merge mode is a per-tree property in this system: it is declared for a
-        // replicated tree (resolved from the producer-side merge-mode resolver)
-        // and is not persisted per key on the durable snapshot row. A replicated
-        // CRDT tree therefore labels every captured key Crdt; a last-writer-wins
-        // or non-replicated tree labels them LastWriterWins. The captured VALUE
-        // bytes are the faithful post-merge (converged) state either way. A
-        // local-only tree that mixes LWW and CRDT keys cannot be distinguished per
-        // key from durable state alone - that faithful per-key labelling needs a
-        // durable-state schema change and is tracked as a follow-up.
+        // Prefer the durable per-key merge-mode discriminator carried on the
+        // snapshot row: a local-only tree that mixes LWW and CRDT keys labels
+        // each key with its true mode this way. When the discriminator is
+        // absent (a plain last-writer-wins key, or a row persisted before the
+        // discriminator existed), fall back to the declared tree mode - the
+        // coarse per-tree labelling shipped by the original full-capture
+        // engine, preserved verbatim so legacy snapshots are unaffected. The
+        // captured VALUE bytes are the faithful post-merge (converged) state in
+        // every case.
+        var mergeMode = entry.MergeMode is { } perKeyMode
+            ? (perKeyMode == LatticeMergeMode.LwwRegister
+                ? BackupKeyMergeMode.LastWriterWins
+                : BackupKeyMergeMode.Crdt)
+            : treeMergeMode;
+
         _keyDescriptors.Add(new BackupKeyDescriptor(
             entry.Key,
-            treeMergeMode,
+            mergeMode,
             entry.OriginClusterId));
 
         if (entry.OriginClusterId is { } origin)

@@ -61,7 +61,7 @@ internal sealed partial class BPlusLeafGrain
         var rows = new List<LeafSnapshotRow>(Cache.Count);
         foreach (var kv in Cache.EnumerateRows())
         {
-            rows.Add(new LeafSnapshotRow(kv.Key, kv.Value));
+            rows.Add(new LeafSnapshotRow(kv.Key, kv.Value, Cache.GetMergeMode(kv.Key)));
         }
 
         // Per-partition frontier the cache already reflects, expressed as the
@@ -147,7 +147,7 @@ internal sealed partial class BPlusLeafGrain
         // mutation, exactly as a live activation's two-pass replay does.
         foreach (var row in freeze.Rows)
         {
-            folder.SeedRow(row.Key, row.Value);
+            folder.SeedRow(row.Key, row.Value, row.MergeMode);
         }
         foreach (var p in freeze.Pending)
         {
