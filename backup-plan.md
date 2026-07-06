@@ -90,10 +90,10 @@ In scope: #1120-#1130 and #1133. Out of scope (deferred follow-on): #1131 (manag
 | W1 | #1122 | Sink + manifest + catalog hiding | LANDED | 3c010829 |
 | W2 | #1123 | Full capture | LANDED | 72c49323 |
 | W2 | #1127 | AzureBlob sink | LANDED | de70a56b |
-| W3 | #1133 | Cross-tree fence | not started | - |
-| W3 | #1124 | Incremental | not started | - |
-| W3 | #1125 | Scheduling + retention | not started | - |
-| W3 | #1126 | Restore | not started | - |
+| W3 | #1133 | Cross-tree fence | DISPATCHED | - |
+| W3 | #1124 | Incremental | DISPATCHED | - |
+| W3 | #1125 | Scheduling + retention | DISPATCHED | - |
+| W3 | #1126 | Restore | DISPATCHED | - |
 | W4 | #1128 | Control facade | not started | - |
 | W5 | #1129 | gRPC binding + client | not started | - |
 | W6 | #1130 | Observability + samples + e2e + docs | not started | - |
