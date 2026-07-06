@@ -1,0 +1,187 @@
+@using Orleans.Lattice.Api.Backup
+@using Orleans.Lattice.Backup
+@using Orleans.Lattice.Explorer.Core.Navigation
+@inject IBackupCatalogReader Reader
+@inject IBackupCapabilityService CapabilityService
+
+@*
+    The Backups management area: lists the visible backup catalog, probes the
+    per-scope capabilities to enable / disable the capture, restore, and delete
+    controls, and triggers those operations. Every action folds a server denial
+    into a clean "not permitted" message rather than surfacing an unhandled
+    error, because the advisory capability map can be over-optimistic - the
+    server is the fail-closed enforcement point.
+*@
+
+<section class="explorer-backups" aria-label="Backups">
+    <header class="explorer-backups-header">
+        <h2>Backups</h2>
+        <button type="button" class="explorer-btn" disabled="@_busy" @onclick="ReloadAsync">Refresh</button>
+    </header>
+
+    @if (_lastResult is not null)
+    {
+        <p class="explorer-backups-result @ResultClass(_lastResult.Status)" role="status">@_lastResult.Message</p>
+    }
+
+    <div class="explorer-backups-scope">
+        <label>
+            Scope tree
+            <input type="text" value="@_scopeTreeId" @oninput="OnScopeInput" placeholder="tree id" />
+        </label>
+        <button type="button" class="explorer-btn" disabled="@(_busy || string.IsNullOrWhiteSpace(_scopeTreeId))" @onclick="ProbeScopeAsync">Check access</button>
+        <label>
+            Name
+            <input type="text" value="@_captureName" @oninput="e => _captureName = e.Value?.ToString() ?? string.Empty" placeholder="backup name" />
+        </label>
+        <button type="button" class="explorer-btn explorer-btn-primary"
+                disabled="@(!CanCapture)" @onclick="CaptureFullAsync">Full backup</button>
+        <label>
+            Base id
+            <input type="text" value="@_incrementalBaseId" @oninput="e => _incrementalBaseId = e.Value?.ToString() ?? string.Empty" placeholder="base backup id" />
+        </label>
+        <button type="button" class="explorer-btn"
+                disabled="@(!CanCaptureIncremental)" @onclick="CaptureIncrementalAsync">Incremental</button>
+    </div>
+
+    <div class="explorer-backups-body">
+        @if (_list.Status == BackupOperationStatus.Denied)
+        {
+            <p class="explorer-backups-empty">You are not permitted to list backups here.</p>
+        }
+        else if (_list.Status == BackupOperationStatus.Failed)
+        {
+            <p class="explorer-backups-empty">@_list.Message</p>
+        }
+        else if (_list.Entries.Count == 0)
+        {
+            <p class="explorer-backups-empty">No backups are visible.</p>
+        }
+        else
+        {
+            <table class="explorer-table">
+                <thead>
+                    <tr>
+                        <th>Id</th><th>Name</th><th>Kind</th><th>Scope</th><th>Created (UTC)</th><th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var manifest in _list.Entries)
+                    {
+                        <tr>
+                            <td title="@manifest.Id">@Shorten(manifest.Id)</td>
+                            <td>@manifest.Name</td>
+                            <td>@manifest.Kind</td>
+                            <td>@manifest.Scope.TreeId</td>
+                            <td>@manifest.CreatedAtUtc.UtcDateTime.ToString("u")</td>
+                            <td class="explorer-backups-actions">
+                                <input type="text" value="@_restoreTarget" @oninput="e => _restoreTarget = e.Value?.ToString() ?? string.Empty" placeholder="target tree" />
+                                <button type="button" class="explorer-btn"
+                                        disabled="@(!CanRestore || string.IsNullOrWhiteSpace(_restoreTarget))"
+                                        @onclick="@(() => RestoreAsync(manifest.Id))">Restore</button>
+                                <button type="button" class="explorer-btn"
+                                        disabled="@(!CanDelete)"
+                                        @onclick="@(() => DeleteAsync(manifest.Id))">Delete</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </div>
+</section>
+
+@code {
+    private BackupListView _list = BackupListView.Empty;
+    private BackupScopeCapabilitySnapshot _scopeCaps = BackupScopeCapabilitySnapshot.None;
+    private BackupOperationResult? _lastResult;
+    private string _scopeTreeId = string.Empty;
+    private string _captureName = string.Empty;
+    private string _incrementalBaseId = string.Empty;
+    private string _restoreTarget = string.Empty;
+    private bool _busy;
+
+    private bool CanCapture => !_busy && _scopeCaps.CanCapture && HasScopeAndName;
+    private bool CanCaptureIncremental => !_busy && _scopeCaps.CanCaptureIncremental && HasScopeAndName && !string.IsNullOrWhiteSpace(_incrementalBaseId);
+    private bool CanRestore => !_busy && _scopeCaps.CanRestore;
+    private bool CanDelete => !_busy && _scopeCaps.CanDelete;
+    private bool HasScopeAndName => !string.IsNullOrWhiteSpace(_scopeTreeId) && !string.IsNullOrWhiteSpace(_captureName);
+
+    protected override Task OnInitializedAsync() => ReloadAsync();
+
+    private void OnScopeInput(ChangeEventArgs e)
+    {
+        _scopeTreeId = e.Value?.ToString() ?? string.Empty;
+
+        // The probed capabilities no longer apply to the new scope; reset to deny
+        // until the user re-checks access so the controls never over-enable.
+        _scopeCaps = BackupScopeCapabilitySnapshot.None;
+    }
+
+    private async Task ProbeScopeAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_scopeTreeId))
+        {
+            return;
+        }
+
+        _scopeCaps = await CapabilityService.ProbeScopeAsync(_scopeTreeId);
+        StateHasChanged();
+    }
+
+    private async Task ReloadAsync()
+    {
+        _busy = true;
+        try
+        {
+            _list = await Reader.LoadPageAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task CaptureFullAsync()
+    {
+        await RunAsync(() => Reader.TriggerFullAsync(_captureName, BackupScopeSelector.WholeTree(_scopeTreeId)));
+    }
+
+    private async Task CaptureIncrementalAsync()
+    {
+        await RunAsync(() => Reader.TriggerIncrementalAsync(_captureName, BackupScopeSelector.WholeTree(_scopeTreeId), _incrementalBaseId));
+    }
+
+    private async Task RestoreAsync(string backupId)
+    {
+        await RunAsync(() => Reader.RestoreAsync(backupId, _restoreTarget));
+    }
+
+    private async Task DeleteAsync(string backupId)
+    {
+        await RunAsync(() => Reader.DeleteAsync(backupId));
+    }
+
+    private async Task RunAsync(Func<Task<BackupOperationResult>> action)
+    {
+        _busy = true;
+        try
+        {
+            _lastResult = await action();
+            _list = await Reader.LoadPageAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static string Shorten(string id) => id.Length <= 12 ? id : id[..12] + "...";
+
+    private static string ResultClass(BackupOperationStatus status) => status switch
+    {
+        BackupOperationStatus.Succeeded => "is-success",
+        BackupOperationStatus.Denied => "is-denied",
+        _ => "is-failed",
+    };
+}

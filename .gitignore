@@ -267,6 +267,9 @@ Backup*/
 !/src/lattice.explorer/Backup/
 # The Explorer backup tests likewise live in a real Backup/ source directory.
 !/test/lattice.explorer/Backup/
+# The Explorer UI's Backups panel components live in a real Backup/ source
+# directory (UI/Backup/), not a Visual Studio upgrade-backup folder either.
+!/src/lattice.explorer/UI/Backup/
 UpgradeLog*.XML
 UpgradeLog*.htm
 ServiceFabricBackup/
