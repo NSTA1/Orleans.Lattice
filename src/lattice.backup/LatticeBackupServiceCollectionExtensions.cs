@@ -84,6 +84,10 @@ public static class LatticeBackupServiceCollectionExtensions
         builder.Services.TryAddSingleton<BackupAccessAuthorizer>();
         builder.Services.TryAddSingleton<ILatticeBackupCaptureService, LatticeBackupCaptureService>();
 
+        // The causally-faithful restore engine: replays a manifest chain back
+        // through the HLC-preserving merge / bulk-load shard seams.
+        builder.Services.TryAddSingleton<ILatticeBackupRestoreService, LatticeBackupRestoreService>();
+
         return builder;
     }
 
