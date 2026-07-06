@@ -51,4 +51,13 @@ internal static class BackupTypeAliases
 
     /// <summary>Alias for <see cref="BackupSetManifest"/>.</summary>
     internal const string BackupSetManifest = "olb.sm";
+
+    /// <summary>Alias for <see cref="ILatticeBackupSchedulerGrain"/>.</summary>
+    internal const string ILatticeBackupSchedulerGrain = "olb.gs";
+
+    /// <summary>Alias for <see cref="BackupSchedulerState"/>.</summary>
+    internal const string BackupSchedulerState = "olb.ss";
+
+    /// <summary>Alias for <see cref="BackupRetentionReport"/>.</summary>
+    internal const string BackupRetentionReport = "olb.rr";
 }

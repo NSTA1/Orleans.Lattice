@@ -74,6 +74,10 @@ public static class LatticeBackupServiceCollectionExtensions
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IValidateOptions<LatticeBackupOptions>, LatticeBackupOptionsValidator>());
 
+        builder.Services.AddOptions<LatticeBackupScheduleOptions>();
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<LatticeBackupScheduleOptions>, LatticeBackupScheduleOptionsValidator>());
+
         builder.Services.TryAddSingleton<BackupInitializer>();
         builder.Services.TryAddSingleton<ILatticeBackupSink, InClusterLatticeBackupSink>();
         builder.Services.TryAddSingleton<ILatticeBackupCatalogStore, LatticeBackupCatalogStore>();
@@ -87,6 +91,13 @@ public static class LatticeBackupServiceCollectionExtensions
         // The causally-faithful restore engine: replays a manifest chain back
         // through the HLC-preserving merge / bulk-load shard seams.
         builder.Services.TryAddSingleton<ILatticeBackupRestoreService, LatticeBackupRestoreService>();
+
+        // The incremental-capture seam and the scheduling / retention facade. The
+        // incremental service is a baseline stand-in registered with
+        // TryAddSingleton so a dedicated differential-capture engine can override
+        // it. The scheduler forwards to the per-scope BackupSchedulerGrain.
+        builder.Services.TryAddSingleton<ILatticeBackupIncrementalCaptureService, BaselineIncrementalBackupCaptureService>();
+        builder.Services.TryAddSingleton<ILatticeBackupScheduler, LatticeBackupScheduler>();
 
         return builder;
     }
@@ -106,6 +117,50 @@ public static class LatticeBackupServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(configure);
         builder.Services.Configure(configure);
+        return builder;
+    }
+
+    /// <summary>
+    /// Configures the global <see cref="LatticeBackupScheduleOptions"/> that apply
+    /// to every backup scope unless a per-scope override is registered. Controls
+    /// the scheduled full / incremental cadences and the chain retention policy;
+    /// all knobs are disabled by default.
+    /// </summary>
+    /// <param name="builder">The silo builder.</param>
+    /// <param name="configure">The options configuration delegate.</param>
+    /// <returns>The same <paramref name="builder"/> for chaining.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="builder"/> or <paramref name="configure"/> is <c>null</c>.</exception>
+    public static ISiloBuilder ConfigureLatticeBackupSchedule(
+        this ISiloBuilder builder,
+        Action<LatticeBackupScheduleOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(configure);
+        builder.Services.ConfigureAll(configure);
+        return builder;
+    }
+
+    /// <summary>
+    /// Configures <see cref="LatticeBackupScheduleOptions"/> for a specific backup
+    /// scope identified by <paramref name="scopeKey"/> (the key returned by
+    /// <see cref="BackupScopeKey.For(BackupScopeSelector)"/>). These settings
+    /// override the global defaults for that scope only.
+    /// </summary>
+    /// <param name="builder">The silo builder.</param>
+    /// <param name="scopeKey">The scope key the settings apply to. Must not be <c>null</c> or empty.</param>
+    /// <param name="configure">The options configuration delegate.</param>
+    /// <returns>The same <paramref name="builder"/> for chaining.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="builder"/> or <paramref name="configure"/> is <c>null</c>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="scopeKey"/> is <c>null</c> or empty.</exception>
+    public static ISiloBuilder ConfigureLatticeBackupSchedule(
+        this ISiloBuilder builder,
+        string scopeKey,
+        Action<LatticeBackupScheduleOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrEmpty(scopeKey);
+        ArgumentNullException.ThrowIfNull(configure);
+        builder.Services.Configure(scopeKey, configure);
         return builder;
     }
 }
