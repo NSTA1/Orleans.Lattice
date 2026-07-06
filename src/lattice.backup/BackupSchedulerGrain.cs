@@ -26,6 +26,7 @@ internal sealed class BackupSchedulerGrain(
     ILatticeBackupSink sink,
     IOptionsMonitor<LatticeBackupScheduleOptions> optionsMonitor,
     ILogger<BackupSchedulerGrain> logger,
+    BackupInventoryRegistry inventory,
     [PersistentState("backup-scheduler", LatticeOptions.StorageProviderName)]
     IPersistentState<BackupSchedulerState> state)
     : IGrainBase, IRemindable, ILatticeBackupSchedulerGrain
@@ -92,6 +93,15 @@ internal sealed class BackupSchedulerGrain(
             return null;
         }
 
+        // A scheduled cycle firing while a capture for this scope is still in
+        // flight is an overrun: the previous cycle has not drained before the next
+        // was due. It is recorded distinctly from the generic skip the overlap
+        // guard emits.
+        if (_captureInFlight)
+        {
+            LatticeBackupMetrics.RecordSchedulerOverrun(ScopeKey);
+        }
+
         var backupId = await RunCaptureAsync(incremental, scope);
         if (backupId is not null && Options.RetentionEnabled)
         {
@@ -104,6 +114,21 @@ internal sealed class BackupSchedulerGrain(
 
     /// <inheritdoc />
     public Task<bool> IsIdleAsync() => Task.FromResult(!_captureInFlight);
+
+    /// <inheritdoc />
+    public async Task<BackupSchedulerRuntimeStatus> GetScopeRuntimeStatusAsync()
+    {
+        var fullRegistered = await HasScheduleAsync(incremental: false);
+        var incrementalRegistered = await HasScheduleAsync(incremental: true);
+        return new BackupSchedulerRuntimeStatus(
+            fullRegistered,
+            incrementalRegistered,
+            state.State.LastFullRunUtc,
+            state.State.LastFullSuccessUtc,
+            state.State.LastIncrementalRunUtc,
+            state.State.LastIncrementalSuccessUtc,
+            state.State.LastRunOutcome);
+    }
 
     /// <inheritdoc />
     public async Task<bool> HasScheduleAsync(bool incremental)
@@ -134,32 +159,70 @@ internal sealed class BackupSchedulerGrain(
         {
             // A capture for this scope is already running; skip rather than start
             // an overlapping one.
+            LatticeBackupMetrics.RecordSchedulerSkipped(ScopeKey);
             return null;
         }
 
         _captureInFlight = true;
+        var startedAt = DateTimeOffset.UtcNow;
+        if (incremental)
+        {
+            state.State.LastIncrementalRunUtc = startedAt;
+        }
+        else
+        {
+            state.State.LastFullRunUtc = startedAt;
+        }
+
         try
         {
             var name = BuildBackupName(scope, incremental);
+            string? resultId;
             if (!incremental)
             {
                 var full = await captureService
                     .CaptureAsync(new LatticeBackupCaptureRequest(name, scope));
-                return full.BackupId;
+                resultId = full.BackupId;
             }
-
-            var baseManifest = await FindLatestForScopeAsync(scope);
-            if (baseManifest is null)
+            else
             {
-                // No base to layer on yet: capture a full baseline instead.
-                var baseline = await captureService
-                    .CaptureAsync(new LatticeBackupCaptureRequest(name, scope));
-                return baseline.BackupId;
+                var baseManifest = await FindLatestForScopeAsync(scope);
+                if (baseManifest is null)
+                {
+                    // No base to layer on yet: capture a full baseline instead.
+                    var baseline = await captureService
+                        .CaptureAsync(new LatticeBackupCaptureRequest(name, scope));
+                    resultId = baseline.BackupId;
+                }
+                else
+                {
+                    var increment = await incrementalCaptureService
+                        .CaptureIncrementalAsync(new LatticeBackupIncrementalCaptureRequest(name, scope, baseManifest.Id));
+                    resultId = increment.BackupId;
+                }
             }
 
-            var increment = await incrementalCaptureService
-                .CaptureIncrementalAsync(new LatticeBackupIncrementalCaptureRequest(name, scope, baseManifest.Id));
-            return increment.BackupId;
+            var succeededAt = DateTimeOffset.UtcNow;
+            if (incremental)
+            {
+                state.State.LastIncrementalSuccessUtc = succeededAt;
+            }
+            else
+            {
+                state.State.LastFullSuccessUtc = succeededAt;
+            }
+
+            state.State.LastRunOutcome = BackupScopeRunOutcome.Success;
+            await state.WriteStateAsync();
+            inventory.RecordScopeOutcome(ScopeKey, BackupScopeRunOutcome.Success, succeededAt);
+            return resultId;
+        }
+        catch
+        {
+            state.State.LastRunOutcome = BackupScopeRunOutcome.Failure;
+            await state.WriteStateAsync();
+            inventory.RecordScopeOutcome(ScopeKey, BackupScopeRunOutcome.Failure, DateTimeOffset.UtcNow);
+            throw;
         }
         finally
         {
@@ -226,6 +289,8 @@ internal sealed class BackupSchedulerGrain(
         }
 
         var prunedIds = new List<string>();
+        var prunedManifests = new List<BackupManifest>();
+        long reclaimedBytes = 0;
         foreach (var manifest in manifests)
         {
             if (keep.Contains(manifest.Id))
@@ -238,12 +303,24 @@ internal sealed class BackupSchedulerGrain(
                 if (!retainedArtifacts.Contains(descriptor.ArtifactId))
                 {
                     await sink.DeleteArtifactAsync(descriptor.ArtifactId);
+                    reclaimedBytes += descriptor.ByteLength;
                 }
             }
 
             await sink.DeleteManifestAsync(manifest.Id);
             await catalog.RemoveAsync(manifest.Id);
             prunedIds.Add(manifest.Id);
+            prunedManifests.Add(manifest);
+        }
+
+        foreach (var pruned in prunedManifests)
+        {
+            inventory.RecordPruned(pruned);
+        }
+
+        if (prunedIds.Count > 0)
+        {
+            LatticeBackupMetrics.RecordRetention(ScopeKey, reclaimedBytes, prunedIds.Count);
         }
 
         logger.LogInformation(

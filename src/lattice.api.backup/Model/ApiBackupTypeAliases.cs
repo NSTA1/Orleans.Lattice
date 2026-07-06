@@ -29,4 +29,10 @@ public static class ApiBackupTypeAliases
 
     /// <summary>Alias for <see cref="BackupChainDescription"/>.</summary>
     public const string BackupChainDescription = "oib.cd";
+
+    /// <summary>Alias for <see cref="BackupInventoryReport"/>.</summary>
+    public const string BackupInventoryReport = "oib.ir";
+
+    /// <summary>Alias for <see cref="BackupScopeStatus"/>.</summary>
+    public const string BackupScopeStatus = "oib.st";
 }

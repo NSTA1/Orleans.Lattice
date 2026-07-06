@@ -38,6 +38,10 @@ public sealed class ApiBackupClusterFixture
     /// <summary>The silo-side default in-cluster backup sink.</summary>
     public ILatticeBackupSink Sink => SiloServices.GetRequiredService<ILatticeBackupSink>();
 
+    /// <summary>The silo-side on-demand backup scheduler facade.</summary>
+    public ILatticeBackupScheduler Scheduler =>
+        SiloServices.GetRequiredService<ILatticeBackupScheduler>();
+
     /// <summary>Deploys the single-silo cluster.</summary>
     public async Task InitializeAsync()
     {
@@ -59,6 +63,8 @@ public sealed class ApiBackupClusterFixture
             Sink,
             SiloServices.GetRequiredService<ILatticeBackupRestoreService>(),
             authorizer,
+            SiloServices.GetRequiredService<IGrainFactory>(),
+            SiloServices.GetRequiredService<BackupInventoryRegistry>(),
             Options.Create(new LatticeApiBackupOptions()));
 
     /// <summary>Stops and disposes the cluster.</summary>

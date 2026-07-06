@@ -75,6 +75,14 @@ internal interface ILatticeBackupSchedulerGrain : IGrainWithStringKey
     Task<bool> IsIdleAsync();
 
     /// <summary>
+    /// Reads the scope's runtime status: whether each schedule kind is registered
+    /// and the start / success timestamps and terminal outcome of the most recent
+    /// full and incremental capture cycles. Backs the admin status surface.
+    /// </summary>
+    [AlwaysInterleave]
+    Task<BackupSchedulerRuntimeStatus> GetScopeRuntimeStatusAsync();
+
+    /// <summary>
     /// Returns <c>true</c> when a schedule reminder of the requested kind is
     /// currently registered for the scope.
     /// </summary>

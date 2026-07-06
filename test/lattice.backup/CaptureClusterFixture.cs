@@ -1,5 +1,10 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Orleans.Hosting;
+using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.Wal;
 using Orleans.Serialization;
 using Orleans.TestingHost;
 
@@ -81,4 +86,25 @@ public sealed class CaptureClusterFixture
             });
         }
     }
+
+    /// <summary>
+    /// Builds a capture service wired to the fixture's live silo services but over
+    /// the supplied authorizer, so a denying gate can drive the fail-closed
+    /// capture path.
+    /// </summary>
+    internal ILatticeBackupCaptureService CreateCaptureServiceWith(BackupAccessAuthorizer authorizer) =>
+        new LatticeBackupCaptureService(
+            SiloServices.GetRequiredService<IGrainFactory>(),
+            Sink,
+            Catalog,
+            authorizer,
+            SiloServices.GetRequiredService<IOptionsMonitor<LatticeOptions>>(),
+            SiloServices.GetRequiredService<IOptions<LatticeBackupOptions>>(),
+            SiloServices.GetRequiredService<ILatticeMergeModeResolver>(),
+            Serializer,
+            SiloServices.GetRequiredService<ICommitLogReader>(),
+            SiloServices.GetRequiredService<IWalSubscriber>(),
+            SiloServices.GetRequiredService<LatticeOptionsResolver>(),
+            SiloServices.GetRequiredService<IWalCursorRegistry>(),
+            SiloServices.GetRequiredService<ILoggerFactory>().CreateLogger<LatticeBackupCaptureService>());
 }

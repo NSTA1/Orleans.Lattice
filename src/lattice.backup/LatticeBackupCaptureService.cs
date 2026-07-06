@@ -51,10 +51,21 @@ internal sealed class LatticeBackupCaptureService(
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var baseManifest = await sink.ReadManifestAsync(request.BaseBackupId, cancellationToken).ConfigureAwait(false)
-            ?? throw new KeyNotFoundException(
-                $"No base backup was found for id '{request.BaseBackupId}'. An incremental backup "
-                + "requires an existing base backup to layer on.");
+        var stopwatch = Stopwatch.StartNew();
+
+        BackupManifest baseManifest;
+        try
+        {
+            baseManifest = await sink.ReadManifestAsync(request.BaseBackupId, cancellationToken).ConfigureAwait(false)
+                ?? throw new KeyNotFoundException(
+                    $"No base backup was found for id '{request.BaseBackupId}'. An incremental backup "
+                    + "requires an existing base backup to layer on.");
+        }
+        catch (Exception ex) when (LatticeBackupMetrics.EmitCaptureFailure(
+            BackupKind.Incremental, LatticeBackupMetrics.PhaseRead, ex))
+        {
+            throw;
+        }
 
         // The increment inherits the base backup's scope so the chain restores as a
         // coherent region; the request scope is advisory (the scheduler passes the
@@ -64,7 +75,15 @@ internal sealed class LatticeBackupCaptureService(
 
         // Fail-closed authorization before anything else is touched, matching the
         // full-capture path.
-        await authorizer.AuthorizeBackupAsync(scope, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await authorizer.AuthorizeBackupAsync(scope, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (LatticeBackupMetrics.EmitCaptureFailure(
+            BackupKind.Incremental, LatticeBackupMetrics.PhaseSnapshotOpen, ex))
+        {
+            throw;
+        }
 
         var partitions = await optionsResolver.GetWalPartitionsAsync(treeId).ConfigureAwait(false);
         var baseOffsets = ResolveBaseOffsets(baseManifest.ConsistencyCut, partitions);
@@ -72,53 +91,69 @@ internal sealed class LatticeBackupCaptureService(
         // Fall-off detection: if retention trimmed the WAL past the base resume
         // point on any partition, a clean forward delta is impossible - fall back
         // to a fresh full backup with the base's scope rather than emit a torn
-        // increment.
+        // increment. This is normal control flow, so it records a capture-retry
+        // (fallback) rather than a failure; the delegated full capture emits its
+        // own success / failure metrics.
         if (await HasFallenOffAsync(treeId, partitions, baseOffsets, cancellationToken).ConfigureAwait(false))
         {
             logger.LogWarning(
                 "Base backup {BaseBackupId} resume point fell off the WAL for tree {TreeId}; "
                 + "falling back to a full backup.",
                 request.BaseBackupId, treeId);
+            LatticeBackupMetrics.RecordCaptureRetry(LatticeBackupMetrics.ReasonIncrementalFallback);
             return await CaptureTreeAsync(request.Name, scope, request.PageSize, cancellationToken)
                 .ConfigureAwait(false);
         }
 
-        // Pin the WAL at the base frontier so garbage collection cannot trim
-        // entries we still need to read while we drain forward. The pin is a fixed
-        // floor for the duration of the drain and is advanced to the increment
-        // frontier once the delta is captured.
         var consumerId = IncrementalConsumerId(treeId);
-        var baseFrontier = new HybridLogicalClock { WallClockTicks = baseManifest.ConsistencyCut.HlcTimestamp };
-        if (baseFrontier > HybridLogicalClock.Zero)
+        string? startInclusive;
+        string? endExclusive;
+        DateTimeOffset createdAtUtc;
+        string artifactId;
+        IncrementalDeltaCollector collector;
+        try
         {
-            await cursorRegistry.ReportCursorAsync(treeId, consumerId, baseFrontier, cancellationToken)
-                .ConfigureAwait(false);
+            // Pin the WAL at the base frontier so garbage collection cannot trim
+            // entries we still need to read while we drain forward. The pin is a fixed
+            // floor for the duration of the drain and is advanced to the increment
+            // frontier once the delta is captured.
+            var baseFrontier = new HybridLogicalClock { WallClockTicks = baseManifest.ConsistencyCut.HlcTimestamp };
+            if (baseFrontier > HybridLogicalClock.Zero)
+            {
+                await cursorRegistry.ReportCursorAsync(treeId, consumerId, baseFrontier, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            (startInclusive, endExclusive) = ResolveRange(scope);
+            createdAtUtc = DateTimeOffset.UtcNow;
+            artifactId = BuildArtifactId(scope, createdAtUtc);
+
+            collector = new IncrementalDeltaCollector(
+                serializer,
+                walSubscriber,
+                treeId,
+                consumerId,
+                partitions,
+                baseOffsets,
+                startInclusive,
+                endExclusive,
+                ResolveTreeMergeMode(treeId),
+                request.BaseBackupId,
+                request.PageSize);
+
+            // Stream the delta pages to the sink; the collector accumulates the
+            // manifest metadata and the new per-partition offset frontier as each page
+            // passes through.
+            await sink.WriteArtifactAsync(
+                artifactId,
+                collector.StreamAsync(cancellationToken),
+                cancellationToken).ConfigureAwait(false);
         }
-
-        var (startInclusive, endExclusive) = ResolveRange(scope);
-        var createdAtUtc = DateTimeOffset.UtcNow;
-        var artifactId = BuildArtifactId(scope, createdAtUtc);
-
-        var collector = new IncrementalDeltaCollector(
-            serializer,
-            walSubscriber,
-            treeId,
-            consumerId,
-            partitions,
-            baseOffsets,
-            startInclusive,
-            endExclusive,
-            ResolveTreeMergeMode(treeId),
-            request.BaseBackupId,
-            request.PageSize);
-
-        // Stream the delta pages to the sink; the collector accumulates the
-        // manifest metadata and the new per-partition offset frontier as each page
-        // passes through.
-        await sink.WriteArtifactAsync(
-            artifactId,
-            collector.StreamAsync(cancellationToken),
-            cancellationToken).ConfigureAwait(false);
+        catch (Exception ex) when (LatticeBackupMetrics.EmitCaptureFailure(
+            BackupKind.Incremental, LatticeBackupMetrics.PhaseExport, ex))
+        {
+            throw;
+        }
 
         // A trim that raced the up-front check, or a range delete that the uniform
         // point-keyed artifact cannot faithfully encode, abandons the delta for a
@@ -133,60 +168,78 @@ internal sealed class LatticeBackupCaptureService(
                 collector.FellOffLog
                     ? "the WAL trimmed past the base resume point mid-drain"
                     : "a range delete surfaced in the delta window");
+            LatticeBackupMetrics.RecordCaptureRetry(LatticeBackupMetrics.ReasonIncrementalFallback);
             return await CaptureTreeAsync(request.Name, scope, request.PageSize, cancellationToken)
                 .ConfigureAwait(false);
         }
 
-        var backupId = collector.BackupId;
-        var lattice = grainFactory.GetGrain<ILattice>(treeId);
-        var topology = await BuildTopologyAsync(lattice, startInclusive, endExclusive, cancellationToken)
-            .ConfigureAwait(false);
-        var consistencyCut = BuildIncrementalCut(
-            baseManifest.ConsistencyCut,
-            collector.NewPartitionOffsets(),
-            collector.HighestHlc,
-            collector.PerOriginHighWater);
-        var provenance = BuildProvenance(collector.PerOriginHighWater);
-
-        var contentDescriptor = new BackupContentDescriptor(
-            artifactId,
-            collector.ContentHash,
-            collector.ByteLength,
-            collector.ChunkCount,
-            scope);
-
-        var manifest = new BackupManifest(
-            id: backupId,
-            name: request.Name,
-            createdAtUtc: createdAtUtc,
-            kind: BackupKind.Incremental,
-            scope: scope,
-            consistencyCut: consistencyCut,
-            topology: topology,
-            structuralDigest: ComputeStructuralDigest(topology.ShardRootDigests),
-            keyDescriptors: collector.KeyDescriptors,
-            contentDescriptors: new[] { contentDescriptor },
-            provenance: provenance,
-            baseBackupId: request.BaseBackupId,
-            compressionDictionary: null);
-
-        await sink.WriteManifestAsync(manifest, cancellationToken).ConfigureAwait(false);
-        await catalog.RegisterAsync(manifest, cancellationToken).ConfigureAwait(false);
-
-        // Advance the WAL pin to the increment frontier so GC can now reclaim the
-        // entries we have captured; the next increment re-pins from its own base.
-        if (collector.HighestHlc > HybridLogicalClock.Zero)
+        try
         {
-            await cursorRegistry.ReportCursorAsync(treeId, consumerId, collector.HighestHlc, cancellationToken)
+            var backupId = collector.BackupId;
+            var lattice = grainFactory.GetGrain<ILattice>(treeId);
+            var topology = await BuildTopologyAsync(lattice, startInclusive, endExclusive, cancellationToken)
                 .ConfigureAwait(false);
+            var consistencyCut = BuildIncrementalCut(
+                baseManifest.ConsistencyCut,
+                collector.NewPartitionOffsets(),
+                collector.HighestHlc,
+                collector.PerOriginHighWater);
+            var provenance = BuildProvenance(collector.PerOriginHighWater);
+
+            var contentDescriptor = new BackupContentDescriptor(
+                artifactId,
+                collector.ContentHash,
+                collector.ByteLength,
+                collector.ChunkCount,
+                scope);
+
+            var manifest = new BackupManifest(
+                id: backupId,
+                name: request.Name,
+                createdAtUtc: createdAtUtc,
+                kind: BackupKind.Incremental,
+                scope: scope,
+                consistencyCut: consistencyCut,
+                topology: topology,
+                structuralDigest: ComputeStructuralDigest(topology.ShardRootDigests),
+                keyDescriptors: collector.KeyDescriptors,
+                contentDescriptors: new[] { contentDescriptor },
+                provenance: provenance,
+                baseBackupId: request.BaseBackupId,
+                compressionDictionary: null);
+
+            await sink.WriteManifestAsync(manifest, cancellationToken).ConfigureAwait(false);
+            await catalog.RegisterAsync(manifest, cancellationToken).ConfigureAwait(false);
+
+            // Advance the WAL pin to the increment frontier so GC can now reclaim the
+            // entries we have captured; the next increment re-pins from its own base.
+            if (collector.HighestHlc > HybridLogicalClock.Zero)
+            {
+                await cursorRegistry.ReportCursorAsync(treeId, consumerId, collector.HighestHlc, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            LatticeBackupMetrics.RecordCaptureSuccess(
+                manifest,
+                stopwatch.Elapsed.TotalMilliseconds,
+                collector.ByteLength,
+                manifest.ContentDescriptors.Count,
+                collector.KeyDescriptors.Count);
+            var baseCutAgeMs = Math.Max(0d, (createdAtUtc - baseManifest.CreatedAtUtc).TotalMilliseconds);
+            LatticeBackupMetrics.RecordIncrementalLag(collector.KeyDescriptors.Count, baseCutAgeMs);
+
+            logger.LogInformation(
+                "Captured incremental backup {BackupId} of tree {TreeId} on base {BaseBackupId} "
+                + "({KeyCount} delta entries, {ByteLength} bytes).",
+                backupId, treeId, request.BaseBackupId, collector.KeyDescriptors.Count, collector.ByteLength);
+
+            return new LatticeBackupCaptureResult(backupId, manifest);
         }
-
-        logger.LogInformation(
-            "Captured incremental backup {BackupId} of tree {TreeId} on base {BaseBackupId} "
-            + "({KeyCount} delta entries, {ByteLength} bytes).",
-            backupId, treeId, request.BaseBackupId, collector.KeyDescriptors.Count, collector.ByteLength);
-
-        return new LatticeBackupCaptureResult(backupId, manifest);
+        catch (Exception ex) when (LatticeBackupMetrics.EmitCaptureFailure(
+            BackupKind.Incremental, LatticeBackupMetrics.PhaseManifestCommit, ex))
+        {
+            throw;
+        }
     }
 
     /// <inheritdoc />
@@ -427,106 +480,129 @@ internal sealed class LatticeBackupCaptureService(
         CancellationToken cancellationToken)
     {
         var treeId = scope.TreeId;
+        var stopwatch = Stopwatch.StartNew();
 
-        // Fail-closed authorization before anything else is touched.
-        await authorizer.AuthorizeBackupAsync(scope, cancellationToken).ConfigureAwait(false);
-
-        var (startInclusive, endExclusive) = ResolveRange(scope);
-        var lattice = grainFactory.GetGrain<ILattice>(treeId);
-        var options = optionsMonitor.Get(treeId);
-
-        // Fail-fast size gate: read the in-scope live entry count from the
-        // shard-root push-up aggregate and reject up front - before a snapshot
-        // is opened - when the scope would exceed the per-shard replay budget, so
-        // a doomed capture never pins a baseline.
-        var inScopeCount = await lattice
-            .CountAsync(startInclusive, endExclusive, cancellationToken)
-            .ConfigureAwait(false);
-        if (inScopeCount > options.MaxSnapshotReplayEntries)
-        {
-            throw new LatticeSnapshotReplayBudgetExceededException(
-                $"The backup scope holds {inScopeCount} entries, which exceeds the configured "
-                + $"snapshot replay budget of {options.MaxSnapshotReplayEntries} "
-                + $"({nameof(LatticeOptions.MaxSnapshotReplayEntries)}). Narrow the scope or raise the budget.");
-        }
-
-        // Capture the per-partition WAL head frontier BEFORE opening the snapshot
-        // cursor so a later incremental resumes its forward WAL read from exactly
-        // this cut. Any entry that lands between this read and the snapshot freeze
-        // is re-read forward by the increment (a benign last-writer-wins overlap)
-        // rather than lost.
-        var walPartitionOffsets = await CaptureWalHeadsAsync(treeId, cancellationToken).ConfigureAwait(false);
-
-        // Open the point-in-time cut through the public snapshot cursor surface;
-        // this consults the core shedding / budget policy and surfaces
-        // LatticeSaturatedException / LatticeCursorSnapshotExpiredException for us.
-        var cursorId = await lattice
-            .OpenSnapshotEntryCursorAsync(startInclusive, endExclusive, reverse: false, cancellationToken)
-            .ConfigureAwait(false);
-
+        // Capture-failure phase tracker: advanced as the capture progresses so the
+        // failure filter tags the counter with the phase the fault surfaced in.
+        var phase = LatticeBackupMetrics.PhaseSnapshotOpen;
         try
         {
-            var cursor = grainFactory.GetGrain<ILatticeCursorGrain>($"{treeId}/{cursorId}");
-            var coordinate = await cursor.GetSnapshotCoordinateAsync().ConfigureAwait(false);
+            // Fail-closed authorization before anything else is touched.
+            await authorizer.AuthorizeBackupAsync(scope, cancellationToken).ConfigureAwait(false);
 
-            var createdAtUtc = DateTimeOffset.UtcNow;
-            var artifactId = BuildArtifactId(scope, createdAtUtc);
+            var (startInclusive, endExclusive) = ResolveRange(scope);
+            var lattice = grainFactory.GetGrain<ILattice>(treeId);
+            var options = optionsMonitor.Get(treeId);
 
-            // Stream the raw-entry pages to the sink while the collector records
-            // per-key descriptors, the content digest, the byte length, and the
-            // chunk count. WriteArtifactAsync fully drains the enumerable, so the
-            // collector is complete once it returns.
-            var collector = new RawEntryCollector(serializer, ResolveTreeMergeMode(treeId));
-            await sink.WriteArtifactAsync(
-                artifactId,
-                collector.StreamAsync(cursor, pageSize, cancellationToken),
-                cancellationToken).ConfigureAwait(false);
-
-            // The manifest id is the content address of the streamed payload, so a
-            // capture that produced identical bytes registers the same backup id.
-            var backupId = collector.ContentHash;
-
-            var topology = await BuildTopologyAsync(lattice, startInclusive, endExclusive, cancellationToken)
+            // Fail-fast size gate: read the in-scope live entry count from the
+            // shard-root push-up aggregate and reject up front - before a snapshot
+            // is opened - when the scope would exceed the per-shard replay budget, so
+            // a doomed capture never pins a baseline.
+            var inScopeCount = await lattice
+                .CountAsync(startInclusive, endExclusive, cancellationToken)
                 .ConfigureAwait(false);
-            var consistencyCut = BuildConsistencyCut(coordinate, collector.PerOriginHighWater, walPartitionOffsets);
-            var provenance = BuildProvenance(collector.PerOriginHighWater);
+            if (inScopeCount > options.MaxSnapshotReplayEntries)
+            {
+                throw new LatticeSnapshotReplayBudgetExceededException(
+                    $"The backup scope holds {inScopeCount} entries, which exceeds the configured "
+                    + $"snapshot replay budget of {options.MaxSnapshotReplayEntries} "
+                    + $"({nameof(LatticeOptions.MaxSnapshotReplayEntries)}). Narrow the scope or raise the budget.");
+            }
 
-            var contentDescriptor = new BackupContentDescriptor(
-                artifactId,
-                collector.ContentHash,
-                collector.ByteLength,
-                collector.ChunkCount,
-                scope);
+            // Capture the per-partition WAL head frontier BEFORE opening the snapshot
+            // cursor so a later incremental resumes its forward WAL read from exactly
+            // this cut. Any entry that lands between this read and the snapshot freeze
+            // is re-read forward by the increment (a benign last-writer-wins overlap)
+            // rather than lost.
+            var walPartitionOffsets = await CaptureWalHeadsAsync(treeId, cancellationToken).ConfigureAwait(false);
 
-            var manifest = new BackupManifest(
-                id: backupId,
-                name: name,
-                createdAtUtc: createdAtUtc,
-                kind: BackupKind.Full,
-                scope: scope,
-                consistencyCut: consistencyCut,
-                topology: topology,
-                structuralDigest: ComputeStructuralDigest(topology.ShardRootDigests),
-                keyDescriptors: collector.KeyDescriptors,
-                contentDescriptors: new[] { contentDescriptor },
-                provenance: provenance,
-                baseBackupId: null,
-                compressionDictionary: null);
+            // Open the point-in-time cut through the public snapshot cursor surface;
+            // this consults the core shedding / budget policy and surfaces
+            // LatticeSaturatedException / LatticeCursorSnapshotExpiredException for us.
+            var cursorId = await lattice
+                .OpenSnapshotEntryCursorAsync(startInclusive, endExclusive, reverse: false, cancellationToken)
+                .ConfigureAwait(false);
 
-            await sink.WriteManifestAsync(manifest, cancellationToken).ConfigureAwait(false);
-            await catalog.RegisterAsync(manifest, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var cursor = grainFactory.GetGrain<ILatticeCursorGrain>($"{treeId}/{cursorId}");
+                var coordinate = await cursor.GetSnapshotCoordinateAsync().ConfigureAwait(false);
 
-            logger.LogInformation(
-                "Captured full backup {BackupId} of tree {TreeId} ({KeyCount} keys, {ByteLength} bytes) at cut wal={WalSequence} hlc={HlcTimestamp}.",
-                backupId, treeId, collector.KeyDescriptors.Count, collector.ByteLength,
-                consistencyCut.WalSequence, consistencyCut.HlcTimestamp);
+                var createdAtUtc = DateTimeOffset.UtcNow;
+                var artifactId = BuildArtifactId(scope, createdAtUtc);
 
-            return new LatticeBackupCaptureResult(backupId, manifest);
+                // Stream the raw-entry pages to the sink while the collector records
+                // per-key descriptors, the content digest, the byte length, and the
+                // chunk count. WriteArtifactAsync fully drains the enumerable, so the
+                // collector is complete once it returns.
+                phase = LatticeBackupMetrics.PhaseExport;
+                var collector = new RawEntryCollector(serializer, ResolveTreeMergeMode(treeId));
+                await sink.WriteArtifactAsync(
+                    artifactId,
+                    collector.StreamAsync(cursor, pageSize, cancellationToken),
+                    cancellationToken).ConfigureAwait(false);
+
+                // The manifest id is the content address of the streamed payload, so a
+                // capture that produced identical bytes registers the same backup id.
+                var backupId = collector.ContentHash;
+
+                var topology = await BuildTopologyAsync(lattice, startInclusive, endExclusive, cancellationToken)
+                    .ConfigureAwait(false);
+                var consistencyCut = BuildConsistencyCut(coordinate, collector.PerOriginHighWater, walPartitionOffsets);
+                var provenance = BuildProvenance(collector.PerOriginHighWater);
+
+                var contentDescriptor = new BackupContentDescriptor(
+                    artifactId,
+                    collector.ContentHash,
+                    collector.ByteLength,
+                    collector.ChunkCount,
+                    scope);
+
+                var manifest = new BackupManifest(
+                    id: backupId,
+                    name: name,
+                    createdAtUtc: createdAtUtc,
+                    kind: BackupKind.Full,
+                    scope: scope,
+                    consistencyCut: consistencyCut,
+                    topology: topology,
+                    structuralDigest: ComputeStructuralDigest(topology.ShardRootDigests),
+                    keyDescriptors: collector.KeyDescriptors,
+                    contentDescriptors: new[] { contentDescriptor },
+                    provenance: provenance,
+                    baseBackupId: null,
+                    compressionDictionary: null);
+
+                phase = LatticeBackupMetrics.PhaseSinkWrite;
+                await sink.WriteManifestAsync(manifest, cancellationToken).ConfigureAwait(false);
+                phase = LatticeBackupMetrics.PhaseManifestCommit;
+                await catalog.RegisterAsync(manifest, cancellationToken).ConfigureAwait(false);
+
+                LatticeBackupMetrics.RecordCaptureSuccess(
+                    manifest,
+                    stopwatch.Elapsed.TotalMilliseconds,
+                    collector.ByteLength,
+                    manifest.ContentDescriptors.Count,
+                    collector.KeyDescriptors.Count);
+
+                logger.LogInformation(
+                    "Captured full backup {BackupId} of tree {TreeId} ({KeyCount} keys, {ByteLength} bytes) at cut wal={WalSequence} hlc={HlcTimestamp}.",
+                    backupId, treeId, collector.KeyDescriptors.Count, collector.ByteLength,
+                    consistencyCut.WalSequence, consistencyCut.HlcTimestamp);
+
+                return new LatticeBackupCaptureResult(backupId, manifest);
+            }
+            finally
+            {
+                // Release the pinned snapshot even when the capture fails partway.
+                await lattice.CloseCursorAsync(cursorId, CancellationToken.None).ConfigureAwait(false);
+            }
         }
-        finally
+        catch (Exception ex) when (LatticeBackupMetrics.EmitCaptureFailure(BackupKind.Full, phase, ex))
         {
-            // Release the pinned snapshot even when the capture fails partway.
-            await lattice.CloseCursorAsync(cursorId, CancellationToken.None).ConfigureAwait(false);
+            // The filter records the failure metric and returns false, so this
+            // catch never runs and the original exception propagates unchanged.
+            throw;
         }
     }
 

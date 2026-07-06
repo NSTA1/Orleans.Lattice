@@ -19,6 +19,8 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
     private readonly ILatticeBackupSink _sink;
     private readonly ILatticeBackupRestoreService _restore;
     private readonly BackupAccessAuthorizer _authorizer;
+    private readonly IGrainFactory _grainFactory;
+    private readonly BackupInventoryRegistry _inventory;
     private readonly LatticeApiBackupOptions _options;
 
     /// <summary>Initializes a new <see cref="LatticeBackupControl"/>.</summary>
@@ -28,6 +30,8 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
     /// <param name="sink">The backup storage sink. Must not be <c>null</c>.</param>
     /// <param name="restore">The restore engine. Must not be <c>null</c>.</param>
     /// <param name="authorizer">The fail-closed backup authorization seam. Must not be <c>null</c>.</param>
+    /// <param name="grainFactory">The grain factory used to reach the per-scope scheduler. Must not be <c>null</c>.</param>
+    /// <param name="inventory">The in-memory backup metric / inventory registry. Must not be <c>null</c>.</param>
     /// <param name="options">The facade options. Must not be <c>null</c>.</param>
     /// <exception cref="ArgumentNullException">A required dependency is <c>null</c>.</exception>
     public LatticeBackupControl(
@@ -37,6 +41,8 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         ILatticeBackupSink sink,
         ILatticeBackupRestoreService restore,
         BackupAccessAuthorizer authorizer,
+        IGrainFactory grainFactory,
+        BackupInventoryRegistry inventory,
         IOptions<LatticeApiBackupOptions> options)
     {
         ArgumentNullException.ThrowIfNull(capture);
@@ -45,6 +51,8 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         ArgumentNullException.ThrowIfNull(sink);
         ArgumentNullException.ThrowIfNull(restore);
         ArgumentNullException.ThrowIfNull(authorizer);
+        ArgumentNullException.ThrowIfNull(grainFactory);
+        ArgumentNullException.ThrowIfNull(inventory);
         ArgumentNullException.ThrowIfNull(options);
 
         _capture = capture;
@@ -53,6 +61,8 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         _sink = sink;
         _restore = restore;
         _authorizer = authorizer;
+        _grainFactory = grainFactory;
+        _inventory = inventory;
         _options = options.Value;
     }
 
@@ -286,6 +296,157 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
             yield return chunk;
         }
     }
+
+    /// <inheritdoc />
+    public async Task<BackupInventoryReport> GetInventoryAsync(
+        CancellationToken cancellationToken = default)
+    {
+        long total = 0;
+        long totalBytes = 0;
+        long fullCount = 0;
+        long incrementalCount = 0;
+        DateTimeOffset? oldest = null;
+        DateTimeOffset? newest = null;
+
+        await foreach (var manifest in _catalog.ListAsync(cancellationToken).ConfigureAwait(false))
+        {
+            if (!await IsReadAuthorizedAsync(manifest.Scope, cancellationToken).ConfigureAwait(false))
+            {
+                continue;
+            }
+
+            total++;
+            foreach (var descriptor in manifest.ContentDescriptors)
+            {
+                totalBytes += descriptor.ByteLength;
+            }
+
+            if (manifest.Kind == BackupKind.Incremental)
+            {
+                incrementalCount++;
+            }
+            else
+            {
+                fullCount++;
+            }
+
+            if (oldest is null || manifest.CreatedAtUtc < oldest)
+            {
+                oldest = manifest.CreatedAtUtc;
+            }
+
+            if (newest is null || manifest.CreatedAtUtc > newest)
+            {
+                newest = manifest.CreatedAtUtc;
+            }
+        }
+
+        return new BackupInventoryReport(
+            total,
+            totalBytes,
+            fullCount,
+            incrementalCount,
+            oldest,
+            newest,
+            _inventory.CaptureFailureCount,
+            _inventory.RestoreFailureCount,
+            _inventory.BytesReclaimed);
+    }
+
+    /// <inheritdoc />
+    public async Task<BackupScopeStatus?> GetScopeStatusAsync(
+        BackupScopeSelector scope,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+
+        // Fail-closed read authorization before any scope state is revealed.
+        await _authorizer.AuthorizeBackupAsync(scope, cancellationToken).ConfigureAwait(false);
+
+        var runtime = await _grainFactory
+            .GetGrain<ILatticeBackupSchedulerGrain>(BackupScopeKey.For(scope))
+            .GetScopeRuntimeStatusAsync()
+            .ConfigureAwait(false);
+
+        var chainDepth = await ComputeScopeChainDepthAsync(scope, cancellationToken).ConfigureAwait(false);
+
+        // An unknown scope - no schedule of either kind, no recorded run, and no
+        // catalogued backup - is reported as absent rather than an empty status.
+        if (!runtime.FullScheduleRegistered
+            && !runtime.IncrementalScheduleRegistered
+            && runtime.LastRunOutcome == BackupScopeRunOutcome.None
+            && chainDepth == 0)
+        {
+            return null;
+        }
+
+        return new BackupScopeStatus(
+            scope,
+            runtime.FullScheduleRegistered,
+            runtime.IncrementalScheduleRegistered,
+            runtime.LastFullRunUtc,
+            runtime.LastFullSuccessUtc,
+            runtime.LastIncrementalRunUtc,
+            runtime.LastIncrementalSuccessUtc,
+            runtime.LastRunOutcome,
+            chainDepth);
+    }
+
+    /// <summary>
+    /// Computes the base-chain depth of a scope's latest backup by finding the
+    /// newest manifest whose scope matches and walking its
+    /// <see cref="BackupManifest.BaseBackupId"/> ancestry, guarding against a
+    /// malformed cycle. Returns 0 when the scope has no catalogued backup.
+    /// </summary>
+    private async Task<int> ComputeScopeChainDepthAsync(
+        BackupScopeSelector scope,
+        CancellationToken cancellationToken)
+    {
+        BackupManifest? latest = null;
+        var byId = new Dictionary<string, BackupManifest>(StringComparer.Ordinal);
+        await foreach (var manifest in _catalog.ListAsync(cancellationToken).ConfigureAwait(false))
+        {
+            byId[manifest.Id] = manifest;
+            if (!ScopeMatches(manifest.Scope, scope))
+            {
+                continue;
+            }
+
+            if (latest is null
+                || manifest.CreatedAtUtc > latest.CreatedAtUtc
+                || (manifest.CreatedAtUtc == latest.CreatedAtUtc
+                    && string.CompareOrdinal(manifest.Id, latest.Id) > 0))
+            {
+                latest = manifest;
+            }
+        }
+
+        if (latest is null)
+        {
+            return 0;
+        }
+
+        var depth = 0;
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        var current = latest;
+        while (current is not null && visited.Add(current.Id))
+        {
+            depth++;
+            if (current.BaseBackupId is not { } baseId || !byId.TryGetValue(baseId, out var baseManifest))
+            {
+                break;
+            }
+
+            current = baseManifest;
+        }
+
+        return depth;
+    }
+
+    private static bool ScopeMatches(BackupScopeSelector a, BackupScopeSelector b) =>
+        a.Kind == b.Kind
+        && string.Equals(a.TreeId, b.TreeId, StringComparison.Ordinal)
+        && string.Equals(a.KeyOrPrefix, b.KeyOrPrefix, StringComparison.Ordinal);
 
     /// <summary>
     /// Applies the fail-closed read gate to a manifest's scope, returning

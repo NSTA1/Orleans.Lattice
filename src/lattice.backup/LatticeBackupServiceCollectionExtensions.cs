@@ -78,6 +78,12 @@ public static class LatticeBackupServiceCollectionExtensions
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IValidateOptions<LatticeBackupScheduleOptions>, LatticeBackupScheduleOptionsValidator>());
 
+        // The in-memory inventory / status registry that the capture, restore,
+        // scheduler, and retention paths update and the observable inventory
+        // gauges + admin status surface read. Registered as the process-wide
+        // singleton so the static meter callbacks and DI consumers share it.
+        builder.Services.TryAddSingleton(_ => BackupInventoryRegistry.Instance);
+
         builder.Services.TryAddSingleton<BackupInitializer>();
         builder.Services.TryAddSingleton<ILatticeBackupSink, InClusterLatticeBackupSink>();
         builder.Services.TryAddSingleton<ILatticeBackupCatalogStore, LatticeBackupCatalogStore>();

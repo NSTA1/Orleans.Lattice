@@ -141,4 +141,31 @@ internal interface ILatticeBackupControl
         string backupId,
         string artifactId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Builds an inventory summary of every backup the caller may read - absolute
+    /// counts, byte totals, per-kind counts, and oldest / newest timestamps from
+    /// the durable catalog, plus the process-lifetime failure and bytes-reclaimed
+    /// tallies from the in-memory metric registry. A manifest whose scope the
+    /// caller may not read is excluded from the counts.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The catalog-wide inventory report.</returns>
+    Task<BackupInventoryReport> GetInventoryAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads a single scope's schedule and last-run status, or
+    /// <see langword="null"/> when the scope has no registered schedule and no
+    /// catalogued backup. Authorizes the scope's read grant fail-closed before
+    /// returning anything.
+    /// </summary>
+    /// <param name="scope">The scope to describe. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The scope's status, or <see langword="null"/> when the scope is unknown.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="scope"/> is <c>null</c>.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the scope.</exception>
+    Task<BackupScopeStatus?> GetScopeStatusAsync(
+        BackupScopeSelector scope,
+        CancellationToken cancellationToken = default);
 }

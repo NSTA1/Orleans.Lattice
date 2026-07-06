@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
@@ -38,60 +39,75 @@ internal sealed class LatticeBackupRestoreService(
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var target = await ReadManifestAsync(request.BackupId, cancellationToken).ConfigureAwait(false)
-            ?? throw new LatticeRestoreValidationException(
-                $"No backup with id '{request.BackupId}' exists in the catalog or sink.");
-
-        var targetTreeId = request.TargetTreeId ?? target.Scope.TreeId;
-        BackupConstants.ThrowIfReservedTree(targetTreeId, nameof(request));
-
-        // The effective restore scope is the requested sub-scope (retargeted to the
-        // target tree) or the whole captured scope. A requested sub-scope must fall
-        // within the captured scope.
-        var effectiveScope = ResolveEffectiveScope(request.Scope, target.Scope, targetTreeId);
-        var (rangeStart, rangeEnd) = ResolveRange(effectiveScope);
-
-        // Fail-closed authorization with the real caller identity, before any
-        // system-origin scope is entered.
-        await authorizer.AuthorizeRestoreAsync(effectiveScope, cancellationToken).ConfigureAwait(false);
-
-        // Read the base chain (base-first) and validate every artifact up front.
-        var chain = await BuildChainAsync(target, cancellationToken).ConfigureAwait(false);
-        foreach (var manifest in chain)
+        var stopwatch = Stopwatch.StartNew();
+        var phase = LatticeBackupMetrics.PhaseRead;
+        try
         {
-            await ValidateManifestAsync(manifest, cancellationToken).ConfigureAwait(false);
-        }
+            var target = await ReadManifestAsync(request.BackupId, cancellationToken).ConfigureAwait(false)
+                ?? throw new LatticeRestoreValidationException(
+                    $"No backup with id '{request.BackupId}' exists in the catalog or sink.");
 
-        var operationId = request.OperationId ?? DeriveOperationId(request, targetTreeId, effectiveScope);
-        var chainIds = chain.Select(m => m.Id).ToArray();
+            var targetTreeId = request.TargetTreeId ?? target.Scope.TreeId;
+            BackupConstants.ThrowIfReservedTree(targetTreeId, nameof(request));
 
-        long entriesApplied;
-        if (request.Mode == LatticeRestoreMode.ShadowCutover)
-        {
-            var (shadowTreeId, previousPhysical, applied) = await RestoreShadowCutoverAsync(
-                targetTreeId, chain, rangeStart, rangeEnd, operationId, request.ApplyBatchSize, cancellationToken)
+            // The effective restore scope is the requested sub-scope (retargeted to the
+            // target tree) or the whole captured scope. A requested sub-scope must fall
+            // within the captured scope.
+            var effectiveScope = ResolveEffectiveScope(request.Scope, target.Scope, targetTreeId);
+            var (rangeStart, rangeEnd) = ResolveRange(effectiveScope);
+
+            // Fail-closed authorization with the real caller identity, before any
+            // system-origin scope is entered.
+            await authorizer.AuthorizeRestoreAsync(effectiveScope, cancellationToken).ConfigureAwait(false);
+
+            // Read the base chain (base-first) and validate every artifact up front.
+            var chain = await BuildChainAsync(target, cancellationToken).ConfigureAwait(false);
+            phase = LatticeBackupMetrics.PhaseVerify;
+            foreach (var manifest in chain)
+            {
+                await ValidateManifestAsync(manifest, cancellationToken).ConfigureAwait(false);
+            }
+
+            var operationId = request.OperationId ?? DeriveOperationId(request, targetTreeId, effectiveScope);
+            var chainIds = chain.Select(m => m.Id).ToArray();
+
+            phase = LatticeBackupMetrics.PhaseMerge;
+            long entriesApplied;
+            if (request.Mode == LatticeRestoreMode.ShadowCutover)
+            {
+                var (shadowTreeId, previousPhysical, applied) = await RestoreShadowCutoverAsync(
+                    targetTreeId, chain, rangeStart, rangeEnd, operationId, request.ApplyBatchSize, cancellationToken)
+                    .ConfigureAwait(false);
+
+                logger.LogInformation(
+                    "Restored backup {BackupId} into tree {TreeId} via shadow-cutover to {ShadowTreeId} "
+                    + "({EntryCount} entries); previous physical tree {PreviousTreeId} retained for revert.",
+                    request.BackupId, targetTreeId, shadowTreeId, applied, previousPhysical);
+
+                LatticeBackupMetrics.RecordRestoreSuccess(stopwatch.Elapsed.TotalMilliseconds, applied);
+                return new LatticeRestoreResult(
+                    request.BackupId, targetTreeId, request.Mode, operationId, chainIds, applied,
+                    shadowPhysicalTreeId: shadowTreeId, previousPhysicalTreeId: previousPhysical);
+            }
+
+            entriesApplied = await RestoreInPlaceAsync(
+                targetTreeId, chain, effectiveScope, rangeStart, rangeEnd, operationId, request.ApplyBatchSize, cancellationToken)
                 .ConfigureAwait(false);
 
             logger.LogInformation(
-                "Restored backup {BackupId} into tree {TreeId} via shadow-cutover to {ShadowTreeId} "
-                + "({EntryCount} entries); previous physical tree {PreviousTreeId} retained for revert.",
-                request.BackupId, targetTreeId, shadowTreeId, applied, previousPhysical);
+                "Restored backup {BackupId} into tree {TreeId} in place ({EntryCount} entries, chain length {ChainLength}).",
+                request.BackupId, targetTreeId, entriesApplied, chain.Count);
 
+            LatticeBackupMetrics.RecordRestoreSuccess(stopwatch.Elapsed.TotalMilliseconds, entriesApplied);
             return new LatticeRestoreResult(
-                request.BackupId, targetTreeId, request.Mode, operationId, chainIds, applied,
-                shadowPhysicalTreeId: shadowTreeId, previousPhysicalTreeId: previousPhysical);
+                request.BackupId, targetTreeId, request.Mode, operationId, chainIds, entriesApplied);
         }
-
-        entriesApplied = await RestoreInPlaceAsync(
-            targetTreeId, chain, effectiveScope, rangeStart, rangeEnd, operationId, request.ApplyBatchSize, cancellationToken)
-            .ConfigureAwait(false);
-
-        logger.LogInformation(
-            "Restored backup {BackupId} into tree {TreeId} in place ({EntryCount} entries, chain length {ChainLength}).",
-            request.BackupId, targetTreeId, entriesApplied, chain.Count);
-
-        return new LatticeRestoreResult(
-            request.BackupId, targetTreeId, request.Mode, operationId, chainIds, entriesApplied);
+        catch (Exception ex) when (LatticeBackupMetrics.EmitRestoreFailure(phase, ex))
+        {
+            // The filter records the failure metric and returns false, so this
+            // catch never runs and the original exception propagates unchanged.
+            throw;
+        }
     }
 
     /// <inheritdoc />

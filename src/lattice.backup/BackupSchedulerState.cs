@@ -18,4 +18,24 @@ internal sealed class BackupSchedulerState
     /// </summary>
     [Id(0)]
     public BackupScopeSelector? Scope { get; set; }
+
+    /// <summary>The wall-clock time the most recent full-capture cycle started, or <c>null</c> when none has run.</summary>
+    [Id(1)]
+    public DateTimeOffset? LastFullRunUtc { get; set; }
+
+    /// <summary>The wall-clock time the most recent full-capture cycle succeeded, or <c>null</c> when none has.</summary>
+    [Id(2)]
+    public DateTimeOffset? LastFullSuccessUtc { get; set; }
+
+    /// <summary>The wall-clock time the most recent incremental-capture cycle started, or <c>null</c> when none has run.</summary>
+    [Id(3)]
+    public DateTimeOffset? LastIncrementalRunUtc { get; set; }
+
+    /// <summary>The wall-clock time the most recent incremental-capture cycle succeeded, or <c>null</c> when none has.</summary>
+    [Id(4)]
+    public DateTimeOffset? LastIncrementalSuccessUtc { get; set; }
+
+    /// <summary>The terminal outcome of the most recent capture cycle of either kind.</summary>
+    [Id(5)]
+    public BackupScopeRunOutcome LastRunOutcome { get; set; }
 }
