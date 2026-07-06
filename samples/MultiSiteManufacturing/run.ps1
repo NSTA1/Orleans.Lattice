@@ -54,6 +54,17 @@
   policy (minimum 8 characters with an uppercase letter, a lowercase letter, and
   a digit). Read in-process and hashed; never written anywhere in plaintext.
 
+.PARAMETER Backup
+  Enable the backup / restore subsystem so the Orleans.Lattice.Explorer backup
+  UI can drive capture and restore against this stack (issue #1131). Sets
+  LATTICE_BACKUP_ENABLED=true in the git-ignored .env; every silo then registers
+  the default in-cluster backup sink, the control API, and its gRPC binding. The
+  binding runs with authorization turned OFF - this is a demo-grade, insecure
+  posture (anyone who can reach the cluster endpoint can back up or restore),
+  matching how the state API runs anonymously by default. Omit to leave the
+  backup subsystem out entirely (the default, unchanged behaviour). Independent
+  of -Username/-Password: the two toggles can be combined or used separately.
+
 .EXAMPLE
   ./run.ps1
     Build the image (if needed), start all services, wait until the two
@@ -67,6 +78,12 @@
   ./run.ps1 -Username alice -Password 'Sup3rSecret'
     Start the stack with state-API authentication enabled. Then browse it:
     ./run-explorer.ps1 -Username alice -Password 'Sup3rSecret'
+
+.EXAMPLE
+  ./run.ps1 -Backup
+    Start the stack with the backup / restore subsystem enabled so the explorer
+    backup UI can capture and restore. Demo-grade: the backup gRPC binding runs
+    with authorization off.
 
 .EXAMPLE
   ./run.ps1 -Down
@@ -85,7 +102,8 @@ param(
   [switch]$Clean,
   [string]$Service,
   [string]$Username,
-  [string]$Password
+  [string]$Password,
+  [switch]$Backup
 )
 
 $ErrorActionPreference = "Stop"
@@ -108,11 +126,18 @@ function Remove-CredentialEnvFile {
 }
 
 function Write-CredentialEnvFile {
-    # Always (re)write .env on the up path so a stale credential from a previous
-    # authenticated run never lingers into a later anonymous run. Anonymous runs
-    # write EXPLORER_STATE_AUTH=false and no credential line.
+    # Always (re)write .env on the up path so a stale toggle from a previous run
+    # never lingers into a later run. Both the state-API auth flag and the backup
+    # flag are written every time (each defaulting to false) so .env reflects
+    # exactly the switches passed to THIS invocation. The two flags are
+    # independent; env_file injects whichever lines are present into every silo.
+    $backupLine = if ($Backup) { "LATTICE_BACKUP_ENABLED=true" } else { "LATTICE_BACKUP_ENABLED=false" }
+
     if (-not $authEnabled) {
-        Set-Content -Path $EnvFilePath -Value "EXPLORER_STATE_AUTH=false" -Encoding ascii
+        Set-Content -Path $EnvFilePath -Value @("EXPLORER_STATE_AUTH=false", $backupLine) -Encoding ascii
+        if ($Backup) {
+            Write-Host "Backup subsystem enabled (LATTICE_BACKUP_ENABLED=true, .env)" -ForegroundColor Green
+        }
         return
     }
 
@@ -141,9 +166,13 @@ function Write-CredentialEnvFile {
     }
 
     # $credLine is "LATTICE_STATE_USER_<user>=pbkdf2-sha256$...". Pair it with the
-    # enable flag the host reads to turn RequireAuthorization on.
-    Set-Content -Path $EnvFilePath -Value @("EXPLORER_STATE_AUTH=true", $credLine) -Encoding ascii
+    # enable flag the host reads to turn RequireAuthorization on, plus the backup
+    # toggle so the two subsystems can be enabled together.
+    Set-Content -Path $EnvFilePath -Value @("EXPLORER_STATE_AUTH=true", $credLine, $backupLine) -Encoding ascii
     Write-Host "Generated state-API credential for '$Username' (.env, git-ignored)" -ForegroundColor Green
+    if ($Backup) {
+        Write-Host "Backup subsystem enabled (LATTICE_BACKUP_ENABLED=true, .env)" -ForegroundColor Green
+    }
 }
 
 # Always run compose from this script's directory so docker-compose.yml,
@@ -263,6 +292,10 @@ try {
         Write-Host "  ./run-explorer.ps1 -Cluster eu     browse EU"
         Write-Host "  ./run-explorer.ps1 -Client windows browse in the Windows desktop explorer"
     }
+    if ($Backup) {
+        Write-Host "  Backup subsystem is ENABLED (demo-grade, authorization off)."
+        Write-Host "  Drive capture / restore from the explorer's backup UI."
+    }
     Write-Host ""
     Write-Host "Useful commands:" -ForegroundColor Cyan
     Write-Host "  ./run.ps1 -Logs                    tail all silo logs"
@@ -272,6 +305,7 @@ try {
     Write-Host "                                     simulate a cross-cluster partition (sever US -> EU)"
     Write-Host "  ./run.ps1 -Username u -Password p   start with state-API auth enabled"
     Write-Host "  ./run.ps1 -Clean                   wipe state, then start fresh"
+    Write-Host "  ./run.ps1 -Backup                  start with the backup subsystem enabled"
     Write-Host "  ./run.ps1 -Down                    stop + wipe volumes"
 }
 finally {

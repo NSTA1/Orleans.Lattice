@@ -57,6 +57,13 @@
          Orleans.Lattice.Explorer can browse the running sample (issue #886). -->
     <ProjectReference Include="..\..\..\..\src\lattice.api.state\Orleans.Lattice.Api.State.csproj" />
     <ProjectReference Include="..\..\..\..\src\lattice.api.state.grpc\Orleans.Lattice.Api.State.Grpc.csproj" />
+    <!-- Backup / restore subsystem, its operator-facing control API, and the
+         gRPC binding the Orleans.Lattice.Explorer backup UI consumes. Wired in
+         only when run.ps1 is given -Backup (LATTICE_BACKUP_ENABLED=true); the
+         references are always present so the host compiles either way. -->
+    <ProjectReference Include="..\..\..\..\src\lattice.backup\Orleans.Lattice.Backup.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.api.backup\Orleans.Lattice.Api.Backup.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.api.backup.grpc\Orleans.Lattice.Api.Backup.Grpc.csproj" />
   </ItemGroup>
 
   <ItemGroup>
