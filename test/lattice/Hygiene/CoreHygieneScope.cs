@@ -14,7 +14,7 @@ namespace Orleans.Lattice.Tests;
 internal static class CoreHygieneScope
 {
     /// <summary>Slice directories owned by the core test project.</summary>
-    private static readonly string[] CoreSliceRoots = { "src/lattice", "test/lattice" };
+    internal static readonly string[] CoreSliceRoots = { "src/lattice", "test/lattice" };
 
     /// <summary>
     /// Every package slice directory owned by some project. Kept in sync with
