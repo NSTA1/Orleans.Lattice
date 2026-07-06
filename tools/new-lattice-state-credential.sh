@@ -122,7 +122,21 @@ PASSWORD=""
 if [ "$PASSWORD_STDIN" -eq 1 ]; then
     IFS= read -r PASSWORD || PASSWORD=""
 elif [ -n "$PASSWORD_ENV" ]; then
-    eval "PASSWORD=\${$PASSWORD_ENV-__LATTICE_UNSET__}"
+    # Validate the variable NAME before dereferencing it. The value used to be
+    # read with `eval "PASSWORD=\${$PASSWORD_ENV-...}"`, which evaluates the
+    # supplied name as shell source: a crafted name such as 'X-$(command)'
+    # would execute arbitrary commands (command injection). Reject anything
+    # that is not an env-var-name-safe token, then dereference with bash
+    # indirect expansion (${!name}), which only reads the named variable and
+    # never evaluates its contents as code.
+    case "$PASSWORD_ENV" in
+        [A-Za-z_]*) : ;;
+        *) die 2 "--password-env name '$PASSWORD_ENV' is not a valid environment-variable name." ;;
+    esac
+    if printf '%s' "$PASSWORD_ENV" | grep -q '[^A-Za-z0-9_]'; then
+        die 2 "--password-env name '$PASSWORD_ENV' is not a valid environment-variable name (allowed: letters, digits, underscore; must not start with a digit)."
+    fi
+    PASSWORD="${!PASSWORD_ENV-__LATTICE_UNSET__}"
     [ "$PASSWORD" != "__LATTICE_UNSET__" ] || die 2 "environment variable '$PASSWORD_ENV' is not set."
 else
     printf 'Password for %s: ' "$USERNAME" >&2
