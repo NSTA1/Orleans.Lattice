@@ -26,6 +26,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\lattice.backup\Orleans.Lattice.Backup.csproj" />
+    <ProjectReference Include="..\..\src\lattice.dashboards\Orleans.Lattice.Dashboards.csproj" />
     <ProjectReference Include="..\shared\Orleans.Lattice.Testing\Orleans.Lattice.Testing.csproj" />
   </ItemGroup>
 

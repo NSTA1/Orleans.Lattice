@@ -84,4 +84,18 @@ public enum LatticeDashboardKind
     /// registered on the silo.
     /// </summary>
     Authorization = 5,
+
+    /// <summary>
+    /// Backup and restore operator view. Charts capture / restore throughput and
+    /// duration percentiles, per-backup size / artifact / entry distributions,
+    /// cumulative processed throughput, retention reclaim and prune rates,
+    /// incremental lag (entries and age behind the base cut), capture / restore
+    /// failure rates broken out by reason, scheduler skipped-run and overrun
+    /// counters, the cross-tree-consistent fence selection / drain counters, and
+    /// the inventory observable gauges (tracked count, max chain depth, catalog
+    /// bytes, oldest / newest age, and per-scope last-run status and
+    /// last-success age). Sources the <c>orleans.lattice.backup</c> meter; useful
+    /// only when the backup package is registered on the silo.
+    /// </summary>
+    Backup = 6,
 }

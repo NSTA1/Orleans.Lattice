@@ -4,6 +4,8 @@ Every instrument on the `orleans.lattice` and `orleans.lattice.replication` mete
 
 The add-on `orleans.lattice.auth` and `orleans.lattice.membership` meters are charted by the bundled Identity & Authorization dashboard. Their coverage is enforced from the owning packages: `Orleans.Lattice.Auth.Tests` and `Orleans.Lattice.Membership.Tests` each derive from the shared `MeterDashboardCoverageTestsBase`, which asserts every instrument on the meter is referenced by that dashboard (and that every token the dashboard references for the meter resolves to a live instrument).
 
+The add-on `orleans.lattice.backup` meter is charted by the bundled Backup & Restore dashboard. Its coverage is enforced the same way, from `Orleans.Lattice.Backup.Tests` (deriving from `MeterDashboardCoverageTestsBase`).
+
 ## `orleans.lattice` meter
 
 | Instrument | Type | Tags | Dashboard | Panel(s) |
@@ -186,3 +188,39 @@ Charted by the Identity & Authorization dashboard.
 |------------|------|------|-----------|----------|
 | `orleans.lattice.membership.resolution_cache.hits` | counter | (none) | Authorization | Subject-resolution cache hit ratio; Subject-resolution cache hits vs misses (rate) |
 | `orleans.lattice.membership.resolution_cache.misses` | counter | (none) | Authorization | Subject-resolution cache hit ratio; Subject-resolution cache hits vs misses (rate) |
+
+## `orleans.lattice.backup` meter
+
+Charted by the Backup & Restore dashboard.
+
+| Instrument | Type | Tags | Dashboard | Panel(s) |
+|------------|------|------|-----------|----------|
+| `orleans.lattice.backup.captures` | counter | `kind` | Backup | Captures (rate by kind) |
+| `orleans.lattice.backup.capture.duration` | histogram (ms) | `kind` | Backup | Capture duration p50/p95/p99 |
+| `orleans.lattice.backup.bytes` | histogram (`By`) | `kind` | Backup | Backup size p50/p95 (bytes) |
+| `orleans.lattice.backup.artifacts` | histogram (`{artifact}`) | `kind` | Backup | Artifacts per backup p50/p95 |
+| `orleans.lattice.backup.entries` | histogram (`{entry}`) | `kind` | Backup | Entries per backup p50/p95 |
+| `orleans.lattice.backup.entries_processed` | counter | `kind` | Backup | Processing throughput |
+| `orleans.lattice.backup.bytes_processed` | counter (`By`) | `kind` | Backup | Processing throughput |
+| `orleans.lattice.backup.restore.duration` | histogram (ms) | (none) | Backup | Restore duration p50/p95/p99 |
+| `orleans.lattice.backup.restore.entries` | counter | (none) | Backup | Restore entries (rate) |
+| `orleans.lattice.backup.incremental.lag_entries` | histogram (`{entry}`) | (none) | Backup | Incremental lag entries p50/p95 |
+| `orleans.lattice.backup.incremental.lag_age` | histogram (ms) | (none) | Backup | Incremental lag age p50/p95 |
+| `orleans.lattice.backup.retention.bytes_reclaimed` | counter (`By`) | `scope` | Backup | Retention reclaimed |
+| `orleans.lattice.backup.retention.pruned` | counter | `scope` | Backup | Retention pruned (rate) |
+| `orleans.lattice.backup.capture.failures` | counter | `kind`, `phase`, `reason` | Backup | Capture failures (by reason) |
+| `orleans.lattice.backup.restore.failures` | counter | `phase`, `reason` | Backup | Restore failures (by reason) |
+| `orleans.lattice.backup.capture.retries` | counter | `reason` | Backup | Capture retries / fallbacks |
+| `orleans.lattice.backup.scheduler.skipped` | counter | `scope` | Backup | Scheduler skipped vs overruns |
+| `orleans.lattice.backup.scheduler.overruns` | counter | `scope` | Backup | Scheduler skipped vs overruns |
+| `orleans.lattice.backup.cross_tree_fence.selections` | counter | `tree_count` | Backup | Cross-tree fence selections / drained |
+| `orleans.lattice.backup.cross_tree_fence.drained_in_flight` | counter | (none) | Backup | Cross-tree fence selections / drained |
+| `orleans.lattice.backup.cross_tree_fence.retries` | counter | (none) | Backup | Cross-tree fence retries |
+| `orleans.lattice.backup.cross_tree_fence.drain_wait` | histogram (ms) | (none) | Backup | Cross-tree fence drain wait p50/p95 |
+| `orleans.lattice.backup.inventory.count` | observable gauge (`{backup}`) | (none) | Backup | Tracked backups |
+| `orleans.lattice.backup.inventory.chain_depth_max` | observable gauge (`{backup}`) | (none) | Backup | Max chain depth |
+| `orleans.lattice.backup.catalog.bytes` | observable gauge (`By`) | (none) | Backup | Catalog size |
+| `orleans.lattice.backup.inventory.oldest_age` | observable gauge (`s`) | (none) | Backup | Oldest backup age |
+| `orleans.lattice.backup.inventory.newest_age` | observable gauge (`s`) | (none) | Backup | Newest backup age |
+| `orleans.lattice.backup.scope.last_run_status` | observable gauge (`{status}`) | `scope` | Backup | Per-scope last-run status |
+| `orleans.lattice.backup.scope.last_success_age` | observable gauge (`s`) | `scope` | Backup | Per-scope seconds since last success |
