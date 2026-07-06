@@ -88,32 +88,49 @@ public class ExplorerSessionTests
     }
 
     [Test]
-    public void ApplyAsync_WithInvalidEndpoint_Throws_AndDoesNotPersist()
+    public async Task InitializeAsync_ExposesConfiguration_BeforeConfiguringConnection()
     {
         var store = Substitute.For<IExplorerConfigStore>();
+        store.LoadAsync(Arg.Any<CancellationToken>()).Returns(ValidConfig());
         var connection = Substitute.For<ILatticeStateConnection>();
         var session = new ExplorerSession(store, connection);
 
-        Assert.That(
-            async () => await session.ApplyAsync(new ExplorerConfiguration { Endpoint = "bad" }),
-            Throws.ArgumentException);
+        bool? configuredWhenConnecting = null;
+        ExplorerConfiguration? currentWhenConnecting = null;
+        connection
+            .When(c => c.ConfigureAsync(Arg.Any<LatticeConnectionSettings>(), Arg.Any<CancellationToken>()))
+            .Do(_ =>
+            {
+                configuredWhenConnecting = session.IsConfigured;
+                currentWhenConnecting = session.Current;
+            });
+
+        await session.InitializeAsync();
+
+        Assert.That(configuredWhenConnecting, Is.True);
+        Assert.That(currentWhenConnecting, Is.Not.Null);
     }
 
     [Test]
-    public async Task ApplyAsync_AfterInvalidEndpoint_DoesNotSave()
+    public async Task ApplyAsync_ExposesConfiguration_BeforeConfiguringConnection()
     {
         var store = Substitute.For<IExplorerConfigStore>();
         var connection = Substitute.For<ILatticeStateConnection>();
         var session = new ExplorerSession(store, connection);
 
-        try
-        {
-            await session.ApplyAsync(new ExplorerConfiguration { Endpoint = "bad" });
-        }
-        catch (ArgumentException)
-        {
-        }
+        bool? configuredWhenConnecting = null;
+        ExplorerConfiguration? currentWhenConnecting = null;
+        connection
+            .When(c => c.ConfigureAsync(Arg.Any<LatticeConnectionSettings>(), Arg.Any<CancellationToken>()))
+            .Do(_ =>
+            {
+                configuredWhenConnecting = session.IsConfigured;
+                currentWhenConnecting = session.Current;
+            });
 
-        await store.DidNotReceive().SaveAsync(Arg.Any<ExplorerConfiguration>(), Arg.Any<CancellationToken>());
+        await session.ApplyAsync(ValidConfig("https://host:443"));
+
+        Assert.That(configuredWhenConnecting, Is.True);
+        Assert.That(currentWhenConnecting!.Endpoint, Is.EqualTo("https://host:443"));
     }
 }

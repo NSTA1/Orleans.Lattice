@@ -23,6 +23,11 @@ public static class ExplorerBackupServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
         services.AddExplorerNavigation();
+        // GrpcBackupControlClient owns its own Orleans serializer provider; it must
+        // not be handed the application root provider (which has no AddSerializer),
+        // or every backup gRPC call fails resolving its per-message serializers and
+        // the Backups area silently greys out. Its single constructor keeps that
+        // guarantee, so a plain type registration is safe here.
         services.TryAddSingleton<IBackupControlClient, GrpcBackupControlClient>();
         services.TryAddSingleton<IBackupCatalogReader, BackupCatalogReader>();
         services.TryAddSingleton<IBackupCapabilityService, BackupCapabilityService>();

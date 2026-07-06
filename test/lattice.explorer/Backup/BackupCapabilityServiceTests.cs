@@ -71,6 +71,20 @@ public class BackupCapabilityServiceTests
     }
 
     [Test]
+    public async Task RefreshAsync_unconfigured_session_leaves_coarse_disabled()
+    {
+        var client = new FakeBackupControlClient
+        {
+            ListThrows = new InvalidOperationException("explorer is not configured with an endpoint"),
+        };
+        var (service, store) = Create(client);
+
+        await service.RefreshAsync();
+
+        Assert.That(store.Current.BackupListAllowed, Is.False);
+    }
+
+    [Test]
     public async Task ProbeScopeAsync_maps_flags_into_store()
     {
         var client = new FakeBackupControlClient

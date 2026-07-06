@@ -28,7 +28,6 @@ public sealed class GrpcBackupControlClient : IBackupControlClient, IDisposable
     private readonly IExplorerSession _session;
     private readonly IExplorerAuthSession _auth;
     private readonly IServiceProvider _serializerProvider;
-    private readonly bool _ownsSerializerProvider;
     private readonly object _gate = new();
 
     private GrpcChannel? _channel;
@@ -39,35 +38,23 @@ public sealed class GrpcBackupControlClient : IBackupControlClient, IDisposable
 
     /// <summary>
     /// Creates the client over the explorer session and auth session. A private
-    /// Orleans serializer provider is built when one is not supplied, matching the
-    /// state connection's self-contained wiring.
+    /// Orleans serializer provider is always built and owned, matching the state
+    /// connection's self-contained wiring. The client deliberately does not take a
+    /// serializer provider from the ambient container: the explorer's application
+    /// root has no Orleans serialization registered, and an injected root provider
+    /// would make every backup call fail resolving its per-message serializers.
     /// </summary>
     /// <param name="session">The explorer session that owns the endpoint. Must not be <see langword="null"/>.</param>
     /// <param name="auth">The auth session whose current sign-in is attached. Must not be <see langword="null"/>.</param>
-    /// <param name="serializerProvider">
-    /// A provider with Orleans serialization registered, or <see langword="null"/>
-    /// to build and own a private one.
-    /// </param>
     public GrpcBackupControlClient(
         IExplorerSession session,
-        IExplorerAuthSession auth,
-        IServiceProvider? serializerProvider = null)
+        IExplorerAuthSession auth)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(auth);
         _session = session;
         _auth = auth;
-
-        if (serializerProvider is null)
-        {
-            _serializerProvider = new ServiceCollection().AddSerializer().BuildServiceProvider();
-            _ownsSerializerProvider = true;
-        }
-        else
-        {
-            _serializerProvider = serializerProvider;
-            _ownsSerializerProvider = false;
-        }
+        _serializerProvider = new ServiceCollection().AddSerializer().BuildServiceProvider();
     }
 
     /// <inheritdoc />
@@ -240,7 +227,7 @@ public sealed class GrpcBackupControlClient : IBackupControlClient, IDisposable
             _client = null;
         }
 
-        if (_ownsSerializerProvider && _serializerProvider is IDisposable disposable)
+        if (_serializerProvider is IDisposable disposable)
         {
             disposable.Dispose();
         }

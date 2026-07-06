@@ -1,8 +1,10 @@
 @using Orleans.Lattice.Explorer.Core.Navigation
+@using Orleans.Lattice.Explorer.Core.Connection
 @implements IDisposable
 @inject IExplorerCapabilityStore Capabilities
 @inject IBackupCapabilityService CapabilityService
 @inject IExplorerAuthSession Auth
+@inject ILatticeStateConnection Connection
 
 @*
     The app-level area switcher: a tab strip above the per-tree detail tabs that
@@ -44,6 +46,7 @@
 @code {
     private ExplorerCapabilities _capabilities = ExplorerCapabilities.Empty;
     private AppArea _area = AppAreas.Default;
+    private LatticeConnectionState _lastConnectionState;
 
     /// <summary>The Explore area's content (the tree browser), rendered when Explore is active.</summary>
     [Parameter] public RenderFragment? ChildContent { get; set; }
@@ -53,6 +56,8 @@
         _capabilities = Capabilities.Current;
         Capabilities.Changed += OnCapabilitiesChanged;
         Auth.AuthenticationChanged += OnAuthenticationChanged;
+        Connection.StatusChanged += OnConnectionStatusChanged;
+        _lastConnectionState = Connection.Status.State;
 
         // Probe the coarse top-level gate once after the shell mounts.
         await RefreshCapabilitiesAsync();
@@ -98,9 +103,27 @@
 
     private void OnAuthenticationChanged() => _ = RefreshCapabilitiesAsync();
 
+    private void OnConnectionStatusChanged(LatticeConnectionStatus status)
+    {
+        var wasConnected = _lastConnectionState == LatticeConnectionState.Connected;
+        _lastConnectionState = status.State;
+
+        // The coarse backup gate is probed once at mount and is fail-closed, so a
+        // probe that ran while the cluster was still starting (endpoint briefly
+        // unreachable) would otherwise leave the Backups area disabled with no
+        // retry, even though the connection later recovers for browsing. Re-run
+        // the probe each time the connection freshly reaches Connected so the area
+        // enables as soon as the endpoint is reachable.
+        if (status.State == LatticeConnectionState.Connected && !wasConnected)
+        {
+            _ = RefreshCapabilitiesAsync();
+        }
+    }
+
     public void Dispose()
     {
         Capabilities.Changed -= OnCapabilitiesChanged;
         Auth.AuthenticationChanged -= OnAuthenticationChanged;
+        Connection.StatusChanged -= OnConnectionStatusChanged;
     }
 }

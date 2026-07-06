@@ -80,6 +80,12 @@ public sealed class BackupCapabilityService(
         {
             return false;
         }
+        catch (InvalidOperationException)
+        {
+            // The explorer is not configured with an endpoint yet (no connection
+            // client). Treat as deny; a later connection-status change re-probes.
+            return false;
+        }
     }
 
     private static BackupScopeCapabilitySnapshot Map(BackupScopeCapabilities capabilities) => new()
