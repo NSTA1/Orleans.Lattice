@@ -67,20 +67,24 @@ public sealed class VersionVector : ICrdt<VersionVector>
         // exactly and bulk-copies, avoiding the 2-3 incremental Resize() grows
         // the previous entry-by-entry fill paid. The right-hand fold below then
         // only grows the dictionary for replica ids unique to the right.
-        result.Entries = new Dictionary<string, HybridLogicalClock>(left.Entries);
+        var merged = new Dictionary<string, HybridLogicalClock>(left.Entries);
 
+        // Single-probe fold: GetValueRefOrAddDefault hashes each id once and
+        // returns a ref to the slot (added zero-initialised when absent),
+        // replacing the previous TryGetValue-then-indexer pattern that hashed
+        // and bucket-walked twice for every replaced or inserted id. The
+        // pointwise-max result is identical: a missing slot is Zero (the
+        // add-default value), so writing clock is the same as the old insert
+        // branch, and an existing slot is bumped only when the incoming clock
+        // is strictly greater (ties keep the incumbent, matching the old
+        // existing >= clock choice).
         foreach (var (id, clock) in right.Entries)
         {
-            if (result.Entries.TryGetValue(id, out var existing))
-            {
-                result.Entries[id] = existing >= clock ? existing : clock;
-            }
-            else
-            {
-                result.Entries[id] = clock;
-            }
+            ref var slot = ref CollectionsMarshal.GetValueRefOrAddDefault(merged, id, out var existed);
+            if (!existed || clock > slot) slot = clock;
         }
 
+        result.Entries = merged;
         return result;
     }
 
@@ -95,14 +99,8 @@ public sealed class VersionVector : ICrdt<VersionVector>
         ArgumentNullException.ThrowIfNull(other);
         foreach (var (id, clock) in other.Entries)
         {
-            if (Entries.TryGetValue(id, out var existing))
-            {
-                if (clock > existing) Entries[id] = clock;
-            }
-            else
-            {
-                Entries[id] = clock;
-            }
+            ref var slot = ref CollectionsMarshal.GetValueRefOrAddDefault(Entries, id, out var existed);
+            if (!existed || clock > slot) slot = clock;
         }
     }
 
@@ -165,14 +163,8 @@ public sealed class VersionVector : ICrdt<VersionVector>
         if (entries is null || entries.Count == 0) return;
         foreach (var (id, clock) in entries)
         {
-            if (Entries.TryGetValue(id, out var existing))
-            {
-                if (clock > existing) Entries[id] = clock;
-            }
-            else
-            {
-                Entries[id] = clock;
-            }
+            ref var slot = ref CollectionsMarshal.GetValueRefOrAddDefault(Entries, id, out var existed);
+            if (!existed || clock > slot) slot = clock;
         }
     }
 
