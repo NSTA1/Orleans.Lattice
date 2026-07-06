@@ -84,6 +84,59 @@ public class OrSetTests
     }
 
     [Test]
+    public void Empty_element_is_a_valid_member()
+    {
+        // Empty arrays base64-encode to the empty string; the span-keyed
+        // lookup must round-trip through the zero-length key.
+        var set = new OrSet();
+        var empty = Array.Empty<byte>();
+        set.Add(empty, "r1", 1);
+        Assert.That(set.Contains(empty), Is.True);
+        Assert.That(set.Elements().Single(), Is.Empty);
+        Assert.That(set.Remove(empty), Is.True);
+        Assert.That(set.Contains(empty), Is.False);
+    }
+
+    [TestCase(1)]
+    [TestCase(64)]
+    [TestCase(192)]     // largest element that keys through the stack buffer
+    [TestCase(193)]     // first element that spills to the pooled buffer
+    [TestCase(4096)]    // well past the stack-buffer threshold
+    public void Elements_of_varying_size_round_trip_through_span_keying(int size)
+    {
+        // Exercises both the stack-buffer and ArrayPool base64 encode paths
+        // in Add / Contains / Remove for elements above and below the
+        // MaxStackBase64Chars (256-char => 192-byte) crossover.
+        var set = new OrSet();
+        var element = new byte[size];
+        for (var i = 0; i < size; i++) element[i] = (byte)(i * 31 + 7);
+
+        set.Add(element, "r1", 1);
+        Assert.That(set.Contains(element), Is.True);
+        Assert.That(set.Count, Is.EqualTo(1));
+
+        var read = set.Elements().Single();
+        Assert.That(read, Is.EqualTo(element));
+
+        Assert.That(set.Remove(element), Is.True);
+        Assert.That(set.Contains(element), Is.False);
+        Assert.That(set.IsEmpty, Is.True);
+    }
+
+    [Test]
+    public void Re_adding_existing_element_appends_a_second_dot()
+    {
+        // The re-add hits the span lookup (no new key materialised) and
+        // must attach a second concurrent dot to the same element.
+        var set = new OrSet();
+        set.Add(Apple, "r1", 1);
+        set.Add(Apple, "r2", 1);
+        Assert.That(set.Contains(Apple), Is.True);
+        Assert.That(set.Adds, Has.Count.EqualTo(1));
+        Assert.That(set.Adds.Values.Single(), Has.Count.EqualTo(2));
+    }
+
+    [Test]
     public void Concurrent_add_survives_remove_on_other_replica()
     {
         // r1 and r2 each add "apple" with their own dot.
