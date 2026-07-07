@@ -699,21 +699,26 @@ internal sealed partial class ViewMaintainerGrain(
 
         if (string.IsNullOrEmpty(bound))
         {
-            // First bind on this view: record the physical identity we start tailing.
-            state.State.BoundPhysicalTreeId = physical;
-            await state.WriteStateAsync();
-
             // A view that first activates over an already-aliased source must
             // reproject from the physical tree rather than resume offsets that were
-            // captured against a different (logical-equals-physical) log.
+            // captured against a different (logical-equals-physical) log. Rebuild
+            // BEFORE recording the binding so a failed initial reprojection leaves
+            // the binding unset and retries on the next drain rather than latching
+            // an unbuilt view behind a satisfied equality check.
             if (!string.Equals(physical, logical, StringComparison.Ordinal))
             {
                 state.State.AppliedOffsets.Clear();
-                await state.WriteStateAsync();
                 await RebuildAsync(cancellationToken);
+                state.State.BoundPhysicalTreeId = physical;
+                await state.WriteStateAsync();
                 return true;
             }
 
+            // First bind over an un-aliased source: record the physical identity we
+            // start tailing. No rebuild is needed - the offsets resume against the
+            // same log this view has always tailed.
+            state.State.BoundPhysicalTreeId = physical;
+            await state.WriteStateAsync();
             return false;
         }
 
@@ -725,16 +730,26 @@ internal sealed partial class ViewMaintainerGrain(
         // The source's physical identity was swapped underneath the alias. Release
         // the pin on the retired WAL so the garbage collector is no longer blocked by
         // this view, reset the offsets (they are meaningless against a new log),
-        // rebuild from the new physical source, and rebind.
+        // rebuild from the new physical source, and only then rebind.
         logger.LogWarning(
             "View '{ViewName}' source '{Source}' physical identity changed from '{OldPhysical}' to '{NewPhysical}'; unpinning the retired WAL and rebuilding from the new source.",
             ViewName, logical, bound, physical);
 
         await cursorRegistry.UnregisterAsync(bound, ConsumerId, cancellationToken);
+
+        // Rebuild from the new physical source BEFORE persisting the advanced
+        // binding. The rebuild is the step that can fail (a transient source-scan
+        // abort, a deactivation mid-build). Persisting the new binding first would
+        // leave the durable state reporting the new physical identity while the
+        // active generation still reflects the retired source, and the equality
+        // check above would then short-circuit every subsequent drain so the view
+        // would never re-heal. Rebuilding first and rebinding only on success leaves
+        // a failed rebuild's old binding intact so the next drain retries the heal.
         state.State.AppliedOffsets.Clear();
+        await RebuildAsync(cancellationToken);
+
         state.State.BoundPhysicalTreeId = physical;
         await state.WriteStateAsync();
-        await RebuildAsync(cancellationToken);
         return true;
     }
 
