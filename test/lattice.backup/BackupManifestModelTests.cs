@@ -89,6 +89,28 @@ public sealed class BackupManifestModelTests
     }
 
     [Test]
+    public void Manifest_has_no_set_membership_by_default()
+    {
+        var manifest = Sample();
+        Assert.Multiple(() =>
+        {
+            Assert.That(manifest.SetId, Is.Null);
+            Assert.That(manifest.SetName, Is.Null);
+        });
+    }
+
+    [Test]
+    public void Set_membership_round_trips_through_a_with_expression()
+    {
+        var stamped = Sample() with { SetId = "set-abc", SetName = "nightly-set" };
+        Assert.Multiple(() =>
+        {
+            Assert.That(stamped.SetId, Is.EqualTo("set-abc"));
+            Assert.That(stamped.SetName, Is.EqualTo("nightly-set"));
+        });
+    }
+
+    [Test]
     public void ContentHash_is_stable_for_identical_bytes()
     {
         var bytes = Encoding.UTF8.GetBytes("hello backup");
