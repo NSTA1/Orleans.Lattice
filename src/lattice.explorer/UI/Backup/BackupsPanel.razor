@@ -1,6 +1,7 @@
 @using Microsoft.JSInterop
 @using Orleans.Lattice.Api.Backup
 @using Orleans.Lattice.Backup
+@using Orleans.Lattice.Explorer.Backup
 @using Orleans.Lattice.Explorer.Core.Catalog
 @using Orleans.Lattice.Explorer.Core.Navigation
 @inject IBackupCatalogReader Reader
@@ -128,32 +129,46 @@
                     </tr>
                 </thead>
                 <tbody>
-                    @foreach (var manifest in _list.Entries)
+                    @foreach (var row in Rows)
                     {
                         <tr>
                             <td class="explorer-backups-id">
-                                <span title="@manifest.Id">@Shorten(manifest.Id)</span>
+                                <span title="@row.DisplayId">@Shorten(row.DisplayId)</span>
                                 <button type="button" class="explorer-btn explorer-btn-icon"
                                         title="Copy full id" aria-label="Copy id"
-                                        @onclick="@(() => CopyIdAsync(manifest.Id))">Copy</button>
+                                        @onclick="@(() => CopyIdAsync(row.DisplayId))">Copy</button>
                             </td>
-                            <td>@manifest.Name</td>
-                            <td>@manifest.Kind</td>
-                            <td>@manifest.Scope.TreeId</td>
-                            <td>@manifest.CreatedAtUtc.UtcDateTime.ToString("u")</td>
+                            <td>
+                                @row.Name
+                                @if (row.IsSet)
+                                {
+                                    <span class="explorer-backups-set-badge" title="A backup set of @row.Members.Count trees">set of @row.Members.Count</span>
+                                }
+                            </td>
+                            <td>@row.Kind</td>
+                            <td>@(row.IsSet ? string.Join(", ", row.TreeIds) : row.Members[0].Scope.TreeId)</td>
+                            <td>@row.CreatedAtUtc.UtcDateTime.ToString("u")</td>
                             <td class="explorer-backups-actions">
-                                <input type="text" value="@RestoreTargetFor(manifest)" @oninput="e => SetRestoreTarget(manifest.Id, e.Value?.ToString())" placeholder="target tree" />
+                                @if (!row.IsSet)
+                                {
+                                    var manifest = row.Members[0];
+                                    <input type="text" value="@RestoreTargetFor(manifest)" @oninput="e => SetRestoreTarget(manifest.Id, e.Value?.ToString())" placeholder="target tree" />
+                                }
+                                else
+                                {
+                                    <span class="explorer-backups-set-hint" title="Each member restores to its own tree.">restores to each tree</span>
+                                }
                                 <select class="explorer-backups-restore-mode" value="@_restoreMode"
                                         @onchange="OnRestoreModeChanged" title="Restore mode">
                                     <option value="@LatticeRestoreMode.InPlace">In-place (merge)</option>
                                     <option value="@LatticeRestoreMode.ShadowCutover">Shadow-cutover (point-in-time)</option>
                                 </select>
                                 <button type="button" class="explorer-btn"
-                                        disabled="@(!CanRestoreManifest(manifest) || string.IsNullOrWhiteSpace(RestoreTargetFor(manifest)))"
-                                        @onclick="@(() => RestoreAsync(manifest))">Restore</button>
+                                        disabled="@(!CanRestoreRow(row) || (!row.IsSet && string.IsNullOrWhiteSpace(RestoreTargetFor(row.Members[0]))))"
+                                        @onclick="@(() => RestoreRowAsync(row))">Restore</button>
                                 <button type="button" class="explorer-btn explorer-btn-danger"
-                                        disabled="@(!CanDeleteManifest(manifest))"
-                                        @onclick="@(() => RequestDelete(manifest))">Delete</button>
+                                        disabled="@(!CanDeleteRow(row))"
+                                        @onclick="@(() => RequestDelete(row))">Delete</button>
                             </td>
                         </tr>
                     }
@@ -167,10 +182,21 @@
         <div class="explorer-modal-backdrop" role="presentation">
             <div class="explorer-modal" role="alertdialog" aria-modal="true" aria-labelledby="explorer-delete-title">
                 <h3 id="explorer-delete-title">Delete backup?</h3>
-                <p>
-                    This permanently deletes backup <code>@Shorten(_pendingDelete.Id)</code>
-                    ('@_pendingDelete.Name'). <strong>This action cannot be undone.</strong>
-                </p>
+                @if (_pendingDelete.IsSet)
+                {
+                    <p>
+                        This permanently deletes all @_pendingDelete.Members.Count member backups
+                        of set <code>@Shorten(_pendingDelete.DisplayId)</code>
+                        ('@_pendingDelete.Name'). <strong>This action cannot be undone.</strong>
+                    </p>
+                }
+                else
+                {
+                    <p>
+                        This permanently deletes backup <code>@Shorten(_pendingDelete.DisplayId)</code>
+                        ('@_pendingDelete.Name'). <strong>This action cannot be undone.</strong>
+                    </p>
+                }
                 <div class="explorer-modal-actions">
                     <button type="button" class="explorer-btn" disabled="@_busy" @onclick="CancelDelete">Cancel</button>
                     <button type="button" class="explorer-btn explorer-btn-danger" disabled="@_busy" @onclick="ConfirmDeleteAsync">Delete</button>
@@ -192,7 +218,7 @@
     private string _incrementalBaseId = string.Empty;
     private readonly Dictionary<string, string> _restoreTargets = new(StringComparer.Ordinal);
     private LatticeRestoreMode _restoreMode = LatticeRestoreMode.InPlace;
-    private BackupManifest? _pendingDelete;
+    private BackupRow? _pendingDelete;
     private bool _busy;
 
     // Per-tree capability snapshots for the scopes that appear in the listed
@@ -204,11 +230,17 @@
     private bool HasSelection => _selectedTrees.Count > 0;
     private bool HasName => !string.IsNullOrWhiteSpace(_captureName);
 
-    private bool CanRestoreManifest(BackupManifest manifest) =>
-        !_busy && _treeCaps.TryGetValue(manifest.Scope.TreeId, out var caps) && caps.CanRestore;
+    // The listed backups collapsed into display rows, folding each backup set's
+    // per-tree members (sharing a stamped SetId) into a single row.
+    private IReadOnlyList<BackupRow> Rows => BackupRowGrouping.Group(_list.Entries);
 
-    private bool CanDeleteManifest(BackupManifest manifest) =>
-        !_busy && _treeCaps.TryGetValue(manifest.Scope.TreeId, out var caps) && caps.CanDelete;
+    // A row is restorable / deletable only when every member's scope allows it, so
+    // a set action is never enabled on the strength of one permissive member.
+    private bool CanRestoreRow(BackupRow row) =>
+        !_busy && row.Members.All(m => _treeCaps.TryGetValue(m.Scope.TreeId, out var caps) && caps.CanRestore);
+
+    private bool CanDeleteRow(BackupRow row) =>
+        !_busy && row.Members.All(m => _treeCaps.TryGetValue(m.Scope.TreeId, out var caps) && caps.CanDelete);
 
     private IReadOnlyList<BackupManifest> FullBackups =>
         _list.Entries.Where(e => e.Kind == BackupKind.Full).ToList();
@@ -415,9 +447,21 @@
         }
     }
 
-    private async Task RestoreAsync(BackupManifest manifest)
+    private async Task RestoreRowAsync(BackupRow row)
     {
-        await RunAsync(() => Reader.RestoreAsync(manifest.Id, RestoreTargetFor(manifest), _restoreMode));
+        if (!row.IsSet)
+        {
+            var manifest = row.Members[0];
+            await RunAsync(() => Reader.RestoreAsync(manifest.Id, RestoreTargetFor(manifest), _restoreMode));
+            return;
+        }
+
+        // A set restores every member back to its own tree in the chosen mode.
+        var members = row.Members;
+        await RunManyAsync(
+            members.Select(m => (Func<Task<BackupOperationResult>>)(
+                () => Reader.RestoreAsync(m.Id, m.Scope.TreeId, _restoreMode))),
+            $"Restored {members.Count} member backups to their trees.");
     }
 
     // The restore target defaults to the backup's own scope tree, so an in-place
@@ -436,9 +480,9 @@
             : LatticeRestoreMode.InPlace;
     }
 
-    private void RequestDelete(BackupManifest manifest)
+    private void RequestDelete(BackupRow row)
     {
-        _pendingDelete = manifest;
+        _pendingDelete = row;
     }
 
     private void CancelDelete()
@@ -448,14 +492,25 @@
 
     private async Task ConfirmDeleteAsync()
     {
-        var manifest = _pendingDelete;
-        if (manifest is null)
+        var row = _pendingDelete;
+        if (row is null)
         {
             return;
         }
 
         _pendingDelete = null;
-        await RunAsync(() => Reader.DeleteAsync(manifest.Id));
+
+        if (!row.IsSet)
+        {
+            await RunAsync(() => Reader.DeleteAsync(row.Members[0].Id));
+            return;
+        }
+
+        // Deleting a set removes every member backup.
+        var members = row.Members;
+        await RunManyAsync(
+            members.Select(m => (Func<Task<BackupOperationResult>>)(() => Reader.DeleteAsync(m.Id))),
+            $"Deleted {members.Count} member backups.");
     }
 
     private async Task RunAsync(Func<Task<BackupOperationResult>> action)
@@ -464,6 +519,36 @@
         try
         {
             _lastResult = await action();
+            _list = await Reader.LoadPageAsync();
+            await ProbeListedScopesAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    // Runs a sequence of operations for a backup set, stopping at the first
+    // non-success, then reloads the list once. On full success the aggregate
+    // message is reported; otherwise the failing / denied result is surfaced.
+    private async Task RunManyAsync(IEnumerable<Func<Task<BackupOperationResult>>> actions, string successMessage)
+    {
+        _busy = true;
+        try
+        {
+            BackupOperationResult? last = null;
+            foreach (var action in actions)
+            {
+                last = await action();
+                if (last.Status != BackupOperationStatus.Succeeded)
+                {
+                    break;
+                }
+            }
+
+            _lastResult = last is { Status: BackupOperationStatus.Succeeded }
+                ? BackupOperationResult.Success(successMessage)
+                : last;
             _list = await Reader.LoadPageAsync();
             await ProbeListedScopesAsync();
         }

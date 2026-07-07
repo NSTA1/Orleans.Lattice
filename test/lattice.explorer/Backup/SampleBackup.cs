@@ -10,13 +10,19 @@ namespace Orleans.Lattice.Explorer.Tests.Backup;
 internal static class SampleBackup
 {
     /// <summary>Builds a minimal, well-formed <see cref="BackupManifest"/>.</summary>
-    public static BackupManifest Manifest(string id = "backup-1", BackupKind kind = BackupKind.Full)
+    public static BackupManifest Manifest(
+        string id = "backup-1",
+        BackupKind kind = BackupKind.Full,
+        string treeId = "orders",
+        string? setId = null,
+        string? setName = null,
+        DateTimeOffset? createdAtUtc = null)
     {
-        var scope = BackupScopeSelector.WholeTree("orders");
+        var scope = BackupScopeSelector.WholeTree(treeId);
         return new BackupManifest(
             id: id,
             name: "nightly",
-            createdAtUtc: DateTimeOffset.UnixEpoch,
+            createdAtUtc: createdAtUtc ?? DateTimeOffset.UnixEpoch,
             kind: kind,
             scope: scope,
             consistencyCut: new BackupConsistencyCut(42, 100),
@@ -25,7 +31,11 @@ internal static class SampleBackup
             keyDescriptors: new[] { new BackupKeyDescriptor("order-1", BackupKeyMergeMode.Crdt, "replica-a") },
             contentDescriptors: new[] { new BackupContentDescriptor("artifact-1", "abc123", 12, 1, scope) },
             provenance: new[] { new BackupOriginProvenance("replica-a", 42) },
-            baseBackupId: kind == BackupKind.Incremental ? "base-1" : null);
+            baseBackupId: kind == BackupKind.Incremental ? "base-1" : null)
+        {
+            SetId = setId,
+            SetName = setName,
+        };
     }
 
     /// <summary>Builds a well-formed <see cref="LatticeRestoreResult"/>.</summary>
