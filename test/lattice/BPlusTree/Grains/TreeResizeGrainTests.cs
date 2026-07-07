@@ -49,7 +49,8 @@ public partial class TreeResizeGrainTests
 
         var grain = new TreeResizeGrain(
             context, grainFactory, reminderRegistry, optionsMonitor, optionsResolver,
-            new LoggerFactory().CreateLogger<TreeResizeGrain>(), state);
+            new LoggerFactory().CreateLogger<TreeResizeGrain>(),
+            Substitute.For<ITagIndexReconcileTrigger>(), state);
         return (grain, state, reminderRegistry, grainFactory, optionsMonitor);
     }
 

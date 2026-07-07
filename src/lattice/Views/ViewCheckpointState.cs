@@ -98,4 +98,20 @@ internal sealed class ViewCheckpointState
     /// </summary>
     [Id(7)]
     public long ReclaimEligibleAtTicks { get; set; }
+
+    /// <summary>
+    /// The physical tree id the view is currently bound to and tailing. A source
+    /// tree's logical id (the projection's configured source) is resolved to a
+    /// physical id through the registry alias; a shadow-cutover restore, a tree
+    /// resize, or a reshard can repoint that alias at a new physical tree whose
+    /// write-ahead log is addressed under the new physical id. The maintainer
+    /// records the physical identity it last bound to here and, on each drain,
+    /// compares it against the freshly-resolved physical id: a mismatch means the
+    /// source identity was swapped underneath the alias, so the view resets its
+    /// per-partition offsets, rebuilds from the new physical source, re-pins the
+    /// WAL cursor under the new id, and updates this field - all in one heal.
+    /// Empty until the first activation binds it.
+    /// </summary>
+    [Id(8)]
+    public string BoundPhysicalTreeId { get; set; } = string.Empty;
 }

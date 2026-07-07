@@ -37,6 +37,7 @@ internal sealed class TreeReshardGrain(
     IOptionsMonitor<LatticeOptions> optionsMonitor,
     LatticeOptionsResolver optionsResolver,
     ILogger<TreeReshardGrain> logger,
+    ITagIndexReconcileTrigger tagIndexReconcileTrigger,
     [PersistentState("tree-reshard", LatticeOptions.StorageProviderName)]
     IPersistentState<TreeReshardState> state)
     : CoordinatorGrain<TreeReshardGrain>(context, reminderRegistry, logger), ITreeReshardGrain
@@ -440,6 +441,12 @@ internal sealed class TreeReshardGrain(
         LatticeMetrics.ShardRootReshardCompleted.Add(1, new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
 
         await PublishReshardCompletedAsync();
+
+        // The tree's shard structure changed under its logical id. Converge any tag
+        // index covering this tree onto the new structure promptly rather than at
+        // the next scheduled reconcile sweep. Best-effort: the trigger swallows its
+        // own failures, and the scheduled sweep remains the backstop.
+        await tagIndexReconcileTrigger.TriggerForTreeAsync(TreeId);
 
         await CompleteCoordinatorAsync();
     }

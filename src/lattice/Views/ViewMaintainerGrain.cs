@@ -236,6 +236,15 @@ internal sealed partial class ViewMaintainerGrain(
             return 0;
         }
 
+        // Heal a source physical-identity swap (restore / resize / reshard) before
+        // any drain work: if the alias now resolves to a different physical tree, the
+        // view resets, rebuilds from the new source, and rebinds its WAL cursor. A
+        // heal owns the checkpoint and cursor for this pass, so short-circuit.
+        if (await EnsureBoundToCurrentSourceIdentityAsync(registration, cancellationToken))
+        {
+            return 0;
+        }
+
         // Reclaim a swapped-out generation tree once its post-swap reader grace has
         // elapsed; runs on the regular drain cadence so reclamation is crash-safe
         // (durable) and never blocks the swap itself.
@@ -259,8 +268,9 @@ internal sealed partial class ViewMaintainerGrain(
         var options = Options;
         var batchSize = options.BatchSize > 0 ? options.BatchSize : LatticeViewOptions.DefaultBatchSize;
         var sourceTreeId = registration.SourceTreeId;
+        var walTreeId = await ResolveSourcePhysicalAsync(sourceTreeId);
         batchSize = ApplyBackpressureBatchScaling(sourceTreeId, batchSize, options);
-        var partitions = await optionsResolver.GetWalPartitionsAsync(sourceTreeId);
+        var partitions = await optionsResolver.GetWalPartitionsAsync(walTreeId);
 
         // Tail the source WAL through the shared subscriber: the cursored read,
         // fall-off-log detection, dynamic shard onboarding and back-pressure all
@@ -282,7 +292,7 @@ internal sealed partial class ViewMaintainerGrain(
             },
             completedTransactions);
 
-        var drainContext = new WalSubscriptionContext(sourceTreeId, ConsumerId, partitions, state.State.AppliedOffsets)
+        var drainContext = new WalSubscriptionContext(walTreeId, ConsumerId, partitions, state.State.AppliedOffsets)
         {
             HighestApplied = state.State.HighestAppliedTimestamp,
             BatchSize = batchSize,
@@ -309,7 +319,7 @@ internal sealed partial class ViewMaintainerGrain(
         // retention ceiling, abandon incremental staging and rebuild from
         // current committed source state (which excludes the uncommitted
         // prepares). The rebuild owns the checkpoint and cursor for this pass.
-        if (StagingBackstopTripped(options, await GetSourceWalRetentionAsync(sourceTreeId)))
+        if (StagingBackstopTripped(options, await GetSourceWalRetentionAsync(walTreeId)))
         {
             await RebuildAsync(cancellationToken);
             return 0;
@@ -413,8 +423,9 @@ internal sealed partial class ViewMaintainerGrain(
             return 0;
         }
 
-        var partitions = await optionsResolver.GetWalPartitionsAsync(registration.SourceTreeId);
-        return await ComputeLagAsync(registration.SourceTreeId, partitions, cancellationToken);
+        var walTreeId = await ResolveSourcePhysicalAsync(registration.SourceTreeId);
+        var partitions = await optionsResolver.GetWalPartitionsAsync(walTreeId);
+        return await ComputeLagAsync(walTreeId, partitions, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -466,7 +477,7 @@ internal sealed partial class ViewMaintainerGrain(
             return HybridLogicalClock.Zero;
         }
 
-        var sourceTreeId = registration.SourceTreeId;
+        var sourceTreeId = await ResolveSourcePhysicalAsync(registration.SourceTreeId);
         var partitions = await optionsResolver.GetWalPartitionsAsync(sourceTreeId);
         var head = HybridLogicalClock.Zero;
 
@@ -531,7 +542,7 @@ internal sealed partial class ViewMaintainerGrain(
     /// </summary>
     private async Task<bool> IsSourceLocallyReadableAsync(ViewRegistration registration, CancellationToken cancellationToken)
     {
-        var sourceTreeId = registration.SourceTreeId;
+        var sourceTreeId = await ResolveSourcePhysicalAsync(registration.SourceTreeId);
         var partitions = await optionsResolver.GetWalPartitionsAsync(sourceTreeId);
         for (var partition = 0; partition < partitions; partition++)
         {
@@ -566,7 +577,7 @@ internal sealed partial class ViewMaintainerGrain(
             return false;
         }
 
-        var sourceTreeId = registration.SourceTreeId;
+        var sourceTreeId = await ResolveSourcePhysicalAsync(registration.SourceTreeId);
         var partitions = await optionsResolver.GetWalPartitionsAsync(sourceTreeId);
         var lag = await ComputeLagAsync(sourceTreeId, partitions, cancellationToken);
         if (lag <= budget)
@@ -643,6 +654,88 @@ internal sealed partial class ViewMaintainerGrain(
         {
             logger.LogWarning(ex, "View '{ViewName}' drain on keepalive tick failed; will retry.", ViewName);
         }
+    }
+
+    /// <summary>
+    /// Resolves the current physical tree id for a logical source tree through the
+    /// registry alias. The write-ahead log, cursor pins, and source-state scans are
+    /// all addressed by physical id, so every WAL-touching operation resolves the
+    /// live physical id rather than caching it - a shadow-cutover restore, resize,
+    /// or reshard can repoint the alias at a new physical tree at any time. System
+    /// trees never alias (and resolving one would recurse into the registry tree),
+    /// so they short-circuit to themselves.
+    /// </summary>
+    private Task<string> ResolveSourcePhysicalAsync(string logicalSourceId)
+    {
+        if (logicalSourceId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+        {
+            return Task.FromResult(logicalSourceId);
+        }
+
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        return registry.ResolveAsync(logicalSourceId);
+    }
+
+    /// <summary>
+    /// Detects and heals a source physical-identity swap. The maintainer records the
+    /// physical tree it last bound to in <see cref="ViewCheckpointState.BoundPhysicalTreeId"/>;
+    /// each drain it re-resolves the logical source's physical id and compares. On
+    /// the first bind it records the identity with no rebuild (unless the source is
+    /// already aliased, in which case it reprojects from the physical tree). When the
+    /// bound identity no longer matches, the source was swapped underneath the alias
+    /// (restore / resize / reshard): the old WAL cursor pin is released, the durable
+    /// per-partition offsets are reset (they are absolute against the retired WAL and
+    /// must never resume against a different physical log), the view is rebuilt from
+    /// the new physical source, and the new identity is recorded. Returns whether a
+    /// heal ran this drain so the caller can short-circuit the rest of the pass.
+    /// </summary>
+    private async Task<bool> EnsureBoundToCurrentSourceIdentityAsync(
+        ViewRegistration registration,
+        CancellationToken cancellationToken)
+    {
+        var logical = registration.SourceTreeId;
+        var physical = await ResolveSourcePhysicalAsync(logical);
+        var bound = state.State.BoundPhysicalTreeId;
+
+        if (string.IsNullOrEmpty(bound))
+        {
+            // First bind on this view: record the physical identity we start tailing.
+            state.State.BoundPhysicalTreeId = physical;
+            await state.WriteStateAsync();
+
+            // A view that first activates over an already-aliased source must
+            // reproject from the physical tree rather than resume offsets that were
+            // captured against a different (logical-equals-physical) log.
+            if (!string.Equals(physical, logical, StringComparison.Ordinal))
+            {
+                state.State.AppliedOffsets.Clear();
+                await state.WriteStateAsync();
+                await RebuildAsync(cancellationToken);
+                return true;
+            }
+
+            return false;
+        }
+
+        if (string.Equals(bound, physical, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        // The source's physical identity was swapped underneath the alias. Release
+        // the pin on the retired WAL so the garbage collector is no longer blocked by
+        // this view, reset the offsets (they are meaningless against a new log),
+        // rebuild from the new physical source, and rebind.
+        logger.LogWarning(
+            "View '{ViewName}' source '{Source}' physical identity changed from '{OldPhysical}' to '{NewPhysical}'; unpinning the retired WAL and rebuilding from the new source.",
+            ViewName, logical, bound, physical);
+
+        await cursorRegistry.UnregisterAsync(bound, ConsumerId, cancellationToken);
+        state.State.AppliedOffsets.Clear();
+        state.State.BoundPhysicalTreeId = physical;
+        await state.WriteStateAsync();
+        await RebuildAsync(cancellationToken);
+        return true;
     }
 
     private async Task<long> ComputeLagAsync(string sourceTreeId, int partitions, CancellationToken cancellationToken)

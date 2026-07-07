@@ -197,6 +197,11 @@ public static class LatticeServiceCollectionExtensions
         // server config instead of per-call parameters; the TagIndex extension
         // methods remain the single-cluster (last-writer-wins) convenience path.
         builder.Services.TryAddSingleton<ILatticeTagIndexFactory, DefaultLatticeTagIndexFactory>();
+        // Prompt tag-index reconcile trigger. Fired by the operations that swap a
+        // tree's physical identity (shadow-cutover restore, resize, reshard) so an
+        // index covering the swapped tree converges to the restored / rebuilt
+        // subject state without waiting for the next scheduled reconcile sweep.
+        builder.Services.TryAddSingleton<ITagIndexReconcileTrigger, TagIndexReconcileTrigger>();
 
         // In-library shutdown log demotion. During the host deactivation
         // window the Orleans runtime emits a Warning per in-flight grain
