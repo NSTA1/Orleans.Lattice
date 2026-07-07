@@ -36,4 +36,14 @@ public sealed record TreeCatalogEntry
 
     /// <summary>The tree's effective, read-only configuration.</summary>
     [Id(5)] public required TreeConfigSummary Config { get; init; }
+
+    /// <summary>
+    /// When this physical tree was created as the shadow target of a
+    /// shadow-cutover restore, the logical tree id the restore was performed for
+    /// (the alias that now resolves to it); <see langword="null"/> for every
+    /// ordinary tree and for the logical alias itself. Sourced from the registry
+    /// provenance marker so a caller classifies a restore shadow as a first-class
+    /// fact rather than inferring it from the tree name.
+    /// </summary>
+    [Id(6)] public string? RestoreShadowOfTreeId { get; init; }
 }

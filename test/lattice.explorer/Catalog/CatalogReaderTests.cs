@@ -149,6 +149,33 @@ public class CatalogReaderTests
     }
 
     [Test]
+    public async Task LoadAsync_Trees_MapsRestoreShadowMarker()
+    {
+        var shadow = Tree("mfg-facts-bkprestore-abc123", TreeLifecycleState.Active, 4) with
+        {
+            RestoreShadowOfTreeId = "mfg-facts",
+        };
+        var client = new FakeStateClient
+        {
+            ListTreesHandler = _ => Task.FromResult(new TreeCatalogPage
+            {
+                Entries = new[] { Tree("mfg-facts", TreeLifecycleState.Active, 4), shadow },
+                NextPageToken = null,
+            }),
+        };
+        var reader = new CatalogReader(client);
+
+        var page = await reader.LoadAsync(CatalogKind.Trees, pageToken: null, pageSize: 50);
+
+        var live = page.Items.Single(i => i.Id == "mfg-facts");
+        Assert.That(live.IsRestoreShadow, Is.False, "an ordinary tree is not a restore shadow");
+        Assert.That(live.RestoreShadowOfTreeId, Is.Null);
+        var restored = page.Items.Single(i => i.Id == "mfg-facts-bkprestore-abc123");
+        Assert.That(restored.IsRestoreShadow, Is.True, "the marker is carried from the state API, not inferred from the name");
+        Assert.That(restored.RestoreShadowOfTreeId, Is.EqualTo("mfg-facts"));
+    }
+
+    [Test]
     public void Constructor_NullClient_Throws()
     {
         Assert.That(() => new CatalogReader(null!), Throws.ArgumentNullException);

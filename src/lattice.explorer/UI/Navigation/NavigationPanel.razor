@@ -267,7 +267,11 @@
         try
         {
             var page = await CatalogReader.LoadAsync(_kind, reset ? null : _nextToken, PageSize);
-            _items.AddRange(page.Items);
+            // Restore-shadow trees are an internal artifact of a shadow-cutover
+            // restore; they are surfaced only under their logical alias in the
+            // Backups area, never in the general catalog. The flag is carried from
+            // the state API, so this is not a name-based filter.
+            _items.AddRange(page.Items.Where(item => !item.IsRestoreShadow));
             _nextToken = page.NextPageToken;
             _hasMore = page.HasMore;
         }

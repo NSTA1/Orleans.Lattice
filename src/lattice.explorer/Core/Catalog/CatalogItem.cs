@@ -64,4 +64,16 @@ public sealed record CatalogItem
     /// reserved <c>tag-</c> prefix removed); <see langword="null"/> otherwise.
     /// </summary>
     public string? IndexName { get; init; }
+
+    /// <summary>
+    /// For a tree that is the shadow target of a shadow-cutover restore, the
+    /// logical tree id the restore was performed for (the alias it is grouped
+    /// under); <see langword="null"/> for every ordinary tree, view, and tag
+    /// index. Carried straight from the state API's tree catalog, so it is a
+    /// first-class fact and not inferred from the tree name.
+    /// </summary>
+    public string? RestoreShadowOfTreeId { get; init; }
+
+    /// <summary><see langword="true"/> when this tree is a shadow-cutover restore shadow.</summary>
+    public bool IsRestoreShadow => RestoreShadowOfTreeId is not null;
 }

@@ -164,10 +164,13 @@ public sealed class StateDtoSerializationTests
             PhysicalTreeId = "tree-a-phys",
             Lifecycle = TreeLifecycleState.SoftDeleted,
             ShardCount = 8,
+            RestoreShadowOfTreeId = "tree-a-logical",
             Config = new TreeConfigSummary { ShardCount = 8, VirtualShardCount = 4096, MaxLeafKeys = 64 },
         };
 
-        Assert.That(RoundTrip(original), Is.EqualTo(original));
+        var copy = RoundTrip(original);
+        Assert.That(copy, Is.EqualTo(original));
+        Assert.That(copy.RestoreShadowOfTreeId, Is.EqualTo("tree-a-logical"));
     }
 
     [Test]

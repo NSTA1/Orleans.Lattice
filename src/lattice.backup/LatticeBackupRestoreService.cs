@@ -3,6 +3,7 @@ using System.Text;
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
 using Orleans.Serialization;
 
@@ -210,7 +211,13 @@ internal sealed class LatticeBackupRestoreService(
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
             previousPhysical = await registry.ResolveAsync(targetTreeId).ConfigureAwait(false);
-            await registry.RegisterAsync(shadowTreeId).ConfigureAwait(false);
+
+            // Stamp the shadow tree with restore provenance so the state catalog
+            // can classify it as a restore shadow (and group it under the logical
+            // alias) from a first-class fact rather than its name.
+            await registry.RegisterAsync(
+                shadowTreeId,
+                new TreeRegistryEntry { RestoreShadowOfTreeId = targetTreeId }).ConfigureAwait(false);
             shadowRouting = await grainFactory.GetGrain<ILattice>(shadowTreeId)
                 .GetRoutingAsync(cancellationToken).ConfigureAwait(false);
         }
