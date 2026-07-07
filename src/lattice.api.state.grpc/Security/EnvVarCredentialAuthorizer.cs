@@ -49,12 +49,27 @@ public sealed class EnvVarCredentialAuthorizer : ILatticeStateApiAuthorizer
     private readonly ILogger<EnvVarCredentialAuthorizer> _logger;
     private readonly TimeProvider _timeProvider;
     private readonly ConcurrentDictionary<string, AttemptRecord> _attempts = new(StringComparer.Ordinal);
+    private int _verificationCount;
 
     /// <summary>
     /// The number of distinct usernames currently tracked in the failed-attempt
     /// map. Exposed for unit testing that unknown-user probes never populate it.
     /// </summary>
     internal int TrackedUsernameCount => _attempts.Count;
+
+    /// <summary>
+    /// The number of PBKDF2 password verifications the authorizer has performed.
+    /// Exposed for unit testing that every terminal outcome - including the
+    /// lockout and unknown-user branches - spends one verification, so response
+    /// timing does not leak user-existence or lockout state.
+    /// </summary>
+    internal int VerificationCount => Volatile.Read(ref _verificationCount);
+
+    private bool SpendVerification(string password, string encodedHash)
+    {
+        Interlocked.Increment(ref _verificationCount);
+        return LatticePasswordHash.Verify(password, encodedHash);
+    }
 
     /// <summary>Initialises the authorizer.</summary>
     /// <param name="environment">The environment-variable source.</param>
@@ -115,7 +130,7 @@ public sealed class EnvVarCredentialAuthorizer : ILatticeStateApiAuthorizer
             // NOT create a per-username attempt record. Tracking unknown users
             // would let a remote caller grow the attempt map without bound by
             // presenting an unlimited stream of distinct usernames (CWE-770).
-            _ = LatticePasswordHash.Verify(password, DummyHash);
+            _ = SpendVerification(password, DummyHash);
             return false;
         }
 
@@ -128,12 +143,17 @@ public sealed class EnvVarCredentialAuthorizer : ILatticeStateApiAuthorizer
             var now = _timeProvider.GetUtcNow();
             if (record.LockedUntil is { } lockedUntil && now < lockedUntil)
             {
+                // Spend an equivalent dummy verification before returning so the
+                // lockout branch's response latency matches the verify-bearing
+                // branches. Without it, a locked-out real account replies faster
+                // (no PBKDF2), leaking user-existence and lockout state by timing.
+                _ = SpendVerification(password, DummyHash);
                 _logger.LogWarning(
                     "Api.State: rejected call - user is temporarily locked out after repeated failures.");
                 return false;
             }
 
-            var verified = LatticePasswordHash.Verify(password, encodedHash);
+            var verified = SpendVerification(password, encodedHash);
 
             if (verified)
             {

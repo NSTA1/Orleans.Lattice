@@ -114,6 +114,56 @@ public class EnvVarCredentialAuthorizerTests
     }
 
     [Test]
+    public void Authorize_lockedOutUser_stillSpendsAVerification()
+    {
+        var options = new EnvVarCredentialAuthorizerOptions { MaxFailedAttempts = 3 };
+        var authorizer = CreateAuthorizer(WithCredential(Username, Password), out _, options);
+
+        for (var i = 0; i < 3; i++)
+        {
+            authorizer.Authorize(BasicHeader(Username, "WrongPassword1"));
+        }
+
+        var beforeLockedCall = authorizer.VerificationCount;
+
+        // The now-locked-out call must still spend a (dummy) verification so its
+        // response timing matches a verify-bearing call and does not leak the
+        // lockout / user-existence state.
+        Assert.That(authorizer.Authorize(BasicHeader(Username, Password)), Is.False, "locked out");
+        Assert.That(authorizer.VerificationCount, Is.EqualTo(beforeLockedCall + 1));
+    }
+
+    [Test]
+    public void Authorize_everyTerminalOutcome_spendsExactlyOneVerification()
+    {
+        var authorizer = CreateAuthorizer(WithCredential(Username, Password), out _);
+
+        // Unknown user.
+        authorizer.Authorize(BasicHeader("mallory", Password));
+        Assert.That(authorizer.VerificationCount, Is.EqualTo(1), "unknown user");
+
+        // Known user, wrong password.
+        authorizer.Authorize(BasicHeader(Username, "WrongPassword1"));
+        Assert.That(authorizer.VerificationCount, Is.EqualTo(2), "wrong password");
+
+        // Known user, correct password.
+        authorizer.Authorize(BasicHeader(Username, Password));
+        Assert.That(authorizer.VerificationCount, Is.EqualTo(3), "valid credential");
+    }
+
+    [Test]
+    public void Authorize_malformedInput_spendsNoVerification()
+    {
+        var authorizer = CreateAuthorizer(WithCredential(Username, Password), out _);
+
+        // Requests rejected before the credential lookup (no username to probe)
+        // do no PBKDF2 work; there is nothing to time against.
+        authorizer.Authorize(null);
+        authorizer.Authorize(BasicHeader("bad-user!", Password));
+        Assert.That(authorizer.VerificationCount, Is.Zero);
+    }
+
+    [Test]
     public void Authorize_locksOutAfterRepeatedFailures()
     {
         var options = new EnvVarCredentialAuthorizerOptions { MaxFailedAttempts = 3 };
