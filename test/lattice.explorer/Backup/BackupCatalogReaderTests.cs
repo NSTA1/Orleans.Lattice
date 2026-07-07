@@ -119,6 +119,57 @@ public class BackupCatalogReaderTests
     }
 
     [Test]
+    public async Task TriggerSetAsync_success_reports_set_id_and_member_count()
+    {
+        var client = new FakeBackupControlClient();
+        var scopes = new[]
+        {
+            BackupScopeSelector.WholeTree("tree-a"),
+            BackupScopeSelector.WholeTree("tree-b"),
+        };
+
+        var result = await CreateReader(client).TriggerSetAsync("nightly-set", scopes, crossTreeConsistent: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsSuccess, Is.True);
+            Assert.That(result.Message, Does.Contain("set-1"));
+            Assert.That(result.Message, Does.Contain("2"));
+            Assert.That(client.LastSetRequest, Is.Not.Null);
+            Assert.That(client.LastSetRequest!.Scopes, Has.Count.EqualTo(2));
+            Assert.That(client.LastSetRequest.CrossTreeConsistent, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task TriggerSetAsync_denied_degrades_gracefully()
+    {
+        var client = new FakeBackupControlClient
+        {
+            MutationThrows = new LatticeAuthorizationDeniedException("set capture denied"),
+        };
+        var scopes = new[] { BackupScopeSelector.WholeTree("tree-a") };
+
+        var result = await CreateReader(client).TriggerSetAsync("nightly-set", scopes, crossTreeConsistent: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(BackupOperationStatus.Denied));
+            Assert.That(result.Message, Is.EqualTo("set capture denied"));
+        });
+    }
+
+    [Test]
+    public void TriggerSetAsync_empty_name_throws()
+    {
+        var client = new FakeBackupControlClient();
+
+        Assert.That(
+            () => CreateReader(client).TriggerSetAsync(string.Empty, new[] { BackupScopeSelector.WholeTree("t") }, false),
+            Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
     public async Task RestoreAsync_success_reports_target_and_entries()
     {
         var client = new FakeBackupControlClient();
@@ -131,6 +182,26 @@ public class BackupCatalogReaderTests
             Assert.That(result.Message, Does.Contain("tree-b"));
             Assert.That(result.Message, Does.Contain("7"));
         });
+    }
+
+    [Test]
+    public async Task RestoreAsync_defaults_to_in_place_mode()
+    {
+        var client = new FakeBackupControlClient();
+
+        await CreateReader(client).RestoreAsync("b1", "tree-b");
+
+        Assert.That(client.LastRestoreRequest!.Mode, Is.EqualTo(LatticeRestoreMode.InPlace));
+    }
+
+    [Test]
+    public async Task RestoreAsync_forwards_shadow_cutover_mode()
+    {
+        var client = new FakeBackupControlClient();
+
+        await CreateReader(client).RestoreAsync("b1", "tree-b", LatticeRestoreMode.ShadowCutover);
+
+        Assert.That(client.LastRestoreRequest!.Mode, Is.EqualTo(LatticeRestoreMode.ShadowCutover));
     }
 
     [Test]

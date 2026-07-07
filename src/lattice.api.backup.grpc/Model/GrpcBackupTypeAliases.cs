@@ -27,8 +27,14 @@ public static class GrpcBackupTypeAliases
     /// <summary>Alias for <see cref="BackupIncrementalCaptureRequestMessage"/>.</summary>
     public const string BackupIncrementalCaptureRequestMessage = "oibg.icapreq";
 
+    /// <summary>Alias for <see cref="BackupSetCaptureRequestMessage"/>.</summary>
+    public const string BackupSetCaptureRequestMessage = "oibg.scapreq";
+
     /// <summary>Alias for <see cref="BackupCaptureResponse"/>.</summary>
     public const string BackupCaptureResponse = "oibg.capresp";
+
+    /// <summary>Alias for <see cref="BackupSetCaptureResponse"/>.</summary>
+    public const string BackupSetCaptureResponse = "oibg.scapresp";
 
     /// <summary>Alias for <see cref="BackupStreamRequest"/>.</summary>
     public const string BackupStreamRequest = "oibg.streq";

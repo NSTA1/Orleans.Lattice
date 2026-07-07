@@ -2102,6 +2102,10 @@ code, .explorer-mono {
     align-items: center;
 }
 
+.explorer-backups-restore-mode {
+    min-width: 10rem;
+}
+
 .explorer-backups-result {
     margin: 0;
     padding: 0.5rem 0.75rem;
@@ -2124,3 +2128,94 @@ code, .explorer-mono {
     color: var(--text-muted);
     font-size: 0.9rem;
 }
+
+.explorer-backups-trees select {
+    min-width: 12rem;
+}
+
+.explorer-backups-kind {
+    display: flex;
+    flex-direction: row;
+    gap: 0.75rem;
+    align-items: center;
+    border: 1px solid var(--border, rgba(240, 246, 252, 0.1));
+    border-radius: 6px;
+    padding: 0.35rem 0.6rem;
+    margin: 0;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.explorer-backups-kind label {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.3rem;
+}
+
+.explorer-backups-fence {
+    flex-direction: row !important;
+    align-items: center !important;
+    gap: 0.3rem !important;
+}
+
+.explorer-backups-hint {
+    margin: 0.25rem 0 0;
+    font-size: 0.8rem;
+    color: var(--warning, #d29922);
+}
+
+.explorer-backups-id {
+    display: flex;
+    gap: 0.4rem;
+    align-items: center;
+}
+
+.explorer-btn-icon {
+    padding: 0.1rem 0.4rem;
+    font-size: 0.75rem;
+}
+
+.explorer-btn-danger {
+    border-color: var(--danger, #f85149);
+    color: var(--danger, #f85149);
+}
+
+.explorer-btn-danger:hover:not(:disabled) {
+    background: var(--danger-surface, rgba(248, 81, 73, 0.15));
+}
+
+.explorer-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(1, 4, 9, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.explorer-modal {
+    background: var(--surface, #161b22);
+    border: 1px solid var(--border, rgba(240, 246, 252, 0.1));
+    border-radius: 8px;
+    padding: 1.25rem 1.5rem;
+    max-width: 30rem;
+    box-shadow: 0 8px 32px rgba(1, 4, 9, 0.6);
+}
+
+.explorer-modal h3 {
+    margin: 0 0 0.6rem;
+}
+
+.explorer-modal p {
+    margin: 0 0 1rem;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.explorer-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}
+

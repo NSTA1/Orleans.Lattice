@@ -47,6 +47,23 @@ internal interface ILatticeBackupControl
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Captures a backup <i>set</i> - one full backup per scope in the request,
+    /// grouped under a single set manifest - after authorizing every member
+    /// scope fail-closed. When the request asks for cross-tree consistency and
+    /// the set covers more than one tree, every member is captured at a single
+    /// causal fence so a cross-tree atomic write is never torn across the set
+    /// boundary; a single-tree set pays no extra coordination.
+    /// </summary>
+    /// <param name="request">The set-capture request. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The set manifest and the per-tree member results in scope order.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to back up a scope in the set.</exception>
+    Task<LatticeBackupSetCaptureResult> CreateBackupSetAsync(
+        LatticeBackupSetCaptureRequest request,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Lists the catalogued backups as a deterministic, cursor-resumable page
     /// ordered by backup id, hiding any manifest whose scope the caller may not
     /// read. Pass the previous page's

@@ -35,6 +35,16 @@ public interface IBackupCatalogReader
     /// <param name="cancellationToken">Cancellation token.</param>
     Task<BackupOperationResult> TriggerFullAsync(string name, BackupScopeSelector scope, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Triggers a backup set - one full backup per tree in <paramref name="scopes"/>,
+    /// grouped under a single set manifest - folding a denial into the result.
+    /// </summary>
+    /// <param name="name">The set name. Must not be <see langword="null"/> or empty.</param>
+    /// <param name="scopes">The per-tree scopes to capture. Must not be <see langword="null"/> or empty, and every scope must name a distinct tree.</param>
+    /// <param name="crossTreeConsistent">Whether to capture every tree at a single cross-tree causal fence.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<BackupOperationResult> TriggerSetAsync(string name, IReadOnlyList<BackupScopeSelector> scopes, bool crossTreeConsistent, CancellationToken cancellationToken = default);
+
     /// <summary>Triggers an incremental backup on top of <paramref name="baseBackupId"/>, folding a denial into the result.</summary>
     /// <param name="name">The backup name. Must not be <see langword="null"/> or empty.</param>
     /// <param name="scope">The scope to capture. Must not be <see langword="null"/>.</param>
@@ -45,8 +55,15 @@ public interface IBackupCatalogReader
     /// <summary>Restores <paramref name="backupId"/> into <paramref name="targetTreeId"/>, folding a denial into the result.</summary>
     /// <param name="backupId">The backup id to restore. Must not be <see langword="null"/> or empty.</param>
     /// <param name="targetTreeId">The target tree id. Must not be <see langword="null"/> or empty.</param>
+    /// <param name="mode">
+    /// How the backup is installed. <see cref="LatticeRestoreMode.InPlace"/> (the
+    /// default) merges the backup into the target by last-writer-wins, so writes
+    /// made after the backup was taken survive. <see cref="LatticeRestoreMode.ShadowCutover"/>
+    /// builds a fresh tree from the backup and swaps the alias, so the restored
+    /// tree holds exactly the backup contents - the point-in-time-recovery path.
+    /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    Task<BackupOperationResult> RestoreAsync(string backupId, string targetTreeId, CancellationToken cancellationToken = default);
+    Task<BackupOperationResult> RestoreAsync(string backupId, string targetTreeId, LatticeRestoreMode mode = LatticeRestoreMode.InPlace, CancellationToken cancellationToken = default);
 
     /// <summary>Deletes <paramref name="backupId"/>, folding a denial into the result.</summary>
     /// <param name="backupId">The backup id to delete. Must not be <see langword="null"/> or empty.</param>

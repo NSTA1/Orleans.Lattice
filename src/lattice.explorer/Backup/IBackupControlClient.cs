@@ -47,6 +47,11 @@ public interface IBackupControlClient
     /// <param name="cancellationToken">Cancellation token.</param>
     Task<LatticeBackupCaptureResult> CreateIncrementalBackupAsync(LatticeBackupIncrementalCaptureRequest request, CancellationToken cancellationToken = default);
 
+    /// <summary>Captures a backup set - one full backup per scope, grouped under a single set manifest.</summary>
+    /// <param name="request">The set-capture request. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<LatticeBackupSetCaptureResult> CreateBackupSetAsync(LatticeBackupSetCaptureRequest request, CancellationToken cancellationToken = default);
+
     /// <summary>Restores a backup into a target scope.</summary>
     /// <param name="request">The restore request. Must not be <see langword="null"/>.</param>
     /// <param name="cancellationToken">Cancellation token.</param>

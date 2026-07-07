@@ -24,12 +24,16 @@ An area or action the connected user cannot use is shown **disabled (greyed
 out)**, not hidden. The Backups area entry is enabled when the connected
 endpoint reports at least list / read backup access; otherwise it stays visible
 but greyed, so the user can see the capability exists without being able to
-enter it. Inside the Backups area, the capture, incremental, restore, and delete
-controls enable or disable per scope from the same advisory capability report.
+enter it. Inside the Backups area, the capture and incremental controls enable
+or disable from the capability report for the scope(s) selected for capture,
+while each listed backup's own restore and delete buttons gate on that backup's
+scope - so a backup the caller may read and restore is actionable regardless of
+what scope is currently selected for a new capture.
 
-The capability report is gathered once after sign-in or reconnect and cached for
-the session, then refreshed when the authentication changes - never re-probed on
-every render.
+The capture-scope capability report is gathered on demand for the selected
+scope; each listed backup's scope capability is probed when the list loads and
+cached per tree for the session, and the cache is cleared on an explicit
+refresh so a permission change is picked up - never re-probed on every render.
 
 ## Advisory, not a security boundary
 
@@ -45,11 +49,21 @@ restores, or deletes anything.
 ## What the Backups area can do
 
 - List the backups visible to the connected user, with their scope, kind
-  (full or incremental), and creation time.
-- Capture a full backup of a scope, or an incremental backup layered on a base
-  backup.
-- Restore a backup into a target tree.
-- Delete a backup.
+  (full or incremental), and creation time. Each row's id carries a copy button.
+- Select one or more trees to capture. A single **Backup** button dispatches by
+  the selected kind and selection: a full capture of one tree, an incremental
+  layered on a chosen base backup (single tree only), or - when more than one
+  tree is selected for a full capture - a single **backup set** that captures one
+  member backup per tree under one set manifest, optionally with a shared
+  cross-tree consistency fence.
+- Choose the incremental base from a dropdown of the existing full backups.
+- Restore a backup into a target tree, choosing the restore mode: **in-place**
+  merges the backup into the target by last-writer-wins (writes made after the
+  backup was taken survive), while **shadow-cutover** rebuilds the tree from the
+  backup and swaps it in, so the restored tree holds exactly the backup contents
+  - the point-in-time-recovery path that drops post-backup writes.
+- Delete a backup, behind a confirmation prompt that warns the action cannot be
+  undone.
 
 Backups are always enumerated through the backup control API, so a backup whose
 scope the caller may not read never appears in the list. Every action reports

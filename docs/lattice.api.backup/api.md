@@ -31,6 +31,7 @@ The control facade (internal) exposes these operations; each is projected as one
 |---|---|---|
 | Create backup | takes a `LatticeBackupCaptureRequest` | `LatticeBackupCaptureResult` |
 | Create incremental backup | takes a `LatticeBackupIncrementalCaptureRequest` | `LatticeBackupCaptureResult` |
+| Create backup set | takes a `LatticeBackupSetCaptureRequest` | `LatticeBackupSetCaptureResult` |
 | List backups | takes a `BackupCatalogRequest` | `BackupCatalogPage` |
 | Stream backups | streams | `IAsyncEnumerable<BackupManifest>` in backup-id order |
 | Describe backup | takes a backup id | `BackupChainDescription?` (null when absent) |
@@ -41,6 +42,8 @@ The control facade (internal) exposes these operations; each is projected as one
 | Get inventory | (none) | `BackupInventoryReport` |
 | Get scope status | takes a `BackupScopeSelector` | `BackupScopeStatus?` (null when unknown) |
 | Probe capabilities | takes a `BackupScopeSelector` | `BackupScopeCapabilities` |
+
+Create backup set captures one full backup per distinct tree scope under a single set manifest, so an operator can back up several trees as one unit; it authorizes every member scope fail-closed before any capture, so a set that names one forbidden scope is rejected whole. When cross-tree consistency is requested the members share one consistency fence. The `LatticeBackupSetCaptureRequest` / `LatticeBackupSetCaptureResult` and `BackupSetManifest` types are defined in [`Orleans.Lattice.Backup`](../lattice.backup/api.md).
 
 The request / result types prefixed `LatticeBackup*` / `LatticeRestore*` and `BackupManifest` / `BackupScopeSelector` are defined in [`Orleans.Lattice.Backup`](../lattice.backup/api.md); the package's own model records are documented below.
 

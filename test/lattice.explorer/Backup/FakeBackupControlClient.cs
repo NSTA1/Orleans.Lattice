@@ -23,6 +23,8 @@ internal sealed class FakeBackupControlClient : IBackupControlClient
     public int ListCallCount { get; private set; }
     public BackupCatalogRequest? LastListRequest { get; private set; }
     public BackupScopeSelector? LastProbedScope { get; private set; }
+    public LatticeBackupSetCaptureRequest? LastSetRequest { get; private set; }
+    public LatticeRestoreRequest? LastRestoreRequest { get; private set; }
 
     public Task<BackupScopeCapabilities> ProbeCapabilitiesAsync(BackupScopeSelector scope, CancellationToken cancellationToken = default)
     {
@@ -70,8 +72,21 @@ internal sealed class FakeBackupControlClient : IBackupControlClient
         return Task.FromResult(new LatticeBackupCaptureResult("inc-1", SampleBackup.Manifest("inc-1", BackupKind.Incremental)));
     }
 
+    public Task<LatticeBackupSetCaptureResult> CreateBackupSetAsync(LatticeBackupSetCaptureRequest request, CancellationToken cancellationToken = default)
+    {
+        LastSetRequest = request;
+        if (MutationThrows is not null)
+        {
+            throw MutationThrows;
+        }
+
+        var memberIds = request.Scopes.Select((_, i) => $"set-member-{i}").ToArray();
+        return Task.FromResult(SampleBackup.SetResult("set-1", memberIds));
+    }
+
     public Task<LatticeRestoreResult> RestoreBackupAsync(LatticeRestoreRequest request, CancellationToken cancellationToken = default)
     {
+        LastRestoreRequest = request;
         if (MutationThrows is not null)
         {
             throw MutationThrows;

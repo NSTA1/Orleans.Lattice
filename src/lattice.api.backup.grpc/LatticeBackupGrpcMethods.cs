@@ -36,6 +36,9 @@ internal sealed class LatticeBackupGrpcMethods
     /// <summary>The unary incremental-capture RPC method name.</summary>
     public const string CreateIncrementalBackupMethodName = "CreateIncrementalBackup";
 
+    /// <summary>The unary backup-set-capture RPC method name.</summary>
+    public const string CreateBackupSetMethodName = "CreateBackupSet";
+
     /// <summary>The unary cursor-resumable catalog-listing RPC method name.</summary>
     public const string ListBackupsMethodName = "ListBackups";
 
@@ -67,7 +70,9 @@ internal sealed class LatticeBackupGrpcMethods
     public LatticeBackupGrpcMethods(
         Serializer<BackupCaptureRequestMessage> captureRequestSerializer,
         Serializer<BackupIncrementalCaptureRequestMessage> incrementalCaptureRequestSerializer,
+        Serializer<BackupSetCaptureRequestMessage> setCaptureRequestSerializer,
         Serializer<BackupCaptureResponse> captureResponseSerializer,
+        Serializer<BackupSetCaptureResponse> setCaptureResponseSerializer,
         Serializer<Orleans.Lattice.Api.Backup.BackupCatalogRequest> catalogRequestSerializer,
         Serializer<Orleans.Lattice.Api.Backup.BackupCatalogPage> catalogPageSerializer,
         Serializer<BackupStreamRequest> streamRequestSerializer,
@@ -88,7 +93,9 @@ internal sealed class LatticeBackupGrpcMethods
     {
         ArgumentNullException.ThrowIfNull(captureRequestSerializer);
         ArgumentNullException.ThrowIfNull(incrementalCaptureRequestSerializer);
+        ArgumentNullException.ThrowIfNull(setCaptureRequestSerializer);
         ArgumentNullException.ThrowIfNull(captureResponseSerializer);
+        ArgumentNullException.ThrowIfNull(setCaptureResponseSerializer);
         ArgumentNullException.ThrowIfNull(catalogRequestSerializer);
         ArgumentNullException.ThrowIfNull(catalogPageSerializer);
         ArgumentNullException.ThrowIfNull(streamRequestSerializer);
@@ -120,6 +127,13 @@ internal sealed class LatticeBackupGrpcMethods
             name: CreateIncrementalBackupMethodName,
             requestMarshaller: LatticeBackupGrpcMarshallers.Create(incrementalCaptureRequestSerializer),
             responseMarshaller: LatticeBackupGrpcMarshallers.Create(captureResponseSerializer));
+
+        CreateBackupSet = new Method<BackupSetCaptureRequestMessage, BackupSetCaptureResponse>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: CreateBackupSetMethodName,
+            requestMarshaller: LatticeBackupGrpcMarshallers.Create(setCaptureRequestSerializer),
+            responseMarshaller: LatticeBackupGrpcMarshallers.Create(setCaptureResponseSerializer));
 
         ListBackups = new Method<Orleans.Lattice.Api.Backup.BackupCatalogRequest, Orleans.Lattice.Api.Backup.BackupCatalogPage>(
             type: MethodType.Unary,
@@ -191,6 +205,9 @@ internal sealed class LatticeBackupGrpcMethods
     /// <summary>The unary <c>CreateIncrementalBackup</c> incremental-capture RPC.</summary>
     public Method<BackupIncrementalCaptureRequestMessage, BackupCaptureResponse> CreateIncrementalBackup { get; }
 
+    /// <summary>The unary <c>CreateBackupSet</c> backup-set-capture RPC.</summary>
+    public Method<BackupSetCaptureRequestMessage, BackupSetCaptureResponse> CreateBackupSet { get; }
+
     /// <summary>The unary <c>ListBackups</c> cursor-resumable catalog RPC.</summary>
     public Method<Orleans.Lattice.Api.Backup.BackupCatalogRequest, Orleans.Lattice.Api.Backup.BackupCatalogPage> ListBackups { get; }
 
@@ -230,7 +247,9 @@ internal sealed class LatticeBackupGrpcMethods
         return new LatticeBackupGrpcMethods(
             serializerProvider.GetRequiredService<Serializer<BackupCaptureRequestMessage>>(),
             serializerProvider.GetRequiredService<Serializer<BackupIncrementalCaptureRequestMessage>>(),
+            serializerProvider.GetRequiredService<Serializer<BackupSetCaptureRequestMessage>>(),
             serializerProvider.GetRequiredService<Serializer<BackupCaptureResponse>>(),
+            serializerProvider.GetRequiredService<Serializer<BackupSetCaptureResponse>>(),
             serializerProvider.GetRequiredService<Serializer<Orleans.Lattice.Api.Backup.BackupCatalogRequest>>(),
             serializerProvider.GetRequiredService<Serializer<Orleans.Lattice.Api.Backup.BackupCatalogPage>>(),
             serializerProvider.GetRequiredService<Serializer<BackupStreamRequest>>(),

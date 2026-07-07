@@ -32,6 +32,9 @@ internal abstract class LatticeBackupGrpcServiceBase
     /// <summary>Captures an incremental backup. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
     public abstract Task<BackupCaptureResponse> CreateIncrementalBackup(BackupIncrementalCaptureRequestMessage request, ServerCallContext context);
 
+    /// <summary>Captures a backup set. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<BackupSetCaptureResponse> CreateBackupSet(BackupSetCaptureRequestMessage request, ServerCallContext context);
+
     /// <summary>Lists a cursor-resumable page of the catalog. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
     public abstract Task<BackupCatalogPage> ListBackups(BackupCatalogRequest request, ServerCallContext context);
 
@@ -91,6 +94,7 @@ internal abstract class LatticeBackupGrpcServiceBase
         {
             binder.AddMethod(methods.CreateBackup, (UnaryServerMethod<BackupCaptureRequestMessage, BackupCaptureResponse>?)null);
             binder.AddMethod(methods.CreateIncrementalBackup, (UnaryServerMethod<BackupIncrementalCaptureRequestMessage, BackupCaptureResponse>?)null);
+            binder.AddMethod(methods.CreateBackupSet, (UnaryServerMethod<BackupSetCaptureRequestMessage, BackupSetCaptureResponse>?)null);
             binder.AddMethod(methods.ListBackups, (UnaryServerMethod<BackupCatalogRequest, BackupCatalogPage>?)null);
             binder.AddMethod(methods.StreamBackups, (ServerStreamingServerMethod<BackupStreamRequest, BackupManifest>?)null);
             binder.AddMethod(methods.DescribeBackup, (UnaryServerMethod<BackupDescribeRequest, BackupChainResponse>?)null);
@@ -105,6 +109,7 @@ internal abstract class LatticeBackupGrpcServiceBase
 
         binder.AddMethod(methods.CreateBackup, new UnaryServerMethod<BackupCaptureRequestMessage, BackupCaptureResponse>(serviceImpl.CreateBackup));
         binder.AddMethod(methods.CreateIncrementalBackup, new UnaryServerMethod<BackupIncrementalCaptureRequestMessage, BackupCaptureResponse>(serviceImpl.CreateIncrementalBackup));
+        binder.AddMethod(methods.CreateBackupSet, new UnaryServerMethod<BackupSetCaptureRequestMessage, BackupSetCaptureResponse>(serviceImpl.CreateBackupSet));
         binder.AddMethod(methods.ListBackups, new UnaryServerMethod<BackupCatalogRequest, BackupCatalogPage>(serviceImpl.ListBackups));
         binder.AddMethod(methods.StreamBackups, new ServerStreamingServerMethod<BackupStreamRequest, BackupManifest>(serviceImpl.StreamBackups));
         binder.AddMethod(methods.DescribeBackup, new UnaryServerMethod<BackupDescribeRequest, BackupChainResponse>(serviceImpl.DescribeBackup));
@@ -196,6 +201,18 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
                     ct)
                 .ConfigureAwait(false);
             return ToCaptureResponse(result);
+        });
+
+    /// <inheritdoc />
+    public override Task<BackupSetCaptureResponse> CreateBackupSet(BackupSetCaptureRequestMessage request, ServerCallContext context)
+        => InvokeAsync(request, context, static async (control, req, ct) =>
+        {
+            var result = await control
+                .CreateBackupSetAsync(
+                    new LatticeBackupSetCaptureRequest(req.Name, req.Scopes, req.CrossTreeConsistent, req.PageSize),
+                    ct)
+                .ConfigureAwait(false);
+            return ToSetCaptureResponse(result);
         });
 
     /// <inheritdoc />
@@ -402,6 +419,13 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
 
     private static BackupCaptureResponse ToCaptureResponse(LatticeBackupCaptureResult result) =>
         new() { BackupId = result.BackupId, Manifest = result.Manifest };
+
+    private static BackupSetCaptureResponse ToSetCaptureResponse(LatticeBackupSetCaptureResult result) =>
+        new()
+        {
+            SetManifest = result.SetManifest,
+            Members = result.Members.Select(ToCaptureResponse).ToList(),
+        };
 
     private static RestoreResponse ToRestoreResponse(LatticeRestoreResult result) =>
         new()

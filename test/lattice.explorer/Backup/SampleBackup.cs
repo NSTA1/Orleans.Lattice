@@ -37,4 +37,18 @@ internal static class SampleBackup
             operationId: "op-1",
             manifestChain: new[] { backupId },
             entriesApplied: entriesApplied);
+
+    /// <summary>Builds a well-formed <see cref="LatticeBackupSetCaptureResult"/> over the given member ids.</summary>
+    public static LatticeBackupSetCaptureResult SetResult(string setId, params string[] memberIds)
+    {
+        var members = memberIds.Select(id => new LatticeBackupCaptureResult(id, Manifest(id))).ToList();
+        var setManifest = new BackupSetManifest(
+            setId: setId,
+            name: "nightly-set",
+            createdAtUtc: DateTimeOffset.UnixEpoch,
+            crossTreeConsistent: false,
+            fence: null,
+            memberBackupIds: memberIds);
+        return new LatticeBackupSetCaptureResult(setManifest, members);
+    }
 }

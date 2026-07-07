@@ -91,6 +91,33 @@ public sealed class LatticeBackupApiGrpcClient
         return new LatticeBackupCaptureResult(response.BackupId, response.Manifest);
     }
 
+    /// <summary>
+    /// Captures a backup set - one full backup per scope, grouped under a single
+    /// set manifest - optionally at a single cross-tree causal fence.
+    /// </summary>
+    public async Task<LatticeBackupSetCaptureResult> CreateBackupSetAsync(
+        LatticeBackupSetCaptureRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var response = await UnaryAsync(
+            _methods.CreateBackupSet,
+            new BackupSetCaptureRequestMessage
+            {
+                Name = request.Name,
+                Scopes = request.Scopes,
+                CrossTreeConsistent = request.CrossTreeConsistent,
+                PageSize = request.PageSize,
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        var members = response.Members
+            .Select(m => new LatticeBackupCaptureResult(m.BackupId, m.Manifest))
+            .ToList();
+        return new LatticeBackupSetCaptureResult(response.SetManifest, members);
+    }
+
     /// <summary>Lists the catalogued backups as a deterministic, cursor-resumable page.</summary>
     public Task<BackupCatalogPage> ListBackupsAsync(
         BackupCatalogRequest request,

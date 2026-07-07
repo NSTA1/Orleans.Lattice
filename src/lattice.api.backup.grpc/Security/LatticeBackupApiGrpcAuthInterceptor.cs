@@ -144,6 +144,7 @@ internal sealed class LatticeBackupApiGrpcAuthInterceptor : Interceptor
         {
             LatticeBackupGrpcMethods.CreateBackupMethodName => LatticeBackupApiOperation.CreateBackup,
             LatticeBackupGrpcMethods.CreateIncrementalBackupMethodName => LatticeBackupApiOperation.CreateIncrementalBackup,
+            LatticeBackupGrpcMethods.CreateBackupSetMethodName => LatticeBackupApiOperation.CreateBackupSet,
             LatticeBackupGrpcMethods.ListBackupsMethodName => LatticeBackupApiOperation.ListBackups,
             LatticeBackupGrpcMethods.StreamBackupsMethodName => LatticeBackupApiOperation.StreamBackups,
             LatticeBackupGrpcMethods.DescribeBackupMethodName => LatticeBackupApiOperation.DescribeBackup,

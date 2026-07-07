@@ -16,6 +16,9 @@ public enum LatticeBackupApiOperation
     /// <summary>The <c>CreateIncrementalBackup</c> incremental-capture RPC.</summary>
     CreateIncrementalBackup,
 
+    /// <summary>The <c>CreateBackupSet</c> multi-tree backup-set-capture RPC.</summary>
+    CreateBackupSet,
+
     /// <summary>The <c>ListBackups</c> cursor-resumable catalog RPC.</summary>
     ListBackups,
 

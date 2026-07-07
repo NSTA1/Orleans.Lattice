@@ -114,6 +114,39 @@ public sealed class LatticeBackupGrpcClientE2ETests
     }
 
     [Test]
+    public async Task CreateBackupSetAsync_captures_a_multi_tree_set_over_the_wire()
+    {
+        var treeA = _fixture.GrainFactory.GetGrain<ILattice>("set-a");
+        await treeA.SetAsync("k", Bytes("a"));
+        var treeB = _fixture.GrainFactory.GetGrain<ILattice>("set-b");
+        await treeB.SetAsync("k", Bytes("b"));
+
+        var set = await _host.Client.CreateBackupSetAsync(
+            new LatticeBackupSetCaptureRequest(
+                "nightly-set",
+                new[]
+                {
+                    BackupScopeSelector.WholeTree("set-a"),
+                    BackupScopeSelector.WholeTree("set-b"),
+                },
+                crossTreeConsistent: true));
+
+        var page = await _host.Client.ListBackupsAsync(new BackupCatalogRequest());
+        var listedIds = page.Entries.Select(e => e.Id).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(set.Members, Has.Count.EqualTo(2));
+            Assert.That(set.SetManifest.CrossTreeConsistent, Is.True);
+            Assert.That(set.SetManifest.MemberBackupIds, Has.Count.EqualTo(2));
+            foreach (var member in set.Members)
+            {
+                Assert.That(listedIds, Does.Contain(member.BackupId));
+            }
+        });
+    }
+
+    [Test]
     public async Task DescribeBackupAsync_returns_null_for_an_unknown_backup_over_the_wire()
     {
         var description = await _host.Client.DescribeBackupAsync(

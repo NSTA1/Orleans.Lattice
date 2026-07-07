@@ -93,6 +93,13 @@ public sealed class GrpcBackupControlClient : IBackupControlClient, IDisposable
     }
 
     /// <inheritdoc />
+    public Task<LatticeBackupSetCaptureResult> CreateBackupSetAsync(LatticeBackupSetCaptureRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return InvokeAsync(client => client.CreateBackupSetAsync(request, cancellationToken));
+    }
+
+    /// <inheritdoc />
     public Task<LatticeRestoreResult> RestoreBackupAsync(LatticeRestoreRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);

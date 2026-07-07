@@ -138,6 +138,36 @@ public sealed class AuthBackupGrpcVisibilityTests
     }
 
     [Test]
+    public void create_backup_set_without_a_credential_is_permission_denied()
+    {
+        var ex = Assert.ThrowsAsync<RpcException>(async () => await CallAsync(
+            _host.Methods.CreateBackupSet,
+            new BackupSetCaptureRequestMessage
+            {
+                Name = "denied-set",
+                Scopes = new[] { BackupScopeSelector.WholeTree(Source) },
+            },
+            subject: null));
+
+        Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
+    }
+
+    [Test]
+    public async Task create_backup_set_with_a_credential_is_accepted()
+    {
+        var response = await CallAsync(
+            _host.Methods.CreateBackupSet,
+            new BackupSetCaptureRequestMessage
+            {
+                Name = "allowed-set",
+                Scopes = new[] { BackupScopeSelector.WholeTree(Source) },
+            },
+            Operator);
+
+        Assert.That(response.SetManifest.MemberBackupIds, Is.Not.Empty);
+    }
+
+    [Test]
     public void restore_backup_without_a_credential_is_permission_denied()
     {
         var ex = Assert.ThrowsAsync<RpcException>(async () => await CallAsync(

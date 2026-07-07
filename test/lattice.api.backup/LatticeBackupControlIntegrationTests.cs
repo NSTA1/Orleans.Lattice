@@ -294,6 +294,69 @@ public sealed class LatticeBackupControlIntegrationTests
             Throws.ArgumentNullException);
     }
 
+    // ---- Backup-set capture ---------------------------------------------
+
+    [Test]
+    public async Task CreateBackupSetAsync_captures_a_member_per_tree_under_one_set_manifest()
+    {
+        await _fixture.InitializeAsync();
+        var treeA = _fixture.GrainFactory.GetGrain<ILattice>("set-tree-a");
+        await treeA.SetAsync("k", Bytes("a"));
+        var treeB = _fixture.GrainFactory.GetGrain<ILattice>("set-tree-b");
+        await treeB.SetAsync("k", Bytes("b"));
+
+        var set = await _fixture.Control.CreateBackupSetAsync(
+            new LatticeBackupSetCaptureRequest(
+                "nightly-set",
+                new[]
+                {
+                    BackupScopeSelector.WholeTree("set-tree-a"),
+                    BackupScopeSelector.WholeTree("set-tree-b"),
+                },
+                crossTreeConsistent: true));
+
+        var page = await _fixture.Control.ListBackupsAsync(new BackupCatalogRequest());
+        var listedIds = page.Entries.Select(e => e.Id).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(set.Members, Has.Count.EqualTo(2));
+            Assert.That(set.SetManifest.MemberBackupIds, Has.Count.EqualTo(2));
+            Assert.That(set.SetManifest.CrossTreeConsistent, Is.True);
+            foreach (var member in set.Members)
+            {
+                Assert.That(listedIds, Does.Contain(member.BackupId));
+            }
+        });
+    }
+
+    [Test]
+    public async Task CreateBackupSetAsync_denied_permission_fails_closed()
+    {
+        await _fixture.InitializeAsync();
+        var source = _fixture.GrainFactory.GetGrain<ILattice>(Source);
+        await source.SetAsync("k1", Bytes("v1"));
+
+        var denying = _fixture.CreateControlWith(
+            new BackupAccessAuthorizer(new DenyingAccessGate("no backup grant"), membership: null));
+
+        Assert.That(
+            async () => await denying.CreateBackupSetAsync(
+                new LatticeBackupSetCaptureRequest(
+                    "denied-set",
+                    new[] { BackupScopeSelector.WholeTree(Source) })),
+            Throws.InstanceOf<LatticeAuthorizationDeniedException>());
+    }
+
+    [Test]
+    public async Task CreateBackupSetAsync_null_request_throws()
+    {
+        await _fixture.InitializeAsync();
+        Assert.That(
+            async () => await _fixture.Control.CreateBackupSetAsync(null!),
+            Throws.ArgumentNullException);
+    }
+
     [Test]
     public async Task ListBackupsAsync_null_request_throws()
     {

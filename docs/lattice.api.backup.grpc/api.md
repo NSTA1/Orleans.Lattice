@@ -32,6 +32,7 @@ Methods (one per RPC):
 |---|---|
 | `CreateBackupAsync` | `Task<LatticeBackupCaptureResult> CreateBackupAsync(LatticeBackupCaptureRequest request, CancellationToken cancellationToken = default)` |
 | `CreateIncrementalBackupAsync` | `Task<LatticeBackupCaptureResult> CreateIncrementalBackupAsync(LatticeBackupIncrementalCaptureRequest request, CancellationToken cancellationToken = default)` |
+| `CreateBackupSetAsync` | `Task<LatticeBackupSetCaptureResult> CreateBackupSetAsync(LatticeBackupSetCaptureRequest request, CancellationToken cancellationToken = default)` |
 | `ListBackupsAsync` | `Task<BackupCatalogPage> ListBackupsAsync(BackupCatalogRequest request, CancellationToken cancellationToken = default)` |
 | `StreamBackupsAsync` | `IAsyncEnumerable<BackupManifest> StreamBackupsAsync(CancellationToken cancellationToken = default)` |
 | `DescribeBackupAsync` | `Task<BackupChainDescription?> DescribeBackupAsync(string backupId, CancellationToken cancellationToken = default)` |
@@ -42,7 +43,7 @@ Methods (one per RPC):
 | `GetAuthSchemeAsync` | `Task<AuthSchemeAdvertisement> GetAuthSchemeAsync(AuthSchemeAdvertisementRequest request, CancellationToken cancellationToken = default)` |
 | `ProbeCapabilitiesAsync` | `Task<BackupScopeCapabilities> ProbeCapabilitiesAsync(BackupScopeSelector scope, CancellationToken cancellationToken = default)` |
 
-`CreateBackupAsync`, `CreateIncrementalBackupAsync`, `RestoreBackupAsync`, and `RevertRestoreAsync` throw `ArgumentNullException` on a null request; `DescribeBackupAsync`, `DeleteBackupAsync`, and `ExportArtifactAsync` throw `ArgumentException` on a null or empty id. `DescribeBackupAsync` returns `null` when the server reports the backup absent. `ProbeCapabilitiesAsync` throws `ArgumentNullException` on a null scope and reports the caller's allowed-operation set (`BackupScopeCapabilities`) with no side effects, so a UI can grey out actions the caller cannot perform; it never replaces the fail-closed authorization each real RPC still performs. `GetAuthSchemeAsync` is unauthenticated - callable before any credential is acquired.
+`CreateBackupAsync`, `CreateIncrementalBackupAsync`, `CreateBackupSetAsync`, `RestoreBackupAsync`, and `RevertRestoreAsync` throw `ArgumentNullException` on a null request; `DescribeBackupAsync`, `DeleteBackupAsync`, and `ExportArtifactAsync` throw `ArgumentException` on a null or empty id. `DescribeBackupAsync` returns `null` when the server reports the backup absent. `ProbeCapabilitiesAsync` throws `ArgumentNullException` on a null scope and reports the caller's allowed-operation set (`BackupScopeCapabilities`) with no side effects, so a UI can grey out actions the caller cannot perform; it never replaces the fail-closed authorization each real RPC still performs. `GetAuthSchemeAsync` is unauthenticated - callable before any credential is acquired.
 
 ## Server-side options
 
@@ -80,7 +81,7 @@ Supplies the advertisement the unauthenticated `GetAuthScheme` RPC returns.
 
 ### `LatticeBackupApiOperation`
 
-Identifies which control-API operation an inbound call invokes, so an authorizer can make per-operation decisions. Values: `CreateBackup`, `CreateIncrementalBackup`, `ListBackups`, `StreamBackups`, `DescribeBackup`, `DeleteBackup`, `RestoreBackup`, `RevertRestore`, `ExportArtifact`, and `Unknown` (an unrecognised method, presented so a deny-by-default policy refuses it rather than treating it as benign).
+Identifies which control-API operation an inbound call invokes, so an authorizer can make per-operation decisions. Values: `CreateBackup`, `CreateIncrementalBackup`, `CreateBackupSet`, `ListBackups`, `StreamBackups`, `DescribeBackup`, `DeleteBackup`, `RestoreBackup`, `RevertRestore`, `ExportArtifact`, and `Unknown` (an unrecognised method, presented so a deny-by-default policy refuses it rather than treating it as benign).
 
 ### `LatticeBackupApiAuthorizationContext`
 
@@ -99,7 +100,9 @@ Each RPC's request and response is one of these Orleans-serialized records. Prop
 |---|---|
 | `BackupCaptureRequestMessage` | `required string Name`, `required BackupScopeSelector Scope`, `int PageSize` (default `LatticeBackupCaptureRequest.DefaultPageSize`). |
 | `BackupIncrementalCaptureRequestMessage` | `required string Name`, `required BackupScopeSelector Scope`, `required string BaseBackupId`, `int PageSize` (default as above). |
+| `BackupSetCaptureRequestMessage` | `required string Name`, `required IReadOnlyList<BackupScopeSelector> Scopes`, `bool CrossTreeConsistent`, `int PageSize` (default `LatticeBackupCaptureRequest.DefaultPageSize`). |
 | `BackupCaptureResponse` | `required string BackupId`, `required BackupManifest Manifest`. |
+| `BackupSetCaptureResponse` | `required BackupSetManifest SetManifest`, `required IReadOnlyList<BackupCaptureResponse> Members` (one per captured tree). |
 | `BackupDescribeRequest` | `required string BackupId`. |
 | `BackupChainResponse` | `bool Found`, `BackupManifest? Manifest`, `IReadOnlyList<string> ChainBackupIds`. |
 | `BackupDeleteRequest` | `required string BackupId`. |

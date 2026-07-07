@@ -87,6 +87,24 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
     }
 
     /// <inheritdoc />
+    public async Task<LatticeBackupSetCaptureResult> CreateBackupSetAsync(
+        LatticeBackupSetCaptureRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        // Authorize every member scope fail-closed before any tree is touched, so
+        // a set that includes even one forbidden scope is rejected in full rather
+        // than partially captured.
+        foreach (var scope in request.Scopes)
+        {
+            await _authorizer.AuthorizeBackupAsync(scope, cancellationToken).ConfigureAwait(false);
+        }
+
+        return await _capture.CaptureSetAsync(request, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
     public async Task<BackupCatalogPage> ListBackupsAsync(
         BackupCatalogRequest request,
         CancellationToken cancellationToken = default)

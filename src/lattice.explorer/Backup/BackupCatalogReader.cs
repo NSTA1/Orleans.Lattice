@@ -76,6 +76,22 @@ public sealed class BackupCatalogReader(IBackupControlClient client) : IBackupCa
     }
 
     /// <inheritdoc />
+    public Task<BackupOperationResult> TriggerSetAsync(string name, IReadOnlyList<BackupScopeSelector> scopes, bool crossTreeConsistent, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        ArgumentNullException.ThrowIfNull(scopes);
+        return RunAsync(
+            async () =>
+            {
+                var result = await _client
+                    .CreateBackupSetAsync(new LatticeBackupSetCaptureRequest(name, scopes, crossTreeConsistent), cancellationToken)
+                    .ConfigureAwait(false);
+                return BackupOperationResult.Success(
+                    $"Captured backup set '{result.SetManifest.SetId}' ({result.Members.Count} tree(s)).");
+            });
+    }
+
+    /// <inheritdoc />
     public Task<BackupOperationResult> TriggerIncrementalAsync(string name, BackupScopeSelector scope, string baseBackupId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(name);
@@ -92,7 +108,7 @@ public sealed class BackupCatalogReader(IBackupControlClient client) : IBackupCa
     }
 
     /// <inheritdoc />
-    public Task<BackupOperationResult> RestoreAsync(string backupId, string targetTreeId, CancellationToken cancellationToken = default)
+    public Task<BackupOperationResult> RestoreAsync(string backupId, string targetTreeId, LatticeRestoreMode mode = LatticeRestoreMode.InPlace, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(backupId);
         ArgumentException.ThrowIfNullOrEmpty(targetTreeId);
@@ -100,7 +116,7 @@ public sealed class BackupCatalogReader(IBackupControlClient client) : IBackupCa
             async () =>
             {
                 var result = await _client
-                    .RestoreBackupAsync(new LatticeRestoreRequest(backupId, targetTreeId), cancellationToken)
+                    .RestoreBackupAsync(new LatticeRestoreRequest(backupId, targetTreeId, mode: mode), cancellationToken)
                     .ConfigureAwait(false);
                 return BackupOperationResult.Success($"Restored '{result.BackupId}' into '{result.TargetTreeId}' ({result.EntriesApplied} entries).");
             });
