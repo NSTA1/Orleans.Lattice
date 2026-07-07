@@ -1,4 +1,4 @@
-# PasswordProtection
+# Password Protection
 
 > This sample shows the built-in **username/password** authentication front door
 > for the State API gRPC surface (`AddEnvVarCredentialAuthorizer`) composed with
