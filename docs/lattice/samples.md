@@ -23,6 +23,7 @@ Minimal, single-feature samples - one per row in the [README feature table](../.
 | [MaterialisedViews](../../samples/MaterialisedViews/README.md) | A filter view and a sum-aggregation view maintained off the source tree's WAL. |
 | [Metrics](../../samples/Metrics/README.md) | Reading the `orleans.lattice` meter instruments with a `MeterListener`. |
 | [OnlineReshard](../../samples/OnlineReshard/README.md) | Growing the physical shard count online with reads, writes, and data intact throughout. |
+| [PasswordProtection](../../samples/PasswordProtection/README.md) | A username/password front door for the State API gRPC surface (`AddEnvVarCredentialAuthorizer`) composed with per-tree authorization: a bootstrap admin plus a read-only user, wrong-password and anonymous calls rejected, and one tree hidden from the reader. |
 | [PredicateOperations](../../samples/PredicateOperations/README.md) | Server-side `Expression<Func<T, bool>>` push-down so only matching keys or values cross the wire. |
 | [Resize](../../samples/Resize/README.md) | Changing `MaxLeafKeys` / `MaxInternalChildren` on a live, populated tree. |
 | [RetryPolicy](../../samples/RetryPolicy/README.md) | An idempotency-keyed retry policy recovering from simulated transient storage faults. |
