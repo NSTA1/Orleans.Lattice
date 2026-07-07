@@ -185,7 +185,19 @@ internal sealed partial class ViewMaintainerGrain
         var highest = HybridLogicalClock.Zero;
         var aggregationApplier = registration.IsAggregation ? CreateAggregationApplier(viewTree) : null;
 
+        // Drain the source key stream up front before the projection loop. The
+        // per-key body does heavy async work (a source read plus one or more
+        // view-tree writes) between iterations; interleaving that work between
+        // KeysAsync MoveNextAsync calls can let the server-side enumerator idle
+        // past its expiration and abort the scan mid-flight. Materialising the
+        // key set bounds the enumerator's lifetime to the (write-free) drain.
+        var sourceKeys = new List<string>();
         await foreach (var key in sourceTree.KeysAsync(cancellationToken: cancellationToken))
+        {
+            sourceKeys.Add(key);
+        }
+
+        foreach (var key in sourceKeys)
         {
             var versioned = await sourceTree.GetWithVersionAsync(key, cancellationToken);
             if (versioned.Value is null)
@@ -323,7 +335,18 @@ internal sealed partial class ViewMaintainerGrain
             historyNowTicks = DateTime.UtcNow.Ticks;
         }
 
+        // Drain the source key stream up front before the projection loop (see the
+        // note in InPlaceRebuildAsync): the per-key aggregation / projection writes
+        // are heavy enough that interleaving them between KeysAsync MoveNextAsync
+        // calls can expire the server-side enumerator and abort the scan. Buffering
+        // the key set keeps the enumerator's lifetime to the write-free drain.
+        var sourceKeys = new List<string>();
         await foreach (var key in sourceTree.KeysAsync(cancellationToken: cancellationToken))
+        {
+            sourceKeys.Add(key);
+        }
+
+        foreach (var key in sourceKeys)
         {
             var versioned = await sourceTree.GetWithVersionAsync(key, cancellationToken);
             if (versioned.Value is null)
