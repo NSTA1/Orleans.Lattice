@@ -116,7 +116,18 @@ each needs a deliberate change before this shape goes anywhere untrusted.
   one-command run. That means "change the password" would mean editing source and
   shipping a recoverable secret in the assembly. A real deployment must set the
   `LATTICE_STATE_USER_*` variables out-of-band (for example with the `tools/`
-  helper scripts) and delete the in-process minting entirely.
+  helper scripts) and delete the in-process minting entirely. Generate each hash
+  once with `tools/new-lattice-state-credential.sh` (or
+  `tools/New-LatticeStateCredential.ps1`) - it prints only the salted hash, never
+  the plaintext - and inject it as the `LATTICE_STATE_USER_<username>` variable.
+  When deploying with Docker, pass that variable through your orchestrator's
+  secret mechanism rather than baking it into the image: a Docker/Swarm or
+  Kubernetes secret surfaced as an env var, or `docker run --env-file` pointing
+  at a file kept out of source control. Avoid `-e LATTICE_STATE_USER_...=...` on
+  the command line (it lands in shell history and `docker inspect`) and never
+  `ENV`/`ARG` the hash in the `Dockerfile` (it is baked into an image layer). The
+  value you inject is the hash, so a leak still forces an attacker through
+  PBKDF2, but treat it as a secret regardless.
 - **Unauthenticated requests can exhaust CPU.** To keep the authorizer free of a
   user-existence timing oracle, **every** attempt - including an unknown username
   and a locked-out account - spends a full, deliberately expensive PBKDF2
