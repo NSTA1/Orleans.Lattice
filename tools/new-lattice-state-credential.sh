@@ -50,7 +50,7 @@ Options:
   -u, --username <name>     Credential username (required; env-var-name-safe).
       --password-stdin      Read the password from stdin (one line).
       --password-env <name> Read the password from the named environment variable.
-  -i, --iterations <n>      PBKDF2 iteration count (default 210000).
+  -i, --iterations <n>      PBKDF2 iteration count (default ${ITERATIONS}).
   -f, --format <fmt>        Output format: env (default), dotenv, export, value, json.
       --allow-weak-password Bypass the password-strength policy (discouraged).
   -h, --help                Show this help.
@@ -62,7 +62,7 @@ USAGE
 USERNAME=""
 PASSWORD_STDIN=0
 PASSWORD_ENV=""
-ITERATIONS=210000
+ITERATIONS=750000
 FORMAT="env"
 ALLOW_WEAK=0
 

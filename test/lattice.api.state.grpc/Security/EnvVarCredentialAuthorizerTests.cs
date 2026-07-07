@@ -59,6 +59,34 @@ public class EnvVarCredentialAuthorizerTests
     }
 
     [Test]
+    public void Authorize_unknownUsers_doNotPopulateAttemptMap()
+    {
+        var authorizer = CreateAuthorizer(WithCredential(Username, Password), out _);
+
+        for (var i = 0; i < 50; i++)
+        {
+            Assert.That(authorizer.Authorize(BasicHeader("probe_" + i, Password)), Is.False);
+        }
+
+        // Unknown-user probes must not grow the per-username attempt map
+        // (CWE-770 pre-auth memory-exhaustion vector).
+        Assert.That(authorizer.TrackedUsernameCount, Is.Zero);
+    }
+
+    [Test]
+    public void Authorize_knownUserFailure_populatesAttemptMapOnce()
+    {
+        var authorizer = CreateAuthorizer(WithCredential(Username, Password), out _);
+
+        authorizer.Authorize(BasicHeader(Username, "WrongPassword1"));
+        authorizer.Authorize(BasicHeader(Username, "WrongPassword1"));
+
+        // Only real credentials are tracked, so the map is bounded by the number
+        // of configured users regardless of how many attempts they make.
+        Assert.That(authorizer.TrackedUsernameCount, Is.EqualTo(1));
+    }
+
+    [Test]
     public void Authorize_missingHeader_returnsFalse()
     {
         var authorizer = CreateAuthorizer(WithCredential(Username, Password), out _);

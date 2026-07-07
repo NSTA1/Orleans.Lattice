@@ -31,7 +31,7 @@ public static class LatticePasswordHash
     public const string AlgorithmPrefix = "pbkdf2-sha256";
 
     /// <summary>The default iteration count used when a caller does not specify one.</summary>
-    public const int DefaultIterations = 210_000;
+    public const int DefaultIterations = 750_000;
 
     /// <summary>The salt length, in bytes, produced by <see cref="Hash(string, int)"/>.</summary>
     public const int SaltSizeBytes = 16;

@@ -50,6 +50,12 @@ public sealed class EnvVarCredentialAuthorizer : ILatticeStateApiAuthorizer
     private readonly TimeProvider _timeProvider;
     private readonly ConcurrentDictionary<string, AttemptRecord> _attempts = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// The number of distinct usernames currently tracked in the failed-attempt
+    /// map. Exposed for unit testing that unknown-user probes never populate it.
+    /// </summary>
+    internal int TrackedUsernameCount => _attempts.Count;
+
     /// <summary>Initialises the authorizer.</summary>
     /// <param name="environment">The environment-variable source.</param>
     /// <param name="options">The lockout and prefix options.</param>
@@ -100,6 +106,21 @@ public sealed class EnvVarCredentialAuthorizer : ILatticeStateApiAuthorizer
         }
 
         var options = _options.CurrentValue;
+        var encodedHash = _environment.GetVariable(options.EnvironmentVariablePrefix + username);
+
+        if (encodedHash is null)
+        {
+            // Unknown user: spend the same verification cost against a dummy hash
+            // so response timing does not reveal whether the user exists, but do
+            // NOT create a per-username attempt record. Tracking unknown users
+            // would let a remote caller grow the attempt map without bound by
+            // presenting an unlimited stream of distinct usernames (CWE-770).
+            _ = LatticePasswordHash.Verify(password, DummyHash);
+            return false;
+        }
+
+        // Only real credentials populate the map, so its working set is bounded
+        // by the number of configured users.
         var record = _attempts.GetOrAdd(username, static _ => new AttemptRecord());
 
         lock (record.Gate)
@@ -112,20 +133,7 @@ public sealed class EnvVarCredentialAuthorizer : ILatticeStateApiAuthorizer
                 return false;
             }
 
-            var encodedHash = _environment.GetVariable(options.EnvironmentVariablePrefix + username);
-
-            bool verified;
-            if (encodedHash is null)
-            {
-                // Unknown user: spend the same verification cost against a dummy
-                // hash so response timing does not reveal whether the user exists.
-                _ = LatticePasswordHash.Verify(password, DummyHash);
-                verified = false;
-            }
-            else
-            {
-                verified = LatticePasswordHash.Verify(password, encodedHash);
-            }
+            var verified = LatticePasswordHash.Verify(password, encodedHash);
 
             if (verified)
             {
