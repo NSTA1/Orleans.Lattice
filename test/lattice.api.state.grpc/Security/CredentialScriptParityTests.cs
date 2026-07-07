@@ -38,7 +38,7 @@ public class CredentialScriptParityTests
 
         var output = RunScript(
             pwsh!,
-            $"-NoProfile -File \"{script}\" -Username alice -PasswordEnv LATTICE_TEST_PW -Format value");
+            $"-NoProfile -File \"{script}\" -Username alice -PasswordEnv LATTICE_TEST_PW -Iterations 210000 -Format value");
 
         Assert.That(output, Is.EqualTo(ExpectedHash));
     }
@@ -57,7 +57,7 @@ public class CredentialScriptParityTests
         var posixScript = script.Replace('\\', '/');
         var output = RunScript(
             bash!,
-            $"-lc \"bash '{posixScript}' --username alice --password-env LATTICE_TEST_PW --format value\"");
+            $"-lc \"bash '{posixScript}' --username alice --password-env LATTICE_TEST_PW --iterations 210000 --format value\"");
 
         Assert.That(output, Is.EqualTo(ExpectedHash));
     }

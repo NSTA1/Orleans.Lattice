@@ -34,7 +34,8 @@
     Read the password from the named environment variable instead of prompting.
 
 .PARAMETER Iterations
-    PBKDF2 iteration count recorded in the encoding. Defaults to 210000.
+    PBKDF2 iteration count recorded in the encoding. Defaults to the tool's
+    built-in default (see the $Iterations parameter default below).
 
 .PARAMETER Format
     Output format: env (default), dotenv, export, value, or json.
@@ -60,7 +61,7 @@ param(
 
     [string] $PasswordEnv,
 
-    [int] $Iterations = 210000,
+    [int] $Iterations = 750000,
 
     [ValidateSet('env', 'dotenv', 'export', 'value', 'json')]
     [string] $Format = 'env',
