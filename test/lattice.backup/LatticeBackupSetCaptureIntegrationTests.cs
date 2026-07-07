@@ -115,6 +115,71 @@ public sealed class LatticeBackupSetCaptureIntegrationTests
         });
     }
 
+    // ---- Set-membership provenance --------------------------------------
+
+    [Test]
+    public async Task CaptureSetAsync_multi_tree_stamps_shared_set_membership_on_every_member()
+    {
+        await _fixture.InitializeAsync();
+        await _fixture.GrainFactory.GetGrain<ILattice>("mem-a").SetAsync("k", Bytes("v"));
+        await _fixture.GrainFactory.GetGrain<ILattice>("mem-b").SetAsync("k", Bytes("v"));
+
+        var result = await _fixture.Capture.CaptureSetAsync(new LatticeBackupSetCaptureRequest(
+            "member-set",
+            new[] { BackupScopeSelector.WholeTree("mem-a"), BackupScopeSelector.WholeTree("mem-b") },
+            crossTreeConsistent: false));
+
+        Assert.That(result.Members, Has.Count.EqualTo(2));
+
+        // Every returned member carries the set's id and name, so the members can
+        // be grouped into one logical entry from a first-class fact.
+        foreach (var member in result.Members)
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(member.Manifest.SetId, Is.EqualTo(result.SetManifest.SetId));
+                Assert.That(member.Manifest.SetName, Is.EqualTo("member-set"));
+            });
+        }
+
+        // The stamp is durable: the catalogued copy read back by backup id carries
+        // the same set membership, not just the in-memory result.
+        foreach (var member in result.Members)
+        {
+            var stored = await _fixture.Catalog.GetAsync(member.BackupId);
+            Assert.That(stored, Is.Not.Null);
+            Assert.Multiple(() =>
+            {
+                Assert.That(stored!.SetId, Is.EqualTo(result.SetManifest.SetId));
+                Assert.That(stored.SetName, Is.EqualTo("member-set"));
+            });
+        }
+    }
+
+    [Test]
+    public async Task CaptureSetAsync_single_tree_leaves_set_membership_unstamped()
+    {
+        await _fixture.InitializeAsync();
+        await _fixture.GrainFactory.GetGrain<ILattice>("lone").SetAsync("k", Bytes("v"));
+
+        var result = await _fixture.Capture.CaptureSetAsync(new LatticeBackupSetCaptureRequest(
+            "lone-set",
+            new[] { BackupScopeSelector.WholeTree("lone") },
+            crossTreeConsistent: false));
+
+        // A single-member set is indistinguishable from a plain backup, so it
+        // carries no set membership and lists as one ordinary row.
+        Assert.That(result.Members, Has.Count.EqualTo(1));
+        var stored = await _fixture.Catalog.GetAsync(result.Members[0].BackupId);
+        Assert.That(stored, Is.Not.Null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Members[0].Manifest.SetId, Is.Null);
+            Assert.That(stored!.SetId, Is.Null);
+            Assert.That(stored.SetName, Is.Null);
+        });
+    }
+
     // ---- Fence + drain recorded in metrics ------------------------------
 
     [Test]

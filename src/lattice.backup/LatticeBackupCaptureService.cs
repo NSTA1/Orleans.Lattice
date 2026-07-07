@@ -265,7 +265,9 @@ internal sealed class LatticeBackupCaptureService(
             }
 
             var plainManifest = BuildSetManifest(request.Name, plainMembers, crossTreeConsistent: false, fence: null);
-            return new LatticeBackupSetCaptureResult(plainManifest, plainMembers);
+            var stampedPlainMembers = await StampSetMembershipAsync(plainManifest, plainMembers, cancellationToken)
+                .ConfigureAwait(false);
+            return new LatticeBackupSetCaptureResult(plainManifest, stampedPlainMembers);
         }
 
         return await CaptureFencedSetAsync(request, cancellationToken).ConfigureAwait(false);
@@ -352,7 +354,9 @@ internal sealed class LatticeBackupCaptureService(
                     request.Name, scopes.Count, fenceHlc, attempt, totalDrained, totalDrainWait.TotalMilliseconds);
 
                 var manifest = BuildSetManifest(request.Name, members, crossTreeConsistent: true, fence);
-                return new LatticeBackupSetCaptureResult(manifest, members);
+                var stampedMembers = await StampSetMembershipAsync(manifest, members, cancellationToken)
+                    .ConfigureAwait(false);
+                return new LatticeBackupSetCaptureResult(manifest, stampedMembers);
             }
 
             // A cross-tree saga registered on the set mid-capture: the captured
@@ -453,6 +457,36 @@ internal sealed class LatticeBackupCaptureService(
             crossTreeConsistent,
             fence,
             memberIds);
+    }
+
+    /// <summary>
+    /// Stamps each member of a multi-tree set with the set's id and name and
+    /// re-writes the stamped manifest to the sink and catalog (both writes are
+    /// idempotent, keyed by backup id), so a catalog consumer can group the set's
+    /// per-tree members into one logical entry from a first-class fact rather than
+    /// inferring the grouping from the backup name. A single-member set is left
+    /// unstamped: it is indistinguishable from a plain backup and lists as one.
+    /// </summary>
+    private async Task<IReadOnlyList<LatticeBackupCaptureResult>> StampSetMembershipAsync(
+        BackupSetManifest setManifest,
+        IReadOnlyList<LatticeBackupCaptureResult> members,
+        CancellationToken cancellationToken)
+    {
+        if (members.Count < 2)
+        {
+            return members;
+        }
+
+        var stamped = new List<LatticeBackupCaptureResult>(members.Count);
+        foreach (var member in members)
+        {
+            var manifest = member.Manifest with { SetId = setManifest.SetId, SetName = setManifest.Name };
+            await sink.WriteManifestAsync(manifest, cancellationToken).ConfigureAwait(false);
+            await catalog.RegisterAsync(manifest, cancellationToken).ConfigureAwait(false);
+            stamped.Add(new LatticeBackupCaptureResult(member.BackupId, manifest));
+        }
+
+        return stamped;
     }
 
     /// <summary>

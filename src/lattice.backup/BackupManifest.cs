@@ -152,4 +152,23 @@ public sealed record BackupManifest
     /// <summary>A reference to the compression dictionary in force, or <c>null</c> when none.</summary>
     [Id(12)]
     public BackupCompressionDictionaryRef? CompressionDictionary { get; init; }
+
+    /// <summary>
+    /// The content-addressed id of the backup set this backup was captured as a
+    /// member of, or <see langword="null"/> when the backup was captured on its
+    /// own (not part of a multi-tree set). Every member of one set carries the
+    /// same value, so a catalog consumer can group a set's per-tree members into
+    /// a single logical entry without inferring the grouping from the backup
+    /// name. Stamped once when the set is captured and never mutated.
+    /// </summary>
+    [Id(13)]
+    public string? SetId { get; init; }
+
+    /// <summary>
+    /// The human-readable name of the backup set this backup belongs to, or
+    /// <see langword="null"/> when the backup is not a set member. Set together
+    /// with <see cref="SetId"/>.
+    /// </summary>
+    [Id(14)]
+    public string? SetName { get; init; }
 }
