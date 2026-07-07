@@ -33,10 +33,19 @@
     <div class="explorer-backups-scope">
         <label class="explorer-backups-trees">
             Scope trees
-            <select multiple size="4" @onchange="OnTreesChanged" disabled="@_busy" aria-label="Scope trees">
-                @foreach (var tree in _availableTrees)
+            <select multiple size="6" @onchange="OnTreesChanged" disabled="@_busy" aria-label="Scope trees">
+                @foreach (var tree in OrdinaryTrees)
                 {
-                    <option value="@tree" selected="@_selectedTrees.Contains(tree)">@tree</option>
+                    <option value="@tree.Id" selected="@_selectedTrees.Contains(tree.Id)">@tree.Id</option>
+                }
+                @foreach (var group in RestoreShadowGroups)
+                {
+                    <optgroup label="@($"{group.Key} (restore shadows)")">
+                        @foreach (var shadow in group)
+                        {
+                            <option value="@shadow.Id" selected="@_selectedTrees.Contains(shadow.Id)">@shadow.Id</option>
+                        }
+                    </optgroup>
                 }
             </select>
         </label>
@@ -133,15 +142,15 @@
                             <td>@manifest.Scope.TreeId</td>
                             <td>@manifest.CreatedAtUtc.UtcDateTime.ToString("u")</td>
                             <td class="explorer-backups-actions">
-                                <input type="text" value="@_restoreTarget" @oninput="e => _restoreTarget = e.Value?.ToString() ?? string.Empty" placeholder="target tree" />
+                                <input type="text" value="@RestoreTargetFor(manifest)" @oninput="e => SetRestoreTarget(manifest.Id, e.Value?.ToString())" placeholder="target tree" />
                                 <select class="explorer-backups-restore-mode" value="@_restoreMode"
                                         @onchange="OnRestoreModeChanged" title="Restore mode">
                                     <option value="@LatticeRestoreMode.InPlace">In-place (merge)</option>
                                     <option value="@LatticeRestoreMode.ShadowCutover">Shadow-cutover (point-in-time)</option>
                                 </select>
                                 <button type="button" class="explorer-btn"
-                                        disabled="@(!CanRestoreManifest(manifest) || string.IsNullOrWhiteSpace(_restoreTarget))"
-                                        @onclick="@(() => RestoreAsync(manifest.Id))">Restore</button>
+                                        disabled="@(!CanRestoreManifest(manifest) || string.IsNullOrWhiteSpace(RestoreTargetFor(manifest)))"
+                                        @onclick="@(() => RestoreAsync(manifest))">Restore</button>
                                 <button type="button" class="explorer-btn explorer-btn-danger"
                                         disabled="@(!CanDeleteManifest(manifest))"
                                         @onclick="@(() => RequestDelete(manifest))">Delete</button>
@@ -175,13 +184,13 @@
     private BackupListView _list = BackupListView.Empty;
     private BackupScopeCapabilitySnapshot _scopeCaps = BackupScopeCapabilitySnapshot.None;
     private BackupOperationResult? _lastResult;
-    private IReadOnlyList<string> _availableTrees = Array.Empty<string>();
+    private IReadOnlyList<CatalogItem> _availableTrees = Array.Empty<CatalogItem>();
     private readonly HashSet<string> _selectedTrees = new(StringComparer.Ordinal);
     private string _captureName = string.Empty;
     private BackupKind _captureKind = BackupKind.Full;
     private bool _crossTreeConsistent;
     private string _incrementalBaseId = string.Empty;
-    private string _restoreTarget = string.Empty;
+    private readonly Dictionary<string, string> _restoreTargets = new(StringComparer.Ordinal);
     private LatticeRestoreMode _restoreMode = LatticeRestoreMode.InPlace;
     private BackupManifest? _pendingDelete;
     private bool _busy;
@@ -232,14 +241,14 @@
 
     private async Task LoadTreesAsync()
     {
-        var trees = new List<string>();
+        var trees = new List<CatalogItem>();
         string? token = null;
         try
         {
             do
             {
                 var page = await Catalog.LoadAsync(CatalogKind.Trees, token, pageSize: 200);
-                trees.AddRange(page.Items.Select(i => i.Id));
+                trees.AddRange(page.Items);
                 token = page.NextPageToken;
             }
             while (token is not null);
@@ -252,6 +261,19 @@
 
         _availableTrees = trees;
     }
+
+    // Ordinary (non-shadow) trees render as flat options; restore-shadow trees
+    // are grouped under an optgroup labelled by the logical tree they were
+    // restored for, keyed off the first-class RestoreShadowOfTreeId marker rather
+    // than the tree name.
+    private IEnumerable<CatalogItem> OrdinaryTrees =>
+        _availableTrees.Where(t => !t.IsRestoreShadow);
+
+    private IEnumerable<IGrouping<string, CatalogItem>> RestoreShadowGroups =>
+        _availableTrees
+            .Where(t => t.IsRestoreShadow)
+            .GroupBy(t => t.RestoreShadowOfTreeId!, StringComparer.Ordinal)
+            .OrderBy(g => g.Key, StringComparer.Ordinal);
 
     private void OnTreesChanged(ChangeEventArgs e)
     {
@@ -393,10 +415,19 @@
         }
     }
 
-    private async Task RestoreAsync(string backupId)
+    private async Task RestoreAsync(BackupManifest manifest)
     {
-        await RunAsync(() => Reader.RestoreAsync(backupId, _restoreTarget, _restoreMode));
+        await RunAsync(() => Reader.RestoreAsync(manifest.Id, RestoreTargetFor(manifest), _restoreMode));
     }
+
+    // The restore target defaults to the backup's own scope tree, so an in-place
+    // restore back into the original tree is one click; the user can retype it to
+    // restore elsewhere. Tracked per backup id so each row keeps its own edit.
+    private string RestoreTargetFor(BackupManifest manifest) =>
+        _restoreTargets.TryGetValue(manifest.Id, out var target) ? target : manifest.Scope.TreeId;
+
+    private void SetRestoreTarget(string backupId, string? value) =>
+        _restoreTargets[backupId] = value ?? string.Empty;
 
     private void OnRestoreModeChanged(ChangeEventArgs e)
     {
