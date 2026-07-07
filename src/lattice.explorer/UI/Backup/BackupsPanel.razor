@@ -5,19 +5,17 @@
 @using Orleans.Lattice.Explorer.Core.Catalog
 @using Orleans.Lattice.Explorer.Core.Navigation
 @inject IBackupCatalogReader Reader
-@inject IBackupCapabilityService CapabilityService
 @inject ICatalogReader Catalog
 @inject IJSRuntime JS
 
 @*
-    The Backups management area: lists the visible backup catalog, probes the
-    per-scope capabilities to enable / disable the capture, restore, and delete
-    controls, and triggers those operations. A capture targets one or more trees
+    The Backups management area: lists the visible backup catalog and triggers
+    capture, restore, and delete operations. A capture targets one or more trees
     selected from the cluster's tree list; a multi-tree capture is a backup set,
-    optionally captured at a single cross-tree causal fence. Every action folds a
-    server denial into a clean "not permitted" message rather than surfacing an
-    unhandled error, because the advisory capability map can be over-optimistic -
-    the server is the fail-closed enforcement point.
+    optionally captured at a single cross-tree causal fence. No client-side
+    permission pre-check gates the controls: the server is the fail-closed
+    enforcement point, so every action folds a server denial into a clean "not
+    permitted" status message rather than surfacing an unhandled error.
 *@
 
 <section class="explorer-backups" aria-label="Backups">
@@ -50,8 +48,6 @@
                 }
             </select>
         </label>
-        <button type="button" class="explorer-btn"
-                disabled="@(_busy || !HasSelection)" @onclick="CheckAccessAsync">Check access</button>
 
         <label>
             Name
@@ -125,7 +121,7 @@
             <table class="explorer-table">
                 <thead>
                     <tr>
-                        <th>Id</th><th>Name</th><th>Kind</th><th>Scope</th><th>Created (UTC)</th><th>Actions</th>
+                        <th>Id</th><th>Name</th><th>Kind</th><th>Scope</th><th>Created</th><th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -138,25 +134,15 @@
                                         title="Copy full id" aria-label="Copy id"
                                         @onclick="@(() => CopyIdAsync(row.DisplayId))">Copy</button>
                             </td>
-                            <td>
-                                @row.Name
-                                @if (row.IsSet)
-                                {
-                                    <span class="explorer-backups-set-badge" title="A backup set of @row.Members.Count trees">set of @row.Members.Count</span>
-                                }
-                            </td>
+                            <td>@row.Name</td>
                             <td>@row.Kind</td>
                             <td>@(row.IsSet ? string.Join(", ", row.TreeIds) : row.Members[0].Scope.TreeId)</td>
-                            <td>@row.CreatedAtUtc.UtcDateTime.ToString("u")</td>
+                            <td title="@row.CreatedAtUtc.UtcDateTime.ToString("u")">@row.CreatedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</td>
                             <td class="explorer-backups-actions">
                                 @if (!row.IsSet)
                                 {
                                     var manifest = row.Members[0];
                                     <input type="text" value="@RestoreTargetFor(manifest)" @oninput="e => SetRestoreTarget(manifest.Id, e.Value?.ToString())" placeholder="target tree" />
-                                }
-                                else
-                                {
-                                    <span class="explorer-backups-set-hint" title="Each member restores to its own tree.">restores to each tree</span>
                                 }
                                 <select class="explorer-backups-restore-mode" value="@_restoreMode"
                                         @onchange="OnRestoreModeChanged" title="Restore mode">
@@ -164,10 +150,10 @@
                                     <option value="@LatticeRestoreMode.ShadowCutover">Shadow-cutover (point-in-time)</option>
                                 </select>
                                 <button type="button" class="explorer-btn"
-                                        disabled="@(!CanRestoreRow(row) || (!row.IsSet && string.IsNullOrWhiteSpace(RestoreTargetFor(row.Members[0]))))"
-                                        @onclick="@(() => RestoreRowAsync(row))">Restore</button>
+                                        disabled="@(_busy || (!row.IsSet && string.IsNullOrWhiteSpace(RestoreTargetFor(row.Members[0]))))"
+                                        @onclick="@(() => RequestRestore(row))">Restore</button>
                                 <button type="button" class="explorer-btn explorer-btn-danger"
-                                        disabled="@(!CanDeleteRow(row))"
+                                        disabled="@_busy"
                                         @onclick="@(() => RequestDelete(row))">Delete</button>
                             </td>
                         </tr>
@@ -204,11 +190,46 @@
             </div>
         </div>
     }
+
+    @if (_pendingRestore is not null)
+    {
+        <div class="explorer-modal-backdrop" role="presentation">
+            <div class="explorer-modal" role="alertdialog" aria-modal="true" aria-labelledby="explorer-restore-title">
+                <h3 id="explorer-restore-title">Restore backup?</h3>
+                @if (_pendingRestore.IsSet)
+                {
+                    <p>
+                        This restores each of the @_pendingRestore.Members.Count member backups
+                        of set <code>@Shorten(_pendingRestore.DisplayId)</code>
+                        ('@_pendingRestore.Name') back into its own tree, @RestoreModeDescription:
+                    </p>
+                    <ul>
+                        @foreach (var member in _pendingRestore.Members)
+                        {
+                            <li><code>@Shorten(member.Id)</code> into tree <strong>@member.Scope.TreeId</strong></li>
+                        }
+                    </ul>
+                }
+                else
+                {
+                    <p>
+                        This restores backup <code>@Shorten(_pendingRestore.DisplayId)</code>
+                        ('@_pendingRestore.Name') into tree
+                        <strong>@RestoreTargetFor(_pendingRestore.Members[0])</strong>,
+                        @RestoreModeDescription.
+                    </p>
+                }
+                <div class="explorer-modal-actions">
+                    <button type="button" class="explorer-btn" disabled="@_busy" @onclick="CancelRestore">Cancel</button>
+                    <button type="button" class="explorer-btn explorer-btn-primary" disabled="@_busy" @onclick="ConfirmRestoreAsync">Proceed</button>
+                </div>
+            </div>
+        </div>
+    }
 </section>
 
 @code {
     private BackupListView _list = BackupListView.Empty;
-    private BackupScopeCapabilitySnapshot _scopeCaps = BackupScopeCapabilitySnapshot.None;
     private BackupOperationResult? _lastResult;
     private IReadOnlyList<CatalogItem> _availableTrees = Array.Empty<CatalogItem>();
     private readonly HashSet<string> _selectedTrees = new(StringComparer.Ordinal);
@@ -219,13 +240,8 @@
     private readonly Dictionary<string, string> _restoreTargets = new(StringComparer.Ordinal);
     private LatticeRestoreMode _restoreMode = LatticeRestoreMode.InPlace;
     private BackupRow? _pendingDelete;
+    private BackupRow? _pendingRestore;
     private bool _busy;
-
-    // Per-tree capability snapshots for the scopes that appear in the listed
-    // backups, probed automatically when the list loads. Restore / delete gate on
-    // the row's own scope from this map, so they do not depend on the capture
-    // tree selection or the "Check access" button.
-    private readonly Dictionary<string, BackupScopeCapabilitySnapshot> _treeCaps = new(StringComparer.Ordinal);
 
     private bool HasSelection => _selectedTrees.Count > 0;
     private bool HasName => !string.IsNullOrWhiteSpace(_captureName);
@@ -234,16 +250,14 @@
     // per-tree members (sharing a stamped SetId) into a single row.
     private IReadOnlyList<BackupRow> Rows => BackupRowGrouping.Group(_list.Entries);
 
-    // A row is restorable / deletable only when every member's scope allows it, so
-    // a set action is never enabled on the strength of one permissive member.
-    private bool CanRestoreRow(BackupRow row) =>
-        !_busy && row.Members.All(m => _treeCaps.TryGetValue(m.Scope.TreeId, out var caps) && caps.CanRestore);
-
-    private bool CanDeleteRow(BackupRow row) =>
-        !_busy && row.Members.All(m => _treeCaps.TryGetValue(m.Scope.TreeId, out var caps) && caps.CanDelete);
-
     private IReadOnlyList<BackupManifest> FullBackups =>
         _list.Entries.Where(e => e.Kind == BackupKind.Full).ToList();
+
+    // A one-line description of the selected restore mode for the confirmation
+    // dialog, so the user sees exactly what the restore will do to the target.
+    private string RestoreModeDescription => _restoreMode == LatticeRestoreMode.ShadowCutover
+        ? "shadow-cutover (point-in-time: the tree is rebuilt from the backup and post-backup writes are dropped)"
+        : "in-place (merge: the backup is merged by last-writer-wins and post-backup writes are kept)";
 
     private bool CanBackup
     {
@@ -256,12 +270,11 @@
 
             if (_captureKind == BackupKind.Incremental)
             {
-                return _scopeCaps.CanCaptureIncremental
-                    && _selectedTrees.Count == 1
+                return _selectedTrees.Count == 1
                     && !string.IsNullOrWhiteSpace(_incrementalBaseId);
             }
 
-            return _scopeCaps.CanCapture;
+            return true;
         }
     }
 
@@ -318,10 +331,6 @@
             }
         }
 
-        // The probed capabilities no longer apply to the new selection; reset to
-        // deny until the user re-checks access so the controls never over-enable.
-        _scopeCaps = BackupScopeCapabilitySnapshot.None;
-
         if (_selectedTrees.Count < 2)
         {
             _crossTreeConsistent = false;
@@ -342,73 +351,16 @@
         }
     }
 
-    private async Task CheckAccessAsync()
-    {
-        if (_selectedTrees.Count == 0)
-        {
-            _scopeCaps = BackupScopeCapabilitySnapshot.None;
-            return;
-        }
-
-        // Combine the per-tree probes: a capability is offered only when every
-        // selected tree allows it, so a multi-tree capture is never enabled on
-        // the strength of one permissive tree.
-        var combined = new BackupScopeCapabilitySnapshot
-        {
-            CanList = true,
-            CanCapture = true,
-            CanCaptureIncremental = true,
-            CanRestore = true,
-            CanDelete = true,
-        };
-
-        foreach (var tree in _selectedTrees)
-        {
-            var probe = await CapabilityService.ProbeScopeAsync(tree);
-            combined = new BackupScopeCapabilitySnapshot
-            {
-                CanList = combined.CanList && probe.CanList,
-                CanCapture = combined.CanCapture && probe.CanCapture,
-                CanCaptureIncremental = combined.CanCaptureIncremental && probe.CanCaptureIncremental,
-                CanRestore = combined.CanRestore && probe.CanRestore,
-                CanDelete = combined.CanDelete && probe.CanDelete,
-            };
-        }
-
-        _scopeCaps = combined;
-        StateHasChanged();
-    }
-
     private async Task ReloadAsync()
     {
         _busy = true;
         try
         {
-            // An explicit refresh re-probes every listed scope from scratch so a
-            // permissions change since the last load is reflected.
-            _treeCaps.Clear();
             _list = await Reader.LoadPageAsync();
-            await ProbeListedScopesAsync();
         }
         finally
         {
             _busy = false;
-        }
-    }
-
-    // Probes the restore / delete capabilities for each distinct scope that
-    // appears in the loaded backups, caching per tree so a reload after an action
-    // only probes newly-appeared scopes.
-    private async Task ProbeListedScopesAsync()
-    {
-        foreach (var tree in _list.Entries
-            .Select(e => e.Scope.TreeId)
-            .Distinct(StringComparer.Ordinal))
-        {
-            if (!_treeCaps.ContainsKey(tree))
-            {
-                _treeCaps[tree] = await CapabilityService.ProbeScopeAsync(tree);
-            }
         }
     }
 
@@ -445,6 +397,28 @@
         {
             _lastResult = BackupOperationResult.Failure("Copying to the clipboard is not available here.");
         }
+    }
+
+    private void RequestRestore(BackupRow row)
+    {
+        _pendingRestore = row;
+    }
+
+    private void CancelRestore()
+    {
+        _pendingRestore = null;
+    }
+
+    private async Task ConfirmRestoreAsync()
+    {
+        var row = _pendingRestore;
+        if (row is null)
+        {
+            return;
+        }
+
+        _pendingRestore = null;
+        await RestoreRowAsync(row);
     }
 
     private async Task RestoreRowAsync(BackupRow row)
@@ -520,7 +494,6 @@
         {
             _lastResult = await action();
             _list = await Reader.LoadPageAsync();
-            await ProbeListedScopesAsync();
         }
         finally
         {
@@ -550,7 +523,6 @@
                 ? BackupOperationResult.Success(successMessage)
                 : last;
             _list = await Reader.LoadPageAsync();
-            await ProbeListedScopesAsync();
         }
         finally
         {
