@@ -77,6 +77,15 @@ in-process:
   the emulator is unreachable. See
   [Orleans.Lattice.Storage.AzureTable chaos tests](../lattice.storage.azuretable/chaos-tests.md).
 
+## Planned suites
+
+The following suite is proposed but not yet implemented; it is tracked by
+[issue #1167](https://github.com/NSTA1/Orleans.Lattice/issues/1167).
+
+| Suite (planned) | What it will prove |
+|---|---|
+| Cross-cluster shipping recovery across an identity swap | A logical source tree is repointed to a freshly minted physical tree (a restore-style cutover, possibly repeated) under its registry alias mid-workload, while the inter-site pumps are cycled through partition and heal. After drain, every peer site converges on the post-swap source key set: no peer is left tailing the orphaned pre-swap physical WAL, and no key from the abandoned identity survives on a receiver. Stresses the shipper's per-tick alias re-resolve, per-partition cursor reset, and idempotent re-ship from the new source log start under load and fault injection. Complements the deterministic single-swap regression that landed with the fix. |
+
 ## See also
 
 - [Architecture](architecture.md) - the producer-to-receiver pipeline and the

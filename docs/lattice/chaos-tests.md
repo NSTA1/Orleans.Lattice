@@ -794,6 +794,15 @@ rather than test doubles of that logic, but they run in-process: in-process test
 clusters with a simulated delivery pump, an in-memory test server, and the
 Azurite emulator stand in for networked silos and a real cloud storage account.
 
+## Planned suites
+
+The following suite is proposed but not yet implemented; it is tracked by
+[issue #1167](https://github.com/NSTA1/Orleans.Lattice/issues/1167).
+
+| Suite (planned) | What it will prove |
+|---|---|
+| Materialised-view recovery across an identity swap | A seeded tree carries an attached folded / materialised view (and a tag index). A sustained mutation workload runs while the tree's physical identity is repointed under its logical registry alias mid-window (a restore-style cutover, possibly repeated). After the workload quiesces, the view has rebuilt against the new physical identity and reflects exactly the post-swap tree contents (stale rows from the abandoned identity are gone, post-swap mutations are folded in), and the tag index's membership matches the reverted key set. Stresses the view maintainer's per-drain re-resolve + rebuild-and-rebind and the coverage-gated tag-index reconcile under load. Complements the deterministic single-swap regression that landed with the fix. |
+
 ## See also
 
 * [Consistency](consistency.md) - the per-operation guarantees these
