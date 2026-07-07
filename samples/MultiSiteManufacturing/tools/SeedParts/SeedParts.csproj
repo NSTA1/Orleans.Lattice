@@ -26,4 +26,22 @@
     <ProjectReference Include="..\..\src\MultiSiteManufacturing.Host\MultiSiteManufacturing.Host.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The Host is a Microsoft.NET.Sdk.Web project and references the backup
+         trio transitively. The Orleans client's serializer/app-part scan
+         (AddSerializer) walks every app-part assembly's referenced-assembly
+         list and loads each BY NAME, so it resolves Orleans.Lattice.Api.Backup
+         (referenced by the Host) at startup. When these arrive only
+         transitively through the Web SDK Host, an incremental publish can copy
+         the DLLs yet omit them from SeedParts.deps.json - and a by-name load of
+         an assembly absent from deps.json fails with FileNotFoundException.
+         Referencing them directly makes them first-class runtime dependencies
+         that are always recorded in deps.json, so the scan resolves them
+         regardless of incremental-build state. SeedParts itself uses no backup
+         type; these references exist solely to keep the app-part scan whole. -->
+    <ProjectReference Include="..\..\..\..\src\lattice.backup\Orleans.Lattice.Backup.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.api.backup\Orleans.Lattice.Api.Backup.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.api.backup.grpc\Orleans.Lattice.Api.Backup.Grpc.csproj" />
+  </ItemGroup>
+
 </Project>
