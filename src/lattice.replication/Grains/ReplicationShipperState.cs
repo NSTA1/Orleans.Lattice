@@ -82,4 +82,25 @@ internal sealed class ReplicationShipperState
     /// </remarks>
     [Id(2)]
     public Dictionary<int, long> PartitionCursors { get; set; } = new();
+
+    /// <summary>
+    /// The physical tree id this shipper's per-partition cursors are bound to,
+    /// resolved from the logical tree alias. A logical tree can be repointed to
+    /// a new physical tree by a registry alias swap (shadow-cutover restore,
+    /// resize, or reshard); WAL shards are keyed by the physical id, so when the
+    /// resolved physical id changes the persisted <see cref="PartitionCursors"/>
+    /// are absolute offsets into the retired log and must be discarded. The
+    /// shipper re-resolves the alias each pump and, on a mismatch, resets the
+    /// cursors and rebinds to the new physical WAL so shipping resumes from the
+    /// new source's log start (the peer's LWW / HLC merge makes the re-ship
+    /// idempotent).
+    /// </summary>
+    /// <remarks>
+    /// <strong>Wire-compat additive.</strong> Legacy persisted state without an
+    /// <c>[Id(3)]</c> slot decodes to <see langword="null"/>, which the shipper
+    /// treats as "not yet bound" and populates on the first pump without
+    /// resetting any cursor.
+    /// </remarks>
+    [Id(3)]
+    public string? BoundPhysicalTreeId { get; set; }
 }

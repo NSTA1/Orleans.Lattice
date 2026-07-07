@@ -30,6 +30,7 @@ internal sealed class LatticeBackupRestoreService(
     ILatticeBackupCatalogStore catalog,
     BackupAccessAuthorizer authorizer,
     Serializer serializer,
+    ITagIndexReconcileTrigger tagIndexReconcileTrigger,
     ILogger<LatticeBackupRestoreService> logger)
     : ILatticeBackupRestoreService
 {
@@ -236,6 +237,14 @@ internal sealed class LatticeBackupRestoreService(
         // so callers observe the cutover without waiting for a reactivation.
         await grainFactory.GetGrain<ILattice>(targetTreeId)
             .GetRoutingAsync(forceRefresh: true, cancellationToken).ConfigureAwait(false);
+
+        // The subject tree's contents just reverted to the restored point-in-time.
+        // Any tag index over it still reflects the pre-restore membership until the
+        // next scheduled reconcile sweep, so converge every covering index now.
+        // Best-effort: the trigger swallows its own failures and the scheduled sweep
+        // remains the backstop, so a reconcile hiccup must not fail the restore.
+        await tagIndexReconcileTrigger.TriggerForTreeAsync(targetTreeId, cancellationToken)
+            .ConfigureAwait(false);
 
         return (shadowRouting.PhysicalTreeId, previousPhysical, applied);
     }

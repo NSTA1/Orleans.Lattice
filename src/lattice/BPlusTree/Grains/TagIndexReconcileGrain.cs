@@ -123,6 +123,28 @@ internal sealed class TagIndexReconcileGrain(
         return CurrentReport();
     }
 
+    public async Task<bool> ReconcileTreeAsync(string subjectTreeId)
+    {
+        ArgumentNullException.ThrowIfNull(subjectTreeId);
+
+        // Coverage gate: only reconcile when this index actually covers the tree
+        // whose identity was swapped. The covered set is read fresh from the
+        // authoritative marker rows, so an index that never tagged the tree short-
+        // circuits with no sweep.
+        var ctx = CreateCoordinatorContext();
+        var covered = await ctx.GetCoveredTreesAsync(CancellationToken.None);
+        if (!covered.Contains(subjectTreeId, StringComparer.Ordinal))
+        {
+            return false;
+        }
+
+        // Run a synchronous digest-gated sweep so the swapped tree converges before
+        // this call returns. Clean covered trees cost only a digest probe; the
+        // swapped tree diverges from its baseline and is deep-scanned and repaired.
+        await RunSweepAsync();
+        return true;
+    }
+
     /// <summary>
     /// Handles the recurring schedule reminder (start a sweep, drift-correct the
     /// period, or unregister when disabled) and delegates the keepalive reminder

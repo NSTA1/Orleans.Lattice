@@ -58,6 +58,53 @@ public class LatticeTagIndexReconcileIntegrationTests
     }
 
     [Test]
+    public async Task ReconcileTreeAsync_reconciles_a_covered_tree_and_returns_true()
+    {
+        var sfx = Guid.NewGuid().ToString("N");
+        var index = $"colors-{sfx}";
+        var treeId = $"items-{sfx}";
+        var tree = Tree(treeId);
+        await tree.SetAsync("d", Bytes("1"));
+        var idx = TagIndex(tree, index);
+        await idx.Key("d").AddAsync(["red"]);
+
+        // Delete the key so its membership row is orphaned, then drive the reconcile
+        // through the identity-swap trigger seam rather than a full manual sweep.
+        await tree.DeleteAsync("d");
+        var covered = await Coordinator(index).ReconcileTreeAsync(treeId);
+        var count = await idx.WithAnyTags("red").CountAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(covered, Is.True, "The index covers the tree, so the reconcile must run.");
+            Assert.That(count, Is.Zero,
+                "The coverage-gated reconcile must remove the orphaned membership row.");
+        });
+    }
+
+    [Test]
+    public async Task ReconcileTreeAsync_returns_false_for_an_uncovered_tree()
+    {
+        var sfx = Guid.NewGuid().ToString("N");
+        var index = $"colors-{sfx}";
+        var tree = Tree($"items-{sfx}");
+        await tree.SetAsync("d", Bytes("1"));
+        var idx = TagIndex(tree, index);
+        await idx.Key("d").AddAsync(["red"]);
+
+        // A tree this index never tagged is not covered, so the reconcile is a no-op.
+        var covered = await Coordinator(index).ReconcileTreeAsync($"unrelated-{sfx}");
+        var count = await idx.WithAnyTags("red").CountAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(covered, Is.False);
+            Assert.That(count, Is.EqualTo(1),
+                "An uncovered-tree reconcile must not touch the index.");
+        });
+    }
+
+    [Test]
     public async Task RunSweepAsync_leaves_clean_index_untouched()
     {
         var sfx = Guid.NewGuid().ToString("N");

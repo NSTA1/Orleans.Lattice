@@ -136,7 +136,8 @@ internal sealed partial class ViewMaintainerGrain
     private async Task InPlaceRebuildAsync(ViewRegistration registration, CancellationToken cancellationToken)
     {
         var sourceTreeId = registration.SourceTreeId;
-        var partitions = await optionsResolver.GetWalPartitionsAsync(sourceTreeId);
+        var walTreeId = await ResolveSourcePhysicalAsync(sourceTreeId);
+        var partitions = await optionsResolver.GetWalPartitionsAsync(walTreeId);
 
         // Capture the source head per partition BEFORE clearing/scanning so any
         // source mutation committed during the build is picked up by the resumed
@@ -149,7 +150,7 @@ internal sealed partial class ViewMaintainerGrain
         var capturedOffsets = new Dictionary<int, long>();
         for (var partition = 0; partition < partitions; partition++)
         {
-            var head = await commitLogReader.GetHeadOffsetAsync(sourceTreeId, partition, cancellationToken);
+            var head = await commitLogReader.GetHeadOffsetAsync(walTreeId, partition, cancellationToken);
             var floor = head - 1;
             var stagedFloor = HeldFloorForPartition(partition);
             if (stagedFloor != long.MaxValue && stagedFloor - 1 < floor)
@@ -180,7 +181,7 @@ internal sealed partial class ViewMaintainerGrain
         var viewTree = grainFactory.GetGrain<ILattice>(GenerationTreeId(0));
         await ClearTreeAsync(viewTree, cancellationToken);
 
-        var sourceTree = grainFactory.GetGrain<ILattice>(sourceTreeId);
+        var sourceTree = grainFactory.GetGrain<ILattice>(walTreeId);
         var highest = HybridLogicalClock.Zero;
         var aggregationApplier = registration.IsAggregation ? CreateAggregationApplier(viewTree) : null;
 
@@ -234,7 +235,7 @@ internal sealed partial class ViewMaintainerGrain
 
         if (highest > HybridLogicalClock.Zero)
         {
-            await cursorRegistry.ReportCursorAsync(sourceTreeId, ConsumerId, highest, cancellationToken);
+            await cursorRegistry.ReportCursorAsync(walTreeId, ConsumerId, highest, cancellationToken);
         }
     }
 
@@ -251,7 +252,8 @@ internal sealed partial class ViewMaintainerGrain
     private async Task<ShadowBuildResult> BuildShadowAsync(ViewRegistration registration, CancellationToken cancellationToken)
     {
         var sourceTreeId = registration.SourceTreeId;
-        var partitions = await optionsResolver.GetWalPartitionsAsync(sourceTreeId);
+        var walTreeId = await ResolveSourcePhysicalAsync(sourceTreeId);
+        var partitions = await optionsResolver.GetWalPartitionsAsync(walTreeId);
 
         // Capture the source head per partition BEFORE clearing/scanning so any
         // source mutation committed during the build is picked up by the resumed
@@ -265,7 +267,7 @@ internal sealed partial class ViewMaintainerGrain
         var capturedOffsets = new Dictionary<int, long>();
         for (var partition = 0; partition < partitions; partition++)
         {
-            var head = await commitLogReader.GetHeadOffsetAsync(sourceTreeId, partition, cancellationToken);
+            var head = await commitLogReader.GetHeadOffsetAsync(walTreeId, partition, cancellationToken);
             var floor = head - 1;
             var stagedFloor = HeldFloorForPartition(partition);
             if (stagedFloor != long.MaxValue && stagedFloor - 1 < floor)
@@ -303,7 +305,7 @@ internal sealed partial class ViewMaintainerGrain
         // build may have left a partial generation under the same id.
         await ClearTreeAsync(shadowTree, cancellationToken);
 
-        var sourceTree = grainFactory.GetGrain<ILattice>(sourceTreeId);
+        var sourceTree = grainFactory.GetGrain<ILattice>(walTreeId);
         var highest = HybridLogicalClock.Zero;
         var aggregationApplier = registration.IsAggregation ? CreateAggregationApplier(shadowTree) : null;
 
@@ -407,7 +409,8 @@ internal sealed partial class ViewMaintainerGrain
 
         if (highest > HybridLogicalClock.Zero)
         {
-            await cursorRegistry.ReportCursorAsync(registration.SourceTreeId, ConsumerId, highest, cancellationToken);
+            var walTreeId = await ResolveSourcePhysicalAsync(registration.SourceTreeId);
+            await cursorRegistry.ReportCursorAsync(walTreeId, ConsumerId, highest, cancellationToken);
         }
     }
 

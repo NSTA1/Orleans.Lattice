@@ -102,14 +102,6 @@ internal sealed class ReplicationDigestProbeGrain(
     private string _treeName = "";
     private bool _treeNameResolved;
 
-    /// <summary>
-    /// Cached resolved physical tree id (after registry alias resolution),
-    /// used to address shard-root and internal-node grains directly during the
-    /// read-only Merkle-walk drift-localisation pass. Resolved lazily on the
-    /// first localisation and reused for the lifetime of the activation.
-    /// </summary>
-    private string? _physicalTreeId;
-
     private string TreeName
     {
         get
@@ -649,19 +641,19 @@ internal sealed class ReplicationDigestProbeGrain(
     }
 
     /// <summary>
-    /// Resolves and caches the physical tree id for this tree (after registry
-    /// alias resolution) so the localisation pass can address shard-root and
-    /// internal-node grains directly. The read is read-only and is cached for
-    /// the lifetime of the activation.
+    /// Resolves the physical tree id for this tree (after registry alias
+    /// resolution) so the localisation pass can address shard-root and
+    /// internal-node grains directly. Resolved fresh on every localisation pass
+    /// rather than cached for the activation: a registry alias swap (shadow-
+    /// cutover restore, resize, reshard) can repoint the logical tree to a new
+    /// physical tree underneath a live probe, and a cached physical id would
+    /// leave the Merkle walk descending the retired tree's frozen structure.
+    /// The read is read-only and cheap relative to the walk it precedes.
     /// </summary>
-    private async Task<string> EnsurePhysicalTreeIdAsync(ILattice lattice)
+    private static async Task<string> EnsurePhysicalTreeIdAsync(ILattice lattice)
     {
-        if (_physicalTreeId is null)
-        {
-            var routing = await lattice.GetRoutingAsync(CancellationToken.None).ConfigureAwait(true);
-            _physicalTreeId = routing.PhysicalTreeId;
-        }
-        return _physicalTreeId;
+        var routing = await lattice.GetRoutingAsync(CancellationToken.None).ConfigureAwait(true);
+        return routing.PhysicalTreeId;
     }
 
     private static bool ShouldRunCadence(long nowTicks, long lastTicks, TimeSpan interval)

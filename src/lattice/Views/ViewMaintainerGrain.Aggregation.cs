@@ -47,8 +47,9 @@ internal sealed partial class ViewMaintainerGrain
         var options = Options;
         var batchSize = options.BatchSize > 0 ? options.BatchSize : LatticeViewOptions.DefaultBatchSize;
         var sourceTreeId = registration.SourceTreeId;
+        var walTreeId = await ResolveSourcePhysicalAsync(sourceTreeId);
         batchSize = ApplyBackpressureBatchScaling(sourceTreeId, batchSize, options);
-        var partitions = await optionsResolver.GetWalPartitionsAsync(sourceTreeId);
+        var partitions = await optionsResolver.GetWalPartitionsAsync(walTreeId);
 
         // Tail the source WAL through the shared subscriber (identical mechanics
         // to the filter path); the handler folds each applicable entry into the
@@ -67,7 +68,7 @@ internal sealed partial class ViewMaintainerGrain
             },
             completedTransactions);
 
-        var drainContext = new WalSubscriptionContext(sourceTreeId, ConsumerId, partitions, state.State.AppliedOffsets)
+        var drainContext = new WalSubscriptionContext(walTreeId, ConsumerId, partitions, state.State.AppliedOffsets)
         {
             HighestApplied = state.State.HighestAppliedTimestamp,
             BatchSize = batchSize,
@@ -90,7 +91,7 @@ internal sealed partial class ViewMaintainerGrain
         var backlogRead = drain.EntriesRead;
 
         // Bounded-buffer / retention backstop, identical to the filter path.
-        if (StagingBackstopTripped(options, await GetSourceWalRetentionAsync(sourceTreeId)))
+        if (StagingBackstopTripped(options, await GetSourceWalRetentionAsync(walTreeId)))
         {
             await RebuildAsync(cancellationToken);
             return 0;

@@ -39,6 +39,7 @@ internal sealed class TreeResizeGrain(
     IOptionsMonitor<LatticeOptions> optionsMonitor,
     LatticeOptionsResolver optionsResolver,
     ILogger<TreeResizeGrain> logger,
+    ITagIndexReconcileTrigger tagIndexReconcileTrigger,
     [PersistentState("tree-resize", LatticeOptions.StorageProviderName)]
     IPersistentState<TreeResizeState> state)
     : CoordinatorGrain<TreeResizeGrain>(context, reminderRegistry, logger), ITreeResizeGrain
@@ -499,6 +500,12 @@ internal sealed class TreeResizeGrain(
             state.State.Phase = prevPhase;
             throw;
         }
+
+        // The logical tree now resolves to the new physical tree. Converge any tag
+        // index covering this tree onto the resized structure promptly rather than
+        // at the next scheduled reconcile sweep. Best-effort: the trigger swallows
+        // its own failures, and the scheduled sweep remains the backstop.
+        await tagIndexReconcileTrigger.TriggerForTreeAsync(TreeId);
     }
 
     /// <summary>

@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Orleans.Hosting;
+using Orleans.Lattice.BPlusTree;
 using Orleans.Serialization;
 using Orleans.TestingHost;
 
@@ -69,6 +70,7 @@ public sealed class RestoreClusterFixture
             Catalog,
             authorizer,
             Serializer,
+            SiloServices.GetRequiredService<ITagIndexReconcileTrigger>(),
             SiloServices.GetRequiredService<ILoggerFactory>().CreateLogger<LatticeBackupRestoreService>());
 
     /// <summary>Stops and disposes the cluster.</summary>

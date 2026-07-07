@@ -65,7 +65,8 @@ public partial class TreeReshardGrainTests
         var state = existingState ?? new FakePersistentState<TreeReshardState>();
         var grain = new TreeReshardGrain(
             context, grainFactory, reminderRegistry, optionsMonitor, optionsResolver,
-            new LoggerFactory().CreateLogger<TreeReshardGrain>(), state);
+            new LoggerFactory().CreateLogger<TreeReshardGrain>(),
+            Substitute.For<ITagIndexReconcileTrigger>(), state);
         return (grain, state, grainFactory, registry);
     }
 

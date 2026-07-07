@@ -109,6 +109,15 @@ internal sealed class ReplicationShipperGrain(
     private string _peerClusterId = "";
     private bool _keyParsed;
 
+    // The physical tree id the WAL shards are addressed by. A logical tree can
+    // be repointed to a new physical tree by a registry alias swap (shadow-
+    // cutover restore, resize, reshard); WAL shards are keyed by the physical
+    // id. Re-resolved from _treeName each pump tick by
+    // EnsureBoundToCurrentSourceIdentityAsync so a mid-stream swap does not
+    // silently orphan the ship cursor. Defaults to _treeName (logical ==
+    // physical for a tree that has never been swapped) until the first resolve.
+    private string _walTreeId = "";
+
     /// <summary>
     /// The peer's most recently advertised
     /// <see cref="ReplicationAck.SupportedWireVersion"/>, or
@@ -2139,7 +2148,15 @@ internal sealed class ReplicationShipperGrain(
 
         EnsureScratchSized(partitions);
 
-        // Initialise per-partition state for this tick. _partitionPages
+        // Rebind to the source tree's current physical identity before seeding
+        // this tick's cursors. A registry alias swap (shadow-cutover restore,
+        // resize, reshard) can repoint the logical tree to a new physical WAL
+        // underneath a live shipper; the persisted per-partition cursors are
+        // absolute offsets into the retired log, so on an identity change they
+        // are reset and the shipper re-ships from the new source's log start.
+        await EnsureBoundToCurrentSourceIdentityAsync(partitions);
+
+
         // and _partitionPageIndex always reset (they're tick-scoped);
         // _partitionNextSeq seeds from the durable cursor;
         // _partitionMaxReadSeq is initialised from the cursor minus 1
@@ -2944,7 +2961,7 @@ internal sealed class ReplicationShipperGrain(
     private async Task TryRefillPartitionAsync(int partition, int pageSize, CancellationToken cancellationToken)
     {
         var grain = _partitionGrainCache[partition] ??=
-            _grainFactory.GetGrain<IWalShardGrain>($"{_treeName}/{partition}");
+            _grainFactory.GetGrain<IWalShardGrain>($"{_walTreeId}/{partition}");
         var page = await grain
             .ReadShippingAsync(_partitionNextSeq[partition], pageSize, cancellationToken)
             ;
@@ -3583,6 +3600,7 @@ internal sealed class ReplicationShipperGrain(
         _treeName = key[..slash];
         _peerClusterId = key[(slash + 1)..];
         _keyParsed = true;
+        _walTreeId = _treeName;
 
         // System trees (any id starting with
         // LatticeConstants.SystemTreePrefix - the tree registry
@@ -3611,6 +3629,81 @@ internal sealed class ReplicationShipperGrain(
     }
 
     /// <summary>
+    /// Resolves the shipper's logical source tree id to its current physical
+    /// tree id via the registry alias. WAL shards are keyed by the physical id,
+    /// so the ship path must address them by the resolved value rather than the
+    /// logical grain key. Returns the logical id unchanged when resolution
+    /// yields nothing (the direct-construction unit-test path, where no registry
+    /// is wired), so the shipper keeps addressing <c>{logical}/{partition}</c>
+    /// exactly as it did before the identity-swap heal existed.
+    /// </summary>
+    private async Task<string> ResolveSourcePhysicalAsync()
+    {
+        var registry = _grainFactory.GetGrain<ILatticeRegistry>(
+            Orleans.Lattice.BPlusTree.LatticeConstants.RegistryTreeId);
+        var physical = await registry.ResolveAsync(_treeName);
+        return string.IsNullOrEmpty(physical) ? _treeName : physical;
+    }
+
+    /// <summary>
+    /// Re-resolves the logical source tree to its current physical identity and,
+    /// when that identity has changed since the cursors were last bound, resets
+    /// the per-partition resume cursors and rebinds so the shipper tails the new
+    /// physical WAL from its log start. A registry alias swap (shadow-cutover
+    /// restore, resize, reshard) repoints a logical tree to a freshly minted
+    /// physical tree; the persisted <see cref="ReplicationShipperState.PartitionCursors"/>
+    /// are absolute sequence offsets into the retired log and are meaningless
+    /// against the new one. Re-shipping from the new log start is safe because
+    /// the peer merges every entry by <see cref="HybridLogicalClock"/> (LWW),
+    /// making the replay idempotent.
+    /// </summary>
+    private async Task EnsureBoundToCurrentSourceIdentityAsync(int partitions)
+    {
+        var physical = await ResolveSourcePhysicalAsync();
+        _walTreeId = physical;
+
+        var bound = state.State.BoundPhysicalTreeId;
+        if (string.IsNullOrEmpty(bound))
+        {
+            // First bind for this activation lineage. Record the identity in
+            // memory without an eager flush: a cold shipper (empty cursors) and
+            // a warm one already resuming against this same physical log both
+            // stay correct, and the slot is persisted opportunistically by the
+            // next cursor-advance write. Avoiding a dedicated write here keeps
+            // the shipper's deferred-persist accounting unchanged.
+            state.State.BoundPhysicalTreeId = physical;
+            return;
+        }
+
+        if (string.Equals(bound, physical, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        // Physical identity changed under the logical alias. Discard the retired
+        // log's cursors, rebind, and drop the cached shard-grain references so
+        // the next refill addresses the new physical WAL.
+        Logger.LogWarning(
+            "Shipper {Tree}/{Peer} source physical identity changed from '{OldPhysical}' to '{NewPhysical}'; "
+            + "resetting partition cursors and re-shipping from the new source log.",
+            _treeName, _peerClusterId, bound, physical);
+
+        state.State.PartitionCursors.Clear();
+        state.State.Cursor = HybridLogicalClock.Zero;
+        state.State.BoundPhysicalTreeId = physical;
+        await state.WriteStateAsync();
+
+        if (_partitionGrainCache.Length >= partitions)
+        {
+            Array.Clear(_partitionGrainCache, 0, partitions);
+        }
+        else
+        {
+            Array.Clear(_partitionGrainCache, 0, _partitionGrainCache.Length);
+        }
+    }
+
+    /// <summary>
     /// Test seam: bypasses Orleans activation and key parsing for
     /// direct unit tests against a fake Orleans context.
     /// </summary>
@@ -3621,6 +3714,7 @@ internal sealed class ReplicationShipperGrain(
         _treeName = treeName;
         _peerClusterId = peerClusterId;
         _keyParsed = true;
+        _walTreeId = treeName;
     }
 
     /// <summary>

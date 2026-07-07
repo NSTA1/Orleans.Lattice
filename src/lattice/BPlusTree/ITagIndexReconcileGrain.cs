@@ -41,4 +41,16 @@ internal interface ITagIndexReconcileGrain : IGrainWithStringKey
     /// while a sweep is in flight.
     /// </summary>
     Task<bool> IsIdleAsync();
+
+    /// <summary>
+    /// Reconciles this index promptly against <paramref name="subjectTreeId"/>
+    /// when that tree is one this index covers, and returns whether it did.
+    /// Intended to be fired by an operation that swaps a tree's physical identity
+    /// (shadow-cutover restore, resize, reshard): after such a swap the index can
+    /// reflect the pre-swap subject state until the next scheduled sweep, so this
+    /// runs a synchronous digest-gated sweep to converge it immediately. When the
+    /// tree is not covered by this index the call is a no-op and returns
+    /// <c>false</c>.
+    /// </summary>
+    Task<bool> ReconcileTreeAsync(string subjectTreeId);
 }
