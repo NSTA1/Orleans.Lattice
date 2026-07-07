@@ -1,6 +1,7 @@
 using System.Text;
 using Orleans.Lattice;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.State;
 
 namespace Orleans.Lattice.Backup.Tests;
 
@@ -328,6 +329,33 @@ public sealed class LatticeBackupRestoreIntegrationTests
             // The prior tree is retained and the revert swings the alias back.
             Assert.That(Str(live.GetAsync("live-key").Result!), Is.EqualTo("live-value"));
             Assert.That(live.GetAsync("k1").Result, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task RestoreAsync_shadow_cutover_stamps_restore_provenance_on_shadow_tree()
+    {
+        await _fixture.InitializeAsync();
+
+        var source = _fixture.GrainFactory.GetGrain<ILattice>(Source);
+        await source.SetAsync("k1", Bytes("backup-v1"));
+        var backup = await _fixture.Capture.CaptureAsync(
+            new LatticeBackupCaptureRequest("cutover-prov", BackupScopeSelector.WholeTree(Source)));
+
+        const string target = "orders-prov";
+        var result = await _fixture.Restore.RestoreAsync(
+            new LatticeRestoreRequest(backup.BackupId, target, mode: LatticeRestoreMode.ShadowCutover));
+
+        var registry = _fixture.GrainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var shadowEntry = await registry.GetEntryAsync(result.ShadowPhysicalTreeId!);
+
+        Assert.Multiple(() =>
+        {
+            // The shadow physical tree records the logical tree it was restored
+            // for, so the state catalog can classify it as a restore shadow
+            // without inspecting the tree name.
+            Assert.That(shadowEntry, Is.Not.Null);
+            Assert.That(shadowEntry!.RestoreShadowOfTreeId, Is.EqualTo(target));
         });
     }
 

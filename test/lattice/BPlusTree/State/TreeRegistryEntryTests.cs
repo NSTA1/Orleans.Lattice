@@ -35,4 +35,25 @@ public class TreeRegistryEntryTests
         // fresh instance.
         Assert.That(entry.WalPartitions, Is.EqualTo(16));
     }
+
+    [Test]
+    public void Default_entry_has_null_RestoreShadowOfTreeId()
+    {
+        // Legacy decode contract: a registry row persisted before the
+        // restore-shadow provenance slot must observe null so it is
+        // classified as an ordinary tree, not a restore shadow.
+        var entry = new TreeRegistryEntry();
+        Assert.That(entry.RestoreShadowOfTreeId, Is.Null);
+    }
+
+    [Test]
+    public void RestoreShadowOfTreeId_round_trips_through_record_with_expression()
+    {
+        var entry = new TreeRegistryEntry { RestoreShadowOfTreeId = "mfg-facts" };
+        Assert.That(entry.RestoreShadowOfTreeId, Is.EqualTo("mfg-facts"));
+
+        var cleared = entry with { RestoreShadowOfTreeId = null };
+        Assert.That(cleared.RestoreShadowOfTreeId, Is.Null);
+        Assert.That(entry.RestoreShadowOfTreeId, Is.EqualTo("mfg-facts"));
+    }
 }

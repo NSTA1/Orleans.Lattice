@@ -1980,6 +1980,7 @@ internal sealed class LatticeStateQuery(
             PhysicalTreeId = physicalTreeId,
             Lifecycle = isDeleted ? TreeLifecycleState.SoftDeleted : TreeLifecycleState.Active,
             ShardCount = shardCount,
+            RestoreShadowOfTreeId = entry?.RestoreShadowOfTreeId,
             Config = new TreeConfigSummary
             {
                 ShardCount = shardCount,

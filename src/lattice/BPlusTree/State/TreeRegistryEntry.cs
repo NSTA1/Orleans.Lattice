@@ -160,4 +160,18 @@ internal sealed record TreeRegistryEntry
     /// when supplied.
     /// </summary>
     [Id(12)] public long? HistoryRetentionWindowTicks { get; init; }
+
+    /// <summary>
+    /// Provenance marker set when this physical tree was created as the shadow
+    /// target of a shadow-cutover restore: it carries the logical tree id the
+    /// restore was performed for (the alias that now resolves to this physical
+    /// tree). <c>null</c> (the default) for every ordinary tree and for the
+    /// logical alias itself. Stamped once at the shadow tree's first
+    /// <see cref="ILatticeRegistry.RegisterAsync"/> and never mutated. It lets
+    /// callers classify a restore shadow as a first-class fact rather than
+    /// inferring it from the tree name, so the state catalog can hide restore
+    /// shadows from the default tree list and group them under their logical
+    /// alias without a naming convention.
+    /// </summary>
+    [Id(13)] public string? RestoreShadowOfTreeId { get; init; }
 }

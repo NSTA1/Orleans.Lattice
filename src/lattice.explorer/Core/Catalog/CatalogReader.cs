@@ -55,6 +55,7 @@ public sealed class CatalogReader(ILatticeStateClient client) : ICatalogReader
                 Kind = CatalogKind.Trees,
                 Lifecycle = entry.Lifecycle.ToString(),
                 ShardCount = entry.ShardCount,
+                RestoreShadowOfTreeId = entry.RestoreShadowOfTreeId,
             });
         }
 
