@@ -33,19 +33,30 @@ namespace Orleans.Lattice.Replication;
 internal sealed class RestoreSagaDispatcher(
     IReplicatedTreeMembership membership,
     IReplicationTopology topology,
-    ILatticeCoordinatedRestoreEngine engine,
+    ILatticeCoordinatedRestoreEngine? engine,
     IRestoreCapacityProbe capacity,
     ISagaControlChannel controlChannel,
     IGrainFactory grainFactory,
     RestoreParticipant localParticipant,
     IOptionsMonitor<LatticeReplicationOptions> options,
-    ILogger<RestoreSagaDispatcher> logger) : IRestoreSagaDispatcher
+    ILogger<RestoreSagaDispatcher> logger,
+    ILatticeBackupSetResolver? setResolver = null) : IRestoreSagaDispatcher
 {
     /// <inheritdoc />
     public async Task<LatticeRestoreResult?> TryDispatchAsync(
         LatticeRestoreRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+
+        // No coordinated-restore engine wired means the backup package is absent on
+        // this host: there is nothing to promote to a saga, so decline and let the
+        // caller run its plain local restore. This mirrors the restore participant's
+        // optional posture and lets a replication-only host build and start (the
+        // dispatcher is registered even when backup is not wired).
+        if (engine is null)
+        {
+            return null;
+        }
 
         // Fast local paths that avoid any manifest I/O: an explicitly targeted
         // tree that is not replicated, or a host with no replicated trees at all,

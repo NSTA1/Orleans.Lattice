@@ -372,7 +372,17 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         // guard fire under replication; wiring the real dispatcher makes the public
         // restore entry point promote a replicated-tree restore to a saga.
         builder.Services.AddSingleton<Orleans.Lattice.Backup.IReplicatedTreeMembership, OptionsReplicatedTreeMembership>();
-        builder.Services.AddSingleton<Orleans.Lattice.Backup.IRestoreSagaDispatcher, RestoreSagaDispatcher>();
+        builder.Services.AddSingleton<Orleans.Lattice.Backup.IRestoreSagaDispatcher>(static sp => new RestoreSagaDispatcher(
+            sp.GetRequiredService<Orleans.Lattice.Backup.IReplicatedTreeMembership>(),
+            sp.GetRequiredService<IReplicationTopology>(),
+            sp.GetServices<Orleans.Lattice.Backup.ILatticeCoordinatedRestoreEngine>().FirstOrDefault(),
+            sp.GetRequiredService<IRestoreCapacityProbe>(),
+            sp.GetRequiredService<ISagaControlChannel>(),
+            sp.GetRequiredService<IGrainFactory>(),
+            sp.GetRequiredService<RestoreParticipant>(),
+            sp.GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>(),
+            sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<RestoreSagaDispatcher>>(),
+            sp.GetServices<Orleans.Lattice.Backup.ILatticeBackupSetResolver>().FirstOrDefault()));
 
         return builder;
     }
