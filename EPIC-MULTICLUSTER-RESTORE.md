@@ -64,7 +64,7 @@ git branch -d feat/<child>
 | Order | Issue | Title (short) | Depends on | Status |
 |---|---|---|---|---|
 | 1 | #1171 | Cross-cluster saga control channel (gRPC) | - | DONE (merged, 38 tests green) |
-| 2 | #1172 | Durable saga coordinator + internal participant model | #1171 | in progress |
+| 2 | #1172 | Durable saga coordinator + internal participant model | #1171 | DONE (merged, 34 tests green) |
 | 3 | #1173 | Per-tree write fence + shipping pause | #1172 | pending |
 | 4 | #1174 | Shared external sink, capturing-cluster stamp, chain affinity | - | DONE (merged, 39 tests green) |
 | 5 | #1175 | Coordinated restore as first internal participant | #1172, #1173, #1174 | pending |
@@ -95,3 +95,5 @@ git branch -d feat/<child>
 
 - Setup: integration branch `feat/replication-backup-restore-coordination` created off main; coordination file added.
 - #1171 (saga control channel): implemented in worktree, reviewed, merged (`8c4be88f`). Adds the `orleans.lattice.replication.LatticeSaga` sibling gRPC service (Prepare/Commit/Abort/GetStatus), request/response DTOs (aliases `olr.sq`/`olr.sv`), client channel + server handler/authorizer seams, and a peer-authorization gate. Integration checkpoint: 38 targeted + hygiene tests green on the epic branch. Follow-up for #1172: tighten origin trust (require the authenticated origin header, or require it to match `CoordinatorClusterId`) rather than falling back to the caller-supplied body field.
+- #1174 (backup shared-sink guard, capturing-cluster stamp, chain affinity): implemented in parallel worktree, reviewed, merged. Adds `BackupManifest.CapturingClusterId` (additive, null-default, wire-compatible), full-path cluster-id stamping + incremental base-stamp inheritance, chain-affinity enforcement via the full-fallback path, and a dependency-free shared-external-sink startup guard behind a backup-local `IReplicatedTreeMembership` seam (default no-op). Checkpoint: 39 stamp/guard/affinity + hygiene tests green.
+- #1172 (durable saga coordinator + internal participant model): implemented in worktree, reviewed, merged (`24d3f156`). Adds the reminder-driven `CrossClusterSagaCoordinatorGrain` (resumable Preparing/Committed/Aborted/Completed phase machine, memoized outcome, SHA-256 participant-set fingerprint for re-submit stability, 1h prepare-progress deadline) and `CrossClusterSagaParticipantGrain` (durable prepared record, reminder-anchored 5-min cutover fence with auto-compensation on coordinator loss, idempotent commit/abort), plus the real `LatticeSagaControlHandler` that wins over the gRPC `NoParticipant` default via `TryAddSingleton` ordering. 8 new `olr.z*` aliases. Integration checkpoint: 34 saga + hygiene tests green on the epic branch. Origin-trust hardening (from #1171) is a transport-authorizer concern; deferred to #1175/#1177 gRPC wiring.
