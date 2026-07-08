@@ -3,10 +3,9 @@ namespace Orleans.Lattice.Replication.Tests.Fakes;
 /// <summary>
 /// Recording test-double <see cref="ISagaParticipant"/>. Votes a configurable
 /// result on prepare and records every prepare / commit / abort / status call
-/// so tests can assert the durable participant model drives it correctly. The
-/// only production <see cref="ISagaParticipant"/> (the restore participant) is
-/// delivered by a later sub-issue; the SPI stays internal, so the model is
-/// exercised with this double.
+/// so tests can assert the durable participant model drives it correctly. Used
+/// to exercise the participant model in isolation from any production
+/// participant.
 /// </summary>
 internal sealed class RecordingSagaParticipant(SagaVote prepareVote = SagaVote.Commit, string? detail = null)
     : ISagaParticipant

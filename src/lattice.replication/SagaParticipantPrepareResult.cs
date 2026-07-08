@@ -16,4 +16,4 @@ namespace Orleans.Lattice.Replication;
 /// Optional detail describing the vote (for example an abort reason). May be
 /// <see langword="null"/>.
 /// </param>
-internal readonly record struct SagaParticipantPrepareResult(SagaVote Vote, string? Detail = null);
+public readonly record struct SagaParticipantPrepareResult(SagaVote Vote, string? Detail = null);

@@ -6,7 +6,7 @@ using Orleans.Lattice.Replication.Grains;
 namespace Orleans.Lattice.Replication;
 
 /// <summary>
-/// The first internal <see cref="ISagaParticipant"/>: maps the backup restore
+/// The first built-in <see cref="ISagaParticipant"/>: maps the backup restore
 /// engine onto the cross-cluster saga so a restore into a replicated tree becomes
 /// an all-or-nothing coordinated multi-cluster restore. One process-wide
 /// singleton per cluster, driven by the local
