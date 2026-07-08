@@ -100,6 +100,8 @@ public static class LatticeReplicationGrpcServiceCollectionExtensions
             new ProjectPushOptions(sp.GetRequiredService<IOptionsMonitor<LatticeReplicationGrpcOptions>>()));
         services.AddSingleton<IConfigureOptions<GrpcRemoteSnapshotTransportOptions>>(sp =>
             new ProjectSnapshotOptions(sp.GetRequiredService<IOptionsMonitor<LatticeReplicationGrpcOptions>>()));
+        services.AddSingleton<IConfigureOptions<GrpcSagaControlChannelOptions>>(sp =>
+            new ProjectSagaOptions(sp.GetRequiredService<IOptionsMonitor<LatticeReplicationGrpcOptions>>()));
 
         // Common security defaults. TryAdd preserves any registration
         // the host did first (typically AddLatticeReplication has
@@ -191,6 +193,25 @@ public static class LatticeReplicationGrpcServiceCollectionExtensions
         services.TryAddSingleton<LatticeRemoteSnapshotGrpcServiceBase>(
             sp => sp.GetRequiredService<LatticeRemoteSnapshotGrpcService>());
 
+        // Saga control channel (outbound, client side). One concrete
+        // singleton is shared behind the ISagaControlChannel seam so a
+        // coordinator reuses the per-peer channel cache.
+        RegisterSagaMethodFactory(services);
+        services.TryAddSingleton<GrpcSagaControlChannel>();
+        services.TryAddSingleton<ISagaControlChannel>(
+            sp => sp.GetRequiredService<GrpcSagaControlChannel>());
+
+        // Saga participant service (inbound, server side). The default
+        // handler is transport-only and votes to abort; a host wiring a
+        // durable participant model replaces it (TryAdd defers to the
+        // host registration). The peer-authorization gate authorizes
+        // exactly the configured replication peer set by default.
+        services.TryAddSingleton<ILatticeSagaControlHandler, NoParticipantSagaControlHandler>();
+        services.TryAddSingleton<ISagaPeerAuthorizer, PeerMapSagaPeerAuthorizer>();
+        services.TryAddSingleton<LatticeSagaGrpcService>();
+        services.TryAddSingleton<LatticeSagaGrpcServiceBase>(
+            sp => sp.GetRequiredService<LatticeSagaGrpcService>());
+
         return services;
     }
 
@@ -219,6 +240,9 @@ public static class LatticeReplicationGrpcServiceCollectionExtensions
 
         endpoints.ServiceProvider.GetRequiredService<LatticeRemoteSnapshotGrpcMethods>();
         endpoints.MapGrpcService<LatticeRemoteSnapshotGrpcServiceBase>();
+
+        endpoints.ServiceProvider.GetRequiredService<LatticeSagaGrpcMethods>();
+        endpoints.MapGrpcService<LatticeSagaGrpcServiceBase>();
 
         return endpoints;
     }
@@ -268,6 +292,18 @@ public static class LatticeReplicationGrpcServiceCollectionExtensions
         });
     }
 
+    private static void RegisterSagaMethodFactory(IServiceCollection services)
+    {
+        services.TryAddSingleton<LatticeSagaGrpcMethods>(sp =>
+        {
+            var requestSerializer = sp.GetRequiredService<Serializer<SagaControlRequest>>();
+            var responseSerializer = sp.GetRequiredService<Serializer<SagaControlResponse>>();
+            var methods = new LatticeSagaGrpcMethods(requestSerializer, responseSerializer);
+            LatticeSagaGrpcMethodsHolder.Current = methods;
+            return methods;
+        });
+    }
+
     private sealed class ProjectPushOptions(IOptionsMonitor<LatticeReplicationGrpcOptions> source)
         : IConfigureOptions<GrpcPushTransportOptions>
     {
@@ -293,6 +329,22 @@ public static class LatticeReplicationGrpcServiceCollectionExtensions
             foreach (var kvp in u.Peers)
             {
                 options.SenderEndpoints[kvp.Key] = kvp.Value;
+            }
+            options.AllowPlaintextEndpoints = u.AllowPlaintextEndpoints;
+            options.ConfigureChannel = u.ConfigureChannel;
+            options.LocalClusterId = u.LocalClusterId;
+        }
+    }
+
+    private sealed class ProjectSagaOptions(IOptionsMonitor<LatticeReplicationGrpcOptions> source)
+        : IConfigureOptions<GrpcSagaControlChannelOptions>
+    {
+        public void Configure(GrpcSagaControlChannelOptions options)
+        {
+            var u = source.CurrentValue;
+            foreach (var kvp in u.Peers)
+            {
+                options.PeerEndpoints[kvp.Key] = kvp.Value;
             }
             options.AllowPlaintextEndpoints = u.AllowPlaintextEndpoints;
             options.ConfigureChannel = u.ConfigureChannel;

@@ -172,4 +172,14 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for <see cref="Replication.PeerHighWaterMarkResponse"/>.</summary>
     internal const string PeerHighWaterMarkResponse = "olr.hp";
 
+    // Cross-cluster saga control channel - the gRPC binding's
+    // orleans.lattice.replication.LatticeSaga service request/response
+    // pair, reused across the Prepare/Commit/Abort/GetStatus RPCs.
+
+    /// <summary>Alias for <see cref="Replication.SagaControlRequest"/>.</summary>
+    internal const string SagaControlRequest = "olr.sq";
+
+    /// <summary>Alias for <see cref="Replication.SagaControlResponse"/>.</summary>
+    internal const string SagaControlResponse = "olr.sv";
+
 }
