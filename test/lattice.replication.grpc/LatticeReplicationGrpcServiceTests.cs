@@ -396,6 +396,45 @@ public class LatticeReplicationGrpcServiceTests
     }
 
     [Test]
+    public async Task Push_returns_not_accepted_ack_when_apply_result_is_receive_fence_deferred()
+    {
+        // DURABLE RECEIVE FENCE (issue #1173) data-loss guard: when the applier
+        // defers the batch behind an engaged receive fence, the entries were not
+        // applied, so the ack MUST be not-accepted (with a bounded backoff) so
+        // the sender keeps its cursor and re-ships once the fence lifts. A
+        // deferred result must never map to Accepted = true, which would let the
+        // sender advance past entries that were dropped on the floor.
+        var applier = Substitute.For<IReplicationApplier>();
+        applier.ApplyBatchAsync(Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ApplyResult
+            {
+                Applied = false,
+                HighWaterMark = HybridLogicalClock.Zero,
+                Deferred = true,
+            }));
+
+        var svc = CreateService(applier, out _);
+        var box = new ReplicationBatchEnvelopeBox
+        {
+            Value = new ReplicationBatchEnvelope
+            {
+                TreeName = "tree",
+                OriginClusterId = "remote",
+                Entries = new[] { MakeSet("a", new HybridLogicalClock { WallClockTicks = 100, Counter = 0 }) },
+            },
+        };
+
+        var ack = await svc.Push(box, new TestServerCallContext());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ack.Value.Accepted, Is.False);
+            Assert.That(ack.Value.PauseForMs, Is.Not.Null.And.GreaterThan(0),
+                "a deferred batch should back the sender off while the fence is held");
+        });
+    }
+
+    [Test]
     public void Push_throws_rpc_exception_on_apply_failure()
     {
         var applier = Substitute.For<IReplicationApplier>();

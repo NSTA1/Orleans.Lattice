@@ -190,15 +190,22 @@ internal sealed partial class ReplicationApplier(
             // saga has paused inbound apply for this tree, peer entries must not
             // be admitted: an early-flipping cluster that applied a laggard's
             // still-advanced post-cut entries would union-merge and re-advance
-            // itself. Defer the entry as an un-applied no-op (HWM unchanged) so
-            // the sender retries it once the fence lifts on global completion.
-            // The gate is fronted by a short in-memory cache so this is not a
-            // per-entry grain call.
+            // itself. Defer the entry with an explicit Deferred=true signal (and
+            // HWM unchanged) so the receive path returns a not-accepted,
+            // cursor-preserving ack; the sender keeps its cursor and re-ships the
+            // same entry once the fence lifts on global completion. The gate is
+            // fronted by a short in-memory cache so this is not a per-entry grain
+            // call.
             if (_receiveGate is not null
                 && await _receiveGate.IsReceivePausedAsync(entry.TreeId, cancellationToken).ConfigureAwait(false))
             {
                 outcome = LatticeReplicationMetrics.OutcomeDedup;
-                return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
+                return new ApplyResult
+                {
+                    Applied = false,
+                    HighWaterMark = HybridLogicalClock.Zero,
+                    Deferred = true,
+                };
             }
 
             // Defence-in-depth: tombstone-reap envelopes

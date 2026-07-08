@@ -146,6 +146,7 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         // semantics for every entry in the batch.
         var applied = false;
         var highest = HybridLogicalClock.Zero;
+        var anyDeferred = false;
         for (var i = 0; i < entries.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -154,12 +155,16 @@ internal sealed class DeadLetterTrackingReplicationApplier(
             {
                 applied = true;
             }
+            if (result.Deferred)
+            {
+                anyDeferred = true;
+            }
             if (result.HighWaterMark.CompareTo(highest) > 0)
             {
                 highest = result.HighWaterMark;
             }
         }
-        return new ApplyResult { Applied = applied, HighWaterMark = highest };
+        return new ApplyResult { Applied = applied, HighWaterMark = highest, Deferred = anyDeferred };
     }
 
     private async Task<ApplyResult> OnFailureAsync(
