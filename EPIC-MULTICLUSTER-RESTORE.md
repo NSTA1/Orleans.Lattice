@@ -66,7 +66,7 @@ git branch -d feat/<child>
 | 1 | #1171 | Cross-cluster saga control channel (gRPC) | - | DONE (merged, 38 tests green) |
 | 2 | #1172 | Durable saga coordinator + internal participant model | #1171 | in progress |
 | 3 | #1173 | Per-tree write fence + shipping pause | #1172 | pending |
-| 4 | #1174 | Shared external sink, capturing-cluster stamp, chain affinity | - | in progress (parallel) |
+| 4 | #1174 | Shared external sink, capturing-cluster stamp, chain affinity | - | DONE (merged, 39 tests green) |
 | 5 | #1175 | Coordinated restore as first internal participant | #1172, #1173, #1174 | pending |
 | 6 | #1176 | Public user-defined saga participant SPI | #1175 | pending |
 | 7 | #1177 | Observability, docs, sample wiring, chaos coverage | all | pending |
@@ -85,6 +85,11 @@ git branch -d feat/<child>
 - `CHANGELOG.md` entries.
 - `features.md` moves (Planned -> Shipped) once each capability is on main (done at/after the epic PR).
 - `docs/**` and sample wiring (with #1177).
+
+## Coordinator-owned integration follow-ups (deferred wiring, tracked here)
+
+- Replication-side `IReplicatedTreeMembership`: #1174 added the backup-local seam with a default no-op (so single-cluster is a no-op and the guard cannot fire spuriously). The replication package must register a real implementation (projecting `LatticeReplicationOptions.ReplicatedTrees`) so the fail-fast guard actually fires in a replicated deployment. Wire this during #1175/#1177 integration, keeping backup's no-dependency-on-replication layering intact (replication references core+backup direction is acceptable; backup must not reference replication).
+- Origin-trust hardening on the saga control channel (from #1171): require the authenticated origin header (or require it to match `CoordinatorClusterId`) rather than falling back to the caller-supplied body field. Fold into #1172 review / #1175.
 
 ## Progress log
 
