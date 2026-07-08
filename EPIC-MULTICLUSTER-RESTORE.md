@@ -63,7 +63,7 @@ git branch -d feat/<child>
 
 | Order | Issue | Title (short) | Depends on | Status |
 |---|---|---|---|---|
-| 1 | #1171 | Cross-cluster saga control channel (gRPC) | - | pending |
+| 1 | #1171 | Cross-cluster saga control channel (gRPC) | - | DONE (merged, 38 tests green) |
 | 2 | #1172 | Durable saga coordinator + internal participant model | #1171 | pending |
 | 3 | #1173 | Per-tree write fence + shipping pause | #1172 | pending |
 | 4 | #1174 | Shared external sink, capturing-cluster stamp, chain affinity | - | pending |
@@ -89,3 +89,4 @@ git branch -d feat/<child>
 ## Progress log
 
 - Setup: integration branch `feat/replication-backup-restore-coordination` created off main; coordination file added.
+- #1171 (saga control channel): implemented in worktree, reviewed, merged (`8c4be88f`). Adds the `orleans.lattice.replication.LatticeSaga` sibling gRPC service (Prepare/Commit/Abort/GetStatus), request/response DTOs (aliases `olr.sq`/`olr.sv`), client channel + server handler/authorizer seams, and a peer-authorization gate. Integration checkpoint: 38 targeted + hygiene tests green on the epic branch. Follow-up for #1172: tighten origin trust (require the authenticated origin header, or require it to match `CoordinatorClusterId`) rather than falling back to the caller-supplied body field.
