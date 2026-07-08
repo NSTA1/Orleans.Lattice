@@ -6,11 +6,15 @@ using Orleans.Hosting;
 using Orleans.Lattice;
 using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Api.State.Grpc;
+using Orleans.Lattice.Backup;
 using Orleans.Lattice.Replication;
 using Orleans.Lattice.Replication.Grpc;
 using Orleans.Lattice.Storage.AzureTable;
+using Orleans.Serialization;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.Extensions.Logging;
 using MultiSiteManufacturing.Host;
+using MultiSiteManufacturing.Host.Backup;
 using MultiSiteManufacturing.Host.Baseline;
 using MultiSiteManufacturing.Host.Components;
 using MultiSiteManufacturing.Host.Dashboard;
@@ -363,6 +367,32 @@ builder.Host.UseOrleans(silo =>
                 };
                 opts.ReplicationPeers = new[] { packagePeerClusterId! };
             });
+
+            // Coordinated multi-cluster restore demonstration. Backup is wired
+            // only on the persistent replication path (it needs the same Azure
+            // Table WAL + grain storage as the shipper) and only when a shared
+            // sink path is available, so the in-memory quick-start stays free of
+            // backup wiring.
+            //
+            // The order matters: register the shared external sink BEFORE
+            // AddLatticeBackup so the package's TryAddSingleton default (the
+            // per-cluster in-cluster sink) does not win. Because the fact tree
+            // (and the site-activity + labels trees) are declared replicated
+            // above, the backup package's startup guard rejects the in-cluster
+            // sink and requires a shared external sink reachable by every
+            // cluster - which is exactly what FileSystemBackupSink provides.
+            // With the sink shared, a backup captured on one cluster is
+            // resolvable and restorable from any peer, and a restore of a
+            // replicated tree is promoted to an all-or-nothing coordinated saga
+            // by the replication package (the real IRestoreSagaDispatcher +
+            // IReplicatedTreeMembership that AddLatticeReplication installed).
+            var sharedSinkPath = builder.Configuration["Backup:SharedSinkPath"]
+                ?? Path.Combine(Path.GetTempPath(), "msmfg-shared-backup-sink");
+            silo.Services.AddSingleton<ILatticeBackupSink>(sp => new FileSystemBackupSink(
+                sharedSinkPath,
+                sp.GetRequiredService<Serializer>(),
+                sp.GetRequiredService<ILogger<FileSystemBackupSink>>()));
+            silo.AddLatticeBackup();
         }
     }
 });
@@ -521,6 +551,16 @@ builder.Services.AddSingleton<FederationRouter>();
 // Operator action surface.
 builder.Services.AddSingleton<OperatorClock>();
 builder.Services.AddScoped<OperatorActions>();
+
+// Coordinated multi-cluster restore operator facade. Registered only when the
+// backup surface is wired (the persistent replication path), because it resolves
+// the backup capture / restore services AddLatticeBackup installs. Mirrors the
+// OperatorActions seam: a DI-registered facade the UI, a gRPC service, or a test
+// can drive directly to capture the fact tree to the shared sink and restore it.
+if (packageReplicationConfigured)
+{
+    builder.Services.AddSingleton<CoordinatedRestoreOperator>();
+}
 
 // CRDT-typed grain state backed by Orleans.Lattice. Singleton
 // because it wraps a single ILattice grain reference and holds no

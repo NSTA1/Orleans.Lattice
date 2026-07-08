@@ -33,6 +33,7 @@ the system behaves like a minimal MES/QMS slice backed by Lattice.
 | **Receiver-side applier decoration** | `BaselineReplicationApplier` decorates the package's `IReplicationApplier` singleton; on every cross-cluster apply it mirrors `mfg-facts` writes into the local naive `BaselineFactBackend` and raises `FederationRouter.FactReplicated`, so the side-by-side divergence visualisation and the dashboard activity feed both update without polling. |
 | **Durable operational state via Orleans grains** | Chaos configuration (`IProcessSiteGrain`, `IBackendChaosGrain`, `IPartitionChaosGrain`, `IReplicationDisconnectGrain`) persists to Azure Table Storage - restart the host and the system resumes exactly where it left off. The lattice tree write-ahead log persists to the same storage account via `Orleans.Lattice.Storage.AzureTable` (Azurite locally), so tree state survives silo restarts. The replication WAL and per-peer cursors are managed by `Orleans.Lattice.Replication` against the same storage account. |
 | **Idempotent bulk-load on startup** | `InventorySeeder` emits 5 representative parts (one per reachable `ComplianceState`) through the same router operators use. A singleton `IInventorySeedStateGrain` gates the seed so re-running against the same storage account preserves inventory and operator mutations. |
+| **Coordinated multi-cluster restore** | `Orleans.Lattice.Backup` captures the replicated `mfg-facts` tree to a shared external sink (`FileSystemBackupSink`) that every cluster can read. The `CoordinatedRestoreOperator` facade restores it; because `mfg-facts` is a replicated tree, the backup package promotes the restore into an all-or-nothing coordinated saga across the participating clusters. See *Coordinated multi-cluster restore* below. |
 
 ## Per-tree replication policy
 
@@ -55,6 +56,55 @@ This is a *design choice*, not a limitation: opting
 LWW register across disjoint HLC namespaces. Within a single cluster
 the register still converges across silos via the lattice's internal
 HLC, which is what the per-tree replication mode is selecting against.
+
+## Coordinated multi-cluster restore
+
+The sample wires `Orleans.Lattice.Backup` so a replicated tree can be
+backed up and restored across every participating cluster as a single
+all-or-nothing operation. This closes the loop on the replication story:
+replication keeps clusters converged during normal operation; a
+coordinated restore rewinds every cluster to the same captured cut
+together, with no peer re-advancing past it and no reader observing a
+torn / partial restore.
+
+**Shared external sink.** All clusters read and write one external sink
+instead of a per-cluster in-cluster sink. The sample provides
+`FileSystemBackupSink` (`src/MultiSiteManufacturing.Host/Backup/`), an
+`ILatticeBackupSink` backed by a shared filesystem directory
+(`Backup:SharedSinkPath`, defaulting to a shared temp directory). The
+sink is registered *before* `AddLatticeBackup()` so it wins over the
+package's in-cluster default. This is mandatory, not cosmetic: the backup
+package's startup guard rejects the in-cluster sink for a replicated tree,
+because a backup captured on one cluster must be resolvable from any peer.
+A manifest written by the cluster that captured is read back by any cluster
+that restores, purely through the shared sink.
+
+**Operator trigger.** `CoordinatedRestoreOperator`
+(`src/MultiSiteManufacturing.Host/Backup/`) is a DI-registered facade -
+the same seam `OperatorActions` uses, drivable by the UI, a gRPC service,
+or a test. `CaptureFactTreeAsync(name)` captures the whole `mfg-facts`
+tree to the shared sink and returns a content-addressed backup id;
+`RestoreFactTreeAsync(backupId)` restores it with an atomic shadow
+cutover. The facade calls the backup package's public `RestoreAsync`
+entry point and holds no saga wiring of its own: because `mfg-facts` is
+declared replicated, the package's `IRestoreSagaDispatcher` (installed by
+`AddLatticeReplication`) promotes the restore into a coordinated
+multi-cluster saga automatically, decided by the target tree's current
+replication membership. On the single-cluster quick-start the identical
+call runs as a plain local restore.
+
+**What the sample test proves.** `CoordinatedRestoreSampleTests`
+(`test/MultiSiteManufacturing.Tests/Backup/`) stands up two in-memory
+clusters that share one sink directory and asserts the cross-cluster
+consistency guarantee a coordinated restore provides: a backup captured
+on one cluster restores identically onto both (all-or-nothing - every
+captured key lands, byte for byte, on every cluster), and a repeated
+restore converges to the same content without re-advancing the cut. The
+full saga transport (coordinator, participant write fence, and gRPC
+control channel that `AddLatticeReplication` activates in the host) is
+covered end to end by the replication package's own coordinated-restore
+suites; the sample test focuses on the shared-sink-enabled cross-cluster
+property in process.
 
 ## Fault-injection surface
 
