@@ -289,6 +289,16 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         builder.Services.TryAddSingleton<IShardCountProvider, DefaultShardCountProvider>();
         builder.Services.TryAddSingleton<IReplicationLocalVcSeeder, LatticeReplicationLocalVcSeeder>();
 
+        // Durable write-fence / shipping-pause primitive (issue #1173) seams.
+        // ISagaCompletionSource gates the cross-cluster shipping resume on
+        // observed global saga completion; IReplicationReceiveGate lets the
+        // inbound apply path consult the per-tree receive fence with a short
+        // cache. Both are TryAddSingleton so a host (or test) can substitute an
+        // alternative - notably a fake completion source that simulates a
+        // laggard participant.
+        builder.Services.TryAddSingleton<ISagaCompletionSource, CoordinatorSagaCompletionSource>();
+        builder.Services.TryAddSingleton<IReplicationReceiveGate, ReplicationReceiveGate>();
+
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IMutationObserver, ReplicationMutationObserver>());
         builder.Services.TryAddEnumerable(

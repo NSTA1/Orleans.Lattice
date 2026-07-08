@@ -212,4 +212,31 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for <see cref="Grains.CrossClusterSagaParticipantState"/>.</summary>
     internal const string CrossClusterSagaParticipantState = "olr.zs";
 
+    // Durable per-tree write-fence and shipping-pause primitive engaged for the
+    // duration of a cross-cluster saga cutover. The saga-scoped, group-atomic
+    // fence grain, its persisted state and lifecycle phase, and the per-tree
+    // inbound receive-fence grain and its state. All use previously-unclaimed
+    // olr.f* codes.
+
+    /// <summary>Alias for the saga write-fence grain interface.</summary>
+    internal const string ISagaWriteFenceGrain = "olr.fg";
+
+    /// <summary>Alias for <see cref="Grains.SagaWriteFenceState"/>.</summary>
+    internal const string SagaWriteFenceState = "olr.fs";
+
+    /// <summary>Alias for <see cref="SagaWriteFencePhase"/>.</summary>
+    internal const string SagaWriteFencePhase = "olr.fp";
+
+    /// <summary>Alias for <see cref="SagaWriteFenceRequest"/>.</summary>
+    internal const string SagaWriteFenceRequest = "olr.fr";
+
+    /// <summary>Alias for <see cref="SagaWriteFenceSnapshot"/>.</summary>
+    internal const string SagaWriteFenceSnapshot = "olr.fn";
+
+    /// <summary>Alias for the per-tree inbound receive-fence grain interface.</summary>
+    internal const string ITreeReceiveFenceGrain = "olr.fc";
+
+    /// <summary>Alias for <see cref="Grains.TreeReceiveFenceState"/>.</summary>
+    internal const string TreeReceiveFenceState = "olr.ft";
+
 }

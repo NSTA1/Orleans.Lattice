@@ -1051,4 +1051,34 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// coordinator's snapshot. Entries marked at or before this HLC
     /// are removed.</param>
     Task ClearDirtyLeavesUpToAsync(HybridLogicalClock advance);
+
+    /// <summary>
+    /// Engages a durable write fence on this shard for the cross-cluster saga
+    /// <paramref name="sagaId"/>. While engaged, every mutation routed through
+    /// this shard is refused with a
+    /// <see cref="Orleans.Lattice.LatticeWriteFencedException"/> until the
+    /// fence is lifted or <paramref name="deadlineTicks"/> (an absolute UTC
+    /// tick) passes, whichever comes first; reads are unaffected. Idempotent:
+    /// a re-engage for the same saga refreshes the deadline; an engage for a
+    /// different saga while one is already engaged is refused so a fence cannot
+    /// be silently reassigned mid-cutover.
+    /// </summary>
+    /// <param name="sagaId">Identifier of the saga engaging the fence.</param>
+    /// <param name="deadlineTicks">Absolute UTC tick at which the fence self-lifts.</param>
+    Task EngageWriteFenceAsync(string sagaId, long deadlineTicks);
+
+    /// <summary>
+    /// Lifts the write fence previously engaged for <paramref name="sagaId"/>.
+    /// Idempotent: lifting an already-lifted fence, or a fence engaged by a
+    /// different saga, is a no-op so a late terminal decision cannot clear a
+    /// newer fence.
+    /// </summary>
+    /// <param name="sagaId">Identifier of the saga whose fence to lift.</param>
+    Task LiftWriteFenceAsync(string sagaId);
+
+    /// <summary>
+    /// Reports whether this shard currently refuses writes because a
+    /// write fence is engaged and its deadline has not yet passed.
+    /// </summary>
+    Task<bool> IsWriteFencedAsync();
 }

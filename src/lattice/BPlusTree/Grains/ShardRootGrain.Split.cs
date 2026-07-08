@@ -161,6 +161,8 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private void ThrowIfRejectedForKey(string key)
     {
+        ThrowIfWriteFenced();
+
         var sip = state.State.SplitInProgress;
         if (sip is not null && sip.Phase == ShardSplitPhase.Reject)
         {
@@ -188,6 +190,8 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private void ThrowIfRejectedForAnyKey(IEnumerable<string> keys)
     {
+        ThrowIfWriteFenced();
+
         var sip = state.State.SplitInProgress;
         var rejectActive = sip is not null && sip.Phase == ShardSplitPhase.Reject;
         var moved = state.State.MovedAwaySlots;
