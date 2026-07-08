@@ -45,23 +45,18 @@ site has converged.
 | Coordinated-restore convergence | A coordinated multi-cluster restore of a replicated tree converges all-or-nothing under fault. Randomized per-participant vote outcomes always resolve to either a full commit on every cluster or a full rollback on every cluster; a coordinator lost mid-saga auto-compensates every prepared cluster through the bounded fence timer; and a peer dropping between prepare and commit still converges to a full commit. |
 | Coordinated-restore no-torn-read | The core [#1169](https://github.com/NSTA1/Orleans.Lattice/issues/1169) guarantee: a continuous reader on a participating cluster never observes a torn or re-advanced tree at any point during a coordinated restore, including with a slow / laggard participant. The globally-gated shipping-resume holds per-saga cross-cluster atomic visibility across the cutover. |
 | Coordinated-restore reliability soak | A large-tree-onto-small-cluster restore under duress. A participant restarted mid-build resumes its shadow rather than restarting from zero; an unrecoverable participant ends in a clean all-or-nothing abort with no orphan-shadow leak; an infeasible target is refused at admission before any build starts; and the write fence engages only at the cutover, not during the prepare build. |
+| Cross-cluster shipping recovery across an identity swap | A logical source tree is repointed to a freshly minted physical tree (a restore-style cutover, possibly repeated) under its registry alias mid-workload while the inter-site edge is cycled through partition and heal. Each shipper pump tick re-resolves the logical source to its current physical id, and on a change clears its per-partition cursors and re-ships from the new physical WAL log start (idempotent by HLC). After drain every peer converges on the post-swap source key set: no peer is left tailing the orphaned pre-swap physical WAL, and keys authored only into the abandoned identity while the edge was partitioned never reach a receiver. The multi-peer case swaps while one peer is partitioned and another stays live; both converge. Complements the deterministic single-swap regression that landed with the shipper heal. |
 
 ### Runtime characteristics
 
-| Property | Cross-cluster atomic vis. | LWW convergence | OR-Set convergence | PN-Counter convergence | MV-Register convergence | Multi-site smoke |
-|---|---|---|---|---|---|---|
-| Sites | 3 | 3 | 3 | 3 | 3 | 2 |
-| Chaos window | 18 sagas across 3 sites, partition cycled mid-workload | 120 writes across 3 sites, one site partitioned mid-window | 75 adds / 51 adds+removes across 3 sites, one site partitioned mid-window | 120 increments + 30 decrements across 3 sites, one site partitioned mid-window | 2 sequential writes then 1 concurrent write per peer with one site partitioned | single deterministic write per test |
-| Drain timeout | up to 60 s | up to 30 s | up to 30 s | up to 30 s | up to 30 s | up to 15 s |
-| Wall-clock | ~5 s | ~5 s | ~5 s / test | ~5-10 s | ~5 s / test | ~3 s / test |
-| Universe size | 72 keys | 1 key | 1 set-valued key | 1 counter | 1 multi-value register | 1 key |
-| Parallel workers | 3 saga writers (one per site) + 6 inter-site delivery pumps | 3 writers + 6 delivery pumps | 3 writers + 6 delivery pumps | 3 writers + 6 delivery pumps | 1 writer + 2 delivery pumps |
-| Shards per site | default 64 | default 64 | default 64 | default 64 | default 64 | default 64 |
-
-The newer cross-cluster fixtures (OR-Map convergence, WAL trim, liveness probe,
-compaction + shipping) follow the same general shape - short chaos window,
-bounded drain, single-tree or single-key universe - and add per-suite cost in
-proportion to the workload in their row above.
+Every suite here shares the same shape: two or three in-process clusters over a
+fault-injectable inter-site delivery layer, a single-key or single-tree universe
+(the atomic-visibility suite uses ~72 keys across three sites), a chaos window of
+a few seconds with a site or edge partitioned mid-workload, and a bounded drain -
+up to ~30 s, or up to ~60 s for the saga-atomicity and coordinated-restore
+suites - before the convergence assertion. Per-suite cost scales with the
+workload in each suite's row above rather than being fixed, so the catalog stays
+accurate as suites are added without a per-suite runtime table to maintain.
 
 ## Downstream binding chaos suites
 
@@ -79,15 +74,6 @@ in-process:
   atomicity, monotone offset assignment, and trim correctness, and is skipped when
   the emulator is unreachable. See
   [Orleans.Lattice.Storage.AzureTable chaos tests](../lattice.storage.azuretable/chaos-tests.md).
-
-## Planned suites
-
-The following suite is proposed but not yet implemented; it is tracked by
-[issue #1167](https://github.com/NSTA1/Orleans.Lattice/issues/1167).
-
-| Suite (planned) | What it will prove |
-|---|---|
-| Cross-cluster shipping recovery across an identity swap | A logical source tree is repointed to a freshly minted physical tree (a restore-style cutover, possibly repeated) under its registry alias mid-workload, while the inter-site pumps are cycled through partition and heal. After drain, every peer site converges on the post-swap source key set: no peer is left tailing the orphaned pre-swap physical WAL, and no key from the abandoned identity survives on a receiver. Stresses the shipper's per-tick alias re-resolve, per-partition cursor reset, and idempotent re-ship from the new source log start under load and fault injection. Complements the deterministic single-swap regression that landed with the fix. |
 
 ## See also
 

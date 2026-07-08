@@ -758,50 +758,47 @@ Legend: ✅ = covered by a live test.
 
 ## Runtime characteristics
 
-### Single-cluster suite (`test/lattice/BPlusTree/`)
+Every chaos suite shares the same shape: a short chaos window (a few seconds of
+sustained workload with topology churn and / or fault injection), a bounded
+heal / drain phase, and a post-quiescence invariant assertion. Per-suite cost
+scales with the workload described in each suite's "What it proves" / "Purpose"
+column rather than being fixed, so this section stays accurate as suites are
+added without a per-suite runtime table to maintain.
 
-| Property | Happy-path | Faults (per case) | Resize | Reshard | Atomic vis. | Split + saga | Resize + saga | Reshard + saga | Digest |
-|---|---|---|---|---|---|---|---|---|---|
-| Chaos window | ~5 s | ~4 s | ~20 s | ~20 s | 50 saga rounds, ~10 ms each | 15 saga rounds | 15 saga rounds | 15 saga rounds | ~8 s |
-| Heal / assert | ~1 s | up to 15 s | ~1 s | ~1 s | n/a | drain to idle | drain to idle (up to 60 s) | drain to idle (up to 60 s) | ~1 s |
-| Wall-clock | ~8 s | ~20 s / case (~80 s total) | ~25 s | ~25 s | ~5-10 s | ~5-10 s | ~10-30 s | ~10-30 s | ~10 s |
-| Universe size | 500 | 200 | 200 | 200 | 16 | 16 | 16 | 16 | 200 |
-| Parallel workers | 16 | 14 | 7 + resize driver | 7 + reshard driver | 1 reader + 1 saga writer | 1 reader + 1 saga writer + split driver | 1 reader + 1 saga writer + resize driver | 1 reader + 1 saga writer + reshard driver | 4 writers + 2 scanners + 1 digest poller |
-| Shards (initial / post) | 4 / up to ~8 | 4 / up to ~6 | 4 / 4 (fan-out changed, shard count unchanged) | 4 / ≥ 8 | 4 / 4 | 4 / 5 (shard 0 split once) | 4 / 4 (fan-out 8/8) | 4 / 8 | 4 / 4 |
+- Single-cluster suites (`test/lattice/BPlusTree/`) run a 200-500 key universe
+  (16 keys for the saga-atomicity suites) across up to ~16 parallel workers -
+  writers, scanners, and a topology or saga driver - with a chaos window of a
+  few seconds and a heal / drain budget up to ~60 s for the saga-atomicity
+  suites. Trees start at 4 shards and may grow to ~8 under split / reshard.
+- Cross-cluster suites (`test/lattice.replication/Chaos/`) run two or three
+  in-process clusters over a fault-injectable inter-site delivery layer, with a
+  single-key or single-tree universe (the atomic-visibility suite uses ~72
+  keys), a chaos window of a few seconds with a site or edge partitioned
+  mid-workload, and a drain budget up to ~60 s. See
+  [the replication chaos tests](../lattice.replication/chaos-tests.md) for the
+  per-suite catalog.
 
-### Cross-cluster suite (`test/lattice.replication/Chaos/`)
+The cross-cluster, gRPC, and Azure Table suites drive the real replication
+pipeline (and the real gRPC transport service and Azure Table provider where
+applicable) rather than test doubles of that logic, but they run in-process:
+in-process test clusters with a simulated delivery pump, an in-memory test
+server, and the Azurite emulator stand in for networked silos and a real cloud
+storage account.
 
-| Property | Cross-cluster atomic vis. | LWW convergence | OR-Set convergence | PN-Counter convergence | MV-Register convergence | Multi-site smoke |
-|---|---|---|---|---|---|---|
-| Sites | 3 | 3 | 3 | 3 | 3 | 2 |
-| Chaos window | 18 sagas across 3 sites, partition cycled mid-workload | 120 writes across 3 sites, site 1 partitioned mid-window | 75 adds (test 1) / 51 adds+removes (test 2) across 3 sites, site 2 partitioned mid-window | 120 increments + 30 decrements across 3 sites, site 0 partitioned mid-window | 2 sequential site-0 writes followed by 1 concurrent write per peer with site 2 partitioned | single deterministic write per test |
-| Drain timeout | up to 60 s | up to 30 s | up to 30 s | up to 30 s | up to 30 s | up to 15 s |
-| Wall-clock | ~5 s | ~5 s | ~5 s / test | ~5-10 s | ~5 s / test | ~3 s / test |
-| Universe size | 72 keys (3 × 6 × 4) | 1 key | 1 key (set-valued) | 1 key (counter) | 1 key (multi-value register) | 1 key |
-| Parallel workers | 3 saga writers (one per site) + 6 inter-site delivery pumps | 3 writers + 6 delivery pumps | 3 writers + 6 delivery pumps | 3 writers + 6 delivery pumps | 1 writer + 2 delivery pumps |
-| Shards (per site) | default 64 / 64 | default 64 / 64 | default 64 / 64 | default 64 / 64 | default 64 / 64 |
+## Derived-state recovery across an identity swap
 
-The runtime tables above capture the originally-shipped baseline fixtures.
-Newer chaos tests (range delete, CAS, scan cancel, multi-silo restart, WAL
-trim, liveness probe, OR-Map convergence, compaction + shipping, the gRPC
-transport suite, and the Azure Table WAL suite) follow the same general
-shape - short chaos window, bounded drain, single-tree or single-key
-universe - and add per-suite cost in proportion to the workload described
-in their "Purpose" column above. The cross-cluster, gRPC, and Azure Table
-suites exercise the real `AddLatticeReplication` capture/ship/apply code paths
-(and the real gRPC transport service and Azure Table provider where applicable)
-rather than test doubles of that logic, but they run in-process: in-process test
-clusters with a simulated delivery pump, an in-memory test server, and the
-Azurite emulator stand in for networked silos and a real cloud storage account.
+Derived state that tails a source tree's write-ahead log - a folded /
+materialised view, and a tag index maintained in a sibling index tree - must
+recover when the source's PHYSICAL identity is repointed under its logical
+registry alias (a restore-style cutover, possibly repeated). Two chaos suites,
+each hosted in the sibling package whose fixture already stands up the machinery,
+cover this and are tracked by
+[issue #1167](https://github.com/NSTA1/Orleans.Lattice/issues/1167):
 
-## Planned suites
-
-The following suite is proposed but not yet implemented; it is tracked by
-[issue #1167](https://github.com/NSTA1/Orleans.Lattice/issues/1167).
-
-| Suite (planned) | What it will prove |
-|---|---|
-| Materialised-view recovery across an identity swap | A seeded tree carries an attached folded / materialised view (and a tag index). A sustained mutation workload runs while the tree's physical identity is repointed under its logical registry alias mid-window (a restore-style cutover, possibly repeated). After the workload quiesces, the view has rebuilt against the new physical identity and reflects exactly the post-swap tree contents (stale rows from the abandoned identity are gone, post-swap mutations are folded in), and the tag index's membership matches the reverted key set. Stresses the view maintainer's per-drain re-resolve + rebuild-and-rebind and the coverage-gated tag-index reconcile under load. Complements the deterministic single-swap regression that landed with the fix. |
+| Suite | Where | What it proves |
+|---|---|---|
+| Materialised-view recovery across an identity swap | `test/lattice.replication/Chaos/DerivedStateRecoveryAcrossIdentitySwapChaosTests.cs` | A folded view tails a logical source tree whose physical identity is repointed under its registry alias repeatedly, under a sustained mutation workload that accretes backlog between drains. On each drain the maintainer re-resolves the source to its current physical id, and on a change rebuilds against the new physical source and rebinds its tail. After the workload quiesces the view reflects exactly the final identity's contents: keys dropped by a cutover are retracted (a WAL tail alone can never retract a key the restored source never had), changed values win, and a large abandoned backlog never survives. Complements the deterministic single-swap regression that landed with the maintainer heal. |
+| Tag-index reconcile under repeated restore | `test/lattice.backup/Chaos/BackupRestoreReconcileChaosTests.cs` | A tag index over a live subject tree is driven through a real shadow-cutover restore under a large tagged working set with a concurrent reader hammering the tag query. The restore fires a prompt reconcile that drops every membership row absent from the restored point-in-time; the reader never observes an out-of-universe key or a torn membership. Repeated restores to successively earlier point-in-times narrow membership monotonically to each restore's subject with no row stranded from a superseded restore. |
 
 ## See also
 
