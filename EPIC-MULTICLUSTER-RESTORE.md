@@ -1,0 +1,91 @@
+# Epic coordination: coordinated multi-cluster restore via a cross-cluster saga
+
+Tracking issue: **#1170** (epic). This file coordinates the implementation and is the
+single source of truth for progress. It is transient: it lives on the integration branch
+`feat/replication-backup-restore-coordination` and is **removed before the final epic PR to
+main**.
+
+> Note: this file deliberately refers to sub-issues by GitHub number and descriptive name
+> only (never by roadmap tracker ids) and stays plain ASCII, so it does not trip the
+> repo-root hygiene gates (tracker-id, em-dash, mojibake).
+
+## Roles
+
+- **Coordinator (resident):** owns this file, the integration branch, `CHANGELOG.md`,
+  `docs/**`, and `features.md`. Reviews every sub-issue for correctness, test gaps, and
+  unnecessary memory allocations before it lands on the integration branch. Runs the
+  non-chaos suite at the integration points below. Stays resident for the whole epic; opens
+  the single epic PR to main at the end.
+- **Sub-agents (feature-dev):** implement one sub-issue each, strictly to its GitHub issue
+  body, plus targeted tests.
+
+## Hard rules for sub-agents
+
+1. Work in a **dedicated git worktree** on a **child branch off the integration branch tip**
+   (the coordinator creates the worktree and branch and hands over the absolute path). Never
+   touch the coordinator's checkout.
+2. Implement only the assigned issue. **Targeted tests only** (Tier 1/2): they may build and
+   run their own narrow tests, but **must not** run the non-chaos suite, the full suite, or
+   chaos tests.
+3. **Must not** modify `CHANGELOG.md`, `features.md`, or anything under `docs/**`. **Must
+   not** create planning/notes markdown.
+4. **Must not** open PRs, merge, push to main, or edit this file.
+5. Commit on the child branch with ASCII-only messages, no author-attribution trailers.
+6. Honour repo conventions: serialization discipline (`[GenerateSerializer]`, stable
+   `[Alias]`, sequential `[Id]`, `[Immutable]` where apt), `ArgumentNullException.ThrowIfNull`
+   on public params, XML docs on public surface, file-scoped namespaces, one top-level type
+   per file, no em-dash / non-ASCII.
+
+## Coordinator review checklist (per sub-issue, before merge to integration branch)
+
+- Correctness against the issue's design and acceptance criteria.
+- Test coverage: every new public type/member has a test; the issue's acceptance scenarios
+  are exercised; targeted tests actually run green.
+- Unnecessary memory allocations on hot paths (avoidable LINQ/closures/boxing, needless
+  copies, `ValueTask` fast-path opportunities per repo guidance).
+- Serialization/versioning discipline and naming conventions.
+- No forbidden edits (docs/changelog/features.md untouched by the sub-agent).
+
+## Worktree workflow (coordinator)
+
+```
+# create child branch + worktree off the integration branch tip
+git worktree add -b feat/<child> ../lattice-wt/<child> feat/replication-backup-restore-coordination
+# ... launch feature-dev with cwd = absolute worktree path ...
+# review child branch, then integrate:
+git switch feat/replication-backup-restore-coordination
+git merge --no-ff feat/<child>
+git worktree remove ../lattice-wt/<child>
+git branch -d feat/<child>
+```
+
+## Sub-issue plan (dependency order)
+
+| Order | Issue | Title (short) | Depends on | Status |
+|---|---|---|---|---|
+| 1 | #1171 | Cross-cluster saga control channel (gRPC) | - | pending |
+| 2 | #1172 | Durable saga coordinator + internal participant model | #1171 | pending |
+| 3 | #1173 | Per-tree write fence + shipping pause | #1172 | pending |
+| 4 | #1174 | Shared external sink, capturing-cluster stamp, chain affinity | - | pending |
+| 5 | #1175 | Coordinated restore as first internal participant | #1172, #1173, #1174 | pending |
+| 6 | #1176 | Public user-defined saga participant SPI | #1175 | pending |
+| 7 | #1177 | Observability, docs, sample wiring, chaos coverage | all | pending |
+
+## Non-chaos integration points (coordinator runs these)
+
+- After #1171 lands: build + targeted replication / replication.grpc suites.
+- After #1173 lands: non-chaos on the replication + core slices (coordinator + fence + control channel together).
+- After #1175 lands: **full non-chaos suite** (this is the correctness milestone that fixes #1169).
+- After #1177 lands / before the epic PR: **mandatory full non-chaos run with blame-hang**
+  (`dotnet test --filter "TestCategory!=Chaos" --blame-hang --blame-hang-timeout 3m`), plus
+  the docs-snippet gate since docs land here.
+
+## Coordinator-owned artifacts (added as sub-issues land, by the coordinator only)
+
+- `CHANGELOG.md` entries.
+- `features.md` moves (Planned -> Shipped) once each capability is on main (done at/after the epic PR).
+- `docs/**` and sample wiring (with #1177).
+
+## Progress log
+
+- Setup: integration branch `feat/replication-backup-restore-coordination` created off main; coordination file added.
