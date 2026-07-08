@@ -49,7 +49,7 @@ A restore is idempotent: re-running the same request converges to the same state
 
 `RevertRestoreAsync` undoes a shadow-cutover by swapping the registry alias back to `PreviousPhysicalTreeId`, restoring the pre-restore state. It is idempotent and rejects a result that did not come from a shadow-cutover restore.
 
-Because a restore preserves each entry's origin cluster id and provenance, a restored tree re-synchronizes per origin faithfully under replication rather than presenting as a single new origin.
+Because a restore preserves each entry's origin cluster id and provenance, a restored tree replays its captured per-origin history faithfully rather than presenting as a single new origin. That preservation is necessary but, for a replicated tree, not sufficient on its own: a single cluster restoring in isolation can have its restored cut re-advanced by the cross-cluster union of the other peers. Restoring a tree that is currently replicated is therefore promoted to an all-or-nothing coordinated restore across the tree's current peers - every cluster builds its shadow, then commits the cutover together under a shared write fence, or all clusters compensate back to their pre-restore state. Restoring an unreplicated tree needs no such coordination and takes the plain local path above. Backup sets restore every member tree as one group under the same coordinated cutover.
 
 ## Scheduling and retention
 
