@@ -45,9 +45,12 @@ phases:
    restarting from zero. Each participant returns a vote.
 2. **Commit** - reached only if **every** participant on every cluster voted to
    commit. Each participant engages a short per-tree **write fence**, atomically
-   swaps the tree's alias to the restored shadow, then lifts the fence and
-   resumes shipping. The fence is held only for the cutover, not for the whole
-   build, so healthy clusters are not write-starved while a large tree builds.
+   swaps the tree's alias to the restored shadow, then unblocks local writes.
+   Local writes resume as soon as the cutover completes, but cross-cluster
+   shipping and receiving stay paused until the saga completes globally, so an
+   early-flipping cluster cannot re-advance the restored cut. The write fence is
+   held only for the cutover, not for the whole build, so healthy clusters are
+   not write-starved while a large tree builds.
 3. **Abort** - reached if any participant voted to abort. Every participant that
    prepared is compensated: its shadow is reverted and garbage collected and the
    pre-restore tree is left untouched.

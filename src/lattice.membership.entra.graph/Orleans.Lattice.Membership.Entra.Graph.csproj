@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Membership.Entra.Graph</PackageId>
-    <Version>7.8.0</Version>
+    <Version>7.9.0</Version>
     <Description>Microsoft Graph-backed group resolver for Orleans.Lattice.Membership.Entra. Resolves a caller's full transitive Entra group membership when a token's groups claim overflows, using an app-only Microsoft Graph client whose access token is acquired, cached, and transparently refreshed via the MSAL confidential-client token cache with a single shared in-flight refresh. Isolates the Microsoft Graph and MSAL dependencies from the core Entra authenticator package.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>

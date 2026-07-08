@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Replication.Grpc</PackageId>
-    <Version>7.8.0</Version>
+    <Version>7.9.0</Version>
     <Description>gRPC binding for Orleans.Lattice.Replication. Ships the canonical IReplicationTransport (live-push) and IRemoteSnapshotTransport (bootstrap) over a unified gRPC pipeline with HTTPS-by-default, shared-secret authentication, and per-peer channel reuse. Registered with a single AddLatticeReplicationGrpc(...) helper.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>

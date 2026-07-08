@@ -20,6 +20,10 @@ on:
       #   lattice.api.auth.grpc-v7.8.0
       #   lattice.api.data-v7.8.0
       #   lattice.api.data.grpc-v7.8.0
+      #   lattice.backup-v7.9.0
+      #   lattice.backup.azureblob-v7.9.0
+      #   lattice.api.backup-v7.9.0
+      #   lattice.api.backup.grpc-v7.9.0
       # The tag prefix is the literal folder name under src/, dots and all.
       - 'lattice-v*'
       - 'lattice.replication-v*'
@@ -36,6 +40,10 @@ on:
       - 'lattice.api.auth.grpc-v*'
       - 'lattice.api.data-v*'
       - 'lattice.api.data.grpc-v*'
+      - 'lattice.backup-v*'
+      - 'lattice.backup.azureblob-v*'
+      - 'lattice.api.backup-v*'
+      - 'lattice.api.backup.grpc-v*'
 
 jobs:
   publish:

@@ -77,6 +77,47 @@ Manifest members:
 - `IAsyncEnumerable<BackupManifest> ListManifestsAsync(CancellationToken cancellationToken = default)` - enumerates every manifest in backup-id order.
 - `Task<bool> DeleteManifestAsync(string backupId, CancellationToken cancellationToken = default)` - removes a manifest; returns `true` when one was removed. Does not remove referenced artifacts. Throws `ArgumentException` when `backupId` is null or empty.
 
+## Extension seams (coordinated restore)
+
+These backup-package-local seams let the replication package layer an atomic multi-tree, multi-cluster restore on top of the backup engine without the backup package taking a dependency on replication. Each has a default no-op registration installed by `AddLatticeBackup`, so a single-cluster host always takes the plain local restore path; the replication package (or the host) supplies the real implementation.
+
+### `IRestoreSagaDispatcher`
+
+The seam the restore path consults so a restore into a replicated tree can be promoted to an all-or-nothing coordinated restore across every cluster that replicates the target. The decision is a function of the target tree's current replication status, never of the backup's origin. The default registration never dispatches.
+
+- `Task<LatticeRestoreResult?> TryDispatchAsync(LatticeRestoreRequest request, CancellationToken cancellationToken = default)` - offers a single-tree restore to the coordinated path; returns the local cluster's result when the coordinated path handled it, or `null` to signal the caller should run the plain local restore. Throws `ArgumentNullException` when `request` is null.
+- `Task<IReadOnlyList<LatticeRestoreResult>?> TryDispatchSetAsync(string setId, LatticeRestoreMode mode, CancellationToken cancellationToken = default)` - offers a backup-set restore as one atomic unit over the union of the replicated members' peer sets; returns this cluster's per-member results, or `null` when no member is replicated (or the id is not a set id). Throws `ArgumentException` when `setId` is null or empty.
+
+### `IReplicatedTreeMembership`
+
+The seam the fail-fast sink guard consults to learn whether a tree participates in the cross-cluster replication set (a replicated tree must be backed by a shared external sink, not the default in-cluster sink). The default registration reports nothing replicated.
+
+- `bool IsReplicated(string treeId)` - reports whether the tree participates in the replication set. Throws `ArgumentNullException` when `treeId` is null.
+- `IReadOnlyCollection<string> ReplicatedTrees { get; }` - the ids of every replicated tree.
+
+### `ILatticeCoordinatedRestoreEngine`
+
+Decomposes the atomic `ShadowCutover` restore into the separate phases a coordinated restore saga drives independently. The single `ILatticeBackupRestoreService.RestoreAsync` entry point composes these same phases for the local path, so both paths share one alias swap. Saga-unaware: it exposes the mechanism without any knowledge of the coordinator, write fence, or participant model.
+
+- `Task<RestoreAdmissionReport> ProbeAdmissionAsync(LatticeRestoreRequest request, CancellationToken cancellationToken = default)` - resolves the target's manifest chain and reports its size and topology without validating, fencing, or building, so an infeasible target is refused up front. Throws `ArgumentNullException` (`request` null) and `LatticeRestoreValidationException` (a chain member is missing).
+- `Task<LatticeRestoreResult> BuildShadowAsync(LatticeRestoreRequest request, CancellationToken cancellationToken = default)` - builds the shadow tree from the manifest chain into a fresh physical tree without swapping the alias or fencing the live tree. Idempotent and resumable. Throws `ArgumentNullException` (`request` null), `ArgumentException` (not a shadow-cutover request), and `LatticeRestoreValidationException` (validation failure).
+- `Task CommitShadowAsync(LatticeRestoreResult shadow, CancellationToken cancellationToken = default)` - commits a built shadow by atomically swapping the registry alias, then refreshing routing and converging any covering tag index. The caller engages the write fence around this call. Idempotent. Throws `ArgumentNullException` (`shadow` null) and `ArgumentException` (not a shadow-cutover build result).
+- `Task DeleteShadowAsync(string shadowPhysicalTreeId, CancellationToken cancellationToken = default)` - reliably garbage-collects an orphaned shadow so an aborted restore leaks no storage. Idempotent. Throws `ArgumentException` when `shadowPhysicalTreeId` is null or empty.
+- `string ResolveShadowTreeId(LatticeRestoreRequest request)` - deterministically resolves the shadow tree id a build of `request` would produce, without I/O, so an aborting participant can garbage-collect by id after losing its in-memory state. Throws `ArgumentNullException` (`request` null) and `ArgumentException` (no explicit target tree).
+
+### `ILatticeBackupSetResolver`
+
+The saga-unaware read seam that expands a captured backup-set id into the per-tree member backups it references, so the restore path can restore every tree in a set as one unit.
+
+- `Task<IReadOnlyList<BackupSetMember>> ResolveMembersAsync(string setId, CancellationToken cancellationToken = default)` - resolves the set's member backups in tree-id order, or an empty list when the id is not a set id (for example a single-tree backup id). Throws `ArgumentException` when `setId` is null or empty.
+
+### `BackupSetMember`
+
+One resolved member of a captured backup set: the member backup id and the tree it restores. Returned by `ILatticeBackupSetResolver`. An in-process value only (no serializer surface).
+
+- `string BackupId` - the content-addressed id of the member backup.
+- `string TreeId` - the tree the member backup restores.
+
 ## Requests and results
 
 ### `LatticeBackupCaptureRequest`
@@ -208,6 +249,13 @@ The selected cross-tree causal fence of a cross-tree-consistent set.
 - Constructor: `BackupRetentionReport(int retainedCount, IReadOnlyList<string> prunedBackupIds)`. Throws `ArgumentOutOfRangeException` (`retainedCount` negative), `ArgumentNullException` (`prunedBackupIds` null).
 - Properties: `int RetainedCount`, `IReadOnlyList<string> PrunedBackupIds`, `int PrunedCount` (equals `PrunedBackupIds.Count`).
 - `static BackupRetentionReport Empty` - a report that retained nothing and pruned nothing.
+
+### `RestoreAdmissionReport`
+
+The self-describing size and topology of a restore, resolved from the target backup's manifest chain before any fence is engaged or shadow tree is built, so a coordinated restore can hard-refuse an infeasible target up front. Returned by `ILatticeCoordinatedRestoreEngine.ProbeAdmissionAsync`. An in-process value only (no serializer surface).
+
+- Constructor: `RestoreAdmissionReport(string backupId, string targetTreeId, long totalByteLength, long totalChunkCount, int shardCount, IReadOnlyList<string> manifestChain)`. Throws `ArgumentException` (a required string null/empty), `ArgumentNullException` (`manifestChain` null), and `ArgumentOutOfRangeException` (`totalByteLength`/`totalChunkCount` negative, `shardCount` not positive).
+- Properties: `string BackupId`, `string TargetTreeId`, `long TotalByteLength`, `long TotalChunkCount`, `int ShardCount`, `IReadOnlyList<string> ManifestChain` (base-first order).
 
 ### `BackupSchedulerRuntimeStatus`
 
