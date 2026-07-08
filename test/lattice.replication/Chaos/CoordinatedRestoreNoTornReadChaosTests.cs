@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Lattice;
 using Orleans.Lattice.Backup;
 using Orleans.Lattice.Replication.Grains;
+using Orleans.Runtime;
 
 namespace Orleans.Lattice.Replication.Tests.Chaos;
 
@@ -181,7 +182,33 @@ public sealed class CoordinatedRestoreNoTornReadChaosTests
             return;
         }
 
-        await foreach (var entry in source.EntriesAsync())
+        // Drain the source in one tight pass before shipping. Holding the source
+        // grain's streaming enumerator open across a slow cross-cluster write on
+        // every entry lets the server-side enumerator idle out (or its activation
+        // be collected) mid-scan, surfacing as a transient
+        // EnumerationAbortedException; a real shipper re-scans on that signal.
+        // Buffering first removes the idle window, and the bounded re-scan covers
+        // a genuine mid-scan activation loss. Neither weakens the torn-read /
+        // re-advance assertions, which check tree content, not enumerator liveness.
+        var buffer = new List<KeyValuePair<string, byte[]>>();
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                buffer.Clear();
+                await foreach (var entry in source.EntriesAsync())
+                {
+                    buffer.Add(entry);
+                }
+                break;
+            }
+            catch (EnumerationAbortedException) when (attempt < 4)
+            {
+                // Transient enumerator loss; re-scan from the start.
+            }
+        }
+
+        foreach (var entry in buffer)
         {
             await dest.SetAsync(entry.Key, entry.Value);
         }
