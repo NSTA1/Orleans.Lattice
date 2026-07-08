@@ -37,7 +37,7 @@ A receiver whose per-origin high-water mark is older than the sender's oldest WA
 - [R-157](https://github.com/NSTA1/Orleans.Lattice/issues/1171) - Cross-cluster saga control channel on the gRPC replication transport
 - [R-158](https://github.com/NSTA1/Orleans.Lattice/issues/1172) - Durable saga coordinator and internal participant model
 - [R-159](https://github.com/NSTA1/Orleans.Lattice/issues/1173) - Per-tree write fence and shipping pause for saga duration
-- [R-160](https://github.com/NSTA1/Orleans.Lattice/issues/1174) - Shared external sink requirement and single-writer coordinated capture
+- [R-160](https://github.com/NSTA1/Orleans.Lattice/issues/1174) - Shared external sink, capturing-cluster stamp and incremental chain affinity
 - [R-161](https://github.com/NSTA1/Orleans.Lattice/issues/1175) - Coordinated multi-cluster restore as the first internal saga participant
 - [R-162](https://github.com/NSTA1/Orleans.Lattice/issues/1176) - Public user-defined saga participant SPI
 - [R-163](https://github.com/NSTA1/Orleans.Lattice/issues/1177) - Observability, docs, sample wiring and chaos coverage for coordinated restore
