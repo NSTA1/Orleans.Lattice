@@ -115,6 +115,9 @@ internal sealed class CrossClusterSagaParticipantGrain : TtlGrain<CrossClusterSa
             "Cross-cluster saga participant {SagaId}: cutover fence expired without a coordinator " +
             "decision; auto-compensating.",
             SagaId);
+        LatticeReplicationMetrics.SagaCompensations.Add(1,
+            new KeyValuePair<string, object?>(
+                LatticeReplicationMetrics.TagCause, LatticeReplicationMetrics.SagaCauseCoordinatorLoss));
         await CompensateParticipantsAsync();
         _state.State.Phase = SagaPhase.Aborted;
         _state.State.Vote = SagaVote.Abort;
@@ -238,6 +241,9 @@ internal sealed class CrossClusterSagaParticipantGrain : TtlGrain<CrossClusterSa
         {
             case SagaPhase.Prepared:
                 await CompensateParticipantsAsync(request);
+                LatticeReplicationMetrics.SagaCompensations.Add(1,
+                    new KeyValuePair<string, object?>(
+                        LatticeReplicationMetrics.TagCause, LatticeReplicationMetrics.SagaCauseVoteAbort));
                 _state.State.Phase = SagaPhase.Aborted;
                 _state.State.Vote = SagaVote.Abort;
                 _state.State.FenceDeadlineTicks = 0;

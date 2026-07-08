@@ -81,6 +81,7 @@ internal sealed class SagaWriteFenceGrain(
         state.State.CoordinatorClusterId = request.CoordinatorClusterId;
         state.State.WritesUnblocked = false;
         state.State.ShippingResumed = false;
+        state.State.EngagedAtTicks = DateTime.UtcNow.Ticks;
         await state.WriteStateAsync();
 
         await EngageWriteFenceAsync(sagaId, deadline);
@@ -105,6 +106,7 @@ internal sealed class SagaWriteFenceGrain(
 
         var sagaId = state.State.SagaId!;
         await LiftWriteFenceAsync(sagaId);
+        RecordFenceDurationOnce();
         state.State.WritesUnblocked = true;
         state.State.Phase = SagaWriteFencePhase.WritesUnblocked;
         await state.WriteStateAsync();
@@ -127,6 +129,7 @@ internal sealed class SagaWriteFenceGrain(
         await ResumeShippingAsync(sagaId);
         await ResumeReceiveAsync(sagaId);
 
+        RecordFenceDurationOnce();
         state.State.WritesUnblocked = true;
         state.State.ShippingResumed = true;
         state.State.Phase = SagaWriteFencePhase.Lifted;
@@ -167,6 +170,7 @@ internal sealed class SagaWriteFenceGrain(
         state.State.CoordinatorClusterId = null;
         state.State.WritesUnblocked = false;
         state.State.ShippingResumed = false;
+        state.State.EngagedAtTicks = 0;
         await state.WriteStateAsync();
     }
 
@@ -190,6 +194,7 @@ internal sealed class SagaWriteFenceGrain(
             && DateTime.UtcNow.Ticks >= state.State.FenceDeadlineTicks)
         {
             await LiftWriteFenceAsync(sagaId);
+            RecordFenceDurationOnce();
             state.State.WritesUnblocked = true;
             state.State.Phase = SagaWriteFencePhase.WritesUnblocked;
             await state.WriteStateAsync();
@@ -210,6 +215,7 @@ internal sealed class SagaWriteFenceGrain(
                 await LiftWriteFenceAsync(sagaId);
                 await ResumeShippingAsync(sagaId);
                 await ResumeReceiveAsync(sagaId);
+                RecordFenceDurationOnce();
                 state.State.WritesUnblocked = true;
                 state.State.ShippingResumed = true;
                 state.State.Phase = SagaWriteFencePhase.Lifted;
@@ -225,6 +231,34 @@ internal sealed class SagaWriteFenceGrain(
     {
         await UnregisterPollReminderAsync();
         await SlideTtlAsync();
+    }
+
+    /// <summary>
+    /// Records the per-tree write-fence window duration (engage to write-fence
+    /// lift) exactly once, on the first lift of the write fence. A no-op when the
+    /// write fence was already lifted or no engage timestamp is recorded, so
+    /// repeated lift call sites (local flip, self-lift deadline, global-completion
+    /// or terminal lift) never double-count.
+    /// </summary>
+    private void RecordFenceDurationOnce()
+    {
+        if (state.State.WritesUnblocked || state.State.EngagedAtTicks <= 0)
+        {
+            return;
+        }
+
+        var elapsedMs = (DateTime.UtcNow.Ticks - state.State.EngagedAtTicks) / (double)TimeSpan.TicksPerMillisecond;
+        if (elapsedMs < 0)
+        {
+            elapsedMs = 0;
+        }
+
+        foreach (var tree in state.State.Trees)
+        {
+            LatticeReplicationMetrics.SagaFenceDuration.Record(
+                elapsedMs,
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, tree));
+        }
     }
 
     private SagaWriteFenceSnapshot Snapshot() => new()

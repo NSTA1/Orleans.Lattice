@@ -49,4 +49,13 @@ internal sealed class SagaWriteFenceState
     /// </summary>
     [Id(6)]
     public bool ShippingResumed { get; set; }
+
+    /// <summary>
+    /// Absolute UTC tick at which the write fence was engaged. Used to record the
+    /// per-tree write-fence window duration (engage to write-fence lift) as an
+    /// observability histogram; persisted so the measurement survives a
+    /// reactivation between engage and lift.
+    /// </summary>
+    [Id(7)]
+    public long EngagedAtTicks { get; set; }
 }

@@ -234,6 +234,22 @@ internal sealed class CrossClusterSagaCoordinatorGrain(
     /// </summary>
     private async Task PreparePhaseAsync()
     {
+        var startTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
+        {
+            await RunPreparePhaseAsync();
+        }
+        finally
+        {
+            LatticeReplicationMetrics.SagaPhaseDuration.Record(
+                System.Diagnostics.Stopwatch.GetElapsedTime(startTicks).TotalMilliseconds,
+                new KeyValuePair<string, object?>(
+                    LatticeReplicationMetrics.TagPhase, LatticeReplicationMetrics.SagaPhasePrepare));
+        }
+    }
+
+    private async Task RunPreparePhaseAsync()
+    {
         // Coordinator-side prepare-progress (build) deadline. A long-running
         // participant prepare is allowed up to this window; past it the
         // coordinator gives up and aborts. Distinct from the participant's short
@@ -315,6 +331,23 @@ internal sealed class CrossClusterSagaCoordinatorGrain(
     private async Task FinalizePhaseAsync()
     {
         var commit = state.State.Phase == CrossClusterSagaPhase.Committed;
+        var startTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
+        {
+            await RunFinalizePhaseAsync(commit);
+        }
+        finally
+        {
+            LatticeReplicationMetrics.SagaPhaseDuration.Record(
+                System.Diagnostics.Stopwatch.GetElapsedTime(startTicks).TotalMilliseconds,
+                new KeyValuePair<string, object?>(
+                    LatticeReplicationMetrics.TagPhase,
+                    commit ? LatticeReplicationMetrics.SagaPhaseCommit : LatticeReplicationMetrics.SagaPhaseAbort));
+        }
+    }
+
+    private async Task RunFinalizePhaseAsync(bool commit)
+    {
         var participants = state.State.Participants;
         var request = BuildRequest();
 

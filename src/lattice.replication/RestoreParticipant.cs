@@ -70,6 +70,21 @@ internal sealed class RestoreParticipant(
     private readonly ConcurrentDictionary<string, LatticeRestoreResult> _built =
         new(StringComparer.Ordinal);
 
+    /// <summary>Records a participant prepare vote on the saga vote counter, tagged by reason.</summary>
+    private static void RecordVote(string reason) =>
+        LatticeReplicationMetrics.SagaParticipantVotes.Add(1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, reason));
+
+    /// <summary>Records a participant commit on the saga commit counter, tagged by reason.</summary>
+    private static void RecordCommit(string reason) =>
+        LatticeReplicationMetrics.SagaParticipantCommits.Add(1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, reason));
+
+    /// <summary>Records a participant abort on the saga abort counter, tagged by reason.</summary>
+    private static void RecordAbort(string reason) =>
+        LatticeReplicationMetrics.SagaParticipantAborts.Add(1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, reason));
+
     /// <summary>
     /// Best-effort in-memory cache of the group of shadows built for a <b>set</b>
     /// restore, keyed by saga id. Parallel to <see cref="_built"/> (which holds a
@@ -117,6 +132,7 @@ internal sealed class RestoreParticipant(
     {
         if (engine is null)
         {
+            RecordVote(LatticeReplicationMetrics.SagaReasonEngineUnavailable);
             return new SagaParticipantPrepareResult(
                 SagaVote.Abort,
                 "Restore engine unavailable: the backup package is not wired on this cluster.");
@@ -146,6 +162,7 @@ internal sealed class RestoreParticipant(
             logger.LogWarning(ex,
                 "Restore participant: admission probe failed for saga '{SagaId}' (backup '{BackupId}').",
                 request.SagaId, request.ManifestId);
+            RecordVote(LatticeReplicationMetrics.SagaReasonInfeasible);
             return new SagaParticipantPrepareResult(
                 SagaVote.Abort, $"Admission probe failed: {ex.Message}");
         }
@@ -155,6 +172,7 @@ internal sealed class RestoreParticipant(
             logger.LogWarning(
                 "Restore participant: target infeasible for saga '{SagaId}': {Bytes} byte(s) over {Shards} shard(s).",
                 request.SagaId, report.TotalByteLength, report.ShardCount);
+            RecordVote(LatticeReplicationMetrics.SagaReasonInfeasible);
             return new SagaParticipantPrepareResult(
                 SagaVote.Abort,
                 $"Target infeasible: cannot host {report.TotalByteLength} byte(s) over {report.ShardCount} shard(s).");
@@ -170,6 +188,7 @@ internal sealed class RestoreParticipant(
             {
                 var result = await engine.BuildShadowAsync(restoreRequest, cancellationToken);
                 _built[request.SagaId] = result;
+                RecordVote(LatticeReplicationMetrics.SagaReasonCommit);
                 return new SagaParticipantPrepareResult(SagaVote.Commit);
             }
             catch (OperationCanceledException)
@@ -182,6 +201,7 @@ internal sealed class RestoreParticipant(
                 // is permanent, not a capacity problem - do not retry.
                 await SafeGarbageCollectAsync(restoreRequest, cancellationToken);
                 _built.TryRemove(request.SagaId, out _);
+                RecordVote(LatticeReplicationMetrics.SagaReasonPrecondition);
                 return new SagaParticipantPrepareResult(
                     SagaVote.Abort, $"Precondition failed: {ex.Message}");
             }
@@ -198,6 +218,7 @@ internal sealed class RestoreParticipant(
                     request.SagaId);
                 await SafeGarbageCollectAsync(restoreRequest, cancellationToken);
                 _built.TryRemove(request.SagaId, out _);
+                RecordVote(LatticeReplicationMetrics.SagaReasonBuildFailed);
                 return new SagaParticipantPrepareResult(
                     SagaVote.Abort, $"Shadow build failed: {ex.Message}");
             }
@@ -252,6 +273,7 @@ internal sealed class RestoreParticipant(
         // shipping stays paused until the saga globally completes (the fence
         // grain's global gate), so no early-flipping cluster re-advances the cut.
         await fence.UnblockWritesAsync();
+        RecordCommit(LatticeReplicationMetrics.SagaReasonSingle);
     }
 
     /// <inheritdoc />
@@ -263,6 +285,7 @@ internal sealed class RestoreParticipant(
         {
             // Backup not wired: nothing was prepared. Lift any fence and return.
             await fence.LiftAsync();
+            RecordAbort(LatticeReplicationMetrics.SagaReasonEngineUnavailable);
             return;
         }
 
@@ -297,6 +320,7 @@ internal sealed class RestoreParticipant(
         }
 
         await fence.LiftAsync();
+        RecordAbort(LatticeReplicationMetrics.SagaReasonSingle);
     }
 
     /// <inheritdoc />
@@ -391,6 +415,7 @@ internal sealed class RestoreParticipant(
                     "Restore participant: set admission probe failed for saga '{SagaId}' (member tree '{TreeId}').",
                     request.SagaId, restoreRequest.TargetTreeId);
                 await GarbageCollectAllAsync(built, requests, cancellationToken);
+                RecordVote(LatticeReplicationMetrics.SagaReasonInfeasible);
                 return new SagaParticipantPrepareResult(
                     SagaVote.Abort, $"Set admission probe failed: {ex.Message}");
             }
@@ -401,6 +426,7 @@ internal sealed class RestoreParticipant(
                     "Restore participant: set member tree '{TreeId}' infeasible for saga '{SagaId}'.",
                     restoreRequest.TargetTreeId, request.SagaId);
                 await GarbageCollectAllAsync(built, requests, cancellationToken);
+                RecordVote(LatticeReplicationMetrics.SagaReasonInfeasible);
                 return new SagaParticipantPrepareResult(
                     SagaVote.Abort,
                     $"Set member '{restoreRequest.TargetTreeId}' infeasible: cannot host " +
@@ -421,12 +447,14 @@ internal sealed class RestoreParticipant(
                     "Restore participant: set member '{TreeId}' shadow build failed for saga '{SagaId}'; aborting the whole set.",
                     restoreRequest.TargetTreeId, request.SagaId);
                 await GarbageCollectAllAsync(built, requests, cancellationToken);
+                RecordVote(LatticeReplicationMetrics.SagaReasonBuildFailed);
                 return new SagaParticipantPrepareResult(
                     SagaVote.Abort, $"Set member '{restoreRequest.TargetTreeId}' build failed: {ex.Message}");
             }
         }
 
         _builtSets[request.SagaId] = built;
+        RecordVote(LatticeReplicationMetrics.SagaReasonCommit);
         return new SagaParticipantPrepareResult(SagaVote.Commit);
     }
 
@@ -481,6 +509,7 @@ internal sealed class RestoreParticipant(
         }
 
         await fence.UnblockWritesAsync();
+        RecordCommit(LatticeReplicationMetrics.SagaReasonSet);
     }
 
     /// <summary>
@@ -526,6 +555,7 @@ internal sealed class RestoreParticipant(
         }
 
         await fence.LiftAsync();
+        RecordAbort(LatticeReplicationMetrics.SagaReasonSet);
     }
 
     /// <summary>Garbage collects every already-built member and any not-yet-built shadow of a failed set prepare.</summary>
