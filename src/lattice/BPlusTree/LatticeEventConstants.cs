@@ -394,4 +394,26 @@ public static class LatticeEventConstants
     /// no-auth cluster never sets or reads it.
     /// </summary>
     internal const string InternalGrainOriginRequestContextKey = "ol.igo";
+
+    /// <summary>
+    /// Orleans <c>RequestContext</c> key carrying the logical tree ID that a
+    /// <c>LatticeGrain</c> activation is currently routing an operation for.
+    /// Stamped by the routing tier on every shard-grain resolution
+    /// (<c>GetShardGrainAsync</c> / <c>GetShardGrainByIndex</c>) with the
+    /// activation's own <c>TreeId</c>, so it flows downstream to every shard
+    /// call in the same turn.
+    /// <para>
+    /// A shard whose <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.RetainedRedirect"/>
+    /// is set (its physical tree was superseded by a shadow-cutover restore but
+    /// retained for revert) reads this marker to distinguish
+    /// <em>logical-alias-routed</em> traffic - which must self-heal onto the
+    /// destination tree via <see cref="StaleTreeRoutingException"/> - from
+    /// direct-physical access and internal maintenance, which must keep
+    /// reading the retained tree. When the marker equals the shard's own
+    /// physical tree ID (direct-physical access) or is absent (maintenance
+    /// firing directly on the shard) the redirect gate is a no-op. The routing
+    /// tier overwrites any client-supplied value, so it cannot be forged.
+    /// </para>
+    /// </summary>
+    internal const string RoutedLogicalTreeIdRequestContextKey = "ol.rlt";
 }

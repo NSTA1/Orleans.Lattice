@@ -1663,6 +1663,7 @@ internal sealed partial class ShardRootGrain(
         // touches ShadowForward state, so for that case ThrowIfTreeRejecting
         // is a no-op and ThrowIfDeleted still fires correctly.
         ThrowIfTreeRejecting();
+        ThrowIfRetainedRedirect();
         ThrowIfDeleted();
 
         // Steady-state sync fast path: on the read hot path each `await`

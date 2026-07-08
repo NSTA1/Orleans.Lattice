@@ -149,19 +149,44 @@ internal sealed partial class LatticeGrain
         // Per-shard ShardActivationRetry wrap on the initial MoveNextAsync:
         // a single shard's cold-start seed-timeout retries only that shard,
         // not the whole scan init.
+        //
+        // The routing resolution + initial page fetch also run under a
+        // stale-alias self-heal retry: a shadow-cutover restore can supersede
+        // this tree between the activation-cache population and scan start,
+        // redirecting the retained shards with a StaleTreeRoutingException.
+        // Mirror the point-read/-write retry (see GetWithVersionAsync) so the
+        // scan re-resolves onto the current physical tree rather than surfacing
+        // the transient routing error to the caller.
         var movedReported = isSystemTree ? null : new HashSet<int>();
-        var cursors = new List<IKeyCursor>(physicalShards.Count);
-        var initTasks = new Task[physicalShards.Count];
-        for (int i = 0; i < physicalShards.Count; i++)
+        List<IKeyCursor> cursors;
+        var scanInitDeadline = DateTime.UtcNow + StaleRoutingWriteRetryBudget;
+        while (true)
         {
-            var sc = new ShardCursor(
-                GetShardGrainByIndex(physicalTreeId, physicalShards[i]),
-                startInclusive, endExclusive, pageSize, reverse, usePrefetch, movedReported, predicate);
-            cursors.Add(sc);
-            initTasks[i] = ShardActivationRetry.RunAsync(
-                () => sc.MoveNextAsync());
+            cursors = new List<IKeyCursor>(physicalShards.Count);
+            var initTasks = new Task[physicalShards.Count];
+            for (int i = 0; i < physicalShards.Count; i++)
+            {
+                var sc = new ShardCursor(
+                    GetShardGrainByIndex(physicalTreeId, physicalShards[i]),
+                    startInclusive, endExclusive, pageSize, reverse, usePrefetch, movedReported, predicate);
+                cursors.Add(sc);
+                initTasks[i] = ShardActivationRetry.RunAsync(
+                    () => sc.MoveNextAsync());
+            }
+            try
+            {
+                await Task.WhenAll(initTasks);
+                break;
+            }
+            catch (StaleTreeRoutingException)
+            {
+                if (DateTime.UtcNow >= scanInitDeadline) throw;
+                if (!TryInvalidateStaleAlias()) throw;
+                movedReported?.Clear();
+                (physicalTreeId, shardMap0) = await GetRoutingAsync();
+                physicalShards = shardMap0.GetPhysicalShardIndices();
+            }
         }
-        await Task.WhenAll(initTasks);
 
         var pq = new PriorityQueue<int, string>(comparer);
         for (int i = 0; i < cursors.Count; i++)

@@ -2760,6 +2760,13 @@ internal sealed partial class LatticeGrain(
 
     private ValueTask<IShardRootGrain> GetShardGrainAsync(string key)
     {
+        // Stamp the routed-logical marker so a retained (shadow-cutover
+        // superseded) shard can distinguish this logical-alias-routed
+        // operation from direct-physical access / maintenance and redirect us
+        // to self-heal. One RequestContext set on the shard-resolution path;
+        // it flows to the downstream shard call in the same turn.
+        RequestContext.Set(LatticeEventConstants.RoutedLogicalTreeIdRequestContextKey, TreeId);
+
         // Sync fast path: if routing is already cached, resolve the shard
         // index and look up the per-activation array cache synchronously.
         // Skips both the async state-machine box for this method AND the
@@ -2850,6 +2857,11 @@ internal sealed partial class LatticeGrain(
     /// </summary>
     private IShardRootGrain GetShardGrainByIndex(string physicalTreeId, int shardIndex)
     {
+        // See GetShardGrainAsync: stamp the routed-logical marker on every
+        // fan-out shard resolution too, so scans and multi-shard writes carry
+        // the same self-heal signal to a retained shard.
+        RequestContext.Set(LatticeEventConstants.RoutedLogicalTreeIdRequestContextKey, TreeId);
+
         var cache = _cachedShards;
         if (cache is not null && (uint)shardIndex < (uint)cache.Length && cache[shardIndex] is { } existing)
             return existing;
