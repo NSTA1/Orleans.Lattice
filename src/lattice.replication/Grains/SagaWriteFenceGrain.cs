@@ -31,7 +31,7 @@ internal sealed class SagaWriteFenceGrain(
     IGrainFactory grainFactory,
     ISagaCompletionSource completionSource,
     IOptionsMonitor<LatticeOptions> options)
-    : TtlGrain<SagaWriteFenceGrain>(grainContext, reminderRegistry, logger)
+    : TtlGrain<SagaWriteFenceGrain>(grainContext, reminderRegistry, logger), ISagaWriteFenceGrain
 {
     /// <summary>Default bounded cutover window sizing the self-lifting fence deadline.</summary>
     private const int DefaultFenceWindowSeconds = 300;

@@ -48,4 +48,15 @@ public readonly record struct SagaControlRequest
     /// is a known peer before any participant state changes.
     /// </summary>
     [Id(3)] public string CoordinatorClusterId { get; init; }
+
+    /// <summary>
+    /// When set, identifies the captured backup <b>set</b> this saga restores as
+    /// one atomic unit; the participant expands it into the set's member trees
+    /// (via the backup set read seam) and fences, builds, commits, or aborts every
+    /// hosted member tree as one group. <c>null</c> for an ordinary single-tree
+    /// restore, where <see cref="TargetTree"/> and <see cref="ManifestId"/> alone
+    /// describe the target. Additive and default-safe: a single-tree caller leaves
+    /// it unset and the participant takes the unchanged single-tree path.
+    /// </summary>
+    [Id(4)] public string? SetId { get; init; }
 }

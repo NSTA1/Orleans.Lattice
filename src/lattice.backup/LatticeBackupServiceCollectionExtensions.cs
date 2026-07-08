@@ -88,6 +88,7 @@ public static class LatticeBackupServiceCollectionExtensions
         builder.Services.TryAddSingleton<BackupInitializer>();
         builder.Services.TryAddSingleton<ILatticeBackupSink, InClusterLatticeBackupSink>();
         builder.Services.TryAddSingleton<ILatticeBackupCatalogStore, LatticeBackupCatalogStore>();
+        builder.Services.TryAddSingleton<ILatticeBackupSetResolver, LatticeBackupSetResolver>();
 
         // The backup-local replicated-tree membership seam. The default no-op
         // reports nothing replicated, which is correct for a single-cluster

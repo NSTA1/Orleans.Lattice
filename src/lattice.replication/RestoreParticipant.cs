@@ -49,7 +49,8 @@ internal sealed class RestoreParticipant(
     ILatticeBackupRestoreService? restoreService,
     IRestoreCapacityProbe capacity,
     IGrainFactory grainFactory,
-    ILogger<RestoreParticipant> logger) : ISagaParticipant
+    ILogger<RestoreParticipant> logger,
+    ILatticeBackupSetResolver? setResolver = null) : ISagaParticipant
 {
     /// <summary>
     /// Bounded retry budget for a transient capacity exhaustion mid-build. Past
@@ -65,6 +66,18 @@ internal sealed class RestoreParticipant(
     private const int CutoverFenceWindowSeconds = 0;
 
     private readonly ConcurrentDictionary<string, LatticeRestoreResult> _built =
+        new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Best-effort in-memory cache of the group of shadows built for a <b>set</b>
+    /// restore, keyed by saga id. Parallel to <see cref="_built"/> (which holds a
+    /// single-tree restore's one shadow); a set saga caches every member tree's
+    /// shadow here so commit flips and abort reverts all of them as one group. Not
+    /// durable: a reactivation that lost it re-derives every member deterministically
+    /// (commit rebuilds idempotently; abort resolves each shadow id without
+    /// rebuilding), so no durable participant state and no new serialized types.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, IReadOnlyList<LatticeRestoreResult>> _builtSets =
         new(StringComparer.Ordinal);
 
     /// <summary>
@@ -90,6 +103,12 @@ internal sealed class RestoreParticipant(
             return new SagaParticipantPrepareResult(
                 SagaVote.Abort,
                 "Restore engine unavailable: the backup package is not wired on this cluster.");
+        }
+
+        var setMembers = await ResolveSetMembersAsync(request, cancellationToken);
+        if (setMembers is not null)
+        {
+            return await PrepareSetAsync(request, setMembers, cancellationToken);
         }
 
         var restoreRequest = BuildRestoreRequest(request);
@@ -179,6 +198,13 @@ internal sealed class RestoreParticipant(
             return;
         }
 
+        var setMembers = await ResolveSetMembersAsync(request, cancellationToken);
+        if (setMembers is not null)
+        {
+            await CommitSetAsync(request, setMembers, cancellationToken);
+            return;
+        }
+
         var restoreRequest = BuildRestoreRequest(request);
 
         // Reuse the prepared shadow; if a reactivation lost the in-memory cache,
@@ -223,6 +249,13 @@ internal sealed class RestoreParticipant(
             return;
         }
 
+        var setMembers = await ResolveSetMembersAsync(request, cancellationToken);
+        if (setMembers is not null)
+        {
+            await AbortSetAsync(request, setMembers, fence, cancellationToken);
+            return;
+        }
+
         // Compensate: revert the alias to the pre-restore physical tree (a no-op
         // when this cluster never committed - the alias is already there), then
         // reliably garbage collect the shadow so no storage leaks, then lift the
@@ -254,6 +287,212 @@ internal sealed class RestoreParticipant(
         // The durable phase is owned by the participant grain; this SPI carries no
         // durable state of its own.
         Task.FromResult(SagaPhase.None);
+
+    /// <summary>
+    /// Resolves the set members this saga restores, or <c>null</c> when the request
+    /// is an ordinary single-tree restore. A non-null, non-empty result switches the
+    /// participant onto the group-atomic set path; a single-tree request (no
+    /// <see cref="SagaControlRequest.SetId"/>, or no set resolver wired) returns
+    /// <c>null</c> and takes the unchanged single-tree path with zero extra I/O.
+    /// </summary>
+    private async Task<IReadOnlyList<BackupSetMember>?> ResolveSetMembersAsync(
+        SagaControlRequest request, CancellationToken cancellationToken)
+    {
+        if (request.SetId is not { Length: > 0 } setId || setResolver is null)
+        {
+            return null;
+        }
+
+        var members = await setResolver.ResolveMembersAsync(setId, cancellationToken);
+        return members.Count > 0 ? members : null;
+    }
+
+    /// <summary>
+    /// Group-atomic prepare for a set: admits and builds every member tree's shadow
+    /// unfenced. If ANY member is infeasible or fails to build, every member built
+    /// so far is garbage collected and the whole set votes abort, so a set never
+    /// commits some trees while aborting others.
+    /// </summary>
+    private async Task<SagaParticipantPrepareResult> PrepareSetAsync(
+        SagaControlRequest request,
+        IReadOnlyList<BackupSetMember> members,
+        CancellationToken cancellationToken)
+    {
+        var requests = BuildSetRestoreRequests(members);
+        var built = new List<LatticeRestoreResult>(requests.Count);
+
+        foreach (var restoreRequest in requests)
+        {
+            RestoreAdmissionReport report;
+            try
+            {
+                report = await engine!.ProbeAdmissionAsync(restoreRequest, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "Restore participant: set admission probe failed for saga '{SagaId}' (member tree '{TreeId}').",
+                    request.SagaId, restoreRequest.TargetTreeId);
+                await GarbageCollectAllAsync(built, requests, cancellationToken);
+                return new SagaParticipantPrepareResult(
+                    SagaVote.Abort, $"Set admission probe failed: {ex.Message}");
+            }
+
+            if (!await capacity.CanHostAsync(report, cancellationToken))
+            {
+                logger.LogWarning(
+                    "Restore participant: set member tree '{TreeId}' infeasible for saga '{SagaId}'.",
+                    restoreRequest.TargetTreeId, request.SagaId);
+                await GarbageCollectAllAsync(built, requests, cancellationToken);
+                return new SagaParticipantPrepareResult(
+                    SagaVote.Abort,
+                    $"Set member '{restoreRequest.TargetTreeId}' infeasible: cannot host " +
+                    $"{report.TotalByteLength} byte(s) over {report.ShardCount} shard(s).");
+            }
+
+            try
+            {
+                built.Add(await engine!.BuildShadowAsync(restoreRequest, cancellationToken));
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "Restore participant: set member '{TreeId}' shadow build failed for saga '{SagaId}'; aborting the whole set.",
+                    restoreRequest.TargetTreeId, request.SagaId);
+                await GarbageCollectAllAsync(built, requests, cancellationToken);
+                return new SagaParticipantPrepareResult(
+                    SagaVote.Abort, $"Set member '{restoreRequest.TargetTreeId}' build failed: {ex.Message}");
+            }
+        }
+
+        _builtSets[request.SagaId] = built;
+        return new SagaParticipantPrepareResult(SagaVote.Commit);
+    }
+
+    /// <summary>
+    /// Group-atomic commit for a set: engages ONE write fence over every member tree
+    /// (the fence primitive already fans out over a tree list), then swaps every
+    /// member's alias, then unblocks writes. Cross-cluster shipping stays globally
+    /// gated for the whole group exactly as for a single tree.
+    /// </summary>
+    private async Task CommitSetAsync(
+        SagaControlRequest request,
+        IReadOnlyList<BackupSetMember> members,
+        CancellationToken cancellationToken)
+    {
+        var requests = BuildSetRestoreRequests(members);
+
+        // Reuse the prepared group; a reactivation that lost the cache re-derives
+        // every member idempotently (BuildShadowAsync is resumable).
+        if (!_builtSets.TryGetValue(request.SagaId, out var built))
+        {
+            var rebuilt = new List<LatticeRestoreResult>(requests.Count);
+            foreach (var restoreRequest in requests)
+            {
+                rebuilt.Add(await engine!.BuildShadowAsync(restoreRequest, cancellationToken));
+            }
+
+            built = rebuilt;
+            _builtSets[request.SagaId] = built;
+        }
+
+        // One fence over the whole group: every member tree is write-fenced and
+        // shipping-paused together, so the set flips as one atomic unit.
+        var fence = grainFactory.GetGrain<ISagaWriteFenceGrain>(request.SagaId);
+        await fence.EngageAsync(new SagaWriteFenceRequest
+        {
+            SagaId = request.SagaId,
+            Trees = members.Select(static m => m.TreeId).ToList(),
+            CoordinatorClusterId = request.CoordinatorClusterId,
+            FenceWindowSeconds = CutoverFenceWindowSeconds,
+        });
+
+        foreach (var result in built)
+        {
+            await engine!.CommitShadowAsync(result, cancellationToken);
+        }
+
+        await fence.UnblockWritesAsync();
+    }
+
+    /// <summary>
+    /// Group-atomic abort for a set: reverts and garbage collects EVERY member tree
+    /// (never some), then lifts the shared fence. Idempotent and safe under the
+    /// participant grain's fence-expiry auto-compensation and when the cache was lost.
+    /// </summary>
+    private async Task AbortSetAsync(
+        SagaControlRequest request,
+        IReadOnlyList<BackupSetMember> members,
+        ISagaWriteFenceGrain fence,
+        CancellationToken cancellationToken)
+    {
+        if (_builtSets.TryGetValue(request.SagaId, out var built))
+        {
+            foreach (var result in built)
+            {
+                await SafeRevertAsync(result, cancellationToken);
+                await SafeDeleteShadowByIdAsync(result.ShadowPhysicalTreeId, cancellationToken);
+            }
+
+            _builtSets.TryRemove(request.SagaId, out _);
+        }
+        else
+        {
+            // Reactivation lost the cache: re-derive each member's shadow id and GC
+            // it without a rebuild. No commit can precede an abort in this saga
+            // model, so each alias is still the pre-restore tree and no revert is
+            // required.
+            foreach (var restoreRequest in BuildSetRestoreRequests(members))
+            {
+                await SafeGarbageCollectAsync(restoreRequest, cancellationToken);
+            }
+        }
+
+        await fence.LiftAsync();
+    }
+
+    /// <summary>Garbage collects every already-built member and any not-yet-built shadow of a failed set prepare.</summary>
+    private async Task GarbageCollectAllAsync(
+        IReadOnlyList<LatticeRestoreResult> built,
+        IReadOnlyList<LatticeRestoreRequest> requests,
+        CancellationToken cancellationToken)
+    {
+        foreach (var result in built)
+        {
+            await SafeDeleteShadowByIdAsync(result.ShadowPhysicalTreeId, cancellationToken);
+        }
+
+        // Also resolve-and-GC any member whose build never completed, so a partial
+        // set prepare leaks no shadow storage.
+        for (var i = built.Count; i < requests.Count; i++)
+        {
+            await SafeGarbageCollectAsync(requests[i], cancellationToken);
+        }
+    }
+
+    /// <summary>Builds the per-member engine restore requests for a set, in resolved (tree-id) order.</summary>
+    private static List<LatticeRestoreRequest> BuildSetRestoreRequests(IReadOnlyList<BackupSetMember> members)
+    {
+        var requests = new List<LatticeRestoreRequest>(members.Count);
+        foreach (var member in members)
+        {
+            requests.Add(new LatticeRestoreRequest(
+                backupId: member.BackupId,
+                targetTreeId: member.TreeId,
+                scope: null,
+                mode: LatticeRestoreMode.ShadowCutover));
+        }
+
+        return requests;
+    }
 
     /// <summary>
     /// Builds the engine restore request from the saga control request. A
