@@ -182,4 +182,34 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for <see cref="Replication.SagaControlResponse"/>.</summary>
     internal const string SagaControlResponse = "olr.sv";
 
+    // Durable cross-cluster saga coordinator + participant model. The
+    // coordinator lifecycle phase / outcome / dialled decision, the
+    // coordinator and participant grain interfaces, and their persisted
+    // state and per-participant records. All use previously-unclaimed
+    // olr.z* codes.
+
+    /// <summary>Alias for <see cref="CrossClusterSagaPhase"/>.</summary>
+    internal const string CrossClusterSagaPhase = "olr.zp";
+
+    /// <summary>Alias for <see cref="CrossClusterSagaOutcome"/>.</summary>
+    internal const string CrossClusterSagaOutcome = "olr.zo";
+
+    /// <summary>Alias for <see cref="CrossClusterSagaDecision"/>.</summary>
+    internal const string CrossClusterSagaDecision = "olr.zd";
+
+    /// <summary>Alias for the cross-cluster saga coordinator grain interface.</summary>
+    internal const string ICrossClusterSagaCoordinatorGrain = "olr.zg";
+
+    /// <summary>Alias for <see cref="Grains.CrossClusterSagaCoordinatorState"/>.</summary>
+    internal const string CrossClusterSagaCoordinatorState = "olr.zc";
+
+    /// <summary>Alias for <see cref="Grains.CrossClusterSagaParticipantRef"/>.</summary>
+    internal const string CrossClusterSagaParticipantRef = "olr.zr";
+
+    /// <summary>Alias for the cross-cluster saga participant grain interface.</summary>
+    internal const string ICrossClusterSagaParticipantGrain = "olr.zn";
+
+    /// <summary>Alias for <see cref="Grains.CrossClusterSagaParticipantState"/>.</summary>
+    internal const string CrossClusterSagaParticipantState = "olr.zs";
+
 }

@@ -323,6 +323,16 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHostedService, ReplicationDriverActivationService>());
 
+        // Durable cross-cluster saga participant model. Registered here,
+        // before the gRPC binding's TryAddSingleton default runs, so this
+        // durable handler - which routes every inbound saga RPC to the
+        // per-saga participant grain - is the effective
+        // ILatticeSagaControlHandler and the transport-only
+        // NoParticipantSagaControlHandler is never used on a silo that
+        // wires replication. TryAdd still lets a host substitute its own
+        // handler ahead of this call.
+        builder.Services.TryAddSingleton<ILatticeSagaControlHandler, LatticeSagaControlHandler>();
+
         return builder;
     }
 
