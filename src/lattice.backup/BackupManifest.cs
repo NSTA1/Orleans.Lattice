@@ -38,6 +38,13 @@ public sealed record BackupManifest
     /// <see cref="BackupKind.Incremental"/> and <c>null</c> otherwise.
     /// </param>
     /// <param name="compressionDictionary">A reference to the compression dictionary in force, or <c>null</c> when none.</param>
+    /// <param name="capturingClusterId">
+    /// The id of the cluster that authored this capture (the vantage point that
+    /// owns the WAL cursor lineage), or <c>null</c> for a manifest captured before
+    /// the stamp existed. Distinct from the per-entry origin recorded in
+    /// <paramref name="provenance"/>: this is a single manifest-level field naming
+    /// the capturing cluster. See <see cref="CapturingClusterId"/>.
+    /// </param>
     /// <exception cref="ArgumentException">
     /// <paramref name="id"/> is <c>null</c>, empty, or contains the reserved
     /// separator; <paramref name="structuralDigest"/> is <c>null</c> or empty; or
@@ -57,7 +64,8 @@ public sealed record BackupManifest
         IReadOnlyList<BackupContentDescriptor> contentDescriptors,
         IReadOnlyList<BackupOriginProvenance> provenance,
         string? baseBackupId = null,
-        BackupCompressionDictionaryRef? compressionDictionary = null)
+        BackupCompressionDictionaryRef? compressionDictionary = null,
+        string? capturingClusterId = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(id);
         if (id.IndexOf(BackupConstants.KeySeparator) >= 0)
@@ -99,6 +107,7 @@ public sealed record BackupManifest
         Provenance = provenance;
         BaseBackupId = baseBackupId;
         CompressionDictionary = compressionDictionary;
+        CapturingClusterId = capturingClusterId;
     }
 
     /// <summary>The content-addressed backup id.</summary>
@@ -171,4 +180,28 @@ public sealed record BackupManifest
     /// </summary>
     [Id(14)]
     public string? SetName { get; init; }
+
+    /// <summary>
+    /// The id of the cluster that authored this capture: its vantage point and the
+    /// owner of the WAL cursor lineage. This is a single manifest-level stamp and
+    /// is DISTINCT from the per-entry origin recorded in <see cref="Provenance"/>
+    /// (which names the cluster each captured entry originated on). Written
+    /// unconditionally on every capture, including single-cluster (non-replicated)
+    /// deployments where it is simply the local cluster id, so backups taken before
+    /// replication is enabled remain forward-compatible and resolvable once
+    /// replication is turned on.
+    /// <para>
+    /// An incremental chain is bound to its base's capturing cluster: every
+    /// incremental inherits this value from its base manifest, so the whole chain
+    /// shares one capturing-cluster stamp. An "extend this chain" request arriving
+    /// on a different cluster cannot resume the lineage and instead starts a fresh
+    /// full backup (a new chain with its own stamp).
+    /// </para>
+    /// <para>
+    /// A <see langword="null"/> value means the manifest was captured before this
+    /// stamp existed (a legacy manifest); a reader treats it as the local cluster.
+    /// </para>
+    /// </summary>
+    [Id(15)]
+    public string? CapturingClusterId { get; init; }
 }

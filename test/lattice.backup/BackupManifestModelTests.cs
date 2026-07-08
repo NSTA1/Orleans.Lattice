@@ -111,6 +111,29 @@ public sealed class BackupManifestModelTests
     }
 
     [Test]
+    public void Manifest_has_no_capturing_cluster_stamp_by_default()
+    {
+        // A manifest built without the stamp (a legacy pre-stamp manifest) decodes
+        // to a null capturing cluster id rather than failing to construct.
+        var manifest = Sample();
+        Assert.That(manifest.CapturingClusterId, Is.Null);
+    }
+
+    [Test]
+    public void Manifest_carries_the_capturing_cluster_stamp_when_supplied()
+    {
+        var manifest = Sample(capturingClusterId: "cluster-eu");
+        Assert.That(manifest.CapturingClusterId, Is.EqualTo("cluster-eu"));
+    }
+
+    [Test]
+    public void Capturing_cluster_stamp_round_trips_through_a_with_expression()
+    {
+        var stamped = Sample() with { CapturingClusterId = "cluster-us" };
+        Assert.That(stamped.CapturingClusterId, Is.EqualTo("cluster-us"));
+    }
+
+    [Test]
     public void ContentHash_is_stable_for_identical_bytes()
     {
         var bytes = Encoding.UTF8.GetBytes("hello backup");
@@ -144,7 +167,8 @@ public sealed class BackupManifestModelTests
     internal static BackupManifest Sample(
         string id = "backup-1",
         BackupKind kind = BackupKind.Full,
-        string? baseBackupId = null)
+        string? baseBackupId = null,
+        string? capturingClusterId = null)
     {
         var scope = BackupScopeSelector.WholeTree("orders");
         return new BackupManifest(
@@ -163,6 +187,7 @@ public sealed class BackupManifestModelTests
             },
             provenance: new[] { new BackupOriginProvenance("replica-a", 42) },
             baseBackupId: baseBackupId,
-            compressionDictionary: new BackupCompressionDictionaryRef("dict-1", "dd"));
+            compressionDictionary: new BackupCompressionDictionaryRef("dict-1", "dd"),
+            capturingClusterId: capturingClusterId);
     }
 }

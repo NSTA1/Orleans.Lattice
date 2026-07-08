@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Orleans.Hosting;
 
@@ -87,6 +88,20 @@ public static class LatticeBackupServiceCollectionExtensions
         builder.Services.TryAddSingleton<BackupInitializer>();
         builder.Services.TryAddSingleton<ILatticeBackupSink, InClusterLatticeBackupSink>();
         builder.Services.TryAddSingleton<ILatticeBackupCatalogStore, LatticeBackupCatalogStore>();
+
+        // The backup-local replicated-tree membership seam. The default no-op
+        // reports nothing replicated, which is correct for a single-cluster
+        // deployment; a multi-cluster host replaces this registration with an
+        // implementation that projects the configured replicated-tree set. The
+        // fail-fast sink guard reads the set through this seam so it carries no
+        // dependency on the replication package.
+        builder.Services.TryAddSingleton<IReplicatedTreeMembership, NoReplicatedTreeMembership>();
+
+        // Fail-fast guard: a replicated tree backed by the default in-cluster sink
+        // is rejected at silo start, because a per-cluster in-cluster sink cannot
+        // resolve or extend a chain across the replication set. Runs as a hosted
+        // startup check, mirroring the replication package's startup validators.
+        builder.Services.AddSingleton<IHostedService, LatticeBackupReplicatedSinkStartupValidator>();
 
         // The fail-closed backup authorization seam and the capture engine. The
         // authorizer resolves the core access gate and (optional) membership

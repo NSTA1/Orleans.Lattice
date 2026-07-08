@@ -49,6 +49,10 @@ public sealed class CaptureClusterFixture
     /// <summary>The silo-side Orleans serializer, used to decode stored artifact chunks.</summary>
     public Serializer Serializer => SiloServices.GetRequiredService<Serializer>();
 
+    /// <summary>The local cluster id the capture engine stamps onto every manifest.</summary>
+    public string LocalClusterId =>
+        SiloServices.GetRequiredService<IOptions<Orleans.Configuration.ClusterOptions>>().Value.ClusterId;
+
     /// <summary>Deploys the cluster with the given per-shard snapshot replay budget.</summary>
     public async Task InitializeAsync(long maxSnapshotReplayEntries = 10_000_000L)
     {
@@ -106,5 +110,6 @@ public sealed class CaptureClusterFixture
             SiloServices.GetRequiredService<IWalSubscriber>(),
             SiloServices.GetRequiredService<LatticeOptionsResolver>(),
             SiloServices.GetRequiredService<IWalCursorRegistry>(),
+            SiloServices.GetRequiredService<IOptions<Orleans.Configuration.ClusterOptions>>(),
             SiloServices.GetRequiredService<ILoggerFactory>().CreateLogger<LatticeBackupCaptureService>());
 }
