@@ -31,8 +31,9 @@ internal sealed class LatticeBackupRestoreService(
     BackupAccessAuthorizer authorizer,
     Serializer serializer,
     ITagIndexReconcileTrigger tagIndexReconcileTrigger,
+    IServiceProvider serviceProvider,
     ILogger<LatticeBackupRestoreService> logger)
-    : ILatticeBackupRestoreService
+    : ILatticeBackupRestoreService, ILatticeCoordinatedRestoreEngine
 {
     /// <inheritdoc />
     public async Task<LatticeRestoreResult> RestoreAsync(
@@ -40,6 +41,21 @@ internal sealed class LatticeBackupRestoreService(
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+
+        // Coordinated-restore dispatch: when the target tree is replicated the
+        // saga dispatcher promotes this restore to an all-or-nothing coordinated
+        // restore across the target's current peer set and returns the local
+        // result. The default no-op dispatcher (single-cluster hosts) always
+        // declines, so the local path below is unchanged. The decision is a
+        // function of the target tree now, not of the backup's origin. The
+        // dispatcher is resolved lazily to break the construction-time cycle
+        // (the dispatcher and the restore participant both consult this engine).
+        var dispatcher = (IRestoreSagaDispatcher)serviceProvider.GetService(typeof(IRestoreSagaDispatcher))!;
+        var coordinated = await dispatcher.TryDispatchAsync(request, cancellationToken).ConfigureAwait(false);
+        if (coordinated is not null)
+        {
+            return coordinated;
+        }
 
         var stopwatch = Stopwatch.StartNew();
         var phase = LatticeBackupMetrics.PhaseRead;
@@ -230,14 +246,41 @@ internal sealed class LatticeBackupRestoreService(
         int applyBatchSize,
         CancellationToken cancellationToken)
     {
+        // The local (single-cluster) shadow-cutover path composes the same two
+        // phases a coordinated restore drives separately: build the shadow, then
+        // commit the atomic alias swap. There is no fence here because a
+        // single-cluster restore has no peer that could re-advance the tree.
+        var (shadowPhysical, previousPhysical, applied) = await BuildShadowCoreAsync(
+            targetTreeId, chain, rangeStart, rangeEnd, operationId, cancellationToken).ConfigureAwait(false);
+
+        await CommitShadowCoreAsync(
+            targetTreeId, shadowPhysical, previousPhysical, operationId, cancellationToken)
+            .ConfigureAwait(false);
+
+        return (shadowPhysical, previousPhysical, applied);
+    }
+
+    /// <summary>
+    /// Builds the shadow physical tree from the chain into a fresh tree and
+    /// records the previous physical tree id, <b>without</b> swapping the alias.
+    /// Idempotent/resumable: the shard bulk-load is keyed by the deterministic
+    /// operation id, so a re-run resumes rather than rebuilding from zero.
+    /// </summary>
+    private async Task<(string shadowPhysical, string previousPhysical, long applied)> BuildShadowCoreAsync(
+        string targetTreeId,
+        IReadOnlyList<BackupManifest> chain,
+        string? rangeStart,
+        string? rangeEnd,
+        string operationId,
+        CancellationToken cancellationToken)
+    {
         var shadowTreeId = ShadowTreeId(targetTreeId, operationId);
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
 
-        // Resolve the current physical tree before swapping so the restore is
+        // Resolve the current physical tree before building so the restore is
         // revertible; the previous tree is left in place until it expires.
         string previousPhysical;
         RoutingInfo shadowRouting;
-        RoutingInfo retainedRouting;
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
             previousPhysical = await registry.ResolveAsync(targetTreeId).ConfigureAwait(false);
@@ -257,15 +300,36 @@ internal sealed class LatticeBackupRestoreService(
         var applied = await BulkLoadRawAsync(shadowRouting, chain, rangeStart, rangeEnd, operationId, cancellationToken)
             .ConfigureAwait(false);
 
+        return (shadowRouting.PhysicalTreeId, previousPhysical, applied);
+    }
+
+    /// <summary>
+    /// Atomically swaps the target tree's alias to the built shadow physical tree,
+    /// refreshes the logical tree routing, and converges any covering tag index.
+    /// </summary>
+    private async Task CommitShadowCoreAsync(
+        string targetTreeId,
+        string shadowPhysicalTreeId,
+        string? previousPhysicalTreeId,
+        string operationId,
+        CancellationToken cancellationToken)
+    {
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        RoutingInfo? retainedRouting = null;
+        var armRedirect = !string.IsNullOrEmpty(previousPhysicalTreeId)
+            && !string.Equals(previousPhysicalTreeId, shadowPhysicalTreeId, StringComparison.Ordinal);
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
             // Resolve the retained tree's routing BEFORE the alias swap. A
             // never-aliased tree's retained physical id equals its logical name,
             // so resolving it after the swap would follow the alias to the
             // shadow tree and arm the wrong shards.
-            retainedRouting = await grainFactory.GetGrain<ILattice>(previousPhysical)
-                .GetRoutingAsync(cancellationToken).ConfigureAwait(false);
-            await registry.SetAliasAsync(targetTreeId, shadowRouting.PhysicalTreeId).ConfigureAwait(false);
+            if (armRedirect)
+            {
+                retainedRouting = await grainFactory.GetGrain<ILattice>(previousPhysicalTreeId!)
+                    .GetRoutingAsync(cancellationToken).ConfigureAwait(false);
+            }
+            await registry.SetAliasAsync(targetTreeId, shadowPhysicalTreeId).ConfigureAwait(false);
         }
 
         // Arm the retained (previous) physical tree to redirect logical-alias-
@@ -278,10 +342,10 @@ internal sealed class LatticeBackupRestoreService(
         // own id (revert / diagnostics) and internal maintenance keep reading
         // the frozen snapshot. Skipped in the degenerate case where the alias
         // already resolved to the shadow tree.
-        if (!string.Equals(previousPhysical, shadowRouting.PhysicalTreeId, StringComparison.Ordinal))
+        if (retainedRouting is not null)
         {
             await MarkRetainedTreeRedirectAsync(
-                retainedRouting, shadowRouting.PhysicalTreeId, targetTreeId, operationId, cancellationToken)
+                retainedRouting, shadowPhysicalTreeId, targetTreeId, operationId, cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -297,8 +361,179 @@ internal sealed class LatticeBackupRestoreService(
         // remains the backstop, so a reconcile hiccup must not fail the restore.
         await tagIndexReconcileTrigger.TriggerForTreeAsync(targetTreeId, cancellationToken)
             .ConfigureAwait(false);
+    }
 
-        return (shadowRouting.PhysicalTreeId, previousPhysical, applied);
+    // ---- Coordinated-restore engine seams (ILatticeCoordinatedRestoreEngine) --
+
+    /// <inheritdoc />
+    public async Task<RestoreAdmissionReport> ProbeAdmissionAsync(
+        LatticeRestoreRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var target = await ReadManifestAsync(request.BackupId, cancellationToken).ConfigureAwait(false)
+            ?? throw new LatticeRestoreValidationException(
+                $"No backup with id '{request.BackupId}' exists in the catalog or sink.");
+
+        var targetTreeId = request.TargetTreeId ?? target.Scope.TreeId;
+        var chain = await BuildChainAsync(target, cancellationToken).ConfigureAwait(false);
+
+        long totalBytes = 0;
+        long totalChunks = 0;
+        foreach (var manifest in chain)
+        {
+            foreach (var descriptor in manifest.ContentDescriptors)
+            {
+                totalBytes += descriptor.ByteLength;
+                totalChunks += descriptor.ChunkCount;
+            }
+        }
+
+        return new RestoreAdmissionReport(
+            request.BackupId,
+            targetTreeId,
+            totalBytes,
+            totalChunks,
+            target.Topology.ShardCount,
+            chain.Select(m => m.Id).ToArray());
+    }
+
+    /// <inheritdoc />
+    public async Task<LatticeRestoreResult> BuildShadowAsync(
+        LatticeRestoreRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.Mode != LatticeRestoreMode.ShadowCutover)
+        {
+            throw new ArgumentException(
+                "The coordinated shadow build requires a shadow-cutover restore request.", nameof(request));
+        }
+
+        var target = await ReadManifestAsync(request.BackupId, cancellationToken).ConfigureAwait(false)
+            ?? throw new LatticeRestoreValidationException(
+                $"No backup with id '{request.BackupId}' exists in the catalog or sink.");
+
+        var targetTreeId = request.TargetTreeId ?? target.Scope.TreeId;
+        BackupConstants.ThrowIfReservedTree(targetTreeId, nameof(request));
+
+        var effectiveScope = ResolveEffectiveScope(request.Scope, target.Scope, targetTreeId);
+        var (rangeStart, rangeEnd) = ResolveRange(effectiveScope);
+
+        await authorizer.AuthorizeRestoreAsync(effectiveScope, cancellationToken).ConfigureAwait(false);
+
+        var chain = await BuildChainAsync(target, cancellationToken).ConfigureAwait(false);
+        foreach (var manifest in chain)
+        {
+            await ValidateManifestAsync(manifest, cancellationToken).ConfigureAwait(false);
+        }
+
+        var operationId = request.OperationId ?? DeriveOperationId(request, targetTreeId, effectiveScope);
+        var chainIds = chain.Select(m => m.Id).ToArray();
+
+        var (shadowPhysical, previousPhysical, applied) = await BuildShadowCoreAsync(
+            targetTreeId, chain, rangeStart, rangeEnd, operationId, cancellationToken).ConfigureAwait(false);
+
+        logger.LogInformation(
+            "Built restore shadow for backup {BackupId} into tree {TreeId} ({EntryCount} entries) at shadow "
+            + "physical tree {ShadowTreeId}; alias not yet swapped (previous physical {PreviousTreeId}).",
+            request.BackupId, targetTreeId, applied, shadowPhysical, previousPhysical);
+
+        return new LatticeRestoreResult(
+            request.BackupId, targetTreeId, LatticeRestoreMode.ShadowCutover, operationId, chainIds, applied,
+            shadowPhysicalTreeId: shadowPhysical, previousPhysicalTreeId: previousPhysical);
+    }
+
+    /// <inheritdoc />
+    public async Task CommitShadowAsync(
+        LatticeRestoreResult shadow,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(shadow);
+        if (shadow.Mode != LatticeRestoreMode.ShadowCutover || shadow.ShadowPhysicalTreeId is null)
+        {
+            throw new ArgumentException(
+                "Only a shadow-cutover build result can be committed.", nameof(shadow));
+        }
+
+        var scope = BackupScopeSelector.WholeTree(shadow.TargetTreeId);
+        await authorizer.AuthorizeRestoreAsync(scope, cancellationToken).ConfigureAwait(false);
+
+        await CommitShadowCoreAsync(
+            shadow.TargetTreeId, shadow.ShadowPhysicalTreeId,
+            shadow.PreviousPhysicalTreeId, shadow.OperationId, cancellationToken)
+            .ConfigureAwait(false);
+
+        logger.LogInformation(
+            "Committed restore shadow of tree {TreeId} to physical tree {ShadowTreeId}.",
+            shadow.TargetTreeId, shadow.ShadowPhysicalTreeId);
+    }
+
+    /// <inheritdoc />
+    public async Task DeleteShadowAsync(
+        string shadowPhysicalTreeId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(shadowPhysicalTreeId);
+
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        bool exists;
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            exists = await registry.ExistsAsync(shadowPhysicalTreeId).ConfigureAwait(false);
+        }
+
+        if (!exists)
+        {
+            // Idempotent: a shadow that was never built, or already GC'd, is a no-op.
+            return;
+        }
+
+        RoutingInfo routing;
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            routing = await grainFactory.GetGrain<ILattice>(shadowPhysicalTreeId)
+                .GetRoutingAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        foreach (var shardIndex in routing.Map.GetPhysicalShardIndices())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            using (LatticeAccessGateContext.EnterSystemOrigin())
+            {
+                await grainFactory.GetGrain<IShardRootGrain>($"{routing.PhysicalTreeId}/{shardIndex}")
+                    .PurgeAsync().ConfigureAwait(false);
+            }
+        }
+
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            await registry.UnregisterAsync(shadowPhysicalTreeId).ConfigureAwait(false);
+        }
+
+        logger.LogInformation("Garbage-collected orphan restore shadow physical tree {ShadowTreeId}.",
+            shadowPhysicalTreeId);
+    }
+
+    /// <inheritdoc />
+    public string ResolveShadowTreeId(LatticeRestoreRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (string.IsNullOrEmpty(request.TargetTreeId))
+        {
+            throw new ArgumentException(
+                "Resolving a shadow tree id requires an explicit target tree id.", nameof(request));
+        }
+
+        // A coordinated restore always targets an explicit whole tree (no sub-scope),
+        // so the operation id derives purely from the request without reading the
+        // captured manifest scope. This mirrors the derivation the shadow build uses.
+        var effectiveScope = request.Scope is null
+            ? BackupScopeSelector.WholeTree(request.TargetTreeId)
+            : Retarget(request.Scope, request.TargetTreeId);
+        var operationId = request.OperationId ?? DeriveOperationId(request, request.TargetTreeId, effectiveScope);
+        return ShadowTreeId(request.TargetTreeId, operationId);
     }
 
     /// <summary>

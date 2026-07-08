@@ -1,3 +1,4 @@
+using System.Linq;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
@@ -342,6 +343,35 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         // wires replication. TryAdd still lets a host substitute its own
         // handler ahead of this call.
         builder.Services.TryAddSingleton<ILatticeSagaControlHandler, LatticeSagaControlHandler>();
+
+        // Coordinated multi-cluster restore (issue #1175). The restore participant
+        // maps the backup restore engine onto the saga as the first internal
+        // ISagaParticipant; the dispatcher promotes a restore whose target tree is
+        // replicated into an all-or-nothing coordinated saga. The participant is
+        // registered as a concrete singleton and forwarded into the ISagaParticipant
+        // collection so the dispatcher and the participant grain share one instance
+        // (and one in-memory built-shadow cache). The capacity probe defaults to
+        // permissive; a host that enforces a storage budget substitutes it.
+        builder.Services.TryAddSingleton<IRestoreCapacityProbe, UnboundedRestoreCapacityProbe>();
+        builder.Services.TryAddSingleton(static sp => new RestoreParticipant(
+            sp.GetServices<Orleans.Lattice.Backup.ILatticeCoordinatedRestoreEngine>().FirstOrDefault(),
+            sp.GetServices<Orleans.Lattice.Backup.ILatticeBackupRestoreService>().FirstOrDefault(),
+            sp.GetRequiredService<IRestoreCapacityProbe>(),
+            sp.GetRequiredService<IGrainFactory>(),
+            sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<RestoreParticipant>>()));
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<ISagaParticipant, RestoreParticipant>(
+                static sp => sp.GetRequiredService<RestoreParticipant>()));
+
+        // Replace the backup package's no-op defaults with the real
+        // replication-backed implementations. AddSingleton (not TryAdd) so the real
+        // implementation wins regardless of whether AddLatticeBackup ran before or
+        // after this call; the backup no-op remains the fallback for a backup-only
+        // host. Wiring the real IReplicatedTreeMembership makes the shared-sink
+        // guard fire under replication; wiring the real dispatcher makes the public
+        // restore entry point promote a replicated-tree restore to a saga.
+        builder.Services.AddSingleton<Orleans.Lattice.Backup.IReplicatedTreeMembership, OptionsReplicatedTreeMembership>();
+        builder.Services.AddSingleton<Orleans.Lattice.Backup.IRestoreSagaDispatcher, RestoreSagaDispatcher>();
 
         return builder;
     }

@@ -97,6 +97,14 @@ public static class LatticeBackupServiceCollectionExtensions
         // dependency on the replication package.
         builder.Services.TryAddSingleton<IReplicatedTreeMembership, NoReplicatedTreeMembership>();
 
+        // The backup-local restore-saga dispatch seam. The default no-op never
+        // dispatches, so every restore takes the plain local path on a
+        // single-cluster host; the replication package replaces it with an
+        // implementation that promotes a restore into a replicated tree to a
+        // coordinated cross-cluster saga. Kept saga-unaware via this seam so the
+        // backup package carries no dependency on the replication package.
+        builder.Services.TryAddSingleton<IRestoreSagaDispatcher, NoRestoreSagaDispatcher>();
+
         // Fail-fast guard: a replicated tree backed by the default in-cluster sink
         // is rejected at silo start, because a per-cluster in-cluster sink cannot
         // resolve or extend a chain across the replication set. Runs as a hosted
@@ -115,8 +123,16 @@ public static class LatticeBackupServiceCollectionExtensions
             sp => sp.GetRequiredService<LatticeBackupCaptureService>());
 
         // The causally-faithful restore engine: replays a manifest chain back
-        // through the HLC-preserving merge / bulk-load shard seams.
-        builder.Services.TryAddSingleton<ILatticeBackupRestoreService, LatticeBackupRestoreService>();
+        // through the HLC-preserving merge / bulk-load shard seams. The same
+        // instance serves the public single-atomic restore surface
+        // (ILatticeBackupRestoreService) and the fine-grained coordinated-restore
+        // phases (ILatticeCoordinatedRestoreEngine) the replication saga drives,
+        // so both share one alias-swap implementation.
+        builder.Services.TryAddSingleton<LatticeBackupRestoreService>();
+        builder.Services.TryAddSingleton<ILatticeBackupRestoreService>(
+            sp => sp.GetRequiredService<LatticeBackupRestoreService>());
+        builder.Services.TryAddSingleton<ILatticeCoordinatedRestoreEngine>(
+            sp => sp.GetRequiredService<LatticeBackupRestoreService>());
 
         // The incremental-capture seam is served by the same capture-engine
         // singleton: it emits a true forward-WAL delta (as a uniform entry-array
