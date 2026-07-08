@@ -129,6 +129,57 @@ internal sealed class LatticeBackupRestoreService(
     }
 
     /// <inheritdoc />
+    public async Task<IReadOnlyList<LatticeRestoreResult>> RestoreSetAsync(
+        string setId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(setId);
+
+        // Coordinated set dispatch: when any member tree is replicated the saga
+        // dispatcher promotes the whole set to a single all-or-nothing coordinated
+        // restore across the union of the replicated members' peer sets and returns
+        // this cluster's per-member results. The default no-op dispatcher (single
+        // cluster) declines, so the local per-member path below runs. The dispatcher
+        // and the set read seam are resolved lazily to break the construction-time
+        // cycle (the dispatcher consults this engine).
+        var dispatcher = (IRestoreSagaDispatcher)serviceProvider.GetService(typeof(IRestoreSagaDispatcher))!;
+        var coordinated = await dispatcher
+            .TryDispatchSetAsync(setId, LatticeRestoreMode.ShadowCutover, cancellationToken)
+            .ConfigureAwait(false);
+        if (coordinated is not null)
+        {
+            return coordinated;
+        }
+
+        // Local (no member replicated, or single-cluster) path: expand the set into
+        // its member trees and restore each one via shadow-cutover. Each per-member
+        // RestoreAsync re-consults the dispatcher, which declines for an unreplicated
+        // member, so this stays a plain local multi-tree restore.
+        var resolver = (ILatticeBackupSetResolver)serviceProvider.GetService(typeof(ILatticeBackupSetResolver))!;
+        var members = await resolver.ResolveMembersAsync(setId, cancellationToken).ConfigureAwait(false);
+        if (members.Count == 0)
+        {
+            throw new ArgumentException(
+                $"No backup set with id '{setId}' exists in the catalog (it resolved to no member trees).",
+                nameof(setId));
+        }
+
+        var results = new List<LatticeRestoreResult>(members.Count);
+        foreach (var member in members)
+        {
+            results.Add(await RestoreAsync(
+                new LatticeRestoreRequest(
+                    backupId: member.BackupId,
+                    targetTreeId: member.TreeId,
+                    scope: null,
+                    mode: LatticeRestoreMode.ShadowCutover),
+                cancellationToken).ConfigureAwait(false));
+        }
+
+        return results;
+    }
+
+    /// <inheritdoc />
     public async Task RevertRestoreAsync(
         LatticeRestoreResult restore,
         CancellationToken cancellationToken = default)

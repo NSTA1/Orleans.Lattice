@@ -19,4 +19,14 @@ internal sealed class NoRestoreSagaDispatcher : IRestoreSagaDispatcher
         ArgumentNullException.ThrowIfNull(request);
         return Task.FromResult<LatticeRestoreResult?>(null);
     }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<LatticeRestoreResult>?> TryDispatchSetAsync(
+        string setId,
+        LatticeRestoreMode mode,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(setId);
+        return Task.FromResult<IReadOnlyList<LatticeRestoreResult>?>(null);
+    }
 }

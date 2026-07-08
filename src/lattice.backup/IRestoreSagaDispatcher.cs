@@ -40,4 +40,28 @@ public interface IRestoreSagaDispatcher
     Task<LatticeRestoreResult?> TryDispatchAsync(
         LatticeRestoreRequest request,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Offers a backup <b>set</b> restore to the coordinated path. A set is restored
+    /// as one atomic unit: the decision is a function of the member trees' current
+    /// replication status. If <b>any</b> member tree is replicated the dispatcher
+    /// runs a single coordinated saga over the union of the replicated members' peer
+    /// sets (local-only members ride along as local participants in the same saga)
+    /// and returns this cluster's per-member restore results; if <b>no</b> member is
+    /// replicated, or the id is not a set id, it declines and the caller runs the
+    /// plain local multi-tree restore.
+    /// </summary>
+    /// <param name="setId">The content-addressed backup set id. Must not be <c>null</c> or empty.</param>
+    /// <param name="mode">The restore mode applied to every member tree.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>
+    /// This cluster's per-member restore results when the coordinated path handled
+    /// the set; otherwise <see langword="null"/> to signal the caller should run the
+    /// local multi-tree restore.
+    /// </returns>
+    /// <exception cref="ArgumentException"><paramref name="setId"/> is <c>null</c> or empty.</exception>
+    Task<IReadOnlyList<LatticeRestoreResult>?> TryDispatchSetAsync(
+        string setId,
+        LatticeRestoreMode mode,
+        CancellationToken cancellationToken = default);
 }

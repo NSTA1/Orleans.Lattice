@@ -77,4 +77,14 @@ internal sealed class CrossClusterSagaCoordinatorState
     /// participant's short cutover fence timer.
     /// </summary>
     [Id(9)] public long StartedAtTicks { get; set; }
+
+    /// <summary>
+    /// When set, the id of the captured backup <b>set</b> this saga restores as one
+    /// atomic unit. Stamped onto every outgoing <see cref="SagaControlRequest.SetId"/>
+    /// so each participant expands and flips the set's member trees as one group, and
+    /// folded into the re-submit stability fingerprint. <c>null</c> for an ordinary
+    /// single-tree restore. Additive and default-null so an existing persisted state
+    /// deserialises unchanged.
+    /// </summary>
+    [Id(10)] public string? SetId { get; set; }
 }

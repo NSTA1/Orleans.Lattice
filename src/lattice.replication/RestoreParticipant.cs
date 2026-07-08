@@ -50,7 +50,9 @@ internal sealed class RestoreParticipant(
     IRestoreCapacityProbe capacity,
     IGrainFactory grainFactory,
     ILogger<RestoreParticipant> logger,
-    ILatticeBackupSetResolver? setResolver = null) : ISagaParticipant
+    ILatticeBackupSetResolver? setResolver = null,
+    IReplicatedTreeMembership? membership = null,
+    Microsoft.Extensions.Options.IOptionsMonitor<LatticeReplicationOptions>? options = null) : ISagaParticipant
 {
     /// <summary>
     /// Bounded retry budget for a transient capacity exhaustion mid-build. Past
@@ -92,6 +94,21 @@ internal sealed class RestoreParticipant(
     {
         ArgumentNullException.ThrowIfNull(sagaId);
         return _built.TryGetValue(sagaId, out result);
+    }
+
+    /// <summary>
+    /// Attempts to read the group of local restore results the participant built for
+    /// a <b>set</b> restore under <paramref name="sagaId"/> (one per hosted member
+    /// tree). The dispatcher on the coordinator cluster reads it back after a
+    /// committed coordinated set restore.
+    /// </summary>
+    /// <param name="sagaId">The saga id. Must not be <c>null</c>.</param>
+    /// <param name="results">The built per-member results, when present.</param>
+    /// <returns><c>true</c> when a group result is cached; otherwise <c>false</c>.</returns>
+    public bool TryGetLocalSetResult(string sagaId, out IReadOnlyList<LatticeRestoreResult>? results)
+    {
+        ArgumentNullException.ThrowIfNull(sagaId);
+        return _builtSets.TryGetValue(sagaId, out results);
     }
 
     /// <inheritdoc />
@@ -308,6 +325,39 @@ internal sealed class RestoreParticipant(
     }
 
     /// <summary>
+    /// Filters the resolved set members to the subset of trees <b>this</b> cluster
+    /// actually hosts, so a participant never tries to restore a tree it does not
+    /// hold. A member tree is hosted here when this cluster replicates it
+    /// (<see cref="IReplicatedTreeMembership.IsReplicated"/> is true exactly on a
+    /// replicated tree's peer set), or when this cluster is the coordinator
+    /// (initiating) cluster, which is where the set's local-only member trees
+    /// physically live. When the membership or options seam is not wired (direct
+    /// unit tests), the filter is a no-op and every member is treated as hosted.
+    /// </summary>
+    private IReadOnlyList<BackupSetMember> FilterHostedMembers(
+        IReadOnlyList<BackupSetMember> members, SagaControlRequest request)
+    {
+        if (membership is null || options is null)
+        {
+            return members;
+        }
+
+        var self = options.CurrentValue.ClusterId;
+        var isCoordinator = string.Equals(self, request.CoordinatorClusterId, StringComparison.Ordinal);
+
+        var hosted = new List<BackupSetMember>(members.Count);
+        foreach (var member in members)
+        {
+            if (membership.IsReplicated(member.TreeId) || isCoordinator)
+            {
+                hosted.Add(member);
+            }
+        }
+
+        return hosted;
+    }
+
+    /// <summary>
     /// Group-atomic prepare for a set: admits and builds every member tree's shadow
     /// unfenced. If ANY member is infeasible or fails to build, every member built
     /// so far is garbage collected and the whole set votes abort, so a set never
@@ -318,6 +368,9 @@ internal sealed class RestoreParticipant(
         IReadOnlyList<BackupSetMember> members,
         CancellationToken cancellationToken)
     {
+        // Restore only the members this cluster hosts. A participant that hosts none
+        // of the set's trees prepares vacuously (nothing to build, an empty group).
+        members = FilterHostedMembers(members, request);
         var requests = BuildSetRestoreRequests(members);
         var built = new List<LatticeRestoreResult>(requests.Count);
 
@@ -388,6 +441,13 @@ internal sealed class RestoreParticipant(
         IReadOnlyList<BackupSetMember> members,
         CancellationToken cancellationToken)
     {
+        members = FilterHostedMembers(members, request);
+        if (members.Count == 0)
+        {
+            // This cluster hosts none of the set's trees: nothing to flip here.
+            return;
+        }
+
         var requests = BuildSetRestoreRequests(members);
 
         // Reuse the prepared group; a reactivation that lost the cache re-derives
@@ -434,6 +494,15 @@ internal sealed class RestoreParticipant(
         ISagaWriteFenceGrain fence,
         CancellationToken cancellationToken)
     {
+        members = FilterHostedMembers(members, request);
+        if (members.Count == 0)
+        {
+            // This cluster hosts none of the set's trees: lift any defensive fence
+            // and return, so a hosted-nothing participant compensates vacuously.
+            await fence.LiftAsync();
+            return;
+        }
+
         if (_builtSets.TryGetValue(request.SagaId, out var built))
         {
             foreach (var result in built)

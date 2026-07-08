@@ -32,6 +32,27 @@ public interface ILatticeBackupRestoreService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Restores every tree in the captured backup <b>set</b> identified by
+    /// <paramref name="setId"/> as a single unit. When any member tree is currently
+    /// replicated the restore runs as one all-or-nothing coordinated saga across the
+    /// union of the replicated members' peer sets, so every member tree flips
+    /// together on every participating cluster or none does; when no member tree is
+    /// replicated (or the backup package is deployed single-cluster) it runs as a
+    /// plain local per-member restore. Each member is restored via
+    /// <see cref="LatticeRestoreMode.ShadowCutover"/>. Re-running the same set
+    /// restore converges to the same state.
+    /// </summary>
+    /// <param name="setId">The content-addressed id of the backup set to restore. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancels the restore.</param>
+    /// <returns>The per-member restore results this cluster applied, one per hosted member tree.</returns>
+    /// <exception cref="ArgumentException"><paramref name="setId"/> is <c>null</c> or empty, or resolves to no member trees.</exception>
+    /// <exception cref="LatticeRestoreValidationException">A member backup fails pre-apply validation, or the coordinated restore aborted.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to restore a member tree's scope.</exception>
+    Task<IReadOnlyList<LatticeRestoreResult>> RestoreSetAsync(
+        string setId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Reverts a <see cref="LatticeRestoreMode.ShadowCutover"/> restore by swapping
     /// the target tree's registry alias back to the physical tree it resolved to
     /// before the cutover (<see cref="LatticeRestoreResult.PreviousPhysicalTreeId"/>),

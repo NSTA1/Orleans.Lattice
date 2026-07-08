@@ -44,15 +44,25 @@ internal interface ICrossClusterSagaCoordinatorGrain : IGrainWithStringKey
     /// The initiating (coordinator) cluster id, stamped onto every control
     /// request. Must be non-null and non-empty.
     /// </param>
+    /// <param name="setId">
+    /// When set, the id of the captured backup <b>set</b> this saga restores as one
+    /// atomic unit; it is stamped onto every outgoing
+    /// <see cref="SagaControlRequest.SetId"/> so each participant expands and flips
+    /// the set's member trees as one group. <c>null</c> for an ordinary single-tree
+    /// restore. Additive: an existing single-tree caller omits it and the saga
+    /// behaves exactly as before. Participates in the saga's re-submit stability
+    /// fingerprint alongside the target tree and manifest id.
+    /// </param>
     /// <exception cref="System.InvalidOperationException">
     /// The same saga id was previously submitted with a different participant
-    /// set, target tree, or manifest id.
+    /// set, target tree, manifest id, or set id.
     /// </exception>
     Task<CrossClusterSagaOutcome> RunAsync(
         List<string> participantClusterIds,
         string targetTree,
         string manifestId,
-        string coordinatorClusterId);
+        string coordinatorClusterId,
+        string? setId = null);
 
     /// <summary>
     /// The single global decision for this saga. Returns

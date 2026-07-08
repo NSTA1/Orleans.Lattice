@@ -122,6 +122,11 @@ internal sealed class FakeCoordinatedRestoreEngine
         throw new NotSupportedException("The fake engine does not drive the coarse restore entry point.");
 
     /// <inheritdoc />
+    public Task<IReadOnlyList<LatticeRestoreResult>> RestoreSetAsync(
+        string setId, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("The fake engine does not drive the coarse set-restore entry point.");
+
+    /// <inheritdoc />
     public Task RevertRestoreAsync(LatticeRestoreResult restore, CancellationToken cancellationToken = default)
     {
         RevertCount++;

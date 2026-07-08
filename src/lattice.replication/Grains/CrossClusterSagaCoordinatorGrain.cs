@@ -118,7 +118,8 @@ internal sealed class CrossClusterSagaCoordinatorGrain(
         List<string> participantClusterIds,
         string targetTree,
         string manifestId,
-        string coordinatorClusterId)
+        string coordinatorClusterId,
+        string? setId = null)
     {
         ArgumentNullException.ThrowIfNull(participantClusterIds);
         ArgumentNullException.ThrowIfNull(targetTree);
@@ -144,6 +145,7 @@ internal sealed class CrossClusterSagaCoordinatorGrain(
                 state.State.TargetTree = targetTree;
                 state.State.ManifestId = manifestId;
                 state.State.CoordinatorClusterId = coordinatorClusterId;
+                state.State.SetId = setId;
                 state.State.StartedAtTicks = DateTime.UtcNow.Ticks;
                 state.State.Phase = CrossClusterSagaPhase.Completed;
                 state.State.Outcome = CrossClusterSagaOutcome.Committed;
@@ -158,9 +160,10 @@ internal sealed class CrossClusterSagaCoordinatorGrain(
             state.State.TargetTree = targetTree;
             state.State.ManifestId = manifestId;
             state.State.CoordinatorClusterId = coordinatorClusterId;
+            state.State.SetId = setId;
             state.State.StartedAtTicks = DateTime.UtcNow.Ticks;
             state.State.Participants = participants;
-            state.State.Fingerprint = ComputeFingerprint(participants, targetTree, manifestId);
+            state.State.Fingerprint = ComputeFingerprint(participants, targetTree, manifestId, setId);
             state.State.Phase = CrossClusterSagaPhase.Preparing;
             await RegisterKeepaliveAsync();
             await state.WriteStateAsync();
@@ -168,15 +171,15 @@ internal sealed class CrossClusterSagaCoordinatorGrain(
         else
         {
             // Re-submit of an in-flight coordinator: enforce participant-set /
-            // target / manifest stability, mirroring the intra-cluster saga's
+            // target / manifest / set stability, mirroring the intra-cluster saga's
             // idempotency contract.
-            var incoming = ComputeFingerprint(BuildParticipants(participantClusterIds), targetTree, manifestId);
+            var incoming = ComputeFingerprint(BuildParticipants(participantClusterIds), targetTree, manifestId, setId);
             if (state.State.Fingerprint is not { } persisted
                 || !CryptographicOperations.FixedTimeEquals(persisted, incoming))
             {
                 throw new InvalidOperationException(
                     $"Cross-cluster saga '{SagaId}' was previously submitted with a different participant " +
-                    "set, target tree, or manifest id; reuse of a saga id requires the exact same arguments.");
+                    "set, target tree, manifest id, or set id; reuse of a saga id requires the exact same arguments.");
             }
         }
 
@@ -346,6 +349,7 @@ internal sealed class CrossClusterSagaCoordinatorGrain(
         TargetTree = state.State.TargetTree,
         ManifestId = state.State.ManifestId,
         CoordinatorClusterId = state.State.CoordinatorClusterId,
+        SetId = state.State.SetId,
     };
 
     /// <summary>
@@ -373,15 +377,21 @@ internal sealed class CrossClusterSagaCoordinatorGrain(
 
     /// <summary>
     /// Stable fingerprint over the (canonical) participant cluster set, target
-    /// tree, and manifest id. A re-submit with any of these changed is rejected.
+    /// tree, manifest id, and optional set id. A re-submit with any of these
+    /// changed is rejected.
     /// </summary>
     private static byte[] ComputeFingerprint(
-        List<CrossClusterSagaParticipantRef> participants, string targetTree, string manifestId)
+        List<CrossClusterSagaParticipantRef> participants, string targetTree, string manifestId, string? setId)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         Span<byte> lenPrefix = stackalloc byte[4];
         AppendLengthPrefixed(hash, targetTree, lenPrefix);
         AppendLengthPrefixed(hash, manifestId, lenPrefix);
+        // Fold the set id into the fingerprint so a set restore and an otherwise
+        // identical single-tree restore never collide on a reused saga id. A null
+        // (single-tree) set id contributes the empty string, so an existing
+        // single-tree caller's fingerprint is unchanged.
+        AppendLengthPrefixed(hash, setId ?? string.Empty, lenPrefix);
         BinaryPrimitives.WriteInt32LittleEndian(lenPrefix, participants.Count);
         hash.AppendData(lenPrefix);
         foreach (var p in participants)

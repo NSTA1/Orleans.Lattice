@@ -95,22 +95,25 @@ internal sealed class RestoreSagaDispatcher(
 
         var self = options.CurrentValue.ClusterId;
         var peers = topology.CurrentPeers;
+        var sagaId = DeriveSagaId(request.BackupId, targetTree);
 
         // All-or-nothing: refuse to start unless every current peer is reachable.
-        await EnsurePeersReachableAsync(peers, request, targetTree, self, cancellationToken);
+        var probe = new SagaControlRequest
+        {
+            SagaId = sagaId,
+            TargetTree = targetTree,
+            ManifestId = request.BackupId,
+            CoordinatorClusterId = self,
+        };
+        await EnsurePeersReachableAsync(
+            peers, probe, self,
+            $"restore of backup '{request.BackupId}' into replicated tree '{targetTree}'",
+            cancellationToken);
 
         // Participant set: the target's current peers plus this (coordinator)
         // cluster, de-duplicated. The coordinator grain canonicalises the set.
-        var participants = new List<string>(peers.Count + 1) { self };
-        foreach (var peer in peers)
-        {
-            if (!string.Equals(peer, self, StringComparison.Ordinal))
-            {
-                participants.Add(peer);
-            }
-        }
+        var participants = BuildParticipantSet(self, peers);
 
-        var sagaId = DeriveSagaId(request.BackupId, targetTree);
         logger.LogInformation(
             "Dispatching coordinated restore of backup '{BackupId}' into replicated tree '{TargetTree}' " +
             "as saga '{SagaId}' over {Count} cluster(s).",
@@ -144,25 +147,126 @@ internal sealed class RestoreSagaDispatcher(
             entriesApplied: 0);
     }
 
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<LatticeRestoreResult>?> TryDispatchSetAsync(
+        string setId, LatticeRestoreMode mode, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(setId);
+
+        // No engine or no set read seam wired means the backup package is absent or
+        // set restore is unsupported here: decline so the caller runs the plain
+        // local multi-tree restore.
+        if (engine is null || setResolver is null)
+        {
+            return null;
+        }
+
+        // Expand the set into its member trees. An empty result means the id is not
+        // a set id (a single-tree backup id), so the caller handles it as such.
+        var members = await setResolver.ResolveMembersAsync(setId, cancellationToken);
+        if (members.Count == 0)
+        {
+            return null;
+        }
+
+        // Set-level dispatch decision, keyed on the members' replication status now:
+        // if NO member tree is replicated the whole set takes the plain local
+        // multi-tree restore (no saga); if ANY member tree is replicated the set
+        // runs one saga so it stays cross-tree atomic, with local-only members
+        // riding along as local participants in the same saga.
+        var anyReplicated = false;
+        foreach (var member in members)
+        {
+            if (membership.IsReplicated(member.TreeId))
+            {
+                anyReplicated = true;
+                break;
+            }
+        }
+
+        if (!anyReplicated)
+        {
+            return null;
+        }
+
+        var self = options.CurrentValue.ClusterId;
+        var peers = topology.CurrentPeers;
+        var sagaId = DeriveSetSagaId(setId);
+
+        // All-or-nothing across the union of the replicated members' peer sets. The
+        // topology exposes a single flat peer set, so the union is this cluster plus
+        // the current peers; every participant restores only the subset of the set's
+        // trees it hosts.
+        var probe = new SagaControlRequest
+        {
+            SagaId = sagaId,
+            TargetTree = setId,
+            ManifestId = setId,
+            CoordinatorClusterId = self,
+            SetId = setId,
+        };
+        await EnsurePeersReachableAsync(
+            peers, probe, self, $"restore of backup set '{setId}'", cancellationToken);
+
+        var participants = BuildParticipantSet(self, peers);
+
+        logger.LogInformation(
+            "Dispatching coordinated restore of backup set '{SetId}' as saga '{SagaId}' over {Count} " +
+            "cluster(s) ({MemberCount} member tree(s)).",
+            setId, sagaId, participants.Count, members.Count);
+
+        // One saga for the whole set: the set id threads through the coordinator so
+        // every outgoing control request carries it and each participant flips the
+        // set's hosted member trees as one group.
+        var coordinator = grainFactory.GetGrain<ICrossClusterSagaCoordinatorGrain>(sagaId);
+        var outcome = await coordinator.RunAsync(participants, setId, setId, self, setId);
+
+        if (outcome != CrossClusterSagaOutcome.Committed)
+        {
+            throw new LatticeRestoreValidationException(
+                $"Coordinated restore of backup set '{setId}' aborted: at least one cluster could not prepare. " +
+                $"Every cluster was compensated back to its pre-restore state, so no member tree was left " +
+                $"committed while another aborted.");
+        }
+
+        // Return the local cluster's per-member build/commit results so the public
+        // set-restore surface reports what this cluster restored. If a reactivation
+        // dropped the in-memory cache, synthesize an equivalent committed summary
+        // for every member.
+        if (localParticipant.TryGetLocalSetResult(sagaId, out var localResults) && localResults is not null)
+        {
+            return localResults;
+        }
+
+        var synthesized = new List<LatticeRestoreResult>(members.Count);
+        foreach (var member in members)
+        {
+            synthesized.Add(new LatticeRestoreResult(
+                backupId: member.BackupId,
+                targetTreeId: member.TreeId,
+                mode: LatticeRestoreMode.ShadowCutover,
+                operationId: sagaId,
+                manifestChain: Array.Empty<string>(),
+                entriesApplied: 0));
+        }
+
+        return synthesized;
+    }
+
     /// <summary>
     /// Probes each peer over the saga control channel and throws if any is
-    /// unreachable, so the coordinator refuses to start a partial restore.
+    /// unreachable, so the coordinator refuses to start a partial restore. The
+    /// <paramref name="probe"/> carries the saga identity (and, for a set restore,
+    /// the set id); <paramref name="subject"/> names the restore in the refusal
+    /// message.
     /// </summary>
     private async Task EnsurePeersReachableAsync(
         IReadOnlyCollection<string> peers,
-        LatticeRestoreRequest request,
-        string targetTree,
+        SagaControlRequest probe,
         string self,
+        string subject,
         CancellationToken cancellationToken)
     {
-        var probe = new SagaControlRequest
-        {
-            SagaId = DeriveSagaId(request.BackupId, targetTree),
-            TargetTree = targetTree,
-            ManifestId = request.BackupId,
-            CoordinatorClusterId = self,
-        };
-
         var unreachable = new List<string>();
         foreach (var peer in peers)
         {
@@ -191,10 +295,28 @@ internal sealed class RestoreSagaDispatcher(
         if (unreachable.Count > 0)
         {
             throw new LatticeRestoreValidationException(
-                $"Coordinated restore of backup '{request.BackupId}' into replicated tree '{targetTree}' " +
-                $"refused: peer(s) [{string.Join(", ", unreachable)}] are unreachable. A coordinated restore " +
-                $"is all-or-nothing across every current peer.");
+                $"Coordinated {subject} refused: peer(s) [{string.Join(", ", unreachable)}] are unreachable. " +
+                $"A coordinated restore is all-or-nothing across every current peer.");
         }
+    }
+
+    /// <summary>
+    /// Builds the participant cluster set for a saga: this (coordinator) cluster
+    /// plus every current peer, de-duplicated. The coordinator grain canonicalises
+    /// the set.
+    /// </summary>
+    private static List<string> BuildParticipantSet(string self, IReadOnlyCollection<string> peers)
+    {
+        var participants = new List<string>(peers.Count + 1) { self };
+        foreach (var peer in peers)
+        {
+            if (!string.Equals(peer, self, StringComparison.Ordinal))
+            {
+                participants.Add(peer);
+            }
+        }
+
+        return participants;
     }
 
     /// <summary>
@@ -207,5 +329,18 @@ internal sealed class RestoreSagaDispatcher(
         var canonical = $"{backupId}\u001f{targetTree}";
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(canonical));
         return $"restore-{Convert.ToHexString(hash.AsSpan(0, 16)).ToLowerInvariant()}";
+    }
+
+    /// <summary>
+    /// Deterministically derives the saga id for a <b>set</b> restore from the set
+    /// id, so a retried set restore re-attaches to the same saga. Distinct from the
+    /// single-tree derivation so a set id and a single-tree backup id can never
+    /// collide on a saga id.
+    /// </summary>
+    private static string DeriveSetSagaId(string setId)
+    {
+        var canonical = $"set\u001f{setId}";
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(canonical));
+        return $"restore-set-{Convert.ToHexString(hash.AsSpan(0, 16)).ToLowerInvariant()}";
     }
 }
