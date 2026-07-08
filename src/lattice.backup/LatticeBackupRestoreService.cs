@@ -145,6 +145,34 @@ internal sealed class LatticeBackupRestoreService(
         await grainFactory.GetGrain<ILattice>(restore.TargetTreeId)
             .GetRoutingAsync(forceRefresh: true, cancellationToken).ConfigureAwait(false);
 
+        // Symmetric redirect fix-up. Clear the redirect the restore armed on the
+        // (now-current-again) previous tree so it answers logical traffic
+        // directly, and arm the shadow tree - which the alias just moved off -
+        // to redirect logical-alias-routed traffic back onto the previous tree,
+        // so a stale routing activation that cached the shadow alias self-heals
+        // instead of serving the restored (now-reverted-away) snapshot. Both are
+        // idempotent and best-effort relative to the alias swap that already
+        // made the revert authoritative.
+        if (!string.Equals(restore.PreviousPhysicalTreeId, restore.ShadowPhysicalTreeId, StringComparison.Ordinal))
+        {
+            await ClearRetainedTreeRedirectAsync(
+                restore.PreviousPhysicalTreeId, restore.OperationId, cancellationToken).ConfigureAwait(false);
+
+            if (!string.IsNullOrEmpty(restore.ShadowPhysicalTreeId))
+            {
+                RoutingInfo shadowRouting;
+                using (LatticeAccessGateContext.EnterSystemOrigin())
+                {
+                    shadowRouting = await grainFactory.GetGrain<ILattice>(restore.ShadowPhysicalTreeId)
+                        .GetRoutingAsync(cancellationToken).ConfigureAwait(false);
+                }
+
+                await MarkRetainedTreeRedirectAsync(
+                    shadowRouting, restore.PreviousPhysicalTreeId, restore.TargetTreeId,
+                    $"{restore.OperationId}:revert", cancellationToken).ConfigureAwait(false);
+            }
+        }
+
         logger.LogInformation(
             "Reverted shadow-cutover restore of tree {TreeId} back to physical tree {PreviousTreeId}.",
             restore.TargetTreeId, restore.PreviousPhysicalTreeId);
@@ -209,6 +237,7 @@ internal sealed class LatticeBackupRestoreService(
         // revertible; the previous tree is left in place until it expires.
         string previousPhysical;
         RoutingInfo shadowRouting;
+        RoutingInfo retainedRouting;
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
             previousPhysical = await registry.ResolveAsync(targetTreeId).ConfigureAwait(false);
@@ -230,7 +259,30 @@ internal sealed class LatticeBackupRestoreService(
 
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
+            // Resolve the retained tree's routing BEFORE the alias swap. A
+            // never-aliased tree's retained physical id equals its logical name,
+            // so resolving it after the swap would follow the alias to the
+            // shadow tree and arm the wrong shards.
+            retainedRouting = await grainFactory.GetGrain<ILattice>(previousPhysical)
+                .GetRoutingAsync(cancellationToken).ConfigureAwait(false);
             await registry.SetAliasAsync(targetTreeId, shadowRouting.PhysicalTreeId).ConfigureAwait(false);
+        }
+
+        // Arm the retained (previous) physical tree to redirect logical-alias-
+        // routed traffic onto the shadow tree. A shadow-cutover leaves the
+        // previous tree in place for revert, so it keeps answering; without
+        // this a stale StatelessWorker routing activation that still caches the
+        // pre-cutover alias would serve pre-restore data forever (it never sees
+        // a staleness signal to re-resolve). The redirect fires only for
+        // logical-alias traffic - direct-physical access by the retained tree's
+        // own id (revert / diagnostics) and internal maintenance keep reading
+        // the frozen snapshot. Skipped in the degenerate case where the alias
+        // already resolved to the shadow tree.
+        if (!string.Equals(previousPhysical, shadowRouting.PhysicalTreeId, StringComparison.Ordinal))
+        {
+            await MarkRetainedTreeRedirectAsync(
+                retainedRouting, shadowRouting.PhysicalTreeId, targetTreeId, operationId, cancellationToken)
+                .ConfigureAwait(false);
         }
 
         // Proactively invalidate the logical tree activation's cached alias / routing
@@ -247,6 +299,74 @@ internal sealed class LatticeBackupRestoreService(
             .ConfigureAwait(false);
 
         return (shadowRouting.PhysicalTreeId, previousPhysical, applied);
+    }
+
+    /// <summary>
+    /// Arms every shard of the retained tree described by <paramref name="retainedRouting"/>
+    /// to redirect logical-alias-routed traffic (addressed by
+    /// <paramref name="logicalTreeId"/>) onto <paramref name="destinationPhysicalTreeId"/>,
+    /// so a stale routing activation self-heals rather than serving the
+    /// retained snapshot. Idempotent per <paramref name="operationId"/>.
+    /// <para>
+    /// The routing must be resolved by the caller <b>before</b> any alias swap
+    /// that could move the retained tree's logical name onto a different
+    /// physical tree: a never-aliased tree's retained physical id equals its
+    /// logical name, so resolving it after the cutover would follow the alias to
+    /// the destination tree and arm the wrong shards.
+    /// </para>
+    /// </summary>
+    private async Task MarkRetainedTreeRedirectAsync(
+        RoutingInfo retainedRouting,
+        string destinationPhysicalTreeId,
+        string logicalTreeId,
+        string operationId,
+        CancellationToken cancellationToken)
+    {
+        var indices = retainedRouting.Map.GetPhysicalShardIndices();
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            var tasks = new List<Task>(indices.Count);
+            foreach (var shardIndex in indices)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                tasks.Add(grainFactory.GetGrain<IShardRootGrain>($"{retainedRouting.PhysicalTreeId}/{shardIndex}")
+                    .MarkRetainedRedirectAsync(destinationPhysicalTreeId, operationId, logicalTreeId));
+            }
+            await Task.WhenAll(tasks).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Clears the retained-redirect installed by
+    /// <see cref="MarkRetainedTreeRedirectAsync"/> on every shard of
+    /// <paramref name="retainedPhysicalTreeId"/>. Idempotent; matches on
+    /// <paramref name="operationId"/> so it never clears a newer restore's
+    /// redirect.
+    /// </summary>
+    private async Task ClearRetainedTreeRedirectAsync(
+        string retainedPhysicalTreeId,
+        string operationId,
+        CancellationToken cancellationToken)
+    {
+        RoutingInfo retainedRouting;
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            retainedRouting = await grainFactory.GetGrain<ILattice>(retainedPhysicalTreeId)
+                .GetRoutingAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        var indices = retainedRouting.Map.GetPhysicalShardIndices();
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            var tasks = new List<Task>(indices.Count);
+            foreach (var shardIndex in indices)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                tasks.Add(grainFactory.GetGrain<IShardRootGrain>($"{retainedRouting.PhysicalTreeId}/{shardIndex}")
+                    .ClearRetainedRedirectAsync(operationId));
+            }
+            await Task.WhenAll(tasks).ConfigureAwait(false);
+        }
     }
 
     // ---- Apply seams -----------------------------------------------------

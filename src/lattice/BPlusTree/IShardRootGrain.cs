@@ -869,6 +869,44 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task ClearShadowForwardAsync(string operationId);
 
     // ==========================================================================
+    //  Restore shadow-cutover - retained-previous-tree redirect primitive
+    // ==========================================================================
+
+    /// <summary>
+    /// Marks this shard's physical tree as retained-but-superseded by a
+    /// shadow-cutover restore, redirecting logical-alias-routed traffic to
+    /// <paramref name="destinationPhysicalTreeId"/>. After this call a
+    /// logical-routed operation on this shard throws
+    /// <see cref="StaleTreeRoutingException"/> so a stale routing activation
+    /// self-heals onto the destination tree; direct-physical access (the
+    /// revert path reading this tree by its physical ID) and internal
+    /// maintenance keep reading the retained snapshot. Idempotent for a
+    /// matching <paramref name="operationId"/>; a call under a different
+    /// <paramref name="operationId"/> overwrites the redirect (a newer restore
+    /// supersedes an older one).
+    /// </summary>
+    /// <param name="destinationPhysicalTreeId">Physical tree ID that now owns
+    /// the logical alias.</param>
+    /// <param name="operationId">Restore operation ID installing the redirect.</param>
+    /// <param name="logicalTreeId">User-visible logical tree ID whose alias was
+    /// redirected. Stamped into the thrown
+    /// <see cref="StaleTreeRoutingException.LogicalTreeId"/>. May be empty, in
+    /// which case the physical tree ID is used as a fallback.</param>
+    Task MarkRetainedRedirectAsync(string destinationPhysicalTreeId, string operationId, string logicalTreeId);
+
+    /// <summary>
+    /// Clears a redirect previously installed by
+    /// <see cref="MarkRetainedRedirectAsync"/>. Idempotent: clearing when no
+    /// redirect is present is a no-op. Refused with
+    /// <see cref="System.InvalidOperationException"/> when a redirect exists
+    /// under a different <paramref name="operationId"/>, so a stale coordinator
+    /// cannot clear a newer restore's redirect.
+    /// </summary>
+    /// <param name="operationId">Restore operation ID that installed the
+    /// redirect being cleared.</param>
+    Task ClearRetainedRedirectAsync(string operationId);
+
+    // ==========================================================================
     //  Saga prepare/commit-broadcast terminal-mark primitive
     // ==========================================================================
     //  Used by AtomicWriteGrain to broadcast a single linearization mark to

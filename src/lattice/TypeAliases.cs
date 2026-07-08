@@ -140,6 +140,9 @@ internal static class TypeAliases
     internal const string ShadowForwardPhase = "ol.sfp";
     internal const string StaleTreeRouting = "ol.str";
 
+    // Restore shadow-cutover - retained-previous-tree redirect primitive
+    internal const string RetainedRedirectState = "ol.rrs";
+
     // Range delete
     internal const string RangeDeleteResult = "ol.rdr";
 

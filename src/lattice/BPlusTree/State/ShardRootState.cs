@@ -134,6 +134,22 @@ internal sealed class ShardRootState
     /// marked with a strictly greater HLC are preserved.
     /// </summary>
     [Id(13)] public HybridLogicalClock LastDirtyAdvance { get; set; }
+
+    /// <summary>
+    /// Non-null when this shard's physical tree has been superseded by a
+    /// shadow-cutover restore but retained in place for revert. Drives the
+    /// hot-path redirect gate (<c>ThrowIfRetainedRedirect</c>): a
+    /// logical-alias-routed operation is refused with
+    /// <see cref="StaleTreeRoutingException"/> so a stale
+    /// <c>LatticeGrain</c> routing activation self-heals onto the destination
+    /// tree, while direct-physical access and internal maintenance keep
+    /// reading the retained snapshot. A <c>null</c> value is the steady state.
+    /// Adding this slot is backward-compatible with Orleans serialization:
+    /// state persisted before this field was introduced deserializes with
+    /// <c>RetainedRedirect = null</c>, which is the correct "not superseded"
+    /// state.
+    /// </summary>
+    [Id(14)] public RetainedRedirectState? RetainedRedirect { get; set; }
 }
 
 /// <summary>
