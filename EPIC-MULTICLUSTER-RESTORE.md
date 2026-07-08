@@ -65,7 +65,7 @@ git branch -d feat/<child>
 |---|---|---|---|---|
 | 1 | #1171 | Cross-cluster saga control channel (gRPC) | - | DONE (merged, 38 tests green) |
 | 2 | #1172 | Durable saga coordinator + internal participant model | #1171 | DONE (merged, 34 tests green) |
-| 3 | #1173 | Per-tree write fence + shipping pause | #1172 | pending |
+| 3 | #1173 | Per-tree write fence + shipping pause | #1172 | in progress |
 | 4 | #1174 | Shared external sink, capturing-cluster stamp, chain affinity | - | DONE (merged, 39 tests green) |
 | 5 | #1175 | Coordinated restore as first internal participant | #1172, #1173, #1174 | pending |
 | 6 | #1176 | Public user-defined saga participant SPI | #1175 | pending |
