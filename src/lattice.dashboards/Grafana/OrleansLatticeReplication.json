@@ -1495,6 +1495,45 @@
           "legendFormat": "coalesced/s {{tree}}/{{peer}}"
         }
       ]
+    },
+    {
+      "id": 62,
+      "title": "Coordinated restore: saga phase and write-fence durations (p95, ms)",
+      "description": "95th-percentile duration of coordinated multi-cluster restore saga phases and per-tree write-fence windows. 'phase p95' (orleans.lattice.replication.saga.phase.duration, split by phase = prepare/commit/abort) separates the long unfenced prepare (shadow build) window from the short fenced cutover. 'fence p95' (orleans.lattice.replication.saga.fence.duration, per tree) measures only the write-blocking cutover window (engage to lift), NOT the longer globally-gated shipping pause - so a fence duration that grows toward the whole build window is the operator-actionable signal that a cutover is not staying bounded.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 169 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, phase) (rate(orleans_lattice_replication_saga_phase_duration_milliseconds_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "phase p95 {{phase}}" },
+        { "refId": "F", "expr": "histogram_quantile(0.95, sum by (le, tree) (rate(orleans_lattice_replication_saga_fence_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "fence p95 {{tree}}" }
+      ]
+    },
+    {
+      "id": 63,
+      "title": "Coordinated restore: participant votes, commits and aborts (rate)",
+      "description": "Rate of coordinated-restore participant outcomes. 'vote' (orleans.lattice.replication.saga.participant.votes, split by reason) counts prepare votes: commit, or an abort reason (infeasible = admission refused a target that cannot fit; precondition = a missing backup/base in the manifest chain; build-failed = the bounded build-retry budget was exhausted; engine-unavailable = the backup package is not wired here). 'commit' (orleans.lattice.replication.saga.participant.commits) and 'abort' (orleans.lattice.replication.saga.participant.aborts) count terminal cutovers and rollbacks. A rising abort/vote fraction, or a spike in a specific abort reason, is the operator signal that restores are failing admission or build.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 169 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        { "refId": "V", "expr": "sum by (reason) (rate(orleans_lattice_replication_saga_participant_votes_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "vote {{reason}}" },
+        { "refId": "C", "expr": "sum (rate(orleans_lattice_replication_saga_participant_commits_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "commit" },
+        { "refId": "AB", "expr": "sum (rate(orleans_lattice_replication_saga_participant_aborts_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "abort" }
+      ]
+    },
+    {
+      "id": 64,
+      "title": "Coordinated restore: saga compensations (rate by cause)",
+      "description": "Rate of coordinated-restore compensations (rollbacks), split by cause (orleans.lattice.replication.saga.compensations). vote-abort = a coordinator-driven rollback after at least one participant voted abort (an all-or-nothing rollback of every prepared cluster); coordinator-loss = a participant's own cutover-fence-expiry auto-compensation after the coordinator decision never arrived. A non-zero coordinator-loss series is the operator-actionable signal that a coordinator cluster is being lost mid-saga and the bounded fence timer is the only thing preventing a leaked prepared restore.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 176 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (cause) (rate(orleans_lattice_replication_saga_compensations_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{cause}}" }
+      ]
     }
   ]
 }
