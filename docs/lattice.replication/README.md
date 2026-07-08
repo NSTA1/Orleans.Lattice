@@ -47,6 +47,7 @@ Behaviour is validated end-to-end by active-active convergence chaos tests acros
 | **Atomic batch delivery** | Replicated `SetManyAtomicAsync` arrives on every receiver as a single visible unit. No reader observes a partial-set state across clusters. | [Replication Apply](replication-apply.md) |
 | **Auto-bootstrap on fall-off-log** | Peers whose cursor falls behind the retained WAL are re-seeded from a fresh snapshot automatically - no operator intervention. | [Auto-Bootstrap](auto-bootstrap.md) |
 | **Causal+ ordering** | A receiver never observes a write before its causal dependencies - point writes, atomic multi-key writes, maintenance rewrites, and structural shadow-forwards all preserve causal order. | [WAL](wal.md) |
+| **Coordinated multi-cluster restore** | Restoring a backup into a replicated tree runs as an all-or-nothing cross-cluster saga: every cluster cuts over together or rolls back together, so no peer re-advances the restored cut and no reader observes a torn restore. | [Coordinated Restore](coordinated-restore.md) |
 | **Dead-letter queue** | Poison entries - schema skew, oversized values, corrupt HLC - are quarantined per tree after a configurable retry budget; replication continues past them. | [Dead-Letter Queue](dead-letter-queue.md) |
 | **gRPC push transport** | Long-lived gRPC streaming sender / receiver pair. Push latency is sub-second, well below reminder-cadence pull. | [Orleans.Lattice.Replication.Grpc](../lattice.replication.grpc/README.md) |
 | **Health check** | ASP.NET Core / Kubernetes `IHealthCheck` reporting `Degraded` when entries-behind, last-contact age, or consecutive-error streak crosses a soft bound, `Unhealthy` when sustained for longer than the configured grace window. | [Health Check](health-check.md) |
@@ -132,6 +133,7 @@ For day-to-day use and operations:
 - [API Reference](api.md) - the public types, seams, registration helpers, and extension points.
 - [Configuration](configuration.md) - every `LatticeReplicationOptions` knob, its default, and per-tree scope.
 - [Chaos Tests](chaos-tests.md) - the cross-cluster, gRPC transport, and Azure Table WAL chaos suites.
+- [Coordinated Restore](coordinated-restore.md) - the all-or-nothing cross-cluster restore saga, its dispatch rule, the public saga-participant SPI, and reliability under duress.
 - [Replication Modes](replication-modes.md) - per-tree opt-in, `LatticeMergeMode` selection, per-key filter.
 - [Observability](observability.md) - `LatticeReplicationMetrics` instruments, per-peer lag, error counters.
 - [Dead-Letter Queue](dead-letter-queue.md) - quarantine model, operator surface, replay.

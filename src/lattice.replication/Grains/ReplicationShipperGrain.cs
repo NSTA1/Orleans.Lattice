@@ -638,9 +638,65 @@ internal sealed class ReplicationShipperGrain(
     }
 
     /// <inheritdoc />
+    public async Task PauseShippingAsync(string sagaId, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(sagaId);
+        cancellationToken.ThrowIfCancellationRequested();
+        ParseGrainKey();
+
+        if (string.Equals(state.State.AdminPauseSagaId, sagaId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        state.State.AdminPauseSagaId = sagaId;
+        await state.WriteStateAsync();
+        Logger.LogInformation(
+            "{Context}: shipping durably paused for cross-cluster saga {SagaId}.",
+            LogContext, sagaId);
+    }
+
+    /// <inheritdoc />
+    public async Task ResumeShippingAsync(string sagaId, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(sagaId);
+        cancellationToken.ThrowIfCancellationRequested();
+        ParseGrainKey();
+
+        if (!string.Equals(state.State.AdminPauseSagaId, sagaId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        state.State.AdminPauseSagaId = null;
+        await state.WriteStateAsync();
+        Logger.LogInformation(
+            "{Context}: shipping resumed after cross-cluster saga {SagaId}.",
+            LogContext, sagaId);
+
+        // Re-arm the pump so the resume takes effect on the next tick rather
+        // than waiting a full keepalive period.
+        await StartCoordinatorAsync();
+    }
+
+    /// <inheritdoc />
+    public Task<bool> IsShippingPausedAsync() =>
+        Task.FromResult(state.State.AdminPauseSagaId is not null);
+
+    /// <inheritdoc />
     protected internal override async Task ProcessNextPhaseAsync()
     {
         ParseGrainKey();
+
+        // Durable administrative pause (saga cutover): no post-cut entry may
+        // leave the cluster while a saga is in flight. The cursor is never
+        // advanced, so shipping resumes from the same point when the pause is
+        // lifted. Checked before the transient backoff gate because it is a
+        // stronger, longer-lived stop.
+        if (state.State.AdminPauseSagaId is not null)
+        {
+            return;
+        }
 
         // Honour the backoff budget set by the previous failed pump.
         if (_nextRetryAtUtc > DateTime.UtcNow)

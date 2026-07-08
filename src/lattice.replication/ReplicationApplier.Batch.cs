@@ -112,6 +112,7 @@ internal sealed partial class ReplicationApplier
     {
         var anyApplied = false;
         var highest = HybridLogicalClock.Zero;
+        var anyDeferred = false;
         var i = 0;
         while (i < entries.Count)
         {
@@ -131,6 +132,10 @@ internal sealed partial class ReplicationApplier
             {
                 anyApplied = true;
             }
+            if (runResult.Deferred)
+            {
+                anyDeferred = true;
+            }
             if (runResult.HighWaterMark.CompareTo(highest) > 0)
             {
                 highest = runResult.HighWaterMark;
@@ -138,7 +143,7 @@ internal sealed partial class ReplicationApplier
             i = j;
         }
 
-        return new ApplyResult { Applied = anyApplied, HighWaterMark = highest };
+        return new ApplyResult { Applied = anyApplied, HighWaterMark = highest, Deferred = anyDeferred };
     }
 
     /// <summary>
@@ -173,11 +178,16 @@ internal sealed partial class ReplicationApplier
 
         var anyApplied = false;
         var highest = HybridLogicalClock.Zero;
+        var anyDeferred = false;
         foreach (var runResult in results)
         {
             if (runResult.Applied)
             {
                 anyApplied = true;
+            }
+            if (runResult.Deferred)
+            {
+                anyDeferred = true;
             }
             if (runResult.HighWaterMark.CompareTo(highest) > 0)
             {
@@ -185,7 +195,7 @@ internal sealed partial class ReplicationApplier
             }
         }
 
-        return new ApplyResult { Applied = anyApplied, HighWaterMark = highest };
+        return new ApplyResult { Applied = anyApplied, HighWaterMark = highest, Deferred = anyDeferred };
     }
 
     /// <summary>
@@ -207,6 +217,7 @@ internal sealed partial class ReplicationApplier
         {
             var anyApplied = false;
             var highest = HybridLogicalClock.Zero;
+            var anyDeferred = false;
             foreach (var (start, end) in segments)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -216,12 +227,16 @@ internal sealed partial class ReplicationApplier
                 {
                     anyApplied = true;
                 }
+                if (runResult.Deferred)
+                {
+                    anyDeferred = true;
+                }
                 if (runResult.HighWaterMark.CompareTo(highest) > 0)
                 {
                     highest = runResult.HighWaterMark;
                 }
             }
-            return new ApplyResult { Applied = anyApplied, HighWaterMark = highest };
+            return new ApplyResult { Applied = anyApplied, HighWaterMark = highest, Deferred = anyDeferred };
         }
         finally
         {
@@ -243,6 +258,26 @@ internal sealed partial class ReplicationApplier
         int endExclusive,
         CancellationToken cancellationToken)
     {
+        // DURABLE RECEIVE FENCE (issue #1173). Mirror the single-entry gate in
+        // ApplyAsync for the batch path: while a restore saga has paused inbound
+        // apply for this run's tree, defer the whole run with an explicit
+        // Deferred=true signal (HWM unchanged) so no laggard post-cut entries are
+        // merged and the receive path returns a not-accepted, cursor-preserving
+        // ack that makes the sender re-ship the run after the fence lifts. A run
+        // is a single (treeId, originClusterId) segment, so one gate check covers
+        // it.
+        if (_receiveGate is not null
+            && await _receiveGate.IsReceivePausedAsync(entries[startInclusive].TreeId, cancellationToken)
+                .ConfigureAwait(false))
+        {
+            return new ApplyResult
+            {
+                Applied = false,
+                HighWaterMark = HybridLogicalClock.Zero,
+                Deferred = true,
+            };
+        }
+
         try
         {
             var runResult = await ApplyOriginRunAsync(entries, startInclusive, endExclusive, cancellationToken)

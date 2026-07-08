@@ -268,3 +268,28 @@ Tailing the silo log for a single bootstrap run is `(treeName, sourceClusterId)`
 The two directions are independent: a peer that this silo only ships to never produces an inbound row; a peer that this silo only receives from never produces an outbound row. `Snapshot()` returns one row per `(tree, peer, direction)` triple, each carrying a `Direction` property of type `ReplicationContactDirection`.
 
 **Migration note.** Dashboards that previously matched `peer.last_contact_seconds` or `peer.consecutive_errors` without filtering on `direction` will see two series per `(tree, peer)` pair on hosts that opt into both directions. Add `direction="outbound"` to the matcher to preserve the pre-bidirectional shape, or accept the doubled series. Metric names and units are otherwise unchanged. `peer.entries_behind` and `peer.bytes_behind` remain outbound-only and emit a single series per pair without the `direction` tag.
+
+## Coordinated-restore saga
+
+The [coordinated multi-cluster restore](coordinated-restore.md) saga emits its
+own instruments on the same `orleans.lattice.replication` meter, so an
+OpenTelemetry pipeline already subscribed to replication receives them without
+additional wiring. All durations are milliseconds as `double`.
+
+| Instrument | Kind | Tags | Recorded when |
+|---|---|---|---|
+| `orleans.lattice.replication.saga.phase.duration` | `Histogram<double>` (`ms`) | `phase` | Recorded by the cross-cluster coordinator after each phase transition. `phase` is `prepare` (the fan-out prepare / vote-collection window), `commit` (the commit fan-out), or `abort` (the compensation fan-out). Separates the long unfenced build window from the short cutover. |
+| `orleans.lattice.replication.saga.fence.duration` | `Histogram<double>` (`ms`) | `tree` | Recorded by the durable write-fence grain when the write fence is lifted (on the local cutover flip or on the self-lifting deadline), once per fenced tree. Measures only the write-blocking cutover window (engage to lift), NOT the longer globally-gated shipping pause, so operators can confirm the fence stays bounded to the cutover. |
+| `orleans.lattice.replication.saga.participant.votes` | `Counter<long>` (`{vote}`) | `reason` | Incremented once per participant prepare with the vote outcome. `reason` is `commit`, or one of the abort reasons `infeasible` (admission refused a target that cannot fit), `precondition` (a missing backup or base in the manifest chain), `build-failed` (the bounded build-retry budget was exhausted), or `engine-unavailable` (the backup package is not wired on this cluster). Lets operators watch the commit-vote fraction and the distribution of abort refusals. |
+| `orleans.lattice.replication.saga.participant.commits` | `Counter<long>` (`{commit}`) | `reason` | Incremented once per committed participant. `reason` is `single` (single-tree restore) or `set` (backup-set group-atomic restore). |
+| `orleans.lattice.replication.saga.participant.aborts` | `Counter<long>` (`{abort}`) | `reason` | Incremented once per aborted participant. `reason` is `single`, `set`, or `engine-unavailable`. |
+| `orleans.lattice.replication.saga.compensations` | `Counter<long>` (`{compensation}`) | `cause` | Incremented once per participant grain that rolls back a prepared saga. `cause` is `vote-abort` (a coordinator-driven rollback after at least one participant voted abort) or `coordinator-loss` (a participant's own cutover-fence expiry auto-compensation after the coordinator decision never arrived). |
+
+Every instrument name, tag key, and tag value is exposed as a `const` on
+`LatticeReplicationMetrics` (for example `SagaPhaseDurationName`, `TagPhase`,
+`SagaPhasePrepare`, `TagCause`, `SagaCauseCoordinatorLoss`), so dashboard rules
+and external subscribers reference the constants rather than hard-coding the
+strings. The `saga.phase.duration` histogram uses a monotonic stopwatch anchored
+at each phase entry; a silo failover mid-phase truncates the measured interval to
+the span since the most recent reactivation, matching the bootstrap-duration
+behaviour described above.

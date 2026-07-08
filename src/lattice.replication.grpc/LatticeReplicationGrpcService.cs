@@ -137,6 +137,15 @@ internal static class LatticeReplicationGrpcMethodHolder
 /// </summary>
 internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServiceBase
 {
+    /// <summary>
+    /// Bounded backoff (milliseconds) stamped onto a not-accepted ack when the
+    /// applier defers a batch behind the durable inbound receive fence (issue
+    /// #1173). Backs the sender off the fenced tree while the fence is held
+    /// instead of hot-looping the same rejected batch, while staying small
+    /// enough that delivery resumes promptly once the fence lifts.
+    /// </summary>
+    private const int ReceiveFenceDeferPauseMs = 500;
+
     private readonly IReplicationApplier _applier;
     private readonly IWalCursorRegistry _cursorRegistry;
     private readonly IReceiverFlowControlPolicy _flowControlPolicy;
@@ -340,6 +349,34 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
                 Array.Sort(snapshot);
                 advertisedDictionaryIds = snapshot;
             }
+        }
+
+        // DURABLE RECEIVE FENCE (issue #1173). When the applier deferred the
+        // batch because this tree's inbound receive fence is engaged by an
+        // in-flight restore saga, the entries were NOT applied. Return a
+        // not-accepted ack so the sender takes its transient-retry path: it
+        // keeps its per-peer cursor (does not advance past the deferred
+        // entries) and re-ships the same batch after a backoff, so the entries
+        // are delivered once the fence lifts on global completion. A modest,
+        // bounded PauseForMs backs the sender off the fenced tree instead of
+        // hot-looping while the fence is held. Every non-deferred result (apply,
+        // dedup, local-origin rejection) keeps Accepted = true so the sender
+        // makes normal cursor progress.
+        if (result.Deferred)
+        {
+            return new ReplicationAckBox
+            {
+                Value = new ReplicationAck
+                {
+                    Accepted = false,
+                    HighestAppliedHlc = result.HighWaterMark,
+                    BlockedAtHlc = blockedAtHlc,
+                    PauseForMs = ReceiveFenceDeferPauseMs,
+                    SupportedWireVersion = EncodedBatchHeader.CurrentWireVersion,
+                    AdvertisedDictionaryIds = advertisedDictionaryIds,
+                    AdvertisedDictionaries = CompressionDictionaryAdvertisement.Build(_dictionaryProvider),
+                },
+            };
         }
 
         return new ReplicationAckBox

@@ -166,6 +166,12 @@ The add-on `orleans.lattice.backup` meter is charted by the bundled Backup & Res
 | `orleans.lattice.replication.receiver.content_manifest_exchanges` | counter | `tree`, `peer` | Receiver content-hash exchanges handled (rate) |
 | `orleans.lattice.replication.receiver.content_entries_elided` | counter | `tree`, `peer` | Receiver content entries elided (rate) |
 | `orleans.lattice.replication.receiver.content_hwm_advances` | counter | `tree`, `peer` | Receiver metadata-only HWM advances (rate) |
+| `orleans.lattice.replication.saga.phase.duration` | histogram (ms) | `phase` | Coordinated restore: saga phase and write-fence durations (p95, ms) |
+| `orleans.lattice.replication.saga.fence.duration` | histogram (ms) | `tree` | Coordinated restore: saga phase and write-fence durations (p95, ms) |
+| `orleans.lattice.replication.saga.participant.votes` | counter | `reason` | Coordinated restore: participant votes, commits and aborts (rate) |
+| `orleans.lattice.replication.saga.participant.commits` | counter | - | Coordinated restore: participant votes, commits and aborts (rate) |
+| `orleans.lattice.replication.saga.participant.aborts` | counter | - | Coordinated restore: participant votes, commits and aborts (rate) |
+| `orleans.lattice.replication.saga.compensations` | counter | `cause` | Coordinated restore: saga compensations (rate by cause) |
 
 ## `orleans.lattice.auth` meter
 

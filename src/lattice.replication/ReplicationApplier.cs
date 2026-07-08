@@ -31,8 +31,20 @@ internal sealed partial class ReplicationApplier(
     ILogger<ReplicationApplier>? logger = null,
     ReplicationPeerStats? peerStats = null,
     ReceiverAppliedContentIndex? appliedContentIndex = null,
-    ILatticeReplicationContext? replicationContext = null) : IReplicationApplier
+    ILatticeReplicationContext? replicationContext = null,
+    IReplicationReceiveGate? receiveGate = null) : IReplicationApplier
 {
+    /// <summary>
+    /// Optional inbound receive fence. When non-<see langword="null"/> and a
+    /// tree's receive fence is engaged by an in-flight restore saga, peer
+    /// entries for that tree are deferred (returned as an un-applied no-op with
+    /// the HWM unchanged) rather than union-merged, so a laggard's post-cut
+    /// entries cannot re-advance a tree that has already flipped. Optional so
+    /// existing call sites that construct the applier without a gate continue to
+    /// compile and behave as before (never paused).
+    /// </summary>
+    private readonly IReplicationReceiveGate? _receiveGate = receiveGate;
+
     private readonly ILogger<ReplicationApplier> _logger =
         logger ?? NullLogger<ReplicationApplier>.Instance;
 
@@ -172,6 +184,28 @@ internal sealed partial class ReplicationApplier(
                 throw new ArgumentException(
                     "WalRecord.OriginClusterId must be non-empty for replication apply.",
                     nameof(entry));
+            }
+
+            // DURABLE RECEIVE FENCE (issue #1173). While a cross-cluster restore
+            // saga has paused inbound apply for this tree, peer entries must not
+            // be admitted: an early-flipping cluster that applied a laggard's
+            // still-advanced post-cut entries would union-merge and re-advance
+            // itself. Defer the entry with an explicit Deferred=true signal (and
+            // HWM unchanged) so the receive path returns a not-accepted,
+            // cursor-preserving ack; the sender keeps its cursor and re-ships the
+            // same entry once the fence lifts on global completion. The gate is
+            // fronted by a short in-memory cache so this is not a per-entry grain
+            // call.
+            if (_receiveGate is not null
+                && await _receiveGate.IsReceivePausedAsync(entry.TreeId, cancellationToken).ConfigureAwait(false))
+            {
+                outcome = LatticeReplicationMetrics.OutcomeDedup;
+                return new ApplyResult
+                {
+                    Applied = false,
+                    HighWaterMark = HybridLogicalClock.Zero,
+                    Deferred = true,
+                };
             }
 
             // Defence-in-depth: tombstone-reap envelopes

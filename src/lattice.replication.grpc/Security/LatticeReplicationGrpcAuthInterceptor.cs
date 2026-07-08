@@ -126,18 +126,20 @@ internal sealed class LatticeReplicationGrpcAuthInterceptor : Interceptor
     /// <summary>
     /// Returns <see langword="true"/> when the call targets a method
     /// hosted by one of this package's gRPC services (the live push
-    /// transport or the cross-cluster snapshot transport). Matching
-    /// by the service-id segment of the method-name keeps the
-    /// interceptor from inspecting headers on unrelated services in
-    /// a shared ASP.NET Core pipeline.
+    /// transport, the cross-cluster snapshot transport, or the saga
+    /// control channel). Matching by the service-id segment of the
+    /// method-name keeps the interceptor from inspecting headers on
+    /// unrelated services in a shared ASP.NET Core pipeline.
     /// </summary>
     private static bool IsLatticeReplicationMethod(string fullMethodName)
     {
         // Method-name format is "/{ServiceId}/{MethodName}".
         const string PushServicePrefix = "/" + LatticeReplicationGrpcMethod.ServiceName + "/";
         const string SnapshotServicePrefix = "/" + LatticeRemoteSnapshotGrpcMethods.ServiceName + "/";
+        const string SagaServicePrefix = "/" + LatticeSagaGrpcMethods.ServiceName + "/";
         return fullMethodName.StartsWith(PushServicePrefix, StringComparison.Ordinal)
-            || fullMethodName.StartsWith(SnapshotServicePrefix, StringComparison.Ordinal);
+            || fullMethodName.StartsWith(SnapshotServicePrefix, StringComparison.Ordinal)
+            || fullMethodName.StartsWith(SagaServicePrefix, StringComparison.Ordinal);
     }
 
     private static string? ReadHeader(ServerCallContext context, string key)

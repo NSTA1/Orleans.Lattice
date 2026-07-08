@@ -172,4 +172,71 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for <see cref="Replication.PeerHighWaterMarkResponse"/>.</summary>
     internal const string PeerHighWaterMarkResponse = "olr.hp";
 
+    // Cross-cluster saga control channel - the gRPC binding's
+    // orleans.lattice.replication.LatticeSaga service request/response
+    // pair, reused across the Prepare/Commit/Abort/GetStatus RPCs.
+
+    /// <summary>Alias for <see cref="Replication.SagaControlRequest"/>.</summary>
+    internal const string SagaControlRequest = "olr.sq";
+
+    /// <summary>Alias for <see cref="Replication.SagaControlResponse"/>.</summary>
+    internal const string SagaControlResponse = "olr.sv";
+
+    // Durable cross-cluster saga coordinator + participant model. The
+    // coordinator lifecycle phase / outcome / dialled decision, the
+    // coordinator and participant grain interfaces, and their persisted
+    // state and per-participant records. All use previously-unclaimed
+    // olr.z* codes.
+
+    /// <summary>Alias for <see cref="CrossClusterSagaPhase"/>.</summary>
+    internal const string CrossClusterSagaPhase = "olr.zp";
+
+    /// <summary>Alias for <see cref="CrossClusterSagaOutcome"/>.</summary>
+    internal const string CrossClusterSagaOutcome = "olr.zo";
+
+    /// <summary>Alias for <see cref="CrossClusterSagaDecision"/>.</summary>
+    internal const string CrossClusterSagaDecision = "olr.zd";
+
+    /// <summary>Alias for the cross-cluster saga coordinator grain interface.</summary>
+    internal const string ICrossClusterSagaCoordinatorGrain = "olr.zg";
+
+    /// <summary>Alias for <see cref="Grains.CrossClusterSagaCoordinatorState"/>.</summary>
+    internal const string CrossClusterSagaCoordinatorState = "olr.zc";
+
+    /// <summary>Alias for <see cref="Grains.CrossClusterSagaParticipantRef"/>.</summary>
+    internal const string CrossClusterSagaParticipantRef = "olr.zr";
+
+    /// <summary>Alias for the cross-cluster saga participant grain interface.</summary>
+    internal const string ICrossClusterSagaParticipantGrain = "olr.zn";
+
+    /// <summary>Alias for <see cref="Grains.CrossClusterSagaParticipantState"/>.</summary>
+    internal const string CrossClusterSagaParticipantState = "olr.zs";
+
+    // Durable per-tree write-fence and shipping-pause primitive engaged for the
+    // duration of a cross-cluster saga cutover. The saga-scoped, group-atomic
+    // fence grain, its persisted state and lifecycle phase, and the per-tree
+    // inbound receive-fence grain and its state. All use previously-unclaimed
+    // olr.f* codes.
+
+    /// <summary>Alias for the saga write-fence grain interface.</summary>
+    internal const string ISagaWriteFenceGrain = "olr.fg";
+
+    /// <summary>Alias for <see cref="Grains.SagaWriteFenceState"/>.</summary>
+    internal const string SagaWriteFenceState = "olr.fs";
+
+    /// <summary>Alias for <see cref="SagaWriteFencePhase"/>.</summary>
+    internal const string SagaWriteFencePhase = "olr.fp";
+
+    /// <summary>Alias for <see cref="SagaWriteFenceRequest"/>.</summary>
+    internal const string SagaWriteFenceRequest = "olr.fr";
+
+    /// <summary>Alias for <see cref="SagaWriteFenceSnapshot"/>.</summary>
+    internal const string SagaWriteFenceSnapshot = "olr.fn";
+
+    /// <summary>Alias for the per-tree inbound receive-fence grain interface.</summary>
+    internal const string ITreeReceiveFenceGrain = "olr.fc";
+
+    /// <summary>Alias for <see cref="Grains.TreeReceiveFenceState"/>.</summary>
+    internal const string TreeReceiveFenceState = "olr.ft";
+
 }

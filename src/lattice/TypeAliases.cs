@@ -124,6 +124,13 @@ internal static class TypeAliases
     // cap), distinct from the transient WAL saturation regime.
     internal const string LatticeQuotaExceeded = "ol.lqe";
 
+    // Per-tree saga write-fence surface. Thrown by the shard-root write path
+    // when the tree is write-fenced for the duration of a cross-cluster saga
+    // (a restore cutover). A retryable back-pressure signal: the refused
+    // mutation was never committed and the caller should retry after the fence
+    // lifts (terminal saga decision or the bounded cutover deadline).
+    internal const string LatticeWriteFenced = "ol.wfx";
+
     // Single-shape-per-replicated-tree guard. Thrown by the public ILattice
     // write surface when a write would violate the declared replication mode
     // for a tree (a CRDT accessor whose mode differs from the declared mode,

@@ -37,4 +37,21 @@ public readonly record struct ApplyResult
     /// <see cref="HybridLogicalClock.Zero"/>.
     /// </summary>
     [Id(1)] public HybridLogicalClock HighWaterMark { get; init; }
+
+    /// <summary>
+    /// <c>true</c> only when the entry / run was deferred by the durable
+    /// inbound receive fence (issue #1173) because a cross-cluster restore
+    /// saga has paused inbound apply for this tree. A deferred result is
+    /// distinct from every other <see cref="Applied"/><c> == false</c>
+    /// outcome (re-delivery dedup, local-origin rejection, tombstone
+    /// filtering): those are terminal on the receiver and the sender must
+    /// advance its cursor past them, whereas a deferred entry has NOT been
+    /// applied and MUST be re-shipped once the fence lifts. Receive paths
+    /// translate a deferred result into a not-accepted, cursor-preserving
+    /// ack so the sender keeps its per-peer cursor and retries the same
+    /// batch after a backoff. Defaults to <c>false</c>, so every existing
+    /// result shape (and every construction that omits this member) keeps
+    /// its cursor-advancing semantics unchanged.
+    /// </summary>
+    [Id(2)] public bool Deferred { get; init; }
 }

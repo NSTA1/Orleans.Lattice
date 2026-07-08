@@ -46,6 +46,12 @@
          host-rolled ReplicationTopology. -->
     <ProjectReference Include="..\..\..\..\src\lattice.replication\Orleans.Lattice.Replication.csproj" />
     <ProjectReference Include="..\..\..\..\src\lattice.replication.grpc\Orleans.Lattice.Replication.Grpc.csproj" />
+    <!-- Causally-consistent backup + coordinated multi-cluster restore. The
+         shared external sink (a filesystem-backed ILatticeBackupSink under a
+         path every cluster can read) lets a backup captured on one cluster be
+         restored from any peer, and a restore of a replicated tree is promoted
+         to an all-or-nothing coordinated saga by the replication package. -->
+    <ProjectReference Include="..\..\..\..\src\lattice.backup\Orleans.Lattice.Backup.csproj" />
     <!-- Read-only cluster state API, co-hosted on the lattice-backed silo and
          exposed over the same :8081 h2c gRPC pipeline as replication so the
          Orleans.Lattice.Explorer can browse the running sample (issue #886). -->

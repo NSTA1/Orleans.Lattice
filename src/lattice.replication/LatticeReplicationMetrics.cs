@@ -1783,4 +1783,177 @@ public static class LatticeReplicationMetrics
     /// leaves the dictionary uninstalled and retries on a later tick.
     /// </summary>
     public const string DictionaryConvergenceOutcomeUnavailable = "unavailable";
+
+    // --- Coordinated cross-cluster restore saga (observability) ------------------
+
+    /// <summary>
+    /// Tag key for the coordinated-restore saga phase carried by
+    /// <see cref="SagaPhaseDuration"/>. Values are
+    /// <see cref="SagaPhasePrepare"/>, <see cref="SagaPhaseCommit"/>, and
+    /// <see cref="SagaPhaseAbort"/>.
+    /// </summary>
+    public const string TagPhase = "phase";
+
+    /// <summary>
+    /// Tag key for the cause of a saga compensation carried by
+    /// <see cref="SagaCompensations"/>. Values are
+    /// <see cref="SagaCauseVoteAbort"/> (a participant voted abort and the
+    /// coordinator drove a rollback) and <see cref="SagaCauseCoordinatorLoss"/>
+    /// (the cutover fence expired without a coordinator decision and the
+    /// participant auto-compensated).
+    /// </summary>
+    public const string TagCause = "cause";
+
+    /// <summary><see cref="TagPhase"/> value: the unfenced, resumable prepare (shadow build) phase.</summary>
+    public const string SagaPhasePrepare = "prepare";
+
+    /// <summary><see cref="TagPhase"/> value: the fenced cutover commit (atomic alias swap) phase.</summary>
+    public const string SagaPhaseCommit = "commit";
+
+    /// <summary><see cref="TagPhase"/> value: the compensation / rollback (abort) phase.</summary>
+    public const string SagaPhaseAbort = "abort";
+
+    /// <summary>
+    /// <see cref="TagCause"/> value on <see cref="SagaCompensations"/>: the
+    /// compensation was driven by the coordinator after at least one participant
+    /// voted abort (an all-or-nothing rollback of every prepared cluster).
+    /// </summary>
+    public const string SagaCauseVoteAbort = "vote-abort";
+
+    /// <summary>
+    /// <see cref="TagCause"/> value on <see cref="SagaCompensations"/>: the
+    /// compensation was driven by a participant's own cutover-fence expiry after
+    /// the coordinator decision never arrived (the coordinator-loss safety net).
+    /// </summary>
+    public const string SagaCauseCoordinatorLoss = "coordinator-loss";
+
+    /// <summary><see cref="TagReason"/> value on the participant vote counter: the participant voted commit.</summary>
+    public const string SagaReasonCommit = "commit";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on the participant vote counter: the backup
+    /// package is not wired on this cluster, so there is nothing to restore and
+    /// the participant votes abort.
+    /// </summary>
+    public const string SagaReasonEngineUnavailable = "engine-unavailable";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on the participant vote counter: admission
+    /// refused an infeasible target (the tree cannot fit the target cluster) or
+    /// the admission probe itself failed, before any shadow build started.
+    /// </summary>
+    public const string SagaReasonInfeasible = "infeasible";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on the participant vote counter: a build
+    /// precondition failed (a missing backup or base in the manifest chain) - a
+    /// permanent, non-retryable refusal.
+    /// </summary>
+    public const string SagaReasonPrecondition = "precondition";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on the participant vote counter: the shadow
+    /// build exhausted its bounded retry budget (for example a persistent
+    /// capacity exhaustion), so the participant garbage collected any partial
+    /// shadow and voted abort.
+    /// </summary>
+    public const string SagaReasonBuildFailed = "build-failed";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on the participant commit / abort counters:
+    /// the saga restored a single tree (the ordinary single-tree restore path).
+    /// </summary>
+    public const string SagaReasonSingle = "single";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on the participant commit / abort counters:
+    /// the saga restored a backup set as one group-atomic unit.
+    /// </summary>
+    public const string SagaReasonSet = "set";
+
+    /// <summary>
+    /// Histogram of coordinated-restore saga phase durations, recorded by the
+    /// cross-cluster coordinator after each phase transition. Reported in
+    /// milliseconds as <c>double</c> and tagged by <see cref="TagPhase"/>
+    /// (<see cref="SagaPhasePrepare"/> for the fan-out prepare/vote-collection
+    /// window, <see cref="SagaPhaseCommit"/> for the commit fan-out, and
+    /// <see cref="SagaPhaseAbort"/> for the compensation fan-out). Lets operators
+    /// separate the long unfenced build window from the short cutover.
+    /// </summary>
+    public static readonly Histogram<double> SagaPhaseDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.replication.saga.phase.duration", unit: "ms",
+            description: "Coordinated-restore saga phase durations, tagged by phase (prepare/commit/abort).");
+
+    /// <summary>Canonical name of the <see cref="SagaPhaseDuration"/> histogram.</summary>
+    public const string SagaPhaseDurationName = "orleans.lattice.replication.saga.phase.duration";
+
+    /// <summary>
+    /// Counter of participant prepare votes, incremented once per participant
+    /// prepare with the vote outcome carried by <see cref="TagReason"/>
+    /// (<see cref="SagaReasonCommit"/>, <see cref="SagaReasonInfeasible"/>,
+    /// <see cref="SagaReasonPrecondition"/>, <see cref="SagaReasonBuildFailed"/>,
+    /// or <see cref="SagaReasonEngineUnavailable"/>). Lets operators watch the
+    /// commit-vote fraction and the distribution of abort refusals.
+    /// </summary>
+    public static readonly Counter<long> SagaParticipantVotes =
+        Meter.CreateCounter<long>("orleans.lattice.replication.saga.participant.votes", unit: "{vote}",
+            description: "Participant prepare votes, tagged by reason (the vote outcome).");
+
+    /// <summary>Canonical name of the <see cref="SagaParticipantVotes"/> counter.</summary>
+    public const string SagaParticipantVotesName = "orleans.lattice.replication.saga.participant.votes";
+
+    /// <summary>
+    /// Counter of participant commits (the fenced cutover alias swap), incremented
+    /// once per committed participant and tagged by <see cref="TagReason"/>
+    /// (<see cref="SagaReasonSingle"/> or <see cref="SagaReasonSet"/>).
+    /// </summary>
+    public static readonly Counter<long> SagaParticipantCommits =
+        Meter.CreateCounter<long>("orleans.lattice.replication.saga.participant.commits", unit: "{commit}",
+            description: "Participant commits (cutover alias swaps), tagged by reason (single/set).");
+
+    /// <summary>Canonical name of the <see cref="SagaParticipantCommits"/> counter.</summary>
+    public const string SagaParticipantCommitsName = "orleans.lattice.replication.saga.participant.commits";
+
+    /// <summary>
+    /// Counter of participant aborts (compensation / rollback), incremented once
+    /// per aborted participant and tagged by <see cref="TagReason"/>
+    /// (<see cref="SagaReasonSingle"/>, <see cref="SagaReasonSet"/>, or
+    /// <see cref="SagaReasonEngineUnavailable"/>).
+    /// </summary>
+    public static readonly Counter<long> SagaParticipantAborts =
+        Meter.CreateCounter<long>("orleans.lattice.replication.saga.participant.aborts", unit: "{abort}",
+            description: "Participant aborts (compensations), tagged by reason.");
+
+    /// <summary>Canonical name of the <see cref="SagaParticipantAborts"/> counter.</summary>
+    public const string SagaParticipantAbortsName = "orleans.lattice.replication.saga.participant.aborts";
+
+    /// <summary>
+    /// Histogram of write-fence window durations per tree, recorded by the durable
+    /// write-fence grain when the write fence is lifted (on the local cutover flip
+    /// or on the self-lifting deadline). Reported in milliseconds as <c>double</c>
+    /// and tagged by <see cref="TagTree"/>. This measures only the write-blocking
+    /// cutover window (engage to write-fence lift), NOT the longer globally-gated
+    /// shipping-pause window, so operators can confirm the fence stays bounded to
+    /// the cutover and healthy clusters are not write-starved for the whole build.
+    /// </summary>
+    public static readonly Histogram<double> SagaFenceDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.replication.saga.fence.duration", unit: "ms",
+            description: "Write-fence window duration per tree (engage to write-fence lift), tagged by tree.");
+
+    /// <summary>Canonical name of the <see cref="SagaFenceDuration"/> histogram.</summary>
+    public const string SagaFenceDurationName = "orleans.lattice.replication.saga.fence.duration";
+
+    /// <summary>
+    /// Counter of saga compensations, incremented once per participant grain that
+    /// rolls back a prepared saga and tagged by <see cref="TagCause"/>
+    /// (<see cref="SagaCauseVoteAbort"/> for a coordinator-driven rollback after a
+    /// vote abort, or <see cref="SagaCauseCoordinatorLoss"/> for a fence-expiry
+    /// auto-compensation after the coordinator decision never arrived).
+    /// </summary>
+    public static readonly Counter<long> SagaCompensations =
+        Meter.CreateCounter<long>("orleans.lattice.replication.saga.compensations", unit: "{compensation}",
+            description: "Saga compensations, tagged by cause (vote-abort/coordinator-loss).");
+
+    /// <summary>Canonical name of the <see cref="SagaCompensations"/> counter.</summary>
+    public const string SagaCompensationsName = "orleans.lattice.replication.saga.compensations";
 }

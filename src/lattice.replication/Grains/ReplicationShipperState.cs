@@ -103,4 +103,23 @@ internal sealed class ReplicationShipperState
     /// </remarks>
     [Id(3)]
     public string? BoundPhysicalTreeId { get; set; }
+
+    /// <summary>
+    /// Identifier of the cross-cluster saga that has administratively paused
+    /// this shipper, or <c>null</c> when shipping runs normally. Distinct from
+    /// the transient per-peer backoff / <c>ReplicationAck.PauseForMs</c> flow
+    /// control (which lives in a non-persisted retry-deadline field): this is a
+    /// <b>durable</b> pause engaged for a saga cutover so no post-cut entries
+    /// leave the cluster while the saga is in flight, and it survives an
+    /// activation restart. While non-<c>null</c> the pump tick short-circuits
+    /// before any send; the durable <see cref="Cursor"/> is never advanced, so
+    /// shipping resumes from the same resume point once the pause is lifted.
+    /// </summary>
+    /// <remarks>
+    /// <strong>Wire-compat additive.</strong> Legacy persisted state without an
+    /// <c>[Id(4)]</c> slot decodes to <see langword="null"/> - the correct
+    /// "not paused" steady state.
+    /// </remarks>
+    [Id(4)]
+    public string? AdminPauseSagaId { get; set; }
 }

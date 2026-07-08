@@ -1,3 +1,4 @@
+using System.Linq;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
@@ -289,6 +290,16 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         builder.Services.TryAddSingleton<IShardCountProvider, DefaultShardCountProvider>();
         builder.Services.TryAddSingleton<IReplicationLocalVcSeeder, LatticeReplicationLocalVcSeeder>();
 
+        // Durable write-fence / shipping-pause primitive (issue #1173) seams.
+        // ISagaCompletionSource gates the cross-cluster shipping resume on
+        // observed global saga completion; IReplicationReceiveGate lets the
+        // inbound apply path consult the per-tree receive fence with a short
+        // cache. Both are TryAddSingleton so a host (or test) can substitute an
+        // alternative - notably a fake completion source that simulates a
+        // laggard participant.
+        builder.Services.TryAddSingleton<ISagaCompletionSource, CoordinatorSagaCompletionSource>();
+        builder.Services.TryAddSingleton<IReplicationReceiveGate, ReplicationReceiveGate>();
+
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IMutationObserver, ReplicationMutationObserver>());
         builder.Services.TryAddEnumerable(
@@ -322,6 +333,58 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         // hosted service doesn't lose this one and vice versa.
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHostedService, ReplicationDriverActivationService>());
+
+        // Durable cross-cluster saga participant model. Registered here,
+        // before the gRPC binding's TryAddSingleton default runs, so this
+        // durable handler - which routes every inbound saga RPC to the
+        // per-saga participant grain - is the effective
+        // ILatticeSagaControlHandler and the transport-only
+        // NoParticipantSagaControlHandler is never used on a silo that
+        // wires replication. TryAdd still lets a host substitute its own
+        // handler ahead of this call.
+        builder.Services.TryAddSingleton<ILatticeSagaControlHandler, LatticeSagaControlHandler>();
+
+        // Coordinated multi-cluster restore (issue #1175). The restore participant
+        // maps the backup restore engine onto the saga as the first internal
+        // ISagaParticipant; the dispatcher promotes a restore whose target tree is
+        // replicated into an all-or-nothing coordinated saga. The participant is
+        // registered as a concrete singleton and forwarded into the ISagaParticipant
+        // collection so the dispatcher and the participant grain share one instance
+        // (and one in-memory built-shadow cache). The capacity probe defaults to
+        // permissive; a host that enforces a storage budget substitutes it.
+        builder.Services.TryAddSingleton<IRestoreCapacityProbe, UnboundedRestoreCapacityProbe>();
+        builder.Services.TryAddSingleton(static sp => new RestoreParticipant(
+            sp.GetServices<Orleans.Lattice.Backup.ILatticeCoordinatedRestoreEngine>().FirstOrDefault(),
+            sp.GetServices<Orleans.Lattice.Backup.ILatticeBackupRestoreService>().FirstOrDefault(),
+            sp.GetRequiredService<IRestoreCapacityProbe>(),
+            sp.GetRequiredService<IGrainFactory>(),
+            sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<RestoreParticipant>>(),
+            sp.GetServices<Orleans.Lattice.Backup.ILatticeBackupSetResolver>().FirstOrDefault(),
+            sp.GetRequiredService<Orleans.Lattice.Backup.IReplicatedTreeMembership>(),
+            sp.GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>()));
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<ISagaParticipant, RestoreParticipant>(
+                static sp => sp.GetRequiredService<RestoreParticipant>()));
+
+        // Replace the backup package's no-op defaults with the real
+        // replication-backed implementations. AddSingleton (not TryAdd) so the real
+        // implementation wins regardless of whether AddLatticeBackup ran before or
+        // after this call; the backup no-op remains the fallback for a backup-only
+        // host. Wiring the real IReplicatedTreeMembership makes the shared-sink
+        // guard fire under replication; wiring the real dispatcher makes the public
+        // restore entry point promote a replicated-tree restore to a saga.
+        builder.Services.AddSingleton<Orleans.Lattice.Backup.IReplicatedTreeMembership, OptionsReplicatedTreeMembership>();
+        builder.Services.AddSingleton<Orleans.Lattice.Backup.IRestoreSagaDispatcher>(static sp => new RestoreSagaDispatcher(
+            sp.GetRequiredService<Orleans.Lattice.Backup.IReplicatedTreeMembership>(),
+            sp.GetRequiredService<IReplicationTopology>(),
+            sp.GetServices<Orleans.Lattice.Backup.ILatticeCoordinatedRestoreEngine>().FirstOrDefault(),
+            sp.GetRequiredService<IRestoreCapacityProbe>(),
+            sp.GetRequiredService<ISagaControlChannel>(),
+            sp.GetRequiredService<IGrainFactory>(),
+            sp.GetRequiredService<RestoreParticipant>(),
+            sp.GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>(),
+            sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<RestoreSagaDispatcher>>(),
+            sp.GetServices<Orleans.Lattice.Backup.ILatticeBackupSetResolver>().FirstOrDefault()));
 
         return builder;
     }

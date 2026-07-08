@@ -257,6 +257,11 @@ Generated_Code/
 # because we have git ;-)
 _UpgradeReport_Files/
 Backup*/
+# The MultiSiteManufacturing sample keeps its Orleans.Lattice.Backup wiring in
+# Backup/ folders; re-include those so the pattern above (meant for VS upgrade
+# junk) does not silently ignore new sample files added under them.
+!/samples/MultiSiteManufacturing/src/MultiSiteManufacturing.Host/Backup/
+!/samples/MultiSiteManufacturing/test/MultiSiteManufacturing.Tests/Backup/
 UpgradeLog*.XML
 UpgradeLog*.htm
 ServiceFabricBackup/

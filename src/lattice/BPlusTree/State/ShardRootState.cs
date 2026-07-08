@@ -136,6 +136,7 @@ internal sealed class ShardRootState
     [Id(13)] public HybridLogicalClock LastDirtyAdvance { get; set; }
 
     /// <summary>
+    /// <summary>
     /// Non-null when this shard's physical tree has been superseded by a
     /// shadow-cutover restore but retained in place for revert. Drives the
     /// hot-path redirect gate (<c>ThrowIfRetainedRedirect</c>): a
@@ -150,6 +151,34 @@ internal sealed class ShardRootState
     /// state.
     /// </summary>
     [Id(14)] public RetainedRedirectState? RetainedRedirect { get; set; }
+
+    /// <summary>
+    /// Identifier of the cross-cluster saga that has write-fenced this shard,
+    /// or <c>null</c> when no fence is engaged (the steady state). While
+    /// non-<c>null</c> and the current UTC wall clock is before
+    /// <see cref="WriteFenceDeadlineTicks"/>, every mutation routed through
+    /// this shard is refused with a
+    /// <see cref="Orleans.Lattice.LatticeWriteFencedException"/>; reads are
+    /// unaffected. Set by
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.EngageWriteFenceAsync"/>
+    /// and cleared by
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.LiftWriteFenceAsync"/>.
+    /// <para>
+    /// Adding this slot is backward-compatible: activations persisted before
+    /// the field existed deserialize with <c>WriteFenceSagaId = null</c>, the
+    /// correct "no fence engaged" state.
+    /// </para>
+    /// </summary>
+    [Id(15)] public string? WriteFenceSagaId { get; set; }
+
+    /// <summary>
+    /// Absolute UTC tick at which the write fence self-lifts even if no
+    /// terminal saga decision arrives. Sized for the short cutover window so a
+    /// coordinator crash mid-saga never strands the tree write-fenced forever:
+    /// the hot-path gate treats a fence whose deadline has passed as lifted.
+    /// Meaningful only while <see cref="WriteFenceSagaId"/> is non-<c>null</c>.
+    /// </summary>
+    [Id(16)] public long WriteFenceDeadlineTicks { get; set; }
 }
 
 /// <summary>

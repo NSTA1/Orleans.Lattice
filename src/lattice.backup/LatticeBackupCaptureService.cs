@@ -32,9 +32,20 @@ internal sealed class LatticeBackupCaptureService(
     IWalSubscriber walSubscriber,
     LatticeOptionsResolver optionsResolver,
     IWalCursorRegistry cursorRegistry,
+    IOptions<Orleans.Configuration.ClusterOptions> clusterOptions,
     ILogger<LatticeBackupCaptureService> logger)
     : ILatticeBackupCaptureService, ILatticeBackupIncrementalCaptureService
 {
+    // The id of the cluster hosting this capture engine: the vantage point that
+    // authors every capture and owns the WAL cursor lineage. Stamped onto every
+    // manifest (full and incremental) so a chain is bound to its capturing
+    // cluster. Read once from ClusterOptions; falls back to the Orleans default
+    // cluster id when unset so the stamp is never null on a fresh capture.
+    private readonly string _capturingClusterId =
+        string.IsNullOrEmpty(clusterOptions?.Value.ClusterId)
+            ? Orleans.Configuration.ClusterOptions.DefaultClusterId
+            : clusterOptions.Value.ClusterId;
+
     /// <inheritdoc />
     public Task<LatticeBackupCaptureResult> CaptureAsync(
         LatticeBackupCaptureRequest request,
@@ -72,6 +83,27 @@ internal sealed class LatticeBackupCaptureService(
         // scope it holds, which is the base's scope).
         var scope = baseManifest.Scope;
         var treeId = scope.TreeId;
+
+        // Chain affinity: an incremental chain is bound to its base's capturing
+        // cluster. Resolve the base's capturing cluster (a legacy null stamp is
+        // treated as the local cluster so a pre-stamp base stays extendable). If it
+        // is NOT this cluster, an "extend this chain" request arrived on a different
+        // cluster; it cannot resume a lineage owned elsewhere, so it starts a fresh
+        // full backup here (a new chain with its own local stamp) rather than
+        // forking the base chain. This reuses the same fall-back-to-full path the
+        // trimmed-WAL / range-delete cases use.
+        var baseCapturingClusterId = baseManifest.CapturingClusterId ?? _capturingClusterId;
+        if (!string.Equals(baseCapturingClusterId, _capturingClusterId, StringComparison.Ordinal))
+        {
+            logger.LogInformation(
+                "Incremental extend request for base {BaseBackupId} of tree {TreeId} arrived on cluster "
+                + "{LocalClusterId} but the base chain is owned by capturing cluster {BaseClusterId}; "
+                + "starting a fresh full backup on this cluster instead of forking the chain.",
+                request.BaseBackupId, treeId, _capturingClusterId, baseCapturingClusterId);
+            LatticeBackupMetrics.RecordCaptureRetry(LatticeBackupMetrics.ReasonIncrementalFallback);
+            return await CaptureTreeAsync(request.Name, scope, request.PageSize, cancellationToken)
+                .ConfigureAwait(false);
+        }
 
         // Fail-closed authorization before anything else is touched, matching the
         // full-capture path.
@@ -206,7 +238,8 @@ internal sealed class LatticeBackupCaptureService(
                 contentDescriptors: new[] { contentDescriptor },
                 provenance: provenance,
                 baseBackupId: request.BaseBackupId,
-                compressionDictionary: null);
+                compressionDictionary: null,
+                capturingClusterId: baseCapturingClusterId);
 
             await sink.WriteManifestAsync(manifest, cancellationToken).ConfigureAwait(false);
             await catalog.RegisterAsync(manifest, cancellationToken).ConfigureAwait(false);
@@ -605,7 +638,8 @@ internal sealed class LatticeBackupCaptureService(
                     contentDescriptors: new[] { contentDescriptor },
                     provenance: provenance,
                     baseBackupId: null,
-                    compressionDictionary: null);
+                    compressionDictionary: null,
+                    capturingClusterId: _capturingClusterId);
 
                 phase = LatticeBackupMetrics.PhaseSinkWrite;
                 await sink.WriteManifestAsync(manifest, cancellationToken).ConfigureAwait(false);

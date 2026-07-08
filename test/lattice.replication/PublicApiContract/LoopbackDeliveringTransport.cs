@@ -207,7 +207,14 @@ internal sealed class LoopbackDeliveringTransport : IReplicationTransport
 
             return new ReplicationAck
             {
-                Accepted = true,
+                // DURABLE RECEIVE FENCE (issue #1173): a deferred result means
+                // the batch was NOT applied because the tree's inbound receive
+                // fence is engaged. Mirror the production receive path and
+                // return a not-accepted ack so the sender keeps its per-peer
+                // cursor and re-ships the same batch after the fence lifts;
+                // every non-deferred result stays accepted so the sender makes
+                // normal cursor progress.
+                Accepted = !result.Deferred,
                 HighestAppliedHlc = result.HighWaterMark,
             };
         }
