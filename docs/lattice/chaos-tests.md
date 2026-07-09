@@ -800,6 +800,22 @@ cover this and are tracked by
 | Materialised-view recovery across an identity swap | `test/lattice.replication/Chaos/DerivedStateRecoveryAcrossIdentitySwapChaosTests.cs` | A folded view tails a logical source tree whose physical identity is repointed under its registry alias repeatedly, under a sustained mutation workload that accretes backlog between drains. On each drain the maintainer re-resolves the source to its current physical id, and on a change rebuilds against the new physical source and rebinds its tail. After the workload quiesces the view reflects exactly the final identity's contents: keys dropped by a cutover are retracted (a WAL tail alone can never retract a key the restored source never had), changed values win, and a large abandoned backlog never survives. Complements the deterministic single-swap regression that landed with the maintainer heal. |
 | Tag-index reconcile under repeated restore | `test/lattice.backup/Chaos/BackupRestoreReconcileChaosTests.cs` | A tag index over a live subject tree is driven through a real shadow-cutover restore under a large tagged working set with a concurrent reader hammering the tag query. The restore fires a prompt reconcile that drops every membership row absent from the restored point-in-time; the reader never observes an out-of-universe key or a torn membership. Repeated restores to successively earlier point-in-times narrow membership monotonically to each restore's subject with no row stranded from a superseded restore. |
 
+## Routing and cross-tree recovery across a shadow-cutover restore
+
+A shadow-cutover restore swaps a logical tree's alias to a freshly loaded shadow
+tree while retaining the previous physical tree so the restore can be reverted.
+Two consumers must recover across that swap: stateless-worker routing
+activations that cache the logical-to-physical alias, and an in-flight
+cross-tree atomic-write saga that drives a participant through that alias. Two
+chaos suites, hosted in the backup package whose fixture stands up both the
+restore machinery and the core lattice, cover this and are tracked by
+[issue #1167](https://github.com/NSTA1/Orleans.Lattice/issues/1167):
+
+| Suite | Where | What it proves |
+|---|---|---|
+| Routing self-heal across a shadow-cutover | `test/lattice.backup/Chaos/ShadowCutoverRoutingSelfHealChaosTests.cs` | Many stateless-worker routing activations are warmed against a tree's pre-cutover identity under sustained concurrent reads, then the tree is cut over to a restored shadow while the readers keep hammering. The retained tree refuses logical-alias traffic with the internal staleness signal, which the routing tier catches and re-resolves onto the shadow. No reader ever surfaces that signal or observes an out-of-universe value, and after the cutover every activation converges onto the restored snapshot with no key left resolving to pre-cutover content. The repeated-cutover case restores to successively earlier point-in-times and proves the heal re-arms for each. |
+| Cross-tree atomic write across a participant cutover | `test/lattice.backup/Chaos/CrossTreeAtomicWriteAcrossCutoverChaosTests.cs` | A sustained stream of cross-tree atomic writes spans two trees while one participant is repeatedly cut over to a restored shadow underneath the saga. The saga's deadline-bounded retry loops must absorb the staleness signal the retired physical tree raises, re-resolve onto the shadow, and reach a clean terminal decision - no call leaks the signal to the caller. After the cutover storm a fresh all-or-nothing batch still commits and is atomically visible on both trees, proving the cut-over participant self-healed and is not wedged. Complements the mocked prepare-side and terminal-broadcast stale-routing retry regressions by exercising the whole coordinator over a real restore. |
+
 ## See also
 
 * [Consistency](consistency.md) - the per-operation guarantees these
