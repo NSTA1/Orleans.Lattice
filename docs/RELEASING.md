@@ -23,8 +23,10 @@ The package family ships from this repository:
 | `Orleans.Lattice.Api.Auth.Grpc` | `src/lattice.api.auth.grpc/Orleans.Lattice.Api.Auth.Grpc.csproj` |
 | `Orleans.Lattice.Api.Data` | `src/lattice.api.data/Orleans.Lattice.Api.Data.csproj` |
 | `Orleans.Lattice.Api.Data.Grpc` | `src/lattice.api.data.grpc/Orleans.Lattice.Api.Data.Grpc.csproj` |
-
-Major and minor digits move in lockstep across the family. Patch digits may advance independently per package.
+| `Orleans.Lattice.Backup` | `src/lattice.backup/Orleans.Lattice.Backup.csproj` |
+| `Orleans.Lattice.Backup.AzureBlob` | `src/lattice.backup.azureblob/Orleans.Lattice.Backup.AzureBlob.csproj` |
+| `Orleans.Lattice.Api.Backup` | `src/lattice.api.backup/Orleans.Lattice.Api.Backup.csproj` |
+| `Orleans.Lattice.Api.Backup.Grpc` | `src/lattice.api.backup.grpc/Orleans.Lattice.Api.Backup.Grpc.csproj` | across the family. Patch digits may advance independently per package.
 
 ## Tag shape
 
@@ -47,6 +49,10 @@ The publish workflow's per-tag trigger globs match these tag shapes:
 | `Orleans.Lattice.Api.Auth.Grpc` | `lattice.api.auth.grpc-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.Data` | `lattice.api.data-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.Data.Grpc` | `lattice.api.data.grpc-v<X.Y.Z>` |
+| `Orleans.Lattice.Backup` | `lattice.backup-v<X.Y.Z>` |
+| `Orleans.Lattice.Backup.AzureBlob` | `lattice.backup.azureblob-v<X.Y.Z>` |
+| `Orleans.Lattice.Api.Backup` | `lattice.api.backup-v<X.Y.Z>` |
+| `Orleans.Lattice.Api.Backup.Grpc` | `lattice.api.backup.grpc-v<X.Y.Z>` |
 
 For historical compatibility, the `v<X.Y.Z>` family tag (e.g. `v3.2.0`) is reserved for "the whole family at this version". When the family moves in lockstep, push **both** the family tag *and* each per-package tag - the publish workflow keys off the per-package tags.
 
