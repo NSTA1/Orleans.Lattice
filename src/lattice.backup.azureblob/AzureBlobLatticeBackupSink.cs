@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using Azure;
 using Azure.Storage.Blobs;
@@ -15,6 +16,15 @@ namespace Orleans.Lattice.Backup.AzureBlob;
 /// <b>block blobs</b> under <c>manifests/{backupId}</c>, so a manifest is a
 /// single atomic overwrite and listing a chain is one ordered prefix scan.
 /// <para>
+/// The artifact surface preserves chunk framing: each written chunk is stored
+/// with a 4-byte little-endian length prefix, and <see cref="ReadArtifactAsync"/>
+/// reconstructs the <b>same</b> chunk boundaries on read rather than re-chunking
+/// the raw byte stream. This matches the framing contract the in-cluster sink
+/// provides and the restore path depends on - each chunk is one Orleans-serialized
+/// entry array that the restore engine deserializes whole - so a chunk is never
+/// split across a read boundary and deserialization never sees a truncated buffer.
+/// </para>
+/// <para>
 /// Writes are idempotent: artifact ids are content-addressed, so a completed
 /// (committed) artifact blob already holds identical bytes and a retried write is
 /// a no-op. A partially written append blob (created but not yet marked committed
@@ -27,7 +37,10 @@ internal sealed class AzureBlobLatticeBackupSink : ILatticeBackupSink
 {
     // Azure append-block hard limit is 4 MiB per AppendBlock call.
     private const int MaxAppendBlockBytes = 4 * 1024 * 1024;
-    private const int ReadChunkBytes = 64 * 1024;
+
+    // Per-chunk length prefix width: a 4-byte little-endian int32 frames each
+    // stored chunk so the read path can restore exact chunk boundaries.
+    private const int ChunkLengthPrefixBytes = 4;
 
     private readonly BlobContainerClient _container;
     private readonly Serializer<BackupManifest> _serializer;
@@ -71,7 +84,15 @@ internal sealed class AzureBlobLatticeBackupSink : ILatticeBackupSink
 
         await foreach (var chunk in content.WithCancellation(cancellationToken).ConfigureAwait(false))
         {
-            var remaining = chunk;
+            // Frame the chunk with a 4-byte little-endian length prefix so the read
+            // path can restore this exact chunk boundary. Prefix and payload are
+            // appended as one contiguous run; the 4 MiB AppendBlock split below is
+            // purely physical and does not affect the logical frame the reader sees.
+            var framed = new byte[ChunkLengthPrefixBytes + chunk.Length];
+            BinaryPrimitives.WriteInt32LittleEndian(framed, chunk.Length);
+            chunk.Span.CopyTo(framed.AsSpan(ChunkLengthPrefixBytes));
+
+            var remaining = (ReadOnlyMemory<byte>)framed;
             while (!remaining.IsEmpty)
             {
                 var take = Math.Min(remaining.Length, MaxAppendBlockBytes);
@@ -116,12 +137,38 @@ internal sealed class AzureBlobLatticeBackupSink : ILatticeBackupSink
 
         using (result)
         {
-            var buffer = new byte[ReadChunkBytes];
-            int read;
-            while ((read = await result.Content
-                .ReadAsync(buffer.AsMemory(0, ReadChunkBytes), cancellationToken).ConfigureAwait(false)) > 0)
+            var content = result.Content;
+            var header = new byte[ChunkLengthPrefixBytes];
+            while (true)
             {
-                yield return buffer.AsMemory(0, read).ToArray();
+                // Read the next frame's length prefix. A clean end-of-stream at a
+                // frame boundary (zero bytes) terminates the enumeration; a partial
+                // prefix means a truncated/corrupt blob and ReadExactlyAsync throws.
+                var first = await content
+                    .ReadAsync(header.AsMemory(0, ChunkLengthPrefixBytes), cancellationToken)
+                    .ConfigureAwait(false);
+                if (first == 0)
+                {
+                    yield break;
+                }
+
+                if (first < ChunkLengthPrefixBytes)
+                {
+                    await content
+                        .ReadExactlyAsync(header.AsMemory(first, ChunkLengthPrefixBytes - first), cancellationToken)
+                        .ConfigureAwait(false);
+                }
+
+                var length = BinaryPrimitives.ReadInt32LittleEndian(header);
+                if (length == 0)
+                {
+                    yield return ReadOnlyMemory<byte>.Empty;
+                    continue;
+                }
+
+                var payload = new byte[length];
+                await content.ReadExactlyAsync(payload.AsMemory(0, length), cancellationToken).ConfigureAwait(false);
+                yield return payload;
             }
         }
     }

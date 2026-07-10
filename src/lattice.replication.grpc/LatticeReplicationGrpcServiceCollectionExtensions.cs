@@ -194,12 +194,18 @@ public static class LatticeReplicationGrpcServiceCollectionExtensions
             sp => sp.GetRequiredService<LatticeRemoteSnapshotGrpcService>());
 
         // Saga control channel (outbound, client side). One concrete
-        // singleton is shared behind the ISagaControlChannel seam so a
-        // coordinator reuses the per-peer channel cache.
+        // GrpcSagaControlChannel singleton is shared so a coordinator reuses
+        // the per-peer channel cache. The ISagaControlChannel seam is the
+        // loopback-aware composite: it routes the coordinator's own cluster leg
+        // to the in-process ILatticeSagaControlHandler (no self-endpoint needed)
+        // and every remote participant over gRPC.
         RegisterSagaMethodFactory(services);
         services.TryAddSingleton<GrpcSagaControlChannel>();
-        services.TryAddSingleton<ISagaControlChannel>(
-            sp => sp.GetRequiredService<GrpcSagaControlChannel>());
+        services.TryAddSingleton<ISagaControlChannel>(sp => new LoopbackAwareSagaControlChannel(
+            sp.GetRequiredService<GrpcSagaControlChannel>(),
+            sp.GetRequiredService<ILatticeSagaControlHandler>(),
+            sp.GetRequiredService<IOptionsMonitor<GrpcSagaControlChannelOptions>>(),
+            sp.GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>()));
 
         // Saga participant service (inbound, server side). The default
         // handler is transport-only and votes to abort; a host wiring a
