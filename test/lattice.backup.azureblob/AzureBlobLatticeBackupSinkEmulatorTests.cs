@@ -159,6 +159,41 @@ public class AzureBlobLatticeBackupSinkEmulatorTests
     }
 
     [Test]
+    public async Task ReadArtifactAsync_preserves_written_chunk_boundaries()
+    {
+        // The restore path deserializes each read chunk as one whole entry array,
+        // so the sink must yield chunks on the same boundaries they were written
+        // rather than re-chunking the raw byte stream.
+        var chunks = new[]
+        {
+            new byte[] { 1, 2, 3 },
+            new byte[] { 4, 5 },
+            new byte[] { 6 },
+        };
+
+        await _sut.WriteArtifactAsync("artifact-1", ToAsync(chunks));
+        var read = await CollectAsync(_sut.ReadArtifactAsync("artifact-1"));
+
+        Assert.That(read.Select(c => c.ToArray()), Is.EqualTo(chunks));
+    }
+
+    [Test]
+    public async Task ReadArtifactAsync_preserves_boundaries_for_chunks_larger_than_the_read_buffer()
+    {
+        // Each chunk exceeds the sink's internal streaming read buffer, proving a
+        // large chunk is reconstructed whole from the framed stream instead of
+        // being split across read boundaries (which would break per-chunk decode).
+        var first = Enumerable.Range(0, 200_000).Select(i => (byte)(i % 251)).ToArray();
+        var second = Enumerable.Range(0, 150_000).Select(i => (byte)((i * 7) % 253)).ToArray();
+        var chunks = new[] { first, second };
+
+        await _sut.WriteArtifactAsync("artifact-big", ToAsync(chunks));
+        var read = await CollectAsync(_sut.ReadArtifactAsync("artifact-big"));
+
+        Assert.That(read.Select(c => c.ToArray()), Is.EqualTo(chunks));
+    }
+
+    [Test]
     public async Task ReadArtifactAsync_yields_nothing_when_absent()
     {
         var read = await CollectAsync(_sut.ReadArtifactAsync("missing"));
