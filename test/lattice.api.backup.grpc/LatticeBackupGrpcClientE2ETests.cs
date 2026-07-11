@@ -264,6 +264,25 @@ public sealed class LatticeBackupGrpcClientE2ETests
         Assert.That(async () => await _host.Client.RevertRestoreAsync(restore), Throws.Nothing);
     }
 
+    [Test]
+    public void RestoreBackupAsync_maps_a_restore_validation_failure_to_failed_precondition_over_the_wire()
+    {
+        // Restoring an unknown backup id fails the pre-apply validation
+        // (LatticeRestoreValidationException, an InvalidOperationException). The
+        // service must surface it as FailedPrecondition with its actionable
+        // message, not the opaque Internal "request failed", so the operator UI
+        // can explain what went wrong (for example a backup store that is not
+        // shared across every cluster).
+        Assert.That(
+            async () => await _host.Client.RestoreBackupAsync(
+                new LatticeRestoreRequest(
+                    "0000000000000000000000000000000000000000000000000000000000000000",
+                    "orders-missing")),
+            Throws.InstanceOf<global::Grpc.Core.RpcException>()
+                .With.Property(nameof(global::Grpc.Core.RpcException.StatusCode))
+                .EqualTo(global::Grpc.Core.StatusCode.FailedPrecondition));
+    }
+
     private static byte[] Bytes(string s) => Encoding.UTF8.GetBytes(s);
 
     private static string Str(byte[] b) => Encoding.UTF8.GetString(b);

@@ -47,11 +47,20 @@
     <ProjectReference Include="..\..\..\..\src\lattice.replication\Orleans.Lattice.Replication.csproj" />
     <ProjectReference Include="..\..\..\..\src\lattice.replication.grpc\Orleans.Lattice.Replication.Grpc.csproj" />
     <!-- Causally-consistent backup + coordinated multi-cluster restore. The
-         shared external sink (a filesystem-backed ILatticeBackupSink under a
-         path every cluster can read) lets a backup captured on one cluster be
-         restored from any peer, and a restore of a replicated tree is promoted
-         to an all-or-nothing coordinated saga by the replication package. -->
+         shared external sink lets a backup captured on one cluster be restored
+         from any peer, and a restore of a replicated tree is promoted to an
+         all-or-nothing coordinated saga by the replication package. Under
+         docker-compose the sink is the Azure Blob sink below (a single shared
+         Azurite account); the legacy single-machine path falls back to a
+         filesystem sink under a shared temp directory. -->
     <ProjectReference Include="..\..\..\..\src\lattice.backup\Orleans.Lattice.Backup.csproj" />
+    <!-- Shared, off-cluster backup sink for the docker-compose topology. Each
+         cluster runs in its own container with its own Azurite, so the
+         filesystem sink's directory is NOT shared across clusters; the Azure
+         Blob sink points every cluster at one shared Azurite account
+         (azurite-backup) so a backup captured on one cluster is resolvable and
+         restorable from any peer - the prerequisite for coordinated restore. -->
+    <ProjectReference Include="..\..\..\..\src\lattice.backup.azureblob\Orleans.Lattice.Backup.AzureBlob.csproj" />
     <!-- Read-only cluster state API, co-hosted on the lattice-backed silo and
          exposed over the same :8081 h2c gRPC pipeline as replication so the
          Orleans.Lattice.Explorer can browse the running sample (issue #886). -->

@@ -53,6 +53,12 @@ flowchart TB
     siloHA --- azH
     siloHB --- azH
 
+    azBK["azurite-backup<br/>:10000 (shared, multi-homed)"]
+    siloFA -->|"backup blob sink"| azBK
+    siloFB -->|"backup blob sink"| azBK
+    siloHA -->|"backup blob sink"| azBK
+    siloHB -->|"backup blob sink"| azBK
+
     siloFA -.->|"gRPC push (LatticeReplication)"| tHE1
     siloFB -.->|"gRPC push (LatticeReplication)"| tHE1
     siloHA -.->|"gRPC push (LatticeReplication)"| tFE2
@@ -73,6 +79,7 @@ Reachability matrix:
 | `silo-us-*` → `silo-eu-*` | - | **No shared network - blocked** |
 | `silo-eu-*` → `silo-us-*` | - | **No shared network - blocked** |
 | `azurite-us` ↔ `azurite-eu` | - | **No shared network - blocked** |
+| `silo-us-*` / `silo-eu-*` → `azurite-backup` | `us-net` + `eu-net` (multi-homed) | Yes (shared backup sink) |
 
 Three host ports are published:
 
@@ -404,6 +411,7 @@ Compose overrides only what has to change in containers:
 | Key | Purpose |
 |---|---|
 | `ConnectionStrings__AzureTableStorage` | Per-cluster Azurite URL (`http://azurite-{cluster}:10002/...`). |
+| `ConnectionStrings__BackupBlobStorage` | Shared backup Azurite blob URL (`http://azurite-backup:10000/...`) - identical on every silo so all clusters resolve one backup sink. |
 | `PackageReplication__PeerClusterId` | Peer cluster short name (used as the WAL origin tag). |
 | `PackageReplication__PeerGrpcEndpoint` | Peer Traefik URL for the gRPC push transport. |
 | `Cluster__SiloPortA` / `SiloPortB` | Both `11111` under Compose - each container has its own IP. |

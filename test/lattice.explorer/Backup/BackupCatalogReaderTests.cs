@@ -218,6 +218,71 @@ public class BackupCatalogReaderTests
     }
 
     [Test]
+    public async Task RestoreAsync_unshared_sink_precondition_explains_the_misconfiguration()
+    {
+        // The coordinated-restore saga aborts because a peer cluster could not
+        // prepare (its backup store is not the shared one). The server reports
+        // FailedPrecondition; the reader must turn it into an actionable
+        // "not shared across every cluster" explanation, not a raw status dump.
+        var client = new FakeBackupControlClient
+        {
+            MutationThrows = new RpcException(new Status(
+                StatusCode.FailedPrecondition,
+                "Coordinated restore of backup 'b1' into replicated tree 'tree-b' aborted: "
+                + "at least one cluster could not prepare. Every cluster was compensated back "
+                + "to its pre-restore state.")),
+        };
+
+        var result = await CreateReader(client).RestoreAsync("b1", "tree-b");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(BackupOperationStatus.Failed));
+            Assert.That(result.Message, Does.Contain("shared"));
+            Assert.That(result.Message, Does.Contain("every cluster"));
+        });
+    }
+
+    [Test]
+    public async Task RestoreAsync_absent_artifact_precondition_explains_the_misconfiguration()
+    {
+        var client = new FakeBackupControlClient
+        {
+            MutationThrows = new RpcException(new Status(
+                StatusCode.FailedPrecondition,
+                "Backup 'b1' references artifact 'a1', which is absent from the sink.")),
+        };
+
+        var result = await CreateReader(client).RestoreAsync("b1", "tree-b");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(BackupOperationStatus.Failed));
+            Assert.That(result.Message, Does.Contain("shared backup sink"));
+        });
+    }
+
+    [Test]
+    public async Task RestoreAsync_other_precondition_surfaces_the_server_detail()
+    {
+        var client = new FakeBackupControlClient
+        {
+            MutationThrows = new RpcException(new Status(
+                StatusCode.FailedPrecondition,
+                "Artifact 'a1' of backup 'b1' failed integrity validation.")),
+        };
+
+        var result = await CreateReader(client).RestoreAsync("b1", "tree-b");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(BackupOperationStatus.Failed));
+            Assert.That(result.Message, Does.Contain("failed integrity validation"));
+            Assert.That(result.Message, Does.Not.Contain("shared"));
+        });
+    }
+
+    [Test]
     public async Task DeleteAsync_absent_reports_already_absent()
     {
         var client = new FakeBackupControlClient { DeleteResult = false };

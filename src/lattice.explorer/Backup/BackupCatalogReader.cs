@@ -157,6 +157,37 @@ public sealed class BackupCatalogReader(IBackupControlClient client) : IBackupCa
             ? "You are not permitted to perform this backup operation."
             : ex.Message;
 
-    private static string FailureMessage(RpcException ex) =>
-        $"The backup operation failed ({ex.StatusCode}): {ex.Status.Detail}";
+    private static string FailureMessage(RpcException ex)
+    {
+        // A restore of a replicated tree fans out to every peer cluster; if the
+        // backup store is not actually shared across all of them (a common
+        // misconfiguration - e.g. a per-cluster sink, or a filesystem path that
+        // is not a shared mount) the peer cannot resolve the manifest / artifacts
+        // and the coordinated restore aborts. The server reports these as
+        // FailedPrecondition. Translate the sink-not-shared shapes into a clear,
+        // actionable explanation instead of a raw status dump.
+        if (ex.StatusCode == StatusCode.FailedPrecondition)
+        {
+            var detail = ex.Status.Detail;
+            if (IndicatesUnsharedBackupStore(detail))
+            {
+                return "This restore could not be completed because the backup is not reachable from "
+                    + "every cluster. A multi-cluster restore needs a single backup store that all "
+                    + "clusters share - otherwise a backup captured on one cluster is invisible to its "
+                    + "peers and the coordinated restore is aborted. Check that every cluster is "
+                    + "configured with the same shared backup sink (for example one shared blob "
+                    + $"account), then retry. Server detail: {detail}";
+            }
+
+            return $"The restore could not be completed: {detail}";
+        }
+
+        return $"The backup operation failed ({ex.StatusCode}): {ex.Status.Detail}";
+    }
+
+    private static bool IndicatesUnsharedBackupStore(string? detail) =>
+        detail is not null
+        && (detail.Contains("could not prepare", StringComparison.OrdinalIgnoreCase)
+            || detail.Contains("absent from the sink", StringComparison.OrdinalIgnoreCase)
+            || detail.Contains("catalog or sink", StringComparison.OrdinalIgnoreCase));
 }

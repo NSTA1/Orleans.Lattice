@@ -36,6 +36,24 @@ When the authorization add-on is not registered, no header is read and the backu
 
 `GetAuthScheme` is deliberately unauthenticated so a client can discover how to sign in before it holds a credential. The response is built by the `ILatticeBackupApiAuthSchemeSource`; the default implementation projects the host-configured `AdvertisedAuthSchemes` (empty by default, so a client falls back to manual or Basic selection). Because the advertisement is served without a credential, an implementation must return only public configuration - scheme ids and public parameters like an OIDC authority or client id - and never a secret or user-specific data.
 
-## Denial mapping
+## Status mapping
 
 A denial from either gate reaches the client as a `PermissionDenied` `RpcException`, so a caller handles authorization failure uniformly regardless of which layer refused the call.
+
+The binding also translates the facade's other failure shapes into stable gRPC
+status codes, so a client can branch on the code rather than parse a message:
+
+| Facade outcome | gRPC `StatusCode` | Notes |
+| --- | --- | --- |
+| Authorization denied (transport gate or facade scope check) | `PermissionDenied` | The detail is safe to surface; never names a secret. |
+| Unknown backup / missing id (`KeyNotFoundException`) | `NotFound` | |
+| Restore pre-apply validation failure (`LatticeRestoreValidationException`) | `FailedPrecondition` | A missing manifest or artifact, a digest mismatch, an out-of-scope request, or a coordinated saga that aborted because a peer could not prepare. The detail is safe and actionable (it names backups / trees), so an operator UI can render it directly. |
+| Invalid argument (`ArgumentException`) | `InvalidArgument` | |
+| Request cancelled | `Cancelled` | |
+| Any other fault | `Internal` | The detail is deliberately opaque; the real exception is logged server-side, not returned. |
+
+The `FailedPrecondition` shape is the one an operator most often needs to act
+on: a coordinated (replicated-tree) restore fails this way when the backup store
+is not actually shared across every cluster, because a peer that never captured
+the backup cannot resolve it. The detail is preserved end to end so a UI can
+turn it into a clear, fixable message rather than an opaque error.

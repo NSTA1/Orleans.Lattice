@@ -146,8 +146,8 @@
                                 }
                                 <select class="explorer-backups-restore-mode" value="@_restoreMode"
                                         @onchange="OnRestoreModeChanged" title="Restore mode">
-                                    <option value="@LatticeRestoreMode.InPlace">In-place (merge)</option>
-                                    <option value="@LatticeRestoreMode.ShadowCutover">Shadow-cutover (point-in-time)</option>
+                                    <option value="@LatticeRestoreMode.InPlace">Repair missing (non-destructive)</option>
+                                    <option value="@LatticeRestoreMode.ShadowCutover">Point-in-time replace (destructive)</option>
                                 </select>
                                 <button type="button" class="explorer-btn"
                                         disabled="@(_busy || (!row.IsSet && string.IsNullOrWhiteSpace(RestoreTargetFor(row.Members[0]))))"

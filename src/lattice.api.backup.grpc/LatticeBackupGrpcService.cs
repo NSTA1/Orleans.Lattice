@@ -406,6 +406,17 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
         {
             throw new RpcException(new Status(StatusCode.NotFound, ex.Message));
         }
+        catch (LatticeRestoreValidationException ex)
+        {
+            // A restore failed its pre-apply trust-boundary validation (a missing
+            // manifest or artifact, a digest mismatch, an out-of-scope request, or
+            // a coordinated saga that aborted because a peer could not prepare).
+            // It is a precondition failure, not an internal fault, and its message
+            // is safe and actionable (it names backups / trees, no secrets), so
+            // surface it as FailedPrecondition instead of the opaque Internal
+            // below - the operator UI turns this into a clear, fixable message.
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
+        }
         catch (ArgumentException ex)
         {
             throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));

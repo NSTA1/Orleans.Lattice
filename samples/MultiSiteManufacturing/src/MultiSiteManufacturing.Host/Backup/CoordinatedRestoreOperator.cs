@@ -7,7 +7,8 @@ namespace MultiSiteManufacturing.Host.Backup;
 /// <summary>
 /// Operator-facing facade that captures and restores the sample's replicated
 /// fact tree (<see cref="LatticeFactBackend.FactTreeId"/>) through the shared
-/// external <see cref="FileSystemBackupSink"/>. It mirrors the seam
+/// external backup sink (the Azure blob sink under docker-compose; a local
+/// <see cref="FileSystemBackupSink"/> in the single-machine quick-start). It mirrors the seam
 /// <c>OperatorActions</c> uses: a small DI-registered facade the UI, a gRPC
 /// service, or a test can drive directly, with no new web framework bolted on.
 /// <para>
