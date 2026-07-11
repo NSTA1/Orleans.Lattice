@@ -97,21 +97,22 @@ Only after **every** sub-issue is integrated and the integration branch builds c
      ```
    Paste the `Failed:`/`Passed:`/`Total:` summary. Any red means stop, fix (or send the owning sub-issue back), re-integrate, and re-run from the top of this step.
 2. **Author the epic documentation yourself.** Write/refresh the topic docs under the relevant `docs/<package>/` for every capability the epic shipped (following the `documentation` skill and the docs layout), update `docs/**/api.md`, `configuration.md`, `architecture.md` as affected, update `.github/copilot-instructions.md`'s tables, add any new package's `README.md`, and move each shipped sub-issue's bullet from **Planned / open** to **Shipped** in the correct `features.md` index (issue link intact, ordering preserved). Use the byte-level markdown-editing technique for long files.
-3. **Update `CHANGELOG.md`** `## [Unreleased]` with user-facing entries for the epic under the right subsections. No version stamp.
+3. **Add exactly one `CHANGELOG.md` entry for the epic.** Under `## [Unreleased]`, add a **single** user-facing entry (in the right subsection - `### Added`/`### Changed`/etc.) that describes the epic **at a high level** - the capability the whole epic delivers, phrased from the user's perspective - and links **the epic issue only** (`#<epic>`). Do **not** add a line per sub-issue and do **not** link the sub-issues; the epic is the one changelog-visible unit of work. No version stamp.
 4. **Fact-check the docs with the docs agent.** Hand the just-written documentation set to the `docs` agent to verify every prose claim against source and check links. Apply its corrections. This is mandatory - you wrote the docs, so an independent accuracy pass is required before shipping.
 5. **Re-run the docs-snippet and em-dash/mojibake/tracker hygiene gates** after all doc edits (every markdown edit is in scope of those gates), and confirm green.
 
 ### Phase 7 - Raise the PR to main
 
 1. Ensure NSTA1 is the active `gh` account (principle 9).
-2. Commit the integrated work with a conventional message (`feat: <epic title>`), push `feat/<epic-slug>`.
-3. Create **one** PR to `main` with `gh pr create`, body written to `.scratch/pr-body.md` (ASCII only) and passed via `--body-file`:
+2. **Confirm the single epic changelog entry is present.** Before committing, verify `CHANGELOG.md` `## [Unreleased]` contains **exactly one** entry for this epic - a high-level, user-facing description of the epic that links **the epic issue only** (`#<epic>`), with no per-sub-issue lines and no sub-issue links (Phase 6 step 3). This entry is mandatory: the PR does not go out without it. If it is missing or over-granular, fix it (and re-run the doc hygiene gates) before proceeding.
+3. Commit the integrated work with a conventional message (`feat: <epic title>`), push `feat/<epic-slug>`. The changelog entry is part of this commit.
+4. Create **one** PR to `main` with `gh pr create`, body written to `.scratch/pr-body.md` (ASCII only) and passed via `--body-file`:
    - a `## Summary` that frames the epic and its shipped capabilities;
    - **`Closes #<epic>`** plus a `Closes #NNN` for every sub-issue the epic fully implements, in the `## Summary` section, so all auto-close on squash-merge;
    - a `## Changes` section grouping the new/modified public API, the tests added (by sub-issue), and the documentation authored;
    - labels: `enhancement` (or the epic's category) **plus every package label** the epic touched, per the `pr-labels` skill.
-4. **Verify the body applied** (it silently no-ops on a malformed file): re-read the first/last lines and length via `gh pr view <num> --json body`. Fix and re-`gh pr edit --body-file` if empty/stale.
-5. Report the PR URL, the full sub-issue -> integration map, the final test summary, and the docs-agent verdict.
+5. **Verify the body applied** (it silently no-ops on a malformed file): re-read the first/last lines and length via `gh pr view <num> --json body`. Fix and re-`gh pr edit --body-file` if empty/stale.
+6. Report the PR URL, the full sub-issue -> integration map, the final test summary, and the docs-agent verdict.
 
 ## Boundaries (what this agent does NOT do)
 
