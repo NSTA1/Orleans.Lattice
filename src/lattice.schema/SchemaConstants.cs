@@ -29,6 +29,13 @@ internal static class SchemaConstants
     /// </summary>
     internal const string DeadLetterTree = "sys-schema-dlq";
 
+    /// <summary>
+    /// Tree holding per-tree schema-version configuration
+    /// (<see cref="LatticeSchemaVersionConfig"/>), keyed by the governed tree id, so
+    /// a config read is a single point read and the opt-in set is a full-tree scan.
+    /// </summary>
+    internal const string VersionConfigTree = "sys-schema-version";
+
     /// <summary>Durable per-key history view name for <see cref="PolicyTree"/>.</summary>
     internal const string PolicyHistoryView = "sys-schema-policy-history";
 
@@ -44,7 +51,7 @@ internal static class SchemaConstants
     internal const string MergeTreeIdRequestContextKey = "ols.mtree";
 
     /// <summary>Enumerates the reserved backing tree names.</summary>
-    internal static IReadOnlyList<string> AllTrees { get; } = new[] { PolicyTree, DeadLetterTree };
+    internal static IReadOnlyList<string> AllTrees { get; } = new[] { PolicyTree, DeadLetterTree, VersionConfigTree };
 
     /// <summary>
     /// Rejects a tree id that collides with the reserved <c>sys-schema-*</c>

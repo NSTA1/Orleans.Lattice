@@ -50,4 +50,7 @@ internal static class SchemaTypeAliases
 
     /// <summary>Alias for <see cref="SchemaRemediationState"/>.</summary>
     internal const string SchemaRemediationState = "ols.rs";
+
+    /// <summary>Alias for <see cref="LatticeSchemaVersionConfig"/>.</summary>
+    internal const string LatticeSchemaVersionConfig = "ols.vc";
 }

@@ -19,6 +19,9 @@ public static class LatticeSchemaReservedTrees
     /// <summary>The reserved tree id backing the strict-mode dead-letter queue.</summary>
     public static string DeadLetterTreeId => SchemaConstants.DeadLetterTree;
 
+    /// <summary>The reserved tree id backing the per-tree schema-version configuration store.</summary>
+    public static string VersionConfigTreeId => SchemaConstants.VersionConfigTree;
+
     /// <summary>
     /// Returns <c>true</c> when <paramref name="treeId"/> collides with the
     /// reserved <c>sys-schema-*</c> namespace.

@@ -1,0 +1,68 @@
+namespace Orleans.Lattice.Schema;
+
+/// <summary>
+/// The default <see cref="ILatticeSchemaVersionAdmin"/>. It delegates config
+/// mutations to the durable <see cref="ILatticeSchemaVersionStore"/> and eagerly
+/// evicts the local <see cref="ILatticeSchemaVersionProvider"/> cache on a change,
+/// so the new config takes effect on this silo's next write / read without waiting
+/// for the mutation observer to propagate the eviction. Mirrors
+/// <c>LatticeSchemaAdmin</c>.
+/// </summary>
+internal sealed class LatticeSchemaVersionAdmin(
+    ILatticeSchemaVersionStore store,
+    ILatticeSchemaVersionProvider provider) : ILatticeSchemaVersionAdmin
+{
+    /// <inheritdoc />
+    public async Task SetVersionConfigAsync(
+        string treeId, LatticeSchemaVersionConfig config, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+
+        await store.SetConfigAsync(treeId, config, cancellationToken).ConfigureAwait(false);
+        provider.Invalidate(treeId);
+    }
+
+    /// <inheritdoc />
+    public Task<LatticeSchemaVersionConfig?> GetVersionConfigAsync(
+        string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return store.GetConfigAsync(treeId, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<LatticeSchemaVersionConfig> AdvanceTargetVersionAsync(
+        string treeId, uint newTargetVersion, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+
+        var current = await store.GetConfigAsync(treeId, cancellationToken).ConfigureAwait(false);
+        if (current is not { } config)
+        {
+            throw new InvalidOperationException(
+                $"Tree '{treeId}' is not versioned; call {nameof(SetVersionConfigAsync)} to opt it in before advancing.");
+        }
+
+        if (newTargetVersion <= config.TargetVersion)
+        {
+            throw new InvalidOperationException(
+                $"Target version for tree '{treeId}' is monotonic: the new target ({newTargetVersion}) must be " +
+                $"greater than the current target ({config.TargetVersion}).");
+        }
+
+        var advanced = config with { TargetVersion = newTargetVersion };
+        await store.SetConfigAsync(treeId, advanced, cancellationToken).ConfigureAwait(false);
+        provider.Invalidate(treeId);
+        return advanced;
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> ClearVersionConfigAsync(string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+
+        var removed = await store.ClearConfigAsync(treeId, cancellationToken).ConfigureAwait(false);
+        provider.Invalidate(treeId);
+        return removed;
+    }
+}

@@ -13,6 +13,7 @@ public class LatticeSchemaReservedTreesTests
         Assert.That(LatticeSchemaReservedTrees.Prefix, Is.EqualTo("sys-schema-"));
         Assert.That(LatticeSchemaReservedTrees.PolicyTreeId, Is.EqualTo("sys-schema-policy"));
         Assert.That(LatticeSchemaReservedTrees.DeadLetterTreeId, Is.EqualTo("sys-schema-dlq"));
+        Assert.That(LatticeSchemaReservedTrees.VersionConfigTreeId, Is.EqualTo("sys-schema-version"));
     }
 
     [Test]
