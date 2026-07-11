@@ -255,6 +255,12 @@ public partial class SharedMetricsSamplerTests
 
         public Task CancelScanAsync(string treeId, string? continuationToken, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
+
+        public Task<int> GetDeadLetterCountAsync(string treeId, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<DeadLetterQueuePage> ListDeadLettersAsync(DeadLetterQueueRequest request, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
     }
 
     /// <summary>

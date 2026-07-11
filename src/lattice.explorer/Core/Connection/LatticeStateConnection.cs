@@ -200,6 +200,14 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
         => ExecuteAsync((c, ct) => c.GetClusterInfoAsync(request, ct), cancellationToken);
 
     /// <inheritdoc />
+    public Task<DeadLetterCountResponse> GetDeadLetterCountAsync(DeadLetterCountRequest request, CancellationToken cancellationToken = default)
+        => ExecuteAsync((c, ct) => c.GetDeadLetterCountAsync(request, ct), cancellationToken);
+
+    /// <inheritdoc />
+    public Task<DeadLetterQueuePage> ListDeadLettersAsync(DeadLetterQueueRequest request, CancellationToken cancellationToken = default)
+        => ExecuteAsync((c, ct) => c.ListDeadLettersAsync(request, ct), cancellationToken);
+
+    /// <inheritdoc />
     public IAsyncEnumerable<StateChangeNotification> ObserveChangesAsync(StateObserveRequest request, CancellationToken cancellationToken = default)
         => StreamAsync((c, ct) => c.ObserveChangesAsync(request, ct), cancellationToken);
 

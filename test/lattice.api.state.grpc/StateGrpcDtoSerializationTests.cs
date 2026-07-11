@@ -196,6 +196,27 @@ public sealed class StateGrpcDtoSerializationTests
     }
 
     [Test]
+    public void DeadLetterCountRequest_round_trips()
+    {
+        var original = new DeadLetterCountRequest { TreeId = "tree-a" };
+
+        Assert.That(RoundTrip(original), Is.EqualTo(original));
+    }
+
+    [Test]
+    public void DeadLetterCountResponse_round_trips()
+    {
+        var original = new DeadLetterCountResponse { TreeId = "tree-a", Count = 42 };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TreeId, Is.EqualTo("tree-a"));
+            Assert.That(copy.Count, Is.EqualTo(42));
+        });
+    }
+
+    [Test]
     public void EntryHistoryResponse_round_trips_with_revisions()
     {
         var original = new EntryHistoryResponse

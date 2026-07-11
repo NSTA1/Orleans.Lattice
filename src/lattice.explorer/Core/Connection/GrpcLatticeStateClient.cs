@@ -168,6 +168,12 @@ internal sealed class GrpcLatticeStateClient : ILatticeStateClient, IDisposable
     public Task<ClusterInfo> GetClusterInfoAsync(ClusterInfoRequest request, CancellationToken cancellationToken = default)
         => _client.GetClusterInfoAsync(request, cancellationToken);
 
+    public Task<DeadLetterCountResponse> GetDeadLetterCountAsync(DeadLetterCountRequest request, CancellationToken cancellationToken = default)
+        => _client.GetDeadLetterCountAsync(request, cancellationToken);
+
+    public Task<DeadLetterQueuePage> ListDeadLettersAsync(DeadLetterQueueRequest request, CancellationToken cancellationToken = default)
+        => _client.ListDeadLettersAsync(request, cancellationToken);
+
     public IAsyncEnumerable<StateChangeNotification> ObserveChangesAsync(StateObserveRequest request, CancellationToken cancellationToken = default)
         => _client.ObserveChangesAsync(request, cancellationToken);
 

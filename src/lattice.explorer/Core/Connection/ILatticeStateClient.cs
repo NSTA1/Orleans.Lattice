@@ -54,6 +54,12 @@ public interface ILatticeStateClient
     /// <summary>Returns identity and metadata for the connected cluster.</summary>
     Task<ClusterInfo> GetClusterInfoAsync(ClusterInfoRequest request, CancellationToken cancellationToken = default);
 
+    /// <summary>Counts a tree's strict-mode dead-letter entries.</summary>
+    Task<DeadLetterCountResponse> GetDeadLetterCountAsync(DeadLetterCountRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>Lists a tree's strict-mode dead-letter queue as a deterministic, paged read.</summary>
+    Task<DeadLetterQueuePage> ListDeadLettersAsync(DeadLetterQueueRequest request, CancellationToken cancellationToken = default);
+
     /// <summary>Subscribes to live change notifications for a tree.</summary>
     IAsyncEnumerable<StateChangeNotification> ObserveChangesAsync(StateObserveRequest request, CancellationToken cancellationToken = default);
 

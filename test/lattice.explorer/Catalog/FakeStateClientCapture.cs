@@ -74,6 +74,12 @@ internal sealed class FakeStateClientCapture : ILatticeStateClient
     public Task<ClusterInfo> GetClusterInfoAsync(ClusterInfoRequest request, CancellationToken cancellationToken = default)
         => Task.FromResult(new ClusterInfo());
 
+    public Task<DeadLetterCountResponse> GetDeadLetterCountAsync(DeadLetterCountRequest request, CancellationToken cancellationToken = default)
+        => Task.FromResult(new DeadLetterCountResponse { TreeId = request.TreeId, Count = 0 });
+
+    public Task<DeadLetterQueuePage> ListDeadLettersAsync(DeadLetterQueueRequest request, CancellationToken cancellationToken = default)
+        => Task.FromResult(new DeadLetterQueuePage());
+
     public IAsyncEnumerable<StateChangeNotification> ObserveChangesAsync(StateObserveRequest request, CancellationToken cancellationToken = default)
         => EmptyAsync<StateChangeNotification>();
 

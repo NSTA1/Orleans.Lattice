@@ -66,6 +66,9 @@
                 case DetailTab.Data:
                     <DataTab @key="key" Selection="selected" />
                     break;
+                case DetailTab.DeadLetter:
+                    <DeadLetterTab @key="key" Selection="selected" />
+                    break;
             }
         }
     </div>

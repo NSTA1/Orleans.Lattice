@@ -116,6 +116,14 @@ public sealed class LatticeStateApiGrpcClient
     public Task<AuthSchemeAdvertisement> GetAuthSchemeAsync(AuthSchemeAdvertisementRequest request, CancellationToken cancellationToken = default)
         => UnaryAsync(_methods.GetAuthScheme, request, cancellationToken);
 
+    /// <summary>Counts a tree's strict-mode dead-letter entries.</summary>
+    public Task<DeadLetterCountResponse> GetDeadLetterCountAsync(DeadLetterCountRequest request, CancellationToken cancellationToken = default)
+        => UnaryAsync(_methods.GetDeadLetterCount, request, cancellationToken);
+
+    /// <summary>Lists a tree's strict-mode dead-letter queue as a deterministic, paged read.</summary>
+    public Task<DeadLetterQueuePage> ListDeadLettersAsync(DeadLetterQueueRequest request, CancellationToken cancellationToken = default)
+        => UnaryAsync(_methods.ListDeadLetters, request, cancellationToken);
+
     /// <summary>
     /// Subscribes to live change notifications for a tree, yielding each
     /// notification until the call is cancelled or the server ends the stream.

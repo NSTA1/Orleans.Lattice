@@ -85,6 +85,12 @@ internal abstract class LatticeStateGrpcServiceBase
     /// </summary>
     public abstract Task<AuthSchemeAdvertisement> GetAuthScheme(AuthSchemeAdvertisementRequest request, ServerCallContext context);
 
+    /// <summary>Counts a tree's strict-mode dead-letter entries. Implemented in <see cref="LatticeStateGrpcService"/>.</summary>
+    public abstract Task<DeadLetterCountResponse> GetDeadLetterCount(DeadLetterCountRequest request, ServerCallContext context);
+
+    /// <summary>Lists a tree's strict-mode dead-letter queue as a paged read. Implemented in <see cref="LatticeStateGrpcService"/>.</summary>
+    public abstract Task<DeadLetterQueuePage> ListDeadLetters(DeadLetterQueueRequest request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at
     /// startup with <paramref name="serviceImpl"/> set to
@@ -121,6 +127,8 @@ internal abstract class LatticeStateGrpcServiceBase
             binder.AddMethod(methods.GetMetricsSnapshot, (UnaryServerMethod<TreeMetricsRequest, TreeMetricsSnapshot>?)null);
             binder.AddMethod(methods.GetClusterInfo, (UnaryServerMethod<ClusterInfoRequest, ClusterInfo>?)null);
             binder.AddMethod(methods.GetAuthScheme, (UnaryServerMethod<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>?)null);
+            binder.AddMethod(methods.GetDeadLetterCount, (UnaryServerMethod<DeadLetterCountRequest, DeadLetterCountResponse>?)null);
+            binder.AddMethod(methods.ListDeadLetters, (UnaryServerMethod<DeadLetterQueueRequest, DeadLetterQueuePage>?)null);
             return;
         }
 
@@ -141,6 +149,8 @@ internal abstract class LatticeStateGrpcServiceBase
         binder.AddMethod(methods.GetMetricsSnapshot, new UnaryServerMethod<TreeMetricsRequest, TreeMetricsSnapshot>(serviceImpl.GetMetricsSnapshot));
         binder.AddMethod(methods.GetClusterInfo, new UnaryServerMethod<ClusterInfoRequest, ClusterInfo>(serviceImpl.GetClusterInfo));
         binder.AddMethod(methods.GetAuthScheme, new UnaryServerMethod<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>(serviceImpl.GetAuthScheme));
+        binder.AddMethod(methods.GetDeadLetterCount, new UnaryServerMethod<DeadLetterCountRequest, DeadLetterCountResponse>(serviceImpl.GetDeadLetterCount));
+        binder.AddMethod(methods.ListDeadLetters, new UnaryServerMethod<DeadLetterQueueRequest, DeadLetterQueuePage>(serviceImpl.ListDeadLetters));
     }
 }
 
@@ -450,6 +460,18 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
     /// <inheritdoc />
     public override Task<ClusterInfo> GetClusterInfo(ClusterInfoRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (query, _, ct) => query.GetClusterInfoAsync(ct));
+
+    /// <inheritdoc />
+    public override Task<DeadLetterCountResponse> GetDeadLetterCount(DeadLetterCountRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static async (query, req, ct) =>
+        {
+            var count = await query.GetDeadLetterCountAsync(req.TreeId, ct).ConfigureAwait(false);
+            return new DeadLetterCountResponse { TreeId = req.TreeId, Count = count };
+        });
+
+    /// <inheritdoc />
+    public override Task<DeadLetterQueuePage> ListDeadLetters(DeadLetterQueueRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (query, req, ct) => query.ListDeadLettersAsync(req, ct));
 
     /// <inheritdoc />
     public override Task<AuthSchemeAdvertisement> GetAuthScheme(AuthSchemeAdvertisementRequest request, ServerCallContext context)

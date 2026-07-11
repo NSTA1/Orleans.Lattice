@@ -40,4 +40,10 @@ public static class GrpcStateTypeAliases
 
     /// <summary>Alias for <see cref="AuthSchemeAdvertisement"/>.</summary>
     public const string AuthSchemeAdvertisement = "olag.asadv";
+
+    /// <summary>Alias for <see cref="DeadLetterCountRequest"/>.</summary>
+    public const string DeadLetterCountRequest = "olag.dlcreq";
+
+    /// <summary>Alias for <see cref="DeadLetterCountResponse"/>.</summary>
+    public const string DeadLetterCountResponse = "olag.dlcresp";
 }
