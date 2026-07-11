@@ -108,7 +108,7 @@ Anything that breaks the Orleans serialization wire format - a deployed cluster 
 | Mutable type marked `[Immutable]` | A `class` (not `record struct`) carrying `[Immutable]` while exposing mutable properties. Orleans skips defensive copies on `[Immutable]` types, so mutations leak across grain boundaries. | Unit test serialising the type, mutating the deserialised graph, and asserting a fresh deserialise returns the original value. |
 | New field on existing type without back-compat | A nullable / value-typed field added with `[Id(n)]` where `n` is fresh, but the grain reads it without a `?? defaultValue` fall-back. Old persisted state has `null` (or `default(T)`); the grain throws on reactivation. | Integration test that loads a grain from a manually-constructed pre-rollout payload and asserts the grain activates without exception. |
 
-Common fix patterns: never re-use an `[Id]` even for a renamed field - bump to the next free integer; gate `[Immutable]` strictly to types whose every field is also immutable; default every new field to its zero value at the read site and document the pre-rollout fallback in the XML doc. Also re-run the `RoadmapIdentifierHygieneTests` and `TypeAliasesTests` from the feature-dev hygiene gates after any alias edit.
+Common fix patterns: never re-use an `[Id]` even for a renamed field - bump to the next free integer; gate `[Immutable]` strictly to types whose every field is also immutable; default every new field to its zero value at the read site and document the pre-rollout fallback in the XML doc. Also re-run the `TypeAliasesTests` from the feature-dev hygiene gates after any alias edit.
 
 ### Class F - Concurrency and lifetime hazards
 
@@ -362,7 +362,7 @@ Append a row to the ledger:
 
 If the bug was confirmed and fixed:
 
-1. Re-read `.github/agents/feature-dev.agent.md`. The shipment workflow (Phase 6 build/hygiene gates, Phase 7 review with the mandatory memory-allocation pass and feature-index sync, Phase 8 deliver) is non-negotiable - this agent does **not** ship PRs directly. Hand the branch off.
+1. Re-read `.github/agents/feature-dev.agent.md`. The shipment workflow (Phase 6 build/hygiene gates, Phase 7 review with the mandatory memory-allocation pass, Phase 8 deliver) is non-negotiable - this agent does **not** ship PRs directly. Hand the branch off.
 2. The PR body must include:
    - The bug class and sub-class from the catalogue.
    - The minimal reproduction (inputs / sequence) from the finding file.

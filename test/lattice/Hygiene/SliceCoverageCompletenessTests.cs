@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Tests;
 /// <summary>
 /// Guards the repository ownership registry (<see cref="CoreHygieneScope.AllPackageSliceRoots"/>)
 /// against accidental incomplete hygiene coverage. The content-hygiene gates
-/// (em-dash, mojibake, tracker-id, deletion-mandate, ...) partition the
+/// (em-dash, mojibake, deletion-mandate, ...) partition the
 /// repository so every file is scanned exactly once: the core fixture scans
 /// every repo-level file <em>except</em> the slices listed in the registry, and
 /// each per-package fixture scans its own <see cref="HygieneScanScope.ForSlice(string[])"/>

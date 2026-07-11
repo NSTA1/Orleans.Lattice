@@ -10,7 +10,7 @@ This changelog covers the **package family**: `Orleans.Lattice`, `Orleans.Lattic
 
 These items are merged into `main` but held back from a published release: the `Orleans.Lattice.Explorer` UI features (connecting to an auth-enabled State API, the per-key History tab and its live-follow mode, the live-updating Data tab detail, and the login/logout CSRF and CRDT-history-rendering hardening fixes), which are not yet shipped as a package, plus test-only chaos coverage added after the last release. They accumulate under the `### Added` / `### Fixed` headings below until the next family release.
 
-Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), indexed in [`docs/lattice/features.md`](docs/lattice/features.md) and [`docs/lattice.replication/features.md`](docs/lattice.replication/features.md). See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
+Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), labelled `lattice` or `lattice.replication`. See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
 
 
 ### Added

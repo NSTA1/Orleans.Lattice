@@ -31,7 +31,7 @@ It supports:
 ## Core Properties
 
 - **Convergent under concurrent writes.** Two clusters writing to the same key arrive at the same final state, deterministically, without coordination.
-- **Causally consistent.** A receiver never observes a write before the writes it causally depends on - across point writes, atomic multi-key writes, maintenance rewrites, and structural shadow-forwards. See the [feature index](features.md) for scope details.
+- **Causally consistent.** A receiver never observes a write before the writes it causally depends on - across point writes, atomic multi-key writes, maintenance rewrites, and structural shadow-forwards.
 - **Cycle-safe.** Origin attribution is durable metadata on every record, not ambient context - replicating into and back out of a peer cluster never loops a mutation back to its source.
 - **At-most-once apply.** Re-delivery of the same `(origin, hlc, key, op)` is idempotent. Counters do not double-increment, sets do not re-add.
 - **No host-level coupling.** Replication is produced by the silo at commit time. Hosts neither install outgoing-call filters nor route mutations through their own pipeline.

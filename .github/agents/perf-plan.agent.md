@@ -27,8 +27,6 @@ These are non-negotiable; each encodes a real failure mode from this program.
 
 7. **Tear down compute as soon as a sweep completes.** The rig bills per-VM-hour. `az group delete` (or `vm.ps1 stop`) the moment the last cohort's logs are captured. Disable the auto-shutdown schedule *only* for the duration of a long sweep, and delete the group at the end regardless.
 
-8. **Tracker-ID hygiene.** Do not introduce `F-`/`R-`/`FX-`/`G-` identifiers anywhere except `CHANGELOG.md` and the issue trackers. Reference perf work by **issue number** (e.g. `#809`) and by behaviour, never by a synthetic id.
-
 ---
 
 ## The `perf` issue tree (the working pattern)

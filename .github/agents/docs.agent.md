@@ -11,7 +11,7 @@ The user has been burned in the past by surface-level "I checked and it's fine" 
 
 - **Source is the only authority.** A doc claim is correct only if it matches the current source. Prior commit messages, prior doc reviews, and your own memory are not authority - open the `.cs` file, read the relevant lines, paste the evidence.
 - **The corpus is `git ls-files "*.md"`.** Everything under version control is in scope unless the user names a narrower scope. The `.scratch/` folder is gitignored and naturally excluded; do not waste time grepping it.
-- **`CHANGELOG.md` is a retrospective record, not a present-tense claim.** A changelog entry describing what was true before a fix landed is correct as a historical statement even if it conflicts with current source. Leave it alone unless the user asks otherwise. It is also the only file (besides the issue trackers and the `features.md` index link-text) where tracker ids (`F-XXX`, `R-XXX`, `FX-XXX`, `G-XXX`) may legitimately appear.
+- **`CHANGELOG.md` is a retrospective record, not a present-tense claim.** A changelog entry describing what was true before a fix landed is correct as a historical statement even if it conflicts with current source. Leave it alone unless the user asks otherwise. It may also contain historical tracker ids (`F-XXX`, `R-XXX`, and similar) from the retired roadmap scheme; leave those historical entries alone.
 - **Edit deterministically, not by similarity.** Every markdown edit goes through verbatim `replace_string_in_file` anchors per the byte-level rule in `.github/copilot-instructions.md`. No `// ...existing code...` placeholders on long markdown files; long markdown is fragile and silently collapses neighbouring near-identical bullets.
 - **Produce evidence in the chat reply.** Every fix lists: the false claim, the source-of-truth file:line, the corrected wording. Every "verified accurate" claim lists the source location. Silent "I checked" is a protocol violation.
 - **Document public surface by name; describe internals by behaviour.** Only public types, members, seams, registration helpers, options, and metric names may be named in the docs. Internal types - grains (`*Grain`), internal observers/sinks/appliers, internal context objects, internal apply methods - must be described by their behaviour and effect, not by their identifier, and only where naming the behaviour is genuinely necessary. When you touch a doc that names an internal, behaviourise it in the same edit. The public/internal split is decided by accessibility in source (`public` vs `internal`) - open the declaration if unsure. Test-fixture and sample class names in testing/sample narrative docs are exempt (they are the subject of those docs), but library-internal product types named inside them are not.
@@ -26,7 +26,6 @@ When the user requests a documentation review, settle these four parameters befo
 | **File scope** | every `git ls-files "*.md"` | "just `docs/lattice/`", "just `replication`", "this one file" |
 | **Depth** | every prose claim | "structural only", "defaults table only" |
 | **Broken-link pass** | included | "skip links", "links only" |
-| **Feature-index docs** | `features.md` index bullets in scope; verify each still links to its issue | "skip the feature indexes", "only check issue links" |
 
 If the user is ambiguous, ask once, then proceed. State the resolved scope at the top of your reply so the user can correct it before the work begins.
 
@@ -106,13 +105,7 @@ Documentation edits trip three repo-wide gates. Run them, paste the tail of each
    dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~EmDashHygieneTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
    ```
 
-3. **Feature-tracker leak scan** - `F-NNN` / `R-NNN` / `FX-NNN` / `G-NNN` identifiers may not leak outside `CHANGELOG.md`, the issue trackers, and the `features.md` index link-text. Doc edits that paraphrase a tracked item by name (not by id) keep this green:
-
-   ```powershell
-   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~RoadmapIdentifierHygieneTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
-   ```
-
-4. **XML doc cref resolution** - every `<see cref>` / `<seealso cref>` / `<paramref>` / `<typeparamref>` in the source you touched (and, on a full sweep, across every packable project) must resolve to a real symbol, because the generated XML ships inside the NuGet package. `Directory.Build.targets` suppresses the cref-warning family for normal builds, so re-expose it explicitly:
+3. **XML doc cref resolution** - every `<see cref>` / `<seealso cref>` / `<paramref>` / `<typeparamref>` in the source you touched (and, on a full sweep, across every packable project) must resolve to a real symbol, because the generated XML ships inside the NuGet package. `Directory.Build.targets` suppresses the cref-warning family for normal builds, so re-expose it explicitly:
 
    ```powershell
    dotnet build src/lattice/Orleans.Lattice.csproj -c Release -p:GenerateDocumentationFile=true -p:NoWarn=CS1591

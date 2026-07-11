@@ -99,7 +99,3 @@ For day-to-day use:
 - [Security](security.md) - the fail-closed authorization seam, the default-deny posture, and the transport story.
 - [Efficiency](efficiency.md) - shared sampling, reader-less zero cost, and the overhead guardrails.
 - [Client](client.md) - building and driving `LatticeStateApiGrpcClient`, and reusing the facade in-process for an MCP bridge.
-
-For feature indexes:
-
-- [Api.State Feature Index](features.md) - grouped index of the `Orleans.Lattice.Api.State` package's features.
