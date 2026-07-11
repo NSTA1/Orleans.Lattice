@@ -17,4 +17,25 @@ internal static class SchemaTypeAliases
 
     /// <summary>Alias for <see cref="LatticeComputeOperator"/>.</summary>
     internal const string LatticeComputeOperator = "ols.co";
+
+    /// <summary>Alias for <see cref="LatticeSchemaPolicy"/>.</summary>
+    internal const string LatticeSchemaPolicy = "ols.sp";
+
+    /// <summary>Alias for <see cref="LatticeSchemaRule"/>.</summary>
+    internal const string LatticeSchemaRule = "ols.sr";
+
+    /// <summary>Alias for <see cref="LatticeSchemaRuleKind"/>.</summary>
+    internal const string LatticeSchemaRuleKind = "ols.rk";
+
+    /// <summary>Alias for <see cref="LatticeSchemaEncodingKind"/>.</summary>
+    internal const string LatticeSchemaEncodingKind = "ols.ek";
+
+    /// <summary>Alias for <see cref="LatticeSchemaDeadLetterEntry"/>.</summary>
+    internal const string LatticeSchemaDeadLetterEntry = "ols.dl";
+
+    /// <summary>Alias for <see cref="LatticeSchemaDeadLetterSource"/>.</summary>
+    internal const string LatticeSchemaDeadLetterSource = "ols.ds";
+
+    /// <summary>Alias for <see cref="LatticeSchemaViolationException"/>.</summary>
+    internal const string LatticeSchemaViolationException = "ols.sv";
 }
