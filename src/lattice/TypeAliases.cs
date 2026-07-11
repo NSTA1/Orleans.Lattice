@@ -52,6 +52,13 @@ internal static class TypeAliases
     // the denial propagates intact from the enforcing grain back to the client.
     internal const string LatticeAuthorizationDenied = "ol.azd";
 
+    // Write-path interceptor: the fail-closed rejection the public write / CRDT
+    // / atomic / bulk-load surface throws when the registered write interceptor
+    // rejects (or, in an atomic batch, dead-letters) an incoming value.
+    // Serialized so the rejection propagates intact from the enforcing grain
+    // back to the client.
+    internal const string LatticeWriteRejected = "ol.wrj";
+
     // BPlusTree State
     internal const string ChildEntry = "ol.ce";
     internal const string InternalNodeState = "ol.ins";

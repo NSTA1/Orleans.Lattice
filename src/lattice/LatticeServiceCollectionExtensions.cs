@@ -173,6 +173,14 @@ public static class LatticeServiceCollectionExtensions
         // gate. The null gate returns a cached, synchronously-completed allow
         // decision, so an unregistered gate adds no per-call allocation.
         builder.Services.TryAddSingleton<ILatticeAccessGate, NullLatticeAccessGate>();
+        // Write-path value interceptor seam: default to the always-accept no-op
+        // so the data-plane choke point always resolves an interceptor and the
+        // write path is byte-for-byte unchanged until a companion package (for
+        // example a schema-enforcement add-on) registers a real, value-evaluating
+        // interceptor. The null interceptor returns a cached, synchronously-
+        // completed accept decision and is detected by reference at the choke
+        // point, so an unregistered interceptor adds no per-call allocation.
+        builder.Services.TryAddSingleton<ILatticeWriteInterceptor, NullLatticeWriteInterceptor>();
         // CRDT shape registry: closed-shape modes (OrSet / PnCounter /
         // VersionVector / MvRegister) are pre-populated on construction
         // so no host registration is required for them. Generic OrMap

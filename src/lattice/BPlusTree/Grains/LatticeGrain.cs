@@ -1237,7 +1237,7 @@ internal sealed partial class LatticeGrain(
         ValidateWriteSize(key, value);
         EnforceAdmissionControl();
         var enforce = EnforcePointAsync(LatticeOperation.Write, key, cancellationToken);
-        if (enforce.IsCompletedSuccessfully)
+        if (enforce.IsCompletedSuccessfully && !WriteInterceptionActive)
         {
             enforce.GetAwaiter().GetResult();
             return LatticeIdempotencyContext.IsActive
@@ -1250,6 +1250,12 @@ internal sealed partial class LatticeGrain(
     private async Task SetEnforcedSlowAsync(ValueTask enforce, string key, byte[] value, CancellationToken cancellationToken)
     {
         await enforce;
+        if (WriteInterceptionActive)
+        {
+            var outcome = await InterceptWriteAsync(LatticeOperation.Write, key, value, ttl: null, cancellationToken);
+            if (!outcome.Proceed) return;
+            value = outcome.Value;
+        }
         if (LatticeIdempotencyContext.IsActive)
             await RunMutationAsync(ct => SetAsyncCore(key, value, ct), cancellationToken);
         else
@@ -1439,6 +1445,12 @@ internal sealed partial class LatticeGrain(
         if (ttl > DateTimeOffset.MaxValue - nowUtc)
             throw new ArgumentOutOfRangeException(nameof(ttl),
                 "TTL is too large - absolute expiry would exceed DateTimeOffset.MaxValue.");
+        if (WriteInterceptionActive)
+        {
+            var outcome = await InterceptWriteAsync(LatticeOperation.Write, key, value, ttl, cancellationToken);
+            if (!outcome.Proceed) return;
+            value = outcome.Value;
+        }
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
@@ -1484,6 +1496,12 @@ internal sealed partial class LatticeGrain(
         ValidateWriteSize(key, value);
         EnforceAdmissionControl();
         await EnforcePointAsync(LatticeOperation.Write, key, cancellationToken);
+        if (WriteInterceptionActive)
+        {
+            var outcome = await InterceptWriteAsync(LatticeOperation.Write, key, value, ttl: null, cancellationToken);
+            if (!outcome.Proceed) return false;
+            value = outcome.Value;
+        }
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
@@ -1519,6 +1537,12 @@ internal sealed partial class LatticeGrain(
         ValidateWriteSize(key, deltaBytes);
         EnforceAdmissionControl();
         await EnforcePointAsync(LatticeOperation.CrdtApply, key, cancellationToken);
+        if (WriteInterceptionActive)
+        {
+            var outcome = await InterceptWriteAsync(LatticeOperation.CrdtApply, key, deltaBytes, ttl: null, cancellationToken);
+            if (!outcome.Proceed) return default;
+            deltaBytes = outcome.Value;
+        }
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
@@ -1554,6 +1578,12 @@ internal sealed partial class LatticeGrain(
         ValidateWriteSize(key, value);
         EnforceAdmissionControl();
         await EnforcePointAsync(LatticeOperation.Write, key, cancellationToken);
+        if (WriteInterceptionActive)
+        {
+            var outcome = await InterceptWriteAsync(LatticeOperation.Write, key, value, ttl: null, cancellationToken);
+            if (!outcome.Proceed) return null;
+            value = outcome.Value;
+        }
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
@@ -1599,6 +1629,8 @@ internal sealed partial class LatticeGrain(
         }
         EnforceAdmissionControl();
         await EnforceEntryWritesAsync(entries, null, cancellationToken);
+        if (WriteInterceptionActive)
+            entries = await InterceptEntriesAsync(LatticeOperation.Write, entries, atomic: false, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
 
@@ -1752,6 +1784,8 @@ internal sealed partial class LatticeGrain(
         ThrowIfLwwWriteToCrdtReplicatedTree();
         ArgumentNullException.ThrowIfNull(entries);
         await EnforceEntryWritesAsync(entries, null, cancellationToken);
+        if (WriteInterceptionActive)
+            entries = await InterceptEntriesAsync(LatticeOperation.Write, entries, atomic: false, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
 
@@ -1857,6 +1891,8 @@ internal sealed partial class LatticeGrain(
         if (entries.Count == 0) return;
 
         await EnforceEntryWritesAsync(entries, null, cancellationToken);
+        if (WriteInterceptionActive)
+            entries = await InterceptEntriesAsync(LatticeOperation.Write, entries, atomic: true, cancellationToken);
         var operationId = Guid.NewGuid().ToString("N");
         var saga = grainFactory.GetGrain<IAtomicWriteGrain>($"{TreeId}/{operationId}");
 #if LATTICE_DIAG
@@ -1903,6 +1939,8 @@ internal sealed partial class LatticeGrain(
         if (entries.Count == 0) return;
 
         await EnforceEntryWritesAsync(entries, null, cancellationToken);
+        if (WriteInterceptionActive)
+            entries = await InterceptEntriesAsync(LatticeOperation.Write, entries, atomic: true, cancellationToken);
         var saga = grainFactory.GetGrain<IAtomicWriteGrain>($"{TreeId}/{operationId}");
 #if LATTICE_DIAG
         var swSetMany = System.Diagnostics.Stopwatch.StartNew();
@@ -1965,6 +2003,8 @@ internal sealed partial class LatticeGrain(
         await EnforceEntryWritesAsync(upserts, null, cancellationToken);
         if (deletes.Count > 0)
             await EnforceManyPointsAsync(LatticeOperation.Delete, deletes, cancellationToken);
+        if (WriteInterceptionActive)
+            upserts = await InterceptEntriesAsync(LatticeOperation.Write, upserts, atomic: true, cancellationToken);
 
         // Union the upserts and deletes into a single batch with a parallel
         // per-entry delete flag. Upserts keep their flag false; deletes carry
@@ -2012,6 +2052,8 @@ internal sealed partial class LatticeGrain(
         if (entries.Count == 0) return AtomicWriteOutcome.Committed;
 
         await EnforceEntryWritesAsync(entries, null, cancellationToken);
+        if (WriteInterceptionActive)
+            entries = await InterceptEntriesAsync(LatticeOperation.Write, entries, atomic: true, cancellationToken);
         var operationId = Guid.NewGuid().ToString("N");
         var saga = grainFactory.GetGrain<IAtomicWriteGrain>($"{TreeId}/{operationId}");
         return await ShardActivationRetry.RunAsync(
@@ -2040,6 +2082,8 @@ internal sealed partial class LatticeGrain(
         if (entries.Count == 0) return AtomicWriteOutcome.Committed;
 
         await EnforceEntryWritesAsync(entries, null, cancellationToken);
+        if (WriteInterceptionActive)
+            entries = await InterceptEntriesAsync(LatticeOperation.Write, entries, atomic: true, cancellationToken);
         var saga = grainFactory.GetGrain<IAtomicWriteGrain>($"{TreeId}/{operationId}");
         return await ShardActivationRetry.RunAsync(
             () => saga.ExecuteGuardedAsync(TreeId, entries, predicate),
