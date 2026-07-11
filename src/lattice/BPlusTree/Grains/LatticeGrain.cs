@@ -582,9 +582,17 @@ internal sealed partial class LatticeGrain(
         var allowed = IsPointReadAllowedAsync(key, cancellationToken);
         if (allowed.IsCompletedSuccessfully)
         {
-            return allowed.GetAwaiter().GetResult()
-                ? GetAsyncCore(key, cancellationToken)
-                : Task.FromResult<byte[]?>(null);
+            if (!allowed.GetAwaiter().GetResult())
+            {
+                return Task.FromResult<byte[]?>(null);
+            }
+
+            // Read-path value-decoder boundary: strip the per-value envelope on
+            // the way out to the caller. Zero-cost when inactive (cached bool):
+            // the default null decoder resolves inactive and GetAsyncCore's task
+            // is returned directly, byte-for-byte identical to the pre-seam path.
+            var core = GetAsyncCore(key, cancellationToken);
+            return ValueDecoderActive ? DecodePointReadAsync(core, cancellationToken) : core;
         }
         return GetEnforcedSlowAsync(allowed, key, cancellationToken);
     }
@@ -592,7 +600,13 @@ internal sealed partial class LatticeGrain(
     private async Task<byte[]?> GetEnforcedSlowAsync(ValueTask<bool> allowed, string key, CancellationToken cancellationToken)
     {
         // Denied point read reads as absent (not-found), never throws.
-        return await allowed ? await GetAsyncCore(key, cancellationToken) : null;
+        if (!await allowed)
+        {
+            return null;
+        }
+
+        var value = await GetAsyncCore(key, cancellationToken);
+        return ValueDecoderActive ? await DecodeValueAsync(value, cancellationToken) : value;
     }
 
     async Task<byte[]?> ISystemLattice.GetAsync(string key, CancellationToken cancellationToken)
@@ -739,7 +753,17 @@ internal sealed partial class LatticeGrain(
                 try
                 {
                     var shard = await GetShardGrainAsync(key);
-                    return await shard.GetWithVersionAsync(key);
+                    var versioned = await shard.GetWithVersionAsync(key);
+                    // Read-path value-decoder boundary: strip the per-value
+                    // envelope from the versioned read's value. Zero-cost when
+                    // inactive (cached bool) - the versioned value is returned
+                    // verbatim on the default null-decoder path.
+                    if (ValueDecoderActive && versioned.Value is not null)
+                    {
+                        var decoded = await DecodeValueAsync(versioned.Value, cancellationToken);
+                        return versioned with { Value = decoded };
+                    }
+                    return versioned;
                 }
                 catch (StaleShardRoutingException)
                 {
@@ -944,7 +968,16 @@ internal sealed partial class LatticeGrain(
                 cancellationToken.ThrowIfCancellationRequested();
                 try
                 {
-                    return await GetManyAsyncCore(keys, stageTagTree);
+                    var many = await GetManyAsyncCore(keys, stageTagTree);
+                    // Read-path value-decoder boundary: strip the per-value
+                    // envelope from each returned value. Zero-cost when inactive
+                    // (cached bool) - the dictionary is returned verbatim on the
+                    // default null-decoder path with no extra allocation.
+                    if (ValueDecoderActive && many.Count > 0)
+                    {
+                        await DecodeManyInPlaceAsync(many, cancellationToken);
+                    }
+                    return many;
                 }
                 catch (StaleShardRoutingException)
                 {

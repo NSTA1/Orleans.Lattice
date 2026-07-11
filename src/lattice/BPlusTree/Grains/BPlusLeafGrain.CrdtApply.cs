@@ -339,6 +339,26 @@ internal sealed partial class BPlusLeafGrain
         // because StoreEntry's byte-row write evicts any prior recorded mode.
         Cache.SetMergeMode(key, mode);
 
+        // step 4c (post-merge observer) - consult the registered merge observer
+        // with the decoded inputs / result and the record's declared CRDT mode.
+        // For a CRDT record AcceptTransformed is rejected (throws): mutating
+        // canonical merged bytes would break WAL-replay determinism, since a
+        // cold rebuild folds the durable delta into the prior visible state and
+        // must reconstruct identical bytes. Accept / AcceptWithEvent are
+        // non-mutating, so the return value is not stored here. Zero-cost when
+        // inactive (cached flag): no observer call, and the deferred row is not
+        // materialised on the default null-observer path. Cache.TryGetRow
+        // materialises a deferred row on demand so the observer sees canonical
+        // merged bytes.
+        if (MergeObserverActive)
+        {
+            var mergedBytes = Cache.TryGetRow(key, out var mergedRow) && mergedRow.Value is not null
+                ? mergedRow.Value
+                : postMergeEntry.Value ?? Array.Empty<byte>();
+            byte[]? localInput = hasExistingRow && !existingDeferred ? existing.Value : null;
+            await ApplyMergeObserverAsync(key, mode, localInput, null, mergedBytes, CancellationToken.None);
+        }
+
         var options = await GetOptionsAsync();
         SplitResult? splitResult = null;
         if (Cache.Count > options.MaxLeafKeys)

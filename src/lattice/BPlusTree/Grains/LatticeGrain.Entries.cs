@@ -89,6 +89,13 @@ internal sealed partial class LatticeGrain
             ? await ResolveRangeReadKeyFilterAsync(startInclusive, endExclusive, cancellationToken)
             : null;
 
+        // Read-path value-decoder gate for the scan, resolved once. Only the
+        // client-facing scan (enforceAccessGate: true) decodes; the
+        // ISystemLattice scan keeps the stored (envelope) form (store-verbatim).
+        // False on the default null-decoder path so the yield loop stays
+        // byte-for-byte identical to the pre-seam behaviour.
+        var decodeActive = enforceAccessGate && ValueDecoderActive;
+
         var (physicalTreeId, shardMap0) = await GetRoutingAsync();
         var physicalShards = shardMap0.GetPhysicalShardIndices();
         var pageSize = Options.KeysPageSize;
@@ -289,7 +296,22 @@ internal sealed partial class LatticeGrain
                 // when an entry is hidden from the caller.
                 lastYieldedKey = entry.Key;
                 if (keyFilter is null || keyFilter(entry.Key))
-                    yield return entry;
+                {
+                    // Read-path value-decoder boundary: strip the per-value
+                    // envelope on the way out. `decodeActive` folds in
+                    // `enforceAccessGate` so the ISystemLattice (store-verbatim)
+                    // scan never decodes, and is false on the default
+                    // null-decoder path so the entry is yielded verbatim.
+                    if (decodeActive)
+                    {
+                        var decoded = await DecodeValueAsync(entry.Value, cancellationToken);
+                        yield return new KeyValuePair<string, byte[]>(entry.Key, decoded!);
+                    }
+                    else
+                    {
+                        yield return entry;
+                    }
+                }
             }
 
             await cursors[idx].MoveNextAsync();

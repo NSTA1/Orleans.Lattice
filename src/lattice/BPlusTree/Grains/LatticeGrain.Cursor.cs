@@ -1,4 +1,4 @@
-﻿namespace Orleans.Lattice.BPlusTree.Grains;
+namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
 /// Stateful cursor forwarding. Each <c>ILattice</c> cursor method
@@ -423,7 +423,38 @@ internal sealed partial class LatticeGrain
         ArgumentNullException.ThrowIfNull(cursorId);
         cancellationToken.ThrowIfCancellationRequested();
         var cursor = grainFactory.GetGrain<ILatticeCursorGrain>(BuildCursorKey(cursorId));
-        return cursor.NextEntriesAsync(pageSize);
+        var page = cursor.NextEntriesAsync(pageSize);
+        // Read-path value-decoder boundary: strip the per-value envelope from
+        // each entry of the page on the way out. Zero-cost when inactive (cached
+        // bool) - the cursor's page task is returned directly on the default
+        // null-decoder path, byte-for-byte identical to the pre-seam behaviour.
+        return ValueDecoderActive ? DecodeCursorPageAsync(page, cancellationToken) : page;
+    }
+
+    /// <summary>
+    /// Awaits a cursor entries page and returns a copy whose entry values have
+    /// had their per-value envelope stripped. Only invoked on the
+    /// active-decoder branch, so the page rebuild it allocates is never paid on
+    /// the default null-decoder path.
+    /// </summary>
+    private async Task<LatticeCursorEntriesPage> DecodeCursorPageAsync(
+        Task<LatticeCursorEntriesPage> pageTask,
+        CancellationToken cancellationToken)
+    {
+        var page = await pageTask;
+        if (page.Entries.Count == 0)
+        {
+            return page;
+        }
+
+        var decoded = new List<KeyValuePair<string, byte[]>>(page.Entries.Count);
+        foreach (var entry in page.Entries)
+        {
+            var value = await DecodeValueAsync(entry.Value, cancellationToken);
+            decoded.Add(new KeyValuePair<string, byte[]>(entry.Key, value!));
+        }
+
+        return page with { Entries = decoded };
     }
 
     /// <inheritdoc />

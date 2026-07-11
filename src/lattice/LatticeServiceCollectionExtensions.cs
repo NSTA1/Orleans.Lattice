@@ -181,6 +181,22 @@ public static class LatticeServiceCollectionExtensions
         // completed accept decision and is detected by reference at the choke
         // point, so an unregistered interceptor adds no per-call allocation.
         builder.Services.TryAddSingleton<ILatticeWriteInterceptor, NullLatticeWriteInterceptor>();
+        // Read-path value-decoder seam: default to the never-active no-op so
+        // the client-facing read boundary (point read / range scan / cursor
+        // page) always resolves a decoder. The null decoder's IsActive is
+        // always false, so the read-boundary wiring caches an inactive flag per
+        // activation and never calls DecodeAsync - the default read path is
+        // byte-for-byte identical and adds no per-read allocation. A schema /
+        // versioning add-on replaces this with a real, envelope-stripping
+        // decoder.
+        builder.Services.TryAddSingleton<ILatticeValueDecoder, NullLatticeValueDecoder>();
+        // CRDT post-merge observer seam: default to the accept-all no-op so the
+        // leaf-grain post-merge wiring always resolves an observer. The null
+        // observer returns a cached, synchronously-completed accept outcome, so
+        // the default merge path is byte-for-byte unchanged and allocation-free.
+        // A schema / versioning add-on replaces this with a real, validating /
+        // normalising observer.
+        builder.Services.TryAddSingleton<ILatticeMergeObserver, NullLatticeMergeObserver>();
         // CRDT shape registry: closed-shape modes (OrSet / PnCounter /
         // VersionVector / MvRegister) are pre-populated on construction
         // so no host registration is required for them. Generic OrMap
