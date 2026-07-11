@@ -38,4 +38,16 @@ internal static class SchemaTypeAliases
 
     /// <summary>Alias for <see cref="LatticeSchemaViolationException"/>.</summary>
     internal const string LatticeSchemaViolationException = "ols.sv";
+
+    /// <summary>Alias for <see cref="ILatticeSchemaRemediationGrain"/>.</summary>
+    internal const string ILatticeSchemaRemediationGrain = "ols.rg";
+
+    /// <summary>Alias for <see cref="LatticeSchemaRemediationReport"/>.</summary>
+    internal const string LatticeSchemaRemediationReport = "ols.rr";
+
+    /// <summary>Alias for <see cref="LatticeSchemaRemediationPhase"/>.</summary>
+    internal const string LatticeSchemaRemediationPhase = "ols.rp";
+
+    /// <summary>Alias for <see cref="SchemaRemediationState"/>.</summary>
+    internal const string SchemaRemediationState = "ols.rs";
 }

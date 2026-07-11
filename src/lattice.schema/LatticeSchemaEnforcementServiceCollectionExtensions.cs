@@ -93,6 +93,11 @@ public static class LatticeSchemaEnforcementServiceCollectionExtensions
         // The SchemaAdmin-gated control plane over the stores + provider cache.
         builder.Services.TryAddSingleton<ILatticeSchemaAdmin, LatticeSchemaAdmin>();
 
+        // The SchemaAdmin-gated background-remediation control plane. The durable
+        // per-tree LatticeSchemaRemediationGrain coordinator is auto-discovered by
+        // Orleans from this assembly; only the operator-facing admin needs wiring.
+        builder.Services.TryAddSingleton<ILatticeSchemaRemediationAdmin, LatticeSchemaRemediationAdmin>();
+
         // CRDT merge-result observer: opt-in, because registering a non-null merge
         // observer makes every merge in the silo pay the observer round-trip. Read
         // the flag from a probe of the configure delegate so the merge path keeps
