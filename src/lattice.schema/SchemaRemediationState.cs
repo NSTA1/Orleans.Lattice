@@ -36,4 +36,14 @@ internal sealed class SchemaRemediationState
 
     /// <summary>The number of entries scanned so far in the current phase, for in-flight reporting.</summary>
     [Id(7)] public int ScannedCount { get; set; }
+
+    /// <summary>
+    /// The source tree's physical id, resolved and persisted at initiation - before
+    /// any alias swap. Cutover arms this physical tree's shards to redirect
+    /// logical-alias-routed traffic onto the destination; capturing it up front
+    /// (rather than re-resolving the logical name after the swap, which would
+    /// follow the new alias to the destination) makes a resume after a partial
+    /// cutover arm the correct shards.
+    /// </summary>
+    [Id(8)] public string? SourcePhysicalTreeId { get; set; }
 }

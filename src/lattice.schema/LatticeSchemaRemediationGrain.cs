@@ -142,6 +142,16 @@ internal sealed class LatticeSchemaRemediationGrain(
         var operationId = Guid.NewGuid().ToString("N");
         var destinationTreeId = $"{TreeId}/remediated/{operationId}";
 
+        // Resolve the source tree's physical id BEFORE any alias swap, so cutover
+        // can arm the correct (source) shards even on a resume after a partial
+        // cutover. Registry reads run under a system-origin scope.
+        string sourcePhysical;
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            sourcePhysical = await registry.ResolveAsync(TreeId);
+        }
+
         // Snapshot every field this method writes so a transient WriteStateAsync
         // failure cannot leak in-memory mutations past the InProgress guard.
         var prevInProgress = state.State.InProgress;
@@ -152,6 +162,7 @@ internal sealed class LatticeSchemaRemediationGrain(
         var prevTargetPolicy = state.State.TargetPolicy;
         var prevLastReport = state.State.LastReport;
         var prevScannedCount = state.State.ScannedCount;
+        var prevSourcePhysical = state.State.SourcePhysicalTreeId;
 
         // Persist intent BEFORE any external side effect.
         state.State.InProgress = true;
@@ -162,6 +173,7 @@ internal sealed class LatticeSchemaRemediationGrain(
         state.State.TargetPolicy = targetPolicy;
         state.State.LastReport = null;
         state.State.ScannedCount = 0;
+        state.State.SourcePhysicalTreeId = sourcePhysical;
         try
         {
             await state.WriteStateAsync();
@@ -176,6 +188,7 @@ internal sealed class LatticeSchemaRemediationGrain(
             state.State.TargetPolicy = prevTargetPolicy;
             state.State.LastReport = prevLastReport;
             state.State.ScannedCount = prevScannedCount;
+            state.State.SourcePhysicalTreeId = prevSourcePhysical;
             throw;
         }
     }
@@ -250,14 +263,50 @@ internal sealed class LatticeSchemaRemediationGrain(
     }
 
     /// <summary>
-    /// Atomically repoints the logical tree to the destination and installs the
-    /// target policy. Idempotent: re-running after a mid-cutover restart repeats
-    /// the same alias and policy writes.
+    /// Atomically repoints the logical tree to the destination, arms the source
+    /// tree's shards to redirect stale logical-alias-routed traffic onto the
+    /// destination (so an already-active routing activation self-heals instead of
+    /// serving the pre-remediation snapshot), and installs the target policy.
+    /// Mirrors the backup shadow-cutover commit. Idempotent: re-running after a
+    /// mid-cutover restart repeats the same alias swap, shard redirects (idempotent
+    /// per operation id), and policy write.
     /// </summary>
     private async Task CutoverAsync()
     {
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        await registry.SetAliasAsync(TreeId, state.State.DestinationTreeId!);
+        var destinationTreeId = state.State.DestinationTreeId!;
+        var operationId = state.State.OperationId!;
+        var sourcePhysical = state.State.SourcePhysicalTreeId!;
+
+        // The destination is a fresh, never-aliased tree, so its physical id equals
+        // its logical id. Resolve the retained (source) routing by PHYSICAL id -
+        // alias-safe, so a resume after a partial cutover re-derives the same
+        // shards rather than following the just-installed alias to the destination.
+        var destinationPhysical = destinationTreeId;
+        var retainedRouting = await grainFactory.GetGrain<ILattice>(sourcePhysical).GetRoutingAsync();
+
+        // Repoint the logical tree to the remediated destination.
+        await registry.SetAliasAsync(TreeId, destinationPhysical);
+
+        // Arm every source shard to redirect logical-alias-routed traffic onto the
+        // destination. Without this, a stale stateless-worker routing activation
+        // that still caches the pre-cutover alias would keep serving the old
+        // (un-remediated) values forever - it never sees a staleness signal to
+        // re-resolve. The redirect fires only for logical-alias traffic; direct-
+        // physical access and internal maintenance keep reading the old snapshot.
+        // Skipped in the degenerate case where the alias already resolved across.
+        if (!string.Equals(destinationPhysical, retainedRouting.PhysicalTreeId, StringComparison.Ordinal))
+        {
+            foreach (var shardIndex in retainedRouting.Map.GetPhysicalShardIndices())
+            {
+                await grainFactory.GetGrain<IShardRootGrain>($"{retainedRouting.PhysicalTreeId}/{shardIndex}")
+                    .MarkRetainedRedirectAsync(destinationPhysical, operationId, TreeId);
+            }
+        }
+
+        // Proactively invalidate this activation's cached alias / routing so a
+        // caller observes the cutover without waiting for a reactivation.
+        await grainFactory.GetGrain<ILattice>(TreeId).GetRoutingAsync(forceRefresh: true);
 
         // Enforce the shape the data now satisfies on subsequent writes. Evict the
         // local policy cache eagerly (as the admin does) so the coordinating silo

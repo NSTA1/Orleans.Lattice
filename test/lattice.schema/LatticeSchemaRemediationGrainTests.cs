@@ -54,10 +54,18 @@ public class LatticeSchemaRemediationGrainTests
 
         var source = Substitute.For<ILattice>();
         source.EntriesAsync().Returns(_ => Entries(sourceEntries));
+        // Source routing for cutover: a single-shard identity map on the physical
+        // tree that equals the (never-aliased) logical tree id.
+        source.GetRoutingAsync().Returns(new ValueTask<RoutingInfo>(
+            new RoutingInfo(TreeId, new ShardMap { Slots = new[] { 0 } })));
 
         var destination = Substitute.For<ILattice>();
 
         var registry = Substitute.For<ILatticeRegistry>();
+        // A never-aliased source tree resolves its physical id to its own name.
+        registry.ResolveAsync(TreeId).Returns(TreeId);
+
+        var shard = Substitute.For<IShardRootGrain>();
 
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<ILattice>(TreeId).Returns(source);
@@ -65,6 +73,7 @@ public class LatticeSchemaRemediationGrainTests
             Arg.Is<string>(s => s != null && s.StartsWith(TreeId + "/remediated/", StringComparison.Ordinal)))
             .Returns(destination);
         grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
+        grainFactory.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(shard);
 
         var policyStore = Substitute.For<ILatticeSchemaPolicyStore>();
         var policyProvider = Substitute.For<ILatticeSchemaPolicyProvider>();
@@ -228,6 +237,7 @@ public class LatticeSchemaRemediationGrainTests
             Phase = LatticeSchemaRemediationPhase.Cutover,
             OperationId = "op1",
             DestinationTreeId = TreeId + "/remediated/op1",
+            SourcePhysicalTreeId = TreeId,
             Transform = transform,
             TargetPolicy = policy,
             ScannedCount = 3,
@@ -254,6 +264,7 @@ public class LatticeSchemaRemediationGrainTests
             Phase = LatticeSchemaRemediationPhase.Build,
             OperationId = "op7",
             DestinationTreeId = TreeId + "/remediated/op7",
+            SourcePhysicalTreeId = TreeId,
             Transform = LatticeValueTransform.Passthrough(),
             TargetPolicy = policy,
         };
