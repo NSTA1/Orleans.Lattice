@@ -11,7 +11,7 @@ Follow these phases in order. Complete each phase fully before moving to the nex
 
 ### Phase 1 - Understand
 
-1. Find the GitHub issue for the feature being requested. Feature planning lives on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues); the grouped indexes in `docs/lattice/features.md` (core) and `docs/lattice.replication/features.md` (replication) link every tracked item to its issue.
+1. Find the GitHub issue for the feature being requested. Feature planning lives on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), labelled `lattice` or `lattice.replication`.
 2. Read `.github/copilot-instructions.md` and all files under `.github/instructions/` to internalize project conventions.
 3. Read `docs/lattice/api.md` and any other docs referenced by the feature to understand the current public API surface.
 4. Search the codebase for existing patterns that the new feature should follow (e.g. how existing grain methods are structured, how extension methods are organized, how similar features were implemented).
@@ -67,8 +67,7 @@ Update documentation in the same change:
 1. **`docs/lattice/api.md`** - Add or update tables, signatures, and examples for any new or changed public API.
 2. **`.github/copilot-instructions.md`** - Update the namespace table, serializable types table, or any other section affected by the change.
 3. **`.github/instructions/*.instructions.md`** - Update grain key conventions, primitives tables, or testing instructions if affected.
-4. **`docs/lattice/features.md` or `docs/lattice.replication/features.md`** - When the shipped item's issue is closed, move its bullet from the **Planned / open** group to the **Shipped** group in the relevant feature index (keeping the issue link intact and the numeric ordering within the group).
-5. **`docs/lattice/*.md`** - Update any topic-specific doc that covers changed behavior. Add new docs to the `README.md` documentation table if applicable.
+4. **`docs/lattice/*.md`** - Update any topic-specific doc that covers changed behavior. Add new docs to the `README.md` documentation table if applicable.
 
 ### Phase 6 - Verify
 
@@ -90,39 +89,31 @@ These are **scriptable, deterministic checks** that have caused PR-time CI failu
 
 The agent **must invoke each command below verbatim** and **paste the tail of its output into the chat reply** as evidence the gate ran. A claim of "I checked and it's clean" without the corresponding tool transcript is a protocol violation and the work is not complete.
 
-1. **Feature-tracker leak scan.** No `F-NNN` / `R-NNN` / `FX-NNN` / `G-NNN` identifiers may appear anywhere except `CHANGELOG.md`, the two `features.md` indexes (only as the link text on an issue link), and the commit message / PR title (which are not in the working tree). The repo enforces this via `RoadmapIdentifierHygieneTests`. Run it directly:
-
-   ```powershell
-   dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~RoadmapIdentifierHygieneTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
-   ```
-
-   The output's `Failed: 0` line is the gate. If `Failed: 1`, the failure message lists every leaking file and line - fix every one (replace the id with a behavioural description by name, or link directly to the GitHub issue) and re-run the gate from scratch.
-
-2. **Type-alias hygiene.** Dead-or-orphan alias constants are caught by `TypeAliasesTests.Every_alias_constant_is_referenced_by_exactly_one_type`. Run it directly:
+1. **Type-alias hygiene.** Dead-or-orphan alias constants are caught by `TypeAliasesTests.Every_alias_constant_is_referenced_by_exactly_one_type`. Run it directly:
 
    ```powershell
    dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~TypeAliasesTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
    ```
 
-3. **Logger-category hygiene.** `AuditHygieneRegressionTests.Every_grain_uses_generic_ILogger_category` enforces typed `ILogger<T>` on every grain. Run it directly:
+2. **Logger-category hygiene.** `AuditHygieneRegressionTests.Every_grain_uses_generic_ILogger_category` enforces typed `ILogger<T>` on every grain. Run it directly:
 
    ```powershell
    dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~AuditHygieneRegressionTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
    ```
 
-4. **Docs-snippet harness.** Renames to public types break opt-in `csharp verify` snippets under `docs/`:
+3. **Docs-snippet harness.** Renames to public types break opt-in `csharp verify` snippets under `docs/`:
 
    ```powershell
    dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~DocsSnippetCompilationTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
    ```
 
-5. **Em-dash hygiene.** Em-dash characters (U+2014) must not appear in any tracked text file - source, tests, docs, build scripts, samples, or configuration. The repo convention is plain ASCII hyphens. Word processors and editors auto-convert `--` to an em-dash on paste, so this leak is recurrent. `EmDashHygieneTests.No_em_dashes_in_tracked_files` enforces it:
+4. **Em-dash hygiene.** Em-dash characters (U+2014) must not appear in any tracked text file - source, tests, docs, build scripts, samples, or configuration. The repo convention is plain ASCII hyphens. Word processors and editors auto-convert `--` to an em-dash on paste, so this leak is recurrent. `EmDashHygieneTests.No_em_dashes_in_tracked_files` enforces it:
 
    ```powershell
    dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~EmDashHygieneTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
    ```
 
-6. **Mojibake hygiene.** Byte-level mojibake sequences - UTF-8 bytes decoded as Windows-1252 / CP437 / latin1 and re-encoded as UTF-8 - must not appear in any tracked text file. They sneak in when PR-body text or doc prose is pasted from a terminal or word processor whose code page disagreed with the underlying UTF-8 bytes (this campaign caught arrow and check-mark leaks in features.md and on a PR-success log line). `MojibakeHygieneTests.No_mojibake_sequences_in_tracked_files` enforces it via a curated trigram set covering smart quotes, smart apostrophes, ellipses, en / em dashes, arrows, and check-marks. `MojibakeHygieneTests.Every_needle_is_actually_detectable_in_an_in_memory_string` is the smoke-detector-battery-test for the gate itself:
+6. **Mojibake hygiene.** Byte-level mojibake sequences - UTF-8 bytes decoded as Windows-1252 / CP437 / latin1 and re-encoded as UTF-8 - must not appear in any tracked text file. They sneak in when PR-body text or doc prose is pasted from a terminal or word processor whose code page disagreed with the underlying UTF-8 bytes (this campaign caught arrow and check-mark leaks in doc prose and on a PR-success log line). `MojibakeHygieneTests.No_mojibake_sequences_in_tracked_files` enforces it via a curated trigram set covering smart quotes, smart apostrophes, ellipses, en / em dashes, arrows, and check-marks. `MojibakeHygieneTests.Every_needle_is_actually_detectable_in_an_in_memory_string` is the smoke-detector-battery-test for the gate itself:
 
    ```powershell
    dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~MojibakeHygieneTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
@@ -183,11 +174,7 @@ Before telling the user the work is done, self-review. Each numbered item must b
 
 5. **Convention compliance**: Verify naming, attributes, XML docs, file placement, and namespace conventions all match the rules in `.github/copilot-instructions.md`.
 
-6. **No feature references**: This was already enforced as a hard gate in Phase 6b. Re-confirm in the chat reply that **`Phase 6b.1` was run and passed**, with the test transcript pasted (or referenced by line in an earlier reply). Do not perform a fresh manual grep here - the test is the authority.
-
-7. **Feature-index sync**: If the work shipped a tracked item, confirm in the chat reply that the matching bullet was moved from **Planned / open** to **Shipped** in the relevant `docs/lattice/features.md` or `docs/lattice.replication/features.md`, that the issue link is intact, and that the issue itself is being closed as part of delivery. Dependency / sequencing information lives in the issue threads (labels, milestones, "depends on #NNN" references) - do not maintain dependency annotations in markdown.
-
-8. **Apply fixes**: If any of the above turned up issues, fix them and re-run **the relevant sub-phase of Phase 6** (build, hygiene, or tests) before declaring the work complete. A fix in `.github/copilot-instructions.md` or any docs file means re-running 6b.1 specifically, because every markdown edit is in scope of the feature-tracker hygiene gate.
+6. **Apply fixes**: If any of the above turned up issues, fix them and re-run **the relevant sub-phase of Phase 6** (build, hygiene, or tests) before declaring the work complete.
 
 ### Phase 8 - Deliver
 
@@ -195,13 +182,13 @@ Only when the user explicitly asks:
 
 1. **Final cross-solution verify.** Before the commit, run `dotnet test --filter "TestCategory!=Chaos" --blame-hang-timeout 2m --blame-hang-dump-type none` once at the solution root and confirm `Failed: 0` across every test project. This is the only place in the workflow where the full cross-solution suite is mandatory; Phase 6c is deliberately scoped to the changed project to keep the inner dev loop fast.
 2. **Update `CHANGELOG.md`'s `## [Unreleased]` section** with a one-line entry for the feature (or fix / docs change) about to be committed. Add under the appropriate subsection (`### Added`, `### Changed`, `### Fixed`, `### Deprecated`, `### Removed`, `### Security`); create the subsection if it does not yet exist under `[Unreleased]`. Phrase the entry from the user's perspective (what they can now do, or what changed for them), not from the implementation perspective. Do **not** stamp a version number or release date here - that is Phase 9's job. The entry stays under `[Unreleased]` until the next release is cut.
-3. **Commit** with a conventional commit message: `feat: <description> (F-XXX)` for features, `fix: <description>` for fixes, `docs: <description>` for doc-only changes. The changelog update is part of this same commit.
+3. **Commit** with a conventional commit message: `feat: <description>` for features, `fix: <description>` for fixes, `docs: <description>` for doc-only changes. The changelog update is part of this same commit.
 4. **Push** the branch.
 5. **Create a PR** using `gh pr create` with:
-   - A title matching the commit convention: `feat: <description> (F-XXX)`
+   - A title matching the commit convention: `feat: <description>`
    - At least one label: `enhancement`, `bug`, `documentation`, `ci`, `dependencies`, or `breaking`
    - A body written to a tracked scratch file (`.scratch/pr-body.md` - `.scratch/` is gitignored) and passed via `--body-file`. **Never** use `New-TemporaryFile` or inline heredocs piped into `gh`. See "PR body file write path" below.
-   - **An issue-closing keyword for every tracked issue the PR resolves.** When the work ships a tracked item, the PR body **must** contain a GitHub closing keyword (`Closes #NNN`, `Fixes #NNN`, or `Resolves #NNN`) referencing the issue number, so the issue auto-closes when the PR squash-merges into `main`. A bare mention of the issue number or the tracker id (`FX-NNN`) in prose does **not** trigger auto-close - only the keyword forms do, and only when the PR targets the default branch (`main`, which is always the case here). Put the keyword in the `## Summary` section. This is the only reliable way the Phase 7 feature-index sync ("close the GitHub issue as part of delivery") actually happens on merge rather than requiring a manual `gh issue close`.
+   - **An issue-closing keyword for every tracked issue the PR resolves.** When the work ships a tracked item, the PR body **must** contain a GitHub closing keyword (`Closes #NNN`, `Fixes #NNN`, or `Resolves #NNN`) referencing the issue number, so the issue auto-closes when the PR squash-merges into `main`. A bare mention of the issue number in prose does **not** trigger auto-close - only the keyword forms do, and only when the PR targets the default branch (`main`, which is always the case here). Put the keyword in the `## Summary` section. This is the only reliable way the GitHub issue is closed on merge rather than requiring a manual `gh issue close`.
 6. **Verify the PR body actually applied.** `gh pr create` and `gh pr edit` both **silently no-op** when the body file is malformed (BOM, wrong encoding, empty, or zero-byte). The CLI prints the PR URL and exits 0 in both the success and the silent-failure case. Immediately after creating or editing a PR, run:
 
    ```powershell
@@ -293,7 +280,7 @@ When the user explicitly asks to release one or more packages by tagging `main`:
 - **Never skip the review phase.** Bugs caught in review are cheaper than bugs caught in CI.
 - **The Phase 6b hygiene gates are unskippable and run *before* the unit-test suite.** Each gate must be invoked verbatim and its output transcript pasted into the chat reply. "I checked and it's clean" without the transcript is a protocol violation. The feature-tracker leak scan in particular has caught real CI failures during this agent's own past PRs - running it locally costs ~3 seconds; discovering it in CI costs a force-push and a wasted CI run.
 - **The Phase 7 memory-allocation pass is mandatory and must produce a written classification.** "I checked and it looks fine" is not a memory-allocation review. Enumerate the hot-path allocations, classify each (✅ / ⚠️ / 📝), and apply every ⚠️ fix before declaring work complete. The user has had to ask for this retrospectively in the past - never assume it can be folded into the correctness pass.
-- **The Phase 7 feature-index sync is mandatory.** When a tracked item ships, move its bullet from **Planned / open** to **Shipped** in the relevant `docs/lattice/features.md` or `docs/lattice.replication/features.md` (keep the issue link, preserve numeric ordering within the group) and close the GitHub issue as part of delivery. Apply the markdown edit via byte-level `String.Replace` with a count-assertion of exactly 1 (per the markdown-edit protocol in `.github/copilot-instructions.md`), then `git diff` the file and confirm only the targeted line changed. Dependency / sequencing information lives in the issue threads, not in markdown annotations.
+- **When a tracked item ships, close its GitHub issue as part of delivery.** Dependency / sequencing information lives in the issue threads, not in markdown annotations.
 - **Always use `--body-file` with a tracked `.scratch/` file for PR descriptions** to avoid shell escaping issues with backticks and special characters. **Never** use `New-TemporaryFile` for the body - it has produced silent failures with non-ASCII content.
 - **`gh pr create` and `gh pr edit` silently no-op on malformed body files.** Always verify the live body via `gh pr view <num> --json body` immediately after the call. The PR URL printed by `gh` is not proof the body applied - it is printed in the failure case too.
 - **Phase 6c is project-scoped, not solution-wide.** Run `dotnet test` against the test project(s) covering the source project you changed, with `--filter "TestCategory!=Chaos"`. The full cross-solution sweep is reserved for the Phase 8 final verify (immediately before commit/push) - running it on every iteration of the inner dev loop wastes wall-clock time without buying additional signal, because CI runs the full suite on every PR.

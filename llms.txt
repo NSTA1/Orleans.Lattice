@@ -43,4 +43,3 @@ This file is the entry point for AI agents and LLM tooling. Documentation lives 
 
 - [AGENTS.md](AGENTS.md): Build/test commands, conventions, and hygiene gates for agents making changes here.
 - [.github/copilot-instructions.md](.github/copilot-instructions.md): Repository conventions.
-- [Feature indexes](docs/lattice/features.md): Issue-linked index of tracked features, fixes, and gaps.

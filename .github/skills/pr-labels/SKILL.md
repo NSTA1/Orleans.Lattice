@@ -7,7 +7,7 @@ description: How to apply package labels to a pull request in Orleans.Lattice. U
 
 Every pull request must carry a label for **every package it touches**, on top of
 its release-category label (`enhancement`, `bug`, `documentation`, `ci`,
-`dependencies`, or `breaking`). Package labels let release notes and roadmap
+`dependencies`, or `breaking`). Package labels let release notes and planning
 queries slice history by component.
 
 ## The package-label rule

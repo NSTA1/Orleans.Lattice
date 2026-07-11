@@ -48,7 +48,7 @@ jobs:
       # picomatch (the matcher dorny/paths-filter uses) only treats '**' as a
       # globstar when it stands alone as a path segment - '**.md' degrades to
       # '*.md' and silently fails to match nested files like
-      # 'docs/lattice/features.md', defeating the docs-only skip.
+      # 'docs/lattice/observability.md', defeating the docs-only skip.
       - name: Check for non-markdown changes
         id: filter
         uses: dorny/paths-filter@v3
@@ -68,8 +68,8 @@ jobs:
       # Auto-discover packages by convention: each subdirectory of `src/`
       # is a package; tests live at `test/{name}/`; docs at `docs/{name}/`.
       # A package is in scope when any **non-markdown** file under one of
-      # those three subtrees changed. Markdown-only edits (e.g. `features.md`,
-      # docs notes) skip that package's test run - the top-level `nonSample`
+      # those three subtrees changed. Markdown-only edits (e.g. a design
+      # note) skip that package's test run - the top-level `nonSample`
       # filter already gates the whole job on at least one non-doc edit
       # somewhere in the tree, but per-package discovery without the
       # extension filter would still pull a heavy package's chaos suite into
@@ -102,7 +102,7 @@ jobs:
           for name in "${packages[@]}"; do
             # Match files under src/<name>/, test/<name>/, or docs/<name>/
             # whose extension is not .md. A package whose only change is a
-            # markdown file (feature index, design note, etc.) is not pulled into
+            # markdown file (design note, etc.) is not pulled into
             # the test matrix - its expensive suites (e.g. chaos) would add
             # minutes of CI runtime for a docs edit.
             #

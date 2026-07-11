@@ -73,9 +73,6 @@ required `build-and-test` check:
 
 - No em-dash (U+2014) in any tracked text file - use a plain ASCII hyphen `-`.
 - No byte-level mojibake - author plain ASCII.
-- Feature-tracker ids (the `F-` / `R-` prefixed identifiers) appear only in
-  `CHANGELOG.md` and the `features.md` indexes; elsewhere, describe the
-  behaviour or link the GitHub issue.
 - C# snippets under `docs/` use the ` ```csharp verify ` fence and must compile
   against the real public surface.
 

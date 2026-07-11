@@ -564,7 +564,6 @@ Per the agent contract this cohort decision is *kept*, and the optimisation agen
 
 - `LatticeOptionsTests` covering the new default value `WalMaxPendingBatches=16`.
 - Update any `BPlusLeafGrainTests.MultiPartitionReplay` / `LatticeOptionsResolverTests` snapshot tests that hard-coded `8` as the expected default.
-- `RoadmapIdentifierHygieneTests` is unaffected (no tracker-id changes here).
 
 **Negative-result documentation:** the dual-knob wedge in §30.4.1 should NOT prevent the cap=16 change shipping; it is a separate finding about combined-knob configuration. A short `docs/lattice/wal-tuning.md` (or equivalent) could carry §30.4.1's mechanism for operators - the optimisation agent flags this as a documentation hand-off candidate without strong recommendation; up to `feature-dev`'s judgement.
 

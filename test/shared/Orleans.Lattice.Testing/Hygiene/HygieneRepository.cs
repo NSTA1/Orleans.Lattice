@@ -6,7 +6,7 @@ namespace Orleans.Lattice.Testing.Hygiene;
 /// Shared filesystem helpers for the repository-wide hygiene gates. The
 /// helpers walk up from <see cref="AppContext.BaseDirectory"/> to find the
 /// repository root and enumerate tracked files, so a single copy of each
-/// content scanner (em-dash, mojibake, tracker-id, deletion-mandate,
+/// content scanner (em-dash, mojibake, deletion-mandate,
 /// performance-report markers) can run from any consuming test assembly.
 /// </summary>
 public static class HygieneRepository

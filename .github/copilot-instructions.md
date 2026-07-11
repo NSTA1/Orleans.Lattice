@@ -54,11 +54,11 @@ Never rename or remove an alias - it is part of the wire format.
 
 ## Documentation
 
-Documentation rules - where docs live, keeping the `features.md` issue indexes in sync, the tracker-id policy, and the `csharp verify` snippet requirement - live in the **documentation** skill (`.github/skills/documentation/SKILL.md`).
+Documentation rules - where docs live and the `csharp verify` snippet requirement - live in the **documentation** skill (`.github/skills/documentation/SKILL.md`).
 
 ## Editing long markdown files
 
-The safe technique for editing long markdown files (`docs/**/*.md`, the `features.md` indexes) - deterministic byte-level replacement with a match-count assertion instead of patch-style edits - lives in the **markdown-editing** skill (`.github/skills/markdown-editing/SKILL.md`).
+The safe technique for editing long markdown files (`docs/**/*.md`) - deterministic byte-level replacement with a match-count assertion instead of patch-style edits - lives in the **markdown-editing** skill (`.github/skills/markdown-editing/SKILL.md`).
 
 ## Branching and Pull Requests
 

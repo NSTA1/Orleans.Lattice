@@ -1,15 +1,15 @@
 ---
 name: markdown-editing
-description: Safe editing technique for long markdown files in Orleans.Lattice. Use whenever editing a markdown file longer than ~200 lines or one with repeated near-identical sibling bullets (the features.md issue indexes in particular), where patch-style edits can silently drop neighbouring lines.
+description: Safe editing technique for long markdown files in Orleans.Lattice. Use whenever editing a markdown file longer than ~200 lines or one with repeated near-identical sibling bullets or table rows (long observability/metric tables in particular), where patch-style edits can silently drop neighbouring lines.
 ---
 
 # Editing long markdown files
 
-Patch-style edits are unsafe on long markdown files (`docs/**/*.md`, the `features.md` indexes). Use deterministic byte-level replacement with a match-count assertion and a `git diff` check instead.
+Patch-style edits are unsafe on long markdown files (`docs/**/*.md`). Use deterministic byte-level replacement with a match-count assertion and a `git diff` check instead.
 
-Patch-style edit tools that rely on `// ...existing code...` markers and similarity matching are **unsafe on long markdown files** that contain many adjacent bullets with similar prefixes (e.g. several feature-index bullets at adjacent line numbers, each starting with `- [F-` and a number, that differ only in the trailing prose). The tool can silently collapse or drop neighbouring bullets and the regression is invisible until a reader notices a missing entry.
+Patch-style edit tools that rely on `// ...existing code...` markers and similarity matching are **unsafe on long markdown files** that contain many adjacent rows or bullets with similar prefixes (e.g. several metric-to-panel table rows at adjacent line numbers that differ only in the trailing prose). The tool can silently collapse or drop neighbouring rows and the regression is invisible until a reader notices a missing entry.
 
-**Required workflow for any edit to a markdown file longer than ~200 lines, or any edit to a file whose surrounding context contains repeated near-identical sibling bullets (the `features.md` indexes in particular):**
+**Required workflow for any edit to a markdown file longer than ~200 lines, or any edit to a file whose surrounding context contains repeated near-identical sibling bullets or table rows (long observability/metric tables in particular):**
 
 1. **Use deterministic byte-level replacement, not patch-style edits.** Read the file via `[System.IO.File]::ReadAllText`, perform an exact `String.Replace` (or a regex with an asserted match-count of exactly 1), and write back via `[System.IO.File]::WriteAllText`. The replacement string must be the verbatim final text - no `// ...existing code...` placeholders.
 
@@ -22,9 +22,9 @@ Patch-style edit tools that rely on `// ...existing code...` markers and similar
 Reference template (PowerShell):
 
 ```powershell
-$path = 'docs/lattice/features.md'
-$old  = '- [F-XXX](https://github.com/NSTA1/Orleans.Lattice/issues/534) - ...full exact line...'
-$new  = $old + "`n- [F-YYY](https://github.com/NSTA1/Orleans.Lattice/issues/535) - ...new line..."
+$path = 'docs/lattice.dashboards/metrics-to-panel-map.md'
+$old  = '| `orleans.lattice.example.counter` | ...full exact row... |'
+$new  = $old + "`n| ``orleans.lattice.example.other`` | ...new row... |"
 $content = [System.IO.File]::ReadAllText((Resolve-Path $path))
 $count = ([regex]::Matches($content, [regex]::Escape($old))).Count
 if ($count -ne 1) { throw "expected exactly 1 match, got $count" }
