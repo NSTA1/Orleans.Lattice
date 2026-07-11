@@ -30,8 +30,8 @@ internal static class LatticeOperationTag
 
     private static string[] BuildSingleFlagNames()
     {
-        // One entry per bit position 0..8 covering Read..Admin.
-        var names = new string[9];
+        // One entry per bit position 0..11 covering Read..SchemaAdmin.
+        var names = new string[12];
         for (var bit = 0; bit < names.Length; bit++)
         {
             names[bit] = ((LatticeOperation)(1 << bit)).ToString();

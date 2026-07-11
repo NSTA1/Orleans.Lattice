@@ -25,5 +25,6 @@ public static class LatticeAuthOperations
         | LatticeOperation.BulkLoad
         | LatticeOperation.Admin
         | LatticeOperation.Backup
-        | LatticeOperation.Restore;
+        | LatticeOperation.Restore
+        | LatticeOperation.SchemaAdmin;
 }

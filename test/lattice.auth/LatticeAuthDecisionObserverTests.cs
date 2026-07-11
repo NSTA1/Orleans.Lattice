@@ -64,6 +64,22 @@ public sealed class LatticeAuthDecisionObserverTests
     }
 
     [Test]
+    public void Observe_tags_a_schema_admin_decision_with_the_schema_admin_operation()
+    {
+        using var collector = new MeterCollector<long>(
+            LatticeAuthMetrics.MeterName, LatticeAuthMetrics.DecisionsName);
+        var observer = CreateObserver(new LatticeAuthOptions());
+        var request = Request(LatticeOperation.SchemaAdmin, "orders", key: null);
+        var decision = LatticeAccessDecision.Allow();
+
+        observer.Observe(in request, in decision, default, epoch: 3, LatticeAuthDecisionObserver.CaptureStart());
+
+        var tags = collector.Measurements.Single().Tags.ToDictionary(t => t.Key, t => t.Value);
+        Assert.That(tags[LatticeAuthMetrics.TagOperation], Is.EqualTo("SchemaAdmin"),
+            "a schema-admin decision is audited with a clear, distinct operation tag");
+    }
+
+    [Test]
     public void IsAuditEnabled_reflects_the_option()
     {
         Assert.That(CreateObserver(new LatticeAuthOptions()).IsAuditEnabled, Is.False);
