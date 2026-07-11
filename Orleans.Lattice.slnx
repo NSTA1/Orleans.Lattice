@@ -12,6 +12,7 @@
   <Project Path="src/lattice.membership.entra/Orleans.Lattice.Membership.Entra.csproj" />
   <Project Path="src/lattice.membership.entra.graph/Orleans.Lattice.Membership.Entra.Graph.csproj" />
   <Project Path="src/lattice.auth/Orleans.Lattice.Auth.csproj" />
+  <Project Path="src/lattice.schema/Orleans.Lattice.Schema.csproj" />
   <Project Path="src/lattice.backup/Orleans.Lattice.Backup.csproj" />
   <Project Path="src/lattice.dashboards/Orleans.Lattice.Dashboards.csproj" />
   <Project Path="src/lattice.replication/Orleans.Lattice.Replication.csproj" />
@@ -37,6 +38,7 @@
   <Project Path="test/lattice.membership.entra/Orleans.Lattice.Membership.Entra.Tests.csproj" />
   <Project Path="test/lattice.membership.entra.graph/Orleans.Lattice.Membership.Entra.Graph.Tests.csproj" />
   <Project Path="test/lattice.auth/Orleans.Lattice.Auth.Tests.csproj" />
+  <Project Path="test/lattice.schema/Orleans.Lattice.Schema.Tests.csproj" />
   <Project Path="test/lattice.backup/Orleans.Lattice.Backup.Tests.csproj" />
   <Project Path="test/lattice.dashboards/Orleans.Lattice.Dashboards.Tests.csproj" />
   <Project Path="test/lattice.replication/Orleans.Lattice.Replication.Tests.csproj" />
