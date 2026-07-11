@@ -23,6 +23,7 @@ no consensus). See [README.md](README.md) for the capability overview and
 - `src/lattice.api.state/`, `src/lattice.api.state.grpc/` - read-only cluster
   state API and its gRPC binding.
 - `src/lattice.storage.azuretable/` - durable Azure Table WAL backend.
+- `src/lattice.schema/` - opt-in schema enforcement and versioning companion.
 - `src/lattice.dashboards/` - bundled Grafana dashboards.
 - `src/lattice.explorer/` - the state-explorer app (not a published package).
 - `test/<package>/` - the NUnit test project for each `src/<package>/`.
