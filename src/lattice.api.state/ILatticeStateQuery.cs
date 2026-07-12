@@ -265,4 +265,35 @@ internal interface ILatticeStateQuery
         string treeId,
         string? continuationToken,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Counts the strict-mode dead-letter entries retained for a tree - the
+    /// non-compliant items schema enforcement diverted rather than applied. A
+    /// non-zero count is the signal a tree has a dead-letter queue worth
+    /// inspecting. Returns <c>0</c> when the tree has no diverted items, when
+    /// schema enforcement is not registered on the cluster, or when the caller
+    /// may not read the tree.
+    /// </summary>
+    /// <param name="treeId">The governed tree whose dead-letter queue is counted.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<int> GetDeadLetterCountAsync(
+        string treeId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lists a tree's strict-mode dead-letter queue as a deterministic, paged
+    /// read in append (time) order. Each entry is projected to a read-only
+    /// <see cref="DeadLetterEntryRecord"/> carrying the offending key, a
+    /// size-bounded value preview (never widened past the enforcement layer's
+    /// budget), the original value length, the validation reason, the ingest
+    /// source, and the dead-letter timestamp. The listing is read-only: it never
+    /// mutates tree data and never replays or requeues a diverted item. Returns
+    /// an empty page when the queue is empty, when schema enforcement is not
+    /// registered on the cluster, or when the caller may not read the tree.
+    /// </summary>
+    /// <param name="request">Scope (tree) and paging.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<DeadLetterQueuePage> ListDeadLettersAsync(
+        DeadLetterQueueRequest request,
+        CancellationToken cancellationToken = default);
 }

@@ -2,6 +2,7 @@ using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Catalog;
 using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.Core.Data;
+using Orleans.Lattice.Explorer.Core.DeadLetter;
 using Orleans.Lattice.Explorer.Core.History;
 using Orleans.Lattice.Explorer.Core.Metrics;
 using Orleans.Lattice.Explorer.Core.Session;
@@ -39,6 +40,7 @@ builder.Services.AddExplorerCatalog();
 builder.Services.AddExplorerMetrics();
 builder.Services.AddExplorerTopology();
 builder.Services.AddExplorerData();
+builder.Services.AddExplorerDeadLetter();
 builder.Services.AddExplorerHistory();
 builder.Services.AddExplorerSession();
 

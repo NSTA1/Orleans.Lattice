@@ -25,7 +25,12 @@ idempotent bulk graft) under random storage-write faults. The
 replication suite extends those guarantees to the production shipper,
 WAL trim, per-peer liveness, tombstone-reap filtering, and the gRPC
 transport; the Azure Table WAL suite pins append-batch atomicity and
-offset monotonicity against the local Azurite emulator.
+offset monotonicity against the local Azurite emulator. The
+`lattice.schema` companion suite additionally pins that
+`SetManyAtomicAsync` stays all-or-nothing while a tree's schema
+enforcement policy or target schema version is changed concurrently, and
+that every stored value stays self-describing and decodable across a
+version advance and an eager background migration.
 
 Every fixture uses the `[NonParallelizable]` attribute so it has the cluster to itself, and is tagged `[Category("Chaos")]` so the iterative-development test filter (`dotnet test --filter "TestCategory!=Chaos"`) skips them.
 
@@ -57,6 +62,21 @@ suite (`test/lattice.replication.grpc/Chaos/`), and the Azure Table WAL suite
 pipeline using in-process test clusters, a simulated delivery pump, an in-memory
 test server, and the Azurite emulator, and are documented in
 [the replication chaos tests](../lattice.replication/chaos-tests.md).
+
+### Schema enforcement and versioning atomicity suite (`test/lattice.schema/Chaos/`)
+
+The `lattice.schema` companion package ships its own chaos fixtures that prove the
+core atomic-write guarantee is preserved *while the schema control plane mutates
+underneath it* - a policy is set or cleared, or a target schema version is advanced
+and eagerly migrated - concurrently with a chain of atomic sagas. They run on a
+single-silo `TestCluster` with core lattice, schema enforcement, and schema
+versioning all registered (`SchemaAtomicChaosClusterFixture`), and are tagged
+`[Category("Chaos")]` `[NonParallelizable]` like every other suite.
+
+| Test class | File | Purpose |
+|---|---|---|
+| Atomic write under policy churn | `AtomicWriteUnderPolicyChurnChaosTests.cs` | A committer drives cross-tree `SetManyAtomicAsync` sagas (alternating a compliant and a non-compliant leg) while a churner flips each participating tree's enforcement policy between "require JSON" and "no policy". Asserts every saga is decided as a unit against the policy current at admission - it either commits every leg or rejects the whole batch and mutates no tree - and a concurrent reader never observes a torn (cross-generation) snapshot. |
+| Atomic write under version advance | `AtomicWriteUnderVersionAdvanceChaosTests.cs` | A committer drives single-tree `SetManyAtomicAsync` batches into one versioned tree while a churner advances the target schema version v1 -> v2 -> v3 concurrently, then a quiesced eager background migration re-stamps the tree. Asserts every batch lands all-or-nothing, that every read is always envelope-stripped and upcast to the current target, and that the eager migration preserves the last committed snapshot. |
 
 ## The workload
 
@@ -656,6 +676,86 @@ flip them together.
 * No single-tree partial view (every batch's per-tree key set is wholly
   present or wholly absent).
 * Post-drain: every batch's keys are present on both trees on every site.
+
+## Test 13 - Atomic write under enforcement-policy churn (`AtomicWriteUnderPolicyChurnChaosTests`)
+
+This test (in the `lattice.schema` suite) asserts that **cross-tree
+`SetManyAtomicAsync` stays all-or-nothing while a tree's schema
+enforcement policy is changed live**. Schema enforcement validates the
+whole batch once, up front at the coordinator, against whatever policy is
+current at admission - so concurrent policy churn may change *which*
+outcome a given saga gets, but must never split a batch.
+
+A committer drives one cross-tree saga per generation across two trees -
+one leg always compliant, the other alternating compliant (odd
+generations) and deliberately non-compliant (even generations) - while a
+churner flips each tree's policy between "require JSON" and "no policy" at
+a 5 ms cadence, and a reader polls both trees on every generation.
+
+### What it proves
+
+| Invariant | Mechanism under test |
+|---|---|
+| A committed saga installs every leg on every tree | Admission-time whole-batch validation decides the saga atomically before any prepare |
+| A rejected saga mutates no tree | A single admission failure rejects the whole batch; no leg is applied |
+| A reader never sees a torn per-tree snapshot | Atomic-write reader isolation holds under concurrent policy mutation |
+
+### Workload
+
+* **Committer** - one cross-tree `SetManyAtomicAsync` saga per generation (60 generations) over `treeA` (always compliant) and `treeB` (compliant on odd, non-compliant on even generations), each value embedding its generation.
+* **Policy churner** - flips each tree's policy between a `LatticeSchemaRule.Json()` policy and no policy at a 5 ms cadence.
+* **Reader** - a concurrent per-generation read of both trees, asserting each tree's key set is at one coherent generation (never a torn cross-generation mix).
+
+### Pass criteria
+
+* Zero invariant violations: every committed generation is present on both trees on every key; every rejected generation advanced neither tree.
+* At least one generation committed and at least one was rejected by the churned policy (proves the race actually exercised both outcomes).
+
+### Tolerated transients
+
+The committer treats a `LatticeSchemaViolationException` (or a non-committed outcome) as the reject branch; any other exception fails the test.
+
+## Test 14 - Atomic write under schema-version advance and eager migration (`AtomicWriteUnderVersionAdvanceChaosTests`)
+
+This test (in the `lattice.schema` suite) asserts that **single-tree
+`SetManyAtomicAsync` stays all-or-nothing and every stored value stays
+self-describing and decodable while a versioned tree's target schema
+version is advanced concurrently, and that the one-call eager background
+migration preserves that atomic snapshot when it re-stamps the tree**. It
+runs in two phases matching the two distinct version-change operations and
+their concurrency contracts.
+
+A target-version advance is a config-only change (it moves no data), so it
+is safe to run concurrently with live writes: new writes stamp at the new
+target and existing values are upcast on read. The eager data migration is
+a shadow-build with alias cutover whose v1 contract requires the tree be
+write-quiescent, so it is validated in a quiesced window - not hammered
+under live writes.
+
+### What it proves
+
+| Invariant | Mechanism under test |
+|---|---|
+| Every atomic batch lands as a unit under a concurrent version advance | The write interceptor stamps each delta at admission; the advance never tears the saga |
+| A read never returns raw enveloped bytes and never throws for a reachable version | The read decoder strips the envelope and upcasts to the current target through the registered hop chain |
+| Eager migration preserves the last committed snapshot | The quiesced shadow-build re-stamps each value from its own version to the target and cuts the alias over atomically |
+
+### Workload
+
+* **Committer** - single-tree `SetManyAtomicAsync` batches (60 generations) of 12 keys into one versioned tree, each value embedding its generation.
+* **Version churner** - advances the target schema version v1 -> v2 -> v3 (once each) concurrently with the write loop.
+* **Reader** - a concurrent per-generation read that fails on any raw enveloped byte leak or torn batch.
+* **Quiesced migration** - after the write loop drains, one `MigrateToTargetVersionAsync` re-stamps every value (written across v1..v3) to the current target, followed by an idempotent second call.
+
+### Pass criteria
+
+* Zero invariant violations across the concurrent phase (all-or-nothing, decodable, no raw-envelope leak).
+* The target advanced exactly twice (v1->v2->v3).
+* The eager migration succeeded, preserved the last committed generation on every key, and the idempotent re-migration also succeeded.
+
+### Tolerated transients
+
+None beyond the churner's own cancellation; any unexpected exception during the advance, the write loop, or the migration fails the test.
 
 ## Observed recovery surfaces
 

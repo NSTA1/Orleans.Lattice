@@ -1,8 +1,10 @@
 @using Orleans.Lattice.Explorer.Core.Catalog
 @using Orleans.Lattice.Explorer.Core.Configuration
+@using Orleans.Lattice.Explorer.Core.DeadLetter
 @using Orleans.Lattice.Explorer.Core.Session
 @implements IDisposable
 @inject ICatalogReader CatalogReader
+@inject IDeadLetterReader DeadLetterReader
 @inject IExplorerSelection Selection
 @inject IExplorerSession Session
 @inject IUiPreferenceStore Preferences
@@ -92,6 +94,11 @@
                                     {
                                         <span class="explorer-badge" title="Shard count">@shards sh</span>
                                     }
+                                    @if (_deadLetterCounts.TryGetValue(item.Id, out var dlq) && dlq > 0)
+                                    {
+                                        <span class="explorer-badge explorer-badge-deadletter"
+                                              title="Dead-lettered items (strict-mode schema rejects)">@dlq DLQ</span>
+                                    }
                                 }
                                 else if (item.Kind == CatalogKind.TagIndexes)
                                 {
@@ -149,6 +156,11 @@
     private const int PageSize = 100;
 
     private readonly List<CatalogItem> _items = new();
+
+    // Per-tree dead-letter-queue counts for the at-a-glance DLQ badge, keyed by
+    // tree id. Populated after each tree page loads; a zero (or missing) count
+    // shows no badge. Empty for the Views / Tag-index kinds, which have no DLQ.
+    private readonly Dictionary<string, int> _deadLetterCounts = new(StringComparer.Ordinal);
     private CatalogKind _kind = CatalogKind.Trees;
     private string KindLabel => _kind switch
     {
@@ -251,6 +263,7 @@
     private async Task ReloadAsync()
     {
         _items.Clear();
+        _deadLetterCounts.Clear();
         _nextToken = null;
         _hasMore = false;
         await LoadPageAsync(reset: true);
@@ -274,6 +287,15 @@
             _items.AddRange(page.Items.Where(item => !item.IsRestoreShadow));
             _nextToken = page.NextPageToken;
             _hasMore = page.HasMore;
+
+            // Populate the DLQ badge counts for the freshly loaded trees. Zero /
+            // absent counts (including a cluster with no schema enforcement, where
+            // the reader returns 0) simply render no badge. Views and tag indexes
+            // have no dead-letter queue, so this is skipped for those kinds.
+            if (_kind == CatalogKind.Trees)
+            {
+                await LoadDeadLetterCountsAsync(page.Items);
+            }
         }
         catch (Exception ex)
         {
@@ -283,6 +305,39 @@
         {
             _loading = false;
             StateHasChanged();
+        }
+    }
+
+    // Fetches the dead-letter count for each of the given trees and records the
+    // non-zero counts for the badge. Counts are fetched concurrently (no delays /
+    // ordering) and a per-tree failure is swallowed so the catalog list still
+    // renders; a tree simply shows no badge when its count cannot be read.
+    private async Task LoadDeadLetterCountsAsync(IReadOnlyList<CatalogItem> trees)
+    {
+        if (trees.Count == 0)
+        {
+            return;
+        }
+
+        var counts = await Task.WhenAll(trees.Select(async tree =>
+        {
+            try
+            {
+                var count = await DeadLetterReader.CountAsync(tree.Id);
+                return (tree.Id, count);
+            }
+            catch (Exception)
+            {
+                return (tree.Id, 0);
+            }
+        }));
+
+        foreach (var (treeId, count) in counts)
+        {
+            if (count > 0)
+            {
+                _deadLetterCounts[treeId] = count;
+            }
         }
     }
 

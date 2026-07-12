@@ -16,6 +16,14 @@ internal sealed partial class LatticeGrain
         ArgumentNullException.ThrowIfNull(entries);
         cancellationToken.ThrowIfCancellationRequested();
         await EnforceWholeTreeAsync(LatticeOperation.BulkLoad, cancellationToken);
+        IReadOnlyList<KeyValuePair<string, byte[]>> effectiveEntries = entries;
+        if (WriteInterceptionActive)
+        {
+            var list = entries as List<KeyValuePair<string, byte[]>>
+                ?? new List<KeyValuePair<string, byte[]>>(entries);
+            effectiveEntries = await InterceptEntriesAsync(
+                LatticeOperation.BulkLoad, list, atomic: false, cancellationToken);
+        }
         var (physicalTreeId, shardMap) = await GetRoutingAsync();
         cancellationToken.ThrowIfCancellationRequested();
         var physicalShards = shardMap.GetPhysicalShardIndices();
@@ -25,7 +33,7 @@ internal sealed partial class LatticeGrain
         foreach (var idx in physicalShards)
             shardBuckets[idx] = [];
 
-        foreach (var entry in entries)
+        foreach (var entry in effectiveEntries)
         {
             var idx = shardMap.Resolve(entry.Key);
             shardBuckets[idx].Add(entry);

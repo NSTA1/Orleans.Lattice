@@ -742,7 +742,27 @@ internal sealed partial class BPlusLeafGrain(
         if (!isPrepared)
             PublishVersionAdvance(stamp);
         BumpLocalRevision();
-        var newEntry = LwwValue<byte[]>.CreateWithExpiry(value, stamp, expiresAtTicks)
+
+        // Post-merge observer (LWW). A fresh foreground Set wins the row-level
+        // LWW by strict HLC-tick monotonicity, so `value` is the canonical
+        // merged result for this key. When an observer is registered it may
+        // normalise / re-encode the merged bytes (AcceptTransformed is permitted
+        // for LwwRegister records; the durable WAL record carries the full
+        // winning value, so a transform stays replay-deterministic). Zero-cost
+        // when inactive (cached flag): `value` is used verbatim and no observer
+        // is consulted. The prior value is read here, before StoreEntry
+        // overwrites it, so the observer sees the true local input.
+        var mergedValue = value;
+        if (MergeObserverActive)
+        {
+            byte[]? priorValue = Cache.TryGetRow(key, out var priorRow) && !priorRow.IsTombstone
+                ? priorRow.Value
+                : null;
+            mergedValue = await ApplyMergeObserverAsync(
+                key, LatticeMergeMode.LwwRegister, priorValue, value, value, CancellationToken.None);
+        }
+
+        var newEntry = LwwValue<byte[]>.CreateWithExpiry(mergedValue, stamp, expiresAtTicks)
             with
             {
                 OriginClusterId = LatticeOriginContext.Current,
@@ -895,9 +915,14 @@ internal sealed partial class BPlusLeafGrain(
         //
         // Only an in-progress split keeps the per-key fallback path:
         // the split recovery in SetCoreAsync forwards mid-batch entries
-        // across two grains and we keep that path serialized.
+        // across two grains and we keep that path serialized. An active
+        // post-merge observer also routes per key: the batched commit path
+        // (CommitSetManyAsync) does not invoke the observer, so falling back to
+        // the per-key SetAsync loop keeps every LWW write observable. Zero-cost
+        // when inactive (cached flag) - the batched fast path is unchanged on
+        // the default null-observer path.
         var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
-        if (splitInProgress)
+        if (splitInProgress || MergeObserverActive)
         {
             SplitResult? lastSplit = null;
             foreach (var entry in entries)
@@ -959,11 +984,14 @@ internal sealed partial class BPlusLeafGrain(
 
         SplitResult? split;
         var splitInProgress = state.State.SplitState == Primitives.SplitState.SplitInProgress;
-        if (splitInProgress)
+        if (splitInProgress || MergeObserverActive)
         {
             // Mirror SetManyAsync's split-in-progress fallback: the split
             // recovery in SetCoreAsync forwards mid-batch entries across two
-            // grains, so the matched entries are committed one at a time.
+            // grains, so the matched entries are committed one at a time. An
+            // active post-merge observer also routes per key so every LWW write
+            // is observed (the batched CommitSetManyAsync path does not invoke
+            // the observer); zero-cost on the default null-observer path.
             SplitResult? lastSplit = null;
             foreach (var entry in matched)
             {

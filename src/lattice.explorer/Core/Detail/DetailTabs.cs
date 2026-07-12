@@ -16,6 +16,7 @@ public static class DetailTabs
         DetailTab.Metrics,
         DetailTab.Topology,
         DetailTab.Data,
+        DetailTab.DeadLetter,
     };
 
     /// <summary>The human-readable label for <paramref name="tab"/>.</summary>
@@ -24,6 +25,7 @@ public static class DetailTabs
         DetailTab.Metrics => "Metrics",
         DetailTab.Topology => "Topology",
         DetailTab.Data => "Data",
+        DetailTab.DeadLetter => "Dead-letter",
         _ => throw new ArgumentOutOfRangeException(nameof(tab), tab, "Unknown detail tab."),
     };
 }

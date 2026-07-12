@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>Orleans.Lattice.Schema</PackageId>
+    <Version>7.9.0</Version>
+    <Description>Schema add-on foundation for Orleans.Lattice. Ships LatticeValueTransform - a shared, serializable value-to-value transform IR (a sibling of the boolean LatticePredicateNode) with a client-side translator, a deterministic server-side JSON evaluator, and an ILatticeValueTransform DI escape hatch. Consumed by the schema-enforcement remediation and schema-versioning upcast layers delivered by later releases.</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Schema.Tests" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\lattice\Orleans.Lattice.csproj" />
+    <PackageReference Include="Microsoft.Orleans.Sdk" Version="10.2.0" />
+  </ItemGroup>
+
+</Project>

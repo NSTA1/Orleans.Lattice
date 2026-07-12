@@ -718,7 +718,12 @@ internal sealed partial class BPlusLeafGrain
                 + "register the OR-Map pair via ISiloBuilder.AddOrMapShape<TKey, TValue>(treeName) "
                 + "for OR-Map trees (closed-shape modes resolve through the global fallback).");
 
-        var typedDelta = shape.DeserializeDelta(delta);
+        // Strip any version envelope from the durable delta before deserialising
+        // (version-agnostic; identity when no versioning is active) so the fold
+        // sees the raw typed-CRDT body. See the determinism remarks on
+        // ILatticeEnvelopeCodec: the same durable bytes strip to the same body on
+        // every replay, so the terminal-commit fold stays byte-identical.
+        var typedDelta = shape.DeserializeDelta(StripDeltaForFold(delta));
         object typedState;
         if (Cache.TryGetRow(key, out var existing)
             && !existing.IsTombstone

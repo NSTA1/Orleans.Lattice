@@ -6,13 +6,14 @@ namespace Orleans.Lattice.Explorer.Tests.Detail;
 public class DetailTabsTests
 {
     [Test]
-    public void Ordered_IsMetricsTopologyData()
+    public void Ordered_IsMetricsTopologyDataDeadLetter()
     {
         Assert.That(DetailTabs.Ordered, Is.EqualTo(new[]
         {
             DetailTab.Metrics,
             DetailTab.Topology,
             DetailTab.Data,
+            DetailTab.DeadLetter,
         }));
     }
 
@@ -31,6 +32,7 @@ public class DetailTabsTests
     [TestCase(DetailTab.Metrics, "Metrics")]
     [TestCase(DetailTab.Topology, "Topology")]
     [TestCase(DetailTab.Data, "Data")]
+    [TestCase(DetailTab.DeadLetter, "Dead-letter")]
     public void Label_ReturnsDisplayName(DetailTab tab, string expected)
     {
         Assert.That(DetailTabs.Label(tab), Is.EqualTo(expected));

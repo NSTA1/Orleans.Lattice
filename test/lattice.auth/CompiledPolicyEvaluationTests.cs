@@ -375,4 +375,104 @@ public sealed class CompiledPolicyEvaluationTests
                 "the more specific key-scope deny beats the tree-scope allow");
         });
     }
+
+    // ---- SchemaAdmin capability -----------------------------------------
+
+    [Test]
+    public void Evaluate_schema_admin_grant_authorizes_schema_admin_but_not_admin()
+    {
+        var rules = new[] { User("r", "alice", LatticeScope.Tree(Tree), LatticeOperation.SchemaAdmin, LatticeEffect.Allow) };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Eval(rules, Subject("alice"), LatticeOperation.SchemaAdmin, key: null).Allowed, Is.True);
+            Assert.That(Eval(rules, Subject("alice"), LatticeOperation.Admin, key: null).Allowed, Is.False,
+                "a schema-admin grant is distinct from data-plane admin");
+            Assert.That(Eval(rules, Subject("alice"), LatticeOperation.Read, key: "k").Allowed, Is.False,
+                "a schema-admin grant does not confer read");
+        });
+    }
+
+    [Test]
+    public void Evaluate_admin_grant_does_not_authorize_schema_admin()
+    {
+        var rules = new[] { User("r", "alice", LatticeScope.Tree(Tree), LatticeOperation.Admin, LatticeEffect.Allow) };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Eval(rules, Subject("alice"), LatticeOperation.Admin, key: null).Allowed, Is.True);
+            Assert.That(Eval(rules, Subject("alice"), LatticeOperation.SchemaAdmin, key: null).Allowed, Is.False,
+                "holding data-plane admin does not confer schema-admin");
+        });
+    }
+
+    [Test]
+    public void Evaluate_holding_both_admin_and_schema_admin_authorizes_each_independently()
+    {
+        var rules = new[]
+        {
+            User("admin", "alice", LatticeScope.Tree(Tree), LatticeOperation.Admin, LatticeEffect.Allow),
+            User("schema", "alice", LatticeScope.Tree(Tree), LatticeOperation.SchemaAdmin, LatticeEffect.Allow),
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Eval(rules, Subject("alice"), LatticeOperation.Admin, key: null).Allowed, Is.True);
+            Assert.That(Eval(rules, Subject("alice"), LatticeOperation.SchemaAdmin, key: null).Allowed, Is.True);
+        });
+    }
+
+    [Test]
+    public void Evaluate_schema_admin_denies_by_default_absent_a_grant()
+    {
+        var decision = Eval(Array.Empty<LatticeAuthorizationRule>(), Subject("alice"), LatticeOperation.SchemaAdmin, key: null);
+
+        Assert.That(decision.Allowed, Is.False);
+    }
+
+    [Test]
+    public void Evaluate_schema_admin_wildcard_grant_via_all_aggregate_authorizes_it()
+    {
+        var rules = new[] { User("r", "alice", LatticeScope.Tree(Tree), LatticeAuthOperations.All, LatticeEffect.Allow) };
+
+        Assert.That(Eval(rules, Subject("alice"), LatticeOperation.SchemaAdmin, key: null).Allowed, Is.True,
+            "a wildcard grant (LatticeAuthOperations.All) still covers schema-admin");
+    }
+
+    [Test]
+    public void Evaluate_schema_admin_grant_narrows_to_a_single_tree()
+    {
+        var rules = new[] { User("r", "alice", LatticeScope.Tree(Tree), LatticeOperation.SchemaAdmin, LatticeEffect.Allow) };
+        var policy = CompiledPolicy.Compile(rules);
+        var options = new LatticeAuthOptions();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                PolicyEvaluator.Evaluate(policy, options, Subject("alice"), Tree, LatticeOperation.SchemaAdmin, null, null, null).Allowed,
+                Is.True,
+                "the grant applies on its own tree");
+            Assert.That(
+                PolicyEvaluator.Evaluate(policy, options, Subject("alice"), "other-tree", LatticeOperation.SchemaAdmin, null, null, null).Allowed,
+                Is.False,
+                "the grant does not leak to another tree");
+        });
+    }
+
+    [Test]
+    public void Evaluate_schema_admin_prefix_deny_beats_tree_allow()
+    {
+        var rules = new[]
+        {
+            User("tree", "alice", LatticeScope.Tree(Tree), LatticeOperation.SchemaAdmin, LatticeEffect.Allow),
+            User("prefix", "alice", LatticeScope.Prefix(Tree, "locked/"), LatticeOperation.SchemaAdmin, LatticeEffect.Deny),
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Eval(rules, Subject("alice"), LatticeOperation.SchemaAdmin, key: "open").Allowed, Is.True);
+            Assert.That(Eval(rules, Subject("alice"), LatticeOperation.SchemaAdmin, key: "locked/x").Allowed, Is.False,
+                "the more specific prefix-scope deny beats the tree-scope allow");
+        });
+    }
 }

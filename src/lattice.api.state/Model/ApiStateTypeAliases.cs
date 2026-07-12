@@ -112,4 +112,16 @@ public static class ApiStateTypeAliases
 
     /// <summary>Alias for <see cref="TagMemberScanPage"/>.</summary>
     public const string TagMemberScanPage = "ola.tmsp";
+
+    /// <summary>Alias for <see cref="DeadLetterSourceKind"/>.</summary>
+    public const string DeadLetterSourceKind = "ola.dlsk";
+
+    /// <summary>Alias for <see cref="DeadLetterEntryRecord"/>.</summary>
+    public const string DeadLetterEntryRecord = "ola.dler";
+
+    /// <summary>Alias for <see cref="DeadLetterQueueRequest"/>.</summary>
+    public const string DeadLetterQueueRequest = "ola.dlqr";
+
+    /// <summary>Alias for <see cref="DeadLetterQueuePage"/>.</summary>
+    public const string DeadLetterQueuePage = "ola.dlqp";
 }

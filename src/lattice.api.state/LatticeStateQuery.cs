@@ -1,8 +1,10 @@
+using System.Globalization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Orleans.Configuration;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Schema;
 using Orleans.Lattice.Views;
 using Orleans.Runtime;
 
@@ -1528,6 +1530,131 @@ internal sealed class LatticeStateQuery(
             // tolerates every one of these as a successful no-op.
         }
     }
+
+    /// <inheritdoc />
+    public async Task<int> GetDeadLetterCountAsync(
+        string treeId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // Auth-backed visibility: a tree the caller may not read discloses
+        // nothing, not even that it has a dead-letter queue.
+        if (await IsTreeReadHiddenAsync(treeId, cancellationToken).ConfigureAwait(false))
+        {
+            return 0;
+        }
+
+        // The dead-letter store is an OPTIONAL capability, present only when the
+        // host registered schema enforcement. A cluster without it has no
+        // dead-letter queue, so the count is zero and no hard runtime dependency
+        // on the enforcement layer is taken (the state API depends solely on the
+        // public ILatticeSchemaDeadLetterStore read interface).
+        var store = _services.GetService<ILatticeSchemaDeadLetterStore>();
+        if (store is null)
+        {
+            return 0;
+        }
+
+        return await store.CountAsync(treeId, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<DeadLetterQueuePage> ListDeadLettersAsync(
+        DeadLetterQueueRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentException.ThrowIfNullOrEmpty(request.TreeId);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (await IsTreeReadHiddenAsync(request.TreeId, cancellationToken).ConfigureAwait(false))
+        {
+            return new DeadLetterQueuePage();
+        }
+
+        var store = _services.GetService<ILatticeSchemaDeadLetterStore>();
+        if (store is null)
+        {
+            return new DeadLetterQueuePage();
+        }
+
+        // The store enumerates the queue as a single time-ordered prefix scan and
+        // exposes no per-entry cursor, so the page cursor is the append offset of
+        // the next unread entry. Append-only semantics make an offset a stable
+        // resume point for this read-only surface (this feature never removes
+        // entries). Only the requested window is projected, so the whole queue is
+        // never materialised in memory - the scan stops one entry past the page.
+        var offset = DecodeOffset(request.PageToken);
+        var pageSize = request.EffectivePageSize;
+        var entries = new List<DeadLetterEntryRecord>(pageSize);
+        var index = 0;
+        string? nextToken = null;
+
+        await foreach (var entry in store.ListAsync(request.TreeId, cancellationToken).ConfigureAwait(false))
+        {
+            if (index < offset)
+            {
+                index++;
+                continue;
+            }
+
+            if (entries.Count == pageSize)
+            {
+                // A further entry exists past this page: hand back the offset that
+                // resumes exactly after the last projected entry.
+                nextToken = EncodeOffset(offset + pageSize);
+                break;
+            }
+
+            entries.Add(MapDeadLetter(entry));
+            index++;
+        }
+
+        return new DeadLetterQueuePage { Entries = entries, NextPageToken = nextToken };
+    }
+
+    /// <summary>
+    /// Projects a schema-package dead-letter entry onto the state-API read model.
+    /// The bounded preview bytes are shared by reference (the record is immutable),
+    /// so the projection allocates only the wrapper record.
+    /// </summary>
+    private static DeadLetterEntryRecord MapDeadLetter(LatticeSchemaDeadLetterEntry entry) =>
+        new()
+        {
+            Key = entry.Key,
+            ValuePreview = entry.ValuePreview,
+            ValueByteLength = entry.ValueByteLength,
+            Reason = entry.Reason,
+            Source = MapSource(entry.Source),
+            TimestampUtc = entry.TimestampUtc,
+            PreviewTruncated = entry.ValueByteLength > entry.ValuePreview.Length,
+        };
+
+    /// <summary>Maps the enforcement dead-letter source onto the API-owned kind.</summary>
+    private static DeadLetterSourceKind MapSource(LatticeSchemaDeadLetterSource source) => source switch
+    {
+        LatticeSchemaDeadLetterSource.Replication => DeadLetterSourceKind.Replication,
+        LatticeSchemaDeadLetterSource.Restore => DeadLetterSourceKind.Restore,
+        LatticeSchemaDeadLetterSource.LocalRejected => DeadLetterSourceKind.LocalRejected,
+        _ => DeadLetterSourceKind.Unknown,
+    };
+
+    /// <summary>
+    /// Decodes a dead-letter page token to an append offset. A null, empty, or
+    /// malformed token resolves to <c>0</c> (start from the oldest entry) so a
+    /// hostile or stale cursor degrades to a fresh read rather than a fault.
+    /// </summary>
+    private static int DecodeOffset(string? token) =>
+        !string.IsNullOrEmpty(token)
+            && int.TryParse(token, NumberStyles.None, CultureInfo.InvariantCulture, out var value)
+            && value >= 0
+            ? value
+            : 0;
+
+    /// <summary>Encodes an append offset as a dead-letter page token.</summary>
+    private static string EncodeOffset(int offset) => offset.ToString(CultureInfo.InvariantCulture);
 
     private async Task<EntryRecord> BuildEntryRecordAsync(
         ILattice tree,

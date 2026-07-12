@@ -76,4 +76,20 @@ public enum LatticeOperation
     /// restore into that scope.
     /// </summary>
     Restore = 1024,
+
+    /// <summary>
+    /// Administer a tree's <b>schema</b>: the schema-management control plane, as
+    /// distinct from an ordinary data-plane mutation. Holding it authorizes the
+    /// schema-management verbs - setting or changing the enforcement policy,
+    /// advancing the schema version, triggering a background shadow-build
+    /// remediation / migration, toggling strict-mode ingest, and replaying
+    /// dead-letter entries - over the requested scope. It is a high-privilege
+    /// capability that is deliberately <b>distinct</b> from <see cref="Admin"/>:
+    /// holding <see cref="Admin"/> does not confer it, and holding it does not
+    /// confer <see cref="Admin"/> or any data-plane capability. Inspecting schema
+    /// state stays on <see cref="Read"/> - this capability gates schema
+    /// <em>changes</em> only, never the read side. Granting it grants no other
+    /// capability.
+    /// </summary>
+    SchemaAdmin = 2048,
 }

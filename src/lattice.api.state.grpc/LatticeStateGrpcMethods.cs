@@ -77,6 +77,12 @@ internal sealed class LatticeStateGrpcMethods
     /// <summary>The unary, unauthenticated auth-scheme advertisement RPC method name.</summary>
     public const string GetAuthSchemeMethodName = "GetAuthScheme";
 
+    /// <summary>The unary dead-letter-count RPC method name.</summary>
+    public const string GetDeadLetterCountMethodName = "GetDeadLetterCount";
+
+    /// <summary>The unary dead-letter-listing RPC method name.</summary>
+    public const string ListDeadLettersMethodName = "ListDeadLetters";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeStateGrpcMethods(
         Serializer<CatalogRequest> catalogRequestSerializer,
@@ -104,7 +110,11 @@ internal sealed class LatticeStateGrpcMethods
         Serializer<ClusterInfoRequest> clusterInfoRequestSerializer,
         Serializer<ClusterInfo> clusterInfoSerializer,
         Serializer<AuthSchemeAdvertisementRequest> authSchemeRequestSerializer,
-        Serializer<AuthSchemeAdvertisement> authSchemeAdvertisementSerializer)
+        Serializer<AuthSchemeAdvertisement> authSchemeAdvertisementSerializer,
+        Serializer<DeadLetterCountRequest> deadLetterCountRequestSerializer,
+        Serializer<DeadLetterCountResponse> deadLetterCountResponseSerializer,
+        Serializer<DeadLetterQueueRequest> deadLetterQueueRequestSerializer,
+        Serializer<DeadLetterQueuePage> deadLetterQueuePageSerializer)
     {
         ArgumentNullException.ThrowIfNull(catalogRequestSerializer);
         ArgumentNullException.ThrowIfNull(treeCatalogPageSerializer);
@@ -132,6 +142,10 @@ internal sealed class LatticeStateGrpcMethods
         ArgumentNullException.ThrowIfNull(clusterInfoSerializer);
         ArgumentNullException.ThrowIfNull(authSchemeRequestSerializer);
         ArgumentNullException.ThrowIfNull(authSchemeAdvertisementSerializer);
+        ArgumentNullException.ThrowIfNull(deadLetterCountRequestSerializer);
+        ArgumentNullException.ThrowIfNull(deadLetterCountResponseSerializer);
+        ArgumentNullException.ThrowIfNull(deadLetterQueueRequestSerializer);
+        ArgumentNullException.ThrowIfNull(deadLetterQueuePageSerializer);
 
         ListTrees = new Method<CatalogRequest, TreeCatalogPage>(
             type: MethodType.Unary,
@@ -251,6 +265,20 @@ internal sealed class LatticeStateGrpcMethods
             name: GetAuthSchemeMethodName,
             requestMarshaller: LatticeStateGrpcMarshallers.Create(authSchemeRequestSerializer),
             responseMarshaller: LatticeStateGrpcMarshallers.Create(authSchemeAdvertisementSerializer));
+
+        GetDeadLetterCount = new Method<DeadLetterCountRequest, DeadLetterCountResponse>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: GetDeadLetterCountMethodName,
+            requestMarshaller: LatticeStateGrpcMarshallers.Create(deadLetterCountRequestSerializer),
+            responseMarshaller: LatticeStateGrpcMarshallers.Create(deadLetterCountResponseSerializer));
+
+        ListDeadLetters = new Method<DeadLetterQueueRequest, DeadLetterQueuePage>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: ListDeadLettersMethodName,
+            requestMarshaller: LatticeStateGrpcMarshallers.Create(deadLetterQueueRequestSerializer),
+            responseMarshaller: LatticeStateGrpcMarshallers.Create(deadLetterQueuePageSerializer));
     }
 
     /// <summary>The unary <c>ListTrees</c> discovery RPC.</summary>
@@ -304,6 +332,12 @@ internal sealed class LatticeStateGrpcMethods
     /// <summary>The unary, unauthenticated <c>GetAuthScheme</c> advertisement RPC.</summary>
     public Method<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement> GetAuthScheme { get; }
 
+    /// <summary>The unary <c>GetDeadLetterCount</c> RPC.</summary>
+    public Method<DeadLetterCountRequest, DeadLetterCountResponse> GetDeadLetterCount { get; }
+
+    /// <summary>The unary <c>ListDeadLetters</c> RPC.</summary>
+    public Method<DeadLetterQueueRequest, DeadLetterQueuePage> ListDeadLetters { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out
     /// of <paramref name="serializerProvider"/>. Shared by the server-side DI
@@ -339,7 +373,11 @@ internal sealed class LatticeStateGrpcMethods
             serializerProvider.GetRequiredService<Serializer<ClusterInfoRequest>>(),
             serializerProvider.GetRequiredService<Serializer<ClusterInfo>>(),
             serializerProvider.GetRequiredService<Serializer<AuthSchemeAdvertisementRequest>>(),
-            serializerProvider.GetRequiredService<Serializer<AuthSchemeAdvertisement>>());
+            serializerProvider.GetRequiredService<Serializer<AuthSchemeAdvertisement>>(),
+            serializerProvider.GetRequiredService<Serializer<DeadLetterCountRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<DeadLetterCountResponse>>(),
+            serializerProvider.GetRequiredService<Serializer<DeadLetterQueueRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<DeadLetterQueuePage>>());
     }
 }
 

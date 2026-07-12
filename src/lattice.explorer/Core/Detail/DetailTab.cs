@@ -16,4 +16,7 @@ public enum DetailTab
 
     /// <summary>Key and value drill-down for the selected tree or view.</summary>
     Data,
+
+    /// <summary>The strict-mode dead-letter queue for the selected tree (read-only).</summary>
+    DeadLetter,
 }
