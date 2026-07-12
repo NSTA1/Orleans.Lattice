@@ -307,7 +307,7 @@ internal sealed class LatticeSchemaRemediationGrain(
         var source = grainFactory.GetGrain<ILattice>(TreeId);
         var outcome = await LatticeSchemaRemediation.DryRunCoreAsync(
             source.EntriesAsync(),
-            RewriteValue,
+            CreateRewrite(),
             PolicyViewOrNull(),
             CompiledPolicyOrNull(),
             _previewMaxBytes,
@@ -335,6 +335,7 @@ internal sealed class LatticeSchemaRemediationGrain(
         var destination = grainFactory.GetGrain<ILattice>(state.State.DestinationTreeId!);
         var compiled = CompiledPolicyOrNull();
         var policyView = PolicyViewOrNull();
+        var rewrite = CreateRewrite();
         var scanned = 0;
 
         await foreach (var entry in source.EntriesAsync())
@@ -344,7 +345,7 @@ internal sealed class LatticeSchemaRemediationGrain(
             byte[] rewritten;
             try
             {
-                rewritten = RewriteValue(entry.Value);
+                rewritten = rewrite(entry.Value);
             }
             catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
             {
@@ -370,26 +371,32 @@ internal sealed class LatticeSchemaRemediationGrain(
     }
 
     /// <summary>
-    /// Rewrites a single source value for the current build mode:
+    /// Snapshots the current build mode and its parameters from durable state (on the
+    /// activation thread) into a <b>pure</b> per-value rewrite delegate that is safe to
+    /// invoke off the activation scheduler - which the shared dry-run loop does, since
+    /// it enumerates the source with <c>ConfigureAwait(false)</c>. The delegate closes
+    /// over local snapshots and the thread-safe singleton registry only, never
+    /// <see cref="state"/>, so it never touches activation services.
     /// <see cref="SchemaRemediationMode.Transform"/> evaluates the static transform;
-    /// <see cref="SchemaRemediationMode.SchemaVersionMigration"/> re-stamps the value
-    /// to the target schema version through the registry. Throws
-    /// <see cref="InvalidOperationException"/> or <see cref="NotSupportedException"/>
-    /// on a per-value failure, which the dry-run / build turns into an abort.
+    /// <see cref="SchemaRemediationMode.SchemaVersionMigration"/> re-stamps the value to
+    /// the target schema version through the registry. The delegate throws
+    /// <see cref="InvalidOperationException"/> or <see cref="NotSupportedException"/> on
+    /// a per-value failure, which the dry-run / build turns into an abort.
     /// </summary>
-    private byte[] RewriteValue(byte[] value)
+    private Func<byte[], byte[]> CreateRewrite()
     {
         if (state.State.Mode == SchemaRemediationMode.SchemaVersionMigration)
         {
             var registry = schemaRegistry
                 ?? throw new InvalidOperationException(
                     $"Schema versioning is not registered on this silo; cannot resume the version migration of tree '{TreeId}'.");
-            return LatticeSchemaVersionMigration.Migrate(
-                value, state.State.MigrationSchemaId, state.State.MigrationTargetVersion, registry);
+            var schemaId = state.State.MigrationSchemaId;
+            var targetVersion = state.State.MigrationTargetVersion;
+            return value => LatticeSchemaVersionMigration.Migrate(value, schemaId, targetVersion, registry);
         }
 
         var transform = state.State.Transform;
-        return LatticeValueTransformEvaluation.Evaluate(value, in transform);
+        return value => LatticeValueTransformEvaluation.Evaluate(value, in transform);
     }
 
     /// <summary>

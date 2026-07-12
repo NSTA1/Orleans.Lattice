@@ -108,10 +108,56 @@ LatticeSchemaVersionConfig advanced =
     await admin.AdvanceTargetVersionAsync("orders", newTargetVersion: 2, cancellationToken);
 ```
 
-To eagerly rewrite the stored values (rather than upcasting them on every read),
-run a background [remediation](schema-enforcement.md#bringing-existing-data-into-compliance)
-with the composed upcaster transform - the same shadow-build-and-cutover mechanism
-enforcement uses.
+Advancing the target only changes the config; it is safe to run concurrently with
+live writes. To eagerly re-stamp the stored values in one call (rather than
+upcasting them on every read), use the eager migration below.
+
+## Eager background migration
+
+A target advance leaves existing values at their stored version and upcasts them on
+every read. To re-stamp them once - so steady-state reads stop paying the per-read
+upcast cost - run an eager background migration. `AdvanceAndMigrateAsync` advances
+the target and re-stamps in a single call; `MigrateToTargetVersionAsync` re-stamps to
+the tree's current target (an idempotent pass an operator or a retry can invoke
+repeatedly):
+
+```csharp verify
+using Orleans.Lattice.Schema;
+
+var admin = client.ServiceProvider.GetRequiredService<ILatticeSchemaVersionAdmin>();
+
+// Advance to v2 and eagerly re-stamp every existing value in one call.
+LatticeSchemaRemediationReport report =
+    await admin.AdvanceAndMigrateAsync("orders", newTargetVersion: 2, cancellationToken);
+
+// Or re-stamp to the current target without advancing (idempotent, resumable).
+LatticeSchemaRemediationReport again =
+    await admin.MigrateToTargetVersionAsync("orders", cancellationToken);
+```
+
+Migration re-stamps each value from its **own** stored version to the target through
+the registered upcaster chain, then re-envelopes it at the target. It reuses the
+crash-safe [shadow-build-and-cutover](schema-enforcement.md#bringing-existing-data-into-compliance)
+mechanism: it is all-or-nothing (a value that cannot be upcast aborts the whole
+migration and leaves the tree untouched), idempotent (a value already at the target
+is passed through unchanged), and failover-resumable (the target is persisted before
+any side effect). Like enforcement remediation, the data migration copies at the
+logical level and does not shadow-forward concurrent writes, so it should run when the
+tree is write-quiescent; the lazy read path keeps concurrent readers correct until it
+cuts over. When the tree also has an enforcement policy, each re-stamped value is
+validated against that policy during the build; the policy itself is left unchanged.
+
+## CRDT merge-input upcasting
+
+For a last-writer-wins value, read-time upcasting is enough: the whole value is
+lifted to the target on the way out. A CRDT value is different - it is folded from a
+history of deltas, so a delta stamped at an older version must be lifted to the
+target **once, at ingest**, and then folded deterministically forever after. When
+versioning is registered, an incoming CRDT delta is upcast at the apply boundary
+before it is appended to the write-ahead log, so the log persists the delta already
+at the target version and every replay folds it identically. A delta that cannot be
+upcast is [dead-lettered](dead-letter-queue.md) rather than folded, so a bad input
+never corrupts the converged state.
 
 ## Ingest trust model
 
@@ -130,12 +176,9 @@ against the new policy, cut over, aborting on the first offending key.
 
 ## Current scope
 
-Read-time upcasting of whole-value reads and monotonic target-version advance are
-shipped. Two refinements are documented follow-ups: eager background re-stamping
-(read-time upcasting already guarantees correct reads, so this is a performance
-optimisation) and CRDT merge-input upcasting (which depends on the core merge
-context carrying each input's stored version). CRDT deltas are accepted verbatim
-in the current release.
+Read-time upcasting of whole-value reads, monotonic target-version advance, one-call
+eager background re-stamping (`AdvanceAndMigrateAsync` / `MigrateToTargetVersionAsync`),
+and ingest-boundary CRDT merge-input upcasting are all shipped.
 
 ## See also
 
