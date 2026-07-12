@@ -380,6 +380,10 @@ internal sealed class LatticeStateQuery(
         }
 
         var candidates = registrations
+            // Hide system views (those named with the system-data prefix, e.g. the
+            // backup catalog index/history) from the listing unless the caller
+            // explicitly opts in, mirroring how ListTreesAsync hides system trees.
+            .Where(r => request.IncludeSystemTrees || !IsSystemDataTree(r.ViewName))
             .Where(r => request.PageToken is null || string.CompareOrdinal(r.ViewName, request.PageToken) > 0)
             .OrderBy(r => r.ViewName, StringComparer.Ordinal)
             .ToArray();

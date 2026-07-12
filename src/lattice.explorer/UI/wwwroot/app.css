@@ -2106,6 +2106,24 @@ code, .explorer-mono {
     min-width: 10rem;
 }
 
+.explorer-backups-filterrow th {
+    font-weight: 400;
+    padding-top: 0.25rem;
+    padding-bottom: 0.35rem;
+    vertical-align: top;
+}
+
+.explorer-backups-filterrow .explorer-data-search-field {
+    display: flex;
+    width: 100%;
+    max-width: none;
+}
+
+.explorer-backups-filter-select {
+    width: 100%;
+    min-width: 6rem;
+}
+
 .explorer-backups-result {
     margin: 0;
     padding: 0.5rem 0.75rem;

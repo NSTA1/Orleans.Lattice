@@ -182,6 +182,18 @@ public sealed record BackupManifest
     public string? SetName { get; init; }
 
     /// <summary>
+    /// The wall-clock time the enclosing backup set completed its capture, or
+    /// <see langword="null"/> when the backup is not a set member. Every member of
+    /// one set carries the same value, so the backup-catalog index can order a
+    /// set's per-tree members to one shared position (keeping them contiguous in
+    /// the newest-first index) rather than scattering them by their individual
+    /// per-tree capture times. Stamped once when the set is captured, alongside
+    /// <see cref="SetId"/> and <see cref="SetName"/>, and never mutated.
+    /// </summary>
+    [Id(16)]
+    public DateTimeOffset? SetCreatedAtUtc { get; init; }
+
+    /// <summary>
     /// The id of the cluster that authored this capture: its vantage point and the
     /// owner of the WAL cursor lineage. This is a single manifest-level stamp and
     /// is DISTINCT from the per-entry origin recorded in <see cref="Provenance"/>

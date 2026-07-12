@@ -46,6 +46,14 @@ internal static class BackupConstants
     /// <summary>Durable per-key history view name for <see cref="CatalogTree"/>.</summary>
     internal const string CatalogHistoryView = "sys-backup-catalog-history";
 
+    /// <summary>
+    /// Backup-catalog index materialised view name for <see cref="CatalogTree"/>.
+    /// Re-keys each catalogued backup so the view scans newest-first with set
+    /// members contiguous, backing the filtered, created-descending, paged catalog
+    /// listing surfaced by the backup control API.
+    /// </summary>
+    internal const string CatalogIndexView = "sys-backup-catalog-index";
+
     /// <summary>Field separator used inside composite sink / catalog keys.</summary>
     internal const char KeySeparator = '\u001f';
 

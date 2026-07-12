@@ -63,4 +63,7 @@ internal static class BackupTypeAliases
 
     /// <summary>Alias for <see cref="BackupSchedulerRuntimeStatus"/>.</summary>
     internal const string BackupSchedulerRuntimeStatus = "olb.rs";
+
+    /// <summary>Alias for <see cref="BackupCatalogIndexRow"/>.</summary>
+    internal const string BackupCatalogIndexRow = "olb.ix";
 }

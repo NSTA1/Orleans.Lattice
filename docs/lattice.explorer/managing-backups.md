@@ -74,7 +74,11 @@ restores, or deletes anything.
 - On a successful capture the panel switches to **Existing Backups** and
   highlights the backup that was just created.
 - **Existing Backups**: click a row to select it; its restore and delete
-  controls appear only while the row is selected. Restore a backup into a target
+  controls appear only while the row is selected. A filter row above the list
+  narrows it by kind and scope (each a drop-down of just the values actually
+  present), and by name and creation time (starts-with text boxes with the same
+  debounce and clear button as the tree key search). The list is ordered
+  newest-first and shown one page at a time. Restore a backup into a target
   tree, choosing the restore mode from the dropdown: **Repair missing items
   (non-destructive)** (in-place) or **Point-in-time replace (destructive)**
   (shadow-cutover). The two modes are explained below. Delete a backup behind a
@@ -123,6 +127,18 @@ saga aborts. Rather than an opaque internal error, the Explorer surfaces a
 friendly message explaining that the backup store must be reachable from every
 cluster - a configuration problem for the operator to fix, not a transient
 failure to retry.
+
+## Filtering, sorting, and paging the list
+
+The Existing Backups filters, the newest-first ordering, and the paging are all
+evaluated on the server, not by fetching the whole catalog and trimming it in
+the browser. To keep that efficient no matter how many backups have
+accumulated, the backup service maintains a catalog **index** that keeps the
+list query fast: only the rows that match the active filter are read, already in
+newest-first order, one page at a time. The index is maintained automatically
+and kept in step with the catalog; you do not create, refresh, or manage it. It
+can be turned off in configuration, in which case the same list is served by a
+slower full scan with identical results.
 
 ## See also
 

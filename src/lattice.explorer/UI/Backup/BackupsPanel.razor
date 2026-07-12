@@ -191,17 +191,13 @@
     else
     {
         <div class="explorer-backups-body">
-            @if (_list.Status == BackupOperationStatus.Denied)
+            @if (_pager.Current.Status == BackupOperationStatus.Denied)
             {
                 <p class="explorer-backups-empty">You are not permitted to list backups here.</p>
             }
-            else if (_list.Status == BackupOperationStatus.Failed)
+            else if (_pager.Current.Status == BackupOperationStatus.Failed)
             {
-                <p class="explorer-backups-empty">@_list.Message</p>
-            }
-            else if (_list.Entries.Count == 0)
-            {
-                <p class="explorer-backups-empty">No backups are visible.</p>
+                <p class="explorer-backups-empty">@_pager.Current.Message</p>
             }
             else
             {
@@ -210,43 +206,87 @@
                         <tr>
                             <th>Name</th><th>Kind</th><th>Scope</th><th>Created</th><th>Actions</th>
                         </tr>
+                        <tr class="explorer-backups-filterrow">
+                            <th>
+                                <BackupFilterBox Placeholder="Name starts with..." InitialValue="@_filterName"
+                                                 Disabled="@_busy" OnFilter="OnNameFilterChanged" />
+                            </th>
+                            <th>
+                                <select class="explorer-backups-filter-select" value="@_filterKind"
+                                        disabled="@_busy" @onchange="OnKindFilterChanged" aria-label="Filter by kind">
+                                    <option value="">(any)</option>
+                                    @foreach (var kind in _summary.Kinds)
+                                    {
+                                        <option value="@kind">@kind</option>
+                                    }
+                                </select>
+                            </th>
+                            <th>
+                                <select class="explorer-backups-filter-select" value="@_filterScope"
+                                        disabled="@_busy" @onchange="OnScopeFilterChanged" aria-label="Filter by scope">
+                                    <option value="">(any)</option>
+                                    @foreach (var scope in _summary.Scopes)
+                                    {
+                                        <option value="@scope">@scope</option>
+                                    }
+                                </select>
+                            </th>
+                            <th>
+                                <BackupFilterBox Placeholder="Created starts with..." InitialValue="@_filterCreated"
+                                                 Disabled="@_busy" OnFilter="OnCreatedFilterChanged" />
+                            </th>
+                            <th></th>
+                        </tr>
                     </thead>
                     <tbody>
-                        @foreach (var row in Rows)
+                        @if (Rows.Count == 0)
                         {
-                            var isSelected = string.Equals(_selectedRowId, row.DisplayId, StringComparison.Ordinal);
-                            var isNew = _highlightedBackupIds.Contains(row.DisplayId);
-                            <tr class="explorer-backups-row @(isSelected ? "is-selected" : null) @(isNew ? "is-new" : null)"
-                                @onclick="@(() => SelectRow(row))">
-                                <td>@row.Name</td>
-                                <td>@row.Kind</td>
-                                <td>@(row.IsSet ? string.Join(", ", row.TreeIds) : row.Members[0].Scope.TreeId)</td>
-                                <td title="@row.CreatedAtUtc.UtcDateTime.ToString("u")">@row.CreatedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</td>
-                                <td class="explorer-backups-actions" @onclick:stopPropagation="true">
-                                    @if (isSelected)
-                                    {
-                                        @if (!row.IsSet)
+                            <tr><td colspan="5" class="explorer-backups-empty">@EmptyMessage</td></tr>
+                        }
+                        else
+                        {
+                            @foreach (var row in Rows)
+                            {
+                                var isSelected = string.Equals(_selectedRowId, row.DisplayId, StringComparison.Ordinal);
+                                var isNew = _highlightedBackupIds.Contains(row.DisplayId);
+                                <tr class="explorer-backups-row @(isSelected ? "is-selected" : null) @(isNew ? "is-new" : null)"
+                                    @onclick="@(() => SelectRow(row))">
+                                    <td>@row.Name</td>
+                                    <td>@row.Kind</td>
+                                    <td>@(row.IsSet ? string.Join(", ", row.TreeIds) : row.Members[0].Scope.TreeId)</td>
+                                    <td title="@row.CreatedAtUtc.UtcDateTime.ToString("u")">@row.CreatedAtUtc.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss")</td>
+                                    <td class="explorer-backups-actions" @onclick:stopPropagation="true">
+                                        @if (isSelected)
                                         {
-                                            var manifest = row.Members[0];
-                                            <input type="text" value="@RestoreTargetFor(manifest)" @oninput="e => SetRestoreTarget(manifest.Id, e.Value?.ToString())" placeholder="target tree" />
+                                            @if (!row.IsSet)
+                                            {
+                                                var manifest = row.Members[0];
+                                                <input type="text" value="@RestoreTargetFor(manifest)" @oninput="e => SetRestoreTarget(manifest.Id, e.Value?.ToString())" placeholder="target tree" />
+                                            }
+                                            <select class="explorer-backups-restore-mode" value="@_restoreMode"
+                                                    @onchange="OnRestoreModeChanged" title="Restore mode">
+                                                <option value="@LatticeRestoreMode.InPlace">Repair missing items (non-destructive)</option>
+                                                <option value="@LatticeRestoreMode.ShadowCutover">Point-in-time replace (destructive)</option>
+                                            </select>
+                                            <button type="button" class="explorer-btn"
+                                                    disabled="@(_busy || (!row.IsSet && string.IsNullOrWhiteSpace(RestoreTargetFor(row.Members[0]))))"
+                                                    @onclick="@(() => RequestRestore(row))">Restore</button>
+                                            <button type="button" class="explorer-btn explorer-btn-danger"
+                                                    disabled="@_busy"
+                                                    @onclick="@(() => RequestDelete(row))">Delete</button>
                                         }
-                                        <select class="explorer-backups-restore-mode" value="@_restoreMode"
-                                                @onchange="OnRestoreModeChanged" title="Restore mode">
-                                            <option value="@LatticeRestoreMode.InPlace">Repair missing items (non-destructive)</option>
-                                            <option value="@LatticeRestoreMode.ShadowCutover">Point-in-time replace (destructive)</option>
-                                        </select>
-                                        <button type="button" class="explorer-btn"
-                                                disabled="@(_busy || (!row.IsSet && string.IsNullOrWhiteSpace(RestoreTargetFor(row.Members[0]))))"
-                                                @onclick="@(() => RequestRestore(row))">Restore</button>
-                                        <button type="button" class="explorer-btn explorer-btn-danger"
-                                                disabled="@_busy"
-                                                @onclick="@(() => RequestDelete(row))">Delete</button>
-                                    }
-                                </td>
-                            </tr>
+                                    </td>
+                                </tr>
+                            }
                         }
                     </tbody>
                 </table>
+
+                <div class="explorer-data-pager">
+                    <button type="button" class="explorer-btn" disabled="@(_busy || !_pager.CanGoPrevious)" @onclick="PreviousPage">Prev</button>
+                    <span class="explorer-data-pagenum">Page @(_pager.PageIndex + 1)</span>
+                    <button type="button" class="explorer-btn" disabled="@(_busy || !_pager.CanGoNext)" @onclick="NextPageAsync">Next</button>
+                </div>
             }
         </div>
     }
@@ -317,7 +357,8 @@
 </section>
 
 @code {
-    private BackupListView _list = BackupListView.Empty;
+    private BackupCatalogPager _pager = default!;
+    private BackupCatalogSummary _summary = BackupCatalogSummary.Empty;
     private BackupOperationResult? _lastResult;
     private IReadOnlyList<CatalogItem> _availableTrees = Array.Empty<CatalogItem>();
     private readonly List<string> _selectedTrees = new();
@@ -353,12 +394,39 @@
     private bool HasSelection => _selectedTrees.Count > 0;
     private bool HasName => !string.IsNullOrWhiteSpace(_captureName);
 
-    // The listed backups collapsed into display rows, folding each backup set's
-    // per-tree members (sharing a stamped SetId) into a single row.
-    private IReadOnlyList<BackupRow> Rows => BackupRowGrouping.Group(_list.Entries);
+    // Existing Backups paging + filter state. The list is served newest-first,
+    // ten rows to a page, with the filter predicates pushed into the server scan.
+    private const int ExistingPageSize = 10;
+    private string _filterName = string.Empty;
+    private string _filterCreated = string.Empty;
+    private string _filterKind = string.Empty;
+    private string _filterScope = string.Empty;
 
-    private IReadOnlyList<BackupManifest> FullBackups =>
-        _list.Entries.Where(e => e.Kind == BackupKind.Full).ToList();
+    // The current page's backups collapsed into display rows, folding each backup
+    // set's per-tree members (sharing a stamped SetId) into a single row.
+    private IReadOnlyList<BackupRow> Rows => BackupRowGrouping.Group(_pager.Current.Entries);
+
+    // The full standalone backups an incremental capture may build on, gathered
+    // across the whole catalog (not just the current page).
+    private IReadOnlyList<BackupManifest> FullBackups => _summary.FullBackups;
+
+    private bool HasActiveFilter =>
+        !string.IsNullOrEmpty(_filterName)
+        || !string.IsNullOrEmpty(_filterCreated)
+        || !string.IsNullOrEmpty(_filterKind)
+        || !string.IsNullOrEmpty(_filterScope);
+
+    private string EmptyMessage => HasActiveFilter
+        ? "No backups match the filters."
+        : "No backups are visible.";
+
+    private BackupCatalogFilter CurrentFilter => new()
+    {
+        Kind = Enum.TryParse<BackupKind>(_filterKind, out var kind) ? kind : null,
+        Scope = string.IsNullOrEmpty(_filterScope) ? null : _filterScope,
+        NamePrefix = string.IsNullOrEmpty(_filterName) ? null : _filterName,
+        CreatedPrefix = string.IsNullOrEmpty(_filterCreated) ? null : _filterCreated,
+    };
 
     // A one-line description of the selected restore mode for the confirmation
     // dialog, so the user sees exactly what the restore will do to the target.
@@ -398,6 +466,7 @@
 
     protected override async Task OnInitializedAsync()
     {
+        _pager = new BackupCatalogPager(Reader);
         await LoadTreesAsync();
         await ReloadAsync();
 
@@ -547,7 +616,8 @@
         _busy = true;
         try
         {
-            _list = await Reader.LoadPageAsync();
+            _summary = await Reader.LoadSummaryAsync();
+            await _pager.ResetAsync(ExistingPageSize, CurrentFilter);
             _highlightedBackupIds.Clear();
         }
         finally
@@ -555,6 +625,70 @@
             _busy = false;
         }
     }
+
+    // Re-runs the current filter from the first page, gathering fresh facets. Used
+    // after a capture / restore / delete so the list and drop-downs stay accurate.
+    private async Task RefreshListAsync()
+    {
+        _summary = await Reader.LoadSummaryAsync();
+        await _pager.ResetAsync(ExistingPageSize, CurrentFilter);
+    }
+
+    private async Task OnNameFilterChanged(string value)
+    {
+        _filterName = value;
+        await ApplyFilterAsync();
+    }
+
+    private async Task OnCreatedFilterChanged(string value)
+    {
+        _filterCreated = value;
+        await ApplyFilterAsync();
+    }
+
+    private async Task OnKindFilterChanged(ChangeEventArgs e)
+    {
+        _filterKind = e.Value?.ToString() ?? string.Empty;
+        await ApplyFilterAsync();
+    }
+
+    private async Task OnScopeFilterChanged(ChangeEventArgs e)
+    {
+        _filterScope = e.Value?.ToString() ?? string.Empty;
+        await ApplyFilterAsync();
+    }
+
+    // A filter change reopens the listing from the first page; the row selection
+    // and just-created highlight are dropped since they may no longer be visible.
+    private async Task ApplyFilterAsync()
+    {
+        _selectedRowId = null;
+        _highlightedBackupIds.Clear();
+        _busy = true;
+        try
+        {
+            await _pager.ResetAsync(ExistingPageSize, CurrentFilter);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task NextPageAsync()
+    {
+        _busy = true;
+        try
+        {
+            await _pager.NextAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void PreviousPage() => _pager.Previous();
 
     private async Task BackupAsync()
     {
@@ -726,7 +860,7 @@
         try
         {
             _lastResult = await action();
-            _list = await Reader.LoadPageAsync();
+            await RefreshListAsync();
         }
         finally
         {
@@ -755,7 +889,7 @@
             _lastResult = last is { Status: BackupOperationStatus.Succeeded }
                 ? BackupOperationResult.Success(successMessage)
                 : last;
-            _list = await Reader.LoadPageAsync();
+            await RefreshListAsync();
         }
         finally
         {

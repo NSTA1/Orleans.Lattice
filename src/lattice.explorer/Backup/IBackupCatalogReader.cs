@@ -12,13 +12,24 @@ namespace Orleans.Lattice.Explorer.Backup;
 public interface IBackupCatalogReader
 {
     /// <summary>
-    /// Loads one page of the backup catalog. A denial or a failure is returned as
-    /// a non-success <see cref="BackupListView"/> rather than thrown.
+    /// Loads one page of the backup catalog, newest-first, honouring the optional
+    /// push-down <paramref name="filter"/>. A denial or a failure is returned as a
+    /// non-success <see cref="BackupListView"/> rather than thrown.
     /// </summary>
     /// <param name="pageSize">The requested page size. Values &lt;= 0 defer to the server default.</param>
     /// <param name="pageToken">The continuation cursor from a prior page, or <see langword="null"/> to start.</param>
+    /// <param name="filter">The filter predicates to push into the scan, or <see langword="null"/> for no filtering.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    Task<BackupListView> LoadPageAsync(int pageSize = 0, string? pageToken = null, CancellationToken cancellationToken = default);
+    Task<BackupListView> LoadPageAsync(int pageSize = 0, string? pageToken = null, BackupCatalogFilter? filter = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gathers the catalog-wide facets the Existing Backups filter row needs: the
+    /// distinct kinds and scopes present, and the full standalone backups an
+    /// incremental capture can build on. A denial or failure folds into the
+    /// returned summary's status rather than throwing.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<BackupCatalogSummary> LoadSummaryAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Describes a backup chain, or returns <see langword="null"/> for an unknown

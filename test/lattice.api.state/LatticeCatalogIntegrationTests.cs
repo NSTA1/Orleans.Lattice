@@ -237,6 +237,23 @@ public sealed class LatticeCatalogIntegrationTests
     }
 
     [Test]
+    public async Task ListViewsAsync_hides_system_views_unless_requested()
+    {
+        await _fixture.CreatePopulatedTreeAsync("tree-sysview", keyCount: 2);
+        _fixture.CreateView("tree-sysview", "orders-visible");
+        _fixture.CreateView("tree-sysview", "sys-backup-catalog-index");
+
+        var hidden = await _fixture.Query.ListViewsAsync(new CatalogRequest());
+        Assert.That(hidden.Entries.Select(e => e.ViewName), Does.Contain("orders-visible"));
+        Assert.That(hidden.Entries.Select(e => e.ViewName), Does.Not.Contain("sys-backup-catalog-index"),
+            "a system-prefixed view must be hidden from the default listing");
+
+        var shown = await _fixture.Query.ListViewsAsync(new CatalogRequest { IncludeSystemTrees = true });
+        Assert.That(shown.Entries.Select(e => e.ViewName), Does.Contain("sys-backup-catalog-index"),
+            "opting in to system trees also reveals system views");
+    }
+
+    [Test]
     public async Task ListViewsAsync_samples_stats_when_requested()
     {
         await _fixture.CreatePopulatedTreeAsync("tree-src2", keyCount: 2);

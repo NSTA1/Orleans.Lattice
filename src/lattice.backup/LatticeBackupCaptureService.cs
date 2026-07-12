@@ -513,7 +513,7 @@ internal sealed class LatticeBackupCaptureService(
         var stamped = new List<LatticeBackupCaptureResult>(members.Count);
         foreach (var member in members)
         {
-            var manifest = member.Manifest with { SetId = setManifest.SetId, SetName = setManifest.Name };
+            var manifest = member.Manifest with { SetId = setManifest.SetId, SetName = setManifest.Name, SetCreatedAtUtc = setManifest.CreatedAtUtc };
             await sink.WriteManifestAsync(manifest, cancellationToken).ConfigureAwait(false);
             await catalog.RegisterAsync(manifest, cancellationToken).ConfigureAwait(false);
             stamped.Add(new LatticeBackupCaptureResult(member.BackupId, manifest));

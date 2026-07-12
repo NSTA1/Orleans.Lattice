@@ -54,10 +54,15 @@ The request / result types prefixed `LatticeBackup*` / `LatticeRestore*` and `Ba
 
 ### `BackupCatalogRequest`
 
-Paging request for the catalog listing. The catalog is enumerated ascending by backup id.
+Paging request for the catalog listing. By default the catalog is enumerated ascending by backup id.
 
 - `int PageSize` - maximum manifests per page. Values below 1 fall back to `LatticeApiBackupOptions.DefaultListPageSize`; values above `MaxListPageSize` are clamped to it.
-- `string? PageToken` - the exclusive continuation cursor (the backup id of the last manifest on the previous page). `null` (the default) starts from the beginning.
+- `string? PageToken` - the exclusive continuation cursor. In the default order this is the backup id of the last manifest on the previous page; in the newest-first mode it is the opaque `BackupCatalogPage.NextPageToken`. `null` (the default) starts from the beginning.
+- `bool OrderByCreatedDescending` - when set, returns the catalog newest-first (by capture time) with backup-set members kept adjacent, and enables the filter predicates below. This mode is served efficiently from a maintained backup-catalog index. When `false` (the default) the listing keeps the ascending-by-backup-id order and ignores the filters.
+- `BackupKind? Kind` - optional exact kind filter (full or incremental). Applied only in newest-first mode.
+- `string? NamePrefix` - optional case-insensitive starts-with filter on the row's display name. Applied only in newest-first mode.
+- `string? TreeId` - optional exact scope tree-id filter. Applied only in newest-first mode.
+- `string? CreatedPrefix` - optional starts-with filter on the created timestamp rendered as the invariant UTC string `yyyy-MM-dd HH:mm:ss`. Applied only in newest-first mode.
 
 ### `BackupCatalogPage`
 

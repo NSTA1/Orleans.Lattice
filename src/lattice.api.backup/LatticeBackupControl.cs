@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.Backup;
 
@@ -22,6 +23,7 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
     private readonly IGrainFactory _grainFactory;
     private readonly BackupInventoryRegistry _inventory;
     private readonly LatticeApiBackupOptions _options;
+    private readonly ILatticeViewFactory? _viewFactory;
 
     /// <summary>Initializes a new <see cref="LatticeBackupControl"/>.</summary>
     /// <param name="capture">The full-capture engine. Must not be <c>null</c>.</param>
@@ -33,6 +35,7 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
     /// <param name="grainFactory">The grain factory used to reach the per-scope scheduler. Must not be <c>null</c>.</param>
     /// <param name="inventory">The in-memory backup metric / inventory registry. Must not be <c>null</c>.</param>
     /// <param name="options">The facade options. Must not be <c>null</c>.</param>
+    /// <param name="services">The silo service provider, used to resolve the optional materialised-view factory. Must not be <c>null</c>.</param>
     /// <exception cref="ArgumentNullException">A required dependency is <c>null</c>.</exception>
     public LatticeBackupControl(
         ILatticeBackupCaptureService capture,
@@ -43,7 +46,8 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         BackupAccessAuthorizer authorizer,
         IGrainFactory grainFactory,
         BackupInventoryRegistry inventory,
-        IOptions<LatticeApiBackupOptions> options)
+        IOptions<LatticeApiBackupOptions> options,
+        IServiceProvider services)
     {
         ArgumentNullException.ThrowIfNull(capture);
         ArgumentNullException.ThrowIfNull(incremental);
@@ -54,6 +58,7 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(inventory);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(services);
 
         _capture = capture;
         _incremental = incremental;
@@ -64,6 +69,7 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         _grainFactory = grainFactory;
         _inventory = inventory;
         _options = options.Value;
+        _viewFactory = services.GetService<ILatticeViewFactory>();
     }
 
     /// <inheritdoc />
@@ -127,6 +133,17 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         var pageSize = request.PageSize <= 0
             ? _options.DefaultListPageSize
             : Math.Min(request.PageSize, _options.MaxListPageSize);
+
+        // Newest-first / filtered listing is served from the backup-catalog index
+        // (with a full-scan fallback); the default listing keeps the legacy
+        // ascending-by-backup-id order and streams the catalog directly.
+        if (request.OrderByCreatedDescending)
+        {
+            var query = new BackupCatalogIndexQuery(_catalog, _viewFactory);
+            return await query
+                .QueryAsync(request, pageSize, IsReadAuthorizedAsync, cancellationToken)
+                .ConfigureAwait(false);
+        }
 
         var token = request.PageToken;
         var entries = new List<BackupManifest>(pageSize);

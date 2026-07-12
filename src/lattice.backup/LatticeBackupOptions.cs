@@ -30,6 +30,15 @@ public sealed class LatticeBackupOptions
     public bool EnableDurableHistoryView { get; set; } = true;
 
     /// <summary>
+    /// Whether to create the backup-catalog index materialised view over the
+    /// <c>sys-backup-catalog</c> tree. The index re-keys each catalogued backup so
+    /// the catalog listing can be filtered, ordered newest-first and paged
+    /// efficiently by scanning the index rather than the whole catalog. Defaults to
+    /// <c>true</c>. When disabled, the listing falls back to a full catalog scan.
+    /// </summary>
+    public bool EnableBackupCatalogIndexView { get; set; } = true;
+
+    /// <summary>
     /// The maximum total wall-clock time a cross-tree-consistent backup-set fence
     /// waits for in-flight cross-tree atomic sagas touching the set to drain to a
     /// terminal decision before it gives up and fails the capture. Must be

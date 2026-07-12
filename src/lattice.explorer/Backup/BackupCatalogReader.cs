@@ -17,12 +17,18 @@ public sealed class BackupCatalogReader(IBackupControlClient client) : IBackupCa
     private readonly IBackupControlClient _client = client ?? throw new ArgumentNullException(nameof(client));
 
     /// <inheritdoc />
-    public async Task<BackupListView> LoadPageAsync(int pageSize = 0, string? pageToken = null, CancellationToken cancellationToken = default)
+    public async Task<BackupListView> LoadPageAsync(int pageSize = 0, string? pageToken = null, BackupCatalogFilter? filter = null, CancellationToken cancellationToken = default)
     {
+        filter ??= BackupCatalogFilter.None;
         var request = new BackupCatalogRequest
         {
             PageSize = pageSize,
             PageToken = string.IsNullOrEmpty(pageToken) ? null : pageToken,
+            OrderByCreatedDescending = true,
+            Kind = filter.Kind,
+            TreeId = string.IsNullOrEmpty(filter.Scope) ? null : filter.Scope,
+            NamePrefix = string.IsNullOrEmpty(filter.NamePrefix) ? null : filter.NamePrefix,
+            CreatedPrefix = string.IsNullOrEmpty(filter.CreatedPrefix) ? null : filter.CreatedPrefix,
         };
 
         try
@@ -51,6 +57,65 @@ public sealed class BackupCatalogReader(IBackupControlClient client) : IBackupCa
                 Message = FailureMessage(ex),
             };
         }
+    }
+
+    // A generous page size for the summary sweep, and a cap on the number of
+    // pages, so a large catalog cannot turn facet-gathering into an unbounded
+    // scan (the drop-downs stay accurate for any realistic backup count).
+    private const int SummaryPageSize = 200;
+    private const int SummaryMaxPages = 200;
+
+    /// <inheritdoc />
+    public async Task<BackupCatalogSummary> LoadSummaryAsync(CancellationToken cancellationToken = default)
+    {
+        var kinds = new HashSet<BackupKind>();
+        var scopes = new HashSet<string>(StringComparer.Ordinal);
+        var fullBackups = new List<BackupManifest>();
+
+        try
+        {
+            string? token = null;
+            var pages = 0;
+            do
+            {
+                var request = new BackupCatalogRequest
+                {
+                    PageSize = SummaryPageSize,
+                    PageToken = token,
+                    OrderByCreatedDescending = true,
+                };
+
+                var page = await _client.ListBackupsAsync(request, cancellationToken).ConfigureAwait(false);
+                foreach (var manifest in page.Entries)
+                {
+                    kinds.Add(manifest.Kind);
+                    scopes.Add(manifest.Scope.TreeId);
+                    if (manifest.Kind == BackupKind.Full && manifest.SetId is null)
+                    {
+                        fullBackups.Add(manifest);
+                    }
+                }
+
+                token = page.NextPageToken;
+            }
+            while (!string.IsNullOrEmpty(token) && ++pages < SummaryMaxPages);
+        }
+        catch (LatticeAuthorizationDeniedException)
+        {
+            return new BackupCatalogSummary { Status = BackupOperationStatus.Denied };
+        }
+        catch (RpcException)
+        {
+            return new BackupCatalogSummary { Status = BackupOperationStatus.Failed };
+        }
+
+        return new BackupCatalogSummary
+        {
+            Status = BackupOperationStatus.Succeeded,
+            Kinds = kinds.OrderBy(k => k.ToString(), StringComparer.Ordinal).ToList(),
+            Scopes = scopes.OrderBy(s => s, StringComparer.Ordinal).ToList(),
+            FullBackups = fullBackups,
+        };
     }
 
     /// <inheritdoc />
