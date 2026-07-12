@@ -285,6 +285,17 @@ internal sealed class LatticeSchemaRemediationGrain(
         var destinationPhysical = destinationTreeId;
         var retainedRouting = await grainFactory.GetGrain<ILattice>(sourcePhysical).GetRoutingAsync();
 
+        // Arm enforcement BEFORE the alias swap so there is no window in which the
+        // remediated destination is live (logical-alias-routed) yet unenforced. The
+        // destination already satisfies the target policy (the shadow build wrote
+        // every value through the transform), so installing the policy first only
+        // guards the source's logical id for the brief instant before the swap - it
+        // can never reject an existing destination value. Evict the local policy
+        // cache eagerly (as the admin does) so the coordinating silo enforces the new
+        // policy on its next write without waiting for the change feed to propagate.
+        await policyStore.SetPolicyAsync(TreeId, state.State.TargetPolicy!);
+        policyProvider.Invalidate(TreeId);
+
         // Repoint the logical tree to the remediated destination.
         await registry.SetAliasAsync(TreeId, destinationPhysical);
 
@@ -307,13 +318,6 @@ internal sealed class LatticeSchemaRemediationGrain(
         // Proactively invalidate this activation's cached alias / routing so a
         // caller observes the cutover without waiting for a reactivation.
         await grainFactory.GetGrain<ILattice>(TreeId).GetRoutingAsync(forceRefresh: true);
-
-        // Enforce the shape the data now satisfies on subsequent writes. Evict the
-        // local policy cache eagerly (as the admin does) so the coordinating silo
-        // enforces the new policy on its next write without waiting for the change
-        // feed to propagate the eviction.
-        await policyStore.SetPolicyAsync(TreeId, state.State.TargetPolicy!);
-        policyProvider.Invalidate(TreeId);
     }
 
     private async Task DiscardDestinationAsync(ILattice destination)

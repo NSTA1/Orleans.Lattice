@@ -136,6 +136,25 @@ public class LatticeSchemaRemediationGrainTests
     }
 
     [Test]
+    public async Task Cutover_arms_the_target_policy_before_repointing_the_alias()
+    {
+        var policy = JsonPolicy();
+        var h = CreateGrain(new[] { ("k1", "{\"a\":1}") });
+
+        await h.Grain.StartAsync(LatticeValueTransform.Passthrough(), policy);
+
+        // Enforcement must be armed BEFORE the logical alias flips to the remediated
+        // destination, so there is no window in which the cut-over tree is live yet
+        // unenforced and a racing non-compliant write could slip in. Assert the
+        // relative order of the two cutover writes, not just that both happened.
+        Received.InOrder(() =>
+        {
+            h.PolicyStore.SetPolicyAsync(TreeId, policy, Arg.Any<CancellationToken>());
+            h.Registry.SetAliasAsync(TreeId, Arg.Any<string>());
+        });
+    }
+
+    [Test]
     public async Task StartAsync_dry_run_violation_aborts_with_no_cutover_and_leaves_original_untouched()
     {
         var policy = MaxLenPolicy(3);

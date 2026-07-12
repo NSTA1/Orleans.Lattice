@@ -118,6 +118,18 @@ internal sealed class LatticeCrossTreeTxGrain(
         // and non-throwing under the default null gate / system-origin turn.
         await EnforceCrossTreeLegsAsync(batches);
 
+        // Fail-closed schema enforcement / versioning of every leg up front, before
+        // any staging or prepare, mirroring the single-tree SetManyAtomicAsync choke
+        // point. Each plain whole-value upsert is validated (a reject or, for an
+        // all-or-nothing commit, a dead-letter throws and the whole cross-tree write
+        // is abandoned before any tree is mutated) and may be value-transformed (e.g.
+        // version-envelope stamped); the effective, possibly-rewritten batches then
+        // flow into BuildParticipants. Deletes and CRDT-delta legs are not
+        // whole-value writes and pass through untouched, exactly as the single-tree
+        // path treats them. Zero-cost under the default null interceptor or a
+        // system-origin turn.
+        batches = await EnforceCrossTreeSchemaAsync(batches);
+
         // Idempotent re-attach to an already-decided coordinator: return the
         // memoized verdict (or rethrow the original failure) without re-running.
         if (state.State.Phase == CrossTreeTxPhase.Completed)
@@ -417,6 +429,114 @@ internal sealed class LatticeCrossTreeTxGrain(
                     gate, membership, batch.TreeId, LatticeOperation.Delete, deleteKeys, CancellationToken.None);
             }
         }
+    }
+
+    private static readonly ILatticeWriteInterceptor CrossTreeNullWriteInterceptorFallback =
+        new NullLatticeWriteInterceptor();
+
+    /// <summary>
+    /// Applies the registered write interceptor (schema enforcement / versioning) to
+    /// every leg of a cross-tree atomic write before the saga is dispatched, and
+    /// returns the effective batches. Mirrors the single-tree
+    /// <c>SetManyAtomicAsync</c> choke point: only plain whole-value upserts are
+    /// intercepted (with <c>atomic: true</c>, so a rejected or dead-lettered entry
+    /// throws and aborts the whole commit before any tree is mutated), while
+    /// tombstone-delete and CRDT-delta entries pass through untouched. A leg whose
+    /// values were transformed is rebuilt with the substituted values at their
+    /// original positions; otherwise the caller's batch is preserved. Short-circuits
+    /// with no allocation under the default null interceptor or a system-origin turn.
+    /// </summary>
+    private async Task<List<LatticeTreeBatch>> EnforceCrossTreeSchemaAsync(List<LatticeTreeBatch> batches)
+    {
+        var interceptor = GrainContext.ActivationServices.GetService<ILatticeWriteInterceptor>()
+            ?? CrossTreeNullWriteInterceptorFallback;
+        if (LatticeWriteInterceptorEnforcement.Skips(interceptor))
+        {
+            return batches;
+        }
+
+        List<LatticeTreeBatch>? rewritten = null;
+        for (var b = 0; b < batches.Count; b++)
+        {
+            var batch = batches[b];
+
+            // Null / empty tree ids and null entry lists are rejected with a precise
+            // ArgumentException by BuildParticipants, which runs after this; skip them
+            // here so interception never inspects a malformed leg.
+            if (string.IsNullOrEmpty(batch.TreeId) || batch.Entries is null || batch.Entries.Count == 0)
+            {
+                rewritten?.Add(batch);
+                continue;
+            }
+
+            // Collect the plain whole-value upserts (skip tombstone-deletes, which
+            // carry no value, and CRDT-delta entries, which are a delta apply rather
+            // than a whole-value write - the single-tree path never routes CrdtApply
+            // through this interceptor either), remembering each one's original index.
+            List<KeyValuePair<string, byte[]>>? writes = null;
+            List<int>? writeIndices = null;
+            for (var i = 0; i < batch.Entries.Count; i++)
+            {
+                if (batch.Entries[i].Key is null)
+                {
+                    continue;
+                }
+
+                var isDelete = batch.EntryDeletes is { } deletes && i < deletes.Count && deletes[i];
+                var isDelta = batch.EntryDeltas is { } deltas && i < deltas.Count && deltas[i] is not null;
+                if (isDelete || isDelta)
+                {
+                    continue;
+                }
+
+                (writes ??= []).Add(batch.Entries[i]);
+                (writeIndices ??= []).Add(i);
+            }
+
+            if (writes is null)
+            {
+                rewritten?.Add(batch);
+                continue;
+            }
+
+            var effective = await LatticeWriteInterceptorEnforcement.InterceptEntriesAsync(
+                interceptor, batch.TreeId, LatticeOperation.Write, writes, atomic: true, CancellationToken.None);
+
+            if (ReferenceEquals(effective, writes))
+            {
+                // No entry was transformed: keep the caller's batch verbatim. (An
+                // atomic-batch reject / dead-letter already threw above.)
+                rewritten?.Add(batch);
+                continue;
+            }
+
+            // At least one value was transformed. The atomic-batch contract keeps the
+            // returned list the same length and order as the input, so effective[w]
+            // aligns with writeIndices[w]. Rebuild the leg with the substituted values
+            // at their original positions, leaving deletes / deltas / predicate intact.
+            rewritten ??= CopyPrefixBatches(batches, b);
+            var newEntries = new List<KeyValuePair<string, byte[]>>(batch.Entries);
+            for (var w = 0; w < writeIndices!.Count; w++)
+            {
+                newEntries[writeIndices[w]] = effective[w];
+            }
+
+            rewritten.Add(new LatticeTreeBatch(
+                batch.TreeId, newEntries, batch.Predicate, batch.EntryDeltas, batch.EntryDeletes));
+        }
+
+        return rewritten ?? batches;
+    }
+
+    private static List<LatticeTreeBatch> CopyPrefixBatches(List<LatticeTreeBatch> batches, int count)
+    {
+        var copy = new List<LatticeTreeBatch>(batches.Count);
+        for (var i = 0; i < count; i++)
+        {
+            copy.Add(batches[i]);
+        }
+
+        return copy;
     }
 
     /// <summary>
