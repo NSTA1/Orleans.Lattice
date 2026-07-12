@@ -151,13 +151,19 @@ validated against that policy during the build; the policy itself is left unchan
 
 For a last-writer-wins value, read-time upcasting is enough: the whole value is
 lifted to the target on the way out. A CRDT value is different - it is folded from a
-history of deltas, so a delta stamped at an older version must be lifted to the
-target **once, at ingest**, and then folded deterministically forever after. When
-versioning is registered, an incoming CRDT delta is upcast at the apply boundary
-before it is appended to the write-ahead log, so the log persists the delta already
-at the target version and every replay folds it identically. A delta that cannot be
-upcast is [dead-lettered](dead-letter-queue.md) rather than folded, so a bad input
-never corrupts the converged state.
+history of deltas, so a delta must be folded at the same version on every replay.
+The write path guarantees that by persisting the delta **enveloped** in the
+write-ahead log and folding it **version-agnostically**: a fresh apply, a cold WAL
+replay, and a snapshot-restore projection fold all strip the same durable bytes to
+the same body and never upcast at fold time, so every replay folds identically. A
+local delta - and, under `StrictIngest`, a replicated delta at an older version -
+is lifted to the target **once, at the apply boundary, before it is appended to the
+log**, so its stored envelope is already at the target. A trusted (default)
+replicated delta at an older version is instead stored verbatim and folds at its
+stored version, with read-time upcasting lifting the converged state to the target.
+Under `StrictIngest`, a delta that cannot be upcast is
+[dead-lettered](dead-letter-queue.md) rather than applied, so a bad input never
+corrupts the converged state.
 
 ## Ingest trust model
 
