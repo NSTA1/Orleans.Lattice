@@ -2164,10 +2164,111 @@ code, .explorer-mono {
     color: var(--warning, #d29922);
 }
 
-.explorer-backups-id {
+.explorer-backups-new {
     display: flex;
-    gap: 0.4rem;
+    gap: 1rem;
+    align-items: flex-start;
+    flex-wrap: wrap;
+}
+
+.explorer-backups-treecol {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    min-width: 12rem;
+    max-width: 16rem;
+    flex: 0 0 auto;
+    max-height: 22rem;
+    overflow: auto;
+}
+
+.explorer-backups-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    flex: 1 1 18rem;
+    min-width: 0;
+    align-items: flex-start;
+}
+
+.explorer-backups-picker-label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+}
+
+.explorer-backups-treegroup {
+    list-style: none;
+    padding: 0.35rem 0.55rem 0.1rem;
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-dim);
+}
+
+.explorer-backups-selected {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+
+.explorer-backups-selected-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.explorer-backups-selected-list li {
+    display: flex;
     align-items: center;
+    gap: 0.4rem;
+}
+
+.explorer-backups-selected-id {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    word-break: break-all;
+}
+
+.explorer-backups-remove {
+    flex: 0 0 auto;
+    line-height: 1;
+    color: var(--danger, #f85149);
+}
+
+.explorer-backups-note {
+    margin: 0;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.explorer-backups-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.explorer-backups-row {
+    cursor: pointer;
+}
+
+.explorer-backups-row:hover {
+    background: var(--bg-elevated);
+}
+
+.explorer-backups-row.is-selected {
+    background: var(--bg-elevated);
+}
+
+.explorer-backups-row.is-new {
+    background: var(--success-surface, rgba(46, 160, 67, 0.15));
 }
 
 .explorer-btn-icon {

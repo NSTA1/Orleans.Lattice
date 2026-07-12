@@ -49,14 +49,20 @@ restores, or deletes anything.
 ## What the Backups area can do
 
 - List the backups visible to the connected user, with their scope, kind
-  (full or incremental), and creation time. Each row's id carries a copy button.
-- Select one or more trees to capture. A single **Backup** button dispatches by
-  the selected kind and selection: a full capture of one tree, an incremental
-  layered on a chosen base backup (single tree only), or - when more than one
-  tree is selected for a full capture - a single **backup set** that captures one
-  member backup per tree under one set manifest, optionally with a shared
-  cross-tree consistency fence.
-- Choose the incremental base from a dropdown of the existing full backups.
+  (full or incremental), and creation time.
+- Work across two sub-tabs, **New Backup** and **Existing Backups**. The panel
+  remembers which sub-tab was last open (a durable UI preference), so it reopens
+  where you left it.
+- **New Backup**: pick the scope by clicking trees in the tree list; each click
+  adds the tree to an *Included in backup* list, one line per tree, with an *x*
+  to its left to remove it again. Selecting a single tree is a single-tree
+  capture; selecting more than one tree captures a **backup set** - one member
+  backup per tree under one set manifest, always at a shared cross-tree
+  consistency fence (multiple trees imply cross-tree consistency, so there is no
+  separate toggle). Choose Full or Incremental with the kind radios; the
+  base-backup dropdown appears only when Incremental is selected and lists the
+  existing full backups. A single **Backup** button dispatches by the selected
+  kind and selection.
 - Optionally **schedule a recurring backup** while creating one: tick *Schedule
   recurring* and pick an interval in hours and minutes. Clicking **Backup** then
   both captures immediately and registers a recurring schedule for the selected
@@ -65,17 +71,20 @@ restores, or deletes anything.
   restarts - and overrides the startup-configured cadence for that kind. An
   interval below the scheduler minimum (one minute) is clamped up. Scheduling
   targets a single tree, so it is unavailable for a multi-tree backup set.
-- Restore a backup into a target tree, choosing the restore mode from the
-  dropdown: **Repair missing (non-destructive)** (in-place) or **Point-in-time
-  replace (destructive)** (shadow-cutover). The two modes are explained below.
-- Delete a backup, behind a confirmation prompt that warns the action cannot be
-  undone.
+- On a successful capture the panel switches to **Existing Backups** and
+  highlights the backup that was just created.
+- **Existing Backups**: click a row to select it; its restore and delete
+  controls appear only while the row is selected. Restore a backup into a target
+  tree, choosing the restore mode from the dropdown: **Repair missing items
+  (non-destructive)** (in-place) or **Point-in-time replace (destructive)**
+  (shadow-cutover). The two modes are explained below. Delete a backup behind a
+  confirmation prompt that warns the action cannot be undone.
 
 ### Choosing a restore mode
 
 The dropdown offers two modes with very different semantics:
 
-- **Repair missing (non-destructive)** - the in-place mode. The backup is merged
+- **Repair missing items (non-destructive)** - the in-place mode. The backup is merged
   into the live tree by last-writer-wins. Every restored entry keeps its original
   hybrid-logical-clock timestamp from when it was captured, and any entry already
   present in the tree was necessarily written *later* than the backup was taken.
