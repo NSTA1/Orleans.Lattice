@@ -155,6 +155,39 @@ public class LatticeMicroBenchmarks
     private readonly MvRegister _mvRegisterLeft = BuildMvRegister("replica-left", 8);
     private readonly MvRegister _mvRegisterRight = BuildMvRegister("replica-right", 8);
 
+    // ===== CrdtShapeRegistry MvRegister delta-coalescing instrument =====
+    // Two identity-stable MvRegisterDeltas with disjoint replica dots, so
+    // the pre-ship same-key coalescing merge keeps every entry (neither
+    // side's dot context dominates the other). Combining them through the
+    // shape's public CombineDeltas entry point exercises
+    // CrdtShapeRegistry.CombineMvRegisterDelta, whose post-merge live-
+    // entries List<MvRegisterEntry> now backs the combined delta directly
+    // rather than being copied out with a defensive .ToArray(). This is the
+    // instrument that proves that copy elision as a deterministic allocated-
+    // bytes reduction. Both inputs are built once and never mutated.
+    // Surfaced as microbench_crdt_mvregister_combine_delta_alloc_b.
+    private readonly CrdtShape _mvRegisterShape = CrdtShape.ForMvRegister();
+    private readonly MvRegisterDelta _mvDeltaLeft = BuildMvRegisterDelta("dl", 8);
+    private readonly MvRegisterDelta _mvDeltaRight = BuildMvRegisterDelta("dr", 8);
+
+    private static MvRegisterDelta BuildMvRegisterDelta(string replicaPrefix, int entries)
+    {
+        var list = new List<MvRegisterEntry>(entries);
+        var context = new Dictionary<string, long>(StringComparer.Ordinal);
+        for (var i = 0; i < entries; i++)
+        {
+            var replicaId = $"{replicaPrefix}-{i:D2}";
+            context[replicaId] = 1;
+            list.Add(new MvRegisterEntry
+            {
+                ReplicaId = replicaId,
+                Counter = 1,
+                Value = new byte[16],
+            });
+        }
+        return new MvRegisterDelta { Entries = list, Context = context };
+    }
+
     // ===== MvRegister.Values() read-path instrument =====
     // Two identity-stable register states for the Values() read path. The
     // single-valued register is the steady state the optimisation targets:
@@ -1218,6 +1251,28 @@ public class LatticeMicroBenchmarks
     [Benchmark(Description = "Crdt mvregister merge")]
     public MvRegister CrdtMvRegisterMerge() =>
         MvRegister.Merge(_mvRegisterLeft, _mvRegisterRight);
+
+    /// <summary>
+    /// Single <see cref="CrdtShapeRegistry"/> MvRegister delta-coalescing
+    /// combine of two identity-stable, disjoint-replica deltas through the
+    /// shape's public <c>CombineDeltas</c> entry point. Drives
+    /// <c>CrdtShapeRegistry.CombineMvRegisterDelta</c> - the pre-ship
+    /// same-key delta-run coalescing path a sender uses to fold an arbitrary
+    /// run of same-key deltas into a single shipped delta. Both inputs carry
+    /// disjoint dots, so the post-merge register keeps every entry and the
+    /// combined delta's live-entries list is at its widest: the case where
+    /// the eliminated defensive <c>List&lt;MvRegisterEntry&gt;.ToArray()</c>
+    /// copy allocated the most. The two deltas are boxed once into the
+    /// <c>Func&lt;object, object, object&gt;</c> signature per iteration on
+    /// both baseline and candidate, so that constant boxing cost cancels in
+    /// the before/after delta and the measured difference isolates the copy
+    /// elision. Inputs are never mutated, so the measured per-iteration
+    /// allocation is the steady-state coalescing cost. Surfaced as
+    /// <c>microbench_crdt_mvregister_combine_delta_alloc_b</c>.
+    /// </summary>
+    [Benchmark(Description = "Crdt mvregister combine delta")]
+    public object CrdtMvRegisterCombineDelta() =>
+        _mvRegisterShape.CombineDeltas!(_mvDeltaLeft, _mvDeltaRight);
 
     /// <summary>
     /// Single <see cref="MvRegister.Values"/> read against a single-valued
