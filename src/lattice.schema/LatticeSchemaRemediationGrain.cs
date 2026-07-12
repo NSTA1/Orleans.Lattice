@@ -588,7 +588,7 @@ internal sealed class LatticeSchemaRemediationGrain(
 
     private bool IsSameParameters(LatticeValueTransform transform, LatticeSchemaPolicy targetPolicy) =>
         state.State.Mode == SchemaRemediationMode.Transform
-            && state.State.Transform.Equals(transform)
+            && TransformEquivalent(state.State.Transform, transform)
             && PolicyEquivalent(state.State.TargetPolicy, targetPolicy);
 
     private bool IsSameMigration(uint schemaId, uint targetVersion) =>
@@ -611,6 +611,77 @@ internal sealed class LatticeSchemaRemediationGrain(
         return a.StrictIngest == b.StrictIngest
             && a.Rules.Count == b.Rules.Count
             && a.Rules.SequenceEqual(b.Rules);
+    }
+
+    // Structural equality for the transform IR. The default record-struct Equals
+    // compares the Children (and Condition's Children) arrays by reference, so two
+    // structurally-identical transforms built from different array instances - as
+    // happens on every grain call, because Orleans deserializes the argument into a
+    // fresh graph - compare unequal. That would break the idempotent same-parameter
+    // resume contract for any non-trivial transform. Compare the tree by value
+    // instead, normalising a null child list to an empty one.
+    private static bool TransformEquivalent(LatticeValueTransform a, LatticeValueTransform b)
+    {
+        if (a.Kind != b.Kind
+            || !string.Equals(a.MemberPath, b.MemberPath, StringComparison.Ordinal)
+            || !string.Equals(a.ToPath, b.ToPath, StringComparison.Ordinal)
+            || !a.Constant.Equals(b.Constant)
+            || a.ComputeOperator != b.ComputeOperator
+            || !PredicateEquivalent(a.Condition, b.Condition))
+        {
+            return false;
+        }
+
+        var ac = a.Children;
+        var bc = b.Children;
+        var count = ac?.Length ?? 0;
+        if (count != (bc?.Length ?? 0))
+        {
+            return false;
+        }
+
+        for (var i = 0; i < count; i++)
+        {
+            if (!TransformEquivalent(ac![i], bc![i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // Structural equality for the embedded boolean predicate IR, with the same
+    // array-by-reference caveat as the transform IR.
+    private static bool PredicateEquivalent(LatticePredicateNode a, LatticePredicateNode b)
+    {
+        if (a.Kind != b.Kind
+            || !string.Equals(a.MemberPath, b.MemberPath, StringComparison.Ordinal)
+            || !a.Constant.Equals(b.Constant)
+            || a.ComparisonOperator != b.ComparisonOperator
+            || a.BooleanOperator != b.BooleanOperator
+            || a.StringMethod != b.StringMethod)
+        {
+            return false;
+        }
+
+        var ac = a.Children;
+        var bc = b.Children;
+        var count = ac?.Length ?? 0;
+        if (count != (bc?.Length ?? 0))
+        {
+            return false;
+        }
+
+        for (var i = 0; i < count; i++)
+        {
+            if (!PredicateEquivalent(ac![i], bc![i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private byte[] Preview(byte[]? value)

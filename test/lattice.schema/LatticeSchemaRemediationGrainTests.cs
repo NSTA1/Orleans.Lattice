@@ -553,6 +553,44 @@ public class LatticeSchemaRemediationGrainTests
     }
 
     [Test]
+    public async Task StartAsync_same_parameters_with_a_reconstructed_transform_resumes_idempotently()
+    {
+        // Regression: on a real cluster Orleans deserializes the transform argument
+        // into a fresh object graph, so the in-flight state's transform and the
+        // retry's transform are never the same array reference. A structurally
+        // equal (but reference-distinct) transform with real, nested operations
+        // must still be recognised as the same parameters and resume - not throw.
+        var policy = JsonPolicy();
+        LatticeValueTransform BuildTransform() => LatticeValueTransform.Passthrough(
+            LatticeValueTransform.RenameMember("old", "new"),
+            LatticeValueTransform.DropMember("legacy"),
+            LatticeValueTransform.SetMember("added", LatticeValueTransform.Member("source")));
+
+        var seededTransform = BuildTransform();
+        var retryTransform = BuildTransform();
+        Assert.That(ReferenceEquals(seededTransform.Children, retryTransform.Children), Is.False);
+
+        var seed = new SchemaRemediationState
+        {
+            InProgress = true,
+            Phase = LatticeSchemaRemediationPhase.Cutover,
+            OperationId = "op1",
+            DestinationTreeId = TreeId + "/remediated/op1",
+            SourcePhysicalTreeId = TreeId,
+            Transform = seededTransform,
+            TargetPolicy = policy,
+            ScannedCount = 3,
+        };
+        var h = CreateGrain(new[] { ("k1", "{\"a\":1}") }, seed);
+
+        var report = await h.Grain.StartAsync(retryTransform, policy);
+
+        Assert.That(report.Succeeded, Is.True);
+        await h.Registry.Received(1).SetAliasAsync(TreeId, "orders/remediated/op1");
+        await h.PolicyStore.Received(1).SetPolicyAsync(TreeId, policy, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task RunRemediationPassAsync_resumes_a_durable_build_after_reactivation()
     {
         // Simulate a reactivation: durable state says a build is in flight at the
