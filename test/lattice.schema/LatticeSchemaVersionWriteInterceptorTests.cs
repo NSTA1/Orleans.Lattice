@@ -29,6 +29,10 @@ public sealed class LatticeSchemaVersionWriteInterceptorTests
 
         var registry = Substitute.For<ILatticeSchemaRegistry>();
         registry.CanUpcast(Arg.Any<uint>(), Arg.Any<uint>(), Arg.Any<uint>()).Returns(canUpcast);
+        // A CRDT-aware upcaster transforms the element payload; the fake prepends a
+        // marker so a test can assert the body was lifted (and re-enveloped at target).
+        registry.Upcast(Arg.Any<uint>(), Arg.Any<uint>(), Arg.Any<uint>(), Arg.Any<byte[]>())
+            .Returns(ci => Utf8("up:").Concat(ci.Arg<byte[]>()).ToArray());
 
         var dlq = Substitute.For<ILatticeSchemaDeadLetterStore>();
         var options = Options.Create(new LatticeSchemaVersioningOptions { DeadLetterPreviewMaxBytes = 4 });
@@ -80,13 +84,102 @@ public sealed class LatticeSchemaVersionWriteInterceptorTests
     }
 
     [Test]
-    public async Task OnWriteAsync_crdt_delta_is_not_stamped()
+    public async Task OnWriteAsync_local_crdt_delta_stamps_envelope_at_target()
     {
-        var (interceptor, _) = Create(new LatticeSchemaVersionConfig(1, 1));
+        // A fresh local CRDT delta (raw, unenveloped) is made self-describing and
+        // stamped at the tree target so the WAL stores an at-target durable delta.
+        var (interceptor, _) = Create(new LatticeSchemaVersionConfig(schemaId: 9, targetVersion: 4));
 
-        var decision = await interceptor.OnWriteAsync(Request(Utf8("delta"), LatticeOperation.CrdtApply));
+        var raw = Utf8("delta-body");
+        var decision = await interceptor.OnWriteAsync(Request(raw, LatticeOperation.CrdtApply));
+
+        Assert.That(decision.Kind, Is.EqualTo(LatticeWriteDecisionKind.AcceptTransformed));
+        Assert.That(LatticeSchemaEnvelope.IsEnveloped(decision.TransformedValue!), Is.True);
+        LatticeSchemaEnvelope.TryReadHeader(decision.TransformedValue!, out var schemaId, out var version);
+        Assert.That(schemaId, Is.EqualTo(9u));
+        Assert.That(version, Is.EqualTo(4u));
+        // Raw local delta is enveloped verbatim (no upcaster invoked), so cold replay
+        // folds exactly these body bytes.
+        Assert.That(LatticeSchemaEnvelope.StripToBody(decision.TransformedValue!), Is.EqualTo(raw));
+    }
+
+    [Test]
+    public async Task OnWriteAsync_crdt_delta_already_at_target_accepts_verbatim()
+    {
+        var (interceptor, _) = Create(new LatticeSchemaVersionConfig(schemaId: 1, targetVersion: 2));
+        var atTarget = LatticeSchemaEnvelope.Encode(1, 2, Utf8("delta"));
+
+        var decision = await interceptor.OnWriteAsync(Request(atTarget, LatticeOperation.CrdtApply));
 
         Assert.That(decision.Kind, Is.EqualTo(LatticeWriteDecisionKind.Accept));
+    }
+
+    [Test]
+    public async Task OnWriteAsync_strict_ingest_crdt_delta_upcasts_and_reenvelopes_at_target()
+    {
+        var (interceptor, dlq) = Create(
+            new LatticeSchemaVersionConfig(schemaId: 1, targetVersion: 3, strictIngest: true),
+            strictIngestEnabled: true,
+            canUpcast: true);
+
+        var body = Utf8("body");
+        var ingested = LatticeSchemaEnvelope.Encode(1, 1, body); // v1 -> target v3
+
+        LatticeWriteDecision decision;
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            decision = await interceptor.OnWriteAsync(Request(ingested, LatticeOperation.CrdtApply));
+        }
+
+        Assert.That(decision.Kind, Is.EqualTo(LatticeWriteDecisionKind.AcceptTransformed));
+        Assert.That(LatticeSchemaEnvelope.IsEnveloped(decision.TransformedValue!), Is.True);
+        LatticeSchemaEnvelope.TryReadHeader(decision.TransformedValue!, out _, out var version);
+        Assert.That(version, Is.EqualTo(3u)); // re-enveloped at target
+        // The durable body is the upcaster output ("up:" + original body).
+        Assert.That(LatticeSchemaEnvelope.StripToBody(decision.TransformedValue!), Is.EqualTo(Utf8("up:").Concat(body).ToArray()));
+        await dlq.DidNotReceive().AppendAsync(Arg.Any<string>(), Arg.Any<LatticeSchemaDeadLetterEntry>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task OnWriteAsync_strict_ingest_crdt_delta_non_upcastable_dead_letters()
+    {
+        var (interceptor, dlq) = Create(
+            new LatticeSchemaVersionConfig(schemaId: 1, targetVersion: 3, strictIngest: true),
+            strictIngestEnabled: true,
+            canUpcast: false);
+
+        var ingested = LatticeSchemaEnvelope.Encode(1, 1, Utf8("body"));
+
+        LatticeWriteDecision decision;
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            decision = await interceptor.OnWriteAsync(Request(ingested, LatticeOperation.CrdtApply));
+        }
+
+        Assert.That(decision.Kind, Is.EqualTo(LatticeWriteDecisionKind.DeadLetter));
+        await dlq.Received(1).AppendAsync("orders", Arg.Any<LatticeSchemaDeadLetterEntry>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task OnWriteAsync_non_strict_crdt_ingest_trusts_enveloped_delta()
+    {
+        // Global strict on, tree strict off: an older enveloped CRDT delta is trusted
+        // and stored verbatim; read/merge upcasts it lazily.
+        var (interceptor, dlq) = Create(
+            new LatticeSchemaVersionConfig(schemaId: 1, targetVersion: 3, strictIngest: false),
+            strictIngestEnabled: true,
+            canUpcast: false);
+
+        var ingested = LatticeSchemaEnvelope.Encode(1, 1, Utf8("body"));
+
+        LatticeWriteDecision decision;
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            decision = await interceptor.OnWriteAsync(Request(ingested, LatticeOperation.CrdtApply));
+        }
+
+        Assert.That(decision.Kind, Is.EqualTo(LatticeWriteDecisionKind.Accept));
+        await dlq.DidNotReceive().AppendAsync(Arg.Any<string>(), Arg.Any<LatticeSchemaDeadLetterEntry>(), Arg.Any<CancellationToken>());
     }
 
     [Test]

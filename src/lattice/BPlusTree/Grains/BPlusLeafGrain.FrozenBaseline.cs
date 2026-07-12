@@ -140,7 +140,7 @@ internal sealed partial class BPlusLeafGrain
                 "FoldTailOntoFrozenAsync was called on a leaf whose tree id is unset; the shard root "
                 + "must only fold baseline tails for leaves it has already attached.");
 
-        var folder = new SnapshotProjectionFolder(treeId, ResolveCrdtShapeRegistry());
+        var folder = new SnapshotProjectionFolder(treeId, ResolveCrdtShapeRegistry(), ResolveEnvelopeCodec());
 
         // Seed the frozen committed cache and prepared sagas before the tail
         // fold so a terminal in the tail resolves against the real prepared

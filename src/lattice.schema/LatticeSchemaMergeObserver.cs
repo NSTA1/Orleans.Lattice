@@ -17,13 +17,12 @@ namespace Orleans.Lattice.Schema;
 /// so the merge path keeps its zero-overhead default.
 /// </para>
 /// <para>
-/// <b>Wiring limitation.</b> The core merge seam (#1198) does not carry the tree
-/// id in <see cref="LatticeMergeContext"/>, so the observer resolves the tree
-/// through the ambient <see cref="LatticeSchemaMergeTree"/> scope. Until a core
-/// hook stamps that scope around leaf merges, the observer accepts every merge in
-/// production; the decision logic is nonetheless exercised end-to-end in tests
-/// that enter the scope. Adding the tree id to the merge context is the follow-up
-/// that completes this path.
+/// <b>Tree resolution.</b> The core merge seam stamps the tree id onto
+/// <see cref="LatticeMergeContext.TreeId"/>, so the observer resolves the per-tree
+/// policy directly from the context in production. It still falls back to the
+/// ambient <see cref="LatticeSchemaMergeTree"/> scope when the context carries no
+/// tree id (tests that drive the observer directly). Absent both, it accepts every
+/// merge, never blocking convergence.
 /// </para>
 /// </remarks>
 internal sealed class LatticeSchemaMergeObserver(ILatticeSchemaPolicyProvider provider) : ILatticeMergeObserver
@@ -31,10 +30,12 @@ internal sealed class LatticeSchemaMergeObserver(ILatticeSchemaPolicyProvider pr
     /// <inheritdoc />
     public ValueTask<LatticeMergeOutcome> OnMergedAsync(in LatticeMergeContext ctx, CancellationToken ct)
     {
-        // The merge context carries the key but not the tree; resolve the tree
-        // from the ambient scope. Absent it, there is nothing to validate against,
-        // so accept (never block convergence).
-        if (LatticeSchemaMergeTree.Current is not { } treeId)
+        // Prefer the tree id the core merge seam now stamps onto the context; fall
+        // back to the ambient scope for tests that drive the observer directly.
+        // Absent both, there is nothing to validate against, so accept (never block
+        // convergence).
+        var treeId = ctx.TreeId ?? LatticeSchemaMergeTree.Current;
+        if (treeId is null)
         {
             return new ValueTask<LatticeMergeOutcome>(LatticeMergeOutcome.Accept());
         }
@@ -57,7 +58,7 @@ internal sealed class LatticeSchemaMergeObserver(ILatticeSchemaPolicyProvider pr
             return LatticeMergeOutcome.Accept();
         }
 
-        var rebuilt = new LatticeMergeContext(key, mode, localValue, incomingValue, mergedValue);
+        var rebuilt = new LatticeMergeContext(key, mode, localValue, incomingValue, mergedValue, treeId);
         return LatticeSchemaMergeValidation.Evaluate(compiled, in rebuilt);
     }
 }

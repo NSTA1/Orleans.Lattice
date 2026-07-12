@@ -32,11 +32,15 @@ namespace Orleans.Lattice.Schema;
 /// applied, so ingest never blocks.
 /// </para>
 /// <para>
-/// <b>CRDT scope (v1).</b> A <see cref="LatticeOperation.CrdtApply"/> delta is not
-/// stamped: envelope versioning applies to whole-value writes, while CRDT
-/// merge-input upcasting depends on the merge seam supplying per-record versioned
-/// bytes (a documented follow-up on <see cref="LatticeMergeContext"/>). CRDT deltas
-/// are therefore accepted verbatim here.
+/// <b>CRDT deltas.</b> A <see cref="LatticeOperation.CrdtApply"/> delta is made
+/// self-describing and lifted to the tree's target at this ingest / apply boundary:
+/// a fresh local delta is stamped at the target; a strict-ingest delta at an older
+/// version is upcast through the registry's CRDT-aware upcaster and re-enveloped at
+/// target, while one that cannot be upcast (or is newer than target) is dead-lettered.
+/// Persisting the upcast, enveloped delta in the WAL is what makes every later fold -
+/// a fresh apply, a cold WAL replay, or a snapshot-restore projection fold -
+/// deterministic: the fold strips the durable envelope version-agnostically and never
+/// upcasts at fold time. See <see cref="ILatticeEnvelopeCodec"/>.
 /// </para>
 /// </remarks>
 internal sealed class LatticeSchemaVersionWriteInterceptor : ILatticeWriteInterceptor
@@ -96,23 +100,91 @@ internal sealed class LatticeSchemaVersionWriteInterceptor : ILatticeWriteInterc
             return LatticeWriteDecision.Accept();
         }
 
-        // An already-stamped value is never re-stamped (idempotent re-writes and any
-        // value that arrived carrying a tag are honoured as-is).
+        // A CRDT delta is made self-describing and lifted to the tree's target at
+        // this ingest / apply boundary (see OnCrdtDeltaAsync). This dispatch must
+        // precede the whole-value enveloped-check below: a CRDT delta and an LWW
+        // value are both length-prefixed envelopes, but only the CRDT path folds at
+        // its stored version, so it needs the CRDT-aware upcaster, not the LWW one.
+        // Persisting the upcast, enveloped delta in the WAL is what keeps every later
+        // fold - a fresh apply, a cold WAL replay, or a snapshot-restore projection
+        // fold - deterministic: they strip the same durable bytes to the same body
+        // and never upcast at fold time.
+        if (operation == LatticeOperation.CrdtApply)
+        {
+            return await OnCrdtDeltaAsync(treeId, key, value, version, cancellationToken).ConfigureAwait(false);
+        }
+
+        // An already-stamped whole value is never re-stamped (idempotent re-writes and
+        // any value that arrived carrying a tag are honoured as-is).
         if (LatticeSchemaEnvelope.IsEnveloped(value))
         {
             return await OnEnvelopedAsync(treeId, key, value, version, cancellationToken).ConfigureAwait(false);
-        }
-
-        // CRDT deltas are not envelope-versioned in v1 (see the type remarks).
-        if (operation == LatticeOperation.CrdtApply)
-        {
-            return LatticeWriteDecision.Accept();
         }
 
         // A local whole-value write to an opted-in tree is stamped at the target.
         // The header-prefixed array is the intrinsic cost of a self-describing value.
         return LatticeWriteDecision.AcceptTransformed(
             LatticeSchemaEnvelope.Encode(version.SchemaId, version.TargetVersion, value));
+    }
+
+    private async ValueTask<LatticeWriteDecision> OnCrdtDeltaAsync(
+        string treeId,
+        string key,
+        byte[] delta,
+        LatticeSchemaVersionConfig version,
+        CancellationToken cancellationToken)
+    {
+        // A raw (un-enveloped) delta - a fresh local apply authored against the
+        // current schema, or an ingest from an unversioned producer - is stamped
+        // self-describing at the tree's target. A local delta is already at target,
+        // so no upcast is needed; stamping makes the WAL delta self-describing so a
+        // downstream cluster can dispatch its own upcaster on it.
+        if (!LatticeSchemaEnvelope.IsEnveloped(delta))
+        {
+            return LatticeWriteDecision.AcceptTransformed(
+                LatticeSchemaEnvelope.Encode(version.SchemaId, version.TargetVersion, delta));
+        }
+
+        _ = LatticeSchemaEnvelope.TryReadHeader(delta, out var schemaId, out var storedVersion);
+
+        // Already at the tree's target schema and version: accept verbatim.
+        if (schemaId == version.SchemaId && storedVersion == version.TargetVersion)
+        {
+            return LatticeWriteDecision.Accept();
+        }
+
+        // A local re-apply of already-enveloped bytes, or a trusted (non-strict)
+        // ingest, keeps its own tag: the fold strips the envelope version-agnostically
+        // and folds at the stored version, and a later read upcasts the state. Only
+        // strict-mode ingest re-validates and lifts the delta to the target here.
+        if (!LatticeAccessGateContext.IsSystemOrigin || !version.StrictIngest)
+        {
+            return LatticeWriteDecision.Accept();
+        }
+
+        // Strict ingest: lift the delta to the tree's target once, at this boundary,
+        // so the WAL stores an at-target delta and every later fold is deterministic
+        // (fold time never upcasts). An older delta with a contiguous upcaster chain
+        // is upcast through the registry's CRDT-aware upcaster - which transforms the
+        // element payloads while preserving dots / HLC / tombstones - and re-enveloped
+        // at target. A newer-than-target or un-upcastable delta is dead-lettered
+        // rather than applied, so ingest never blocks.
+        if (schemaId == version.SchemaId
+            && storedVersion < version.TargetVersion
+            && _registry.CanUpcast(version.SchemaId, storedVersion, version.TargetVersion))
+        {
+            var body = LatticeSchemaEnvelope.StripToBody(delta);
+            var upcast = _registry.Upcast(version.SchemaId, storedVersion, version.TargetVersion, body);
+            return LatticeWriteDecision.AcceptTransformed(
+                LatticeSchemaEnvelope.Encode(version.SchemaId, version.TargetVersion, upcast));
+        }
+
+        var reason =
+            $"Strict-ingest: CRDT delta at schema {schemaId} v{storedVersion} cannot be upcast to " +
+            $"schema {version.SchemaId} v{version.TargetVersion}.";
+        var entry = BuildDeadLetterEntry(key, delta, reason);
+        await _deadLetters.AppendAsync(treeId, entry, cancellationToken).ConfigureAwait(false);
+        return LatticeWriteDecision.DeadLetter(reason);
     }
 
     private async ValueTask<LatticeWriteDecision> OnEnvelopedAsync(

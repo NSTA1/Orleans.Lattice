@@ -41,7 +41,10 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// applies whatever it is given.
 /// </para>
 /// </summary>
-internal sealed class SnapshotProjectionFolder(string treeId, CrdtShapeRegistry crdtShapes)
+internal sealed class SnapshotProjectionFolder(
+    string treeId,
+    CrdtShapeRegistry crdtShapes,
+    ILatticeEnvelopeCodec? envelopeCodec = null)
 {
     private readonly SortedDictionary<string, LwwValue<byte[]>> _entries = new(StringComparer.Ordinal);
     private readonly Dictionary<Guid, Dictionary<string, LwwValue<byte[]>>> _pendingTx = new();
@@ -337,7 +340,15 @@ internal sealed class SnapshotProjectionFolder(string treeId, CrdtShapeRegistry 
                 + "A prepared CRDT-mode entry cannot fold its typed delta on the snapshot "
                 + "leaf's terminal commit without a shape descriptor.");
 
-        var typedDelta = shape.DeserializeDelta(delta);
+        // Strip any self-describing version envelope from the durable delta before
+        // deserialising (version-agnostic; identity when no versioning is active).
+        // The durable WAL delta is stored enveloped at the version it was ingested /
+        // upcast to, and this restore-replay fold recovers the same raw body the
+        // live leaf's apply folded, so the rebuilt projection is byte-identical.
+        var foldDelta = envelopeCodec is not null and not NullLatticeEnvelopeCodec && envelopeCodec.IsActive(treeId)
+            ? envelopeCodec.StripForFold(delta)
+            : delta;
+        var typedDelta = shape.DeserializeDelta(foldDelta);
         object typedState;
         if (_entries.TryGetValue(key, out var existing)
             && !existing.IsTombstone

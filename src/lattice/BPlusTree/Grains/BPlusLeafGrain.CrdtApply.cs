@@ -146,7 +146,18 @@ internal sealed partial class BPlusLeafGrain
         // The actual MergeDelta fold happens inside the path branch below
         // because the deferred path must first re-stream the pre-merge
         // state to fold the prior digest contribution out.
-        var typedDelta = shape.DeserializeDelta(deltaBytes);
+        //
+        // Determinism: the durable delta may carry a self-describing version
+        // envelope (the ingest/apply boundary stamps and, in strict-ingest,
+        // upcasts it once). We strip that envelope here with a version-agnostic
+        // strip to recover the raw typed-CRDT body the shape deserialises, but we
+        // persist the *enveloped* deltaBytes verbatim in the WAL below. Every later
+        // fold - a fresh apply, a cold WAL replay, or a snapshot-restore projection
+        // fold - strips the same durable bytes to the same body, so the fold is
+        // byte-identical across apply time and replay time and never upcasts at
+        // fold time. Identity (deltaBytes itself) when no versioning is active.
+        var foldDelta = StripDeltaForFold(deltaBytes);
+        var typedDelta = shape.DeserializeDelta(foldDelta);
         var hasExistingRow = Cache.TryPeekRow(key, out var existing, out var existingDeferred)
             && !existing.IsTombstone
             && (existingDeferred || existing.Value is { Length: > 0 });
@@ -356,7 +367,9 @@ internal sealed partial class BPlusLeafGrain
                 ? mergedRow.Value
                 : postMergeEntry.Value ?? Array.Empty<byte>();
             byte[]? localInput = hasExistingRow && !existingDeferred ? existing.Value : null;
-            await ApplyMergeObserverAsync(key, mode, localInput, null, mergedBytes, CancellationToken.None);
+            await ApplyMergeObserverAsync(
+                key, mode, localInput, null, mergedBytes, CancellationToken.None,
+                incomingDeltaForVersion: deltaBytes);
         }
 
         var options = await GetOptionsAsync();

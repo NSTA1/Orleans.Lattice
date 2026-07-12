@@ -113,6 +113,16 @@ public static class LatticeSchemaVersioningServiceCollectionExtensions
             ServiceDescriptor.Singleton<ILatticeValueDecoder>(
                 sp => sp.GetRequiredService<LatticeSchemaVersionDecoder>()));
 
+        // Merge / apply path: replace the core no-op envelope codec with the
+        // envelope-aware codec so the post-merge observer reads each merge input's
+        // durable schema version and the CRDT fold strips the version envelope from
+        // a durable delta (version-agnostic; the one-time upcast happens at the
+        // ingest / apply boundary, so folds stay byte-identical under WAL replay).
+        builder.Services.TryAddSingleton<LatticeSchemaEnvelopeCodec>();
+        builder.Services.Replace(
+            ServiceDescriptor.Singleton<ILatticeEnvelopeCodec>(
+                sp => sp.GetRequiredService<LatticeSchemaEnvelopeCodec>()));
+
         // The SchemaAdmin-gated control plane over the config store + provider cache.
         builder.Services.TryAddSingleton<ILatticeSchemaVersionAdmin, LatticeSchemaVersionAdmin>();
 

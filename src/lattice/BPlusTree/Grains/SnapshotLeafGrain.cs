@@ -139,6 +139,9 @@ internal sealed class SnapshotLeafGrain(
                 "No CrdtShapeRegistry is registered in the snapshot leaf's activation services. "
                 + "AddLattice registers it unconditionally; a missing registration indicates a host wiring bug.");
 
+    private ILatticeEnvelopeCodec? ResolveEnvelopeCodec() =>
+        context.ActivationServices.GetService(typeof(ILatticeEnvelopeCodec)) as ILatticeEnvelopeCodec;
+
     /// <inheritdoc />
     public async Task OpenAsync(string treeId, int shardIndex, IReadOnlyList<long> capturedOffsetsByPartition, IReadOnlyList<int>? ownedVirtualSlots, int virtualShardCount, Guid baselineToken, CancellationToken cancellationToken)
     {
@@ -215,7 +218,7 @@ internal sealed class SnapshotLeafGrain(
         _ownedVirtualSlots = ownedSlots;
         _ownedVirtualShardCount = ownedSlots is null ? 0 : virtualShardCount;
         _baselineToken = baselineToken;
-        _folder = new SnapshotProjectionFolder(treeId, ResolveCrdtShapeRegistry());
+        _folder = new SnapshotProjectionFolder(treeId, ResolveCrdtShapeRegistry(), ResolveEnvelopeCodec());
 
         if (baselineToken != Guid.Empty)
         {
@@ -289,7 +292,7 @@ internal sealed class SnapshotLeafGrain(
         _capturedOffsetsByPartition = capturedHead;
         _baselineToken = baselineToken;
         _seedBaseline = baseline;
-        _folder = new SnapshotProjectionFolder(treeId, ResolveCrdtShapeRegistry());
+        _folder = new SnapshotProjectionFolder(treeId, ResolveCrdtShapeRegistry(), ResolveEnvelopeCodec());
 
         // Seed the rows verbatim. Donor-orphan ownership filtering is applied by
         // the read path against the cursor-supplied owned-slot set (set on the

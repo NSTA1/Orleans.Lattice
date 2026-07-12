@@ -41,6 +41,64 @@ internal sealed partial class BPlusLeafGrain
     private bool _mergeInputDecoderResolved;
     private bool _mergeInputDecoderActive;
 
+    private ILatticeEnvelopeCodec? _envelopeCodec;
+    private bool _envelopeCodecResolved;
+    private bool _envelopeCodecActive;
+
+    /// <summary>
+    /// <c>true</c> when a non-null-default <see cref="ILatticeEnvelopeCodec"/> is
+    /// registered and active for this leaf's tree. Resolved once per activation and
+    /// cached, so the LWW and CRDT merge / apply paths pay only a cached <c>bool</c>
+    /// check when no codec is wired. Gates both the per-record version read (for the
+    /// merge context) and the version-agnostic delta strip (for the CRDT fold).
+    /// </summary>
+    private bool EnvelopeCodecActive
+    {
+        get
+        {
+            if (!_envelopeCodecResolved)
+            {
+                _envelopeCodec = context.ActivationServices.GetService<ILatticeEnvelopeCodec>();
+                _envelopeCodecActive = _envelopeCodec is not null
+                    and not NullLatticeEnvelopeCodec
+                    && _envelopeCodec.IsActive(state.State.TreeId ?? string.Empty);
+                _envelopeCodecResolved = true;
+            }
+            return _envelopeCodecActive;
+        }
+    }
+
+    /// <summary>
+    /// Resolves the registered <see cref="ILatticeEnvelopeCodec"/> instance from the
+    /// activation services (or <c>null</c> when none is registered), for handing to a
+    /// <see cref="SnapshotProjectionFolder"/> so a restore-replay fold strips the same
+    /// version envelope the live apply strips. The folder guards its own
+    /// active / null check, so this returns the raw resolved service.
+    /// </summary>
+    private ILatticeEnvelopeCodec? ResolveEnvelopeCodec()
+    {
+        _ = EnvelopeCodecActive; // ensure the codec is resolved and cached
+        return _envelopeCodec;
+    }
+
+    /// <summary>
+    /// Reads the durable schema version stamped on a stored value's envelope, or
+    /// <c>0</c> when no codec is active or the value carries no envelope. Cheap
+    /// header read; no allocation.
+    /// </summary>
+    private uint ReadEnvelopeVersion(byte[]? value) =>
+        EnvelopeCodecActive ? _envelopeCodec!.ReadVersion(value) : 0;
+
+    /// <summary>
+    /// Strips the version envelope from a durable CRDT delta so the raw typed-CRDT
+    /// body can be deserialized and folded. Identity (same reference) when no codec
+    /// is active or the delta carries no envelope. Version-agnostic and never
+    /// upcasts, so apply-time and every replay fold identical bytes - see the
+    /// determinism remarks on <see cref="ILatticeEnvelopeCodec"/>.
+    /// </summary>
+    private byte[] StripDeltaForFold(byte[] delta) =>
+        EnvelopeCodecActive ? _envelopeCodec!.StripForFold(delta) : delta;
+
     /// <summary>
     /// <c>true</c> when a non-null-default <see cref="ILatticeMergeObserver"/> is
     /// registered. Resolved once per activation and cached, so the LWW and CRDT
@@ -110,6 +168,12 @@ internal sealed partial class BPlusLeafGrain
     /// <param name="incomingStored">The incoming stored value, or <c>null</c> when the change was a typed CRDT delta.</param>
     /// <param name="mergedStored">The canonical stored merged result.</param>
     /// <param name="cancellationToken">Cancels the observation.</param>
+    /// <param name="incomingDeltaForVersion">
+    /// For a typed CRDT merge (where <paramref name="incomingStored"/> is <c>null</c>),
+    /// the stored (possibly enveloped) delta bytes the incoming schema version is
+    /// read from; ignored for LWW, where the version is read from
+    /// <paramref name="incomingStored"/>.
+    /// </param>
     /// <returns>The canonical stored bytes to persist.</returns>
     /// <exception cref="InvalidOperationException">
     /// The observer returned <see cref="MergeOutcomeKind.AcceptTransformed"/> for
@@ -122,8 +186,16 @@ internal sealed partial class BPlusLeafGrain
         byte[]? localStored,
         byte[]? incomingStored,
         byte[] mergedStored,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        byte[]? incomingDeltaForVersion = null)
     {
+        // Read the per-record durable schema versions from the stored (enveloped)
+        // inputs before they are decoded (envelope-stripped). Identity 0 when no
+        // codec is active. The incoming version for a CRDT merge comes from the
+        // delta bytes (incomingStored is null for a typed delta).
+        var localVersion = ReadEnvelopeVersion(localStored);
+        var incomingVersion = ReadEnvelopeVersion(incomingStored ?? incomingDeltaForVersion);
+
         // Decode the inputs / result into the logical form the observer reasons
         // about. Identity on the default (no decoder) path.
         var localDecoded = await DecodeMergeInputAsync(localStored, cancellationToken);
@@ -131,7 +203,9 @@ internal sealed partial class BPlusLeafGrain
         var mergedDecoded = await DecodeMergeInputAsync(mergedStored, cancellationToken)
             ?? mergedStored;
 
-        var ctx = new LatticeMergeContext(key, mode, localDecoded, incomingDecoded, mergedDecoded);
+        var ctx = new LatticeMergeContext(
+            key, mode, localDecoded, incomingDecoded, mergedDecoded,
+            state.State.TreeId, localVersion, incomingVersion);
         var outcome = await _mergeObserver!.OnMergedAsync(in ctx, cancellationToken);
 
         switch (outcome.Kind)

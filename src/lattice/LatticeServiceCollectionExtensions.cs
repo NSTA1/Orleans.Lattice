@@ -197,6 +197,16 @@ public static class LatticeServiceCollectionExtensions
         // A schema / versioning add-on replaces this with a real, validating /
         // normalising observer.
         builder.Services.TryAddSingleton<ILatticeMergeObserver, NullLatticeMergeObserver>();
+        // Merge / apply-path envelope codec seam: default to the never-active no-op
+        // so the leaf-grain merge and CRDT-apply wiring always resolves a codec. The
+        // null codec's IsActive is always false, so the wiring caches an inactive
+        // flag per activation and never reads a version or strips a delta - the
+        // default fold path stays byte-for-byte identical with no per-fold
+        // allocation. A schema / versioning add-on replaces this with a real,
+        // envelope-aware codec that reports the stamped version (for the post-merge
+        // observer's per-record upcaster dispatch) and strips the version envelope
+        // from a durable CRDT delta before it is folded.
+        builder.Services.TryAddSingleton<ILatticeEnvelopeCodec, NullLatticeEnvelopeCodec>();
         // CRDT shape registry: closed-shape modes (OrSet / PnCounter /
         // VersionVector / MvRegister) are pre-populated on construction
         // so no host registration is required for them. Generic OrMap
