@@ -1,5 +1,7 @@
 namespace Orleans.Lattice;
 
+using System.Runtime.InteropServices;
+
 /// <summary>
 /// An observed-remove (OR) map CRDT keyed by <typeparamref name="TKey"/>
 /// whose values are themselves recursively-mergeable CRDTs constrained
@@ -561,10 +563,13 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
 
     private void BumpContext(string replicaId, long counter)
     {
-        if (!Context.TryGetValue(replicaId, out var current) || counter > current)
-        {
-            Context[replicaId] = counter;
-        }
+        // Single-probe pointwise-max: hash replicaId once and bump the slot
+        // only when the incoming counter is strictly greater. A missing slot
+        // is added zero-initialised, so the !existed branch installs counter -
+        // identical to the previous TryGetValue-then-indexer form with one
+        // fewer hash and bucket walk. Mirrors VersionVector.Merge's fold.
+        ref var slot = ref CollectionsMarshal.GetValueRefOrAddDefault(Context, replicaId, out var existed);
+        if (!existed || counter > slot) slot = counter;
     }
 
     /// <summary>
