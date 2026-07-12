@@ -40,6 +40,9 @@ public enum LatticeBackupApiOperation
     /// <summary>The server-streaming <c>ExportArtifact</c> RPC.</summary>
     ExportArtifact,
 
+    /// <summary>The <c>ScheduleBackup</c> recurring-schedule RPC.</summary>
+    ScheduleBackup,
+
     /// <summary>
     /// A backup control-API method the interceptor does not recognise (for
     /// example a future RPC added without updating the operation map). Presented

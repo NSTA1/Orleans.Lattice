@@ -271,6 +271,43 @@ public sealed class LatticeBackupApiGrpcClient
             cancellationToken);
     }
 
+    /// <summary>
+    /// Registers (or updates) a recurring backup schedule for
+    /// <paramref name="scope"/> that fires every <paramref name="interval"/>,
+    /// capturing an incremental backup when <paramref name="incremental"/> is
+    /// <see langword="true"/> or a full backup otherwise. An interval below the
+    /// scheduler minimum is clamped up; the returned effective interval reports
+    /// the cadence actually registered.
+    /// </summary>
+    /// <param name="scope">The scope to schedule. Must not be <c>null</c>.</param>
+    /// <param name="incremental"><c>true</c> to schedule incremental captures, <c>false</c> for full captures.</param>
+    /// <param name="interval">The requested cadence between captures. Must be strictly positive.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The cadence actually registered (clamped up to the scheduler minimum when smaller).</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="scope"/> is <c>null</c>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="interval"/> is not strictly positive.</exception>
+    public async Task<TimeSpan> ScheduleBackupAsync(
+        BackupScopeSelector scope,
+        bool incremental,
+        TimeSpan interval,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(interval.Ticks);
+
+        var response = await UnaryAsync(
+            _methods.ScheduleBackup,
+            new BackupScheduleRequestMessage
+            {
+                Scope = scope,
+                Incremental = incremental,
+                IntervalTicks = interval.Ticks,
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        return TimeSpan.FromTicks(response.EffectiveIntervalTicks);
+    }
+
     private async Task<TResponse> UnaryAsync<TRequest, TResponse>(
         Method<TRequest, TResponse> method,
         TRequest request,

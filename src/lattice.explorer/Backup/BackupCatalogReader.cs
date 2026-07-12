@@ -136,6 +136,40 @@ public sealed class BackupCatalogReader(IBackupControlClient client) : IBackupCa
             });
     }
 
+    /// <inheritdoc />
+    public Task<BackupOperationResult> ScheduleAsync(BackupScopeSelector scope, bool incremental, TimeSpan interval, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(interval.Ticks);
+        return RunAsync(
+            async () =>
+            {
+                var effective = await _client
+                    .ScheduleBackupAsync(scope, incremental, interval, cancellationToken)
+                    .ConfigureAwait(false);
+                var kind = incremental ? "incremental" : "full";
+                return BackupOperationResult.Success(
+                    $"Scheduled recurring {kind} backup every {FormatInterval(effective)}.");
+            });
+    }
+
+    private static string FormatInterval(TimeSpan interval)
+    {
+        var parts = new List<string>();
+        var wholeHours = (int)interval.TotalHours;
+        if (wholeHours > 0)
+        {
+            parts.Add($"{wholeHours}h");
+        }
+
+        if (interval.Minutes > 0)
+        {
+            parts.Add($"{interval.Minutes}m");
+        }
+
+        return parts.Count > 0 ? string.Join(" ", parts) : $"{interval.TotalSeconds:0}s";
+    }
+
     private static async Task<BackupOperationResult> RunAsync(Func<Task<BackupOperationResult>> action)
     {
         try

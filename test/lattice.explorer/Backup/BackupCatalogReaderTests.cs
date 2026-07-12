@@ -305,4 +305,67 @@ public class BackupCatalogReaderTests
             () => CreateReader(client).TriggerFullAsync(string.Empty, BackupScopeSelector.WholeTree("t")),
             Throws.InstanceOf<ArgumentException>());
     }
+
+    [Test]
+    public async Task ScheduleAsync_success_reports_the_effective_cadence_and_forwards_the_request()
+    {
+        var client = new FakeBackupControlClient { ScheduleResult = TimeSpan.FromMinutes(90) };
+        var scope = BackupScopeSelector.WholeTree("tree-a");
+
+        var result = await CreateReader(client).ScheduleAsync(scope, incremental: false, TimeSpan.FromMinutes(90));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsSuccess, Is.True);
+            Assert.That(result.Message, Does.Contain("full"));
+            Assert.That(result.Message, Does.Contain("1h 30m"));
+            Assert.That(client.LastScheduledScope, Is.EqualTo(scope));
+            Assert.That(client.LastScheduledIncremental, Is.False);
+            Assert.That(client.LastScheduledInterval, Is.EqualTo(TimeSpan.FromMinutes(90)));
+        });
+    }
+
+    [Test]
+    public async Task ScheduleAsync_incremental_reports_the_incremental_kind()
+    {
+        var client = new FakeBackupControlClient { ScheduleResult = TimeSpan.FromMinutes(15) };
+
+        var result = await CreateReader(client)
+            .ScheduleAsync(BackupScopeSelector.WholeTree("tree-a"), incremental: true, TimeSpan.FromMinutes(15));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsSuccess, Is.True);
+            Assert.That(result.Message, Does.Contain("incremental"));
+            Assert.That(result.Message, Does.Contain("15m"));
+        });
+    }
+
+    [Test]
+    public async Task ScheduleAsync_denied_degrades_gracefully()
+    {
+        var client = new FakeBackupControlClient
+        {
+            MutationThrows = new LatticeAuthorizationDeniedException("schedule denied"),
+        };
+
+        var result = await CreateReader(client)
+            .ScheduleAsync(BackupScopeSelector.WholeTree("tree-a"), incremental: false, TimeSpan.FromMinutes(30));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(BackupOperationStatus.Denied));
+            Assert.That(result.Message, Is.EqualTo("schedule denied"));
+        });
+    }
+
+    [Test]
+    public void ScheduleAsync_non_positive_interval_throws()
+    {
+        var client = new FakeBackupControlClient();
+
+        Assert.That(
+            () => CreateReader(client).ScheduleAsync(BackupScopeSelector.WholeTree("t"), incremental: false, TimeSpan.Zero),
+            Throws.InstanceOf<ArgumentOutOfRangeException>());
+    }
 }

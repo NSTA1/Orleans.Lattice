@@ -114,6 +114,63 @@ public sealed class BackupSchedulerScheduleTests
         Assert.That(backupId, Is.Null);
     }
 
+    [Test]
+    public async Task ScheduleRecurringAsync_registers_the_full_reminder_at_a_runtime_interval()
+    {
+        // No startup schedule enabled: the runtime call alone drives registration.
+        _fixture = new SchedulerClusterFixture();
+        await _fixture.InitializeAsync();
+        var scope = BackupScopeSelector.WholeTree(Tree);
+
+        await _fixture.Scheduler(scope).ScheduleRecurringAsync(scope, incremental: false, TimeSpan.FromMinutes(15));
+
+        var hasFull = await _fixture.Scheduler(scope).HasScheduleAsync(incremental: false);
+        var hasIncremental = await _fixture.Scheduler(scope).HasScheduleAsync(incremental: true);
+        Assert.Multiple(() =>
+        {
+            Assert.That(hasFull, Is.True);
+            Assert.That(hasIncremental, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task ScheduleRecurringAsync_registers_the_incremental_reminder_when_requested()
+    {
+        _fixture = new SchedulerClusterFixture();
+        await _fixture.InitializeAsync();
+        var scope = BackupScopeSelector.WholeTree(Tree);
+
+        await _fixture.Scheduler(scope).ScheduleRecurringAsync(scope, incremental: true, TimeSpan.FromMinutes(30));
+
+        var hasFull = await _fixture.Scheduler(scope).HasScheduleAsync(incremental: false);
+        var hasIncremental = await _fixture.Scheduler(scope).HasScheduleAsync(incremental: true);
+        Assert.Multiple(() =>
+        {
+            Assert.That(hasFull, Is.False);
+            Assert.That(hasIncremental, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task ScheduleRecurringAsync_persists_the_scope_so_a_scheduled_cycle_can_capture()
+    {
+        _fixture = new SchedulerClusterFixture();
+        await _fixture.InitializeAsync();
+        var scope = BackupScopeSelector.WholeTree(Tree);
+        await SeedAsync("k1", "v1");
+
+        await _fixture.Scheduler(scope).ScheduleRecurringAsync(scope, incremental: false, TimeSpan.FromMinutes(5));
+        var backupId = await _fixture.Scheduler(scope).RunScheduledCycleAsync(incremental: false);
+
+        var manifests = await _fixture.ListScopeAsync(scope);
+        Assert.Multiple(() =>
+        {
+            Assert.That(backupId, Is.Not.Null);
+            Assert.That(manifests, Has.Count.EqualTo(1));
+            Assert.That(manifests[0].Kind, Is.EqualTo(BackupKind.Full));
+        });
+    }
+
     private async Task SeedAsync(string key, string value)
     {
         var tree = _fixture.GrainFactory.GetGrain<ILattice>(Tree);

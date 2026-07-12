@@ -146,6 +146,42 @@ public sealed class BackupGrpcDtoSerializationTests
     }
 
     [Test]
+    public void BackupScheduleRequestMessage_round_trips()
+    {
+        var original = new BackupScheduleRequestMessage
+        {
+            Scope = BackupScopeSelector.WholeTree("orders"),
+            Incremental = true,
+            IntervalTicks = TimeSpan.FromMinutes(90).Ticks,
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Scope.TreeId, Is.EqualTo("orders"));
+            Assert.That(copy.Incremental, Is.True);
+            Assert.That(copy.IntervalTicks, Is.EqualTo(TimeSpan.FromMinutes(90).Ticks));
+        });
+    }
+
+    [Test]
+    public void BackupScheduleResponse_round_trips()
+    {
+        var original = new BackupScheduleResponse
+        {
+            Scheduled = true,
+            EffectiveIntervalTicks = TimeSpan.FromMinutes(1).Ticks,
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Scheduled, Is.True);
+            Assert.That(copy.EffectiveIntervalTicks, Is.EqualTo(TimeSpan.FromMinutes(1).Ticks));
+        });
+    }
+
+    [Test]
     public void BackupChainResponse_round_trips_when_not_found()
     {
         var original = new BackupChainResponse { Found = false };

@@ -77,4 +77,10 @@ public static class GrpcBackupTypeAliases
 
     /// <summary>Alias for <see cref="BackupCapabilityProbeRequest"/>.</summary>
     public const string BackupCapabilityProbeRequest = "oibg.cpreq";
+
+    /// <summary>Alias for <see cref="BackupScheduleRequestMessage"/>.</summary>
+    public const string BackupScheduleRequestMessage = "oibg.schreq";
+
+    /// <summary>Alias for <see cref="BackupScheduleResponse"/>.</summary>
+    public const string BackupScheduleResponse = "oibg.schresp";
 }

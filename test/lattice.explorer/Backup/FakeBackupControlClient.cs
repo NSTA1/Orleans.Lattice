@@ -95,6 +95,11 @@ internal sealed class FakeBackupControlClient : IBackupControlClient
         return Task.FromResult(SampleBackup.RestoreResult(request.BackupId, request.TargetTreeId ?? string.Empty, 7));
     }
 
+    public BackupScopeSelector? LastScheduledScope { get; private set; }
+    public bool? LastScheduledIncremental { get; private set; }
+    public TimeSpan? LastScheduledInterval { get; private set; }
+    public TimeSpan ScheduleResult { get; set; } = TimeSpan.FromMinutes(1);
+
     public Task<bool> DeleteBackupAsync(string backupId, CancellationToken cancellationToken = default)
     {
         if (MutationThrows is not null)
@@ -103,5 +108,18 @@ internal sealed class FakeBackupControlClient : IBackupControlClient
         }
 
         return Task.FromResult(DeleteResult);
+    }
+
+    public Task<TimeSpan> ScheduleBackupAsync(BackupScopeSelector scope, bool incremental, TimeSpan interval, CancellationToken cancellationToken = default)
+    {
+        LastScheduledScope = scope;
+        LastScheduledIncremental = incremental;
+        LastScheduledInterval = interval;
+        if (MutationThrows is not null)
+        {
+            throw MutationThrows;
+        }
+
+        return Task.FromResult(ScheduleResult);
     }
 }

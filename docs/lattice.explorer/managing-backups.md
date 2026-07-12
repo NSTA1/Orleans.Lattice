@@ -57,6 +57,14 @@ restores, or deletes anything.
   member backup per tree under one set manifest, optionally with a shared
   cross-tree consistency fence.
 - Choose the incremental base from a dropdown of the existing full backups.
+- Optionally **schedule a recurring backup** while creating one: tick *Schedule
+  recurring* and pick an interval in hours and minutes. Clicking **Backup** then
+  both captures immediately and registers a recurring schedule for the selected
+  tree, following the chosen kind (full or incremental). The schedule is a
+  first-class runtime registration - an Orleans reminder that survives silo
+  restarts - and overrides the startup-configured cadence for that kind. An
+  interval below the scheduler minimum (one minute) is clamped up. Scheduling
+  targets a single tree, so it is unavailable for a multi-tree backup set.
 - Restore a backup into a target tree, choosing the restore mode from the
   dropdown: **Repair missing (non-destructive)** (in-place) or **Point-in-time
   replace (destructive)** (shadow-cutover). The two modes are explained below.

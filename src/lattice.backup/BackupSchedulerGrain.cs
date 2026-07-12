@@ -71,6 +71,30 @@ internal sealed class BackupSchedulerGrain(
     }
 
     /// <inheritdoc />
+    public async Task ScheduleRecurringAsync(BackupScopeSelector scope, bool incremental, TimeSpan interval)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(interval.Ticks);
+
+        await PersistScopeAsync(scope);
+
+        var period = ClampInterval(interval);
+        if (incremental)
+        {
+            state.State.RuntimeIncrementalBackupInterval = period;
+        }
+        else
+        {
+            state.State.RuntimeFullBackupInterval = period;
+        }
+
+        await state.WriteStateAsync();
+
+        var reminderName = incremental ? IncrementalScheduleReminderName : FullScheduleReminderName;
+        await ApplyScheduleAsync(reminderName, enabled: true, period);
+    }
+
+    /// <inheritdoc />
     public async Task<BackupRetentionReport> PruneAsync(BackupScopeSelector scope)
     {
         ArgumentNullException.ThrowIfNull(scope);

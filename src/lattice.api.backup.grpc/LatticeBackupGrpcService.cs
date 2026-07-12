@@ -73,6 +73,9 @@ internal abstract class LatticeBackupGrpcServiceBase
     /// <summary>Probes the caller's backup / restore capabilities for a scope. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
     public abstract Task<BackupScopeCapabilities> ProbeCapabilities(BackupCapabilityProbeRequest request, ServerCallContext context);
 
+    /// <summary>Registers a recurring backup schedule. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<BackupScheduleResponse> ScheduleBackup(BackupScheduleRequestMessage request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at
     /// startup with <paramref name="serviceImpl"/> set to
@@ -104,6 +107,7 @@ internal abstract class LatticeBackupGrpcServiceBase
             binder.AddMethod(methods.ExportArtifact, (ServerStreamingServerMethod<ArtifactExportRequest, ArtifactChunk>?)null);
             binder.AddMethod(methods.GetAuthScheme, (UnaryServerMethod<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>?)null);
             binder.AddMethod(methods.ProbeCapabilities, (UnaryServerMethod<BackupCapabilityProbeRequest, BackupScopeCapabilities>?)null);
+            binder.AddMethod(methods.ScheduleBackup, (UnaryServerMethod<BackupScheduleRequestMessage, BackupScheduleResponse>?)null);
             return;
         }
 
@@ -119,6 +123,7 @@ internal abstract class LatticeBackupGrpcServiceBase
         binder.AddMethod(methods.ExportArtifact, new ServerStreamingServerMethod<ArtifactExportRequest, ArtifactChunk>(serviceImpl.ExportArtifact));
         binder.AddMethod(methods.GetAuthScheme, new UnaryServerMethod<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>(serviceImpl.GetAuthScheme));
         binder.AddMethod(methods.ProbeCapabilities, new UnaryServerMethod<BackupCapabilityProbeRequest, BackupScopeCapabilities>(serviceImpl.ProbeCapabilities));
+        binder.AddMethod(methods.ScheduleBackup, new UnaryServerMethod<BackupScheduleRequestMessage, BackupScheduleResponse>(serviceImpl.ScheduleBackup));
     }
 }
 
@@ -213,6 +218,23 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
                     ct)
                 .ConfigureAwait(false);
             return ToSetCaptureResponse(result);
+        });
+
+    /// <inheritdoc />
+    public override Task<BackupScheduleResponse> ScheduleBackup(BackupScheduleRequestMessage request, ServerCallContext context)
+        => InvokeAsync(request, context, static async (control, req, ct) =>
+        {
+            var interval = TimeSpan.FromTicks(req.IntervalTicks);
+            await control
+                .ScheduleBackupAsync(new LatticeBackupScheduleRequest(req.Scope, req.Incremental, interval), ct)
+                .ConfigureAwait(false);
+
+            // Mirror the scheduler's clamp so the caller learns the cadence that
+            // was actually registered when a sub-minimum interval was rounded up.
+            var effective = interval < LatticeBackupScheduleOptions.MinimumInterval
+                ? LatticeBackupScheduleOptions.MinimumInterval
+                : interval;
+            return new BackupScheduleResponse { Scheduled = true, EffectiveIntervalTicks = effective.Ticks };
         });
 
     /// <inheritdoc />

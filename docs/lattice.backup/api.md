@@ -45,10 +45,11 @@ The public entry point for on-demand triggers, schedule registration, and retent
 
 - `Task<string?> TriggerFullBackupAsync(BackupScopeSelector scope)` - triggers a full backup; returns the backup id, or `null` when a capture for the scope is already in flight.
 - `Task<string?> TriggerIncrementalBackupAsync(BackupScopeSelector scope)` - triggers an incremental backup layered on the most recent backup for the scope (or a full baseline when none exists); returns the backup id, or `null` when skipped by the overlap guard.
+- `Task ScheduleRecurringBackupAsync(LatticeBackupScheduleRequest request)` - registers or updates a recurring backup of the request's scope that fires every `Interval`, capturing a full or incremental backup per the request. The interval is clamped up to the reminder minimum; a runtime schedule registered this way overrides the configured `LatticeBackupScheduleOptions` cadence for the chosen kind. Idempotent. Throws `ArgumentNullException` when `request` is null.
 - `Task EnsureScheduleAsync(BackupScopeSelector scope)` - registers or updates the recurring full and incremental schedule reminders for the scope per its `LatticeBackupScheduleOptions`. Idempotent.
 - `Task<BackupRetentionReport> PruneAsync(BackupScopeSelector scope)` - prunes the scope's backup chain per its retention policy, preserving the base chain of every retained increment; a no-op that retains everything when retention is disabled.
 
-All four throw `ArgumentNullException` when `scope` is null.
+All four scope-typed methods throw `ArgumentNullException` when `scope` is null.
 
 ### `ILatticeBackupCatalogStore`
 
@@ -151,6 +152,15 @@ Backup-set request.
 
 - Constructor: `LatticeBackupSetCaptureResult(BackupSetManifest setManifest, IReadOnlyList<LatticeBackupCaptureResult> members)`. Throws `ArgumentNullException` (either null) and `ArgumentException` (`members` empty).
 - Properties: `BackupSetManifest SetManifest`, `IReadOnlyList<LatticeBackupCaptureResult> Members`.
+
+### `LatticeBackupScheduleRequest`
+
+A request to register a recurring backup schedule for a scope.
+
+- Constructor: `LatticeBackupScheduleRequest(BackupScopeSelector scope, bool incremental, TimeSpan interval)`. Throws `ArgumentNullException` when `scope` is null; `ArgumentOutOfRangeException` when `interval` is not strictly positive.
+- Properties: `BackupScopeSelector Scope`, `bool Incremental`, `TimeSpan Interval`.
+
+A runtime schedule registered from this request overrides the configured `LatticeBackupScheduleOptions` cadence for the chosen kind; the interval is clamped up to the scheduler minimum when smaller.
 
 ### `LatticeRestoreRequest`
 

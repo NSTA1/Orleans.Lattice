@@ -152,6 +152,7 @@ internal sealed class LatticeBackupApiGrpcAuthInterceptor : Interceptor
             LatticeBackupGrpcMethods.RestoreBackupMethodName => LatticeBackupApiOperation.RestoreBackup,
             LatticeBackupGrpcMethods.RevertRestoreMethodName => LatticeBackupApiOperation.RevertRestore,
             LatticeBackupGrpcMethods.ExportArtifactMethodName => LatticeBackupApiOperation.ExportArtifact,
+            LatticeBackupGrpcMethods.ScheduleBackupMethodName => LatticeBackupApiOperation.ScheduleBackup,
             _ => LatticeBackupApiOperation.Unknown,
         };
 
@@ -165,6 +166,7 @@ internal sealed class LatticeBackupApiGrpcAuthInterceptor : Interceptor
             // The revert RPC carries the prior restore result as its request.
             RestoreResponse r => r.BackupId,
             ArtifactExportRequest a => a.BackupId,
+            BackupScheduleRequestMessage s => s.Scope?.TreeId,
             _ => null,
         };
 

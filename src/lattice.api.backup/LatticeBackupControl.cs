@@ -105,6 +105,19 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
     }
 
     /// <inheritdoc />
+    public async Task ScheduleBackupAsync(
+        LatticeBackupScheduleRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        await _authorizer.AuthorizeBackupAsync(request.Scope, cancellationToken).ConfigureAwait(false);
+        await _grainFactory
+            .GetGrain<ILatticeBackupSchedulerGrain>(BackupScopeKey.For(request.Scope))
+            .ScheduleRecurringAsync(request.Scope, request.Incremental, request.Interval)
+            .ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
     public async Task<BackupCatalogPage> ListBackupsAsync(
         BackupCatalogRequest request,
         CancellationToken cancellationToken = default)

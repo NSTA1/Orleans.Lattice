@@ -36,6 +36,20 @@ public interface ILatticeBackupScheduler
     Task<string?> TriggerIncrementalBackupAsync(BackupScopeSelector scope);
 
     /// <summary>
+    /// Registers (or updates) a recurring backup schedule for the request's scope
+    /// that fires every <see cref="LatticeBackupScheduleRequest.Interval"/>,
+    /// capturing a full or incremental backup per
+    /// <see cref="LatticeBackupScheduleRequest.Incremental"/>. The interval is
+    /// clamped up to the reminder minimum when smaller. A runtime schedule
+    /// registered this way overrides the configured
+    /// <see cref="LatticeBackupScheduleOptions"/> cadence for the chosen kind.
+    /// Idempotent.
+    /// </summary>
+    /// <param name="request">The schedule request. Must not be <c>null</c>.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
+    Task ScheduleRecurringBackupAsync(LatticeBackupScheduleRequest request);
+
+    /// <summary>
     /// Registers (or updates) the recurring full- and incremental-backup schedule
     /// reminders for <paramref name="scope"/>, honouring its configured
     /// <see cref="LatticeBackupScheduleOptions"/>. Idempotent.

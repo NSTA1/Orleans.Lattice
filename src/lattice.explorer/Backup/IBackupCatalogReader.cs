@@ -69,4 +69,14 @@ public interface IBackupCatalogReader
     /// <param name="backupId">The backup id to delete. Must not be <see langword="null"/> or empty.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task<BackupOperationResult> DeleteAsync(string backupId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Registers a recurring backup schedule for <paramref name="scope"/> at the
+    /// requested <paramref name="interval"/>, folding a denial into the result.
+    /// </summary>
+    /// <param name="scope">The scope to schedule. Must not be <see langword="null"/>.</param>
+    /// <param name="incremental"><see langword="true"/> to schedule incremental captures; otherwise full captures.</param>
+    /// <param name="interval">The requested cadence between captures. Must be strictly positive.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<BackupOperationResult> ScheduleAsync(BackupScopeSelector scope, bool incremental, TimeSpan interval, CancellationToken cancellationToken = default);
 }

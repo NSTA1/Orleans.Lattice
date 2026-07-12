@@ -66,6 +66,9 @@ internal sealed class LatticeBackupGrpcMethods
     /// <summary>The unary capability-probe RPC method name.</summary>
     public const string ProbeCapabilitiesMethodName = "ProbeCapabilities";
 
+    /// <summary>The unary schedule-backup RPC method name.</summary>
+    public const string ScheduleBackupMethodName = "ScheduleBackup";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeBackupGrpcMethods(
         Serializer<BackupCaptureRequestMessage> captureRequestSerializer,
@@ -89,7 +92,9 @@ internal sealed class LatticeBackupGrpcMethods
         Serializer<AuthSchemeAdvertisementRequest> authSchemeRequestSerializer,
         Serializer<AuthSchemeAdvertisement> authSchemeAdvertisementSerializer,
         Serializer<BackupCapabilityProbeRequest> capabilityProbeRequestSerializer,
-        Serializer<Orleans.Lattice.Api.Backup.BackupScopeCapabilities> capabilitiesSerializer)
+        Serializer<Orleans.Lattice.Api.Backup.BackupScopeCapabilities> capabilitiesSerializer,
+        Serializer<BackupScheduleRequestMessage> scheduleRequestSerializer,
+        Serializer<BackupScheduleResponse> scheduleResponseSerializer)
     {
         ArgumentNullException.ThrowIfNull(captureRequestSerializer);
         ArgumentNullException.ThrowIfNull(incrementalCaptureRequestSerializer);
@@ -113,6 +118,8 @@ internal sealed class LatticeBackupGrpcMethods
         ArgumentNullException.ThrowIfNull(authSchemeAdvertisementSerializer);
         ArgumentNullException.ThrowIfNull(capabilityProbeRequestSerializer);
         ArgumentNullException.ThrowIfNull(capabilitiesSerializer);
+        ArgumentNullException.ThrowIfNull(scheduleRequestSerializer);
+        ArgumentNullException.ThrowIfNull(scheduleResponseSerializer);
 
         CreateBackup = new Method<BackupCaptureRequestMessage, BackupCaptureResponse>(
             type: MethodType.Unary,
@@ -197,6 +204,13 @@ internal sealed class LatticeBackupGrpcMethods
             name: ProbeCapabilitiesMethodName,
             requestMarshaller: LatticeBackupGrpcMarshallers.Create(capabilityProbeRequestSerializer),
             responseMarshaller: LatticeBackupGrpcMarshallers.Create(capabilitiesSerializer));
+
+        ScheduleBackup = new Method<BackupScheduleRequestMessage, BackupScheduleResponse>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: ScheduleBackupMethodName,
+            requestMarshaller: LatticeBackupGrpcMarshallers.Create(scheduleRequestSerializer),
+            responseMarshaller: LatticeBackupGrpcMarshallers.Create(scheduleResponseSerializer));
     }
 
     /// <summary>The unary <c>CreateBackup</c> full-capture RPC.</summary>
@@ -235,6 +249,9 @@ internal sealed class LatticeBackupGrpcMethods
     /// <summary>The unary <c>ProbeCapabilities</c> capability-probe RPC.</summary>
     public Method<BackupCapabilityProbeRequest, Orleans.Lattice.Api.Backup.BackupScopeCapabilities> ProbeCapabilities { get; }
 
+    /// <summary>The unary <c>ScheduleBackup</c> recurring-schedule RPC.</summary>
+    public Method<BackupScheduleRequestMessage, BackupScheduleResponse> ScheduleBackup { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out
     /// of <paramref name="serializerProvider"/>. Shared by the server-side DI
@@ -266,7 +283,9 @@ internal sealed class LatticeBackupGrpcMethods
             serializerProvider.GetRequiredService<Serializer<AuthSchemeAdvertisementRequest>>(),
             serializerProvider.GetRequiredService<Serializer<AuthSchemeAdvertisement>>(),
             serializerProvider.GetRequiredService<Serializer<BackupCapabilityProbeRequest>>(),
-            serializerProvider.GetRequiredService<Serializer<Orleans.Lattice.Api.Backup.BackupScopeCapabilities>>());
+            serializerProvider.GetRequiredService<Serializer<Orleans.Lattice.Api.Backup.BackupScopeCapabilities>>(),
+            serializerProvider.GetRequiredService<Serializer<BackupScheduleRequestMessage>>(),
+            serializerProvider.GetRequiredService<Serializer<BackupScheduleResponse>>());
     }
 }
 

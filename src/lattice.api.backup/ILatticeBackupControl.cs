@@ -64,6 +64,23 @@ internal interface ILatticeBackupControl
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Registers (or updates) a recurring backup schedule for the request's
+    /// scope, after authorizing the scope fail-closed with the same grant a
+    /// capture requires. Each scheduled cycle captures a full or incremental
+    /// backup per <see cref="LatticeBackupScheduleRequest.Incremental"/> at the
+    /// request's interval (clamped up to the scheduler minimum when smaller),
+    /// overriding the configured schedule cadence for the chosen kind.
+    /// Idempotent.
+    /// </summary>
+    /// <param name="request">The schedule request. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to back up the scope.</exception>
+    Task ScheduleBackupAsync(
+        LatticeBackupScheduleRequest request,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Lists the catalogued backups as a deterministic, cursor-resumable page
     /// ordered by backup id, hiding any manifest whose scope the caller may not
     /// read. Pass the previous page's

@@ -219,8 +219,39 @@ public sealed class AuthBackupGrpcVisibilityTests
         await Task.CompletedTask;
     }
 
+    [Test]
+    public void schedule_backup_without_a_credential_is_permission_denied()
+    {
+        var ex = Assert.ThrowsAsync<RpcException>(async () => await CallAsync(
+            _host.Methods.ScheduleBackup,
+            new BackupScheduleRequestMessage
+            {
+                Scope = BackupScopeSelector.WholeTree(Source),
+                Incremental = false,
+                IntervalTicks = TimeSpan.FromMinutes(20).Ticks,
+            },
+            subject: null));
+
+        Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
+    }
+
+    [Test]
+    public async Task schedule_backup_with_a_credential_is_accepted()
+    {
+        var response = await CallAsync(
+            _host.Methods.ScheduleBackup,
+            new BackupScheduleRequestMessage
+            {
+                Scope = BackupScopeSelector.WholeTree(Source),
+                Incremental = false,
+                IntervalTicks = TimeSpan.FromMinutes(20).Ticks,
+            },
+            Operator);
+
+        Assert.That(response.Scheduled, Is.True);
+    }
+
     /// <summary>
-    /// Test authorizer that admits a call only when it carries an
     /// <c>authorization</c> request header, so the tests can drive both the
     /// accept and default-deny paths purely from the wire credential.
     /// </summary>

@@ -24,6 +24,13 @@ internal sealed class LatticeBackupScheduler(IGrainFactory grainFactory) : ILatt
     }
 
     /// <inheritdoc />
+    public Task ScheduleRecurringBackupAsync(LatticeBackupScheduleRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return Grain(request.Scope).ScheduleRecurringAsync(request.Scope, request.Incremental, request.Interval);
+    }
+
+    /// <inheritdoc />
     public Task EnsureScheduleAsync(BackupScopeSelector scope)
     {
         ArgumentNullException.ThrowIfNull(scope);

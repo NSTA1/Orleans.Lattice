@@ -61,4 +61,17 @@ public interface IBackupControlClient
     /// <param name="backupId">The backup id to delete. Must not be <see langword="null"/> or empty.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task<bool> DeleteBackupAsync(string backupId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Registers (or updates) a recurring backup schedule for
+    /// <paramref name="scope"/> at the requested <paramref name="interval"/>,
+    /// scheduling incremental captures when <paramref name="incremental"/> is
+    /// <see langword="true"/> or full captures otherwise. Returns the cadence
+    /// actually registered (clamped up to the scheduler minimum when smaller).
+    /// </summary>
+    /// <param name="scope">The scope to schedule. Must not be <see langword="null"/>.</param>
+    /// <param name="incremental"><see langword="true"/> to schedule incremental captures; otherwise full captures.</param>
+    /// <param name="interval">The requested cadence between captures. Must be strictly positive.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<TimeSpan> ScheduleBackupAsync(BackupScopeSelector scope, bool incremental, TimeSpan interval, CancellationToken cancellationToken = default);
 }

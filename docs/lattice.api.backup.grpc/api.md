@@ -42,8 +42,9 @@ Methods (one per RPC):
 | `ExportArtifactAsync` | `IAsyncEnumerable<ReadOnlyMemory<byte>> ExportArtifactAsync(string backupId, string artifactId, CancellationToken cancellationToken = default)` |
 | `GetAuthSchemeAsync` | `Task<AuthSchemeAdvertisement> GetAuthSchemeAsync(AuthSchemeAdvertisementRequest request, CancellationToken cancellationToken = default)` |
 | `ProbeCapabilitiesAsync` | `Task<BackupScopeCapabilities> ProbeCapabilitiesAsync(BackupScopeSelector scope, CancellationToken cancellationToken = default)` |
+| `ScheduleBackupAsync` | `Task<TimeSpan> ScheduleBackupAsync(BackupScopeSelector scope, bool incremental, TimeSpan interval, CancellationToken cancellationToken = default)` |
 
-`CreateBackupAsync`, `CreateIncrementalBackupAsync`, `CreateBackupSetAsync`, `RestoreBackupAsync`, and `RevertRestoreAsync` throw `ArgumentNullException` on a null request; `DescribeBackupAsync`, `DeleteBackupAsync`, and `ExportArtifactAsync` throw `ArgumentException` on a null or empty id. `DescribeBackupAsync` returns `null` when the server reports the backup absent. `ProbeCapabilitiesAsync` throws `ArgumentNullException` on a null scope and reports the caller's allowed-operation set (`BackupScopeCapabilities`) with no side effects, so a UI can grey out actions the caller cannot perform; it never replaces the fail-closed authorization each real RPC still performs. `GetAuthSchemeAsync` is unauthenticated - callable before any credential is acquired.
+`CreateBackupAsync`, `CreateIncrementalBackupAsync`, `CreateBackupSetAsync`, `RestoreBackupAsync`, and `RevertRestoreAsync` throw `ArgumentNullException` on a null request; `DescribeBackupAsync`, `DeleteBackupAsync`, and `ExportArtifactAsync` throw `ArgumentException` on a null or empty id. `DescribeBackupAsync` returns `null` when the server reports the backup absent. `ProbeCapabilitiesAsync` throws `ArgumentNullException` on a null scope and reports the caller's allowed-operation set (`BackupScopeCapabilities`) with no side effects, so a UI can grey out actions the caller cannot perform; it never replaces the fail-closed authorization each real RPC still performs. `ScheduleBackupAsync` throws `ArgumentNullException` on a null scope and `ArgumentOutOfRangeException` when `interval` is not strictly positive; it registers a recurring backup of the scope, authorized with the same grant as a capture, and returns the effective cadence actually registered (clamped up to the scheduler minimum when smaller). `GetAuthSchemeAsync` is unauthenticated - callable before any credential is acquired.
 
 ## Server-side options
 
@@ -81,7 +82,7 @@ Supplies the advertisement the unauthenticated `GetAuthScheme` RPC returns.
 
 ### `LatticeBackupApiOperation`
 
-Identifies which control-API operation an inbound call invokes, so an authorizer can make per-operation decisions. Values: `CreateBackup`, `CreateIncrementalBackup`, `CreateBackupSet`, `ListBackups`, `StreamBackups`, `DescribeBackup`, `DeleteBackup`, `RestoreBackup`, `RevertRestore`, `ExportArtifact`, and `Unknown` (an unrecognised method, presented so a deny-by-default policy refuses it rather than treating it as benign).
+Identifies which control-API operation an inbound call invokes, so an authorizer can make per-operation decisions. Values: `CreateBackup`, `CreateIncrementalBackup`, `CreateBackupSet`, `ListBackups`, `StreamBackups`, `DescribeBackup`, `DeleteBackup`, `RestoreBackup`, `RevertRestore`, `ExportArtifact`, `ScheduleBackup`, and `Unknown` (an unrecognised method, presented so a deny-by-default policy refuses it rather than treating it as benign).
 
 ### `LatticeBackupApiAuthorizationContext`
 
@@ -117,8 +118,10 @@ Each RPC's request and response is one of these Orleans-serialized records. Prop
 | `AuthSchemeAdvertisement` | `IReadOnlyList<AuthSchemeDescriptor> Schemes`. |
 | `AuthSchemeDescriptor` | `required string SchemeId`, `string DisplayName`, `IReadOnlyDictionary<string, string> Parameters`. |
 | `BackupCapabilityProbeRequest` | `required BackupScopeSelector Scope` - the scope the read-only capability probe reports on. |
+| `BackupScheduleRequestMessage` | `required BackupScopeSelector Scope`, `bool Incremental`, `long IntervalTicks` - the requested cadence between captures, sent as `TimeSpan.Ticks`. |
+| `BackupScheduleResponse` | `bool Scheduled`, `long EffectiveIntervalTicks` - the cadence actually registered (clamped up to the scheduler minimum), as `TimeSpan.Ticks`. |
 
-The `RevertRestore` RPC reuses `RestoreResponse` as its request shape (the client sends back the restore result to revert) and returns `RevertRestoreResponse`. The `ProbeCapabilities` RPC takes a `BackupCapabilityProbeRequest` and returns a `BackupScopeCapabilities` (defined in [`Orleans.Lattice.Api.Backup`](../lattice.api.backup/api.md)).
+The `RevertRestore` RPC reuses `RestoreResponse` as its request shape (the client sends back the restore result to revert) and returns `RevertRestoreResponse`. The `ProbeCapabilities` RPC takes a `BackupCapabilityProbeRequest` and returns a `BackupScopeCapabilities` (defined in [`Orleans.Lattice.Api.Backup`](../lattice.api.backup/api.md)). The `ScheduleBackup` RPC takes a `BackupScheduleRequestMessage` and returns a `BackupScheduleResponse`.
 
 ## Serialization aliases
 

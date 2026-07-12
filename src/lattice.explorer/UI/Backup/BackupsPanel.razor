@@ -86,9 +86,40 @@
             Cross-tree consistent
         </label>
 
+        <fieldset class="explorer-backups-schedule" aria-label="Recurring schedule">
+            <label title="Also register a recurring backup of the selected tree at the interval below.">
+                <input type="checkbox" checked="@_scheduleEnabled"
+                       @onchange="e => _scheduleEnabled = (bool?)e.Value ?? false"
+                       disabled="@(!CanSchedule)" />
+                Schedule recurring
+            </label>
+            <label>
+                Every
+                <input type="number" min="0" max="168" value="@_scheduleHours"
+                       @oninput="e => _scheduleHours = ParseInterval(e.Value, 0, 168)"
+                       disabled="@(!_scheduleEnabled || !CanSchedule)" aria-label="Interval hours" />
+                h
+            </label>
+            <label>
+                <input type="number" min="0" max="59" value="@_scheduleMinutes"
+                       @oninput="e => _scheduleMinutes = ParseInterval(e.Value, 0, 59)"
+                       disabled="@(!_scheduleEnabled || !CanSchedule)" aria-label="Interval minutes" />
+                m
+            </label>
+        </fieldset>
+
         <button type="button" class="explorer-btn explorer-btn-primary"
                 disabled="@(!CanBackup)" @onclick="BackupAsync">Backup</button>
     </div>
+
+    @if (_scheduleEnabled && !CanSchedule)
+    {
+        <p class="explorer-backups-hint">A recurring schedule targets a single tree - select exactly one tree.</p>
+    }
+    else if (_scheduleEnabled && ScheduleInterval <= TimeSpan.Zero)
+    {
+        <p class="explorer-backups-hint">Set a schedule interval greater than zero.</p>
+    }
 
     @if (_captureKind == BackupKind.Incremental && _selectedTrees.Count > 1)
     {
@@ -239,6 +270,9 @@
     private string _incrementalBaseId = string.Empty;
     private readonly Dictionary<string, string> _restoreTargets = new(StringComparer.Ordinal);
     private LatticeRestoreMode _restoreMode = LatticeRestoreMode.InPlace;
+    private bool _scheduleEnabled;
+    private int _scheduleHours;
+    private int _scheduleMinutes;
     private BackupRow? _pendingDelete;
     private BackupRow? _pendingRestore;
     private bool _busy;
@@ -259,11 +293,22 @@
         ? "shadow-cutover (point-in-time: the tree is rebuilt from the backup and post-backup writes are dropped)"
         : "in-place (merge: the backup is merged by last-writer-wins and post-backup writes are kept)";
 
+    // Scheduling attaches a recurring capture to a single tree; it is not offered
+    // for a multi-tree backup set (mirroring the incremental single-tree rule).
+    private bool CanSchedule => _selectedTrees.Count == 1;
+
+    private TimeSpan ScheduleInterval => new(hours: _scheduleHours, minutes: _scheduleMinutes, seconds: 0);
+
     private bool CanBackup
     {
         get
         {
             if (_busy || !HasSelection || !HasName)
+            {
+                return false;
+            }
+
+            if (_scheduleEnabled && (!CanSchedule || ScheduleInterval <= TimeSpan.Zero))
             {
                 return false;
             }
@@ -335,6 +380,21 @@
         {
             _crossTreeConsistent = false;
         }
+
+        if (!CanSchedule)
+        {
+            _scheduleEnabled = false;
+        }
+    }
+
+    private static int ParseInterval(object? value, int min, int max)
+    {
+        if (int.TryParse(value?.ToString(), out var parsed))
+        {
+            return Math.Clamp(parsed, min, max);
+        }
+
+        return min;
     }
 
     private void SetKind(BackupKind kind)
@@ -367,23 +427,51 @@
     private async Task BackupAsync()
     {
         var trees = _selectedTrees.ToList();
+        var scheduleThisRun = _scheduleEnabled && CanSchedule && ScheduleInterval > TimeSpan.Zero;
 
         if (_captureKind == BackupKind.Incremental)
         {
-            await RunAsync(() => Reader.TriggerIncrementalAsync(
-                _captureName, BackupScopeSelector.WholeTree(trees[0]), _incrementalBaseId));
+            var scope = BackupScopeSelector.WholeTree(trees[0]);
+            var capture = (Func<Task<BackupOperationResult>>)(() => Reader.TriggerIncrementalAsync(
+                _captureName, scope, _incrementalBaseId));
+            await RunCaptureAsync(capture, scheduleThisRun, scope, incremental: true);
             return;
         }
 
         if (trees.Count == 1)
         {
-            await RunAsync(() => Reader.TriggerFullAsync(
-                _captureName, BackupScopeSelector.WholeTree(trees[0])));
+            var scope = BackupScopeSelector.WholeTree(trees[0]);
+            var capture = (Func<Task<BackupOperationResult>>)(() => Reader.TriggerFullAsync(_captureName, scope));
+            await RunCaptureAsync(capture, scheduleThisRun, scope, incremental: false);
             return;
         }
 
         var scopes = trees.Select(BackupScopeSelector.WholeTree).ToList();
         await RunAsync(() => Reader.TriggerSetAsync(_captureName, scopes, _crossTreeConsistent));
+    }
+
+    // Captures now and, when a recurring schedule was requested, also registers
+    // it for the same scope and kind, surfacing a combined result.
+    private async Task RunCaptureAsync(
+        Func<Task<BackupOperationResult>> capture,
+        bool schedule,
+        BackupScopeSelector scope,
+        bool incremental)
+    {
+        if (!schedule)
+        {
+            await RunAsync(capture);
+            return;
+        }
+
+        var interval = ScheduleInterval;
+        await RunManyAsync(
+            new[]
+            {
+                capture,
+                (Func<Task<BackupOperationResult>>)(() => Reader.ScheduleAsync(scope, incremental, interval)),
+            },
+            $"Captured backup and scheduled a recurring {(incremental ? "incremental" : "full")} backup.");
     }
 
     private async Task CopyIdAsync(string id)

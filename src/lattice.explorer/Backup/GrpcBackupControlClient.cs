@@ -113,6 +113,13 @@ public sealed class GrpcBackupControlClient : IBackupControlClient, IDisposable
         return InvokeAsync(client => client.DeleteBackupAsync(backupId, cancellationToken));
     }
 
+    /// <inheritdoc />
+    public Task<TimeSpan> ScheduleBackupAsync(BackupScopeSelector scope, bool incremental, TimeSpan interval, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        return InvokeAsync(client => client.ScheduleBackupAsync(scope, incremental, interval, cancellationToken));
+    }
+
     private async Task<T> InvokeAsync<T>(Func<LatticeBackupApiGrpcClient, Task<T>> call)
     {
         var client = ResolveClient();

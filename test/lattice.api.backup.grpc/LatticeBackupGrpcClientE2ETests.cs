@@ -283,6 +283,46 @@ public sealed class LatticeBackupGrpcClientE2ETests
                 .EqualTo(global::Grpc.Core.StatusCode.FailedPrecondition));
     }
 
+    [Test]
+    public async Task ScheduleBackupAsync_registers_a_recurring_schedule_over_the_wire()
+    {
+        var scope = BackupScopeSelector.WholeTree(Source);
+
+        var effective = await _host.Client.ScheduleBackupAsync(scope, incremental: false, TimeSpan.FromMinutes(30));
+
+        var grain = _fixture.GrainFactory.GetGrain<ILatticeBackupSchedulerGrain>(BackupScopeKey.For(scope));
+        var hasFull = await grain.HasScheduleAsync(incremental: false);
+        Assert.Multiple(() =>
+        {
+            Assert.That(effective, Is.EqualTo(TimeSpan.FromMinutes(30)));
+            Assert.That(hasFull, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task ScheduleBackupAsync_clamps_a_sub_minimum_interval_and_reports_the_effective_cadence()
+    {
+        var scope = BackupScopeSelector.WholeTree("orders-clamp");
+
+        var effective = await _host.Client.ScheduleBackupAsync(scope, incremental: true, TimeSpan.FromSeconds(5));
+
+        var grain = _fixture.GrainFactory.GetGrain<ILatticeBackupSchedulerGrain>(BackupScopeKey.For(scope));
+        var hasIncremental = await grain.HasScheduleAsync(incremental: true);
+        Assert.Multiple(() =>
+        {
+            Assert.That(effective, Is.EqualTo(LatticeBackupScheduleOptions.MinimumInterval));
+            Assert.That(hasIncremental, Is.True);
+        });
+    }
+
+    [Test]
+    public void ScheduleBackupAsync_null_scope_throws()
+    {
+        Assert.That(
+            async () => await _host.Client.ScheduleBackupAsync(null!, incremental: false, TimeSpan.FromMinutes(10)),
+            Throws.ArgumentNullException);
+    }
+
     private static byte[] Bytes(string s) => Encoding.UTF8.GetBytes(s);
 
     private static string Str(byte[] b) => Encoding.UTF8.GetString(b);
