@@ -14,7 +14,19 @@ public sealed class LatticeSchemaVersionAdminTests
     {
         var store = Substitute.For<ILatticeSchemaVersionStore>();
         var provider = Substitute.For<ILatticeSchemaVersionProvider>();
-        return (new LatticeSchemaVersionAdmin(store, provider), store, provider);
+        var grainFactory = Substitute.For<IGrainFactory>();
+        return (new LatticeSchemaVersionAdmin(store, provider, grainFactory), store, provider);
+    }
+
+    private static (LatticeSchemaVersionAdmin Admin, ILatticeSchemaVersionStore Store, ILatticeSchemaVersionProvider Provider, ILatticeSchemaRemediationGrain Grain)
+        CreateWithGrain()
+    {
+        var store = Substitute.For<ILatticeSchemaVersionStore>();
+        var provider = Substitute.For<ILatticeSchemaVersionProvider>();
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var grain = Substitute.For<ILatticeSchemaRemediationGrain>();
+        grainFactory.GetGrain<ILatticeSchemaRemediationGrain>("orders").Returns(grain);
+        return (new LatticeSchemaVersionAdmin(store, provider, grainFactory), store, provider, grain);
     }
 
     [Test]
@@ -108,5 +120,91 @@ public sealed class LatticeSchemaVersionAdminTests
         Assert.That(async () => await admin.GetVersionConfigAsync(string.Empty), Throws.InstanceOf<ArgumentException>());
         Assert.That(async () => await admin.AdvanceTargetVersionAsync(null!, 2), Throws.InstanceOf<ArgumentException>());
         Assert.That(async () => await admin.ClearVersionConfigAsync(string.Empty), Throws.InstanceOf<ArgumentException>());
+        Assert.That(async () => await admin.AdvanceAndMigrateAsync(null!, 2), Throws.InstanceOf<ArgumentException>());
+        Assert.That(async () => await admin.MigrateToTargetVersionAsync(string.Empty), Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public async Task AdvanceAndMigrateAsync_advances_config_then_drives_migration_to_new_target()
+    {
+        var (admin, store, provider, grain) = CreateWithGrain();
+        store.GetConfigAsync("orders", Arg.Any<CancellationToken>())
+            .Returns(new LatticeSchemaVersionConfig(schemaId: 7, targetVersion: 2));
+        var terminal = LatticeSchemaRemediationReport.Completed(3, "orders/remediated/op", "op");
+        grain.StartVersionMigrationAsync(7, 5, Arg.Any<CancellationToken>()).Returns(terminal);
+
+        var report = await admin.AdvanceAndMigrateAsync("orders", 5);
+
+        // Config advanced and cache invalidated (the lazy path), then the eager
+        // migration re-stamped to the newly advanced target.
+        await store.Received(1).SetConfigAsync(
+            "orders",
+            Arg.Is<LatticeSchemaVersionConfig>(c => c.TargetVersion == 5 && c.SchemaId == 7),
+            Arg.Any<CancellationToken>());
+        provider.Received(1).Invalidate("orders");
+        await grain.Received(1).StartVersionMigrationAsync(7, 5, Arg.Any<CancellationToken>());
+        Assert.That(report, Is.EqualTo(terminal));
+    }
+
+    [Test]
+    public void AdvanceAndMigrateAsync_non_advancing_target_throws()
+    {
+        var (admin, store, _, _) = CreateWithGrain();
+        store.GetConfigAsync("orders", Arg.Any<CancellationToken>())
+            .Returns(new LatticeSchemaVersionConfig(7, targetVersion: 3));
+
+        Assert.That(
+            async () => await admin.AdvanceAndMigrateAsync("orders", 3),
+            Throws.InstanceOf<InvalidOperationException>());
+    }
+
+    [Test]
+    public void AdvanceAndMigrateAsync_reserved_tree_throws()
+    {
+        var (admin, _, _, _) = CreateWithGrain();
+
+        Assert.That(
+            async () => await admin.AdvanceAndMigrateAsync("sys-schema-orders", 5),
+            Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public async Task MigrateToTargetVersionAsync_drives_migration_to_current_target()
+    {
+        var (admin, store, _, grain) = CreateWithGrain();
+        store.GetConfigAsync("orders", Arg.Any<CancellationToken>())
+            .Returns(new LatticeSchemaVersionConfig(schemaId: 7, targetVersion: 4));
+        var terminal = LatticeSchemaRemediationReport.Completed(2, "orders/remediated/op", "op");
+        grain.StartVersionMigrationAsync(7, 4, Arg.Any<CancellationToken>()).Returns(terminal);
+
+        var report = await admin.MigrateToTargetVersionAsync("orders");
+
+        // No config advance: re-stamp to the tree's current target.
+        await store.DidNotReceive().SetConfigAsync(
+            Arg.Any<string>(), Arg.Any<LatticeSchemaVersionConfig>(), Arg.Any<CancellationToken>());
+        await grain.Received(1).StartVersionMigrationAsync(7, 4, Arg.Any<CancellationToken>());
+        Assert.That(report, Is.EqualTo(terminal));
+    }
+
+    [Test]
+    public void MigrateToTargetVersionAsync_unversioned_tree_throws()
+    {
+        var (admin, store, _, _) = CreateWithGrain();
+        store.GetConfigAsync("orders", Arg.Any<CancellationToken>())
+            .Returns((LatticeSchemaVersionConfig?)null);
+
+        Assert.That(
+            async () => await admin.MigrateToTargetVersionAsync("orders"),
+            Throws.InstanceOf<InvalidOperationException>());
+    }
+
+    [Test]
+    public void MigrateToTargetVersionAsync_reserved_tree_throws()
+    {
+        var (admin, _, _, _) = CreateWithGrain();
+
+        Assert.That(
+            async () => await admin.MigrateToTargetVersionAsync("sys-schema-orders"),
+            Throws.InstanceOf<ArgumentException>());
     }
 }

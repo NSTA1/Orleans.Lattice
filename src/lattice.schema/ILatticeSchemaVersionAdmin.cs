@@ -57,6 +57,46 @@ public interface ILatticeSchemaVersionAdmin
         string treeId, uint newTargetVersion, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Advances <paramref name="treeId"/>'s target schema version to
+    /// <paramref name="newTargetVersion"/> <b>and</b> kicks off a background eager
+    /// migration that re-stamps every existing value to the new target, in one call.
+    /// The advance reuses <see cref="AdvanceTargetVersionAsync"/>'s validation (the
+    /// tree must be versioned and the new target strictly greater) and takes effect
+    /// immediately for new writes; the migration then re-stamps existing values by
+    /// upcasting each through the registered upcaster chain and re-enveloping it at
+    /// the new target, so steady-state reads stop paying the per-read upcast cost.
+    /// It aborts on the first value that cannot be upcast, naming the offending key
+    /// and a value preview and leaving the tree's data untouched. If the tree has an
+    /// enforcement policy, the re-stamped values are validated against it during the
+    /// build; the policy itself is left unchanged. (<see cref="LatticeOperation.SchemaAdmin"/>.)
+    /// </summary>
+    /// <param name="treeId">The governed tree id. Must not be <c>null</c>, empty, or reserved.</param>
+    /// <param name="newTargetVersion">The new target version. Must be greater than the current target.</param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>The terminal migration report: <see cref="LatticeSchemaRemediationReport.Succeeded"/> on cutover, or <see cref="LatticeSchemaRemediationReport.DidAbort"/> with the first offending entry.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved.</exception>
+    /// <exception cref="InvalidOperationException">The tree is unversioned, <paramref name="newTargetVersion"/> does not advance the current target, or schema versioning is not registered.</exception>
+    Task<LatticeSchemaRemediationReport> AdvanceAndMigrateAsync(
+        string treeId, uint newTargetVersion, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Runs (or idempotently resumes / no-ops) an eager migration that re-stamps
+    /// every existing value of <paramref name="treeId"/> to the tree's <b>current</b>
+    /// target version - the eager pass an operator or a retry can invoke repeatedly
+    /// without advancing the target. It is a no-op success when the tree is already
+    /// fully migrated, resumes an in-flight migration idempotently, and aborts on the
+    /// first value that cannot be upcast, leaving the tree's data untouched.
+    /// (<see cref="LatticeOperation.SchemaAdmin"/>.)
+    /// </summary>
+    /// <param name="treeId">The governed tree id. Must not be <c>null</c>, empty, or reserved.</param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>The terminal migration report.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved.</exception>
+    /// <exception cref="InvalidOperationException">The tree is unversioned, or schema versioning is not registered.</exception>
+    Task<LatticeSchemaRemediationReport> MigrateToTargetVersionAsync(
+        string treeId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Opts <paramref name="treeId"/> back out of envelope versioning. New writes are
     /// no longer stamped; already-stamped values remain self-describing and are still
     /// stripped on read. (<see cref="LatticeOperation.SchemaAdmin"/>.)

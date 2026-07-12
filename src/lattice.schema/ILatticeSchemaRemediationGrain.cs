@@ -39,6 +39,30 @@ internal interface ILatticeSchemaRemediationGrain : IGrainWithStringKey
     /// </summary>
     Task RunRemediationPassAsync();
 
+    /// <summary>
+    /// Starts (or idempotently resumes / no-ops) an eager schema-version migration
+    /// of the tree: re-stamp every existing value to <paramref name="targetVersion"/>
+    /// by upcasting each value from its own stamped version through the registered
+    /// upcaster chain, validate the upcast value against the tree's existing
+    /// enforcement policy (when it has one), and - only if every value re-stamps -
+    /// cut the tree over to the re-stamped destination, leaving the tree's policy
+    /// untouched. Aborts on the first value that cannot be upcast, naming the
+    /// offending key and a value preview and leaving the original tree untouched.
+    /// <para>
+    /// Idempotent: a call while a migration to the same <c>(schemaId, targetVersion)</c>
+    /// is in flight resumes it; a call after the tree is already fully migrated to
+    /// <paramref name="targetVersion"/> is a no-op success; a call while a build with
+    /// different parameters is in flight throws <see cref="InvalidOperationException"/>.
+    /// </para>
+    /// </summary>
+    /// <param name="schemaId">The schema-family id to stamp legacy un-enveloped values with.</param>
+    /// <param name="targetVersion">The target schema version to re-stamp every value to.</param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>The terminal report (completed or aborted).</returns>
+    /// <exception cref="InvalidOperationException">Schema versioning is not registered, or a build with different parameters is already in flight.</exception>
+    Task<LatticeSchemaRemediationReport> StartVersionMigrationAsync(
+        uint schemaId, uint targetVersion, CancellationToken cancellationToken = default);
+
     /// <summary>Reads the current or last-known remediation status for the tree.</summary>
     Task<LatticeSchemaRemediationReport> GetStatusAsync();
 }

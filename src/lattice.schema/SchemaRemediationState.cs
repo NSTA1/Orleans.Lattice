@@ -46,4 +46,38 @@ internal sealed class SchemaRemediationState
     /// cutover arm the correct shards.
     /// </summary>
     [Id(8)] public string? SourcePhysicalTreeId { get; set; }
+
+    /// <summary>
+    /// The build mode. <see cref="SchemaRemediationMode.Transform"/> (the default,
+    /// so pre-existing durable state deserializes unchanged) applies the static
+    /// <see cref="Transform"/> and installs <see cref="TargetPolicy"/> at cutover;
+    /// <see cref="SchemaRemediationMode.SchemaVersionMigration"/> re-stamps each
+    /// value to <see cref="MigrationTargetVersion"/> through the schema registry and
+    /// leaves the tree's existing policy untouched.
+    /// </summary>
+    [Id(9)] public SchemaRemediationMode Mode { get; set; }
+
+    /// <summary>
+    /// The schema-family id an eager version migration re-stamps values to. Meaningful
+    /// only when <see cref="Mode"/> is
+    /// <see cref="SchemaRemediationMode.SchemaVersionMigration"/>. Persisted so a
+    /// failover resumes and re-evaluates the migration identically.
+    /// </summary>
+    [Id(10)] public uint MigrationSchemaId { get; set; }
+
+    /// <summary>
+    /// The target schema version an eager version migration re-stamps values to.
+    /// Meaningful only when <see cref="Mode"/> is
+    /// <see cref="SchemaRemediationMode.SchemaVersionMigration"/>. Persisted so a
+    /// failover resumes and re-evaluates the migration identically.
+    /// </summary>
+    [Id(11)] public uint MigrationTargetVersion { get; set; }
+
+    /// <summary>
+    /// The schema version the last successful eager migration re-stamped the tree
+    /// to (<c>0</c> until the first migration completes). Lets a repeat
+    /// <c>MigrateToTargetVersionAsync</c> to an already-migrated target short-circuit
+    /// to a no-op success instead of rebuilding an identical destination.
+    /// </summary>
+    [Id(12)] public uint LastCompletedMigrationVersion { get; set; }
 }

@@ -55,6 +55,48 @@ public static class LatticeSchemaRemediation
         ArgumentNullException.ThrowIfNull(candidatePolicy);
 
         var compiled = CompiledSchemaPolicy.Compile(candidatePolicy);
+        return await DryRunCoreAsync(
+            entries,
+            value => LatticeValueTransformEvaluation.Evaluate(value, in transform),
+            policyView: null,
+            compiled,
+            previewMaxBytes,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The shared read-only dry-run loop over <paramref name="entries"/>: rewrite
+    /// each value with <paramref name="rewrite"/>, optionally project it to the shape
+    /// the policy validates with <paramref name="policyView"/>, optionally revalidate
+    /// that projection against <paramref name="policy"/>, and abort on the first
+    /// offending entry. Both the enforcement-transform and the
+    /// schema-version-migration shadow builds funnel through it, so the abort contract
+    /// (first offending key / reason / value preview) is identical across modes.
+    /// </summary>
+    /// <param name="entries">The existing (key, value) entries to scan.</param>
+    /// <param name="rewrite">
+    /// The per-value rewrite. It throws <see cref="InvalidOperationException"/> (a
+    /// malformed / not-rewritable value) or <see cref="NotSupportedException"/> (a
+    /// value with no upcaster hop, or newer than the target) to signal a per-value
+    /// abort.
+    /// </param>
+    /// <param name="policyView">
+    /// Projects the rewritten value to the bytes the policy validates, or <c>null</c>
+    /// to validate the rewritten value directly. A schema-version migration stores an
+    /// enveloped value but validates its plain upcast body, so this strips the
+    /// envelope.
+    /// </param>
+    /// <param name="policy">The compiled policy the projected value must satisfy, or <c>null</c> to skip revalidation.</param>
+    /// <param name="previewMaxBytes">Maximum leading bytes copied into an offending-value preview. Clamped to at least 1.</param>
+    /// <param name="cancellationToken">Cancels the scan.</param>
+    internal static async Task<LatticeSchemaRemediationOutcome> DryRunCoreAsync(
+        IAsyncEnumerable<KeyValuePair<string, byte[]>> entries,
+        Func<byte[], byte[]> rewrite,
+        Func<byte[], byte[]>? policyView,
+        CompiledSchemaPolicy? policy,
+        int previewMaxBytes,
+        CancellationToken cancellationToken)
+    {
         var bound = Math.Max(1, previewMaxBytes);
         var scanned = 0;
 
@@ -62,22 +104,23 @@ public static class LatticeSchemaRemediation
         {
             scanned++;
 
-            byte[] transformed;
+            byte[] rewritten;
             try
             {
-                transformed = LatticeValueTransformEvaluation.Evaluate(entry.Value, in transform);
+                rewritten = rewrite(entry.Value);
             }
-            catch (InvalidOperationException ex)
+            catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
             {
                 return LatticeSchemaRemediationOutcome.Aborted(
                     scanned, entry.Key, ex.Message, Preview(entry.Value, bound));
             }
 
-            var reason = compiled.Validate(transformed);
+            var validated = policyView is null ? rewritten : policyView(rewritten);
+            var reason = policy?.Validate(validated);
             if (reason is not null)
             {
                 return LatticeSchemaRemediationOutcome.Aborted(
-                    scanned, entry.Key, reason, Preview(transformed, bound));
+                    scanned, entry.Key, reason, Preview(validated, bound));
             }
         }
 

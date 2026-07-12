@@ -27,6 +27,19 @@ namespace Orleans.Lattice.Schema;
 /// A duplicate trigger with the same parameters resumes idempotently; a trigger
 /// with different parameters while a remediation is in flight throws.
 /// <para>
+/// <b>Two build modes.</b> The same dry-run / build / cutover / durable-state /
+/// idempotent-resume / abort machinery serves both an enforcement remediation
+/// (<see cref="StartAsync"/>: one static <see cref="LatticeValueTransform"/> per
+/// value, revalidated against a <b>new</b> target policy that is installed at
+/// cutover) and an eager schema-version migration
+/// (<see cref="StartVersionMigrationAsync"/>: each value re-stamped to the tree's
+/// target schema version through the registry's upcaster chain, revalidated against
+/// the tree's <b>existing</b> policy when it has one, which is left untouched at
+/// cutover). <see cref="SchemaRemediationState.Mode"/> selects the per-value rewrite
+/// and the cutover policy behaviour; both are persisted before any side effect so a
+/// failover resumes and re-evaluates identically.
+/// </para>
+/// <para>
 /// <b>Concurrent-writes contract (v1).</b> The build copies at the logical
 /// <see cref="ILattice"/> level and does not shadow-forward writes that land on the
 /// source during the build window, so remediation requires the tree be
@@ -41,12 +54,13 @@ namespace Orleans.Lattice.Schema;
 internal sealed class LatticeSchemaRemediationGrain(
     IGrainContext context,
     IGrainFactory grainFactory,
-    ILatticeSchemaPolicyStore policyStore,
-    ILatticeSchemaPolicyProvider policyProvider,
     IOptions<LatticeSchemaEnforcementOptions> options,
     ILogger<LatticeSchemaRemediationGrain> logger,
     [PersistentState("schema-remediation", LatticeOptions.StorageProviderName)]
-    IPersistentState<SchemaRemediationState> state)
+    IPersistentState<SchemaRemediationState> state,
+    ILatticeSchemaPolicyStore? policyStore = null,
+    ILatticeSchemaPolicyProvider? policyProvider = null,
+    ILatticeSchemaRegistry? schemaRegistry = null)
     : IGrainBase, ILatticeSchemaRemediationGrain
 {
     private readonly int _previewMaxBytes = Math.Max(1, options.Value.DeadLetterPreviewMaxBytes);
@@ -80,6 +94,45 @@ internal sealed class LatticeSchemaRemediationGrain(
         }
 
         await InitiateAsync(transform, targetPolicy);
+        await RunRemediationPassAsync();
+        return GetStatus();
+    }
+
+    /// <inheritdoc />
+    public async Task<LatticeSchemaRemediationReport> StartVersionMigrationAsync(
+        uint schemaId, uint targetVersion, CancellationToken cancellationToken = default)
+    {
+        if (schemaRegistry is null)
+        {
+            throw new InvalidOperationException(
+                $"Schema versioning is not registered on this silo; a schema-version migration of tree '{TreeId}' " +
+                "cannot run. Call AddLatticeSchemaVersioning(...) on the silo.");
+        }
+
+        if (state.State.InProgress)
+        {
+            if (IsSameMigration(schemaId, targetVersion))
+            {
+                // Idempotent resume: drive the in-flight migration to completion.
+                await RunRemediationPassAsync();
+                return GetStatus();
+            }
+
+            throw new InvalidOperationException(
+                $"A schema remediation is already in progress for tree '{TreeId}' with different parameters.");
+        }
+
+        // Already fully migrated to this exact (schema, version): a genuine no-op
+        // success, so a repeat / retry does not rebuild an identical destination.
+        if (state.State.Mode == SchemaRemediationMode.SchemaVersionMigration
+            && state.State.LastReport is { Succeeded: true }
+            && state.State.MigrationSchemaId == schemaId
+            && state.State.LastCompletedMigrationVersion == targetVersion)
+        {
+            return GetStatus();
+        }
+
+        await InitiateMigrationAsync(schemaId, targetVersion);
         await RunRemediationPassAsync();
         return GetStatus();
     }
@@ -137,7 +190,49 @@ internal sealed class LatticeSchemaRemediationGrain(
         return state.State.LastReport ?? LatticeSchemaRemediationReport.Idle;
     }
 
-    private async Task InitiateAsync(LatticeValueTransform transform, LatticeSchemaPolicy targetPolicy)
+    private Task InitiateAsync(LatticeValueTransform transform, LatticeSchemaPolicy targetPolicy) =>
+        InitiateCoreAsync(SchemaRemediationMode.Transform, transform, targetPolicy, migrationSchemaId: 0, migrationTargetVersion: 0);
+
+    /// <summary>
+    /// Reads the tree's current enforcement policy (when it has one) and starts a
+    /// schema-version migration against it. The policy, if present, is validated
+    /// post-upcast during the build but is <b>not</b> reinstalled at cutover (it is
+    /// keyed by the logical tree id, so the alias flip leaves it governing the tree
+    /// unchanged - tightening a policy is the separate enforcement-remediation path).
+    /// </summary>
+    private async Task InitiateMigrationAsync(uint schemaId, uint targetVersion)
+    {
+        LatticeSchemaPolicy? existingPolicy;
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            existingPolicy = policyStore is null
+                ? null
+                : await policyStore.GetPolicyAsync(TreeId);
+        }
+
+        // Reject an uncompilable existing policy up front rather than mid-build. A
+        // policy that reached the store is already validated, so this is defensive.
+        if (existingPolicy is { } policy)
+        {
+            _ = CompiledSchemaPolicy.Compile(policy);
+        }
+
+        await InitiateCoreAsync(
+            SchemaRemediationMode.SchemaVersionMigration, transform: default, existingPolicy, schemaId, targetVersion);
+    }
+
+    /// <summary>
+    /// Persists the intent to run a shadow build (in either mode) before any
+    /// external side effect, snapshotting every field this method writes so a
+    /// transient <c>WriteStateAsync</c> failure cannot leak in-memory mutations past
+    /// the <see cref="SchemaRemediationState.InProgress"/> guard.
+    /// </summary>
+    private async Task InitiateCoreAsync(
+        SchemaRemediationMode mode,
+        LatticeValueTransform transform,
+        LatticeSchemaPolicy? targetPolicy,
+        uint migrationSchemaId,
+        uint migrationTargetVersion)
     {
         var operationId = Guid.NewGuid().ToString("N");
         var destinationTreeId = $"{TreeId}/remediated/{operationId}";
@@ -163,6 +258,9 @@ internal sealed class LatticeSchemaRemediationGrain(
         var prevLastReport = state.State.LastReport;
         var prevScannedCount = state.State.ScannedCount;
         var prevSourcePhysical = state.State.SourcePhysicalTreeId;
+        var prevMode = state.State.Mode;
+        var prevMigrationSchemaId = state.State.MigrationSchemaId;
+        var prevMigrationTargetVersion = state.State.MigrationTargetVersion;
 
         // Persist intent BEFORE any external side effect.
         state.State.InProgress = true;
@@ -174,6 +272,9 @@ internal sealed class LatticeSchemaRemediationGrain(
         state.State.LastReport = null;
         state.State.ScannedCount = 0;
         state.State.SourcePhysicalTreeId = sourcePhysical;
+        state.State.Mode = mode;
+        state.State.MigrationSchemaId = migrationSchemaId;
+        state.State.MigrationTargetVersion = migrationTargetVersion;
         try
         {
             await state.WriteStateAsync();
@@ -189,6 +290,9 @@ internal sealed class LatticeSchemaRemediationGrain(
             state.State.LastReport = prevLastReport;
             state.State.ScannedCount = prevScannedCount;
             state.State.SourcePhysicalTreeId = prevSourcePhysical;
+            state.State.Mode = prevMode;
+            state.State.MigrationSchemaId = prevMigrationSchemaId;
+            state.State.MigrationTargetVersion = prevMigrationTargetVersion;
             throw;
         }
     }
@@ -201,11 +305,13 @@ internal sealed class LatticeSchemaRemediationGrain(
     private async Task<bool> RunDryRunGateAsync()
     {
         var source = grainFactory.GetGrain<ILattice>(TreeId);
-        var outcome = await LatticeSchemaRemediation.DryRunAsync(
+        var outcome = await LatticeSchemaRemediation.DryRunCoreAsync(
             source.EntriesAsync(),
-            state.State.Transform,
-            state.State.TargetPolicy!,
-            _previewMaxBytes);
+            RewriteValue,
+            PolicyViewOrNull(),
+            CompiledPolicyOrNull(),
+            _previewMaxBytes,
+            CancellationToken.None);
 
         if (!outcome.Succeeded)
         {
@@ -219,48 +325,98 @@ internal sealed class LatticeSchemaRemediationGrain(
     }
 
     /// <summary>
-    /// Populates the destination physical tree with transformed, revalidated
-    /// values. Returns <c>true</c> to advance to cutover, <c>false</c> when the
-    /// remediation aborted (the partial destination is discarded).
+    /// Populates the destination physical tree with rewritten, revalidated values.
+    /// Returns <c>true</c> to advance to cutover, <c>false</c> when the remediation
+    /// aborted (the partial destination is discarded).
     /// </summary>
     private async Task<bool> BuildDestinationAsync()
     {
         var source = grainFactory.GetGrain<ILattice>(TreeId);
         var destination = grainFactory.GetGrain<ILattice>(state.State.DestinationTreeId!);
-        var compiled = CompiledSchemaPolicy.Compile(state.State.TargetPolicy!);
-        var transform = state.State.Transform;
+        var compiled = CompiledPolicyOrNull();
+        var policyView = PolicyViewOrNull();
         var scanned = 0;
 
         await foreach (var entry in source.EntriesAsync())
         {
             scanned++;
 
-            byte[] transformed;
+            byte[] rewritten;
             try
             {
-                transformed = LatticeValueTransformEvaluation.Evaluate(entry.Value, in transform);
+                rewritten = RewriteValue(entry.Value);
             }
-            catch (InvalidOperationException ex)
+            catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
             {
                 await DiscardDestinationAsync(destination);
                 await AbortAsync(scanned, entry.Key, ex.Message, Preview(entry.Value));
                 return false;
             }
 
-            var reason = compiled.Validate(transformed);
+            var validated = policyView is null ? rewritten : policyView(rewritten);
+            var reason = compiled?.Validate(validated);
             if (reason is not null)
             {
                 await DiscardDestinationAsync(destination);
-                await AbortAsync(scanned, entry.Key, reason, Preview(transformed));
+                await AbortAsync(scanned, entry.Key, reason, Preview(validated));
                 return false;
             }
 
-            await destination.SetAsync(entry.Key, transformed);
+            await destination.SetAsync(entry.Key, rewritten);
         }
 
         await AdvancePhaseAsync(LatticeSchemaRemediationPhase.Cutover, scanned);
         return true;
     }
+
+    /// <summary>
+    /// Rewrites a single source value for the current build mode:
+    /// <see cref="SchemaRemediationMode.Transform"/> evaluates the static transform;
+    /// <see cref="SchemaRemediationMode.SchemaVersionMigration"/> re-stamps the value
+    /// to the target schema version through the registry. Throws
+    /// <see cref="InvalidOperationException"/> or <see cref="NotSupportedException"/>
+    /// on a per-value failure, which the dry-run / build turns into an abort.
+    /// </summary>
+    private byte[] RewriteValue(byte[] value)
+    {
+        if (state.State.Mode == SchemaRemediationMode.SchemaVersionMigration)
+        {
+            var registry = schemaRegistry
+                ?? throw new InvalidOperationException(
+                    $"Schema versioning is not registered on this silo; cannot resume the version migration of tree '{TreeId}'.");
+            return LatticeSchemaVersionMigration.Migrate(
+                value, state.State.MigrationSchemaId, state.State.MigrationTargetVersion, registry);
+        }
+
+        var transform = state.State.Transform;
+        return LatticeValueTransformEvaluation.Evaluate(value, in transform);
+    }
+
+    /// <summary>
+    /// Compiles the target policy for build-time revalidation, or returns <c>null</c>
+    /// when the tree has no policy (a pure version migration of an unenforced tree).
+    /// </summary>
+    private CompiledSchemaPolicy? CompiledPolicyOrNull() =>
+        state.State.TargetPolicy is { } policy ? CompiledSchemaPolicy.Compile(policy) : null;
+
+    /// <summary>
+    /// Projects a rewritten value to the shape the policy validates. In
+    /// <see cref="SchemaRemediationMode.SchemaVersionMigration"/> the stored value is
+    /// enveloped, but the enforcement policy must see the plain upcast body (a JSON
+    /// rule cannot parse the binary envelope header), so this strips the envelope.
+    /// Returns <c>null</c> in <see cref="SchemaRemediationMode.Transform"/>, where the
+    /// rewritten value is already the plain value the policy validates directly.
+    /// </summary>
+    private Func<byte[], byte[]>? PolicyViewOrNull() =>
+        state.State.Mode == SchemaRemediationMode.SchemaVersionMigration ? StripEnvelopeForPolicy : null;
+
+    /// <summary>
+    /// Strips the schema envelope so the enforcement policy validates the plain upcast
+    /// body. A value that is not enveloped (a legacy value migrated in place) is
+    /// validated as-is.
+    /// </summary>
+    private static byte[] StripEnvelopeForPolicy(byte[] rewritten) =>
+        LatticeSchemaEnvelope.IsEnveloped(rewritten) ? LatticeSchemaEnvelope.StripToBody(rewritten) : rewritten;
 
     /// <summary>
     /// Atomically repoints the logical tree to the destination, arms the source
@@ -293,8 +449,17 @@ internal sealed class LatticeSchemaRemediationGrain(
         // can never reject an existing destination value. Evict the local policy
         // cache eagerly (as the admin does) so the coordinating silo enforces the new
         // policy on its next write without waiting for the change feed to propagate.
-        await policyStore.SetPolicyAsync(TreeId, state.State.TargetPolicy!);
-        policyProvider.Invalidate(TreeId);
+        //
+        // Only the enforcement-transform mode installs a policy. A pure version
+        // migration validates each value against the tree's EXISTING policy during
+        // the build but does not change it: the policy is keyed by the logical tree
+        // id, so the alias flip leaves it governing the re-stamped destination
+        // unchanged. (Tightening a policy is the separate enforcement path.)
+        if (state.State.Mode == SchemaRemediationMode.Transform)
+        {
+            await policyStore!.SetPolicyAsync(TreeId, state.State.TargetPolicy!);
+            policyProvider!.Invalidate(TreeId);
+        }
 
         // Repoint the logical tree to the remediated destination.
         await registry.SetAliasAsync(TreeId, destinationPhysical);
@@ -360,11 +525,20 @@ internal sealed class LatticeSchemaRemediationGrain(
         var prevInProgress = state.State.InProgress;
         var prevPhase = state.State.Phase;
         var prevLastReport = state.State.LastReport;
+        var prevLastCompletedMigrationVersion = state.State.LastCompletedMigrationVersion;
 
         state.State.InProgress = false;
         state.State.Phase = LatticeSchemaRemediationPhase.Completed;
         state.State.LastReport = LatticeSchemaRemediationReport.Completed(
             state.State.ScannedCount, state.State.DestinationTreeId!, state.State.OperationId!);
+
+        // Record the version a successful migration re-stamped the tree to, so a
+        // repeat MigrateToTargetVersionAsync to the same target short-circuits.
+        if (state.State.Mode == SchemaRemediationMode.SchemaVersionMigration)
+        {
+            state.State.LastCompletedMigrationVersion = state.State.MigrationTargetVersion;
+        }
+
         try
         {
             await state.WriteStateAsync();
@@ -374,6 +548,7 @@ internal sealed class LatticeSchemaRemediationGrain(
             state.State.InProgress = prevInProgress;
             state.State.Phase = prevPhase;
             state.State.LastReport = prevLastReport;
+            state.State.LastCompletedMigrationVersion = prevLastCompletedMigrationVersion;
             throw;
         }
     }
@@ -405,7 +580,14 @@ internal sealed class LatticeSchemaRemediationGrain(
     }
 
     private bool IsSameParameters(LatticeValueTransform transform, LatticeSchemaPolicy targetPolicy) =>
-        state.State.Transform.Equals(transform) && PolicyEquivalent(state.State.TargetPolicy, targetPolicy);
+        state.State.Mode == SchemaRemediationMode.Transform
+            && state.State.Transform.Equals(transform)
+            && PolicyEquivalent(state.State.TargetPolicy, targetPolicy);
+
+    private bool IsSameMigration(uint schemaId, uint targetVersion) =>
+        state.State.Mode == SchemaRemediationMode.SchemaVersionMigration
+            && state.State.MigrationSchemaId == schemaId
+            && state.State.MigrationTargetVersion == targetVersion;
 
     private static bool PolicyEquivalent(LatticeSchemaPolicy? a, LatticeSchemaPolicy? b)
     {

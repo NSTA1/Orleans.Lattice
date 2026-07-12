@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -35,6 +36,17 @@ public class LatticeSchemaRemediationGrainTests
         await Task.CompletedTask;
     }
 
+    private static async IAsyncEnumerable<KeyValuePair<string, byte[]>> EntriesBytes(
+        params (string Key, byte[] Value)[] items)
+    {
+        foreach (var (key, value) in items)
+        {
+            yield return new KeyValuePair<string, byte[]>(key, value);
+        }
+
+        await Task.CompletedTask;
+    }
+
     private sealed class Harness
     {
         public required LatticeSchemaRemediationGrain Grain { get; init; }
@@ -42,18 +54,36 @@ public class LatticeSchemaRemediationGrainTests
         public required ILattice Destination { get; init; }
         public required ILatticeRegistry Registry { get; init; }
         public required ILatticeSchemaPolicyStore PolicyStore { get; init; }
+        public required ILatticeSchemaPolicyProvider PolicyProvider { get; init; }
+        public required ILatticeSchemaRegistry SchemaRegistry { get; init; }
         public required FakePersistentState<SchemaRemediationState> State { get; init; }
     }
 
     private static Harness CreateGrain(
         (string Key, string Value)[] sourceEntries,
-        SchemaRemediationState? seedState = null)
+        SchemaRemediationState? seedState = null,
+        ILatticeSchemaRegistry? schemaRegistry = null,
+        LatticeSchemaPolicy? existingPolicy = null) =>
+        CreateGrainCore(() => Entries(sourceEntries), seedState, schemaRegistry, existingPolicy);
+
+    private static Harness CreateGrainBytes(
+        (string Key, byte[] Value)[] sourceEntries,
+        SchemaRemediationState? seedState = null,
+        ILatticeSchemaRegistry? schemaRegistry = null,
+        LatticeSchemaPolicy? existingPolicy = null) =>
+        CreateGrainCore(() => EntriesBytes(sourceEntries), seedState, schemaRegistry, existingPolicy);
+
+    private static Harness CreateGrainCore(
+        Func<IAsyncEnumerable<KeyValuePair<string, byte[]>>> entriesFactory,
+        SchemaRemediationState? seedState,
+        ILatticeSchemaRegistry? schemaRegistry,
+        LatticeSchemaPolicy? existingPolicy)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("remediation", TreeId));
 
         var source = Substitute.For<ILattice>();
-        source.EntriesAsync().Returns(_ => Entries(sourceEntries));
+        source.EntriesAsync().Returns(_ => entriesFactory());
         // Source routing for cutover: a single-shard identity map on the physical
         // tree that equals the (never-aliased) logical tree id.
         source.GetRoutingAsync().Returns(new ValueTask<RoutingInfo>(
@@ -76,6 +106,7 @@ public class LatticeSchemaRemediationGrainTests
         grainFactory.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(shard);
 
         var policyStore = Substitute.For<ILatticeSchemaPolicyStore>();
+        policyStore.GetPolicyAsync(TreeId, Arg.Any<CancellationToken>()).Returns(existingPolicy);
         var policyProvider = Substitute.For<ILatticeSchemaPolicyProvider>();
 
         var state = new FakePersistentState<SchemaRemediationState>();
@@ -89,11 +120,12 @@ public class LatticeSchemaRemediationGrainTests
         var grain = new LatticeSchemaRemediationGrain(
             context,
             grainFactory,
-            policyStore,
-            policyProvider,
             options,
             NullLogger<LatticeSchemaRemediationGrain>.Instance,
-            state);
+            state,
+            policyStore,
+            policyProvider,
+            schemaRegistry);
 
         return new Harness
         {
@@ -102,6 +134,8 @@ public class LatticeSchemaRemediationGrainTests
             Destination = destination,
             Registry = registry,
             PolicyStore = policyStore,
+            PolicyProvider = policyProvider,
+            SchemaRegistry = schemaRegistry ?? Substitute.For<ILatticeSchemaRegistry>(),
             State = state,
         };
     }
@@ -109,6 +143,253 @@ public class LatticeSchemaRemediationGrainTests
     private static LatticeSchemaPolicy JsonPolicy() => new(new[] { LatticeSchemaRule.Json() });
 
     private static LatticeSchemaPolicy MaxLenPolicy(int max) => new(new[] { LatticeSchemaRule.MaxLength(max) });
+
+    // ---- Schema-version-migration helpers -------------------------------------
+
+    private const uint MigSchemaId = 7;
+
+    private static byte[] Env(uint version, string body) =>
+        LatticeSchemaEnvelope.Encode(MigSchemaId, version, Utf8(body));
+
+    private static uint VersionOf(byte[] value)
+    {
+        LatticeSchemaEnvelope.TryReadHeader(value, out _, out var version);
+        return version;
+    }
+
+    /// <summary>
+    /// A registry whose upcaster applies <paramref name="bodyMap"/> (identity when
+    /// null) for any forward hop and throws <see cref="NotSupportedException"/> on a
+    /// downcast (target version not strictly greater than the stored version),
+    /// mirroring the real registry's abort contract.
+    /// </summary>
+    private static ILatticeSchemaRegistry MigratingRegistry(Func<byte[], byte[]>? bodyMap = null)
+    {
+        var registry = Substitute.For<ILatticeSchemaRegistry>();
+        registry.Upcast(MigSchemaId, Arg.Any<uint>(), Arg.Any<uint>(), Arg.Any<byte[]>())
+            .Returns(ci =>
+            {
+                var from = (uint)ci[1];
+                var to = (uint)ci[2];
+                var body = (byte[])ci[3];
+                if (to <= from)
+                {
+                    throw new NotSupportedException($"No downcast from v{from} to v{to}.");
+                }
+
+                return bodyMap is null ? body : bodyMap(body);
+            });
+        return registry;
+    }
+
+    /// <summary>A registry with no registered hop: every upcast throws.</summary>
+    private static ILatticeSchemaRegistry NoHopRegistry()
+    {
+        var registry = Substitute.For<ILatticeSchemaRegistry>();
+        registry.Upcast(Arg.Any<uint>(), Arg.Any<uint>(), Arg.Any<uint>(), Arg.Any<byte[]>())
+            .Returns<byte[]>(_ => throw new NotSupportedException("No registered upcaster."));
+        return registry;
+    }
+
+    [Test]
+    public async Task StartVersionMigrationAsync_restamps_mixed_versions_to_target_and_cuts_over()
+    {
+        var registry = MigratingRegistry();
+        var h = CreateGrainBytes(
+            new[]
+            {
+                ("k1", Env(1, "{\"a\":1}")),
+                ("k2", Env(2, "{\"b\":2}")), // already at target: idempotent pass-through
+            },
+            schemaRegistry: registry);
+
+        var report = await h.Grain.StartVersionMigrationAsync(MigSchemaId, 2);
+
+        Assert.That(report.Succeeded, Is.True);
+        Assert.That(report.Phase, Is.EqualTo(LatticeSchemaRemediationPhase.Completed));
+        Assert.That(report.ScannedCount, Is.EqualTo(2));
+
+        // Both destination values are stamped at the target version.
+        await h.Destination.Received(1).SetAsync("k1", Arg.Is<byte[]>(v => VersionOf(v) == 2));
+        await h.Destination.Received(1).SetAsync("k2", Arg.Is<byte[]>(v => VersionOf(v) == 2));
+
+        // Only the below-target value needed an upcast hop; the at-target value passed through.
+        registry.Received().Upcast(MigSchemaId, 1, 2, Arg.Any<byte[]>());
+        registry.DidNotReceive().Upcast(MigSchemaId, 2, 2, Arg.Any<byte[]>());
+
+        // Alias repointed; no policy installed (pure version migration, unenforced tree).
+        await h.Registry.Received(1).SetAliasAsync(TreeId, report.DestinationTreeId!);
+        await h.PolicyStore.DidNotReceive().SetPolicyAsync(
+            Arg.Any<string>(), Arg.Any<LatticeSchemaPolicy>(), Arg.Any<CancellationToken>());
+        Assert.That(h.State.State.LastCompletedMigrationVersion, Is.EqualTo(2u));
+    }
+
+    [Test]
+    public async Task StartVersionMigrationAsync_legacy_unstamped_value_is_stamped_at_target()
+    {
+        var registry = MigratingRegistry();
+        var h = CreateGrainBytes(new[] { ("k1", Utf8("{\"a\":1}")) }, schemaRegistry: registry);
+
+        var report = await h.Grain.StartVersionMigrationAsync(MigSchemaId, 2);
+
+        Assert.That(report.Succeeded, Is.True);
+        await h.Destination.Received(1).SetAsync(
+            "k1",
+            Arg.Is<byte[]>(v => VersionOf(v) == 2
+                && LatticeSchemaEnvelope.StripToBody(v).SequenceEqual(Utf8("{\"a\":1}"))));
+
+        // A legacy un-stamped value is stamped, never upcast.
+        registry.DidNotReceive().Upcast(Arg.Any<uint>(), Arg.Any<uint>(), Arg.Any<uint>(), Arg.Any<byte[]>());
+    }
+
+    [Test]
+    public async Task StartVersionMigrationAsync_un_upcastable_value_aborts_and_leaves_tree_untouched()
+    {
+        var registry = NoHopRegistry();
+        var h = CreateGrainBytes(new[] { ("k1", Env(1, "{\"a\":1}")) }, schemaRegistry: registry);
+
+        var report = await h.Grain.StartVersionMigrationAsync(MigSchemaId, 2);
+
+        Assert.That(report.Succeeded, Is.False);
+        Assert.That(report.Phase, Is.EqualTo(LatticeSchemaRemediationPhase.Aborted));
+        Assert.That(report.OffendingKey, Is.EqualTo("k1"));
+
+        // No cutover, no policy install: the original tree is byte-for-byte untouched.
+        await h.Registry.DidNotReceive().SetAliasAsync(Arg.Any<string>(), Arg.Any<string>());
+        await h.PolicyStore.DidNotReceive().SetPolicyAsync(
+            Arg.Any<string>(), Arg.Any<LatticeSchemaPolicy>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task StartVersionMigrationAsync_value_newer_than_target_aborts()
+    {
+        var registry = MigratingRegistry();
+        var h = CreateGrainBytes(new[] { ("k1", Env(3, "{\"a\":1}")) }, schemaRegistry: registry);
+
+        var report = await h.Grain.StartVersionMigrationAsync(MigSchemaId, 2);
+
+        Assert.That(report.Succeeded, Is.False);
+        Assert.That(report.OffendingKey, Is.EqualTo("k1"));
+        await h.Registry.DidNotReceive().SetAliasAsync(Arg.Any<string>(), Arg.Any<string>());
+    }
+
+    [Test]
+    public async Task StartVersionMigrationAsync_with_policy_validates_post_upcast_body_and_cuts_over()
+    {
+        // The upcast maps the v1 body to compact JSON that satisfies the tree's
+        // existing JSON policy; the build validates the plain upcast body, not the
+        // binary envelope, and does not reinstall the policy.
+        var registry = MigratingRegistry(_ => Utf8("{\"v\":2}"));
+        var h = CreateGrainBytes(
+            new[] { ("k1", Env(1, "{\"a\":1}")) },
+            schemaRegistry: registry,
+            existingPolicy: JsonPolicy());
+
+        var report = await h.Grain.StartVersionMigrationAsync(MigSchemaId, 2);
+
+        Assert.That(report.Succeeded, Is.True);
+        await h.Destination.Received(1).SetAsync(
+            "k1",
+            Arg.Is<byte[]>(v => VersionOf(v) == 2
+                && LatticeSchemaEnvelope.StripToBody(v).SequenceEqual(Utf8("{\"v\":2}"))));
+        await h.PolicyStore.DidNotReceive().SetPolicyAsync(
+            Arg.Any<string>(), Arg.Any<LatticeSchemaPolicy>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task StartVersionMigrationAsync_with_policy_aborts_when_post_upcast_body_violates()
+    {
+        // The upcast produces a body that exceeds the tree's MaxLength(3) policy; the
+        // build validates the plain upcast body, aborts, and leaves the tree untouched.
+        var registry = MigratingRegistry(_ => Utf8("way-too-long"));
+        var h = CreateGrainBytes(
+            new[] { ("k1", Env(1, "{}")) },
+            schemaRegistry: registry,
+            existingPolicy: MaxLenPolicy(3));
+
+        var report = await h.Grain.StartVersionMigrationAsync(MigSchemaId, 2);
+
+        Assert.That(report.Succeeded, Is.False);
+        Assert.That(report.OffendingKey, Is.EqualTo("k1"));
+        await h.Registry.DidNotReceive().SetAliasAsync(Arg.Any<string>(), Arg.Any<string>());
+    }
+
+    [Test]
+    public async Task StartVersionMigrationAsync_is_noop_when_already_fully_migrated()
+    {
+        var registry = MigratingRegistry();
+        var h = CreateGrainBytes(new[] { ("k1", Env(1, "{\"a\":1}")) }, schemaRegistry: registry);
+
+        var first = await h.Grain.StartVersionMigrationAsync(MigSchemaId, 2);
+        Assert.That(first.Succeeded, Is.True);
+
+        var second = await h.Grain.StartVersionMigrationAsync(MigSchemaId, 2);
+        Assert.That(second.Succeeded, Is.True);
+
+        // The second call short-circuited: exactly one cutover across both calls.
+        await h.Registry.Received(1).SetAliasAsync(TreeId, Arg.Any<string>());
+    }
+
+    [Test]
+    public async Task StartVersionMigrationAsync_resumes_in_flight_migration_and_cuts_over()
+    {
+        // Durable state says a version migration is in flight at the Build phase; a
+        // fresh grain over that state must resume and cut over identically.
+        var seed = new SchemaRemediationState
+        {
+            InProgress = true,
+            Phase = LatticeSchemaRemediationPhase.Build,
+            OperationId = "opm",
+            DestinationTreeId = TreeId + "/remediated/opm",
+            SourcePhysicalTreeId = TreeId,
+            Mode = SchemaRemediationMode.SchemaVersionMigration,
+            MigrationSchemaId = MigSchemaId,
+            MigrationTargetVersion = 2,
+        };
+        var registry = MigratingRegistry();
+        var h = CreateGrainBytes(
+            new[] { ("k1", Env(1, "{\"a\":1}")) }, seedState: seed, schemaRegistry: registry);
+
+        var report = await h.Grain.StartVersionMigrationAsync(MigSchemaId, 2);
+
+        Assert.That(report.Succeeded, Is.True);
+        Assert.That(report.Phase, Is.EqualTo(LatticeSchemaRemediationPhase.Completed));
+        await h.Destination.Received(1).SetAsync("k1", Arg.Is<byte[]>(v => VersionOf(v) == 2));
+        await h.Registry.Received(1).SetAliasAsync(TreeId, seed.DestinationTreeId!);
+    }
+
+    [Test]
+    public void StartVersionMigrationAsync_different_target_while_in_flight_throws()
+    {
+        var seed = new SchemaRemediationState
+        {
+            InProgress = true,
+            Phase = LatticeSchemaRemediationPhase.Build,
+            OperationId = "opm",
+            DestinationTreeId = TreeId + "/remediated/opm",
+            SourcePhysicalTreeId = TreeId,
+            Mode = SchemaRemediationMode.SchemaVersionMigration,
+            MigrationSchemaId = MigSchemaId,
+            MigrationTargetVersion = 2,
+        };
+        var registry = MigratingRegistry();
+        var h = CreateGrainBytes(
+            new[] { ("k1", Env(1, "{\"a\":1}")) }, seedState: seed, schemaRegistry: registry);
+
+        Assert.That(
+            async () => await h.Grain.StartVersionMigrationAsync(MigSchemaId, 3),
+            Throws.InstanceOf<InvalidOperationException>());
+    }
+
+    [Test]
+    public void StartVersionMigrationAsync_without_registry_throws()
+    {
+        var h = CreateGrainBytes(new[] { ("k1", Env(1, "{\"a\":1}")) }, schemaRegistry: null);
+
+        Assert.That(
+            async () => await h.Grain.StartVersionMigrationAsync(MigSchemaId, 2),
+            Throws.InstanceOf<InvalidOperationException>());
+    }
 
     [Test]
     public async Task StartAsync_all_values_remediate_cuts_over_and_installs_policy()
