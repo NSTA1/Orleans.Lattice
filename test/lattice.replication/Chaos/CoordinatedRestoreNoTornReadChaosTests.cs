@@ -202,9 +202,16 @@ public sealed class CoordinatedRestoreNoTornReadChaosTests
                 }
                 break;
             }
-            catch (EnumerationAbortedException) when (attempt < 4)
+            catch (EnumerationAbortedException) when (attempt < 19)
             {
-                // Transient enumerator loss; re-scan from the start.
+                // Transient enumerator loss: the source activation can be swapped
+                // or collected by the just-completed restore mid-scan. A tight
+                // no-delay retry can land every attempt inside the same
+                // reactivation window, so back off with a short, growing delay -
+                // the bounded re-scan then spans past the transient window before
+                // giving up. A production shipper re-scans on this signal the same
+                // way.
+                await Task.Delay(TimeSpan.FromMilliseconds(25 * (attempt + 1)));
             }
         }
 
