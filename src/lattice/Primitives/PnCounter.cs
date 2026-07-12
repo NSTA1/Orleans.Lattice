@@ -1,5 +1,7 @@
 namespace Orleans.Lattice;
 
+using System.Runtime.InteropServices;
+
 /// <summary>
 /// A positive-negative (PN) counter CRDT. Each replica tracks its own
 /// monotonic positive and negative components; the counter's value is the
@@ -51,8 +53,8 @@ public sealed class PnCounter : ICrdt<PnCounter>
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         ArgumentOutOfRangeException.ThrowIfNegative(amount);
         if (amount == 0) return;
-        Increments.TryGetValue(replicaId, out var current);
-        Increments[replicaId] = current + amount;
+        ref var inc = ref CollectionsMarshal.GetValueRefOrAddDefault(Increments, replicaId, out _);
+        inc += amount;
     }
 
     /// <summary>
@@ -64,8 +66,8 @@ public sealed class PnCounter : ICrdt<PnCounter>
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         ArgumentOutOfRangeException.ThrowIfNegative(amount);
         if (amount == 0) return;
-        Decrements.TryGetValue(replicaId, out var current);
-        Decrements[replicaId] = current + amount;
+        ref var dec = ref CollectionsMarshal.GetValueRefOrAddDefault(Decrements, replicaId, out _);
+        dec += amount;
     }
 
     /// <summary>
@@ -131,7 +133,17 @@ public sealed class PnCounter : ICrdt<PnCounter>
     {
         foreach (var (k, v) in source)
         {
-            target[k] = target.TryGetValue(k, out var existing) && existing > v ? existing : v;
+            // Single-probe fold: GetValueRefOrAddDefault hashes k once and
+            // returns a ref to the slot (added zero-initialised when absent),
+            // replacing the previous TryGetValue-then-indexer pattern that
+            // hashed and bucket-walked twice for every replica component. The
+            // pointwise-max result is identical: a missing slot is 0 (the
+            // add-default value), and an existing slot is bumped only when the
+            // incoming value is strictly greater, matching the old
+            // existing > v ? existing : v choice. Mirrors the single-probe
+            // fold VersionVector.Merge already uses.
+            ref var slot = ref CollectionsMarshal.GetValueRefOrAddDefault(target, k, out var existed);
+            if (!existed || v > slot) slot = v;
         }
     }
 }

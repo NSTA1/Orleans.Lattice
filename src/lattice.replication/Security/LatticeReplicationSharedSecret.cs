@@ -102,7 +102,18 @@ public static class LatticeReplicationSharedSecret
         var bufB = maxB <= StackThreshold ? stackB : (Span<byte>)new byte[maxB];
         var lenA = utf8.GetBytes(a, bufA);
         var lenB = utf8.GetBytes(b, bufB);
-        return CryptographicOperations.FixedTimeEquals(bufA[..lenA], bufB[..lenB]);
+        try
+        {
+            return CryptographicOperations.FixedTimeEquals(bufA[..lenA], bufB[..lenB]);
+        }
+        finally
+        {
+            // Wipe the transient UTF-8 plaintext copies of both secrets from
+            // the stack (or heap, for the overlong fallback) before returning
+            // so a later stack-frame reuse or heap read cannot recover them.
+            CryptographicOperations.ZeroMemory(bufA[..lenA]);
+            CryptographicOperations.ZeroMemory(bufB[..lenB]);
+        }
     }
 
     private static string ToUrlSafeBase64(ReadOnlySpan<byte> bytes)

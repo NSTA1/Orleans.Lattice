@@ -355,7 +355,11 @@ public sealed class CrdtShape
         left.MergeFrom(ToMvRegister(b));
         return new MvRegisterDelta
         {
-            Entries = left.Entries.ToArray(),
+            // left is a transient register owned by this method and never
+            // touched again, so its live entries list can back the combined
+            // delta directly. List<T> already implements IReadOnlyList<T>,
+            // so the previous .ToArray() was a redundant full-length copy.
+            Entries = left.Entries,
             Context = new Dictionary<string, long>(left.Context, StringComparer.Ordinal),
         };
     }

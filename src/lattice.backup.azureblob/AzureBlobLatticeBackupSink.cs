@@ -160,6 +160,17 @@ internal sealed class AzureBlobLatticeBackupSink : ILatticeBackupSink
                 }
 
                 var length = BinaryPrimitives.ReadInt32LittleEndian(header);
+                if (length < 0 || length > result.Details.ContentLength)
+                {
+                    // A frame can never be larger than the blob that carries it.
+                    // A negative or over-large declared length means the blob is
+                    // truncated, corrupt, or hostile; refuse to size an arbitrary
+                    // (potentially multi-gigabyte) buffer from an untrusted prefix.
+                    throw new InvalidDataException(
+                        $"Backup artifact frame declares a length of {length} bytes, which is negative or exceeds "
+                        + $"the {result.Details.ContentLength}-byte blob; the artifact is corrupt.");
+                }
+
                 if (length == 0)
                 {
                     yield return ReadOnlyMemory<byte>.Empty;

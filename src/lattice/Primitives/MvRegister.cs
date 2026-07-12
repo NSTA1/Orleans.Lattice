@@ -1,5 +1,7 @@
 namespace Orleans.Lattice;
 
+using System.Runtime.InteropServices;
+
 /// <summary>
 /// A multi-value register CRDT. Unlike a last-writer-wins register,
 /// which silently collapses concurrent writes from different replicas
@@ -224,10 +226,12 @@ public sealed class MvRegister : ICrdt<MvRegister>
         // Pointwise-max of the two contexts.
         foreach (var (replicaId, counter) in otherContext)
         {
-            if (!Context.TryGetValue(replicaId, out var current) || counter > current)
-            {
-                Context[replicaId] = counter;
-            }
+            // Single-probe fold: a missing slot is added zero-initialised and
+            // installed with counter; an existing slot advances only when the
+            // incoming counter is strictly greater. Same result as the prior
+            // TryGetValue-then-indexer form with one fewer hash per replica.
+            ref var slot = ref CollectionsMarshal.GetValueRefOrAddDefault(Context, replicaId, out var existed);
+            if (!existed || counter > slot) slot = counter;
         }
 
         Entries = survivors;

@@ -29,6 +29,16 @@ public sealed partial class AzureTableWalStorageProvider
     // inflate buffer the ILatticeCompressor.Decompress contract requires.
     private const int CompressedLengthPrefixBytes = sizeof(int);
 
+    // Upper bound on the uncompressed size the read path will materialise
+    // from a single WAL row's declared length prefix. The prefix is read
+    // from stored bytes that a compromised or buggy producer could forge;
+    // without a ceiling a hostile row could declare a multi-gigabyte length
+    // and drive the reader into an out-of-memory decompression bomb from a
+    // few compressed bytes. 256 MiB is far above any legitimate single-row
+    // WAL payload (batches are split well below this) while still bounding
+    // the worst-case allocation.
+    private const int MaxDecompressedRowBytes = 256 * 1024 * 1024;
+
     /// <summary>
     /// Builds the per-tag compressor dispatch dictionary from the DI
     /// sequence. Keyed by the raw <see cref="LatticeCompression"/> byte
@@ -166,6 +176,13 @@ public sealed partial class AzureTableWalStorageProvider
         {
             throw new InvalidDataException(
                 $"Compressed WAL payload declares a negative uncompressed length ({uncompressedLength}); the row is corrupt.");
+        }
+
+        if (uncompressedLength > MaxDecompressedRowBytes)
+        {
+            throw new InvalidDataException(
+                $"Compressed WAL payload declares an uncompressed length of {uncompressedLength} bytes, exceeding the "
+                + $"{MaxDecompressedRowBytes}-byte decompression ceiling; the row is corrupt or hostile.");
         }
 
         var result = new byte[uncompressedLength];
