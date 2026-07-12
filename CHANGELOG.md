@@ -31,6 +31,14 @@ Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.
 
 - **Orleans.Lattice.Explorer web head now enforces antiforgery on the sign-in / sign-out endpoints (login / logout CSRF hardening).** The web head's `/auth/login` and `/auth/logout` form-post endpoints previously called `.DisableAntiforgery()`, justified by `SameSite=Strict` on the credential cookie - but that cookie is not presented on the login POST itself, so it gave no CSRF protection. A cross-site form post could drive a victim's browser to authenticate (or sign out) the Explorer with attacker-chosen credentials, and because the auth session is a process-global singleton this flipped the shared connection's credential for the whole process. Both endpoints now validate a `RequestVerificationToken` (the login and logout forms embed `<AntiforgeryToken />`) and reject a tokenless or mismatched post with `400 Bad Request` before touching the auth session. Explorer-only change; no public-API or wire-format change to the package family. (#966)
 
+## [7.9.2] - 2026-07-12
+
+Per-package patch release. Only `Orleans.Lattice.Backup` advances to `7.9.2`; every other package in the family stays at its current version (`7.9.1` for `Orleans.Lattice.Replication.Grpc` and `Orleans.Lattice.Backup.AzureBlob`, `7.9.0` for the rest). One defect made the per-scope backup scheduler grain unpersistable on a durable grain-storage provider, surfacing as an opaque `Internal` error the first time a schedule or trigger call ran. No public-API break and no change to any serialized wire format; a safe drop-in patch over `7.9.0`.
+
+### Fixed
+
+- **Orleans.Lattice.Backup: the per-scope scheduler grain can now persist its state on a durable grain-storage provider.** `BackupScopeKey.For` delimited the scope key with the unit separator (U+001F), and that key doubles as the string grain key of the per-scope `BackupSchedulerGrain`. A durable grain-storage provider derives its persisted key from the grain key, and Azure Table storage (and the Azurite emulator) reject a partition/row key containing a control character with a `400 InvalidInput` - so the first time a scheduler persisted its state (the first `ScheduleRecurringAsync`, `TriggerFullAsync`, `TriggerIncrementalAsync`, or `EnsureScheduleAsync` for a scope) the state write failed and the call surfaced an opaque `Internal` error, leaving no schedule registered. The latent defect never fired before because no scope had reached a durable scheduler-state write. `BackupScopeKey.For` now delimits fields with `|` and percent-encodes every character a durable store forbids in a key - the control ranges U+0000-U+001F and U+007F-U+009F and the characters `/`, `\`, `#`, and `?` (the set Azure Table storage and Azure Cosmos DB both reject) - plus the delimiter and the `%` escape marker themselves, so the key stays valid across durable providers while remaining deterministic and collision-free (the delimiter can never appear inside an encoded field). Only the scope-key encoding changed; the key is derived fresh at runtime and is not itself a persisted wire format, so no migration is required. `Orleans.Lattice.Backup` fix; no public-API or wire-format change (#PLACEHOLDER_PR).
+
 ## [7.9.1] - 2026-07-10
 
 Per-package patch release. Only `Orleans.Lattice.Replication.Grpc` and `Orleans.Lattice.Backup.AzureBlob` advance to `7.9.1`; every other package in the family stays at `7.9.0`. Two independent defects blocked an all-or-nothing cross-cluster (replicated-tree) restore end to end, each surfacing as an opaque `Internal` error. No public-API break and no change to any serialized wire format; a safe drop-in patch over `7.9.0`.
@@ -511,6 +519,7 @@ Changelog entries for v6.x and earlier - down to the historical pre-v6.0.0 notes
 
 ---
 [Unreleased]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.8.2...HEAD
+[7.9.2]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.9.1...v7.9.2
 [7.9.1]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.9.0...v7.9.1
 [7.9.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.8.2...v7.9.0
 [7.8.2]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.8.1...v7.8.2
