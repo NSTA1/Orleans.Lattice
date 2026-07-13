@@ -3537,6 +3537,16 @@ public class LatticeMicroBenchmarks
     public OrSet OrSet_Merge() => OrSet.Merge(_orSetLeft, _orSetRight);
 
     /// <summary>
+    /// Deep copy: the per-key dot-list-fill + Adds/Tombstones dictionary-fill
+    /// allocation that <see cref="OrSet.Merge"/> pays on every fold via its
+    /// internal <c>left.Clone()</c>. Presizing the two backing dictionaries to
+    /// the source key counts removes the intermediate rehash grows the former
+    /// entry-by-entry fill paid, which this benchmark isolates from the fold.
+    /// </summary>
+    [Benchmark(Description = "Crdt orset clone")]
+    public OrSet OrSet_Clone() => _orSetLeft.Clone();
+
+    /// <summary>
     /// Builds the pre-seeded OR-set and probe-element array for the
     /// <see cref="OrSet_Contains"/> / <see cref="OrSet_Add"/> micro-suite.
     /// Elements are 24 bytes (a realistic content-addressed key size whose

@@ -255,7 +255,17 @@ public sealed class OrSet : ICrdt<OrSet>
     /// <summary>Creates a deep copy of this set.</summary>
     public OrSet Clone()
     {
-        var copy = new OrSet();
+        // Presize both backing dictionaries to the source key counts so the
+        // entry-by-entry fill below never triggers an intermediate rehash
+        // grow. Mirrors the OrMap.Clone / VersionVector.Clone presize; the
+        // per-key dot-list copies are unchanged. Clone is on the OrSet.Merge
+        // hot path (Merge clones the left operand before folding), so the
+        // eliminated resize grows are paid on every replicated OR-set reconcile.
+        var copy = new OrSet
+        {
+            Adds = new Dictionary<string, List<OrSetDot>>(Adds.Count),
+            Tombstones = new Dictionary<string, List<OrSetDot>>(Tombstones.Count),
+        };
         foreach (var (key, dots) in Adds) copy.Adds[key] = [.. dots];
         foreach (var (key, dots) in Tombstones) copy.Tombstones[key] = [.. dots];
         return copy;
