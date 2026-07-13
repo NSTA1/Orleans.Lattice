@@ -4,7 +4,9 @@
     Deploys the ClusterScaling Orleans.Lattice.Scaling sample to Azure Container Apps.
 
 .DESCRIPTION
-    Provisions (idempotently) a resource group, a user-assigned managed identity,
+    Builds and pushes the silo container image (via `az acr build`, unless a
+    pre-built -ContainerImage is supplied), then provisions (idempotently) a
+    resource group, a user-assigned managed identity,
     a Tables-only storage account (Orleans clustering + reminders + grain state +
     Lattice WAL, shared-key access disabled), the Storage Table Data Contributor
     role for the identity, a Log Analytics workspace, a Container Apps managed
@@ -24,10 +26,26 @@
 .PARAMETER Location
     Azure region. Defaults to eastus.
 
+.PARAMETER Registry
+    Azure Container Registry NAME (not login server) to build and push the silo
+    image into, e.g. myregistry. When supplied, deploy.ps1 orchestrates the image
+    build and push itself via `az acr build` (server-side, no local Docker) and
+    derives the resulting image reference automatically. Mutually exclusive with
+    -ContainerImage. The registry must exist and the container app must be able
+    to pull from it.
+
 .PARAMETER ContainerImage
-    Fully-qualified silo image, e.g. myregistry.azurecr.io/clusterscaling-silo:latest.
-    Build and push it from samples/ClusterScaling/src/ClusterScaling.Silo first
-    (see the README). The image's registry must be reachable by the container app.
+    Escape hatch: a fully-qualified, already-built silo image (e.g.
+    myregistry.azurecr.io/clusterscaling-silo:latest). Supply this INSTEAD of
+    -Registry to skip the build and deploy a pre-built image. The image's
+    registry must be reachable by the container app.
+
+.PARAMETER ImageName
+    Repository name for the built image. Defaults to clusterscaling-silo. Only
+    used with -Registry.
+
+.PARAMETER ImageTag
+    Tag for the built image. Defaults to latest. Only used with -Registry.
 
 .PARAMETER AdminPassword
     Plaintext admin password as a SecureString (prompted if omitted). Presented
@@ -57,8 +75,13 @@ param(
 
     [string] $Location = 'eastus',
 
-    [Parameter(Mandatory = $true)]
+    [string] $Registry,
+
     [string] $ContainerImage,
+
+    [string] $ImageName = 'clusterscaling-silo',
+
+    [string] $ImageTag = 'latest',
 
     [Parameter(Mandatory = $true)]
     [System.Security.SecureString] $AdminPassword,
@@ -102,6 +125,43 @@ if ($LASTEXITCODE -ne 0) {
 
 # Ensure the containerapp extension is present (idempotent).
 az extension add --name containerapp --upgrade --only-show-errors --output none 2>$null
+
+# --- Resolve the silo image: build+push, or use a pre-built one ---------------
+$repoRoot = (Resolve-Path (Join-Path $scriptRoot '..\..\..')).Path
+$dockerfile = Join-Path $repoRoot 'samples/ClusterScaling/src/ClusterScaling.Silo/Dockerfile'
+
+if ($ContainerImage) {
+    if ($Registry) {
+        throw 'Specify either -Registry (to build and push) or -ContainerImage (pre-built), not both.'
+    }
+    Write-Step "Using pre-built image '$ContainerImage' (skipping build)"
+}
+elseif ($Registry) {
+    if (-not (Test-Path $dockerfile)) { throw "Dockerfile not found: $dockerfile" }
+
+    $imageRef = "${ImageName}:${ImageTag}"
+    Write-Step "Building and pushing silo image '$imageRef' into registry '$Registry'"
+    Write-Host '    (az acr build runs server-side in the registry and streams its logs below)' -ForegroundColor DarkGray
+    az acr build `
+        --registry $Registry `
+        --image $imageRef `
+        --file $dockerfile `
+        $repoRoot
+    if ($LASTEXITCODE -ne 0) {
+        throw "Container image build/push failed (az acr build exited $LASTEXITCODE)."
+    }
+
+    Write-Step "Resolving login server for registry '$Registry'"
+    $loginServer = az acr show --name $Registry --query loginServer --output tsv
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($loginServer)) {
+        throw "Could not resolve the login server for registry '$Registry'. Ensure it exists and you have access."
+    }
+    $ContainerImage = "$loginServer/$imageRef"
+    Write-Host "    pushed: $ContainerImage" -ForegroundColor DarkGray
+}
+else {
+    throw 'Provide -Registry (to build and push the silo image) or -ContainerImage (a pre-built image reference).'
+}
 
 # --- Hash the admin password (never handle plaintext beyond this block) -------
 Write-Step 'Hashing admin password (salted PBKDF2-SHA256)'

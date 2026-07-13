@@ -98,33 +98,26 @@ flowchart LR
   assignments** (the deploy assigns *Storage Table Data Contributor* to the
   app's managed identity).
 - Azure CLI with the `containerapp` extension (`deploy.ps1` installs/updates it).
-- The .NET SDK (net10.0) to build the silo image and run the load driver.
-- A container registry the ACA environment can pull from (e.g. Azure Container
-  Registry), and a built-and-pushed silo image.
+- The .NET SDK (net10.0) to run the load driver.
+- An Azure Container Registry the ACA environment can pull from. `deploy.ps1`
+  builds and pushes the silo image into it for you (server-side via
+  `az acr build` - no local Docker daemon required).
 - PowerShell 7+.
 
-## Build and push the silo image
+## The silo image
 
-The deploy consumes a container image; build and push it first. A minimal
-Dockerfile alongside the silo project:
+You don't build the image by hand - `deploy.ps1` orchestrates it. When you pass
+`-Registry <myregistry>`, the script runs `az acr build` from the repository
+root against
+[`src/ClusterScaling.Silo/Dockerfile`](src/ClusterScaling.Silo/Dockerfile),
+which builds and pushes the image **server-side in your registry** (no local
+Docker daemon required) and streams the build log to your console. It then
+derives the resulting `<loginServer>/clusterscaling-silo:latest` reference and
+deploys it.
 
-```dockerfile
-# samples/ClusterScaling/src/ClusterScaling.Silo/Dockerfile
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
-WORKDIR /src
-COPY . .
-RUN dotnet publish samples/ClusterScaling/src/ClusterScaling.Silo/ClusterScaling.Silo.csproj -c Release -o /app
-
-FROM mcr.microsoft.com/dotnet/aspnet:10.0
-WORKDIR /app
-COPY --from=build /app .
-ENV CLUSTERSCALING_HTTP_PORT=8080
-EXPOSE 8080
-ENTRYPOINT ["dotnet", "Orleans.Lattice.Samples.ClusterScaling.Silo.dll"]
-```
-
-Build the image from the **repository root** (the publish copies the whole repo
-so the `ProjectReference`s to `src/` resolve) and push it to your registry:
+If you would rather build the image yourself (CI, a private base image, an
+air-gapped registry), pass a fully-qualified `-ContainerImage` instead of
+`-Registry` to skip the build:
 
 ```powershell
 az acr build --registry <myregistry> --image clusterscaling-silo:latest `
@@ -139,15 +132,16 @@ $pw = Read-Host -AsSecureString -Prompt 'Admin password'
 ./deploy.ps1 `
   -ResourceGroup rg-clusterscaling `
   -Location eastus `
-  -ContainerImage <myregistry>.azurecr.io/clusterscaling-silo:latest `
+  -Registry <myregistry> `
   -AdminPassword $pw `
   -MinReplicas 1 -MaxReplicas 10
 ```
 
-`deploy.ps1` is idempotent. It provisions the managed identity, the Tables-only
-storage account (shared-key access disabled), the role assignment, the Log
-Analytics workspace, the Container Apps environment, and the container app with
-the KEDA `metrics-api` scale rule (`valueLocation: scaleValue`, `targetValue: 1`,
+`deploy.ps1` is idempotent. It builds and pushes the silo image (see above),
+then provisions the managed identity, the Tables-only storage account
+(shared-key access disabled), the role assignment, the Log Analytics workspace,
+the Container Apps environment, and the container app with the KEDA
+`metrics-api` scale rule (`valueLocation: scaleValue`, `targetValue: 1`,
 `minReplicas`/`maxReplicas`). It prints the ingress FQDN and the exact
 `drive-load.ps1` command to run next.
 
