@@ -34,20 +34,29 @@ driver keeps payloads deliberately small.
 
 ## Architecture
 
-```
-   your workstation                         Azure Container Apps environment
-+--------------------+                +-------------------------------------------+
-|  drive-load.ps1    |                |   container app (1..N replicas)           |
-|   |                |   gRPC (TLS)   |   +-----------------------------------+   |
-|   +-- LoadDriver --------------------->  data API gRPC  (Basic-gated)      |   |
-|         (compute   |   Basic over   |   |  /lattice/scale  (scrape target) <----+  KEDA metrics-api
-|          load)     |   managed TLS  |   |  Orleans silo (Azure clustering)  |   |  reads scaleValue
-|   |                |                |   +-----------------------------------+   |
-|   +-- az poll -------------------------> replica count           |             |
-+--------------------+                +--------------------------- | -----------+
-                                                                   v
-                                        Azure Storage (Tables, managed identity)
-                                        clustering | reminders | grain state | WAL
+```mermaid
+flowchart LR
+    subgraph WS["Your workstation"]
+        LD["drive-load.ps1 -&gt; LoadDriver<br/>(compute load)"]
+        POLL["az poll"]
+    end
+
+    subgraph ACA["Azure Container Apps environment"]
+        subgraph APP["Container app (1..N replicas)"]
+            API["data API gRPC<br/>(Basic-gated)"]
+            SCALE["/lattice/scale<br/>(scrape target)"]
+            SILO["Orleans silo<br/>(Azure clustering)"]
+        end
+        KEDA["KEDA metrics-api"]
+    end
+
+    STORE[("Azure Storage - Tables, managed identity<br/>clustering, reminders, grain state, WAL")]
+
+    LD -->|"gRPC + Basic over managed TLS"| API
+    POLL -->|"reads replica count"| APP
+    KEDA -->|"reads scaleValue"| SCALE
+    KEDA -->|"sets replica count"| APP
+    SILO --> STORE
 ```
 
 - **Silo host** (`src/ClusterScaling.Silo`) - one container image, run as many
