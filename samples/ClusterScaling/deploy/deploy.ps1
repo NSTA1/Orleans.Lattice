@@ -188,7 +188,6 @@ else {
     # on Visual-Studio-locked files ([Errno 13] Permission denied). Stage only
     # the inputs the image needs into a clean temp dir so the pack is small,
     # deterministic, and free of locked or oversized files.
-    $dockerfileRel = 'samples/ClusterScaling/src/ClusterScaling.Silo/Dockerfile'
     $stageRoot = Join-Path ([IO.Path]::GetTempPath()) "clusterscaling-ctx-$([Guid]::NewGuid().ToString('N'))"
     try {
         Write-Step "Staging a clean build context in $stageRoot"
@@ -210,13 +209,21 @@ else {
 
         Write-Step "Building and pushing silo image '$imageRef' into registry '$registryName'"
         Write-Host '    (az acr build runs server-side in the registry and streams its logs below)' -ForegroundColor DarkGray
-        az acr build `
-            --registry $registryName `
-            --image $imageRef `
-            --file $dockerfileRel `
-            $stageRoot
-        if ($LASTEXITCODE -ne 0) {
-            throw "Container image build/push failed (az acr build exited $LASTEXITCODE)."
+        # Run from the context root so az acr build resolves the relative --file
+        # (and the in-tar Dockerfile path) against the staged context, not CWD.
+        Push-Location $stageRoot
+        try {
+            az acr build `
+                --registry $registryName `
+                --image $imageRef `
+                --file 'samples/ClusterScaling/src/ClusterScaling.Silo/Dockerfile' `
+                .
+            if ($LASTEXITCODE -ne 0) {
+                throw "Container image build/push failed (az acr build exited $LASTEXITCODE)."
+            }
+        }
+        finally {
+            Pop-Location
         }
     }
     finally {
