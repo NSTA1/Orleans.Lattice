@@ -72,17 +72,24 @@ internal sealed class MembershipInitializer
     {
         var options = _options.CurrentValue;
 
-        foreach (var tree in MembershipConstants.AllTrees)
+        // The reserved sys-membership-* trees live in the system-data
+        // namespace, so the bootstrap addresses them under system-origin -
+        // both to skip the access gate and to satisfy the public-surface
+        // guard that otherwise rejects a user-origin sys- tree.
+        using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            var lattice = _grainFactory.GetGrain<ILattice>(tree);
-            await lattice
-                .SetHistoryRetentionAsync(options.HistoryRetentionMode, options.HistoryRetentionWindow, CancellationToken.None)
-                .ConfigureAwait(false);
-
-            if (options.EnableDurableHistoryView && _viewFactory is not null)
+            foreach (var tree in MembershipConstants.AllTrees)
             {
-                var viewName = HistoryViewNameFor(tree);
-                _viewFactory.Create(lattice, viewName, LatticeHistoryView.Definition(viewName, _services));
+                var lattice = _grainFactory.GetGrain<ILattice>(tree);
+                await lattice
+                    .SetHistoryRetentionAsync(options.HistoryRetentionMode, options.HistoryRetentionWindow, CancellationToken.None)
+                    .ConfigureAwait(false);
+
+                if (options.EnableDurableHistoryView && _viewFactory is not null)
+                {
+                    var viewName = HistoryViewNameFor(tree);
+                    _viewFactory.Create(lattice, viewName, LatticeHistoryView.Definition(viewName, _services));
+                }
             }
         }
     }

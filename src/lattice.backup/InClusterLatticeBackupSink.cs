@@ -33,17 +33,24 @@ internal sealed class InClusterLatticeBackupSink(IGrainFactory grainFactory) : I
         ArgumentNullException.ThrowIfNull(content);
         ThrowIfSeparator(artifactId, nameof(artifactId));
 
-        // Clear any prior run so a re-chunked retry cannot leave stale trailing
-        // chunks behind the new (possibly shorter) run.
-        await DeleteArtifactAsync(artifactId, cancellationToken).ConfigureAwait(false);
-
-        var prefix = ArtifactChunkPrefix(artifactId);
-        var index = 0;
-        await foreach (var chunk in content.WithCancellation(cancellationToken).ConfigureAwait(false))
+        // The reserved sys-backup-store tree is created lazily by its first
+        // write and has no bootstrap initializer, so the creating write must
+        // run on the system-origin path or the registry would reject the
+        // self-registration of a sys- tree.
+        using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            var key = string.Concat(prefix, index.ToString(ChunkIndexFormat));
-            await Store.SetAsync(key, chunk.ToArray(), cancellationToken).ConfigureAwait(false);
-            index++;
+            // Clear any prior run so a re-chunked retry cannot leave stale trailing
+            // chunks behind the new (possibly shorter) run.
+            await DeleteArtifactAsync(artifactId, cancellationToken).ConfigureAwait(false);
+
+            var prefix = ArtifactChunkPrefix(artifactId);
+            var index = 0;
+            await foreach (var chunk in content.WithCancellation(cancellationToken).ConfigureAwait(false))
+            {
+                var key = string.Concat(prefix, index.ToString(ChunkIndexFormat));
+                await Store.SetAsync(key, chunk.ToArray(), cancellationToken).ConfigureAwait(false);
+                index++;
+            }
         }
     }
 
@@ -55,11 +62,14 @@ internal sealed class InClusterLatticeBackupSink(IGrainFactory grainFactory) : I
         ArgumentException.ThrowIfNullOrEmpty(artifactId);
 
         var prefix = ArtifactChunkPrefix(artifactId);
-        await foreach (var entry in Store
-            .ScanEntriesAsync(prefix, BackupConstants.PrefixUpperBound(prefix), cancellationToken: cancellationToken)
-            .ConfigureAwait(false))
+        using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            yield return entry.Value;
+            await foreach (var entry in Store
+                .ScanEntriesAsync(prefix, BackupConstants.PrefixUpperBound(prefix), cancellationToken: cancellationToken)
+                .ConfigureAwait(false))
+            {
+                yield return entry.Value;
+            }
         }
     }
 
@@ -70,17 +80,20 @@ internal sealed class InClusterLatticeBackupSink(IGrainFactory grainFactory) : I
 
         var prefix = ArtifactChunkPrefix(artifactId);
         var removedAny = false;
-        var keys = new List<string>();
-        await foreach (var key in Store
-            .KeysAsync(prefix, BackupConstants.PrefixUpperBound(prefix), cancellationToken: cancellationToken)
-            .ConfigureAwait(false))
+        using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            keys.Add(key);
-        }
+            var keys = new List<string>();
+            await foreach (var key in Store
+                .KeysAsync(prefix, BackupConstants.PrefixUpperBound(prefix), cancellationToken: cancellationToken)
+                .ConfigureAwait(false))
+            {
+                keys.Add(key);
+            }
 
-        foreach (var key in keys)
-        {
-            removedAny |= await Store.DeleteAsync(key, cancellationToken).ConfigureAwait(false);
+            foreach (var key in keys)
+            {
+                removedAny |= await Store.DeleteAsync(key, cancellationToken).ConfigureAwait(false);
+            }
         }
 
         return removedAny;
@@ -92,33 +105,42 @@ internal sealed class InClusterLatticeBackupSink(IGrainFactory grainFactory) : I
     {
         var prefix = string.Concat(BackupConstants.ArtifactKeyPrefix.ToString(), BackupConstants.KeySeparator.ToString());
         string? previous = null;
-        await foreach (var key in Store
-            .KeysAsync(prefix, BackupConstants.PrefixUpperBound(prefix), cancellationToken: cancellationToken)
-            .ConfigureAwait(false))
+        using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            var id = ArtifactIdFromChunkKey(key);
-            if (id is null || id == previous)
+            await foreach (var key in Store
+                .KeysAsync(prefix, BackupConstants.PrefixUpperBound(prefix), cancellationToken: cancellationToken)
+                .ConfigureAwait(false))
             {
-                continue;
-            }
+                var id = ArtifactIdFromChunkKey(key);
+                if (id is null || id == previous)
+                {
+                    continue;
+                }
 
-            previous = id;
-            yield return id;
+                previous = id;
+                yield return id;
+            }
         }
     }
 
     /// <inheritdoc />
-    public Task WriteManifestAsync(BackupManifest manifest, CancellationToken cancellationToken = default)
+    public async Task WriteManifestAsync(BackupManifest manifest, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(manifest);
-        return Store.SetAsync(ManifestKey(manifest.Id), manifest, cancellationToken);
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            await Store.SetAsync(ManifestKey(manifest.Id), manifest, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <inheritdoc />
-    public Task<BackupManifest?> ReadManifestAsync(string backupId, CancellationToken cancellationToken = default)
+    public async Task<BackupManifest?> ReadManifestAsync(string backupId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(backupId);
-        return Store.GetAsync<BackupManifest>(ManifestKey(backupId), cancellationToken);
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            return await Store.GetAsync<BackupManifest>(ManifestKey(backupId), cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <inheritdoc />
@@ -126,22 +148,28 @@ internal sealed class InClusterLatticeBackupSink(IGrainFactory grainFactory) : I
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var prefix = string.Concat(BackupConstants.ManifestKeyPrefix.ToString(), BackupConstants.KeySeparator.ToString());
-        await foreach (var entry in Store
-            .ScanEntriesAsync<BackupManifest>(prefix, BackupConstants.PrefixUpperBound(prefix), cancellationToken: cancellationToken)
-            .ConfigureAwait(false))
+        using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            if (entry.Value is { } manifest)
+            await foreach (var entry in Store
+                .ScanEntriesAsync<BackupManifest>(prefix, BackupConstants.PrefixUpperBound(prefix), cancellationToken: cancellationToken)
+                .ConfigureAwait(false))
             {
-                yield return manifest;
+                if (entry.Value is { } manifest)
+                {
+                    yield return manifest;
+                }
             }
         }
     }
 
     /// <inheritdoc />
-    public Task<bool> DeleteManifestAsync(string backupId, CancellationToken cancellationToken = default)
+    public async Task<bool> DeleteManifestAsync(string backupId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(backupId);
-        return Store.DeleteAsync(ManifestKey(backupId), cancellationToken);
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            return await Store.DeleteAsync(ManifestKey(backupId), cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private static string ManifestKey(string backupId) =>

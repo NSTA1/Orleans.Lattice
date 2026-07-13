@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -331,12 +331,56 @@ internal sealed partial class LatticeGrain(
     /// legitimately addresses system trees resolves
     /// <see cref="ISystemLattice"/> instead and bypasses this guard via
     /// explicit interface implementation.
+    /// <para>
+    /// The dogfooded <see cref="LatticeConstants.SystemDataTreePrefix"/>
+    /// (<c>sys-</c>) system-data namespace is deliberately <b>not</b>
+    /// rejected here: those are real user-facing trees that first-party
+    /// add-ons read and write through this same surface (often under a
+    /// user identity, e.g. membership / backup admin operations), and
+    /// operators legitimately <em>read</em> them through the State API, so a
+    /// blanket per-operation reject would break them. User-origin
+    /// <em>creation</em> of a <c>sys-</c> tree is instead gated on the
+    /// data-mutation surface only, via
+    /// <see cref="ThrowIfUserOriginSystemDataTree"/>.
+    /// </para>
     /// </summary>
     private void ThrowIfSystemTree()
     {
         if (TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
             throw new InvalidOperationException(
                 $"Tree ID '{TreeId}' is reserved for internal Lattice system trees and cannot be addressed via the public ILattice surface. Choose a tree name that does not start with '{LatticeConstants.SystemTreePrefix}'.");
+    }
+
+    /// <summary>
+    /// Rejects user-origin creation of a tree in the reserved
+    /// <see cref="LatticeConstants.SystemDataTreePrefix"/> (<c>sys-</c>)
+    /// system-data namespace. Called only from the public data-mutation
+    /// surface (writes, deletes, CRDT apply, bulk load) - never from reads -
+    /// because a write is the operation that materialises (creates) a tree,
+    /// and blocking it stops a user accidentally seeding a tree that collides
+    /// with the dogfooded system-data trees (auth <c>sys-auth-*</c>, backup
+    /// <c>sys-backup-*</c>, membership <c>sys-membership-*</c>).
+    /// <para>
+    /// The guard is suppressed inside a
+    /// <see cref="LatticeAccessGateContext.EnterSystemOrigin"/> scope, so the
+    /// first-party add-ons that legitimately create and mutate their own
+    /// <c>sys-</c> trees under system-origin are unaffected. Reads are never
+    /// gated (an operator may inspect a <c>sys-</c> tree through the State
+    /// API, and a first-party add-on may read its own trees under a user
+    /// identity), which is why this is deliberately not enforced at the
+    /// registry self-registration choke point where reads and writes are
+    /// indistinguishable.
+    /// </para>
+    /// </summary>
+    private void ThrowIfUserOriginSystemDataTree()
+    {
+        if (TreeId.StartsWith(LatticeConstants.SystemDataTreePrefix, StringComparison.Ordinal)
+            && !LatticeAccessGateContext.IsSystemOrigin)
+            throw new InvalidOperationException(
+                $"Tree ID '{TreeId}' is reserved: names starting with '{LatticeConstants.SystemDataTreePrefix}' " +
+                "are reserved for internal Lattice system-data trees (identity, authorization, backup, and " +
+                "membership add-ons) and cannot be created via the public ILattice surface. Choose a tree name " +
+                "that does not start with the 'sys-' namespace.");
     }
 
     /// <summary>
@@ -1263,6 +1307,7 @@ internal sealed partial class LatticeGrain(
     public Task SetAsync(string key, byte[] value, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfUserOriginSystemDataTree();
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -1464,6 +1509,7 @@ internal sealed partial class LatticeGrain(
     public async Task SetAsync(string key, byte[] value, TimeSpan ttl, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfUserOriginSystemDataTree();
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -1521,6 +1567,7 @@ internal sealed partial class LatticeGrain(
     public async Task<bool> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfUserOriginSystemDataTree();
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -1562,6 +1609,7 @@ internal sealed partial class LatticeGrain(
     public async Task<HybridLogicalClock> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfUserOriginSystemDataTree();
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfCrdtWriteViolatesReplicationMode(mode);
@@ -1603,6 +1651,7 @@ internal sealed partial class LatticeGrain(
     public async Task<byte[]?> GetOrSetAsync(string key, byte[] value, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfUserOriginSystemDataTree();
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -1645,6 +1694,7 @@ internal sealed partial class LatticeGrain(
     public async Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfUserOriginSystemDataTree();
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -1812,6 +1862,7 @@ internal sealed partial class LatticeGrain(
         List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfUserOriginSystemDataTree();
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -1916,6 +1967,7 @@ internal sealed partial class LatticeGrain(
     public async Task SetManyAtomicAsync(List<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfUserOriginSystemDataTree();
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -1963,6 +2015,7 @@ internal sealed partial class LatticeGrain(
         CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfUserOriginSystemDataTree();
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -2021,6 +2074,7 @@ internal sealed partial class LatticeGrain(
         CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfUserOriginSystemDataTree();
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -2077,6 +2131,7 @@ internal sealed partial class LatticeGrain(
         CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfUserOriginSystemDataTree();
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -2106,6 +2161,7 @@ internal sealed partial class LatticeGrain(
         CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfUserOriginSystemDataTree();
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -2126,6 +2182,7 @@ internal sealed partial class LatticeGrain(
     public Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfUserOriginSystemDataTree();
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -2177,6 +2234,7 @@ internal sealed partial class LatticeGrain(
     public async Task<int> DeleteRangeAsync(string startInclusive, string endExclusive, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfUserOriginSystemDataTree();
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -2198,6 +2256,7 @@ internal sealed partial class LatticeGrain(
     public async Task<int> DeleteRangeWherePredicateAsync(LatticePredicateNode predicate, string startInclusive, string endExclusive, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfUserOriginSystemDataTree();
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();

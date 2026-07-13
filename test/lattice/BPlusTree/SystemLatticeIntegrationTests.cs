@@ -115,4 +115,52 @@ public class SystemLatticeIntegrationTests
         await registry.UnregisterAsync(treeId);
         Assert.That(await registry.ExistsAsync(treeId), Is.False);
     }
+
+    [Test]
+    public void Public_ILattice_rejects_user_origin_write_to_sys_data_prefix()
+    {
+        // A user-origin write to the reserved sys- system-data namespace must
+        // be rejected so a user cannot silently create a tree that collides
+        // with a first-party add-on's dogfooded trees (auth / backup /
+        // membership), which the State API also hides from the default catalog.
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("sys-user-accidental");
+
+        Assert.ThrowsAsync<InvalidOperationException>(
+            () => tree.SetAsync("k", Encoding.UTF8.GetBytes("v")));
+    }
+
+    [Test]
+    public async Task Public_ILattice_allows_user_origin_read_of_sys_data_prefix()
+    {
+        // Reads are never gated: an operator (via the State API) or a
+        // first-party add-on may legitimately read a sys- tree under a user
+        // identity, so a read of a not-yet-created sys- tree returns empty
+        // rather than throwing.
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("sys-read-allowed");
+
+        Assert.That(await tree.GetAsync("missing"), Is.Null);
+
+        var keys = new List<string>();
+        await foreach (var k in tree.KeysAsync())
+            keys.Add(k);
+        Assert.That(keys, Is.Empty);
+    }
+
+    [Test]
+    public async Task Public_ILattice_allows_system_origin_write_to_sys_data_prefix()
+    {
+        // First-party add-ons create and mutate their sys- trees under a
+        // system-origin scope; that path is explicitly permitted and must
+        // round-trip normally.
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("sys-firstparty-store");
+        var value = Encoding.UTF8.GetBytes("system-ok");
+
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            await tree.SetAsync("k", value);
+            var read = await tree.GetAsync("k");
+            Assert.That(read, Is.Not.Null);
+            Assert.That(Encoding.UTF8.GetString(read!), Is.EqualTo("system-ok"));
+        }
+    }
 }

@@ -17,6 +17,17 @@ Trees are automatically registered on first write. When a `ShardRootGrain` creat
 
 Tree IDs starting with `_lattice_` are reserved for internal use and are excluded from self-registration to avoid circular bootstrap. Currently the only system tree is `_lattice_trees` (the registry itself).
 
+### Reserved tree-ID namespaces
+
+Two tree-ID prefixes are reserved and cannot be created by application code through the public `ILattice` surface:
+
+| Prefix | Purpose | Guard |
+| --- | --- | --- |
+| `_lattice_` | Internal library trees (the registry `_lattice_trees`, the replication WAL `_lattice_replog_*`). Never user-addressable. | Every public `ILattice` call (read or write) throws `InvalidOperationException`; internal code resolves `ISystemLattice` to bypass. |
+| `sys-` | Dogfooded **system-data** trees owned by first-party add-ons: authorization (`sys-auth-*`), backup (`sys-backup-*`), and membership (`sys-membership-*`). These are real, individually inspectable trees. | A user-origin **write** (create/mutate) to a `sys-`-prefixed tree throws `InvalidOperationException`. Reads are allowed, and first-party add-ons create and mutate their own `sys-` trees under an internal system-origin scope. |
+
+The `sys-` guard is enforced only on the data-mutation surface (writes, deletes, CRDT apply, bulk load) and only outside a system-origin scope, so a user cannot accidentally seed a tree that collides with a first-party add-on's namespace, while operators can still read those trees (for example through the State API, which hides `sys-` trees from the default catalog listing but exposes them when `IncludeSystemTrees` is set).
+
 ## Configuration Priority
 
 Options are resolved in the following priority order:
