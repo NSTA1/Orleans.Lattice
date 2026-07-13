@@ -90,6 +90,12 @@ public static class LatticeBackupServiceCollectionExtensions
         builder.Services.TryAddSingleton<ILatticeBackupCatalogStore, LatticeBackupCatalogStore>();
         builder.Services.TryAddSingleton<ILatticeBackupSetResolver, LatticeBackupSetResolver>();
 
+        // Rebuilds the catalog from the sink so the catalog is a disposable,
+        // self-healing projection over the sink (the single source of truth). A
+        // pure projection over the sink and catalog seams, so it carries no extra
+        // state and is safe to re-run.
+        builder.Services.TryAddSingleton<ILatticeBackupCatalogRebuildService, LatticeBackupCatalogRebuildService>();
+
         // The backup-local replicated-tree membership seam. The default no-op
         // reports nothing replicated, which is correct for a single-cluster
         // deployment; a multi-cluster host replaces this registration with an

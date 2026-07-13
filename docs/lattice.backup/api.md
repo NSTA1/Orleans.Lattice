@@ -78,6 +78,12 @@ Manifest members:
 - `IAsyncEnumerable<BackupManifest> ListManifestsAsync(CancellationToken cancellationToken = default)` - enumerates every manifest in backup-id order.
 - `Task<bool> DeleteManifestAsync(string backupId, CancellationToken cancellationToken = default)` - removes a manifest; returns `true` when one was removed. Does not remove referenced artifacts. Throws `ArgumentException` when `backupId` is null or empty.
 
+### `ILatticeBackupCatalogRebuildService`
+
+Rebuilds the in-cluster catalog from the durable sink, treating the sink as the single source of truth and the catalog as a rebuildable, self-healing projection over it.
+
+- `Task<BackupCatalogRebuildReport> RebuildFromSinkAsync(CancellationToken cancellationToken = default)` - scans every manifest the sink holds (via `ILatticeBackupSink.ListManifestsAsync`) and re-registers each into the catalog under system-origin. Idempotent and safe to re-run: a manifest already catalogued is reconciled in place (keeping its immutable capture timestamp) rather than duplicated, and a catalog missing rows the sink has is repopulated. Returns a `BackupCatalogRebuildReport` summarizing counts scanned, freshly added, and reconciled.
+
 ## Extension seams (coordinated restore)
 
 These backup-package-local seams let the replication package layer an atomic multi-tree, multi-cluster restore on top of the backup engine without the backup package taking a dependency on replication. Each has a default no-op registration installed by `AddLatticeBackup`, so a single-cluster host always takes the plain local restore path; the replication package (or the host) supplies the real implementation.
@@ -273,6 +279,13 @@ A scope's schedule registration and last-run status.
 
 - Constructor: `BackupSchedulerRuntimeStatus(bool fullScheduleRegistered, bool incrementalScheduleRegistered, DateTimeOffset? lastFullRunUtc, DateTimeOffset? lastFullSuccessUtc, DateTimeOffset? lastIncrementalRunUtc, DateTimeOffset? lastIncrementalSuccessUtc, BackupScopeRunOutcome lastRunOutcome)`.
 - Properties mirror the constructor parameters: `bool FullScheduleRegistered`, `bool IncrementalScheduleRegistered`, `DateTimeOffset? LastFullRunUtc`, `DateTimeOffset? LastFullSuccessUtc`, `DateTimeOffset? LastIncrementalRunUtc`, `DateTimeOffset? LastIncrementalSuccessUtc`, `BackupScopeRunOutcome LastRunOutcome`.
+
+### `BackupCatalogRebuildReport`
+
+The outcome summary of `ILatticeBackupCatalogRebuildService.RebuildFromSinkAsync`. `ScannedCount` always equals `RegisteredCount + ReconciledCount`.
+
+- Constructor: `BackupCatalogRebuildReport(long scannedCount, long registeredCount, long reconciledCount)`.
+- Properties: `long ScannedCount` (manifests enumerated from the sink), `long RegisteredCount` (absent from the catalog and freshly added), `long ReconciledCount` (already catalogued and reconciled in place).
 
 ## Enums
 

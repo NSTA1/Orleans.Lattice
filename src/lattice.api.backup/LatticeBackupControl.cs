@@ -17,6 +17,7 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
     private readonly ILatticeBackupCaptureService _capture;
     private readonly ILatticeBackupIncrementalCaptureService _incremental;
     private readonly ILatticeBackupCatalogStore _catalog;
+    private readonly ILatticeBackupCatalogRebuildService _catalogRebuild;
     private readonly ILatticeBackupSink _sink;
     private readonly ILatticeBackupRestoreService _restore;
     private readonly BackupAccessAuthorizer _authorizer;
@@ -29,6 +30,7 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
     /// <param name="capture">The full-capture engine. Must not be <c>null</c>.</param>
     /// <param name="incremental">The incremental-capture engine. Must not be <c>null</c>.</param>
     /// <param name="catalog">The backup catalog store. Must not be <c>null</c>.</param>
+    /// <param name="catalogRebuild">The catalog rebuild-from-sink engine. Must not be <c>null</c>.</param>
     /// <param name="sink">The backup storage sink. Must not be <c>null</c>.</param>
     /// <param name="restore">The restore engine. Must not be <c>null</c>.</param>
     /// <param name="authorizer">The fail-closed backup authorization seam. Must not be <c>null</c>.</param>
@@ -41,6 +43,7 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         ILatticeBackupCaptureService capture,
         ILatticeBackupIncrementalCaptureService incremental,
         ILatticeBackupCatalogStore catalog,
+        ILatticeBackupCatalogRebuildService catalogRebuild,
         ILatticeBackupSink sink,
         ILatticeBackupRestoreService restore,
         BackupAccessAuthorizer authorizer,
@@ -52,6 +55,7 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         ArgumentNullException.ThrowIfNull(capture);
         ArgumentNullException.ThrowIfNull(incremental);
         ArgumentNullException.ThrowIfNull(catalog);
+        ArgumentNullException.ThrowIfNull(catalogRebuild);
         ArgumentNullException.ThrowIfNull(sink);
         ArgumentNullException.ThrowIfNull(restore);
         ArgumentNullException.ThrowIfNull(authorizer);
@@ -63,6 +67,7 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         _capture = capture;
         _incremental = incremental;
         _catalog = catalog;
+        _catalogRebuild = catalogRebuild;
         _sink = sink;
         _restore = restore;
         _authorizer = authorizer;
@@ -413,6 +418,24 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
             _inventory.CaptureFailureCount,
             _inventory.RestoreFailureCount,
             _inventory.BytesReclaimed);
+    }
+
+    /// <inheritdoc />
+    public async Task<BackupCatalogRebuildReport> RebuildCatalogFromSinkAsync(
+        CancellationToken cancellationToken = default)
+    {
+        // Rebuilding the catalog re-registers manifests of every scope from the
+        // sink, so it is a cluster-wide administrative action rather than a
+        // per-scope one. Authorize it fail-closed at the reserved catalog tree
+        // with the high-privilege Restore (author / bulk-load) authority - the
+        // same grant a bulk restore into a tree requires - before any catalog
+        // write happens. Under the default no-op gate this short-circuits to
+        // allow at zero cost; a bootstrap administrator is always permitted.
+        await _authorizer
+            .AuthorizeRestoreAsync(BackupScopeSelector.WholeTree(BackupConstants.CatalogTree), cancellationToken)
+            .ConfigureAwait(false);
+
+        return await _catalogRebuild.RebuildFromSinkAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />

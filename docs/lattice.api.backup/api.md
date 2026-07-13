@@ -40,6 +40,7 @@ The control facade (internal) exposes these operations; each is projected as one
 | Revert restore | takes a `LatticeRestoreResult` | (void) |
 | Export artifact | takes a backup id and artifact id | `IAsyncEnumerable<ReadOnlyMemory<byte>>` |
 | Get inventory | (none) | `BackupInventoryReport` |
+| Rebuild catalog from sink | (none) | `BackupCatalogRebuildReport` |
 | Get scope status | takes a `BackupScopeSelector` | `BackupScopeStatus?` (null when unknown) |
 | Probe capabilities | takes a `BackupScopeSelector` | `BackupScopeCapabilities` |
 | Schedule backup | takes a `LatticeBackupScheduleRequest` | (void) |
@@ -49,6 +50,8 @@ Create backup set captures one full backup per distinct tree scope under a singl
 Schedule backup registers (or updates) a recurring backup of one scope: the scheduler grain persists the scope and registers an Orleans reminder that fires every interval, capturing a full or an incremental backup per the request. It authorizes the scope with the same grant as a capture, and clamps a sub-minimum interval up to the scheduler minimum. A runtime schedule registered this way overrides the startup-configured cadence for the chosen kind. The `LatticeBackupScheduleRequest` type is defined in [`Orleans.Lattice.Backup`](../lattice.backup/api.md).
 
 The request / result types prefixed `LatticeBackup*` / `LatticeRestore*` and `BackupManifest` / `BackupScopeSelector` are defined in [`Orleans.Lattice.Backup`](../lattice.backup/api.md); the package's own model records are documented below.
+
+Rebuild catalog from sink re-registers every self-describing manifest the durable sink holds into the reserved `sys-backup-catalog` tree, so the sink is the single source of truth and the catalog a rebuildable, self-healing projection over it. It is a high-privilege administrative action authorized fail-closed with the Restore (author / bulk-load) grant over the catalog tree, and is idempotent: a manifest already catalogued is reconciled in place (keeping its immutable capture timestamp) rather than duplicated, and a catalog missing rows the sink has is repopulated. It returns a `BackupCatalogRebuildReport` summarizing how many manifests were scanned, freshly added, and reconciled. The `BackupCatalogRebuildReport` type is defined in [`Orleans.Lattice.Backup`](../lattice.backup/api.md).
 
 ## Model records
 
