@@ -7,11 +7,6 @@ namespace Orleans.Lattice.Scaling;
 /// and call <see cref="GetScalingSignalAsync(System.Threading.CancellationToken)"/>
 /// to obtain a cluster-aggregate, two-axis pressure snapshot suitable for an
 /// external autoscaler to scrape.
-/// <para>
-/// The scaffold implementation returns a well-formed zero/stub signal; live
-/// pressure collection is added by later issues (#1186 compute, #1187 storage,
-/// #1188 endpoint).
-/// </para>
 /// </summary>
 public interface ILatticeScalingSignal
 {

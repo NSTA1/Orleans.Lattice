@@ -6,9 +6,10 @@ namespace Orleans.Lattice.Scaling;
 /// have crossed a configured threshold, the aggregate retained bytes, a
 /// per-catalogue-key breakdown, and an optional rebalance suggestion.
 /// <para>
-/// This is a read-only point-in-time snapshot. Live collection is added by the
-/// storage-axis issue (#1187); the scaffold facade returns a not-over-threshold,
-/// zero-byte instance with an empty account list and no recommendation.
+/// This is a read-only point-in-time snapshot collected by the storage-axis
+/// pressure collector. Before the first sample completes the facade returns a
+/// not-over-threshold, zero-byte instance with an empty account list and no
+/// recommendation.
 /// </para>
 /// </summary>
 [GenerateSerializer]
@@ -21,7 +22,8 @@ public readonly record struct StoragePressure
     /// <summary>
     /// <see langword="true"/> when aggregate retained WAL bytes have crossed the
     /// configured storage-pressure threshold, signalling the storage axis is
-    /// under-provisioned. <see langword="false"/> in the scaffold.
+    /// under-provisioned. <see langword="false"/> when retained bytes are within
+/// the configured threshold.
     /// </summary>
     [Id(0)] public bool OverThreshold { get; init; }
 

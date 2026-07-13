@@ -5,11 +5,10 @@ namespace Orleans.Lattice.Scaling;
 /// bound through
 /// <see cref="LatticeScalingServiceCollectionExtensions.AddLatticeScalingSignal(Orleans.Hosting.ISiloBuilder, System.Action{LatticeScalingSignalOptions})"/>.
 /// <para>
-/// This scaffold carries only the surface the endpoint issue (#1188) needs plus
-/// a replica floor. The compute-collector (#1186), storage-axis (#1187), and
-/// endpoint (#1188) issues extend this type with their own knobs (sampling
-/// interval, thresholds, weighting, endpoint auth); keep additions backward
-/// compatible so downstream hosts binding this options type are not broken.
+/// The knobs are grouped by axis: the endpoint path and replica floor, the
+/// compute-axis collector cadence and scale-in gating, and the storage-axis
+/// retention and rebalance thresholds. Keep additions backward compatible so
+/// downstream hosts binding this options type are not broken.
 /// </para>
 /// </summary>
 public sealed class LatticeScalingSignalOptions

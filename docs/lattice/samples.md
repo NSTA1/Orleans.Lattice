@@ -12,6 +12,7 @@ Minimal, single-feature samples - one per row in the [README feature table](../.
 | [Authorization](../../samples/Authorization/README.md) | Single-silo default-deny authorization with group and nested-group membership: a group nested inside another group, per-tree/prefix/key rules, read-visibility range pruning, and a runtime grant via nesting. |
 | [BulkLoading](../../samples/BulkLoading/README.md) | Seeding an empty tree via one-shot `BulkLoadAsync` and streaming `IAsyncEnumerable` ingestion. |
 | [ChangeHistory](../../samples/ChangeHistory/README.md) | Reading a key's revision timeline with `ScanEntryHistoryAsync`. |
+| [ClusterScaling](../../samples/ClusterScaling/README.md) | A deployable Azure Container Apps multi-silo cluster whose replica count is autoscaled by the `Orleans.Lattice.Scaling` compute-axis signal through a KEDA `metrics-api` rule, with a bundled load driver. Deploy-to-Azure, not in-process. |
 | [ConflictFreeMerges](../../samples/ConflictFreeMerges/README.md) | Two CRDT writers converging to the same result regardless of merge order. |
 | [CrossClusterAuthorization](../../samples/CrossClusterAuthorization/README.md) | Two in-process clusters where the reserved membership and authorization-policy system trees converge over gRPC replication, so a grant or revoke authored on one site becomes enforced on the other. |
 | [CrossClusterReplication](../../samples/CrossClusterReplication/README.md) | Two in-process clusters over gRPC where a write on one converges onto the other. |
@@ -83,3 +84,19 @@ The full stack (Azurite + Silo + gRPC API + Blazor WASM UI) runs under Docker Co
 ```
 
 UI on `http://localhost:8090`, API on `http://localhost:8080`. See [`samples/VehicleFleetSimulator/README.md`](../../samples/VehicleFleetSimulator/README.md) for the full project layout, the on-import test-parallelism fix, and the planned Lattice-bridge sample.
+
+## ClusterScaling
+
+[`samples/ClusterScaling`](../../samples/ClusterScaling)
+
+A deployable Azure Container Apps (ACA) sample that proves the `Orleans.Lattice.Scaling` autoscaling signal drives KEDA replica scale-out on the compute axis. One container image runs as a genuine multi-silo Orleans cluster: each replica joins over real Azure Storage clustering and persists grain state and the Lattice write-ahead log to Azure Table storage, all via managed identity (no connection strings). Each replica co-hosts the write-capable gRPC data API - gated by a hashed admin password injected as an ACA secret and presented as HTTP Basic over ACA's managed TLS ingress - and the `/lattice/scale` HTTP signal endpoint the ACA KEDA `metrics-api` scale rule scrapes.
+
+A bundled `.NET` `LoadDriver` console drives the compute axis (activation and dispatch pressure, not storage growth) so the cluster's `scaleValue` rises and ACA scales the replica count out. The `deploy/` folder provisions everything from a single bicep template plus PowerShell scripts:
+
+```powershell
+./samples/ClusterScaling/deploy/deploy.ps1      # provision + deploy
+./samples/ClusterScaling/deploy/drive-load.ps1  # run the load driver, watch replicas grow
+./samples/ClusterScaling/deploy/teardown.ps1    # delete the resource group
+```
+
+See [`samples/ClusterScaling/README.md`](../../samples/ClusterScaling/README.md) for the full walkthrough, the two-axis note, and the prerequisites. Documentation for the underlying signal lives under [`docs/lattice.scaling`](../lattice.scaling/README.md).

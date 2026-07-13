@@ -9,9 +9,9 @@ namespace Orleans.Lattice.Scaling;
 /// (<see cref="RecommendedReplicas"/>) that an external autoscaler can scrape.
 /// <para>
 /// This is a read-only point-in-time snapshot produced by the silo's compute
-/// collector (#1186); the storage axis is populated by #1187. Before the first
-/// sample completes the facade returns a warming-up signal
-/// (<see cref="ScaleValue"/> zero, <see cref="Reason"/> naming the warm-up state).
+/// and storage collectors. Before the first sample completes the facade returns
+/// a warming-up signal (<see cref="ScaleValue"/> zero, <see cref="Reason"/>
+/// naming the warm-up state).
 /// </para>
 /// </summary>
 [GenerateSerializer]
@@ -42,8 +42,8 @@ public readonly record struct ScalingSignal
 
     /// <summary>
     /// Human-readable explanation of how the signal was derived (for example,
-    /// which axis dominated the recommendation, or <c>"not yet collecting"</c>
-    /// while the collector is not yet wired up).
+    /// which axis dominated the recommendation, or a warm-up note
+    /// while the first sample is still being collected).
     /// </summary>
     [Id(4)] public string Reason { get; init; }
 

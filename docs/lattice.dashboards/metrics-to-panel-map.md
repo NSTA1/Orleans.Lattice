@@ -6,6 +6,8 @@ The add-on `orleans.lattice.auth` and `orleans.lattice.membership` meters are ch
 
 The add-on `orleans.lattice.backup` meter is charted by the bundled Backup & Restore dashboard. Its coverage is enforced the same way, from `Orleans.Lattice.Backup.Tests` (deriving from `MeterDashboardCoverageTestsBase`).
 
+The add-on `orleans.lattice.scaling` meter is charted by the bundled Autoscaling Signal dashboard. Its coverage is enforced the same way, from `Orleans.Lattice.Scaling.Tests` (deriving from `MeterDashboardCoverageTestsBase`).
+
 ## `orleans.lattice` meter
 
 | Instrument | Type | Tags | Dashboard | Panel(s) |
@@ -230,3 +232,18 @@ Charted by the Backup & Restore dashboard.
 | `orleans.lattice.backup.inventory.newest_age` | observable gauge (`s`) | (none) | Backup | Newest backup age |
 | `orleans.lattice.backup.scope.last_run_status` | observable gauge (`{status}`) | `scope` | Backup | Per-scope last-run status |
 | `orleans.lattice.backup.scope.last_success_age` | observable gauge (`s`) | `scope` | Backup | Per-scope seconds since last success |
+
+## `orleans.lattice.scaling` meter
+
+All instruments are observable gauges published from the cached `ScalingSignal` on the silo's sampling timer. Charted by the Autoscaling Signal dashboard; coverage enforced from `Orleans.Lattice.Scaling.Tests`.
+
+| Instrument | Type | Tags | Dashboard | Panel(s) |
+|------------|------|------|-----------|----------|
+| `orleans.lattice.scaling.scale_value` | observable gauge (`{replica}`) | (none) | Autoscaling Signal | Scale value (smoothed vs raw) |
+| `orleans.lattice.scaling.raw_scale_value` | observable gauge (`{replica}`) | (none) | Autoscaling Signal | Scale value (smoothed vs raw) |
+| `orleans.lattice.scaling.compute.activation_pressure` | observable gauge (`1`) | (none) | Autoscaling Signal | Compute pressure by dimension |
+| `orleans.lattice.scaling.compute.resource_pressure` | observable gauge (`1`) | (none) | Autoscaling Signal | Compute pressure by dimension |
+| `orleans.lattice.scaling.compute.wal_dispatch_pressure` | observable gauge (`1`) | (none) | Autoscaling Signal | Compute pressure by dimension |
+| `orleans.lattice.scaling.compute.replicas` | observable gauge (`{replica}`) | (none) | Autoscaling Signal | Recommended replicas |
+| `orleans.lattice.scaling.storage.accounts_over_threshold` | observable gauge (`{account}`) | (none) | Autoscaling Signal | WAL accounts over threshold |
+| `orleans.lattice.scaling.storage.rebalance_recommendations` | observable gauge (`{recommendation}`) | (none) | Autoscaling Signal | WAL rebalance recommended |

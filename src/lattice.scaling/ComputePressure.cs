@@ -7,9 +7,9 @@ namespace Orleans.Lattice.Scaling;
 /// indicates the corresponding resource is fully consumed and the cluster is
 /// under-provisioned on that dimension.
 /// <para>
-/// This is a read-only point-in-time snapshot. Live collection is added by the
-/// pressure collector (#1186); the scaffold facade returns an all-zero,
-/// <see cref="Orleans.Lattice.WalSaturationState.Healthy"/> instance.
+/// This is a read-only point-in-time snapshot collected by the silo's compute
+/// pressure collector. Before the first sample completes the facade returns an
+/// all-zero, <see cref="Orleans.Lattice.WalSaturationState.Healthy"/> instance.
 /// </para>
 /// </summary>
 [GenerateSerializer]
