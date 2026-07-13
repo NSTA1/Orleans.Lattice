@@ -103,7 +103,7 @@ if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
 # --- Resolve the app + ingress FQDN ------------------------------------------
 if ([string]::IsNullOrWhiteSpace($AppName)) {
     Write-Step 'Resolving container app name'
-    $apps = az containerapp list --resource-group $ResourceGroup --query "[].name" --output json | ConvertFrom-Json
+    $apps = @(az containerapp list --resource-group $ResourceGroup --query "[].name" --output json | ConvertFrom-Json)
     if ($apps.Count -eq 0) { throw "No container apps found in resource group '$ResourceGroup'." }
     if ($apps.Count -gt 1) { throw "Multiple container apps found; pass -AppName explicitly. Found: $($apps -join ', ')" }
     $AppName = $apps[0]
