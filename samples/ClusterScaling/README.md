@@ -157,9 +157,20 @@ and pushes the silo image into it (see above), then provisions the managed
 identity, the Tables-only storage account (shared-key access disabled), the
 Storage Table Data Contributor and AcrPull role assignments, the Log Analytics
 workspace, the Container Apps environment, and the container app with the KEDA
-`metrics-api` scale rule (`valueLocation: scaleValue`, `targetValue: 1`,
+`metrics-api` scale rule (`valueLocation: scaleValue`, `targetValue: 0.5`,
 `minReplicas`/`maxReplicas`). It prints the ingress FQDN and the exact
 `drive-load.ps1` command to run next.
+
+> **Why `targetValue: 0.5` and not `1`?** KEDA computes
+> `desiredReplicas = ceil(scaleValue / targetValue)`. `scaleValue` is the
+> dominant per-replica utilisation (0..1) times the current replica count, so a
+> single replica caps it at `1.0`. With `targetValue: 1` that yields
+> `ceil(1.0 / 1) = 1` even at full saturation, so the cluster can never bootstrap
+> its first scale-out. `targetValue: 0.5` targets 50% per-replica utilisation and
+> leaves headroom: a saturated single replica (`scaleValue` near `1.0`) gives
+> `ceil(1.0 / 0.5) = 2`, while an idle one (`scaleValue` near `0.1`) stays at
+> `ceil(0.1 / 0.5) = 1`. Lower the value for a more aggressive (earlier)
+> scale-out; raise it toward `1` to require heavier saturation first.
 
 ## Drive load and observe scale-out
 

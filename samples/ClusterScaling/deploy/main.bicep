@@ -54,8 +54,8 @@ param minReplicas int = 1
 @maxValue(30)
 param maxReplicas int = 10
 
-@description('The scaleValue per desired replica. scaleValue is already expressed in replica-units, so "1" tracks it directly.')
-param scaleTargetValue string = '1'
+@description('KEDA target: replica-units of load each replica should carry. scaleValue is dominant per-replica utilisation times the current replica count, so a value below 1 leaves per-replica headroom (0.5 = target 50% utilisation) and lets a single saturated replica (scaleValue approaches 1.0) cross the threshold and scale out. A value of 1 cannot bootstrap scale-out from a single replica, because one replica caps scaleValue at 1.0 and ceil(1.0/1) is still 1.')
+param scaleTargetValue string = '0.5'
 
 @description('Orleans cluster / service id shared by every replica.')
 param clusterId string = 'clusterscaling'

@@ -46,7 +46,9 @@
     with -ContainerImage.
 
 .PARAMETER ImageTag
-    Tag for the built image. Defaults to latest. Unused with -ContainerImage.
+    Tag for the built image. Defaults to a unique per-deploy tag (git short sha
+    plus a UTC timestamp) so every redeploy rolls a fresh Container App revision;
+    a fixed tag such as 'latest' would not. Unused with -ContainerImage.
 
 .PARAMETER AdminPassword
     Plaintext admin password as a SecureString (prompted if omitted). Presented
@@ -82,7 +84,7 @@ param(
 
     [string] $ImageName = 'clusterscaling-silo',
 
-    [string] $ImageTag = 'latest',
+    [string] $ImageTag = '',
 
     [Parameter(Mandatory = $true)]
     [System.Security.SecureString] $AdminPassword,
@@ -205,6 +207,22 @@ else {
             throw 'Could not read the provisioned registry name from the deployment outputs.'
         }
         Write-Host "    registry: $registryName" -ForegroundColor DarkGray
+    }
+
+    # A stable ':latest' tag does NOT roll the Container App to a new revision on
+    # redeploy: ACA only creates a revision when the template changes, and the
+    # image reference string is byte-identical, so the app keeps running the old
+    # cached image. Default to a unique tag per deploy (git short sha plus a UTC
+    # stamp) so every redeploy produces a fresh, traceable revision.
+    if ([string]::IsNullOrWhiteSpace($ImageTag)) {
+        $sha = (& git -C $repoRoot rev-parse --short HEAD 2>$null)
+        $stamp = [DateTime]::UtcNow.ToString('yyyyMMddHHmmss')
+        $ImageTag = if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($sha)) {
+            "$($sha.Trim())-$stamp"
+        } else {
+            $stamp
+        }
+        Write-Host "    image tag (auto): $ImageTag" -ForegroundColor DarkGray
     }
 
     $imageRef = "${ImageName}:${ImageTag}"
