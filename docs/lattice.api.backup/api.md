@@ -37,6 +37,7 @@ The control facade (internal) exposes these operations; each is projected as one
 | Describe backup | takes a backup id | `BackupChainDescription?` (null when absent) |
 | Delete backup | takes a backup id | `bool` (true when one was deleted) |
 | Restore backup | takes a `LatticeRestoreRequest` | `LatticeRestoreResult` |
+| Cold restore | takes a `LatticeRestoreRequest` | `LatticeRestoreResult` |
 | Revert restore | takes a `LatticeRestoreResult` | (void) |
 | Export artifact | takes a backup id and artifact id | `IAsyncEnumerable<ReadOnlyMemory<byte>>` |
 | Get inventory | (none) | `BackupInventoryReport` |
@@ -52,6 +53,8 @@ Schedule backup registers (or updates) a recurring backup of one scope: the sche
 The request / result types prefixed `LatticeBackup*` / `LatticeRestore*` and `BackupManifest` / `BackupScopeSelector` are defined in [`Orleans.Lattice.Backup`](../lattice.backup/api.md); the package's own model records are documented below.
 
 Rebuild catalog from sink re-registers every self-describing manifest the durable sink holds into the reserved `sys-backup-catalog` tree, so the sink is the single source of truth and the catalog a rebuildable, self-healing projection over it. It is a high-privilege administrative action authorized fail-closed with the Restore (author / bulk-load) grant over the catalog tree, and is idempotent: a manifest already catalogued is reconciled in place (keeping its immutable capture timestamp) rather than duplicated, and a catalog missing rows the sink has is repopulated. It returns a `BackupCatalogRebuildReport` summarizing how many manifests were scanned, freshly added, and reconciled. The `BackupCatalogRebuildReport` type is defined in [`Orleans.Lattice.Backup`](../lattice.backup/api.md).
+
+Cold restore is the disaster-recovery entry point: it restores a backup into a **fresh** cluster from the durable sink alone, with zero dependency on any surviving `sys-backup-catalog`. It resolves the target backup and its `BaseBackupId` chain directly from the sink (never the catalog), bootstraps the reserved `sys-` trees if they are absent, verifies every referenced artifact, replays the chain through the HLC-preserving restore engine, and re-projects the catalog from the sink so the recovered cluster is left with a correct catalog. It is authorized fail-closed against the target scope's Restore grant - derived from the request's target tree or, when absent, the sink-held manifest - and is idempotent. It reuses `LatticeRestoreRequest` / `LatticeRestoreResult` (defined in [`Orleans.Lattice.Backup`](../lattice.backup/api.md)) and throws `LatticeRestoreValidationException` when the backup is absent from the sink, the base chain is broken, or an artifact is missing or tampered.
 
 ## Model records
 

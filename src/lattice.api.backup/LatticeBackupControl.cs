@@ -20,6 +20,7 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
     private readonly ILatticeBackupCatalogRebuildService _catalogRebuild;
     private readonly ILatticeBackupSink _sink;
     private readonly ILatticeBackupRestoreService _restore;
+    private readonly ILatticeBackupColdRestoreService _coldRestore;
     private readonly BackupAccessAuthorizer _authorizer;
     private readonly IGrainFactory _grainFactory;
     private readonly BackupInventoryRegistry _inventory;
@@ -33,6 +34,7 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
     /// <param name="catalogRebuild">The catalog rebuild-from-sink engine. Must not be <c>null</c>.</param>
     /// <param name="sink">The backup storage sink. Must not be <c>null</c>.</param>
     /// <param name="restore">The restore engine. Must not be <c>null</c>.</param>
+    /// <param name="coldRestore">The cold, catalog-free disaster-restore engine. Must not be <c>null</c>.</param>
     /// <param name="authorizer">The fail-closed backup authorization seam. Must not be <c>null</c>.</param>
     /// <param name="grainFactory">The grain factory used to reach the per-scope scheduler. Must not be <c>null</c>.</param>
     /// <param name="inventory">The in-memory backup metric / inventory registry. Must not be <c>null</c>.</param>
@@ -46,6 +48,7 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         ILatticeBackupCatalogRebuildService catalogRebuild,
         ILatticeBackupSink sink,
         ILatticeBackupRestoreService restore,
+        ILatticeBackupColdRestoreService coldRestore,
         BackupAccessAuthorizer authorizer,
         IGrainFactory grainFactory,
         BackupInventoryRegistry inventory,
@@ -58,6 +61,7 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         ArgumentNullException.ThrowIfNull(catalogRebuild);
         ArgumentNullException.ThrowIfNull(sink);
         ArgumentNullException.ThrowIfNull(restore);
+        ArgumentNullException.ThrowIfNull(coldRestore);
         ArgumentNullException.ThrowIfNull(authorizer);
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(inventory);
@@ -70,6 +74,7 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         _catalogRebuild = catalogRebuild;
         _sink = sink;
         _restore = restore;
+        _coldRestore = coldRestore;
         _authorizer = authorizer;
         _grainFactory = grainFactory;
         _inventory = inventory;
@@ -315,6 +320,31 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         }
 
         return await _restore.RestoreAsync(request, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<LatticeRestoreResult> ColdRestoreAsync(
+        LatticeRestoreRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        // Derive the target scope to authorize from the SINK, not the catalog: a
+        // cold restore runs precisely when the catalog may be gone, so the target
+        // tree is resolved from the explicit request or the sink-held manifest. When
+        // neither resolves (an unknown backup id and no target) the cold-restore
+        // engine's own fail-closed validation refuses it without touching data.
+        var manifest = await _sink.ReadManifestAsync(request.BackupId, cancellationToken).ConfigureAwait(false);
+        var targetTreeId = request.TargetTreeId ?? manifest?.Scope.TreeId;
+        if (targetTreeId is not null)
+        {
+            var scope = request.Scope is { } sub
+                ? new BackupScopeSelector(sub.Kind, targetTreeId, sub.KeyOrPrefix)
+                : BackupScopeSelector.WholeTree(targetTreeId);
+            await _authorizer.AuthorizeRestoreAsync(scope, cancellationToken).ConfigureAwait(false);
+        }
+
+        return await _coldRestore.ColdRestoreAsync(request, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />

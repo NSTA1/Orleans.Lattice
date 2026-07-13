@@ -39,6 +39,10 @@ public sealed class RestoreClusterFixture
     public ILatticeBackupRestoreService Restore =>
         SiloServices.GetRequiredService<ILatticeBackupRestoreService>();
 
+    /// <summary>The silo-side cold, catalog-free disaster-restore service under test.</summary>
+    public ILatticeBackupColdRestoreService ColdRestore =>
+        SiloServices.GetRequiredService<ILatticeBackupColdRestoreService>();
+
     /// <summary>The silo-side backup catalog store.</summary>
     public ILatticeBackupCatalogStore Catalog =>
         SiloServices.GetRequiredService<ILatticeBackupCatalogStore>();
