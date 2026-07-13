@@ -37,9 +37,16 @@ The control facade (internal) exposes these operations; each is projected as one
 | Describe backup | takes a backup id | `BackupChainDescription?` (null when absent) |
 | Delete backup | takes a backup id | `bool` (true when one was deleted) |
 | Restore backup | takes a `LatticeRestoreRequest` | `LatticeRestoreResult` |
+| Cold restore | takes a `LatticeRestoreRequest` | `LatticeRestoreResult` |
 | Revert restore | takes a `LatticeRestoreResult` | (void) |
 | Export artifact | takes a backup id and artifact id | `IAsyncEnumerable<ReadOnlyMemory<byte>>` |
 | Get inventory | (none) | `BackupInventoryReport` |
+| Rebuild catalog from sink | (none) | `BackupCatalogRebuildReport` |
+| Scrub catalog against sink | takes a `bool pruneOrphans` | `BackupCatalogScrubReport` |
+| Is health monitoring available | (none) | `bool` (true when the sink is durable) |
+| Check backup health | takes a backup id | `BackupHealthReport` (verifies and persists) |
+| Get backup health | takes a backup id | `BackupHealthReport?` (last stored, null when none/absent) |
+| Configure backup health | takes a backup id and a `BackupHealthConfig` | (void) |
 | Get scope status | takes a `BackupScopeSelector` | `BackupScopeStatus?` (null when unknown) |
 | Probe capabilities | takes a `BackupScopeSelector` | `BackupScopeCapabilities` |
 | Schedule backup | takes a `LatticeBackupScheduleRequest` | (void) |
@@ -49,6 +56,14 @@ Create backup set captures one full backup per distinct tree scope under a singl
 Schedule backup registers (or updates) a recurring backup of one scope: the scheduler grain persists the scope and registers an Orleans reminder that fires every interval, capturing a full or an incremental backup per the request. It authorizes the scope with the same grant as a capture, and clamps a sub-minimum interval up to the scheduler minimum. A runtime schedule registered this way overrides the startup-configured cadence for the chosen kind. The `LatticeBackupScheduleRequest` type is defined in [`Orleans.Lattice.Backup`](../lattice.backup/api.md).
 
 The request / result types prefixed `LatticeBackup*` / `LatticeRestore*` and `BackupManifest` / `BackupScopeSelector` are defined in [`Orleans.Lattice.Backup`](../lattice.backup/api.md); the package's own model records are documented below.
+
+Rebuild catalog from sink re-registers every self-describing manifest the durable sink holds into the reserved `sys-backup-catalog` tree, so the sink is the single source of truth and the catalog a rebuildable, self-healing projection over it. It is a high-privilege administrative action authorized fail-closed with the Restore (author / bulk-load) grant over the catalog tree, and is idempotent: a manifest already catalogued is reconciled in place (keeping its immutable capture timestamp) rather than duplicated, and a catalog missing rows the sink has is repopulated. It returns a `BackupCatalogRebuildReport` summarizing how many manifests were scanned, freshly added, and reconciled. The `BackupCatalogRebuildReport` type is defined in [`Orleans.Lattice.Backup`](../lattice.backup/api.md).
+
+Scrub catalog against sink is the reconcile pass in the other direction: it enumerates every catalog row and probes the durable sink for its resolvability, reporting the orphans - catalog rows whose sink payload (manifest, or a referenced artifact) is gone, so the backup can no longer be resolved or restored. It shares the rebuild op's high-privilege, fail-closed Restore grant over the catalog tree. It is non-destructive by default: it only flags orphans and leaves the catalog untouched. Removal of orphan rows is an explicit opt-in (`pruneOrphans: true`), which deletes each orphan under system origin and is idempotent on re-run (a pruned orphan is no longer scanned). It returns a `BackupCatalogScrubReport` summarizing how many rows were scanned, how many were orphans, how many were removed, whether pruning ran, and the orphan backup ids. The `BackupCatalogScrubReport` type is defined in [`Orleans.Lattice.Backup`](../lattice.backup/api.md).
+
+Cold restore is the disaster-recovery entry point: it restores a backup into a **fresh** cluster from the durable sink alone, with zero dependency on any surviving `sys-backup-catalog`. It resolves the target backup and its `BaseBackupId` chain directly from the sink (never the catalog), bootstraps the reserved `sys-` trees if they are absent, verifies every referenced artifact, replays the chain through the HLC-preserving restore engine, and re-projects the catalog from the sink so the recovered cluster is left with a correct catalog. It is authorized fail-closed against the target scope's Restore grant - derived from the request's target tree or, when absent, the sink-held manifest - and is idempotent. It reuses `LatticeRestoreRequest` / `LatticeRestoreResult` (defined in [`Orleans.Lattice.Backup`](../lattice.backup/api.md)) and throws `LatticeRestoreValidationException` when the backup is absent from the sink, the base chain is broken, or an artifact is missing or tampered.
+
+The backup-health operations surface the periodic health monitor to an operator. Is health monitoring available reports whether the registered sink is durable (`ILatticeBackupSink.IsDurable`), so a UI can hide the health column when payload lives in the ephemeral in-cluster sink. Check backup health runs an on-demand verification of one backup - resolving its manifest, checking every referenced artifact's presence, and re-hashing each present artifact against its recorded digest - then persists and returns the `BackupHealthReport`; it authorizes the backup's scope fail-closed and throws `KeyNotFoundException` for an unknown backup id. Get backup health returns the last stored report for a backup (or `null` when none has been stored or the backup is absent) under the same read grant. Configure backup health stores a per-backup `BackupHealthConfig` (enable / disable plus interval) overriding the cluster default cadence; it authorizes fail-closed and throws `KeyNotFoundException` for an unknown backup id. The `BackupHealthReport` and `BackupHealthConfig` types are defined in [`Orleans.Lattice.Backup`](../lattice.backup/api.md).
 
 ## Model records
 

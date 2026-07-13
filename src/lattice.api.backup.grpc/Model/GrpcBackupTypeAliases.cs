@@ -95,4 +95,25 @@ public static class GrpcBackupTypeAliases
 
     /// <summary>Alias for <see cref="BackupScopeStatusResponse"/>.</summary>
     public const string BackupScopeStatusResponse = "oibg.statresp";
+
+    /// <summary>Alias for <see cref="BackupHealthAvailabilityRequest"/>.</summary>
+    public const string BackupHealthAvailabilityRequest = "oibg.havreq";
+
+    /// <summary>Alias for <see cref="BackupHealthAvailabilityResponse"/>.</summary>
+    public const string BackupHealthAvailabilityResponse = "oibg.havresp";
+
+    /// <summary>Alias for <see cref="BackupHealthCheckRequestMessage"/>.</summary>
+    public const string BackupHealthCheckRequestMessage = "oibg.hchkreq";
+
+    /// <summary>Alias for <see cref="BackupHealthGetRequestMessage"/>.</summary>
+    public const string BackupHealthGetRequestMessage = "oibg.hgetreq";
+
+    /// <summary>Alias for <see cref="BackupHealthReportResponse"/>.</summary>
+    public const string BackupHealthReportResponse = "oibg.hrresp";
+
+    /// <summary>Alias for <see cref="BackupHealthConfigureRequestMessage"/>.</summary>
+    public const string BackupHealthConfigureRequestMessage = "oibg.hcfgreq";
+
+    /// <summary>Alias for <see cref="BackupHealthConfigureResponse"/>.</summary>
+    public const string BackupHealthConfigureResponse = "oibg.hcfgresp";
 }

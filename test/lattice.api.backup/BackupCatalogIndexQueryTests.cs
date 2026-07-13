@@ -50,9 +50,10 @@ public sealed class BackupCatalogIndexQueryTests
         BackupCatalogRequest request,
         int pageSize = 10,
         Func<BackupScopeSelector, CancellationToken, ValueTask<bool>>? auth = null,
-        ILatticeViewFactory? viewFactory = null)
+        ILatticeViewFactory? viewFactory = null,
+        ILatticeBackupSink? sink = null)
     {
-        var query = new BackupCatalogIndexQuery(catalog, viewFactory);
+        var query = new BackupCatalogIndexQuery(catalog, sink ?? AlwaysPresentSink.Instance, viewFactory);
         return await query.QueryAsync(request, pageSize, auth ?? AllowAll, CancellationToken.None);
     }
 
@@ -282,6 +283,39 @@ public sealed class BackupCatalogIndexQueryTests
         Assert.That(page.Entries.Select(e => e.Id), Is.EqualTo(new[] { "standalone", "tip" }));
     }
 
+    [Test]
+    public async Task A_backup_whose_sink_manifest_is_gone_is_not_listed()
+    {
+        // Store drift: the catalog (and the full-scan source) still knows "gone",
+        // but the sink no longer holds its manifest, so it is unresolvable and must
+        // not be offered as a restore point. "live" resolves in the sink and stays.
+        var catalog = new FakeCatalog(
+            Manifest("live", DateTimeOffset.UnixEpoch.AddHours(1)),
+            Manifest("gone", DateTimeOffset.UnixEpoch.AddHours(2)));
+
+        var page = await QueryAsync(catalog, Request(), sink: new PresentSink("live"));
+
+        Assert.That(page.Entries.Select(e => e.Id), Is.EqualTo(new[] { "live" }));
+    }
+
+    [Test]
+    public async Task An_unresolvable_backup_is_dropped_from_the_index_path()
+    {
+        var live = Manifest("live", DateTimeOffset.UnixEpoch.AddHours(1));
+        var gone = Manifest("gone", DateTimeOffset.UnixEpoch.AddHours(2));
+
+        var catalog = new FakeCatalog(live, gone);
+        var view = new FakeIndexView(live, gone);
+
+        var page = await QueryAsync(
+            catalog,
+            Request(),
+            viewFactory: new FakeViewFactory(view),
+            sink: new PresentSink("live"));
+
+        Assert.That(page.Entries.Select(e => e.Id), Is.EqualTo(new[] { "live" }));
+    }
+
     private sealed class FakeCatalog(params BackupManifest[] manifests) : ILatticeBackupCatalogStore
     {
         private readonly List<BackupManifest> _manifests = manifests.ToList();
@@ -370,5 +404,53 @@ public sealed class BackupCatalogIndexQueryTests
         public ILatticeView Create(ILattice source, string viewName, LatticeViewDefinition definition) => view;
         public Task<ILatticeView?> GetAsync(string viewName, CancellationToken cancellationToken = default) => Task.FromResult<ILatticeView?>(view);
         public Task DeleteAsync(string viewName, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    }
+
+    // A sink that reports every backup id as present, so the default query path is
+    // unchanged by the selection-time sink-liveness probe.
+    private sealed class AlwaysPresentSink : ILatticeBackupSink
+    {
+        public static readonly AlwaysPresentSink Instance = new();
+
+        public bool IsDurable => true;
+
+        public Task<bool> ManifestExistsAsync(string backupId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(true);
+
+        public Task<BackupSinkResolution> ProbeAsync(string backupId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new BackupSinkResolution(backupId, manifestPresent: true, Array.Empty<string>()));
+
+        public Task WriteArtifactAsync(string artifactId, IAsyncEnumerable<ReadOnlyMemory<byte>> content, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public IAsyncEnumerable<ReadOnlyMemory<byte>> ReadArtifactAsync(string artifactId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<bool> DeleteArtifactAsync(string artifactId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public IAsyncEnumerable<string> ListArtifactIdsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task WriteManifestAsync(BackupManifest manifest, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<BackupManifest?> ReadManifestAsync(string backupId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public IAsyncEnumerable<BackupManifest> ListManifestsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<bool> DeleteManifestAsync(string backupId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    }
+
+    // A sink that reports only the named backups as present, driving the
+    // selection-time drop of an unresolvable (sink-missing) backup.
+    private sealed class PresentSink(params string[] present) : ILatticeBackupSink
+    {
+        private readonly HashSet<string> _present = new(present, StringComparer.Ordinal);
+
+        public bool IsDurable => true;
+
+        public Task<bool> ManifestExistsAsync(string backupId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(_present.Contains(backupId));
+
+        public Task<BackupSinkResolution> ProbeAsync(string backupId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new BackupSinkResolution(backupId, manifestPresent: _present.Contains(backupId), Array.Empty<string>()));
+
+        public Task WriteArtifactAsync(string artifactId, IAsyncEnumerable<ReadOnlyMemory<byte>> content, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public IAsyncEnumerable<ReadOnlyMemory<byte>> ReadArtifactAsync(string artifactId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<bool> DeleteArtifactAsync(string artifactId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public IAsyncEnumerable<string> ListArtifactIdsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task WriteManifestAsync(BackupManifest manifest, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<BackupManifest?> ReadManifestAsync(string backupId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public IAsyncEnumerable<BackupManifest> ListManifestsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<bool> DeleteManifestAsync(string backupId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 }

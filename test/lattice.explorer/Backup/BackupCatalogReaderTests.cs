@@ -447,4 +447,105 @@ public class BackupCatalogReaderTests
             Assert.That(failedStatus, Is.Null);
         });
     }
+
+    // ---- Health ---------------------------------------------------------
+
+    [Test]
+    public async Task IsHealthMonitoringAvailableAsync_reflects_client_result()
+    {
+        var client = new FakeBackupControlClient { HealthAvailableResult = true };
+
+        Assert.That(await CreateReader(client).IsHealthMonitoringAvailableAsync(), Is.True);
+    }
+
+    [Test]
+    public async Task IsHealthMonitoringAvailableAsync_returns_false_on_denial_or_transport_failure()
+    {
+        var denied = new FakeBackupControlClient
+        {
+            HealthThrows = new LatticeAuthorizationDeniedException("health denied"),
+        };
+        var failed = new FakeBackupControlClient
+        {
+            HealthThrows = new RpcException(new Status(StatusCode.Unavailable, "gone")),
+        };
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(await CreateReader(denied).IsHealthMonitoringAvailableAsync(), Is.False);
+            Assert.That(await CreateReader(failed).IsHealthMonitoringAvailableAsync(), Is.False);
+        });
+    }
+
+    [Test]
+    public async Task GetHealthAsync_returns_stored_report()
+    {
+        var report = new BackupHealthReport(
+            "b1", BackupHealthStatus.Warning, manifestPresent: true,
+            new[] { "art-1" }, Array.Empty<string>(), DateTimeOffset.UtcNow, "Missing artifact art-1.");
+        var client = new FakeBackupControlClient { HealthReportResult = report };
+
+        Assert.That(await CreateReader(client).GetHealthAsync("b1"), Is.SameAs(report));
+    }
+
+    [Test]
+    public async Task GetHealthAsync_returns_null_on_denial_or_transport_failure()
+    {
+        var denied = new FakeBackupControlClient
+        {
+            HealthThrows = new LatticeAuthorizationDeniedException("health denied"),
+        };
+
+        Assert.That(await CreateReader(denied).GetHealthAsync("b1"), Is.Null);
+    }
+
+    [Test]
+    public void GetHealthAsync_empty_id_throws()
+    {
+        Assert.That(
+            () => CreateReader(new FakeBackupControlClient()).GetHealthAsync(string.Empty),
+            Throws.ArgumentException);
+    }
+
+    [Test]
+    public async Task CheckHealthAsync_success_reports_status_and_explanation()
+    {
+        var report = new BackupHealthReport(
+            "b1", BackupHealthStatus.Healthy, manifestPresent: true,
+            Array.Empty<string>(), Array.Empty<string>(), DateTimeOffset.UtcNow, "All good.");
+        var client = new FakeBackupControlClient { HealthReportResult = report };
+
+        var result = await CreateReader(client).CheckHealthAsync("b1");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsSuccess, Is.True);
+            Assert.That(client.LastCheckedBackupId, Is.EqualTo("b1"));
+            Assert.That(result.Message, Does.Contain("Healthy").And.Contain("All good."));
+        });
+    }
+
+    [Test]
+    public async Task ConfigureHealthAsync_success_forwards_config()
+    {
+        var client = new FakeBackupControlClient();
+
+        var result = await CreateReader(client).ConfigureHealthAsync("b1", enabled: false, TimeSpan.FromHours(3));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsSuccess, Is.True);
+            Assert.That(client.LastConfiguredBackupId, Is.EqualTo("b1"));
+            Assert.That(client.LastHealthConfig!.MonitoringEnabled, Is.False);
+            Assert.That(client.LastHealthConfig.Interval, Is.EqualTo(TimeSpan.FromHours(3)));
+        });
+    }
+
+    [Test]
+    public void ConfigureHealthAsync_non_positive_interval_throws()
+    {
+        Assert.That(
+            () => CreateReader(new FakeBackupControlClient()).ConfigureHealthAsync("b1", true, TimeSpan.Zero),
+            Throws.TypeOf<ArgumentOutOfRangeException>());
+    }
 }

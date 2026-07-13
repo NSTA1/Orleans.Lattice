@@ -98,6 +98,8 @@ public class LatticeBackupAzureBlobServiceCollectionExtensionsTests
 
     private sealed class StubBackupSink : ILatticeBackupSink
     {
+        public bool IsDurable => true;
+
         public Task WriteArtifactAsync(string artifactId, IAsyncEnumerable<ReadOnlyMemory<byte>> content, CancellationToken cancellationToken = default) =>
             Task.CompletedTask;
 
@@ -126,6 +128,11 @@ public class LatticeBackupAzureBlobServiceCollectionExtensionsTests
         }
 
         public Task<bool> DeleteManifestAsync(string backupId, CancellationToken cancellationToken = default) => Task.FromResult(false);
+
+        public Task<bool> ManifestExistsAsync(string backupId, CancellationToken cancellationToken = default) => Task.FromResult(false);
+
+        public Task<BackupSinkResolution> ProbeAsync(string backupId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new BackupSinkResolution(backupId, manifestPresent: false, Array.Empty<string>()));
     }
 
     private sealed class StubSiloBuilder(IServiceCollection services) : ISiloBuilder

@@ -86,6 +86,144 @@ public sealed class LatticeBackupControlAdminTests
         });
     }
 
+    // ---- Catalog rebuild from sink --------------------------------------
+
+    [Test]
+    public async Task RebuildCatalogFromSinkAsync_repopulates_the_catalog_from_the_sink()
+    {
+        await _fixture.InitializeAsync();
+        var source = _fixture.GrainFactory.GetGrain<ILattice>(Source);
+        await source.SetAsync("k1", Bytes("v1"));
+
+        var captured = await _fixture.Control.CreateBackupAsync(
+            new LatticeBackupCaptureRequest("full", BackupScopeSelector.WholeTree(Source)));
+
+        // Drift: drop the catalog row while the sink still holds the manifest, as
+        // a non-clean restart would. The backup lists nothing yet is intact in the
+        // sink.
+        await _fixture.Catalog.RemoveAsync(captured.BackupId);
+        Assert.That(await _fixture.Catalog.GetAsync(captured.BackupId), Is.Null);
+
+        var report = await _fixture.Control.RebuildCatalogFromSinkAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.ScannedCount, Is.GreaterThanOrEqualTo(1));
+            Assert.That(report.RegisteredCount, Is.GreaterThanOrEqualTo(1));
+        });
+        Assert.That(await _fixture.Catalog.GetAsync(captured.BackupId), Is.Not.Null);
+    }
+
+    [Test]
+    public async Task RebuildCatalogFromSinkAsync_is_idempotent_on_re_run()
+    {
+        await _fixture.InitializeAsync();
+        var source = _fixture.GrainFactory.GetGrain<ILattice>(Source);
+        await source.SetAsync("k1", Bytes("v1"));
+        await _fixture.Control.CreateBackupAsync(
+            new LatticeBackupCaptureRequest("full", BackupScopeSelector.WholeTree(Source)));
+
+        await _fixture.Control.RebuildCatalogFromSinkAsync();
+        var second = await _fixture.Control.RebuildCatalogFromSinkAsync();
+
+        // Everything the sink holds is already catalogued, so the second pass adds
+        // nothing new and reconciles the existing rows in place.
+        Assert.Multiple(() =>
+        {
+            Assert.That(second.RegisteredCount, Is.Zero);
+            Assert.That(second.ReconciledCount, Is.EqualTo(second.ScannedCount));
+        });
+    }
+
+    [Test]
+    public async Task RebuildCatalogFromSinkAsync_denied_permission_fails_closed()
+    {
+        await _fixture.InitializeAsync();
+
+        var denying = _fixture.CreateControlWith(
+            new BackupAccessAuthorizer(new DenyingAccessGate("no restore grant"), membership: null));
+
+        Assert.That(
+            async () => await denying.RebuildCatalogFromSinkAsync(),
+            Throws.InstanceOf<LatticeAuthorizationDeniedException>());
+    }
+
+    // ---- Catalog scrub against sink -------------------------------------
+
+    [Test]
+    public async Task ScrubCatalogAgainstSinkAsync_flags_orphan_but_default_is_non_destructive()
+    {
+        await _fixture.InitializeAsync();
+        var source = _fixture.GrainFactory.GetGrain<ILattice>(Source);
+        await source.SetAsync("k1", Bytes("v1"));
+
+        var captured = await _fixture.Control.CreateBackupAsync(
+            new LatticeBackupCaptureRequest("full", BackupScopeSelector.WholeTree(Source)));
+
+        // Drift: drop the sink manifest while the catalog row survives, as store
+        // divergence would. The catalog still lists the backup, yet the sink can
+        // no longer resolve it - an orphan.
+        Assert.That(await _fixture.Sink.DeleteManifestAsync(captured.BackupId), Is.True);
+
+        var report = await _fixture.Control.ScrubCatalogAgainstSinkAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.ScannedCount, Is.GreaterThanOrEqualTo(1));
+            Assert.That(report.OrphanCount, Is.EqualTo(1));
+            Assert.That(report.RemovedCount, Is.Zero);
+            Assert.That(report.Pruned, Is.False);
+            Assert.That(report.OrphanBackupIds, Does.Contain(captured.BackupId));
+        });
+        // Non-destructive default leaves the orphan catalog row in place.
+        Assert.That(await _fixture.Catalog.GetAsync(captured.BackupId), Is.Not.Null);
+    }
+
+    [Test]
+    public async Task ScrubCatalogAgainstSinkAsync_with_prune_removes_orphan_and_is_idempotent()
+    {
+        await _fixture.InitializeAsync();
+        var source = _fixture.GrainFactory.GetGrain<ILattice>(Source);
+        await source.SetAsync("k1", Bytes("v1"));
+
+        var captured = await _fixture.Control.CreateBackupAsync(
+            new LatticeBackupCaptureRequest("full", BackupScopeSelector.WholeTree(Source)));
+        Assert.That(await _fixture.Sink.DeleteManifestAsync(captured.BackupId), Is.True);
+
+        var pruned = await _fixture.Control.ScrubCatalogAgainstSinkAsync(pruneOrphans: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pruned.OrphanCount, Is.EqualTo(1));
+            Assert.That(pruned.RemovedCount, Is.EqualTo(1));
+            Assert.That(pruned.Pruned, Is.True);
+            Assert.That(pruned.OrphanBackupIds, Does.Contain(captured.BackupId));
+        });
+        Assert.That(await _fixture.Catalog.GetAsync(captured.BackupId), Is.Null);
+
+        // The orphan is gone, so a second pass finds and removes nothing.
+        var second = await _fixture.Control.ScrubCatalogAgainstSinkAsync(pruneOrphans: true);
+        Assert.Multiple(() =>
+        {
+            Assert.That(second.OrphanCount, Is.Zero);
+            Assert.That(second.RemovedCount, Is.Zero);
+            Assert.That(second.OrphanBackupIds, Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task ScrubCatalogAgainstSinkAsync_denied_permission_fails_closed()
+    {
+        await _fixture.InitializeAsync();
+
+        var denying = _fixture.CreateControlWith(
+            new BackupAccessAuthorizer(new DenyingAccessGate("no restore grant"), membership: null));
+
+        Assert.That(
+            async () => await denying.ScrubCatalogAgainstSinkAsync(),
+            Throws.InstanceOf<LatticeAuthorizationDeniedException>());
+    }
+
     // ---- Scope status ---------------------------------------------------
 
     [Test]

@@ -63,6 +63,14 @@ public sealed class FileSystemBackupSink : ILatticeBackupSink
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// The shared filesystem sink stores payload under a directory reachable by
+    /// every cluster in the sample topology, independent of any single cluster's
+    /// lifetime, so it is durable and health monitoring is meaningful against it.
+    /// </remarks>
+    public bool IsDurable => true;
+
+    /// <inheritdoc />
     public async Task WriteArtifactAsync(
         string artifactId,
         IAsyncEnumerable<ReadOnlyMemory<byte>> content,
@@ -217,6 +225,43 @@ public sealed class FileSystemBackupSink : ILatticeBackupSink
 
         File.Delete(path);
         return Task.FromResult(true);
+    }
+
+    /// <inheritdoc />
+    public Task<bool> ManifestExistsAsync(string backupId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(File.Exists(ManifestPath(backupId)));
+    }
+
+    /// <inheritdoc />
+    public async Task<BackupSinkResolution> ProbeAsync(string backupId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+
+        var manifest = await ReadManifestAsync(backupId, cancellationToken).ConfigureAwait(false);
+        if (manifest is null)
+        {
+            return new BackupSinkResolution(backupId, manifestPresent: false, Array.Empty<string>());
+        }
+
+        var missing = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var descriptor in manifest.ContentDescriptors)
+        {
+            if (!seen.Add(descriptor.ArtifactId))
+            {
+                continue;
+            }
+
+            if (!File.Exists(ArtifactPath(descriptor.ArtifactId)))
+            {
+                missing.Add(descriptor.ArtifactId);
+            }
+        }
+
+        return new BackupSinkResolution(backupId, manifestPresent: true, missing);
     }
 
     private string ArtifactPath(string artifactId) =>

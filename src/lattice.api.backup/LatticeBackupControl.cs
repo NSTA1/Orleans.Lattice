@@ -17,8 +17,13 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
     private readonly ILatticeBackupCaptureService _capture;
     private readonly ILatticeBackupIncrementalCaptureService _incremental;
     private readonly ILatticeBackupCatalogStore _catalog;
+    private readonly ILatticeBackupCatalogRebuildService _catalogRebuild;
+    private readonly ILatticeBackupCatalogScrubService _catalogScrub;
     private readonly ILatticeBackupSink _sink;
     private readonly ILatticeBackupRestoreService _restore;
+    private readonly ILatticeBackupColdRestoreService _coldRestore;
+    private readonly ILatticeBackupHealthService _health;
+    private readonly ILatticeBackupHealthStore _healthStore;
     private readonly BackupAccessAuthorizer _authorizer;
     private readonly IGrainFactory _grainFactory;
     private readonly BackupInventoryRegistry _inventory;
@@ -29,8 +34,13 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
     /// <param name="capture">The full-capture engine. Must not be <c>null</c>.</param>
     /// <param name="incremental">The incremental-capture engine. Must not be <c>null</c>.</param>
     /// <param name="catalog">The backup catalog store. Must not be <c>null</c>.</param>
+    /// <param name="catalogRebuild">The catalog rebuild-from-sink engine. Must not be <c>null</c>.</param>
+    /// <param name="catalogScrub">The catalog reconcile / scrub engine. Must not be <c>null</c>.</param>
     /// <param name="sink">The backup storage sink. Must not be <c>null</c>.</param>
     /// <param name="restore">The restore engine. Must not be <c>null</c>.</param>
+    /// <param name="coldRestore">The cold, catalog-free disaster-restore engine. Must not be <c>null</c>.</param>
+    /// <param name="health">The backup-health verification engine. Must not be <c>null</c>.</param>
+    /// <param name="healthStore">The per-backup health-state store. Must not be <c>null</c>.</param>
     /// <param name="authorizer">The fail-closed backup authorization seam. Must not be <c>null</c>.</param>
     /// <param name="grainFactory">The grain factory used to reach the per-scope scheduler. Must not be <c>null</c>.</param>
     /// <param name="inventory">The in-memory backup metric / inventory registry. Must not be <c>null</c>.</param>
@@ -41,8 +51,13 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         ILatticeBackupCaptureService capture,
         ILatticeBackupIncrementalCaptureService incremental,
         ILatticeBackupCatalogStore catalog,
+        ILatticeBackupCatalogRebuildService catalogRebuild,
+        ILatticeBackupCatalogScrubService catalogScrub,
         ILatticeBackupSink sink,
         ILatticeBackupRestoreService restore,
+        ILatticeBackupColdRestoreService coldRestore,
+        ILatticeBackupHealthService health,
+        ILatticeBackupHealthStore healthStore,
         BackupAccessAuthorizer authorizer,
         IGrainFactory grainFactory,
         BackupInventoryRegistry inventory,
@@ -52,8 +67,13 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         ArgumentNullException.ThrowIfNull(capture);
         ArgumentNullException.ThrowIfNull(incremental);
         ArgumentNullException.ThrowIfNull(catalog);
+        ArgumentNullException.ThrowIfNull(catalogRebuild);
+        ArgumentNullException.ThrowIfNull(catalogScrub);
         ArgumentNullException.ThrowIfNull(sink);
         ArgumentNullException.ThrowIfNull(restore);
+        ArgumentNullException.ThrowIfNull(coldRestore);
+        ArgumentNullException.ThrowIfNull(health);
+        ArgumentNullException.ThrowIfNull(healthStore);
         ArgumentNullException.ThrowIfNull(authorizer);
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(inventory);
@@ -63,8 +83,13 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         _capture = capture;
         _incremental = incremental;
         _catalog = catalog;
+        _catalogRebuild = catalogRebuild;
+        _catalogScrub = catalogScrub;
         _sink = sink;
         _restore = restore;
+        _coldRestore = coldRestore;
+        _health = health;
+        _healthStore = healthStore;
         _authorizer = authorizer;
         _grainFactory = grainFactory;
         _inventory = inventory;
@@ -153,7 +178,7 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         // ascending-by-backup-id order and streams the catalog directly.
         if (request.OrderByCreatedDescending)
         {
-            var query = new BackupCatalogIndexQuery(_catalog, _viewFactory);
+            var query = new BackupCatalogIndexQuery(_catalog, _sink, _viewFactory);
             return await query
                 .QueryAsync(request, pageSize, IsReadAuthorizedAsync, cancellationToken)
                 .ConfigureAwait(false);
@@ -172,6 +197,14 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
             }
 
             if (!await IsReadAuthorizedAsync(manifest.Scope, cancellationToken).ConfigureAwait(false))
+            {
+                continue;
+            }
+
+            // Selection-time liveness: a catalog row whose sink manifest is gone
+            // (store drift after a non-clean restart) is unresolvable, so it must
+            // not be offered as a restore point. A cheap manifest-presence probe.
+            if (!await _sink.ManifestExistsAsync(manifest.Id, cancellationToken).ConfigureAwait(false))
             {
                 continue;
             }
@@ -197,7 +230,14 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
     {
         await foreach (var manifest in _catalog.ListAsync(cancellationToken).ConfigureAwait(false))
         {
-            if (await IsReadAuthorizedAsync(manifest.Scope, cancellationToken).ConfigureAwait(false))
+            if (!await IsReadAuthorizedAsync(manifest.Scope, cancellationToken).ConfigureAwait(false))
+            {
+                continue;
+            }
+
+            // Skip a catalog row the sink can no longer resolve, so a drained
+            // enumeration never surfaces an unresolvable backup.
+            if (await _sink.ManifestExistsAsync(manifest.Id, cancellationToken).ConfigureAwait(false))
             {
                 yield return manifest;
             }
@@ -285,6 +325,10 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
             }
         }
 
+        // Discard the deleted backup's health state so a stale report never lingers
+        // for a backup id that no longer exists.
+        await _healthStore.RemoveAsync(backupId, cancellationToken).ConfigureAwait(false);
+
         return true;
     }
 
@@ -310,6 +354,31 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         }
 
         return await _restore.RestoreAsync(request, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<LatticeRestoreResult> ColdRestoreAsync(
+        LatticeRestoreRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        // Derive the target scope to authorize from the SINK, not the catalog: a
+        // cold restore runs precisely when the catalog may be gone, so the target
+        // tree is resolved from the explicit request or the sink-held manifest. When
+        // neither resolves (an unknown backup id and no target) the cold-restore
+        // engine's own fail-closed validation refuses it without touching data.
+        var manifest = await _sink.ReadManifestAsync(request.BackupId, cancellationToken).ConfigureAwait(false);
+        var targetTreeId = request.TargetTreeId ?? manifest?.Scope.TreeId;
+        if (targetTreeId is not null)
+        {
+            var scope = request.Scope is { } sub
+                ? new BackupScopeSelector(sub.Kind, targetTreeId, sub.KeyOrPrefix)
+                : BackupScopeSelector.WholeTree(targetTreeId);
+            await _authorizer.AuthorizeRestoreAsync(scope, cancellationToken).ConfigureAwait(false);
+        }
+
+        return await _coldRestore.ColdRestoreAsync(request, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -416,6 +485,44 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
     }
 
     /// <inheritdoc />
+    public async Task<BackupCatalogRebuildReport> RebuildCatalogFromSinkAsync(
+        CancellationToken cancellationToken = default)
+    {
+        // Rebuilding the catalog re-registers manifests of every scope from the
+        // sink, so it is a cluster-wide administrative action rather than a
+        // per-scope one. Authorize it fail-closed at the reserved catalog tree
+        // with the high-privilege Restore (author / bulk-load) authority - the
+        // same grant a bulk restore into a tree requires - before any catalog
+        // write happens. Under the default no-op gate this short-circuits to
+        // allow at zero cost; a bootstrap administrator is always permitted.
+        await _authorizer
+            .AuthorizeRestoreAsync(BackupScopeSelector.WholeTree(BackupConstants.CatalogTree), cancellationToken)
+            .ConfigureAwait(false);
+
+        return await _catalogRebuild.RebuildFromSinkAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<BackupCatalogScrubReport> ScrubCatalogAgainstSinkAsync(
+        bool pruneOrphans = false,
+        CancellationToken cancellationToken = default)
+    {
+        // Scrubbing reconciles rows of every scope against the sink and, when
+        // pruning, removes rows from the reserved catalog tree, so it is a
+        // cluster-wide administrative action rather than a per-scope one. Authorize
+        // it fail-closed at the catalog tree with the high-privilege Restore
+        // (author / bulk-load) authority - the same grant rebuild-from-sink requires
+        // - before any probe or delete happens. Under the default no-op gate this
+        // short-circuits to allow at zero cost; a bootstrap administrator is always
+        // permitted.
+        await _authorizer
+            .AuthorizeRestoreAsync(BackupScopeSelector.WholeTree(BackupConstants.CatalogTree), cancellationToken)
+            .ConfigureAwait(false);
+
+        return await _catalogScrub.ScrubAsync(pruneOrphans, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
     public async Task<BackupScopeStatus?> GetScopeStatusAsync(
         BackupScopeSelector scope,
         CancellationToken cancellationToken = default)
@@ -481,6 +588,60 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
             CanDelete = canBackup,
             CanRestore = canRestore,
         };
+    }
+
+    /// <inheritdoc />
+    public Task<bool> IsHealthMonitoringAvailableAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(_sink.IsDurable);
+
+    /// <inheritdoc />
+    public async Task<BackupHealthReport> CheckBackupHealthAsync(
+        string backupId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+
+        var manifest = await _catalog.GetAsync(backupId, cancellationToken).ConfigureAwait(false)
+            ?? throw new KeyNotFoundException($"No backup with id '{backupId}' exists in the catalog.");
+
+        await _authorizer.AuthorizeBackupAsync(manifest.Scope, cancellationToken).ConfigureAwait(false);
+
+        var report = await _health.VerifyAsync(backupId, cancellationToken).ConfigureAwait(false);
+        await _healthStore.SetReportAsync(report, cancellationToken).ConfigureAwait(false);
+        return report;
+    }
+
+    /// <inheritdoc />
+    public async Task<BackupHealthReport?> GetBackupHealthAsync(
+        string backupId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+
+        var manifest = await _catalog.GetAsync(backupId, cancellationToken).ConfigureAwait(false);
+        if (manifest is null)
+        {
+            return null;
+        }
+
+        await _authorizer.AuthorizeBackupAsync(manifest.Scope, cancellationToken).ConfigureAwait(false);
+        return await _healthStore.GetReportAsync(backupId, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task ConfigureBackupHealthAsync(
+        string backupId,
+        BackupHealthConfig config,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        ArgumentNullException.ThrowIfNull(config);
+
+        var manifest = await _catalog.GetAsync(backupId, cancellationToken).ConfigureAwait(false)
+            ?? throw new KeyNotFoundException($"No backup with id '{backupId}' exists in the catalog.");
+
+        await _authorizer.AuthorizeBackupAsync(manifest.Scope, cancellationToken).ConfigureAwait(false);
+        await _healthStore.SetConfigAsync(backupId, config, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

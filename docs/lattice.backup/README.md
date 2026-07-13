@@ -34,6 +34,9 @@ The package registers the storage and engine surface; the [`Orleans.Lattice.Api.
 | Revert | `ILatticeBackupRestoreService.RevertRestoreAsync` | Undoes a shadow-cutover restore by swapping the registry alias back. |
 | Trigger / schedule / prune | `ILatticeBackupScheduler` | On-demand triggers, recurring schedules, and chain-aware retention per scope. |
 | Catalog | `ILatticeBackupCatalogStore` | Durable, introspectable index of manifests keyed by backup id. |
+| Catalog rebuild / scrub | `ILatticeBackupControl.RebuildCatalogFromSinkAsync` / `ScrubCatalogAgainstSinkAsync` | Re-derive the catalog from the sink, or reconcile and prune rows whose sink payload is gone. |
+| Cold restore | `ILatticeBackupControl.ColdRestoreAsync` | Restore into a fresh cluster from the sink alone, with no surviving catalog. |
+| Health monitoring | `ILatticeBackupHealthService` / `ILatticeBackupControl` health ops | Periodic presence + content-hash verification of each backup's durable sink payload, gated on a durable sink. |
 | Sink | `ILatticeBackupSink` | Pluggable content-addressed artifact + manifest storage. |
 | Reserved-namespace guard | `LatticeBackupReservedTrees` | Lets an application validate its own tree ids against the reserved `sys-backup-*` namespace. |
 | Observability | `BackupMetrics` / `LatticeBackupMetrics` | A dedicated `orleans.lattice.backup` meter for space, throughput, failures, and inventory. |
@@ -105,6 +108,7 @@ The scope key passed to `ConfigureLatticeBackupSchedule` is the value returned b
 - [API reference](api.md) - every public type and member, by name, with signatures.
 - [Configuration](configuration.md) - every public options property, its type, and its default.
 - [Architecture](architecture.md) - the capture, incremental, restore, scheduling, and sink pipelines and the core seams they attach to.
+- [Disaster recovery](disaster-recovery.md) - the sink-is-truth model, catalog rebuild and scrub, cold restore into a fresh cluster, and periodic health monitoring.
 - [Observability](observability.md) - the `orleans.lattice.backup` meter and its instruments.
 
 ## See also

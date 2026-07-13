@@ -155,6 +155,10 @@ internal sealed class LatticeBackupApiGrpcAuthInterceptor : Interceptor
             LatticeBackupGrpcMethods.ScheduleBackupMethodName => LatticeBackupApiOperation.ScheduleBackup,
             LatticeBackupGrpcMethods.CancelScheduleMethodName => LatticeBackupApiOperation.CancelSchedule,
             LatticeBackupGrpcMethods.GetScopeStatusMethodName => LatticeBackupApiOperation.GetScopeStatus,
+            LatticeBackupGrpcMethods.IsHealthMonitoringAvailableMethodName => LatticeBackupApiOperation.IsHealthMonitoringAvailable,
+            LatticeBackupGrpcMethods.CheckBackupHealthMethodName => LatticeBackupApiOperation.CheckBackupHealth,
+            LatticeBackupGrpcMethods.GetBackupHealthMethodName => LatticeBackupApiOperation.GetBackupHealth,
+            LatticeBackupGrpcMethods.ConfigureBackupHealthMethodName => LatticeBackupApiOperation.ConfigureBackupHealth,
             _ => LatticeBackupApiOperation.Unknown,
         };
 
@@ -171,6 +175,9 @@ internal sealed class LatticeBackupApiGrpcAuthInterceptor : Interceptor
             BackupScheduleRequestMessage s => s.Scope?.TreeId,
             BackupCancelScheduleRequestMessage c => c.Scope?.TreeId,
             BackupScopeStatusRequestMessage s => s.Scope?.TreeId,
+            BackupHealthCheckRequestMessage h => h.BackupId,
+            BackupHealthGetRequestMessage h => h.BackupId,
+            BackupHealthConfigureRequestMessage h => h.BackupId,
             _ => null,
         };
 

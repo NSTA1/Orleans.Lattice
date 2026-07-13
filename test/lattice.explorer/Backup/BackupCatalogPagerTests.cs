@@ -137,5 +137,17 @@ public sealed class BackupCatalogPagerTests
 
         public Task<BackupScopeStatus?> GetScheduleStatusAsync(BackupScopeSelector scope, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
+
+        public Task<bool> IsHealthMonitoringAvailableAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(false);
+
+        public Task<BackupHealthReport?> GetHealthAsync(string backupId, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<BackupOperationResult> CheckHealthAsync(string backupId, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<BackupOperationResult> ConfigureHealthAsync(string backupId, bool enabled, TimeSpan interval, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
     }
 }

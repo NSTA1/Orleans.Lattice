@@ -112,4 +112,40 @@ public interface IBackupCatalogReader
     /// <param name="scope">The scope to describe. Must not be <see langword="null"/>.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task<BackupScopeStatus?> GetScheduleStatusAsync(BackupScopeSelector scope, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reports whether periodic backup-health monitoring is available on the server
+    /// (true only when the configured backup sink is durable and external). Folds a
+    /// denial or transport failure into <see langword="false"/> rather than throwing,
+    /// so the Backups area simply hides the health column when unavailable.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<bool> IsHealthMonitoringAvailableAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads a backup's latest stored health report, or <see langword="null"/> when
+    /// none has run or it is unavailable. A denial or failure folds into
+    /// <see langword="null"/> rather than throwing.
+    /// </summary>
+    /// <param name="backupId">The backup id. Must not be <see langword="null"/> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<BackupHealthReport?> GetHealthAsync(string backupId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Runs a fresh on-demand health verification of <paramref name="backupId"/> and
+    /// folds a denial or failure into the returned result.
+    /// </summary>
+    /// <param name="backupId">The backup id to verify. Must not be <see langword="null"/> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<BackupOperationResult> CheckHealthAsync(string backupId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Overrides a backup's per-backup health-monitor configuration and folds a
+    /// denial or failure into the returned result.
+    /// </summary>
+    /// <param name="backupId">The backup id. Must not be <see langword="null"/> or empty.</param>
+    /// <param name="enabled">Whether the periodic monitor verifies this backup.</param>
+    /// <param name="interval">The minimum interval between verifications. Must be strictly positive.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<BackupOperationResult> ConfigureHealthAsync(string backupId, bool enabled, TimeSpan interval, CancellationToken cancellationToken = default);
 }

@@ -204,6 +204,71 @@ internal interface ILatticeBackupControl
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Rebuilds the in-cluster backup catalog from the durable sink, after
+    /// authorizing the operation fail-closed as a high-privilege administrative
+    /// action. Scans every self-describing manifest the sink holds and
+    /// re-registers each into the reserved <c>sys-backup-catalog</c> tree, so the
+    /// sink is treated as the single source of truth and the catalog as a
+    /// disposable, self-healing projection over it. Idempotent and safe to re-run:
+    /// a manifest already catalogued is reconciled in place (keeping its immutable
+    /// capture timestamp) rather than duplicated, and a catalog missing rows the
+    /// sink has is repopulated.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A summary of how many manifests were scanned, freshly added, and reconciled.</returns>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to rebuild the catalog.</exception>
+    Task<BackupCatalogRebuildReport> RebuildCatalogFromSinkAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reconciles the in-cluster backup catalog against the durable sink, after
+    /// authorizing the operation fail-closed as a high-privilege administrative
+    /// action. Cross-checks every catalog row for a resolvable sink payload (the
+    /// manifest present and every referenced artifact present and committed) and
+    /// reports orphans - catalog rows whose sink payload is gone and which must
+    /// never be offered as a restore point. <b>Non-destructive by default</b>: with
+    /// <paramref name="pruneOrphans"/> <see langword="false"/> the orphans are only
+    /// flagged and returned; with <see langword="true"/> each orphan row is removed
+    /// from the reserved <c>sys-backup-catalog</c> tree. Idempotent and safe to
+    /// re-run: a pruning re-run reports no further orphans.
+    /// </summary>
+    /// <param name="pruneOrphans">
+    /// <see langword="true"/> to destructively remove orphan rows; <see langword="false"/>
+    /// (the default) to flag them non-destructively.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A summary of how many rows were scanned, how many are orphans, and how many were removed.</returns>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to scrub the catalog.</exception>
+    Task<BackupCatalogScrubReport> ScrubCatalogAgainstSinkAsync(
+        bool pruneOrphans = false,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Restores a backup into a <b>fresh</b> cluster from the durable sink alone,
+    /// after authorizing the operation fail-closed as a high-privilege
+    /// administrative disaster-recovery action. Resolves the target backup and its
+    /// base chain directly from the sink (never the catalog), bootstraps the
+    /// reserved <c>sys-</c> trees if they are absent, replays the chain through the
+    /// HLC-preserving restore engine, and re-projects the catalog from the sink so
+    /// the recovered cluster ends up with a correct catalog. This is the cold entry
+    /// point that lets a cluster which lost its grain storage - and therefore its
+    /// <c>sys-backup-catalog</c> - recover its backups using only the backup
+    /// medium. Idempotent: re-running the same request converges to the same state.
+    /// </summary>
+    /// <param name="request">The restore request. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The restore outcome.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
+    /// <exception cref="LatticeRestoreValidationException">
+    /// No backup with the requested id exists in the sink, or the backup fails
+    /// pre-apply validation (a broken base chain or a missing / tampered artifact).
+    /// </exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to restore the target scope.</exception>
+    Task<LatticeRestoreResult> ColdRestoreAsync(
+        LatticeRestoreRequest request,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Reads a single scope's schedule and last-run status, or
     /// <see langword="null"/> when the scope has no registered schedule and no
     /// catalogued backup. Authorizes the scope's read grant fail-closed before
@@ -235,5 +300,70 @@ internal interface ILatticeBackupControl
     /// <exception cref="ArgumentNullException"><paramref name="scope"/> is <c>null</c>.</exception>
     Task<BackupScopeCapabilities> ProbeCapabilitiesAsync(
         BackupScopeSelector scope,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reports whether periodic backup-health monitoring is available on this
+    /// deployment, which is true only when the configured backup sink is durable
+    /// and external (<see cref="ILatticeBackupSink.IsDurable"/>). With the ephemeral
+    /// in-cluster sink the payload lives in the same cluster that a disaster would
+    /// destroy, so health verification is pointless and the monitor is inert; a
+    /// management UI uses this flag to hide or disable the health column and the
+    /// per-backup health controls. Never authorizes and never throws - it is an
+    /// advisory capability flag.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns><see langword="true"/> when the sink is durable and monitoring applies; otherwise <see langword="false"/>.</returns>
+    Task<bool> IsHealthMonitoringAvailableAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Runs a fresh health verification of the backup identified by
+    /// <paramref name="backupId"/> against the durable sink - checking manifest and
+    /// artifact presence <b>and</b> re-hashing every present artifact against its
+    /// recorded content hash - persists the resulting report as the backup's latest
+    /// health state, and returns it. Authorizes the backup's scope fail-closed
+    /// before touching data.
+    /// </summary>
+    /// <param name="backupId">The backup id to verify. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The fresh health report.</returns>
+    /// <exception cref="ArgumentException"><paramref name="backupId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="KeyNotFoundException">No backup with <paramref name="backupId"/> exists in the catalog.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the backup's scope.</exception>
+    Task<BackupHealthReport> CheckBackupHealthAsync(
+        string backupId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads the latest stored health report for the backup identified by
+    /// <paramref name="backupId"/>, or <see langword="null"/> when no verification has
+    /// run for it yet. Authorizes the backup's scope fail-closed before returning
+    /// anything.
+    /// </summary>
+    /// <param name="backupId">The backup id. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The latest stored health report, or <see langword="null"/> when none exists.</returns>
+    /// <exception cref="ArgumentException"><paramref name="backupId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the backup's scope.</exception>
+    Task<BackupHealthReport?> GetBackupHealthAsync(
+        string backupId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Overrides the per-backup health-monitor configuration (whether the periodic
+    /// monitor verifies the backup and at what cadence) for the backup identified by
+    /// <paramref name="backupId"/>. Authorizes the backup's scope fail-closed before
+    /// writing. The override takes effect on the monitor's next sweep.
+    /// </summary>
+    /// <param name="backupId">The backup id. Must not be <c>null</c> or empty.</param>
+    /// <param name="config">The per-backup monitor configuration. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <exception cref="ArgumentException"><paramref name="backupId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="config"/> is <c>null</c>.</exception>
+    /// <exception cref="KeyNotFoundException">No backup with <paramref name="backupId"/> exists in the catalog.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the backup's scope.</exception>
+    Task ConfigureBackupHealthAsync(
+        string backupId,
+        BackupHealthConfig config,
         CancellationToken cancellationToken = default);
 }
