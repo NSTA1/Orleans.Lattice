@@ -156,7 +156,7 @@ Key properties:
 
 ### Health in the Explorer
 
-The [`Orleans.Lattice.Explorer`](../lattice.explorer/README.md) **Existing Backups**
+The [`Orleans.Lattice.Explorer`](../lattice.explorer/managing-backups.md) **Existing Backups**
 tab renders a per-row health indicator (an OK marker when healthy, a warning marker
 when a backup is unresolvable, has a missing blob, or has a hash mismatch). Clicking
 the warning opens a diagnostics dialog that names exactly which artifact is missing
