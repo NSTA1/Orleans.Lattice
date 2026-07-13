@@ -182,15 +182,45 @@ else {
     }
 
     $imageRef = "${ImageName}:${ImageTag}"
-    Write-Step "Building and pushing silo image '$imageRef' into registry '$registryName'"
-    Write-Host '    (az acr build runs server-side in the registry and streams its logs below)' -ForegroundColor DarkGray
-    az acr build `
-        --registry $registryName `
-        --image $imageRef `
-        --file $dockerfile `
-        $repoRoot
-    if ($LASTEXITCODE -ne 0) {
-        throw "Container image build/push failed (az acr build exited $LASTEXITCODE)."
+
+    # az acr build packs the source dir client-side and, unlike docker build,
+    # does not reliably honour .dockerignore: it walks into .vs/bin/obj and dies
+    # on Visual-Studio-locked files ([Errno 13] Permission denied). Stage only
+    # the inputs the image needs into a clean temp dir so the pack is small,
+    # deterministic, and free of locked or oversized files.
+    $dockerfileRel = 'samples/ClusterScaling/src/ClusterScaling.Silo/Dockerfile'
+    $stageRoot = Join-Path ([IO.Path]::GetTempPath()) "clusterscaling-ctx-$([Guid]::NewGuid().ToString('N'))"
+    try {
+        Write-Step "Staging a clean build context in $stageRoot"
+        New-Item -ItemType Directory -Path $stageRoot -Force | Out-Null
+
+        function Copy-BuildTree([string] $relative) {
+            $src = Join-Path $repoRoot $relative
+            if (-not (Test-Path $src)) { throw "Required build input missing: $src" }
+            $dst = Join-Path $stageRoot $relative
+            New-Item -ItemType Directory -Path $dst -Force | Out-Null
+            # Mirror the tree minus build/IDE dirs. robocopy exit codes < 8 are success.
+            robocopy $src $dst /E /XD bin obj .vs /NFL /NDL /NJH /NJS /NP /R:1 /W:1 | Out-Null
+            if ($LASTEXITCODE -ge 8) { throw "robocopy failed staging '$relative' (exit $LASTEXITCODE)." }
+        }
+
+        Copy-Item (Join-Path $repoRoot 'Directory.Build.targets') (Join-Path $stageRoot 'Directory.Build.targets')
+        Copy-BuildTree 'src'
+        Copy-BuildTree 'samples/ClusterScaling/src'
+
+        Write-Step "Building and pushing silo image '$imageRef' into registry '$registryName'"
+        Write-Host '    (az acr build runs server-side in the registry and streams its logs below)' -ForegroundColor DarkGray
+        az acr build `
+            --registry $registryName `
+            --image $imageRef `
+            --file $dockerfileRel `
+            $stageRoot
+        if ($LASTEXITCODE -ne 0) {
+            throw "Container image build/push failed (az acr build exited $LASTEXITCODE)."
+        }
+    }
+    finally {
+        Remove-Item -Path $stageRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 
     Write-Step "Resolving login server for registry '$registryName'"
