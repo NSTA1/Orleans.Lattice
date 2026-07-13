@@ -134,6 +134,32 @@ public sealed class GrpcBackupControlClient : IBackupControlClient, IDisposable
         return InvokeAsync(client => client.GetScopeStatusAsync(scope, cancellationToken));
     }
 
+    /// <inheritdoc />
+    public Task<bool> IsHealthMonitoringAvailableAsync(CancellationToken cancellationToken = default)
+        => InvokeAsync(client => client.IsHealthMonitoringAvailableAsync(cancellationToken));
+
+    /// <inheritdoc />
+    public Task<BackupHealthReport> CheckBackupHealthAsync(string backupId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        return InvokeAsync(client => client.CheckBackupHealthAsync(backupId, cancellationToken));
+    }
+
+    /// <inheritdoc />
+    public Task<BackupHealthReport?> GetBackupHealthAsync(string backupId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        return InvokeAsync(client => client.GetBackupHealthAsync(backupId, cancellationToken));
+    }
+
+    /// <inheritdoc />
+    public Task ConfigureBackupHealthAsync(string backupId, BackupHealthConfig config, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        ArgumentNullException.ThrowIfNull(config);
+        return InvokeAsync(client => client.ConfigureBackupHealthAsync(backupId, config, cancellationToken));
+    }
+
     private async Task<T> InvokeAsync<T>(Func<LatticeBackupApiGrpcClient, Task<T>> call)
     {
         var client = ResolveClient();

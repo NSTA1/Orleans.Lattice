@@ -63,6 +63,14 @@ public sealed class FileSystemBackupSink : ILatticeBackupSink
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// The shared filesystem sink stores payload under a directory reachable by
+    /// every cluster in the sample topology, independent of any single cluster's
+    /// lifetime, so it is durable and health monitoring is meaningful against it.
+    /// </remarks>
+    public bool IsDurable => true;
+
+    /// <inheritdoc />
     public async Task WriteArtifactAsync(
         string artifactId,
         IAsyncEnumerable<ReadOnlyMemory<byte>> content,

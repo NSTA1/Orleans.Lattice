@@ -24,6 +24,14 @@ internal sealed class InClusterLatticeBackupSink(IGrainFactory grainFactory) : I
     private ILattice Store => grainFactory.GetGrain<ILattice>(BackupConstants.StoreTree);
 
     /// <inheritdoc />
+    /// <remarks>
+    /// The in-cluster sink stores payload in a reserved tree inside the same
+    /// cluster the backup protects, so it is <b>not</b> durable against that
+    /// cluster's loss. Health monitoring is inert against it.
+    /// </remarks>
+    public bool IsDurable => false;
+
+    /// <inheritdoc />
     public async Task WriteArtifactAsync(
         string artifactId,
         IAsyncEnumerable<ReadOnlyMemory<byte>> content,

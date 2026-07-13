@@ -148,4 +148,62 @@ internal sealed class FakeBackupControlClient : IBackupControlClient
 
         return Task.FromResult<BackupScopeStatus?>(ScopeStatusResult);
     }
+
+    public bool HealthAvailableResult { get; set; }
+    public BackupHealthReport? HealthReportResult { get; set; }
+    public Exception? HealthThrows { get; set; }
+    public string? LastCheckedBackupId { get; private set; }
+    public string? LastConfiguredBackupId { get; private set; }
+    public BackupHealthConfig? LastHealthConfig { get; private set; }
+
+    public Task<bool> IsHealthMonitoringAvailableAsync(CancellationToken cancellationToken = default)
+    {
+        if (HealthThrows is not null)
+        {
+            throw HealthThrows;
+        }
+
+        return Task.FromResult(HealthAvailableResult);
+    }
+
+    public Task<BackupHealthReport> CheckBackupHealthAsync(string backupId, CancellationToken cancellationToken = default)
+    {
+        LastCheckedBackupId = backupId;
+        if (HealthThrows is not null)
+        {
+            throw HealthThrows;
+        }
+
+        return Task.FromResult(
+            HealthReportResult ?? new BackupHealthReport(
+                backupId,
+                BackupHealthStatus.Healthy,
+                manifestPresent: true,
+                Array.Empty<string>(),
+                Array.Empty<string>(),
+                DateTimeOffset.UtcNow,
+                "Healthy."));
+    }
+
+    public Task<BackupHealthReport?> GetBackupHealthAsync(string backupId, CancellationToken cancellationToken = default)
+    {
+        if (HealthThrows is not null)
+        {
+            throw HealthThrows;
+        }
+
+        return Task.FromResult(HealthReportResult);
+    }
+
+    public Task ConfigureBackupHealthAsync(string backupId, BackupHealthConfig config, CancellationToken cancellationToken = default)
+    {
+        LastConfiguredBackupId = backupId;
+        LastHealthConfig = config;
+        if (HealthThrows is not null)
+        {
+            throw HealthThrows;
+        }
+
+        return Task.CompletedTask;
+    }
 }

@@ -412,6 +412,8 @@ public sealed class BackupCatalogIndexQueryTests
     {
         public static readonly AlwaysPresentSink Instance = new();
 
+        public bool IsDurable => true;
+
         public Task<bool> ManifestExistsAsync(string backupId, CancellationToken cancellationToken = default) =>
             Task.FromResult(true);
 
@@ -433,6 +435,8 @@ public sealed class BackupCatalogIndexQueryTests
     private sealed class PresentSink(params string[] present) : ILatticeBackupSink
     {
         private readonly HashSet<string> _present = new(present, StringComparer.Ordinal);
+
+        public bool IsDurable => true;
 
         public Task<bool> ManifestExistsAsync(string backupId, CancellationToken cancellationToken = default) =>
             Task.FromResult(_present.Contains(backupId));

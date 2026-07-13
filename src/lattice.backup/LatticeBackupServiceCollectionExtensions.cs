@@ -79,6 +79,8 @@ public static class LatticeBackupServiceCollectionExtensions
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IValidateOptions<LatticeBackupScheduleOptions>, LatticeBackupScheduleOptionsValidator>());
 
+        builder.Services.AddOptions<LatticeBackupHealthOptions>();
+
         // The in-memory inventory / status registry that the capture, restore,
         // scheduler, and retention paths update and the observable inventory
         // gauges + admin status surface read. Registered as the process-wide
@@ -89,6 +91,17 @@ public static class LatticeBackupServiceCollectionExtensions
         builder.Services.TryAddSingleton<ILatticeBackupSink, InClusterLatticeBackupSink>();
         builder.Services.TryAddSingleton<ILatticeBackupCatalogStore, LatticeBackupCatalogStore>();
         builder.Services.TryAddSingleton<ILatticeBackupSetResolver, LatticeBackupSetResolver>();
+
+        // Periodic backup-health verification: the store that persists the latest
+        // per-backup report and per-backup configuration into the reserved
+        // sys-backup-health tree, the verification engine that presence-probes and
+        // hash-verifies a backup against the durable sink, and the cluster-wide
+        // reminder-driven monitor that sweeps the catalog. The monitor is gated on
+        // a durable sink, so it stays inert with the default in-cluster sink. A
+        // background activation service starts the monitor once the silo is ready.
+        builder.Services.TryAddSingleton<ILatticeBackupHealthStore, LatticeBackupHealthStore>();
+        builder.Services.TryAddSingleton<ILatticeBackupHealthService, LatticeBackupHealthService>();
+        builder.Services.AddSingleton<IHostedService, BackupHealthMonitorActivationService>();
 
         // Rebuilds the catalog from the sink so the catalog is a disposable,
         // self-healing projection over the sink (the single source of truth). A
@@ -219,6 +232,28 @@ public static class LatticeBackupServiceCollectionExtensions
         ArgumentException.ThrowIfNullOrEmpty(scopeKey);
         ArgumentNullException.ThrowIfNull(configure);
         builder.Services.Configure(scopeKey, configure);
+        return builder;
+    }
+
+    /// <summary>
+    /// Configures the cluster-wide <see cref="LatticeBackupHealthOptions"/> that
+    /// govern the periodic backup-health monitor: whether it runs and the default
+    /// re-verification cadence. Health monitoring is auto-enrolled for every backup
+    /// and on by default; use this to change the cadence (for example a tighter
+    /// interval in a demo) or to disable the monitor. The monitor stays inert
+    /// against a non-durable sink regardless of these options.
+    /// </summary>
+    /// <param name="builder">The silo builder.</param>
+    /// <param name="configure">The options configuration delegate.</param>
+    /// <returns>The same <paramref name="builder"/> for chaining.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="builder"/> or <paramref name="configure"/> is <c>null</c>.</exception>
+    public static ISiloBuilder ConfigureLatticeBackupHealth(
+        this ISiloBuilder builder,
+        Action<LatticeBackupHealthOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(configure);
+        builder.Services.Configure(configure);
         return builder;
     }
 }

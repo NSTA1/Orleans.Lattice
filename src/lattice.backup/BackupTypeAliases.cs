@@ -75,4 +75,16 @@ internal static class BackupTypeAliases
 
     /// <summary>Alias for <see cref="BackupCatalogScrubReport"/>.</summary>
     internal const string BackupCatalogScrubReport = "olb.cs";
+
+    /// <summary>Alias for <see cref="BackupHealthReport"/>.</summary>
+    internal const string BackupHealthReport = "olb.hr";
+
+    /// <summary>Alias for <see cref="BackupHealthConfig"/>.</summary>
+    internal const string BackupHealthConfig = "olb.hg";
+
+    /// <summary>Alias for <see cref="ILatticeBackupHealthMonitorGrain"/>.</summary>
+    internal const string ILatticeBackupHealthMonitorGrain = "olb.hm";
+
+    /// <summary>Alias for <see cref="BackupHealthMonitorState"/>.</summary>
+    internal const string BackupHealthMonitorState = "olb.hy";
 }

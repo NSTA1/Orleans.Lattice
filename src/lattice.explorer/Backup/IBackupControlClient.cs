@@ -85,4 +85,29 @@ public interface IBackupControlClient
     /// <param name="scope">The scope to describe. Must not be <see langword="null"/>.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task<BackupScopeStatus?> GetScopeStatusAsync(BackupScopeSelector scope, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reports whether periodic backup-health monitoring is available (true only
+    /// when the server's configured backup sink is durable and external). The
+    /// Backups area uses this to hide or disable the per-backup health column and
+    /// health controls when monitoring does not apply.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<bool> IsHealthMonitoringAvailableAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Runs a fresh health verification of a backup, persists it server-side, and returns the report.</summary>
+    /// <param name="backupId">The backup id to verify. Must not be <see langword="null"/> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<BackupHealthReport> CheckBackupHealthAsync(string backupId, CancellationToken cancellationToken = default);
+
+    /// <summary>Reads a backup's latest stored health report, or returns <see langword="null"/> when none has run.</summary>
+    /// <param name="backupId">The backup id. Must not be <see langword="null"/> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<BackupHealthReport?> GetBackupHealthAsync(string backupId, CancellationToken cancellationToken = default);
+
+    /// <summary>Overrides a backup's per-backup health-monitor configuration.</summary>
+    /// <param name="backupId">The backup id. Must not be <see langword="null"/> or empty.</param>
+    /// <param name="config">The per-backup monitor configuration. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task ConfigureBackupHealthAsync(string backupId, BackupHealthConfig config, CancellationToken cancellationToken = default);
 }

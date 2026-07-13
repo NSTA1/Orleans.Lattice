@@ -19,6 +19,24 @@ namespace Orleans.Lattice.Backup;
 public interface ILatticeBackupSink
 {
     /// <summary>
+    /// Whether this sink stores backup payload durably outside the cluster that
+    /// captured it, so a backup survives the loss of that cluster. A durable /
+    /// external sink (for example the Azure Blob backend or a shared filesystem
+    /// backend) reports <see langword="true"/>; the default in-cluster sink, which
+    /// dogfoods a reserved tree in the same cluster whose loss the backup is meant
+    /// to protect against, reports <see langword="false"/>.
+    /// <para>
+    /// Periodic backup-health verification is only meaningful against a durable
+    /// sink: verifying payload that lives in the same ephemeral cluster proves
+    /// nothing about disaster recovery. The health monitor consults this capability
+    /// to stay inert on a non-durable sink, and a management UI hides or disables
+    /// its health surface accordingly. Prefer this flag over an <c>is</c>-type
+    /// check so a new durable sink is covered without a change here.
+    /// </para>
+    /// </summary>
+    bool IsDurable { get; }
+
+    /// <summary>
     /// Writes an artifact as an ordered stream of chunks under
     /// <paramref name="artifactId"/>. Re-writing the same id with the same content
     /// is idempotent. When the id is content-addressed, an identical retry is a

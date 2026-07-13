@@ -75,6 +75,18 @@ internal sealed class LatticeBackupGrpcMethods
     /// <summary>The unary scope-status RPC method name.</summary>
     public const string GetScopeStatusMethodName = "GetScopeStatus";
 
+    /// <summary>The unary health-monitoring-availability RPC method name.</summary>
+    public const string IsHealthMonitoringAvailableMethodName = "IsHealthMonitoringAvailable";
+
+    /// <summary>The unary check-backup-health RPC method name.</summary>
+    public const string CheckBackupHealthMethodName = "CheckBackupHealth";
+
+    /// <summary>The unary get-backup-health RPC method name.</summary>
+    public const string GetBackupHealthMethodName = "GetBackupHealth";
+
+    /// <summary>The unary configure-backup-health RPC method name.</summary>
+    public const string ConfigureBackupHealthMethodName = "ConfigureBackupHealth";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeBackupGrpcMethods(
         Serializer<BackupCaptureRequestMessage> captureRequestSerializer,
@@ -104,7 +116,14 @@ internal sealed class LatticeBackupGrpcMethods
         Serializer<BackupCancelScheduleRequestMessage> cancelScheduleRequestSerializer,
         Serializer<BackupCancelScheduleResponse> cancelScheduleResponseSerializer,
         Serializer<BackupScopeStatusRequestMessage> scopeStatusRequestSerializer,
-        Serializer<BackupScopeStatusResponse> scopeStatusResponseSerializer)
+        Serializer<BackupScopeStatusResponse> scopeStatusResponseSerializer,
+        Serializer<BackupHealthAvailabilityRequest> healthAvailabilityRequestSerializer,
+        Serializer<BackupHealthAvailabilityResponse> healthAvailabilityResponseSerializer,
+        Serializer<BackupHealthCheckRequestMessage> healthCheckRequestSerializer,
+        Serializer<BackupHealthGetRequestMessage> healthGetRequestSerializer,
+        Serializer<BackupHealthReportResponse> healthReportResponseSerializer,
+        Serializer<BackupHealthConfigureRequestMessage> healthConfigureRequestSerializer,
+        Serializer<BackupHealthConfigureResponse> healthConfigureResponseSerializer)
     {
         ArgumentNullException.ThrowIfNull(captureRequestSerializer);
         ArgumentNullException.ThrowIfNull(incrementalCaptureRequestSerializer);
@@ -134,6 +153,13 @@ internal sealed class LatticeBackupGrpcMethods
         ArgumentNullException.ThrowIfNull(cancelScheduleResponseSerializer);
         ArgumentNullException.ThrowIfNull(scopeStatusRequestSerializer);
         ArgumentNullException.ThrowIfNull(scopeStatusResponseSerializer);
+        ArgumentNullException.ThrowIfNull(healthAvailabilityRequestSerializer);
+        ArgumentNullException.ThrowIfNull(healthAvailabilityResponseSerializer);
+        ArgumentNullException.ThrowIfNull(healthCheckRequestSerializer);
+        ArgumentNullException.ThrowIfNull(healthGetRequestSerializer);
+        ArgumentNullException.ThrowIfNull(healthReportResponseSerializer);
+        ArgumentNullException.ThrowIfNull(healthConfigureRequestSerializer);
+        ArgumentNullException.ThrowIfNull(healthConfigureResponseSerializer);
 
         CreateBackup = new Method<BackupCaptureRequestMessage, BackupCaptureResponse>(
             type: MethodType.Unary,
@@ -239,6 +265,34 @@ internal sealed class LatticeBackupGrpcMethods
             name: GetScopeStatusMethodName,
             requestMarshaller: LatticeBackupGrpcMarshallers.Create(scopeStatusRequestSerializer),
             responseMarshaller: LatticeBackupGrpcMarshallers.Create(scopeStatusResponseSerializer));
+
+        IsHealthMonitoringAvailable = new Method<BackupHealthAvailabilityRequest, BackupHealthAvailabilityResponse>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: IsHealthMonitoringAvailableMethodName,
+            requestMarshaller: LatticeBackupGrpcMarshallers.Create(healthAvailabilityRequestSerializer),
+            responseMarshaller: LatticeBackupGrpcMarshallers.Create(healthAvailabilityResponseSerializer));
+
+        CheckBackupHealth = new Method<BackupHealthCheckRequestMessage, BackupHealthReportResponse>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: CheckBackupHealthMethodName,
+            requestMarshaller: LatticeBackupGrpcMarshallers.Create(healthCheckRequestSerializer),
+            responseMarshaller: LatticeBackupGrpcMarshallers.Create(healthReportResponseSerializer));
+
+        GetBackupHealth = new Method<BackupHealthGetRequestMessage, BackupHealthReportResponse>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: GetBackupHealthMethodName,
+            requestMarshaller: LatticeBackupGrpcMarshallers.Create(healthGetRequestSerializer),
+            responseMarshaller: LatticeBackupGrpcMarshallers.Create(healthReportResponseSerializer));
+
+        ConfigureBackupHealth = new Method<BackupHealthConfigureRequestMessage, BackupHealthConfigureResponse>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: ConfigureBackupHealthMethodName,
+            requestMarshaller: LatticeBackupGrpcMarshallers.Create(healthConfigureRequestSerializer),
+            responseMarshaller: LatticeBackupGrpcMarshallers.Create(healthConfigureResponseSerializer));
     }
 
     /// <summary>The unary <c>CreateBackup</c> full-capture RPC.</summary>
@@ -286,6 +340,18 @@ internal sealed class LatticeBackupGrpcMethods
     /// <summary>The unary <c>GetScopeStatus</c> schedule-status RPC.</summary>
     public Method<BackupScopeStatusRequestMessage, BackupScopeStatusResponse> GetScopeStatus { get; }
 
+    /// <summary>The unary <c>IsHealthMonitoringAvailable</c> capability RPC.</summary>
+    public Method<BackupHealthAvailabilityRequest, BackupHealthAvailabilityResponse> IsHealthMonitoringAvailable { get; }
+
+    /// <summary>The unary <c>CheckBackupHealth</c> on-demand verification RPC.</summary>
+    public Method<BackupHealthCheckRequestMessage, BackupHealthReportResponse> CheckBackupHealth { get; }
+
+    /// <summary>The unary <c>GetBackupHealth</c> stored-report read RPC.</summary>
+    public Method<BackupHealthGetRequestMessage, BackupHealthReportResponse> GetBackupHealth { get; }
+
+    /// <summary>The unary <c>ConfigureBackupHealth</c> per-backup monitor-config RPC.</summary>
+    public Method<BackupHealthConfigureRequestMessage, BackupHealthConfigureResponse> ConfigureBackupHealth { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out
     /// of <paramref name="serializerProvider"/>. Shared by the server-side DI
@@ -323,7 +389,14 @@ internal sealed class LatticeBackupGrpcMethods
             serializerProvider.GetRequiredService<Serializer<BackupCancelScheduleRequestMessage>>(),
             serializerProvider.GetRequiredService<Serializer<BackupCancelScheduleResponse>>(),
             serializerProvider.GetRequiredService<Serializer<BackupScopeStatusRequestMessage>>(),
-            serializerProvider.GetRequiredService<Serializer<BackupScopeStatusResponse>>());
+            serializerProvider.GetRequiredService<Serializer<BackupScopeStatusResponse>>(),
+            serializerProvider.GetRequiredService<Serializer<BackupHealthAvailabilityRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<BackupHealthAvailabilityResponse>>(),
+            serializerProvider.GetRequiredService<Serializer<BackupHealthCheckRequestMessage>>(),
+            serializerProvider.GetRequiredService<Serializer<BackupHealthGetRequestMessage>>(),
+            serializerProvider.GetRequiredService<Serializer<BackupHealthReportResponse>>(),
+            serializerProvider.GetRequiredService<Serializer<BackupHealthConfigureRequestMessage>>(),
+            serializerProvider.GetRequiredService<Serializer<BackupHealthConfigureResponse>>());
     }
 }
 

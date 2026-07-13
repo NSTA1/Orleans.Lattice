@@ -239,6 +239,10 @@
                     <thead>
                         <tr>
                             <th>Name</th><th>Kind</th><th>Scope</th><th>Created</th>
+                            @if (_healthAvailable)
+                            {
+                                <th>Health</th>
+                            }
                         </tr>
                         <tr class="explorer-backups-filterrow">
                             <th>
@@ -269,12 +273,16 @@
                                 <BackupFilterBox Placeholder="Created starts with..." InitialValue="@_filterCreated"
                                                  OnFilter="OnCreatedFilterChanged" />
                             </th>
+                            @if (_healthAvailable)
+                            {
+                                <th></th>
+                            }
                         </tr>
                     </thead>
                     <tbody>
                         @if (Rows.Count == 0)
                         {
-                            <tr><td colspan="4" class="explorer-backups-empty">@EmptyMessage</td></tr>
+                            <tr><td colspan="@(_healthAvailable ? 5 : 4)" class="explorer-backups-empty">@EmptyMessage</td></tr>
                         }
                         else
                         {
@@ -288,6 +296,27 @@
                                     <td>@row.Kind</td>
                                     <td>@(row.IsSet ? string.Join(", ", row.TreeIds) : row.Members[0].Scope.TreeId)</td>
                                     <td title="@row.CreatedAtUtc.UtcDateTime.ToString("u")">@row.CreatedAtUtc.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss")</td>
+                                    @if (_healthAvailable)
+                                    {
+                                        var health = RowHealth(row);
+                                        <td class="explorer-backups-health">
+                                            @if (health is null || health.Status == BackupHealthStatus.Unknown)
+                                            {
+                                                <span class="explorer-health-dot explorer-health-unknown" title="Not yet verified">-</span>
+                                            }
+                                            else if (health.Status == BackupHealthStatus.Healthy)
+                                            {
+                                                <span class="explorer-health-dot explorer-health-ok" title="Healthy (verified @health.CheckedAtUtc.UtcDateTime.ToString("u"))">OK</span>
+                                            }
+                                            else
+                                            {
+                                                <button type="button" class="explorer-health-dot explorer-health-warn"
+                                                        title="@(health.Status == BackupHealthStatus.Missing ? "Manifest missing - click for details" : "Unresolvable - click for details")"
+                                                        @onclick:stopPropagation="true"
+                                                        @onclick="@(() => OpenHealthDialog(health))">!</button>
+                                            }
+                                        </td>
+                                    }
                                 </tr>
                             }
                         }
@@ -533,9 +562,76 @@
                             backup from the New Backup tab.
                         </p>
                     }
+
+                    @if (_healthAvailable)
+                    {
+                        <fieldset class="explorer-backups-schedule" aria-label="Health monitoring">
+                            <legend>Health monitoring</legend>
+                            <label>
+                                <input type="checkbox" checked="@_editHealthEnabled"
+                                       @onchange="e => _editHealthEnabled = (bool)(e.Value ?? false)"
+                                       disabled="@_busy" aria-label="Enable health monitoring" />
+                                Verify this backup's sink payload periodically
+                            </label>
+                            <label>
+                                Every
+                                <input type="number" min="0" max="168" value="@_editHealthHours"
+                                       @oninput="e => _editHealthHours = ParseInterval(e.Value, 0, 168)"
+                                       disabled="@(_busy || !_editHealthEnabled)" aria-label="Health interval hours" /> h
+                            </label>
+                            <label>
+                                <input type="number" min="0" max="59" value="@_editHealthMinutes"
+                                       @oninput="e => _editHealthMinutes = ParseInterval(e.Value, 0, 59)"
+                                       disabled="@(_busy || !_editHealthEnabled)" aria-label="Health interval minutes" /> m
+                            </label>
+                            <button type="button" class="explorer-btn explorer-btn-primary"
+                                    disabled="@(_busy || (_editHealthEnabled && EditHealthInterval <= TimeSpan.Zero))"
+                                    @onclick="SaveHealthConfigAsync">Save</button>
+                        </fieldset>
+                    }
                 }
                 <div class="explorer-modal-actions">
                     <button type="button" class="explorer-btn" disabled="@_busy" @onclick="CloseSchedule">Close</button>
+                </div>
+            </div>
+        </div>
+    }
+
+    @if (_healthDialog is not null)
+    {
+        <div class="explorer-modal-backdrop" role="presentation">
+            <div class="explorer-modal" role="dialog" aria-modal="true" aria-labelledby="explorer-health-title">
+                <h3 id="explorer-health-title">Backup health</h3>
+                <p>
+                    Backup <strong>@_healthDialog.BackupId</strong> is
+                    <strong>@_healthDialog.Status</strong>.
+                </p>
+                <p class="explorer-backups-hint">@_healthDialog.Explanation</p>
+                @if (_healthDialog.MissingArtifactIds.Count > 0)
+                {
+                    <p><strong>Missing or uncommitted artifacts:</strong></p>
+                    <ul class="explorer-health-list">
+                        @foreach (var id in _healthDialog.MissingArtifactIds)
+                        {
+                            <li>@id</li>
+                        }
+                    </ul>
+                }
+                @if (_healthDialog.HashMismatchArtifactIds.Count > 0)
+                {
+                    <p><strong>Content-hash mismatches:</strong></p>
+                    <ul class="explorer-health-list">
+                        @foreach (var id in _healthDialog.HashMismatchArtifactIds)
+                        {
+                            <li>@id</li>
+                        }
+                    </ul>
+                }
+                <p class="explorer-backups-hint">Last checked @_healthDialog.CheckedAtUtc.UtcDateTime.ToString("u").</p>
+                <div class="explorer-modal-actions">
+                    <button type="button" class="explorer-btn explorer-btn-primary" disabled="@_busy"
+                            @onclick="@(() => RecheckHealthAsync(_healthDialog.BackupId))">Re-check now</button>
+                    <button type="button" class="explorer-btn" disabled="@_busy" @onclick="CloseHealthDialog">Close</button>
                 </div>
             </div>
         </div>
@@ -574,6 +670,19 @@
     private int _editFullMinutes;
     private int _editIncHours;
     private int _editIncMinutes;
+
+    // Backup-health state. Availability gates the whole feature (true only when the
+    // server's backup sink is durable/external); the per-backup reports back the
+    // health column and diagnostics dialog; the editor fields back the per-backup
+    // health-monitor config in the schedule modal.
+    private bool _healthAvailable;
+    private readonly Dictionary<string, BackupHealthReport> _health = new(StringComparer.Ordinal);
+    private BackupHealthReport? _healthDialog;
+    private bool _editHealthEnabled = true;
+    private int _editHealthHours = 6;
+    private int _editHealthMinutes;
+
+    private TimeSpan EditHealthInterval => new(hours: _editHealthHours, minutes: _editHealthMinutes, seconds: 0);
 
     // The two Backups sub-tabs, with the active one retained as a durable
     // preference so the panel reopens on the same sub-tab.
@@ -690,6 +799,7 @@
     {
         _pager = new BackupCatalogPager(Reader);
         await LoadTreesAsync();
+        _healthAvailable = await Reader.IsHealthMonitoringAvailableAsync();
         await ReloadAsync();
 
         // Restore the prior active sub-tab so the panel reopens where it was.
@@ -942,6 +1052,7 @@
             _summary = await Reader.LoadSummaryAsync();
             await _pager.ResetAsync(ExistingPageSize, CurrentFilter);
             _highlightedBackupIds.Clear();
+            await RefreshHealthAsync();
         }
         finally
         {
@@ -956,6 +1067,7 @@
         _summary = await Reader.LoadSummaryAsync();
         await _pager.ResetAsync(ExistingPageSize, CurrentFilter);
         await RefreshBaseBackupsAsync();
+        await RefreshHealthAsync();
     }
 
     private async Task OnNameFilterChanged(string value)
@@ -992,6 +1104,7 @@
         try
         {
             await _pager.ResetAsync(ExistingPageSize, CurrentFilter);
+            await RefreshHealthAsync();
         }
         finally
         {
@@ -1005,6 +1118,7 @@
         try
         {
             await _pager.NextAsync();
+            await RefreshHealthAsync();
         }
         finally
         {
@@ -1012,7 +1126,11 @@
         }
     }
 
-    private void PreviousPage() => _pager.Previous();
+    private async Task PreviousPage()
+    {
+        _pager.Previous();
+        await RefreshHealthAsync();
+    }
 
     private async Task BackupAsync()
     {
@@ -1150,6 +1268,98 @@
     {
         _pendingSchedule = null;
         _scheduleStatus = null;
+    }
+
+    // Loads the latest stored health report for every backup visible on the
+    // current page (each set member individually), so the health column and the
+    // per-row indicator reflect the freshest verification the monitor persisted.
+    // Inert (and cheap) when health monitoring is unavailable.
+    private async Task RefreshHealthAsync()
+    {
+        if (!_healthAvailable)
+        {
+            return;
+        }
+
+        _health.Clear();
+        foreach (var row in Rows)
+        {
+            foreach (var member in row.Members)
+            {
+                var report = await Reader.GetHealthAsync(member.Id);
+                if (report is not null)
+                {
+                    _health[member.Id] = report;
+                }
+            }
+        }
+    }
+
+    // The health of a display row: the worst-status report across its members, so a
+    // backup set flags a warning when any one member is unresolvable. Null when no
+    // member has a stored report yet.
+    private BackupHealthReport? RowHealth(BackupRow row)
+    {
+        BackupHealthReport? worst = null;
+        foreach (var member in row.Members)
+        {
+            if (_health.TryGetValue(member.Id, out var report)
+                && (worst is null || report.Status > worst.Status))
+            {
+                worst = report;
+            }
+        }
+
+        return worst;
+    }
+
+    private void OpenHealthDialog(BackupHealthReport report) => _healthDialog = report;
+
+    private void CloseHealthDialog() => _healthDialog = null;
+
+    // Runs a fresh on-demand verification, refreshes the page's stored reports, and
+    // re-opens the dialog on the updated report so the operator sees the new result.
+    private async Task RecheckHealthAsync(string backupId)
+    {
+        _busy = true;
+        try
+        {
+            _lastResult = await Reader.CheckHealthAsync(backupId);
+            await RefreshHealthAsync();
+            _healthDialog = _health.TryGetValue(backupId, out var report) ? report : null;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    // Persists the per-backup health-monitor override from the schedule modal, then
+    // refreshes the page's reports so a newly enabled backup starts showing state.
+    private async Task SaveHealthConfigAsync()
+    {
+        var row = _pendingSchedule;
+        if (row is null)
+        {
+            return;
+        }
+
+        var interval = _editHealthEnabled ? EditHealthInterval : TimeSpan.FromHours(6);
+        if (_editHealthEnabled && interval <= TimeSpan.Zero)
+        {
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            _lastResult = await Reader.ConfigureHealthAsync(row.Members[0].Id, _editHealthEnabled, interval);
+            await RefreshHealthAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
     }
 
     // Registers or updates the schedule of the chosen kind at the edited interval,
