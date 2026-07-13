@@ -40,6 +40,22 @@ internal static class RuntimeViewRehydrator
             return null;
         }
 
+        // Defence-in-depth: the projection type name is read back from durable
+        // registry state, so it must be treated as untrusted. Reject any type
+        // that is not the expected projection interface *before* constructing it,
+        // so a tampered or stale record can never instantiate an arbitrary CLR
+        // type (and trigger its constructor's side effects) during re-hydration.
+        var expected = record.IsAggregation
+            ? typeof(ILatticeAggregationProjection)
+            : typeof(ILatticeViewProjection);
+        if (!expected.IsAssignableFrom(type))
+        {
+            logger.LogWarning(
+                "Runtime view '{ViewName}' cannot be re-hydrated: projection type '{TypeName}' is not assignable to '{ExpectedType}'. The view stays dormant until it is re-created.",
+                record.ViewName, record.ProjectionTypeName, expected.Name);
+            return null;
+        }
+
         object? instance;
         try
         {
