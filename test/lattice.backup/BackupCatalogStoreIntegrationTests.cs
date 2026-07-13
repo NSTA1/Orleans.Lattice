@@ -59,6 +59,24 @@ public sealed class BackupCatalogStoreIntegrationTests
     }
 
     [Test]
+    public async Task RegisterAsync_preserves_the_first_created_timestamp_on_recapture()
+    {
+        // A backup id is a content address, so a re-capture of identical content
+        // re-registers the same id with a fresh capture time. The store must keep
+        // the first-seen timestamp so the catalog index (keyed by capture time) is
+        // never re-keyed into an orphaned duplicate row.
+        var firstSeen = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var first = BackupManifestModelTests.Sample(id: "cat-recap") with { CreatedAtUtc = firstSeen };
+        await _fixture.Catalog.RegisterAsync(first);
+
+        var recaptured = BackupManifestModelTests.Sample(id: "cat-recap") with { CreatedAtUtc = firstSeen.AddDays(3) };
+        await _fixture.Catalog.RegisterAsync(recaptured);
+
+        var readBack = await _fixture.Catalog.GetAsync("cat-recap");
+        Assert.That(readBack!.CreatedAtUtc, Is.EqualTo(firstSeen));
+    }
+
+    [Test]
     public async Task RemoveAsync_removes_the_manifest()
     {
         await _fixture.Catalog.RegisterAsync(BackupManifestModelTests.Sample(id: "cat-del"));

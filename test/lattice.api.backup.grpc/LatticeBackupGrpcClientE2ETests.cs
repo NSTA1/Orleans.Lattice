@@ -90,6 +90,63 @@ public sealed class LatticeBackupGrpcClientE2ETests
     }
 
     [Test]
+    public async Task ProbeCapabilitiesAsync_round_trips_the_capability_set_over_the_wire()
+    {
+        var caps = await _host.Client.ProbeCapabilitiesAsync(BackupScopeSelector.WholeTree(Source));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(caps.Scope, Is.EqualTo(BackupScopeSelector.WholeTree(Source)));
+            Assert.That(caps.CanList, Is.True);
+            Assert.That(caps.CanCapture, Is.True);
+            Assert.That(caps.CanCaptureIncremental, Is.True);
+            Assert.That(caps.CanRestore, Is.True);
+            Assert.That(caps.CanDelete, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task ProbeCapabilitiesAsync_null_scope_throws()
+    {
+        Assert.That(
+            async () => await _host.Client.ProbeCapabilitiesAsync(null!),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public async Task CreateBackupSetAsync_captures_a_multi_tree_set_over_the_wire()
+    {
+        var treeA = _fixture.GrainFactory.GetGrain<ILattice>("set-a");
+        await treeA.SetAsync("k", Bytes("a"));
+        var treeB = _fixture.GrainFactory.GetGrain<ILattice>("set-b");
+        await treeB.SetAsync("k", Bytes("b"));
+
+        var set = await _host.Client.CreateBackupSetAsync(
+            new LatticeBackupSetCaptureRequest(
+                "nightly-set",
+                new[]
+                {
+                    BackupScopeSelector.WholeTree("set-a"),
+                    BackupScopeSelector.WholeTree("set-b"),
+                },
+                crossTreeConsistent: true));
+
+        var page = await _host.Client.ListBackupsAsync(new BackupCatalogRequest());
+        var listedIds = page.Entries.Select(e => e.Id).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(set.Members, Has.Count.EqualTo(2));
+            Assert.That(set.SetManifest.CrossTreeConsistent, Is.True);
+            Assert.That(set.SetManifest.MemberBackupIds, Has.Count.EqualTo(2));
+            foreach (var member in set.Members)
+            {
+                Assert.That(listedIds, Does.Contain(member.BackupId));
+            }
+        });
+    }
+
+    [Test]
     public async Task DescribeBackupAsync_returns_null_for_an_unknown_backup_over_the_wire()
     {
         var description = await _host.Client.DescribeBackupAsync(
@@ -205,6 +262,102 @@ public sealed class LatticeBackupGrpcClientE2ETests
 
         // Revert is idempotent and must not throw when replayed with the same result.
         Assert.That(async () => await _host.Client.RevertRestoreAsync(restore), Throws.Nothing);
+    }
+
+    [Test]
+    public void RestoreBackupAsync_maps_a_restore_validation_failure_to_failed_precondition_over_the_wire()
+    {
+        // Restoring an unknown backup id fails the pre-apply validation
+        // (LatticeRestoreValidationException, an InvalidOperationException). The
+        // service must surface it as FailedPrecondition with its actionable
+        // message, not the opaque Internal "request failed", so the operator UI
+        // can explain what went wrong (for example a backup store that is not
+        // shared across every cluster).
+        Assert.That(
+            async () => await _host.Client.RestoreBackupAsync(
+                new LatticeRestoreRequest(
+                    "0000000000000000000000000000000000000000000000000000000000000000",
+                    "orders-missing")),
+            Throws.InstanceOf<global::Grpc.Core.RpcException>()
+                .With.Property(nameof(global::Grpc.Core.RpcException.StatusCode))
+                .EqualTo(global::Grpc.Core.StatusCode.FailedPrecondition));
+    }
+
+    [Test]
+    public async Task ScheduleBackupAsync_registers_a_recurring_schedule_over_the_wire()
+    {
+        var scope = BackupScopeSelector.WholeTree(Source);
+
+        var effective = await _host.Client.ScheduleBackupAsync(scope, incremental: false, TimeSpan.FromMinutes(30));
+
+        var grain = _fixture.GrainFactory.GetGrain<ILatticeBackupSchedulerGrain>(BackupScopeKey.For(scope));
+        var hasFull = await grain.HasScheduleAsync(incremental: false);
+        Assert.Multiple(() =>
+        {
+            Assert.That(effective, Is.EqualTo(TimeSpan.FromMinutes(30)));
+            Assert.That(hasFull, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task ScheduleBackupAsync_clamps_a_sub_minimum_interval_and_reports_the_effective_cadence()
+    {
+        var scope = BackupScopeSelector.WholeTree("orders-clamp");
+
+        var effective = await _host.Client.ScheduleBackupAsync(scope, incremental: true, TimeSpan.FromSeconds(5));
+
+        var grain = _fixture.GrainFactory.GetGrain<ILatticeBackupSchedulerGrain>(BackupScopeKey.For(scope));
+        var hasIncremental = await grain.HasScheduleAsync(incremental: true);
+        Assert.Multiple(() =>
+        {
+            Assert.That(effective, Is.EqualTo(LatticeBackupScheduleOptions.MinimumInterval));
+            Assert.That(hasIncremental, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task CancelScheduleAsync_removes_a_recurring_schedule_over_the_wire()
+    {
+        var scope = BackupScopeSelector.WholeTree("orders-cancel");
+        await _host.Client.ScheduleBackupAsync(scope, incremental: false, TimeSpan.FromMinutes(30));
+
+        await _host.Client.CancelScheduleAsync(scope, incremental: false);
+
+        var grain = _fixture.GrainFactory.GetGrain<ILatticeBackupSchedulerGrain>(BackupScopeKey.For(scope));
+        var hasFull = await grain.HasScheduleAsync(incremental: false);
+        var status = await _host.Client.GetScopeStatusAsync(scope);
+        Assert.Multiple(() =>
+        {
+            Assert.That(hasFull, Is.False);
+            Assert.That(status, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task GetScopeStatusAsync_round_trips_runtime_intervals_over_the_wire()
+    {
+        var scope = BackupScopeSelector.WholeTree("orders-status");
+
+        await _host.Client.ScheduleBackupAsync(scope, incremental: false, TimeSpan.FromMinutes(20));
+        await _host.Client.ScheduleBackupAsync(scope, incremental: true, TimeSpan.FromMinutes(45));
+
+        var status = await _host.Client.GetScopeStatusAsync(scope);
+        Assert.That(status, Is.Not.Null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(status!.FullScheduleRegistered, Is.True);
+            Assert.That(status.IncrementalScheduleRegistered, Is.True);
+            Assert.That(status.RuntimeFullBackupInterval, Is.EqualTo(TimeSpan.FromMinutes(20)));
+            Assert.That(status.RuntimeIncrementalBackupInterval, Is.EqualTo(TimeSpan.FromMinutes(45)));
+        });
+    }
+
+    [Test]
+    public void ScheduleBackupAsync_null_scope_throws()
+    {
+        Assert.That(
+            async () => await _host.Client.ScheduleBackupAsync(null!, incremental: false, TimeSpan.FromMinutes(10)),
+            Throws.ArgumentNullException);
     }
 
     private static byte[] Bytes(string s) => Encoding.UTF8.GetBytes(s);

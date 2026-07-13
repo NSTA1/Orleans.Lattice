@@ -65,7 +65,8 @@ public sealed class ApiBackupClusterFixture
             authorizer,
             SiloServices.GetRequiredService<IGrainFactory>(),
             SiloServices.GetRequiredService<BackupInventoryRegistry>(),
-            Options.Create(new LatticeApiBackupOptions()));
+            Options.Create(new LatticeApiBackupOptions()),
+            SiloServices);
 
     /// <summary>Stops and disposes the cluster.</summary>
     public async Task DisposeAsync()

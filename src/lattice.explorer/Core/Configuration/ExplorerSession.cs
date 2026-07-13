@@ -71,9 +71,15 @@ public sealed class ExplorerSession : IExplorerSession
             if (configuration is not null &&
                 TransportSecurityPolicy.TryValidateEndpoint(configuration.Endpoint, configuration.TransportMode, out _))
             {
-                await Connection.ConfigureAsync(configuration.ToConnectionSettings(), cancellationToken).ConfigureAwait(false);
+                // Expose the configuration before driving the connection so an
+                // observer reacting to the connection reaching Connected (for
+                // example the area capability probe) sees a populated Current
+                // rather than racing its assignment. ConfigureAsync degrades to a
+                // faulted status instead of throwing when the endpoint is
+                // unreachable, so setting Current first cannot leave a stale value.
                 Current = configuration;
                 IsConfigured = true;
+                await Connection.ConfigureAsync(configuration.ToConnectionSettings(), cancellationToken).ConfigureAwait(false);
             }
 
             return IsConfigured;
@@ -98,9 +104,11 @@ public sealed class ExplorerSession : IExplorerSession
         {
             _initialized = true;
             await _store.SaveAsync(configuration, cancellationToken).ConfigureAwait(false);
-            await Connection.ConfigureAsync(configuration.ToConnectionSettings(), cancellationToken).ConfigureAwait(false);
+            // Expose the configuration before reconfiguring the connection (see
+            // InitializeAsync) so connection-status observers see Current set.
             Current = configuration;
             IsConfigured = true;
+            await Connection.ConfigureAsync(configuration.ToConnectionSettings(), cancellationToken).ConfigureAwait(false);
         }
         finally
         {

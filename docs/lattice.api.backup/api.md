@@ -31,6 +31,7 @@ The control facade (internal) exposes these operations; each is projected as one
 |---|---|---|
 | Create backup | takes a `LatticeBackupCaptureRequest` | `LatticeBackupCaptureResult` |
 | Create incremental backup | takes a `LatticeBackupIncrementalCaptureRequest` | `LatticeBackupCaptureResult` |
+| Create backup set | takes a `LatticeBackupSetCaptureRequest` | `LatticeBackupSetCaptureResult` |
 | List backups | takes a `BackupCatalogRequest` | `BackupCatalogPage` |
 | Stream backups | streams | `IAsyncEnumerable<BackupManifest>` in backup-id order |
 | Describe backup | takes a backup id | `BackupChainDescription?` (null when absent) |
@@ -40,6 +41,12 @@ The control facade (internal) exposes these operations; each is projected as one
 | Export artifact | takes a backup id and artifact id | `IAsyncEnumerable<ReadOnlyMemory<byte>>` |
 | Get inventory | (none) | `BackupInventoryReport` |
 | Get scope status | takes a `BackupScopeSelector` | `BackupScopeStatus?` (null when unknown) |
+| Probe capabilities | takes a `BackupScopeSelector` | `BackupScopeCapabilities` |
+| Schedule backup | takes a `LatticeBackupScheduleRequest` | (void) |
+
+Create backup set captures one full backup per distinct tree scope under a single set manifest, so an operator can back up several trees as one unit; it authorizes every member scope fail-closed before any capture, so a set that names one forbidden scope is rejected whole. When cross-tree consistency is requested the members share one consistency fence. The `LatticeBackupSetCaptureRequest` / `LatticeBackupSetCaptureResult` and `BackupSetManifest` types are defined in [`Orleans.Lattice.Backup`](../lattice.backup/api.md).
+
+Schedule backup registers (or updates) a recurring backup of one scope: the scheduler grain persists the scope and registers an Orleans reminder that fires every interval, capturing a full or an incremental backup per the request. It authorizes the scope with the same grant as a capture, and clamps a sub-minimum interval up to the scheduler minimum. A runtime schedule registered this way overrides the startup-configured cadence for the chosen kind. The `LatticeBackupScheduleRequest` type is defined in [`Orleans.Lattice.Backup`](../lattice.backup/api.md).
 
 The request / result types prefixed `LatticeBackup*` / `LatticeRestore*` and `BackupManifest` / `BackupScopeSelector` are defined in [`Orleans.Lattice.Backup`](../lattice.backup/api.md); the package's own model records are documented below.
 
@@ -47,10 +54,15 @@ The request / result types prefixed `LatticeBackup*` / `LatticeRestore*` and `Ba
 
 ### `BackupCatalogRequest`
 
-Paging request for the catalog listing. The catalog is enumerated ascending by backup id.
+Paging request for the catalog listing. By default the catalog is enumerated ascending by backup id.
 
 - `int PageSize` - maximum manifests per page. Values below 1 fall back to `LatticeApiBackupOptions.DefaultListPageSize`; values above `MaxListPageSize` are clamped to it.
-- `string? PageToken` - the exclusive continuation cursor (the backup id of the last manifest on the previous page). `null` (the default) starts from the beginning.
+- `string? PageToken` - the exclusive continuation cursor. In the default order this is the backup id of the last manifest on the previous page; in the newest-first mode it is the opaque `BackupCatalogPage.NextPageToken`. `null` (the default) starts from the beginning.
+- `bool OrderByCreatedDescending` - when set, returns the catalog newest-first (by capture time) with backup-set members kept adjacent, and enables the filter predicates below. This mode is served efficiently from a maintained backup-catalog index. When `false` (the default) the listing keeps the ascending-by-backup-id order and ignores the filters.
+- `BackupKind? Kind` - optional exact kind filter (full or incremental). Applied only in newest-first mode.
+- `string? NamePrefix` - optional case-insensitive starts-with filter on the row's display name. Applied only in newest-first mode.
+- `string? TreeId` - optional exact scope tree-id filter. Applied only in newest-first mode.
+- `string? CreatedPrefix` - optional starts-with filter on the created timestamp rendered as the invariant UTC string `yyyy-MM-dd HH:mm:ss`. Applied only in newest-first mode.
 
 ### `BackupCatalogPage`
 
@@ -75,6 +87,17 @@ A catalog-wide inventory summary.
 - Properties: `long TotalBackupCount`, `long TotalCatalogBytes`, `long FullBackupCount`, `long IncrementalBackupCount`, `DateTimeOffset? OldestBackupUtc`, `DateTimeOffset? NewestBackupUtc`, `long CaptureFailureCount`, `long RestoreFailureCount`, `long BytesReclaimed`.
 
 The counts and byte totals are computed from the durable catalog (excluding manifests the caller may not read); the failure and bytes-reclaimed tallies are the process-lifetime figures from the in-memory metric registry.
+
+### `BackupScopeCapabilities`
+
+The allowed-operation set the read-only capability probe reports for one scope. Every flag is default-deny (`false` means "not known to be permitted"), and the flags are advisory: the server still authorizes each real operation fail-closed. The probe distinguishes the two authorization grants the access gate models - one covering list / read / capture / delete, the other covering restore - so the capture, incremental, list, and delete flags move together and the restore flag is separate.
+
+- `required BackupScopeSelector Scope` - the probed scope.
+- `bool CanList` - whether the caller may list / read / describe backups in the scope.
+- `bool CanCapture` - whether the caller may capture a full backup of the scope.
+- `bool CanCaptureIncremental` - whether the caller may capture an incremental backup of the scope.
+- `bool CanRestore` - whether the caller may restore a backup into the scope.
+- `bool CanDelete` - whether the caller may delete a backup in the scope.
 
 ### `BackupScopeStatus`
 

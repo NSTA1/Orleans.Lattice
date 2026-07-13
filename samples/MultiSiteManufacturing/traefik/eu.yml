@@ -24,6 +24,22 @@ http:
         - web
       service: eu-state
 
+    eu-backup:
+      # gRPC service name: orleans.lattice.api.backup (full method paths
+      # are /orleans.lattice.api.backup/<Method>). Backup control API the
+      # Orleans.Lattice.Explorer backup UI drives (issue #1131), wired
+      # only when the stack is started with run.ps1 -Backup. Without this
+      # router the backup service path falls through to the / catch-all
+      # (Blazor), which 404s the gRPC call and greys out the Backups tab.
+      # Trailing slash anchors the prefix; priority 200 keeps it ahead of
+      # the / catch-all, mirroring eu-state.
+      rule: "PathPrefix(`/orleans.lattice.api.backup/`)"
+
+      priority: 200
+      entryPoints:
+        - web
+      service: eu-backup
+
     eu-web:
       rule: "PathPrefix(`/`)"
       entryPoints:
@@ -65,6 +81,24 @@ http:
           # Generous timeout (issue #1030): a live silo busy serving a
           # write burst can answer the :8080 probe slowly; a 1s timeout
           # evicted both live silos and 503-ed the state route.
+          timeout: "4s"
+
+    eu-backup:
+      loadBalancer:
+        # No sticky cookie: the backup control API routes to grains that
+        # Orleans places cluster-wide, so either silo entrypoint serves
+        # any call and round-robin spreads load. Same dedicated :8081 h2c
+        # gRPC listener and :8080 HTTP health probe as eu-state, so a
+        # stopped silo is evicted within ~2s and the backup UI fails over
+        # instead of flickering.
+        servers:
+          - url: "h2c://silo-eu-a:8081"
+          - url: "h2c://silo-eu-b:8081"
+        healthCheck:
+          path: "/"
+          scheme: http
+          port: 8080
+          interval: "5s"
           timeout: "4s"
 
     eu-web:

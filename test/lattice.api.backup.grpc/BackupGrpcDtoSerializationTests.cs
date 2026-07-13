@@ -74,6 +74,173 @@ public sealed class BackupGrpcDtoSerializationTests
     }
 
     [Test]
+    public void BackupSetCaptureRequestMessage_round_trips()
+    {
+        var original = new BackupSetCaptureRequestMessage
+        {
+            Name = "nightly-set",
+            Scopes = new[]
+            {
+                BackupScopeSelector.WholeTree("orders"),
+                BackupScopeSelector.WholeTree("customers"),
+            },
+            CrossTreeConsistent = true,
+            PageSize = 512,
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Name, Is.EqualTo("nightly-set"));
+            Assert.That(copy.Scopes.Select(s => s.TreeId), Is.EqualTo(new[] { "orders", "customers" }));
+            Assert.That(copy.CrossTreeConsistent, Is.True);
+            Assert.That(copy.PageSize, Is.EqualTo(512));
+        });
+    }
+
+    [Test]
+    public void BackupSetCaptureResponse_round_trips_set_manifest_and_members()
+    {
+        var original = new BackupSetCaptureResponse
+        {
+            SetManifest = new BackupSetManifest(
+                setId: "set-1",
+                name: "nightly-set",
+                createdAtUtc: DateTimeOffset.UnixEpoch,
+                crossTreeConsistent: true,
+                fence: null,
+                memberBackupIds: new[] { "m0", "m1" }),
+            Members = new[]
+            {
+                new BackupCaptureResponse { BackupId = "m0", Manifest = Manifest("m0") },
+                new BackupCaptureResponse { BackupId = "m1", Manifest = Manifest("m1") },
+            },
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.SetManifest.SetId, Is.EqualTo("set-1"));
+            Assert.That(copy.SetManifest.CrossTreeConsistent, Is.True);
+            Assert.That(copy.SetManifest.MemberBackupIds, Is.EqualTo(new[] { "m0", "m1" }));
+            Assert.That(copy.Members.Select(m => m.BackupId), Is.EqualTo(new[] { "m0", "m1" }));
+        });
+    }
+
+    private static BackupManifest Manifest(string id)
+    {
+        var scope = BackupScopeSelector.WholeTree("orders");
+        return new BackupManifest(
+            id: id,
+            name: "nightly",
+            createdAtUtc: DateTimeOffset.UnixEpoch,
+            kind: BackupKind.Full,
+            scope: scope,
+            consistencyCut: new BackupConsistencyCut(42, 100),
+            topology: new BackupTopologySnapshot(2, 4096, new[] { "d0", "d1" }),
+            structuralDigest: "digest-root",
+            keyDescriptors: new[] { new BackupKeyDescriptor("order-1", BackupKeyMergeMode.Crdt, "replica-a") },
+            contentDescriptors: new[] { new BackupContentDescriptor("artifact-1", "abc123", 12, 1, scope) },
+            provenance: new[] { new BackupOriginProvenance("replica-a", 42) },
+            baseBackupId: null);
+    }
+
+    [Test]
+    public void BackupScheduleRequestMessage_round_trips()
+    {
+        var original = new BackupScheduleRequestMessage
+        {
+            Scope = BackupScopeSelector.WholeTree("orders"),
+            Incremental = true,
+            IntervalTicks = TimeSpan.FromMinutes(90).Ticks,
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Scope.TreeId, Is.EqualTo("orders"));
+            Assert.That(copy.Incremental, Is.True);
+            Assert.That(copy.IntervalTicks, Is.EqualTo(TimeSpan.FromMinutes(90).Ticks));
+        });
+    }
+
+    [Test]
+    public void BackupScheduleResponse_round_trips()
+    {
+        var original = new BackupScheduleResponse
+        {
+            Scheduled = true,
+            EffectiveIntervalTicks = TimeSpan.FromMinutes(1).Ticks,
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Scheduled, Is.True);
+            Assert.That(copy.EffectiveIntervalTicks, Is.EqualTo(TimeSpan.FromMinutes(1).Ticks));
+        });
+    }
+
+    [Test]
+    public void BackupCancelScheduleRequestMessage_round_trips()
+    {
+        var original = new BackupCancelScheduleRequestMessage
+        {
+            Scope = BackupScopeSelector.WholeTree("orders"),
+            Incremental = true,
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Scope.TreeId, Is.EqualTo("orders"));
+            Assert.That(copy.Incremental, Is.True);
+        });
+    }
+
+    [Test]
+    public void BackupCancelScheduleResponse_round_trips()
+    {
+        Assert.That(RoundTrip(new BackupCancelScheduleResponse()), Is.Not.Null);
+    }
+
+    [Test]
+    public void BackupScopeStatusResponse_round_trips_runtime_intervals()
+    {
+        var original = new BackupScopeStatusResponse
+        {
+            Found = true,
+            Scope = BackupScopeSelector.WholeTree("orders"),
+            FullScheduleRegistered = true,
+            IncrementalScheduleRegistered = true,
+            LastRunOutcome = BackupScopeRunOutcome.Success,
+            ChainDepth = 2,
+            RuntimeFullBackupIntervalTicks = TimeSpan.FromMinutes(20).Ticks,
+            RuntimeIncrementalBackupIntervalTicks = TimeSpan.FromMinutes(45).Ticks,
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Found, Is.True);
+            Assert.That(copy.Scope!.TreeId, Is.EqualTo("orders"));
+            Assert.That(copy.RuntimeFullBackupIntervalTicks, Is.EqualTo(TimeSpan.FromMinutes(20).Ticks));
+            Assert.That(copy.RuntimeIncrementalBackupIntervalTicks, Is.EqualTo(TimeSpan.FromMinutes(45).Ticks));
+        });
+    }
+
+    [Test]
+    public void BackupScopeStatusRequestMessage_round_trips()
+    {
+        var copy = RoundTrip(new BackupScopeStatusRequestMessage
+        {
+            Scope = BackupScopeSelector.WholeTree("orders"),
+        });
+
+        Assert.That(copy.Scope.TreeId, Is.EqualTo("orders"));
+    }
+
+    [Test]
     public void BackupChainResponse_round_trips_when_not_found()
     {
         var original = new BackupChainResponse { Found = false };

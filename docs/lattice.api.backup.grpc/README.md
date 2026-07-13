@@ -38,6 +38,7 @@ The gRPC service name is `orleans.lattice.api.backup`.
 | `RevertRestore` | unary | Revert restore |
 | `ExportArtifact` | server-streaming | Export artifact |
 | `GetAuthScheme` | unary (unauthenticated) | Advertise accepted auth schemes |
+| `ProbeCapabilities` | unary | Probe capabilities (read-only, no side effects) |
 
 ## Quick Start
 
@@ -80,7 +81,7 @@ await foreach (var manifest in backupClient.StreamBackupsAsync(cancellationToken
 }
 ```
 
-The `serializerProvider` must have Orleans serialization registered (`AddSerializer()`) so the client and server wire marshallers match exactly. A call the server rejects arrives as a `PermissionDenied` `RpcException`.
+The `serializerProvider` must have Orleans serialization registered (`AddSerializer()`) so the client and server wire marshallers match exactly. A call the server rejects arrives as a `PermissionDenied` `RpcException`; other failures map to stable status codes (notably `FailedPrecondition` for a restore that fails pre-apply validation, such as a backup store not shared across every cluster). See [Architecture](architecture.md#status-mapping) for the full mapping.
 
 ## Reference
 

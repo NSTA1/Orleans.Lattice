@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.Backup;
 
@@ -22,6 +23,7 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
     private readonly IGrainFactory _grainFactory;
     private readonly BackupInventoryRegistry _inventory;
     private readonly LatticeApiBackupOptions _options;
+    private readonly ILatticeViewFactory? _viewFactory;
 
     /// <summary>Initializes a new <see cref="LatticeBackupControl"/>.</summary>
     /// <param name="capture">The full-capture engine. Must not be <c>null</c>.</param>
@@ -33,6 +35,7 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
     /// <param name="grainFactory">The grain factory used to reach the per-scope scheduler. Must not be <c>null</c>.</param>
     /// <param name="inventory">The in-memory backup metric / inventory registry. Must not be <c>null</c>.</param>
     /// <param name="options">The facade options. Must not be <c>null</c>.</param>
+    /// <param name="services">The silo service provider, used to resolve the optional materialised-view factory. Must not be <c>null</c>.</param>
     /// <exception cref="ArgumentNullException">A required dependency is <c>null</c>.</exception>
     public LatticeBackupControl(
         ILatticeBackupCaptureService capture,
@@ -43,7 +46,8 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         BackupAccessAuthorizer authorizer,
         IGrainFactory grainFactory,
         BackupInventoryRegistry inventory,
-        IOptions<LatticeApiBackupOptions> options)
+        IOptions<LatticeApiBackupOptions> options,
+        IServiceProvider services)
     {
         ArgumentNullException.ThrowIfNull(capture);
         ArgumentNullException.ThrowIfNull(incremental);
@@ -54,6 +58,7 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(inventory);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(services);
 
         _capture = capture;
         _incremental = incremental;
@@ -64,6 +69,7 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         _grainFactory = grainFactory;
         _inventory = inventory;
         _options = options.Value;
+        _viewFactory = services.GetService<ILatticeViewFactory>();
     }
 
     /// <inheritdoc />
@@ -87,6 +93,51 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
     }
 
     /// <inheritdoc />
+    public async Task<LatticeBackupSetCaptureResult> CreateBackupSetAsync(
+        LatticeBackupSetCaptureRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        // Authorize every member scope fail-closed before any tree is touched, so
+        // a set that includes even one forbidden scope is rejected in full rather
+        // than partially captured.
+        foreach (var scope in request.Scopes)
+        {
+            await _authorizer.AuthorizeBackupAsync(scope, cancellationToken).ConfigureAwait(false);
+        }
+
+        return await _capture.CaptureSetAsync(request, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task ScheduleBackupAsync(
+        LatticeBackupScheduleRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        await _authorizer.AuthorizeBackupAsync(request.Scope, cancellationToken).ConfigureAwait(false);
+        await _grainFactory
+            .GetGrain<ILatticeBackupSchedulerGrain>(BackupScopeKey.For(request.Scope))
+            .ScheduleRecurringAsync(request.Scope, request.Incremental, request.Interval)
+            .ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task CancelScheduleAsync(
+        BackupScopeSelector scope,
+        bool incremental,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        await _authorizer.AuthorizeBackupAsync(scope, cancellationToken).ConfigureAwait(false);
+        await _grainFactory
+            .GetGrain<ILatticeBackupSchedulerGrain>(BackupScopeKey.For(scope))
+            .CancelScheduleAsync(incremental)
+            .ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
     public async Task<BackupCatalogPage> ListBackupsAsync(
         BackupCatalogRequest request,
         CancellationToken cancellationToken = default)
@@ -96,6 +147,17 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         var pageSize = request.PageSize <= 0
             ? _options.DefaultListPageSize
             : Math.Min(request.PageSize, _options.MaxListPageSize);
+
+        // Newest-first / filtered listing is served from the backup-catalog index
+        // (with a full-scan fallback); the default listing keeps the legacy
+        // ascending-by-backup-id order and streams the catalog directly.
+        if (request.OrderByCreatedDescending)
+        {
+            var query = new BackupCatalogIndexQuery(_catalog, _viewFactory);
+            return await query
+                .QueryAsync(request, pageSize, IsReadAuthorizedAsync, cancellationToken)
+                .ConfigureAwait(false);
+        }
 
         var token = request.PageToken;
         var entries = new List<BackupManifest>(pageSize);
@@ -375,6 +437,8 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         if (!runtime.FullScheduleRegistered
             && !runtime.IncrementalScheduleRegistered
             && runtime.LastRunOutcome == BackupScopeRunOutcome.None
+            && runtime.RuntimeFullBackupInterval is null
+            && runtime.RuntimeIncrementalBackupInterval is null
             && chainDepth == 0)
         {
             return null;
@@ -389,7 +453,34 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
             runtime.LastIncrementalRunUtc,
             runtime.LastIncrementalSuccessUtc,
             runtime.LastRunOutcome,
-            chainDepth);
+            chainDepth,
+            runtime.RuntimeFullBackupInterval,
+            runtime.RuntimeIncrementalBackupInterval);
+    }
+
+    /// <inheritdoc />
+    public async Task<BackupScopeCapabilities> ProbeCapabilitiesAsync(
+        BackupScopeSelector scope,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+
+        // The gate exposes two backup capabilities for a scope: the capture / read
+        // authority (Backup) and the author / bulk-load authority (Restore). Probe
+        // both with no side effects; list, capture, incremental, and delete all
+        // require the Backup authority, restore requires the Restore authority.
+        var canBackup = await IsBackupAuthorizedAsync(scope, cancellationToken).ConfigureAwait(false);
+        var canRestore = await IsRestoreAuthorizedAsync(scope, cancellationToken).ConfigureAwait(false);
+
+        return new BackupScopeCapabilities
+        {
+            Scope = scope,
+            CanList = canBackup,
+            CanCapture = canBackup,
+            CanCaptureIncremental = canBackup,
+            CanDelete = canBackup,
+            CanRestore = canRestore,
+        };
     }
 
     /// <summary>
@@ -449,19 +540,49 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         && string.Equals(a.KeyOrPrefix, b.KeyOrPrefix, StringComparison.Ordinal);
 
     /// <summary>
-    /// Applies the fail-closed read gate to a manifest's scope, returning
-    /// <see langword="true"/> when the caller may read it and
-    /// <see langword="false"/> when the gate denies it, so a listing hides
-    /// manifests the caller has no read grant for rather than faulting the whole
-    /// enumeration.
+    /// Applies the fail-closed capture / read gate to a scope, returning
+    /// <see langword="true"/> when the caller holds the backup (capture / read)
+    /// authority and <see langword="false"/> when the gate denies it, so a listing
+    /// hides manifests the caller has no read grant for rather than faulting the
+    /// whole enumeration - and so a capability probe reports a clean allow / deny.
     /// </summary>
-    private async ValueTask<bool> IsReadAuthorizedAsync(
+    private ValueTask<bool> IsReadAuthorizedAsync(
+        BackupScopeSelector scope,
+        CancellationToken cancellationToken) =>
+        IsBackupAuthorizedAsync(scope, cancellationToken);
+
+    /// <summary>
+    /// Probes the fail-closed <see cref="LatticeOperation.Backup"/> (capture /
+    /// read) authority over a scope with no side effects, translating the gate's
+    /// throw-on-deny into a boolean.
+    /// </summary>
+    private async ValueTask<bool> IsBackupAuthorizedAsync(
         BackupScopeSelector scope,
         CancellationToken cancellationToken)
     {
         try
         {
             await _authorizer.AuthorizeBackupAsync(scope, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch (LatticeAuthorizationDeniedException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Probes the fail-closed <see cref="LatticeOperation.Restore"/> (author /
+    /// bulk-load) authority over a scope with no side effects, translating the
+    /// gate's throw-on-deny into a boolean.
+    /// </summary>
+    private async ValueTask<bool> IsRestoreAuthorizedAsync(
+        BackupScopeSelector scope,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _authorizer.AuthorizeRestoreAsync(scope, cancellationToken).ConfigureAwait(false);
             return true;
         }
         catch (LatticeAuthorizationDeniedException)

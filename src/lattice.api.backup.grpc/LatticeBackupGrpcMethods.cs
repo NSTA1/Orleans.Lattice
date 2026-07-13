@@ -36,6 +36,9 @@ internal sealed class LatticeBackupGrpcMethods
     /// <summary>The unary incremental-capture RPC method name.</summary>
     public const string CreateIncrementalBackupMethodName = "CreateIncrementalBackup";
 
+    /// <summary>The unary backup-set-capture RPC method name.</summary>
+    public const string CreateBackupSetMethodName = "CreateBackupSet";
+
     /// <summary>The unary cursor-resumable catalog-listing RPC method name.</summary>
     public const string ListBackupsMethodName = "ListBackups";
 
@@ -60,11 +63,25 @@ internal sealed class LatticeBackupGrpcMethods
     /// <summary>The unary, unauthenticated auth-scheme advertisement RPC method name.</summary>
     public const string GetAuthSchemeMethodName = "GetAuthScheme";
 
+    /// <summary>The unary capability-probe RPC method name.</summary>
+    public const string ProbeCapabilitiesMethodName = "ProbeCapabilities";
+
+    /// <summary>The unary schedule-backup RPC method name.</summary>
+    public const string ScheduleBackupMethodName = "ScheduleBackup";
+
+    /// <summary>The unary cancel-schedule RPC method name.</summary>
+    public const string CancelScheduleMethodName = "CancelSchedule";
+
+    /// <summary>The unary scope-status RPC method name.</summary>
+    public const string GetScopeStatusMethodName = "GetScopeStatus";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeBackupGrpcMethods(
         Serializer<BackupCaptureRequestMessage> captureRequestSerializer,
         Serializer<BackupIncrementalCaptureRequestMessage> incrementalCaptureRequestSerializer,
+        Serializer<BackupSetCaptureRequestMessage> setCaptureRequestSerializer,
         Serializer<BackupCaptureResponse> captureResponseSerializer,
+        Serializer<BackupSetCaptureResponse> setCaptureResponseSerializer,
         Serializer<Orleans.Lattice.Api.Backup.BackupCatalogRequest> catalogRequestSerializer,
         Serializer<Orleans.Lattice.Api.Backup.BackupCatalogPage> catalogPageSerializer,
         Serializer<BackupStreamRequest> streamRequestSerializer,
@@ -79,11 +96,21 @@ internal sealed class LatticeBackupGrpcMethods
         Serializer<ArtifactExportRequest> artifactExportRequestSerializer,
         Serializer<ArtifactChunk> artifactChunkSerializer,
         Serializer<AuthSchemeAdvertisementRequest> authSchemeRequestSerializer,
-        Serializer<AuthSchemeAdvertisement> authSchemeAdvertisementSerializer)
+        Serializer<AuthSchemeAdvertisement> authSchemeAdvertisementSerializer,
+        Serializer<BackupCapabilityProbeRequest> capabilityProbeRequestSerializer,
+        Serializer<Orleans.Lattice.Api.Backup.BackupScopeCapabilities> capabilitiesSerializer,
+        Serializer<BackupScheduleRequestMessage> scheduleRequestSerializer,
+        Serializer<BackupScheduleResponse> scheduleResponseSerializer,
+        Serializer<BackupCancelScheduleRequestMessage> cancelScheduleRequestSerializer,
+        Serializer<BackupCancelScheduleResponse> cancelScheduleResponseSerializer,
+        Serializer<BackupScopeStatusRequestMessage> scopeStatusRequestSerializer,
+        Serializer<BackupScopeStatusResponse> scopeStatusResponseSerializer)
     {
         ArgumentNullException.ThrowIfNull(captureRequestSerializer);
         ArgumentNullException.ThrowIfNull(incrementalCaptureRequestSerializer);
+        ArgumentNullException.ThrowIfNull(setCaptureRequestSerializer);
         ArgumentNullException.ThrowIfNull(captureResponseSerializer);
+        ArgumentNullException.ThrowIfNull(setCaptureResponseSerializer);
         ArgumentNullException.ThrowIfNull(catalogRequestSerializer);
         ArgumentNullException.ThrowIfNull(catalogPageSerializer);
         ArgumentNullException.ThrowIfNull(streamRequestSerializer);
@@ -99,6 +126,14 @@ internal sealed class LatticeBackupGrpcMethods
         ArgumentNullException.ThrowIfNull(artifactChunkSerializer);
         ArgumentNullException.ThrowIfNull(authSchemeRequestSerializer);
         ArgumentNullException.ThrowIfNull(authSchemeAdvertisementSerializer);
+        ArgumentNullException.ThrowIfNull(capabilityProbeRequestSerializer);
+        ArgumentNullException.ThrowIfNull(capabilitiesSerializer);
+        ArgumentNullException.ThrowIfNull(scheduleRequestSerializer);
+        ArgumentNullException.ThrowIfNull(scheduleResponseSerializer);
+        ArgumentNullException.ThrowIfNull(cancelScheduleRequestSerializer);
+        ArgumentNullException.ThrowIfNull(cancelScheduleResponseSerializer);
+        ArgumentNullException.ThrowIfNull(scopeStatusRequestSerializer);
+        ArgumentNullException.ThrowIfNull(scopeStatusResponseSerializer);
 
         CreateBackup = new Method<BackupCaptureRequestMessage, BackupCaptureResponse>(
             type: MethodType.Unary,
@@ -113,6 +148,13 @@ internal sealed class LatticeBackupGrpcMethods
             name: CreateIncrementalBackupMethodName,
             requestMarshaller: LatticeBackupGrpcMarshallers.Create(incrementalCaptureRequestSerializer),
             responseMarshaller: LatticeBackupGrpcMarshallers.Create(captureResponseSerializer));
+
+        CreateBackupSet = new Method<BackupSetCaptureRequestMessage, BackupSetCaptureResponse>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: CreateBackupSetMethodName,
+            requestMarshaller: LatticeBackupGrpcMarshallers.Create(setCaptureRequestSerializer),
+            responseMarshaller: LatticeBackupGrpcMarshallers.Create(setCaptureResponseSerializer));
 
         ListBackups = new Method<Orleans.Lattice.Api.Backup.BackupCatalogRequest, Orleans.Lattice.Api.Backup.BackupCatalogPage>(
             type: MethodType.Unary,
@@ -169,6 +211,34 @@ internal sealed class LatticeBackupGrpcMethods
             name: GetAuthSchemeMethodName,
             requestMarshaller: LatticeBackupGrpcMarshallers.Create(authSchemeRequestSerializer),
             responseMarshaller: LatticeBackupGrpcMarshallers.Create(authSchemeAdvertisementSerializer));
+
+        ProbeCapabilities = new Method<BackupCapabilityProbeRequest, Orleans.Lattice.Api.Backup.BackupScopeCapabilities>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: ProbeCapabilitiesMethodName,
+            requestMarshaller: LatticeBackupGrpcMarshallers.Create(capabilityProbeRequestSerializer),
+            responseMarshaller: LatticeBackupGrpcMarshallers.Create(capabilitiesSerializer));
+
+        ScheduleBackup = new Method<BackupScheduleRequestMessage, BackupScheduleResponse>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: ScheduleBackupMethodName,
+            requestMarshaller: LatticeBackupGrpcMarshallers.Create(scheduleRequestSerializer),
+            responseMarshaller: LatticeBackupGrpcMarshallers.Create(scheduleResponseSerializer));
+
+        CancelSchedule = new Method<BackupCancelScheduleRequestMessage, BackupCancelScheduleResponse>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: CancelScheduleMethodName,
+            requestMarshaller: LatticeBackupGrpcMarshallers.Create(cancelScheduleRequestSerializer),
+            responseMarshaller: LatticeBackupGrpcMarshallers.Create(cancelScheduleResponseSerializer));
+
+        GetScopeStatus = new Method<BackupScopeStatusRequestMessage, BackupScopeStatusResponse>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: GetScopeStatusMethodName,
+            requestMarshaller: LatticeBackupGrpcMarshallers.Create(scopeStatusRequestSerializer),
+            responseMarshaller: LatticeBackupGrpcMarshallers.Create(scopeStatusResponseSerializer));
     }
 
     /// <summary>The unary <c>CreateBackup</c> full-capture RPC.</summary>
@@ -176,6 +246,9 @@ internal sealed class LatticeBackupGrpcMethods
 
     /// <summary>The unary <c>CreateIncrementalBackup</c> incremental-capture RPC.</summary>
     public Method<BackupIncrementalCaptureRequestMessage, BackupCaptureResponse> CreateIncrementalBackup { get; }
+
+    /// <summary>The unary <c>CreateBackupSet</c> backup-set-capture RPC.</summary>
+    public Method<BackupSetCaptureRequestMessage, BackupSetCaptureResponse> CreateBackupSet { get; }
 
     /// <summary>The unary <c>ListBackups</c> cursor-resumable catalog RPC.</summary>
     public Method<Orleans.Lattice.Api.Backup.BackupCatalogRequest, Orleans.Lattice.Api.Backup.BackupCatalogPage> ListBackups { get; }
@@ -201,6 +274,18 @@ internal sealed class LatticeBackupGrpcMethods
     /// <summary>The unary, unauthenticated <c>GetAuthScheme</c> advertisement RPC.</summary>
     public Method<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement> GetAuthScheme { get; }
 
+    /// <summary>The unary <c>ProbeCapabilities</c> capability-probe RPC.</summary>
+    public Method<BackupCapabilityProbeRequest, Orleans.Lattice.Api.Backup.BackupScopeCapabilities> ProbeCapabilities { get; }
+
+    /// <summary>The unary <c>ScheduleBackup</c> recurring-schedule RPC.</summary>
+    public Method<BackupScheduleRequestMessage, BackupScheduleResponse> ScheduleBackup { get; }
+
+    /// <summary>The unary <c>CancelSchedule</c> recurring-schedule removal RPC.</summary>
+    public Method<BackupCancelScheduleRequestMessage, BackupCancelScheduleResponse> CancelSchedule { get; }
+
+    /// <summary>The unary <c>GetScopeStatus</c> schedule-status RPC.</summary>
+    public Method<BackupScopeStatusRequestMessage, BackupScopeStatusResponse> GetScopeStatus { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out
     /// of <paramref name="serializerProvider"/>. Shared by the server-side DI
@@ -213,7 +298,9 @@ internal sealed class LatticeBackupGrpcMethods
         return new LatticeBackupGrpcMethods(
             serializerProvider.GetRequiredService<Serializer<BackupCaptureRequestMessage>>(),
             serializerProvider.GetRequiredService<Serializer<BackupIncrementalCaptureRequestMessage>>(),
+            serializerProvider.GetRequiredService<Serializer<BackupSetCaptureRequestMessage>>(),
             serializerProvider.GetRequiredService<Serializer<BackupCaptureResponse>>(),
+            serializerProvider.GetRequiredService<Serializer<BackupSetCaptureResponse>>(),
             serializerProvider.GetRequiredService<Serializer<Orleans.Lattice.Api.Backup.BackupCatalogRequest>>(),
             serializerProvider.GetRequiredService<Serializer<Orleans.Lattice.Api.Backup.BackupCatalogPage>>(),
             serializerProvider.GetRequiredService<Serializer<BackupStreamRequest>>(),
@@ -228,7 +315,15 @@ internal sealed class LatticeBackupGrpcMethods
             serializerProvider.GetRequiredService<Serializer<ArtifactExportRequest>>(),
             serializerProvider.GetRequiredService<Serializer<ArtifactChunk>>(),
             serializerProvider.GetRequiredService<Serializer<AuthSchemeAdvertisementRequest>>(),
-            serializerProvider.GetRequiredService<Serializer<AuthSchemeAdvertisement>>());
+            serializerProvider.GetRequiredService<Serializer<AuthSchemeAdvertisement>>(),
+            serializerProvider.GetRequiredService<Serializer<BackupCapabilityProbeRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<Orleans.Lattice.Api.Backup.BackupScopeCapabilities>>(),
+            serializerProvider.GetRequiredService<Serializer<BackupScheduleRequestMessage>>(),
+            serializerProvider.GetRequiredService<Serializer<BackupScheduleResponse>>(),
+            serializerProvider.GetRequiredService<Serializer<BackupCancelScheduleRequestMessage>>(),
+            serializerProvider.GetRequiredService<Serializer<BackupCancelScheduleResponse>>(),
+            serializerProvider.GetRequiredService<Serializer<BackupScopeStatusRequestMessage>>(),
+            serializerProvider.GetRequiredService<Serializer<BackupScopeStatusResponse>>());
     }
 }
 

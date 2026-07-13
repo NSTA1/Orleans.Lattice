@@ -32,6 +32,9 @@ internal abstract class LatticeBackupGrpcServiceBase
     /// <summary>Captures an incremental backup. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
     public abstract Task<BackupCaptureResponse> CreateIncrementalBackup(BackupIncrementalCaptureRequestMessage request, ServerCallContext context);
 
+    /// <summary>Captures a backup set. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<BackupSetCaptureResponse> CreateBackupSet(BackupSetCaptureRequestMessage request, ServerCallContext context);
+
     /// <summary>Lists a cursor-resumable page of the catalog. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
     public abstract Task<BackupCatalogPage> ListBackups(BackupCatalogRequest request, ServerCallContext context);
 
@@ -67,6 +70,18 @@ internal abstract class LatticeBackupGrpcServiceBase
     /// </summary>
     public abstract Task<AuthSchemeAdvertisement> GetAuthScheme(AuthSchemeAdvertisementRequest request, ServerCallContext context);
 
+    /// <summary>Probes the caller's backup / restore capabilities for a scope. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<BackupScopeCapabilities> ProbeCapabilities(BackupCapabilityProbeRequest request, ServerCallContext context);
+
+    /// <summary>Registers a recurring backup schedule. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<BackupScheduleResponse> ScheduleBackup(BackupScheduleRequestMessage request, ServerCallContext context);
+
+    /// <summary>Removes a recurring backup schedule. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<BackupCancelScheduleResponse> CancelSchedule(BackupCancelScheduleRequestMessage request, ServerCallContext context);
+
+    /// <summary>Reads a scope's backup schedule status. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<BackupScopeStatusResponse> GetScopeStatus(BackupScopeStatusRequestMessage request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at
     /// startup with <paramref name="serviceImpl"/> set to
@@ -88,6 +103,7 @@ internal abstract class LatticeBackupGrpcServiceBase
         {
             binder.AddMethod(methods.CreateBackup, (UnaryServerMethod<BackupCaptureRequestMessage, BackupCaptureResponse>?)null);
             binder.AddMethod(methods.CreateIncrementalBackup, (UnaryServerMethod<BackupIncrementalCaptureRequestMessage, BackupCaptureResponse>?)null);
+            binder.AddMethod(methods.CreateBackupSet, (UnaryServerMethod<BackupSetCaptureRequestMessage, BackupSetCaptureResponse>?)null);
             binder.AddMethod(methods.ListBackups, (UnaryServerMethod<BackupCatalogRequest, BackupCatalogPage>?)null);
             binder.AddMethod(methods.StreamBackups, (ServerStreamingServerMethod<BackupStreamRequest, BackupManifest>?)null);
             binder.AddMethod(methods.DescribeBackup, (UnaryServerMethod<BackupDescribeRequest, BackupChainResponse>?)null);
@@ -96,11 +112,16 @@ internal abstract class LatticeBackupGrpcServiceBase
             binder.AddMethod(methods.RevertRestore, (UnaryServerMethod<RestoreResponse, RevertRestoreResponse>?)null);
             binder.AddMethod(methods.ExportArtifact, (ServerStreamingServerMethod<ArtifactExportRequest, ArtifactChunk>?)null);
             binder.AddMethod(methods.GetAuthScheme, (UnaryServerMethod<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>?)null);
+            binder.AddMethod(methods.ProbeCapabilities, (UnaryServerMethod<BackupCapabilityProbeRequest, BackupScopeCapabilities>?)null);
+            binder.AddMethod(methods.ScheduleBackup, (UnaryServerMethod<BackupScheduleRequestMessage, BackupScheduleResponse>?)null);
+            binder.AddMethod(methods.CancelSchedule, (UnaryServerMethod<BackupCancelScheduleRequestMessage, BackupCancelScheduleResponse>?)null);
+            binder.AddMethod(methods.GetScopeStatus, (UnaryServerMethod<BackupScopeStatusRequestMessage, BackupScopeStatusResponse>?)null);
             return;
         }
 
         binder.AddMethod(methods.CreateBackup, new UnaryServerMethod<BackupCaptureRequestMessage, BackupCaptureResponse>(serviceImpl.CreateBackup));
         binder.AddMethod(methods.CreateIncrementalBackup, new UnaryServerMethod<BackupIncrementalCaptureRequestMessage, BackupCaptureResponse>(serviceImpl.CreateIncrementalBackup));
+        binder.AddMethod(methods.CreateBackupSet, new UnaryServerMethod<BackupSetCaptureRequestMessage, BackupSetCaptureResponse>(serviceImpl.CreateBackupSet));
         binder.AddMethod(methods.ListBackups, new UnaryServerMethod<BackupCatalogRequest, BackupCatalogPage>(serviceImpl.ListBackups));
         binder.AddMethod(methods.StreamBackups, new ServerStreamingServerMethod<BackupStreamRequest, BackupManifest>(serviceImpl.StreamBackups));
         binder.AddMethod(methods.DescribeBackup, new UnaryServerMethod<BackupDescribeRequest, BackupChainResponse>(serviceImpl.DescribeBackup));
@@ -109,6 +130,10 @@ internal abstract class LatticeBackupGrpcServiceBase
         binder.AddMethod(methods.RevertRestore, new UnaryServerMethod<RestoreResponse, RevertRestoreResponse>(serviceImpl.RevertRestore));
         binder.AddMethod(methods.ExportArtifact, new ServerStreamingServerMethod<ArtifactExportRequest, ArtifactChunk>(serviceImpl.ExportArtifact));
         binder.AddMethod(methods.GetAuthScheme, new UnaryServerMethod<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>(serviceImpl.GetAuthScheme));
+        binder.AddMethod(methods.ProbeCapabilities, new UnaryServerMethod<BackupCapabilityProbeRequest, BackupScopeCapabilities>(serviceImpl.ProbeCapabilities));
+        binder.AddMethod(methods.ScheduleBackup, new UnaryServerMethod<BackupScheduleRequestMessage, BackupScheduleResponse>(serviceImpl.ScheduleBackup));
+        binder.AddMethod(methods.CancelSchedule, new UnaryServerMethod<BackupCancelScheduleRequestMessage, BackupCancelScheduleResponse>(serviceImpl.CancelSchedule));
+        binder.AddMethod(methods.GetScopeStatus, new UnaryServerMethod<BackupScopeStatusRequestMessage, BackupScopeStatusResponse>(serviceImpl.GetScopeStatus));
     }
 }
 
@@ -191,6 +216,51 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
                     ct)
                 .ConfigureAwait(false);
             return ToCaptureResponse(result);
+        });
+
+    /// <inheritdoc />
+    public override Task<BackupSetCaptureResponse> CreateBackupSet(BackupSetCaptureRequestMessage request, ServerCallContext context)
+        => InvokeAsync(request, context, static async (control, req, ct) =>
+        {
+            var result = await control
+                .CreateBackupSetAsync(
+                    new LatticeBackupSetCaptureRequest(req.Name, req.Scopes, req.CrossTreeConsistent, req.PageSize),
+                    ct)
+                .ConfigureAwait(false);
+            return ToSetCaptureResponse(result);
+        });
+
+    /// <inheritdoc />
+    public override Task<BackupScheduleResponse> ScheduleBackup(BackupScheduleRequestMessage request, ServerCallContext context)
+        => InvokeAsync(request, context, static async (control, req, ct) =>
+        {
+            var interval = TimeSpan.FromTicks(req.IntervalTicks);
+            await control
+                .ScheduleBackupAsync(new LatticeBackupScheduleRequest(req.Scope, req.Incremental, interval), ct)
+                .ConfigureAwait(false);
+
+            // Mirror the scheduler's clamp so the caller learns the cadence that
+            // was actually registered when a sub-minimum interval was rounded up.
+            var effective = interval < LatticeBackupScheduleOptions.MinimumInterval
+                ? LatticeBackupScheduleOptions.MinimumInterval
+                : interval;
+            return new BackupScheduleResponse { Scheduled = true, EffectiveIntervalTicks = effective.Ticks };
+        });
+
+    /// <inheritdoc />
+    public override Task<BackupCancelScheduleResponse> CancelSchedule(BackupCancelScheduleRequestMessage request, ServerCallContext context)
+        => InvokeAsync(request, context, static async (control, req, ct) =>
+        {
+            await control.CancelScheduleAsync(req.Scope, req.Incremental, ct).ConfigureAwait(false);
+            return new BackupCancelScheduleResponse();
+        });
+
+    /// <inheritdoc />
+    public override Task<BackupScopeStatusResponse> GetScopeStatus(BackupScopeStatusRequestMessage request, ServerCallContext context)
+        => InvokeAsync(request, context, static async (control, req, ct) =>
+        {
+            var status = await control.GetScopeStatusAsync(req.Scope, ct).ConfigureAwait(false);
+            return status is null ? new BackupScopeStatusResponse { Found = false } : ToScopeStatusResponse(status);
         });
 
     /// <inheritdoc />
@@ -350,6 +420,10 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
         return Task.FromResult(_authSchemeSource.GetAdvertisement());
     }
 
+    /// <inheritdoc />
+    public override Task<BackupScopeCapabilities> ProbeCapabilities(BackupCapabilityProbeRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.ProbeCapabilitiesAsync(req.Scope, ct));
+
     private async Task<TResponse> InvokeAsync<TRequest, TResponse>(
         TRequest request,
         ServerCallContext context,
@@ -380,6 +454,17 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
         {
             throw new RpcException(new Status(StatusCode.NotFound, ex.Message));
         }
+        catch (LatticeRestoreValidationException ex)
+        {
+            // A restore failed its pre-apply trust-boundary validation (a missing
+            // manifest or artifact, a digest mismatch, an out-of-scope request, or
+            // a coordinated saga that aborted because a peer could not prepare).
+            // It is a precondition failure, not an internal fault, and its message
+            // is safe and actionable (it names backups / trees, no secrets), so
+            // surface it as FailedPrecondition instead of the opaque Internal
+            // below - the operator UI turns this into a clear, fixable message.
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
+        }
         catch (ArgumentException ex)
         {
             throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
@@ -393,6 +478,30 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
 
     private static BackupCaptureResponse ToCaptureResponse(LatticeBackupCaptureResult result) =>
         new() { BackupId = result.BackupId, Manifest = result.Manifest };
+
+    private static BackupSetCaptureResponse ToSetCaptureResponse(LatticeBackupSetCaptureResult result) =>
+        new()
+        {
+            SetManifest = result.SetManifest,
+            Members = result.Members.Select(ToCaptureResponse).ToList(),
+        };
+
+    private static BackupScopeStatusResponse ToScopeStatusResponse(BackupScopeStatus status) =>
+        new()
+        {
+            Found = true,
+            Scope = status.Scope,
+            FullScheduleRegistered = status.FullScheduleRegistered,
+            IncrementalScheduleRegistered = status.IncrementalScheduleRegistered,
+            LastFullRunUtc = status.LastFullRunUtc,
+            LastFullSuccessUtc = status.LastFullSuccessUtc,
+            LastIncrementalRunUtc = status.LastIncrementalRunUtc,
+            LastIncrementalSuccessUtc = status.LastIncrementalSuccessUtc,
+            LastRunOutcome = status.LastRunOutcome,
+            ChainDepth = status.ChainDepth,
+            RuntimeFullBackupIntervalTicks = status.RuntimeFullBackupInterval?.Ticks,
+            RuntimeIncrementalBackupIntervalTicks = status.RuntimeIncrementalBackupInterval?.Ticks,
+        };
 
     private static RestoreResponse ToRestoreResponse(LatticeRestoreResult result) =>
         new()

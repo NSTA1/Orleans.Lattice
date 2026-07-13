@@ -1,6 +1,5 @@
 using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.Core.Connection;
-
 namespace Orleans.Lattice.Explorer.Core.Authentication;
 
 /// <summary>
@@ -87,6 +86,9 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
 
     /// <summary>The scheme id of the current sign-in, or <see langword="null"/> when anonymous.</summary>
     public string? CurrentScheme => _signIn?.SchemeId;
+
+    /// <inheritdoc />
+    public LatticeCallAuthentication? CurrentAuthentication => _signIn?.Authentication;
 
     /// <summary>The scheme ids the registered auth-method providers can service.</summary>
     public IReadOnlyCollection<string> AvailableSchemes => _methods.Select(m => m.SchemeId).ToArray();

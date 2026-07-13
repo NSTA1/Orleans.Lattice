@@ -144,6 +144,7 @@ internal sealed class LatticeBackupApiGrpcAuthInterceptor : Interceptor
         {
             LatticeBackupGrpcMethods.CreateBackupMethodName => LatticeBackupApiOperation.CreateBackup,
             LatticeBackupGrpcMethods.CreateIncrementalBackupMethodName => LatticeBackupApiOperation.CreateIncrementalBackup,
+            LatticeBackupGrpcMethods.CreateBackupSetMethodName => LatticeBackupApiOperation.CreateBackupSet,
             LatticeBackupGrpcMethods.ListBackupsMethodName => LatticeBackupApiOperation.ListBackups,
             LatticeBackupGrpcMethods.StreamBackupsMethodName => LatticeBackupApiOperation.StreamBackups,
             LatticeBackupGrpcMethods.DescribeBackupMethodName => LatticeBackupApiOperation.DescribeBackup,
@@ -151,6 +152,9 @@ internal sealed class LatticeBackupApiGrpcAuthInterceptor : Interceptor
             LatticeBackupGrpcMethods.RestoreBackupMethodName => LatticeBackupApiOperation.RestoreBackup,
             LatticeBackupGrpcMethods.RevertRestoreMethodName => LatticeBackupApiOperation.RevertRestore,
             LatticeBackupGrpcMethods.ExportArtifactMethodName => LatticeBackupApiOperation.ExportArtifact,
+            LatticeBackupGrpcMethods.ScheduleBackupMethodName => LatticeBackupApiOperation.ScheduleBackup,
+            LatticeBackupGrpcMethods.CancelScheduleMethodName => LatticeBackupApiOperation.CancelSchedule,
+            LatticeBackupGrpcMethods.GetScopeStatusMethodName => LatticeBackupApiOperation.GetScopeStatus,
             _ => LatticeBackupApiOperation.Unknown,
         };
 
@@ -164,6 +168,9 @@ internal sealed class LatticeBackupApiGrpcAuthInterceptor : Interceptor
             // The revert RPC carries the prior restore result as its request.
             RestoreResponse r => r.BackupId,
             ArtifactExportRequest a => a.BackupId,
+            BackupScheduleRequestMessage s => s.Scope?.TreeId,
+            BackupCancelScheduleRequestMessage c => c.Scope?.TreeId,
+            BackupScopeStatusRequestMessage s => s.Scope?.TreeId,
             _ => null,
         };
 

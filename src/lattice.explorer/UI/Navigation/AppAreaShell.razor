@@ -1,0 +1,129 @@
+@using Orleans.Lattice.Explorer.Core.Navigation
+@using Orleans.Lattice.Explorer.Core.Connection
+@implements IDisposable
+@inject IExplorerCapabilityStore Capabilities
+@inject IBackupCapabilityService CapabilityService
+@inject IExplorerAuthSession Auth
+@inject ILatticeStateConnection Connection
+
+@*
+    The app-level area switcher: a tab strip above the per-tree detail tabs that
+    swaps the whole working surface between the Explore browser and the Backups
+    management area. Areas register through AppAreas.Ordered, so a future area
+    joins here with no change to this component. An area the user lacks the
+    capability for renders disabled (greyed) rather than hidden; the grey-out is
+    advisory only - the server still enforces access when an action runs.
+*@
+
+<div class="explorer-areastrip" role="tablist" aria-label="Application areas">
+    @foreach (var descriptor in AppAreas.Ordered)
+    {
+        var enabled = descriptor.IsEnabled(_capabilities);
+        var isActive = descriptor.Area == _area;
+        <button type="button"
+                role="tab"
+                class="explorer-area-tab @(isActive ? "is-active" : null)"
+                aria-selected="@isActive"
+                disabled="@(!enabled)"
+                title="@(enabled ? null : $"{descriptor.Label} is not available for your account.")"
+                @onclick="@(() => SetArea(descriptor.Area))">
+            @descriptor.Label
+        </button>
+    }
+</div>
+
+<div class="explorer-area-content">
+    @if (_area == AppArea.Backups)
+    {
+        <BackupsPanel />
+    }
+    else
+    {
+        @ChildContent
+    }
+</div>
+
+@code {
+    private ExplorerCapabilities _capabilities = ExplorerCapabilities.Empty;
+    private AppArea _area = AppAreas.Default;
+    private LatticeConnectionState _lastConnectionState;
+
+    /// <summary>The Explore area's content (the tree browser), rendered when Explore is active.</summary>
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _capabilities = Capabilities.Current;
+        Capabilities.Changed += OnCapabilitiesChanged;
+        Auth.AuthenticationChanged += OnAuthenticationChanged;
+        Connection.StatusChanged += OnConnectionStatusChanged;
+        _lastConnectionState = Connection.Status.State;
+
+        // Probe the coarse top-level gate once after the shell mounts.
+        await RefreshCapabilitiesAsync();
+    }
+
+    private void SetArea(AppArea area)
+    {
+        if (_area == area || !AppAreas.IsEnabled(area, _capabilities))
+        {
+            return;
+        }
+
+        _area = area;
+        StateHasChanged();
+    }
+
+    private async Task RefreshCapabilitiesAsync()
+    {
+        try
+        {
+            await CapabilityService.RefreshAsync();
+        }
+        catch
+        {
+            // Capability probing is advisory; a probe failure must never break the
+            // shell. The store keeps its last value (deny-by-default at worst).
+        }
+    }
+
+    private void OnCapabilitiesChanged()
+    {
+        _capabilities = Capabilities.Current;
+
+        // If the active area just became disabled (for example after sign-out),
+        // fall back to the always-available Explore area.
+        if (!AppAreas.IsEnabled(_area, _capabilities))
+        {
+            _area = AppAreas.Default;
+        }
+
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void OnAuthenticationChanged() => _ = RefreshCapabilitiesAsync();
+
+    private void OnConnectionStatusChanged(LatticeConnectionStatus status)
+    {
+        var wasConnected = _lastConnectionState == LatticeConnectionState.Connected;
+        _lastConnectionState = status.State;
+
+        // The coarse backup gate is probed once at mount and is fail-closed, so a
+        // probe that ran while the cluster was still starting (endpoint briefly
+        // unreachable) would otherwise leave the Backups area disabled with no
+        // retry, even though the connection later recovers for browsing. Re-run
+        // the probe each time the connection freshly reaches Connected so the area
+        // enables as soon as the endpoint is reachable.
+        if (status.State == LatticeConnectionState.Connected && !wasConnected)
+        {
+            _ = RefreshCapabilitiesAsync();
+        }
+    }
+
+    public void Dispose()
+    {
+        Capabilities.Changed -= OnCapabilitiesChanged;
+        Auth.AuthenticationChanged -= OnAuthenticationChanged;
+        Connection.StatusChanged -= OnConnectionStatusChanged;
+    }
+}

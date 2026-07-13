@@ -50,6 +50,28 @@ internal interface ILatticeBackupSchedulerGrain : IGrainWithStringKey
     Task EnsureScheduleAsync(BackupScopeSelector scope);
 
     /// <summary>
+    /// Registers (or updates) a recurring schedule reminder for
+    /// <paramref name="scope"/> that fires every <paramref name="interval"/>,
+    /// capturing a full backup when <paramref name="incremental"/> is
+    /// <c>false</c> or an incremental backup when it is <c>true</c>. The interval
+    /// is clamped up to the reminder minimum when smaller. Overrides the
+    /// configured <see cref="LatticeBackupScheduleOptions"/> cadence for the
+    /// chosen kind and persists the scope so a firing after a silo restart can
+    /// reconstruct it. Idempotent: repeated calls converge on a single reminder.
+    /// </summary>
+    /// <param name="scope">The scope to schedule. Must not be <c>null</c>.</param>
+    /// <param name="incremental"><c>true</c> to schedule incremental captures, <c>false</c> for full captures.</param>
+    /// <param name="interval">The cadence between scheduled captures. Must be strictly positive.</param>
+    Task ScheduleRecurringAsync(BackupScopeSelector scope, bool incremental, TimeSpan interval);
+
+    /// <summary>
+    /// Unregisters the recurring schedule reminder of the requested kind and
+    /// clears its runtime interval. Idempotent: a missing reminder is a no-op.
+    /// </summary>
+    /// <param name="incremental"><c>true</c> to cancel the incremental schedule, <c>false</c> for the full schedule.</param>
+    Task CancelScheduleAsync(bool incremental);
+
+    /// <summary>
     /// Prunes the backup chain for <paramref name="scope"/> per the per-scope
     /// retention policy, deleting superseded manifests and artifacts through the
     /// sink and removing their catalog entries while preserving the base chain of

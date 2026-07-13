@@ -38,4 +38,25 @@ internal sealed class BackupSchedulerState
     /// <summary>The terminal outcome of the most recent capture cycle of either kind.</summary>
     [Id(5)]
     public BackupScopeRunOutcome LastRunOutcome { get; set; }
+
+    /// <summary>
+    /// The cadence of a runtime-registered recurring full-backup schedule (for
+    /// example one requested from a management UI), or <c>null</c> when no runtime
+    /// full schedule has been registered. Recorded for observability and to make
+    /// a re-registration idempotent; the Orleans reminder itself is the durable
+    /// source of truth for whether the schedule fires. A runtime interval
+    /// overrides the configured <see cref="LatticeBackupScheduleOptions.FullBackupInterval"/>
+    /// cadence for this scope.
+    /// </summary>
+    [Id(6)]
+    public TimeSpan? RuntimeFullBackupInterval { get; set; }
+
+    /// <summary>
+    /// The cadence of a runtime-registered recurring incremental-backup schedule,
+    /// or <c>null</c> when no runtime incremental schedule has been registered.
+    /// The runtime counterpart of
+    /// <see cref="LatticeBackupScheduleOptions.IncrementalBackupInterval"/>.
+    /// </summary>
+    [Id(7)]
+    public TimeSpan? RuntimeIncrementalBackupInterval { get; set; }
 }

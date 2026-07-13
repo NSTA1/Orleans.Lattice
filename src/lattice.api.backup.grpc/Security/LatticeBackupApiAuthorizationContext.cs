@@ -16,6 +16,9 @@ public enum LatticeBackupApiOperation
     /// <summary>The <c>CreateIncrementalBackup</c> incremental-capture RPC.</summary>
     CreateIncrementalBackup,
 
+    /// <summary>The <c>CreateBackupSet</c> multi-tree backup-set-capture RPC.</summary>
+    CreateBackupSet,
+
     /// <summary>The <c>ListBackups</c> cursor-resumable catalog RPC.</summary>
     ListBackups,
 
@@ -36,6 +39,15 @@ public enum LatticeBackupApiOperation
 
     /// <summary>The server-streaming <c>ExportArtifact</c> RPC.</summary>
     ExportArtifact,
+
+    /// <summary>The <c>ScheduleBackup</c> recurring-schedule RPC.</summary>
+    ScheduleBackup,
+
+    /// <summary>The <c>CancelSchedule</c> recurring-schedule removal RPC.</summary>
+    CancelSchedule,
+
+    /// <summary>The <c>GetScopeStatus</c> schedule-status RPC.</summary>
+    GetScopeStatus,
 
     /// <summary>
     /// A backup control-API method the interceptor does not recognise (for

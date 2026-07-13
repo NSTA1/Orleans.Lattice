@@ -33,7 +33,7 @@ the system behaves like a minimal MES/QMS slice backed by Lattice.
 | **Receiver-side applier decoration** | `BaselineReplicationApplier` decorates the package's `IReplicationApplier` singleton; on every cross-cluster apply it mirrors `mfg-facts` writes into the local naive `BaselineFactBackend` and raises `FederationRouter.FactReplicated`, so the side-by-side divergence visualisation and the dashboard activity feed both update without polling. |
 | **Durable operational state via Orleans grains** | Chaos configuration (`IProcessSiteGrain`, `IBackendChaosGrain`, `IPartitionChaosGrain`, `IReplicationDisconnectGrain`) persists to Azure Table Storage - restart the host and the system resumes exactly where it left off. The lattice tree write-ahead log persists to the same storage account via `Orleans.Lattice.Storage.AzureTable` (Azurite locally), so tree state survives silo restarts. The replication WAL and per-peer cursors are managed by `Orleans.Lattice.Replication` against the same storage account. |
 | **Idempotent bulk-load on startup** | `InventorySeeder` emits 5 representative parts (one per reachable `ComplianceState`) through the same router operators use. A singleton `IInventorySeedStateGrain` gates the seed so re-running against the same storage account preserves inventory and operator mutations. |
-| **Coordinated multi-cluster restore** | `Orleans.Lattice.Backup` captures the replicated `mfg-facts` tree to a shared external sink (`FileSystemBackupSink`) that every cluster can read. The `CoordinatedRestoreOperator` facade restores it; because `mfg-facts` is a replicated tree, the backup package promotes the restore into an all-or-nothing coordinated saga across the participating clusters. See *Coordinated multi-cluster restore* below. |
+| **Coordinated multi-cluster restore** | `Orleans.Lattice.Backup` captures the replicated `mfg-facts` tree to a shared external sink that every cluster can read - under `docker compose` a dedicated Azurite blob account (`azurite-backup`) reachable from both clusters. The `CoordinatedRestoreOperator` facade restores it; because `mfg-facts` is a replicated tree, the backup package promotes the restore into an all-or-nothing coordinated saga across the participating clusters. See *Coordinated multi-cluster restore* below. |
 
 ## Per-tree replication policy
 
@@ -68,16 +68,29 @@ together, with no peer re-advancing past it and no reader observing a
 torn / partial restore.
 
 **Shared external sink.** All clusters read and write one external sink
-instead of a per-cluster in-cluster sink. The sample provides
-`FileSystemBackupSink` (`src/MultiSiteManufacturing.Host/Backup/`), an
-`ILatticeBackupSink` backed by a shared filesystem directory
-(`Backup:SharedSinkPath`, defaulting to a shared temp directory). The
-sink is registered *before* `AddLatticeBackup()` so it wins over the
-package's in-cluster default. This is mandatory, not cosmetic: the backup
-package's startup guard rejects the in-cluster sink for a replicated tree,
-because a backup captured on one cluster must be resolvable from any peer.
-A manifest written by the cluster that captured is read back by any cluster
-that restores, purely through the shared sink.
+instead of a per-cluster in-cluster sink, registered *before*
+`AddLatticeBackup()` so it wins over the package's in-cluster default.
+This is mandatory, not cosmetic: the backup package's startup guard
+rejects the in-cluster sink for a replicated tree, because a backup
+captured on one cluster must be resolvable from any peer. A manifest
+written by the cluster that captured is read back by any cluster that
+restores, purely through the shared sink.
+
+The sink must be genuinely shared across every cluster. Under
+`docker compose` each cluster runs in its own container with its own
+Azurite, so a filesystem directory is **not** shared between them - a
+backup captured on `us` would be invisible to `eu` and a coordinated
+restore would abort. The sample therefore runs a dedicated Azurite
+account, `azurite-backup`, multi-homed onto both cluster networks, and
+points every silo at it through the Azure Blob sink
+(`ConnectionStrings:BackupBlobStorage` ->
+`AddLatticeBackupAzureBlob`, one shared `msmfg-shared-backup`
+container). When no shared blob account is configured (the legacy
+single-machine / in-process path where all silos share one host) the
+host falls back to `FileSystemBackupSink`
+(`src/MultiSiteManufacturing.Host/Backup/`), an `ILatticeBackupSink`
+backed by a shared filesystem directory (`Backup:SharedSinkPath`,
+defaulting to a shared temp directory).
 
 **Operator trigger.** `CoordinatedRestoreOperator`
 (`src/MultiSiteManufacturing.Host/Backup/`) is a DI-registered facade -

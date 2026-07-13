@@ -27,8 +27,14 @@ public static class GrpcBackupTypeAliases
     /// <summary>Alias for <see cref="BackupIncrementalCaptureRequestMessage"/>.</summary>
     public const string BackupIncrementalCaptureRequestMessage = "oibg.icapreq";
 
+    /// <summary>Alias for <see cref="BackupSetCaptureRequestMessage"/>.</summary>
+    public const string BackupSetCaptureRequestMessage = "oibg.scapreq";
+
     /// <summary>Alias for <see cref="BackupCaptureResponse"/>.</summary>
     public const string BackupCaptureResponse = "oibg.capresp";
+
+    /// <summary>Alias for <see cref="BackupSetCaptureResponse"/>.</summary>
+    public const string BackupSetCaptureResponse = "oibg.scapresp";
 
     /// <summary>Alias for <see cref="BackupStreamRequest"/>.</summary>
     public const string BackupStreamRequest = "oibg.streq";
@@ -68,4 +74,25 @@ public static class GrpcBackupTypeAliases
 
     /// <summary>Alias for <see cref="AuthSchemeAdvertisement"/>.</summary>
     public const string AuthSchemeAdvertisement = "oibg.asadv";
+
+    /// <summary>Alias for <see cref="BackupCapabilityProbeRequest"/>.</summary>
+    public const string BackupCapabilityProbeRequest = "oibg.cpreq";
+
+    /// <summary>Alias for <see cref="BackupScheduleRequestMessage"/>.</summary>
+    public const string BackupScheduleRequestMessage = "oibg.schreq";
+
+    /// <summary>Alias for <see cref="BackupScheduleResponse"/>.</summary>
+    public const string BackupScheduleResponse = "oibg.schresp";
+
+    /// <summary>Alias for <see cref="BackupCancelScheduleRequestMessage"/>.</summary>
+    public const string BackupCancelScheduleRequestMessage = "oibg.cschreq";
+
+    /// <summary>Alias for <see cref="BackupCancelScheduleResponse"/>.</summary>
+    public const string BackupCancelScheduleResponse = "oibg.cschresp";
+
+    /// <summary>Alias for <see cref="BackupScopeStatusRequestMessage"/>.</summary>
+    public const string BackupScopeStatusRequestMessage = "oibg.statreq";
+
+    /// <summary>Alias for <see cref="BackupScopeStatusResponse"/>.</summary>
+    public const string BackupScopeStatusResponse = "oibg.statresp";
 }

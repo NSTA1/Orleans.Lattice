@@ -138,6 +138,36 @@ public sealed class AuthBackupGrpcVisibilityTests
     }
 
     [Test]
+    public void create_backup_set_without_a_credential_is_permission_denied()
+    {
+        var ex = Assert.ThrowsAsync<RpcException>(async () => await CallAsync(
+            _host.Methods.CreateBackupSet,
+            new BackupSetCaptureRequestMessage
+            {
+                Name = "denied-set",
+                Scopes = new[] { BackupScopeSelector.WholeTree(Source) },
+            },
+            subject: null));
+
+        Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
+    }
+
+    [Test]
+    public async Task create_backup_set_with_a_credential_is_accepted()
+    {
+        var response = await CallAsync(
+            _host.Methods.CreateBackupSet,
+            new BackupSetCaptureRequestMessage
+            {
+                Name = "allowed-set",
+                Scopes = new[] { BackupScopeSelector.WholeTree(Source) },
+            },
+            Operator);
+
+        Assert.That(response.SetManifest.MemberBackupIds, Is.Not.Empty);
+    }
+
+    [Test]
     public void restore_backup_without_a_credential_is_permission_denied()
     {
         var ex = Assert.ThrowsAsync<RpcException>(async () => await CallAsync(
@@ -189,8 +219,69 @@ public sealed class AuthBackupGrpcVisibilityTests
         await Task.CompletedTask;
     }
 
+    [Test]
+    public void schedule_backup_without_a_credential_is_permission_denied()
+    {
+        var ex = Assert.ThrowsAsync<RpcException>(async () => await CallAsync(
+            _host.Methods.ScheduleBackup,
+            new BackupScheduleRequestMessage
+            {
+                Scope = BackupScopeSelector.WholeTree(Source),
+                Incremental = false,
+                IntervalTicks = TimeSpan.FromMinutes(20).Ticks,
+            },
+            subject: null));
+
+        Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
+    }
+
+    [Test]
+    public async Task schedule_backup_with_a_credential_is_accepted()
+    {
+        var response = await CallAsync(
+            _host.Methods.ScheduleBackup,
+            new BackupScheduleRequestMessage
+            {
+                Scope = BackupScopeSelector.WholeTree(Source),
+                Incremental = false,
+                IntervalTicks = TimeSpan.FromMinutes(20).Ticks,
+            },
+            Operator);
+
+        Assert.That(response.Scheduled, Is.True);
+    }
+
+    [Test]
+    public void cancel_schedule_without_a_credential_is_permission_denied()
+    {
+        var ex = Assert.ThrowsAsync<RpcException>(async () => await CallAsync(
+            _host.Methods.CancelSchedule,
+            new BackupCancelScheduleRequestMessage
+            {
+                Scope = BackupScopeSelector.WholeTree(Source),
+                Incremental = false,
+            },
+            subject: null));
+
+        Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
+    }
+
+    [Test]
+    public async Task cancel_schedule_with_a_credential_is_accepted()
+    {
+        var response = await CallAsync(
+            _host.Methods.CancelSchedule,
+            new BackupCancelScheduleRequestMessage
+            {
+                Scope = BackupScopeSelector.WholeTree(Source),
+                Incremental = false,
+            },
+            Operator);
+
+        Assert.That(response, Is.Not.Null);
+    }
+
     /// <summary>
-    /// Test authorizer that admits a call only when it carries an
     /// <c>authorization</c> request header, so the tests can drive both the
     /// accept and default-deny paths purely from the wire credential.
     /// </summary>

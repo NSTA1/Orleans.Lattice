@@ -7,6 +7,9 @@ using Orleans.Lattice;
 using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Api.State.Grpc;
 using Orleans.Lattice.Backup;
+using Orleans.Lattice.Backup.AzureBlob;
+using Orleans.Lattice.Api.Backup;
+using Orleans.Lattice.Api.Backup.Grpc;
 using Orleans.Lattice.Replication;
 using Orleans.Lattice.Replication.Grpc;
 using Orleans.Lattice.Storage.AzureTable;
@@ -154,6 +157,14 @@ var packageReplicationConfigured = !useInMemoryStorage
     && !string.IsNullOrWhiteSpace(packagePeerGrpcEndpoint)
     && Uri.TryCreate(packagePeerGrpcEndpoint, UriKind.Absolute, out _);
 
+// Backup / restore subsystem toggle (issue #1131 test vehicle). run.ps1 -Backup
+// sets LATTICE_BACKUP_ENABLED=true in the per-cluster .env; when off (the
+// default) the backup subsystem, its control API, and the gRPC binding are all
+// elided so the sample boots exactly as before. Captured here so the same flag
+// gates the silo-side registration, the builder-side gRPC service, and the
+// endpoint mapping below.
+var backupEnabled = builder.Configuration.GetValue<bool>("LATTICE_BACKUP_ENABLED");
+
 builder.Host.UseOrleans(silo =>
 {
     if (useInMemoryStorage)
@@ -291,6 +302,21 @@ builder.Host.UseOrleans(silo =>
         // on the published cluster endpoint. Must follow AddLattice.
         silo.AddLatticeStateApi();
 
+        // Backup / restore subsystem (issue #1131 test vehicle). Registers the
+        // default in-cluster backup sink, the capture / incremental / restore /
+        // schedule services, and the operator-facing control API. Must follow
+        // AddLattice (capture tails its WAL; the access authorizer resolves the
+        // core gate). Because this sample does not install AddLatticeAuth, the
+        // core access gate is the no-op gate and the fail-closed backup
+        // authorizer short-circuits to allow - so an anonymous operator can
+        // drive backups end-to-end for the demo. Enabled only with run.ps1
+        // -Backup.
+        if (backupEnabled)
+        {
+            silo.AddLatticeBackup();
+            silo.AddLatticeBackupApi();
+        }
+
         // Cluster-wide dashboard broadcast stream backed by Azure
         // Storage Queues. Every silo's DashboardBroadcaster publishes
         // each inbound fact onto this stream and subscribes to it, so
@@ -370,9 +396,8 @@ builder.Host.UseOrleans(silo =>
 
             // Coordinated multi-cluster restore demonstration. Backup is wired
             // only on the persistent replication path (it needs the same Azure
-            // Table WAL + grain storage as the shipper) and only when a shared
-            // sink path is available, so the in-memory quick-start stays free of
-            // backup wiring.
+            // Table WAL + grain storage as the shipper), so the in-memory
+            // quick-start stays free of backup wiring.
             //
             // The order matters: register the shared external sink BEFORE
             // AddLatticeBackup so the package's TryAddSingleton default (the
@@ -380,18 +405,45 @@ builder.Host.UseOrleans(silo =>
             // (and the site-activity + labels trees) are declared replicated
             // above, the backup package's startup guard rejects the in-cluster
             // sink and requires a shared external sink reachable by every
-            // cluster - which is exactly what FileSystemBackupSink provides.
-            // With the sink shared, a backup captured on one cluster is
+            // cluster. With the sink shared, a backup captured on one cluster is
             // resolvable and restorable from any peer, and a restore of a
             // replicated tree is promoted to an all-or-nothing coordinated saga
             // by the replication package (the real IRestoreSagaDispatcher +
             // IReplicatedTreeMembership that AddLatticeReplication installed).
-            var sharedSinkPath = builder.Configuration["Backup:SharedSinkPath"]
-                ?? Path.Combine(Path.GetTempPath(), "msmfg-shared-backup-sink");
-            silo.Services.AddSingleton<ILatticeBackupSink>(sp => new FileSystemBackupSink(
-                sharedSinkPath,
-                sp.GetRequiredService<Serializer>(),
-                sp.GetRequiredService<ILogger<FileSystemBackupSink>>()));
+            //
+            // Sink selection: under docker-compose each cluster runs in its own
+            // container with its own Azurite, so a filesystem path is NOT shared
+            // across clusters and a cross-cluster restore would fail to resolve
+            // the peer-captured backup. When a shared blob account is configured
+            // (ConnectionStrings:BackupBlobStorage -> the azurite-backup account
+            // multi-homed onto both cluster networks) the Azure Blob sink is used
+            // so every cluster reads and writes the same account. The legacy
+            // single-machine path (all silos on one host, no shared blob account)
+            // falls back to the filesystem sink under a shared temp directory.
+            var backupBlobConnectionString =
+                builder.Configuration.GetConnectionString("BackupBlobStorage");
+            if (!string.IsNullOrWhiteSpace(backupBlobConnectionString))
+            {
+                // One shared container across BOTH clusters. Backup and artifact
+                // ids are content-addressed, so a shared container never collides;
+                // sharing it is exactly what lets a peer resolve the manifest and
+                // artifacts a sibling cluster captured.
+                silo.AddLatticeBackupAzureBlob(o =>
+                {
+                    o.ConnectionString = backupBlobConnectionString;
+                    o.ContainerName = "msmfg-shared-backup";
+                });
+            }
+            else
+            {
+                var sharedSinkPath = builder.Configuration["Backup:SharedSinkPath"]
+                    ?? Path.Combine(Path.GetTempPath(), "msmfg-shared-backup-sink");
+                silo.Services.AddSingleton<ILatticeBackupSink>(sp => new FileSystemBackupSink(
+                    sharedSinkPath,
+                    sp.GetRequiredService<Serializer>(),
+                    sp.GetRequiredService<ILogger<FileSystemBackupSink>>()));
+            }
+
             silo.AddLatticeBackup();
         }
     }
@@ -418,6 +470,17 @@ builder.Services.AddLatticeStateApiGrpc(o => o.RequireAuthorization = stateApiAu
 if (stateApiAuthEnabled)
 {
     builder.Services.AddEnvVarCredentialAuthorizer();
+}
+
+// Backup control gRPC binding the Explorer backup UI consumes (issue #1131).
+// The binding's own meta-authorizer defaults to deny-all; the sample is a
+// demo, so enforcement is turned off (RequireAuthorization = false) exactly as
+// the state API above is anonymous by default. This is demo-grade and
+// insecure - a production host would keep enforcement on and register a real
+// ILatticeBackupApiAuthorizer. Wired only with run.ps1 -Backup.
+if (backupEnabled)
+{
+    builder.Services.AddLatticeBackupApiGrpc(o => o.RequireAuthorization = false);
 }
 
 // Cross-cluster replication transport. The package's gRPC push
@@ -653,6 +716,15 @@ app.MapGrpcService<InventoryServiceImpl>();
 // Orleans.Lattice.Explorer can browse this cluster's trees, views, metrics,
 // topology, and data with no new published host ports.
 app.MapLatticeStateApiGrpc();
+
+// Backup control gRPC route (issue #1131). Served on the same :8081 h2c
+// listener as the state API and reachable through Traefik so the Explorer
+// backup UI can drive capture / restore against this cluster. Mapped only when
+// run.ps1 -Backup wired the backup subsystem in above.
+if (backupEnabled)
+{
+    app.MapLatticeBackupApiGrpc();
+}
 
 // Receiver-side gRPC route for cross-cluster replication push. Mapped
 // only when package replication was wired in above so the in-memory

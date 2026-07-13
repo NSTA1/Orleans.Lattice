@@ -91,6 +91,33 @@ public sealed class LatticeBackupApiGrpcClient
         return new LatticeBackupCaptureResult(response.BackupId, response.Manifest);
     }
 
+    /// <summary>
+    /// Captures a backup set - one full backup per scope, grouped under a single
+    /// set manifest - optionally at a single cross-tree causal fence.
+    /// </summary>
+    public async Task<LatticeBackupSetCaptureResult> CreateBackupSetAsync(
+        LatticeBackupSetCaptureRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var response = await UnaryAsync(
+            _methods.CreateBackupSet,
+            new BackupSetCaptureRequestMessage
+            {
+                Name = request.Name,
+                Scopes = request.Scopes,
+                CrossTreeConsistent = request.CrossTreeConsistent,
+                PageSize = request.PageSize,
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        var members = response.Members
+            .Select(m => new LatticeBackupCaptureResult(m.BackupId, m.Manifest))
+            .ToList();
+        return new LatticeBackupSetCaptureResult(response.SetManifest, members);
+    }
+
     /// <summary>Lists the catalogued backups as a deterministic, cursor-resumable page.</summary>
     public Task<BackupCatalogPage> ListBackupsAsync(
         BackupCatalogRequest request,
@@ -222,6 +249,105 @@ public sealed class LatticeBackupApiGrpcClient
         CancellationToken cancellationToken = default)
         => UnaryAsync(_methods.GetAuthScheme, request, cancellationToken);
 
+    /// <summary>
+    /// Probes, with no side effects, which backup / restore operations the calling
+    /// credential may perform over <paramref name="scope"/>. Never fails on a
+    /// permission denial: each capability is reported as an allowed / denied flag,
+    /// default-deny. The flags are advisory (a UX affordance); the server still
+    /// authorizes each real operation fail-closed on attempt.
+    /// </summary>
+    /// <param name="scope">The scope to probe. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The caller's allowed-operation set for <paramref name="scope"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="scope"/> is <c>null</c>.</exception>
+    public Task<BackupScopeCapabilities> ProbeCapabilitiesAsync(
+        BackupScopeSelector scope,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        return UnaryAsync(
+            _methods.ProbeCapabilities,
+            new BackupCapabilityProbeRequest { Scope = scope },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Registers (or updates) a recurring backup schedule for
+    /// <paramref name="scope"/> that fires every <paramref name="interval"/>,
+    /// capturing an incremental backup when <paramref name="incremental"/> is
+    /// <see langword="true"/> or a full backup otherwise. An interval below the
+    /// scheduler minimum is clamped up; the returned effective interval reports
+    /// the cadence actually registered.
+    /// </summary>
+    /// <param name="scope">The scope to schedule. Must not be <c>null</c>.</param>
+    /// <param name="incremental"><c>true</c> to schedule incremental captures, <c>false</c> for full captures.</param>
+    /// <param name="interval">The requested cadence between captures. Must be strictly positive.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The cadence actually registered (clamped up to the scheduler minimum when smaller).</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="scope"/> is <c>null</c>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="interval"/> is not strictly positive.</exception>
+    public async Task<TimeSpan> ScheduleBackupAsync(
+        BackupScopeSelector scope,
+        bool incremental,
+        TimeSpan interval,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(interval.Ticks);
+
+        var response = await UnaryAsync(
+            _methods.ScheduleBackup,
+            new BackupScheduleRequestMessage
+            {
+                Scope = scope,
+                Incremental = incremental,
+                IntervalTicks = interval.Ticks,
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        return TimeSpan.FromTicks(response.EffectiveIntervalTicks);
+    }
+
+    /// <summary>
+    /// Removes the runtime recurring backup schedule for <paramref name="scope"/>.
+    /// Idempotent.
+    /// </summary>
+    /// <param name="scope">The scope whose schedule should be removed. Must not be <c>null</c>.</param>
+    /// <param name="incremental"><c>true</c> to remove the incremental schedule, <c>false</c> for the full schedule.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="scope"/> is <c>null</c>.</exception>
+    public async Task CancelScheduleAsync(
+        BackupScopeSelector scope,
+        bool incremental,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        await UnaryAsync(
+            _methods.CancelSchedule,
+            new BackupCancelScheduleRequestMessage { Scope = scope, Incremental = incremental },
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Reads a scope's schedule and last-run status, or returns
+    /// <see langword="null"/> when the scope is unknown.
+    /// </summary>
+    /// <param name="scope">The scope to describe. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="scope"/> is <c>null</c>.</exception>
+    public async Task<BackupScopeStatus?> GetScopeStatusAsync(
+        BackupScopeSelector scope,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        var response = await UnaryAsync(
+            _methods.GetScopeStatus,
+            new BackupScopeStatusRequestMessage { Scope = scope },
+            cancellationToken).ConfigureAwait(false);
+
+        return ToScopeStatus(response);
+    }
+
     private async Task<TResponse> UnaryAsync<TRequest, TResponse>(
         Method<TRequest, TResponse> method,
         TRequest request,
@@ -271,4 +397,25 @@ public sealed class LatticeBackupApiGrpcClient
             response.EntriesApplied,
             response.ShadowPhysicalTreeId,
             response.PreviousPhysicalTreeId);
+
+    private static BackupScopeStatus? ToScopeStatus(BackupScopeStatusResponse response)
+    {
+        if (!response.Found || response.Scope is null)
+        {
+            return null;
+        }
+
+        return new BackupScopeStatus(
+            response.Scope,
+            response.FullScheduleRegistered,
+            response.IncrementalScheduleRegistered,
+            response.LastFullRunUtc,
+            response.LastFullSuccessUtc,
+            response.LastIncrementalRunUtc,
+            response.LastIncrementalSuccessUtc,
+            response.LastRunOutcome,
+            response.ChainDepth,
+            response.RuntimeFullBackupIntervalTicks is { } fullTicks ? TimeSpan.FromTicks(fullTicks) : null,
+            response.RuntimeIncrementalBackupIntervalTicks is { } incrementalTicks ? TimeSpan.FromTicks(incrementalTicks) : null);
+    }
 }

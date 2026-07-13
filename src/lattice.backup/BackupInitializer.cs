@@ -7,8 +7,10 @@ namespace Orleans.Lattice.Backup;
 /// Runs the once-per-silo backup bootstrap: sets the durable per-key history
 /// retention policy on the reserved <c>sys-backup-catalog</c> tree and, when
 /// enabled, creates the durable history materialised view over it so every backup
-/// catalogued or removed is auditable out of the box. Initialization is triggered
-/// lazily by the first catalog mutation and is idempotent for concurrent callers.
+/// catalogued or removed is auditable out of the box, plus the backup-catalog
+/// index view that powers the filtered, newest-first, paged catalog listing.
+/// Initialization is triggered lazily by the first catalog mutation and is
+/// idempotent for concurrent callers.
 /// </summary>
 internal sealed class BackupInitializer
 {
@@ -88,6 +90,14 @@ internal sealed class BackupInitializer
                     catalog,
                     BackupConstants.CatalogHistoryView,
                     LatticeHistoryView.Definition(BackupConstants.CatalogHistoryView, _services));
+            }
+
+            if (options.EnableBackupCatalogIndexView && _viewFactory is not null)
+            {
+                _viewFactory.Create(
+                    catalog,
+                    BackupConstants.CatalogIndexView,
+                    new LatticeViewDefinition(BackupConstants.CatalogIndexView, new BackupCatalogIndexProjection()));
             }
         }
     }

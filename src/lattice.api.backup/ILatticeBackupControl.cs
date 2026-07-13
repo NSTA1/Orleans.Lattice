@@ -47,6 +47,55 @@ internal interface ILatticeBackupControl
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Captures a backup <i>set</i> - one full backup per scope in the request,
+    /// grouped under a single set manifest - after authorizing every member
+    /// scope fail-closed. When the request asks for cross-tree consistency and
+    /// the set covers more than one tree, every member is captured at a single
+    /// causal fence so a cross-tree atomic write is never torn across the set
+    /// boundary; a single-tree set pays no extra coordination.
+    /// </summary>
+    /// <param name="request">The set-capture request. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The set manifest and the per-tree member results in scope order.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to back up a scope in the set.</exception>
+    Task<LatticeBackupSetCaptureResult> CreateBackupSetAsync(
+        LatticeBackupSetCaptureRequest request,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Registers (or updates) a recurring backup schedule for the request's
+    /// scope, after authorizing the scope fail-closed with the same grant a
+    /// capture requires. Each scheduled cycle captures a full or incremental
+    /// backup per <see cref="LatticeBackupScheduleRequest.Incremental"/> at the
+    /// request's interval (clamped up to the scheduler minimum when smaller),
+    /// overriding the configured schedule cadence for the chosen kind.
+    /// Idempotent.
+    /// </summary>
+    /// <param name="request">The schedule request. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to back up the scope.</exception>
+    Task ScheduleBackupAsync(
+        LatticeBackupScheduleRequest request,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Removes a runtime recurring backup schedule for <paramref name="scope"/>,
+    /// after authorizing the scope fail-closed with the same grant a capture
+    /// requires. Idempotent.
+    /// </summary>
+    /// <param name="scope">The scope whose schedule should be removed. Must not be <c>null</c>.</param>
+    /// <param name="incremental"><c>true</c> to remove the incremental schedule, <c>false</c> for the full schedule.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="scope"/> is <c>null</c>.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to back up the scope.</exception>
+    Task CancelScheduleAsync(
+        BackupScopeSelector scope,
+        bool incremental,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Lists the catalogued backups as a deterministic, cursor-resumable page
     /// ordered by backup id, hiding any manifest whose scope the caller may not
     /// read. Pass the previous page's
@@ -166,6 +215,25 @@ internal interface ILatticeBackupControl
     /// <exception cref="ArgumentNullException"><paramref name="scope"/> is <c>null</c>.</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the scope.</exception>
     Task<BackupScopeStatus?> GetScopeStatusAsync(
+        BackupScopeSelector scope,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Probes, with <b>no side effects</b>, which backup / restore operations the
+    /// current caller may perform over <paramref name="scope"/>. Runs the same
+    /// fail-closed backup access gate the real operations use but reads, captures,
+    /// restores, and deletes nothing, reporting each capability as an
+    /// allowed / denied flag. Unlike every other operation on this facade it never
+    /// throws <see cref="LatticeAuthorizationDeniedException"/>: a denial is
+    /// reported as a <see langword="false"/> flag, default-deny, so a management
+    /// UI can grey out controls the caller cannot use. The reported flags are
+    /// advisory; the server still authorizes each real operation on attempt.
+    /// </summary>
+    /// <param name="scope">The scope to probe. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The caller's allowed-operation set for <paramref name="scope"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="scope"/> is <c>null</c>.</exception>
+    Task<BackupScopeCapabilities> ProbeCapabilitiesAsync(
         BackupScopeSelector scope,
         CancellationToken cancellationToken = default);
 }
