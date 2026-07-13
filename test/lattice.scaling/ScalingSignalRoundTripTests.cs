@@ -177,6 +177,7 @@ public sealed class ScalingSignalRoundTripTests
             Storage = new StoragePressure { OverThreshold = true, WalRetainedBytes = 100 },
             Reason = "compute axis dominated",
             SampledAt = sampledAt,
+            RawScaleValue = 3.2,
         };
 
         var decoded = RoundTrip(value);
@@ -191,6 +192,7 @@ public sealed class ScalingSignalRoundTripTests
             Assert.That(decoded.Storage.WalRetainedBytes, Is.EqualTo(100));
             Assert.That(decoded.Reason, Is.EqualTo("compute axis dominated"));
             Assert.That(decoded.SampledAt, Is.EqualTo(sampledAt));
+            Assert.That(decoded.RawScaleValue, Is.EqualTo(3.2));
         });
     }
 

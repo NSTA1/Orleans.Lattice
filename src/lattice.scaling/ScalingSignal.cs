@@ -8,10 +8,10 @@ namespace Orleans.Lattice.Scaling;
 /// (<see cref="ScaleValue"/>) plus a concrete replica recommendation
 /// (<see cref="RecommendedReplicas"/>) that an external autoscaler can scrape.
 /// <para>
-/// This is a read-only point-in-time snapshot. Until the pressure collector
-/// (#1186) and storage-axis (#1187) issues land, the facade returns a
-/// well-formed zero/stub signal with <see cref="Reason"/> set to
-/// <c>"not yet collecting"</c>.
+/// This is a read-only point-in-time snapshot produced by the silo's compute
+/// collector (#1186); the storage axis is populated by #1187. Before the first
+/// sample completes the facade returns a warming-up signal
+/// (<see cref="ScaleValue"/> zero, <see cref="Reason"/> naming the warm-up state).
 /// </para>
 /// </summary>
 [GenerateSerializer]
@@ -49,4 +49,13 @@ public readonly record struct ScalingSignal
 
     /// <summary>UTC instant at which this snapshot was sampled.</summary>
     [Id(5)] public DateTimeOffset SampledAt { get; init; }
+
+    /// <summary>
+    /// The un-smoothed replica-demand scalar for this sample: the dominant
+    /// normalised compute dimension multiplied by the current replica count,
+    /// before EWMA smoothing and scale-in gating are applied. <see cref="ScaleValue"/>
+    /// carries the smoothed, gated value an autoscaler should act on; this field
+    /// exposes the raw instantaneous demand for observability and debugging.
+    /// </summary>
+    [Id(6)] public double RawScaleValue { get; init; }
 }

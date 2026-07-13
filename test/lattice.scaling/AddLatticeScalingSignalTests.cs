@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using NSubstitute;
 using Orleans.Hosting;
 
@@ -6,12 +7,14 @@ namespace Orleans.Lattice.Scaling.Tests;
 
 /// <summary>
 /// Coverage for <see cref="LatticeScalingServiceCollectionExtensions.AddLatticeScalingSignal(ISiloBuilder, System.Action{LatticeScalingSignalOptions})"/>:
-/// it must guard a null builder, chain fluently, register the
-/// <see cref="ILatticeScalingSignal"/> facade as a resolvable singleton, and be
-/// idempotent under the <c>TryAdd</c> registrations. Also pins the scaffold
-/// stub semantics returned by the resolved facade. Uses a substituted
-/// <see cref="ISiloBuilder"/> over a bare <see cref="ServiceCollection"/> so no
-/// real cluster is required.
+/// it must guard a null builder, chain fluently, register the live
+/// <see cref="ILatticeScalingSignal"/> facade as a resolvable singleton that is
+/// also a hosted service, be idempotent under the <c>TryAdd</c> registrations,
+/// and register a no-op storage collector and split probe as the #1187 seam.
+/// Uses a substituted <see cref="ISiloBuilder"/> over a bare
+/// <see cref="ServiceCollection"/> so no real cluster is required; the facade
+/// resolves without a grain factory and returns a warming-up signal before its
+/// timer runs.
 /// </summary>
 [TestFixture]
 public sealed class AddLatticeScalingSignalTests
@@ -55,8 +58,40 @@ public sealed class AddLatticeScalingSignalTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(first, Is.InstanceOf<StubLatticeScalingSignal>());
+            Assert.That(first, Is.InstanceOf<LatticeScalingSignal>());
             Assert.That(second, Is.SameAs(first));
+        });
+    }
+
+    [Test]
+    public void AddLatticeScalingSignal_registers_facade_as_hosted_service()
+    {
+        var services = new ServiceCollection();
+        BuilderWith(services).AddLatticeScalingSignal();
+
+        using var provider = services.BuildServiceProvider();
+        var facade = provider.GetRequiredService<ILatticeScalingSignal>();
+        var hosted = provider.GetServices<IHostedService>().ToList();
+
+        Assert.That(hosted, Has.One.SameAs(facade));
+    }
+
+    [Test]
+    public void AddLatticeScalingSignal_registers_seams_for_downstream_issues()
+    {
+        var services = new ServiceCollection();
+        BuilderWith(services).AddLatticeScalingSignal();
+
+        using var provider = services.BuildServiceProvider();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(provider.GetRequiredService<IStoragePressureCollector>(),
+                Is.InstanceOf<NoOpStoragePressureCollector>());
+            Assert.That(provider.GetRequiredService<ISplitActivityProbe>(),
+                Is.InstanceOf<NoOpSplitActivityProbe>());
+            Assert.That(provider.GetRequiredService<IComputePressureCollector>(),
+                Is.InstanceOf<ComputePressureCollector>());
         });
     }
 
@@ -71,8 +106,14 @@ public sealed class AddLatticeScalingSignalTests
 
         var facadeRegistrations = services
             .Count(d => d.ServiceType == typeof(ILatticeScalingSignal));
+        var hostedRegistrations = services
+            .Count(d => d.ServiceType == typeof(IHostedService));
 
-        Assert.That(facadeRegistrations, Is.EqualTo(1));
+        Assert.Multiple(() =>
+        {
+            Assert.That(facadeRegistrations, Is.EqualTo(1));
+            Assert.That(hostedRegistrations, Is.EqualTo(1));
+        });
     }
 
     [Test]
@@ -98,7 +139,7 @@ public sealed class AddLatticeScalingSignalTests
     }
 
     [Test]
-    public async Task Resolved_facade_returns_well_formed_zero_stub_signal()
+    public async Task Resolved_facade_returns_warming_up_signal_before_first_sample()
     {
         var services = new ServiceCollection();
         BuilderWith(services).AddLatticeScalingSignal();
@@ -112,15 +153,7 @@ public sealed class AddLatticeScalingSignalTests
         {
             Assert.That(result.ScaleValue, Is.Zero);
             Assert.That(result.RecommendedReplicas, Is.Zero);
-            Assert.That(result.Reason, Is.EqualTo("not yet collecting"));
-            Assert.That(result.Compute.Activation, Is.Zero);
-            Assert.That(result.Compute.Resource, Is.Zero);
-            Assert.That(result.Compute.WalDispatch, Is.Zero);
-            Assert.That(result.Compute.WalSaturation, Is.EqualTo(WalSaturationState.Healthy));
-            Assert.That(result.Storage.OverThreshold, Is.False);
-            Assert.That(result.Storage.WalRetainedBytes, Is.Zero);
-            Assert.That(result.Storage.Accounts, Is.Empty);
-            Assert.That(result.Storage.Recommendation, Is.Null);
+            Assert.That(result.Reason, Is.EqualTo(LatticeScalingSignal.WarmingUp));
             Assert.That(result.SampledAt, Is.GreaterThan(DateTimeOffset.MinValue));
         });
     }
