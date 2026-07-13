@@ -151,6 +151,8 @@ public sealed class LatticeBackupCatalogRebuildServiceTests
     {
         private readonly SortedDictionary<string, BackupManifest> _manifests = new(StringComparer.Ordinal);
 
+        public bool IsDurable => true;
+
         public Task WriteManifestAsync(BackupManifest manifest, CancellationToken cancellationToken = default)
         {
             _manifests[manifest.Id] = manifest;

@@ -60,6 +60,13 @@ internal sealed class AzureBlobLatticeBackupSink : ILatticeBackupSink
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// The Azure Blob sink stores payload in an off-cluster storage account, so it
+    /// survives the loss of the capturing cluster and is durable.
+    /// </remarks>
+    public bool IsDurable => true;
+
+    /// <inheritdoc />
     public async Task WriteArtifactAsync(
         string artifactId,
         IAsyncEnumerable<ReadOnlyMemory<byte>> content,

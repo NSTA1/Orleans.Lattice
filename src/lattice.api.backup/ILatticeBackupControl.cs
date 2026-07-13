@@ -301,4 +301,69 @@ internal interface ILatticeBackupControl
     Task<BackupScopeCapabilities> ProbeCapabilitiesAsync(
         BackupScopeSelector scope,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reports whether periodic backup-health monitoring is available on this
+    /// deployment, which is true only when the configured backup sink is durable
+    /// and external (<see cref="ILatticeBackupSink.IsDurable"/>). With the ephemeral
+    /// in-cluster sink the payload lives in the same cluster that a disaster would
+    /// destroy, so health verification is pointless and the monitor is inert; a
+    /// management UI uses this flag to hide or disable the health column and the
+    /// per-backup health controls. Never authorizes and never throws - it is an
+    /// advisory capability flag.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns><see langword="true"/> when the sink is durable and monitoring applies; otherwise <see langword="false"/>.</returns>
+    Task<bool> IsHealthMonitoringAvailableAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Runs a fresh health verification of the backup identified by
+    /// <paramref name="backupId"/> against the durable sink - checking manifest and
+    /// artifact presence <b>and</b> re-hashing every present artifact against its
+    /// recorded content hash - persists the resulting report as the backup's latest
+    /// health state, and returns it. Authorizes the backup's scope fail-closed
+    /// before touching data.
+    /// </summary>
+    /// <param name="backupId">The backup id to verify. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The fresh health report.</returns>
+    /// <exception cref="ArgumentException"><paramref name="backupId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="KeyNotFoundException">No backup with <paramref name="backupId"/> exists in the catalog.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the backup's scope.</exception>
+    Task<BackupHealthReport> CheckBackupHealthAsync(
+        string backupId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads the latest stored health report for the backup identified by
+    /// <paramref name="backupId"/>, or <see langword="null"/> when no verification has
+    /// run for it yet. Authorizes the backup's scope fail-closed before returning
+    /// anything.
+    /// </summary>
+    /// <param name="backupId">The backup id. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The latest stored health report, or <see langword="null"/> when none exists.</returns>
+    /// <exception cref="ArgumentException"><paramref name="backupId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the backup's scope.</exception>
+    Task<BackupHealthReport?> GetBackupHealthAsync(
+        string backupId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Overrides the per-backup health-monitor configuration (whether the periodic
+    /// monitor verifies the backup and at what cadence) for the backup identified by
+    /// <paramref name="backupId"/>. Authorizes the backup's scope fail-closed before
+    /// writing. The override takes effect on the monitor's next sweep.
+    /// </summary>
+    /// <param name="backupId">The backup id. Must not be <c>null</c> or empty.</param>
+    /// <param name="config">The per-backup monitor configuration. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <exception cref="ArgumentException"><paramref name="backupId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="config"/> is <c>null</c>.</exception>
+    /// <exception cref="KeyNotFoundException">No backup with <paramref name="backupId"/> exists in the catalog.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the backup's scope.</exception>
+    Task ConfigureBackupHealthAsync(
+        string backupId,
+        BackupHealthConfig config,
+        CancellationToken cancellationToken = default);
 }

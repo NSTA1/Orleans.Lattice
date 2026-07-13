@@ -348,6 +348,92 @@ public sealed class LatticeBackupApiGrpcClient
         return ToScopeStatus(response);
     }
 
+    /// <summary>
+    /// Reports whether periodic backup-health monitoring is available on the
+    /// server (true only when the configured backup sink is durable and external).
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns><see langword="true"/> when monitoring applies; otherwise <see langword="false"/>.</returns>
+    public async Task<bool> IsHealthMonitoringAvailableAsync(CancellationToken cancellationToken = default)
+    {
+        var response = await UnaryAsync(
+            _methods.IsHealthMonitoringAvailable,
+            new BackupHealthAvailabilityRequest(),
+            cancellationToken).ConfigureAwait(false);
+
+        return response.Available;
+    }
+
+    /// <summary>
+    /// Runs a fresh health verification of the backup identified by
+    /// <paramref name="backupId"/>, persists the report server-side, and returns it.
+    /// </summary>
+    /// <param name="backupId">The backup id to verify. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The fresh health report.</returns>
+    /// <exception cref="ArgumentException"><paramref name="backupId"/> is <c>null</c> or empty.</exception>
+    public async Task<BackupHealthReport> CheckBackupHealthAsync(
+        string backupId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        var response = await UnaryAsync(
+            _methods.CheckBackupHealth,
+            new BackupHealthCheckRequestMessage { BackupId = backupId },
+            cancellationToken).ConfigureAwait(false);
+
+        return response.Report!;
+    }
+
+    /// <summary>
+    /// Reads the latest stored health report for the backup identified by
+    /// <paramref name="backupId"/>, or <see langword="null"/> when no verification
+    /// has run for it yet.
+    /// </summary>
+    /// <param name="backupId">The backup id. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The latest stored report, or <see langword="null"/> when none exists.</returns>
+    /// <exception cref="ArgumentException"><paramref name="backupId"/> is <c>null</c> or empty.</exception>
+    public async Task<BackupHealthReport?> GetBackupHealthAsync(
+        string backupId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        var response = await UnaryAsync(
+            _methods.GetBackupHealth,
+            new BackupHealthGetRequestMessage { BackupId = backupId },
+            cancellationToken).ConfigureAwait(false);
+
+        return response.Found ? response.Report : null;
+    }
+
+    /// <summary>
+    /// Overrides the per-backup health-monitor configuration for the backup
+    /// identified by <paramref name="backupId"/>.
+    /// </summary>
+    /// <param name="backupId">The backup id. Must not be <c>null</c> or empty.</param>
+    /// <param name="config">The per-backup monitor configuration. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <exception cref="ArgumentException"><paramref name="backupId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="config"/> is <c>null</c>.</exception>
+    public async Task ConfigureBackupHealthAsync(
+        string backupId,
+        BackupHealthConfig config,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        ArgumentNullException.ThrowIfNull(config);
+        await UnaryAsync(
+            _methods.ConfigureBackupHealth,
+            new BackupHealthConfigureRequestMessage
+            {
+                BackupId = backupId,
+                MonitoringEnabled = config.MonitoringEnabled,
+                IntervalTicks = config.Interval.Ticks,
+            },
+            cancellationToken).ConfigureAwait(false);
+    }
+
     private async Task<TResponse> UnaryAsync<TRequest, TResponse>(
         Method<TRequest, TResponse> method,
         TRequest request,

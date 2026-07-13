@@ -98,6 +98,8 @@ public class LatticeBackupAzureBlobServiceCollectionExtensionsTests
 
     private sealed class StubBackupSink : ILatticeBackupSink
     {
+        public bool IsDurable => true;
+
         public Task WriteArtifactAsync(string artifactId, IAsyncEnumerable<ReadOnlyMemory<byte>> content, CancellationToken cancellationToken = default) =>
             Task.CompletedTask;
 

@@ -335,6 +335,89 @@ public sealed class BackupGrpcDtoSerializationTests
     }
 
     [Test]
+    public void BackupHealthAvailabilityRequest_round_trips() =>
+        Assert.That(RoundTrip(new BackupHealthAvailabilityRequest()), Is.Not.Null);
+
+    [Test]
+    public void BackupHealthAvailabilityResponse_round_trips()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(RoundTrip(new BackupHealthAvailabilityResponse { Available = true }).Available, Is.True);
+            Assert.That(RoundTrip(new BackupHealthAvailabilityResponse { Available = false }).Available, Is.False);
+        });
+    }
+
+    [Test]
+    public void BackupHealthCheckRequestMessage_round_trips() =>
+        Assert.That(RoundTrip(new BackupHealthCheckRequestMessage { BackupId = "b" }).BackupId, Is.EqualTo("b"));
+
+    [Test]
+    public void BackupHealthGetRequestMessage_round_trips() =>
+        Assert.That(RoundTrip(new BackupHealthGetRequestMessage { BackupId = "b" }).BackupId, Is.EqualTo("b"));
+
+    [Test]
+    public void BackupHealthReportResponse_round_trips_report()
+    {
+        var original = new BackupHealthReportResponse
+        {
+            Found = true,
+            Report = new BackupHealthReport(
+                "b",
+                BackupHealthStatus.Warning,
+                manifestPresent: true,
+                missingArtifactIds: new[] { "m1" },
+                hashMismatchArtifactIds: new[] { "h1" },
+                checkedAtUtc: DateTimeOffset.UnixEpoch,
+                explanation: "torn"),
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Found, Is.True);
+            Assert.That(copy.Report, Is.Not.Null);
+            Assert.That(copy.Report!.Status, Is.EqualTo(BackupHealthStatus.Warning));
+            Assert.That(copy.Report.MissingArtifactIds, Is.EqualTo(new[] { "m1" }));
+            Assert.That(copy.Report.HashMismatchArtifactIds, Is.EqualTo(new[] { "h1" }));
+        });
+    }
+
+    [Test]
+    public void BackupHealthReportResponse_round_trips_when_not_found()
+    {
+        var copy = RoundTrip(new BackupHealthReportResponse { Found = false });
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Found, Is.False);
+            Assert.That(copy.Report, Is.Null);
+        });
+    }
+
+    [Test]
+    public void BackupHealthConfigureRequestMessage_round_trips()
+    {
+        var original = new BackupHealthConfigureRequestMessage
+        {
+            BackupId = "b",
+            MonitoringEnabled = true,
+            IntervalTicks = TimeSpan.FromHours(3).Ticks,
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.BackupId, Is.EqualTo("b"));
+            Assert.That(copy.MonitoringEnabled, Is.True);
+            Assert.That(copy.IntervalTicks, Is.EqualTo(TimeSpan.FromHours(3).Ticks));
+        });
+    }
+
+    [Test]
+    public void BackupHealthConfigureResponse_round_trips() =>
+        Assert.That(RoundTrip(new BackupHealthConfigureResponse()), Is.Not.Null);
+
+    [Test]
     public void Every_registry_alias_is_unique_and_uses_the_reserved_prefix()
     {
         var aliases = RegistryAliasValues();

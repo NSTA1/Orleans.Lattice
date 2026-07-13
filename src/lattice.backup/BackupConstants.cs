@@ -54,6 +54,16 @@ internal static class BackupConstants
     /// </summary>
     internal const string CatalogIndexView = "sys-backup-catalog-index";
 
+    /// <summary>
+    /// The reserved, dogfooded <c>ILattice</c> tree that persists the latest
+    /// per-backup health-verification report and the per-backup health-monitor
+    /// configuration, so the periodic monitor and the management UI share one
+    /// verification result. Keyed <c>r\u001f{backupId}</c> for reports and
+    /// <c>c\u001f{backupId}</c> for configuration. Nested under the reserved prefix
+    /// so it inherits state-catalog hiding.
+    /// </summary>
+    internal const string HealthTree = "sys-backup-health";
+
     /// <summary>Field separator used inside composite sink / catalog keys.</summary>
     internal const char KeySeparator = '\u001f';
 
@@ -63,8 +73,14 @@ internal static class BackupConstants
     /// <summary>Key discriminator for an artifact chunk row in the in-cluster sink store.</summary>
     internal const char ArtifactKeyPrefix = 'a';
 
+    /// <summary>Key discriminator for a health-report row in the in-cluster health tree.</summary>
+    internal const char HealthReportKeyPrefix = 'r';
+
+    /// <summary>Key discriminator for a health-config row in the in-cluster health tree.</summary>
+    internal const char HealthConfigKeyPrefix = 'c';
+
     /// <summary>Enumerates the reserved backing tree names owned by the backup package.</summary>
-    internal static IReadOnlyList<string> AllTrees { get; } = new[] { StoreTree, CatalogTree };
+    internal static IReadOnlyList<string> AllTrees { get; } = new[] { StoreTree, CatalogTree, HealthTree };
 
     /// <summary>
     /// The exclusive upper bound of every key sharing <paramref name="prefix"/>:

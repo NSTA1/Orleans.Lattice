@@ -22,6 +22,8 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
     private readonly ILatticeBackupSink _sink;
     private readonly ILatticeBackupRestoreService _restore;
     private readonly ILatticeBackupColdRestoreService _coldRestore;
+    private readonly ILatticeBackupHealthService _health;
+    private readonly ILatticeBackupHealthStore _healthStore;
     private readonly BackupAccessAuthorizer _authorizer;
     private readonly IGrainFactory _grainFactory;
     private readonly BackupInventoryRegistry _inventory;
@@ -37,6 +39,8 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
     /// <param name="sink">The backup storage sink. Must not be <c>null</c>.</param>
     /// <param name="restore">The restore engine. Must not be <c>null</c>.</param>
     /// <param name="coldRestore">The cold, catalog-free disaster-restore engine. Must not be <c>null</c>.</param>
+    /// <param name="health">The backup-health verification engine. Must not be <c>null</c>.</param>
+    /// <param name="healthStore">The per-backup health-state store. Must not be <c>null</c>.</param>
     /// <param name="authorizer">The fail-closed backup authorization seam. Must not be <c>null</c>.</param>
     /// <param name="grainFactory">The grain factory used to reach the per-scope scheduler. Must not be <c>null</c>.</param>
     /// <param name="inventory">The in-memory backup metric / inventory registry. Must not be <c>null</c>.</param>
@@ -52,6 +56,8 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         ILatticeBackupSink sink,
         ILatticeBackupRestoreService restore,
         ILatticeBackupColdRestoreService coldRestore,
+        ILatticeBackupHealthService health,
+        ILatticeBackupHealthStore healthStore,
         BackupAccessAuthorizer authorizer,
         IGrainFactory grainFactory,
         BackupInventoryRegistry inventory,
@@ -66,6 +72,8 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         ArgumentNullException.ThrowIfNull(sink);
         ArgumentNullException.ThrowIfNull(restore);
         ArgumentNullException.ThrowIfNull(coldRestore);
+        ArgumentNullException.ThrowIfNull(health);
+        ArgumentNullException.ThrowIfNull(healthStore);
         ArgumentNullException.ThrowIfNull(authorizer);
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(inventory);
@@ -80,6 +88,8 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         _sink = sink;
         _restore = restore;
         _coldRestore = coldRestore;
+        _health = health;
+        _healthStore = healthStore;
         _authorizer = authorizer;
         _grainFactory = grainFactory;
         _inventory = inventory;
@@ -314,6 +324,10 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
                 await _sink.DeleteArtifactAsync(descriptor.ArtifactId, cancellationToken).ConfigureAwait(false);
             }
         }
+
+        // Discard the deleted backup's health state so a stale report never lingers
+        // for a backup id that no longer exists.
+        await _healthStore.RemoveAsync(backupId, cancellationToken).ConfigureAwait(false);
 
         return true;
     }
@@ -574,6 +588,60 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
             CanDelete = canBackup,
             CanRestore = canRestore,
         };
+    }
+
+    /// <inheritdoc />
+    public Task<bool> IsHealthMonitoringAvailableAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(_sink.IsDurable);
+
+    /// <inheritdoc />
+    public async Task<BackupHealthReport> CheckBackupHealthAsync(
+        string backupId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+
+        var manifest = await _catalog.GetAsync(backupId, cancellationToken).ConfigureAwait(false)
+            ?? throw new KeyNotFoundException($"No backup with id '{backupId}' exists in the catalog.");
+
+        await _authorizer.AuthorizeBackupAsync(manifest.Scope, cancellationToken).ConfigureAwait(false);
+
+        var report = await _health.VerifyAsync(backupId, cancellationToken).ConfigureAwait(false);
+        await _healthStore.SetReportAsync(report, cancellationToken).ConfigureAwait(false);
+        return report;
+    }
+
+    /// <inheritdoc />
+    public async Task<BackupHealthReport?> GetBackupHealthAsync(
+        string backupId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+
+        var manifest = await _catalog.GetAsync(backupId, cancellationToken).ConfigureAwait(false);
+        if (manifest is null)
+        {
+            return null;
+        }
+
+        await _authorizer.AuthorizeBackupAsync(manifest.Scope, cancellationToken).ConfigureAwait(false);
+        return await _healthStore.GetReportAsync(backupId, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task ConfigureBackupHealthAsync(
+        string backupId,
+        BackupHealthConfig config,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        ArgumentNullException.ThrowIfNull(config);
+
+        var manifest = await _catalog.GetAsync(backupId, cancellationToken).ConfigureAwait(false)
+            ?? throw new KeyNotFoundException($"No backup with id '{backupId}' exists in the catalog.");
+
+        await _authorizer.AuthorizeBackupAsync(manifest.Scope, cancellationToken).ConfigureAwait(false);
+        await _healthStore.SetConfigAsync(backupId, config, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

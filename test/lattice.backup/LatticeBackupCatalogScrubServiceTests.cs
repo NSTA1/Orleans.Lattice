@@ -162,6 +162,8 @@ public sealed class LatticeBackupCatalogScrubServiceTests
     {
         private readonly Dictionary<string, BackupSinkResolution> _resolutions = new(StringComparer.Ordinal);
 
+        public bool IsDurable => true;
+
         public FakeSink WithResolvable(params string[] backupIds)
         {
             foreach (var id in backupIds)

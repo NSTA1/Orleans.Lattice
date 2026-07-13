@@ -65,6 +65,8 @@ public sealed class ApiBackupClusterFixture
             Sink,
             SiloServices.GetRequiredService<ILatticeBackupRestoreService>(),
             SiloServices.GetRequiredService<ILatticeBackupColdRestoreService>(),
+            SiloServices.GetRequiredService<ILatticeBackupHealthService>(),
+            SiloServices.GetRequiredService<ILatticeBackupHealthStore>(),
             authorizer,
             SiloServices.GetRequiredService<IGrainFactory>(),
             SiloServices.GetRequiredService<BackupInventoryRegistry>(),

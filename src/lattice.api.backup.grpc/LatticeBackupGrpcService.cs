@@ -82,6 +82,18 @@ internal abstract class LatticeBackupGrpcServiceBase
     /// <summary>Reads a scope's backup schedule status. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
     public abstract Task<BackupScopeStatusResponse> GetScopeStatus(BackupScopeStatusRequestMessage request, ServerCallContext context);
 
+    /// <summary>Reports whether backup-health monitoring is available. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<BackupHealthAvailabilityResponse> IsHealthMonitoringAvailable(BackupHealthAvailabilityRequest request, ServerCallContext context);
+
+    /// <summary>Runs an on-demand backup-health verification. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<BackupHealthReportResponse> CheckBackupHealth(BackupHealthCheckRequestMessage request, ServerCallContext context);
+
+    /// <summary>Reads a backup's latest stored health report. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<BackupHealthReportResponse> GetBackupHealth(BackupHealthGetRequestMessage request, ServerCallContext context);
+
+    /// <summary>Configures a backup's per-backup health monitor. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<BackupHealthConfigureResponse> ConfigureBackupHealth(BackupHealthConfigureRequestMessage request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at
     /// startup with <paramref name="serviceImpl"/> set to
@@ -116,6 +128,10 @@ internal abstract class LatticeBackupGrpcServiceBase
             binder.AddMethod(methods.ScheduleBackup, (UnaryServerMethod<BackupScheduleRequestMessage, BackupScheduleResponse>?)null);
             binder.AddMethod(methods.CancelSchedule, (UnaryServerMethod<BackupCancelScheduleRequestMessage, BackupCancelScheduleResponse>?)null);
             binder.AddMethod(methods.GetScopeStatus, (UnaryServerMethod<BackupScopeStatusRequestMessage, BackupScopeStatusResponse>?)null);
+            binder.AddMethod(methods.IsHealthMonitoringAvailable, (UnaryServerMethod<BackupHealthAvailabilityRequest, BackupHealthAvailabilityResponse>?)null);
+            binder.AddMethod(methods.CheckBackupHealth, (UnaryServerMethod<BackupHealthCheckRequestMessage, BackupHealthReportResponse>?)null);
+            binder.AddMethod(methods.GetBackupHealth, (UnaryServerMethod<BackupHealthGetRequestMessage, BackupHealthReportResponse>?)null);
+            binder.AddMethod(methods.ConfigureBackupHealth, (UnaryServerMethod<BackupHealthConfigureRequestMessage, BackupHealthConfigureResponse>?)null);
             return;
         }
 
@@ -134,6 +150,10 @@ internal abstract class LatticeBackupGrpcServiceBase
         binder.AddMethod(methods.ScheduleBackup, new UnaryServerMethod<BackupScheduleRequestMessage, BackupScheduleResponse>(serviceImpl.ScheduleBackup));
         binder.AddMethod(methods.CancelSchedule, new UnaryServerMethod<BackupCancelScheduleRequestMessage, BackupCancelScheduleResponse>(serviceImpl.CancelSchedule));
         binder.AddMethod(methods.GetScopeStatus, new UnaryServerMethod<BackupScopeStatusRequestMessage, BackupScopeStatusResponse>(serviceImpl.GetScopeStatus));
+        binder.AddMethod(methods.IsHealthMonitoringAvailable, new UnaryServerMethod<BackupHealthAvailabilityRequest, BackupHealthAvailabilityResponse>(serviceImpl.IsHealthMonitoringAvailable));
+        binder.AddMethod(methods.CheckBackupHealth, new UnaryServerMethod<BackupHealthCheckRequestMessage, BackupHealthReportResponse>(serviceImpl.CheckBackupHealth));
+        binder.AddMethod(methods.GetBackupHealth, new UnaryServerMethod<BackupHealthGetRequestMessage, BackupHealthReportResponse>(serviceImpl.GetBackupHealth));
+        binder.AddMethod(methods.ConfigureBackupHealth, new UnaryServerMethod<BackupHealthConfigureRequestMessage, BackupHealthConfigureResponse>(serviceImpl.ConfigureBackupHealth));
     }
 }
 
@@ -423,6 +443,41 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
     /// <inheritdoc />
     public override Task<BackupScopeCapabilities> ProbeCapabilities(BackupCapabilityProbeRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (control, req, ct) => control.ProbeCapabilitiesAsync(req.Scope, ct));
+
+    /// <inheritdoc />
+    public override Task<BackupHealthAvailabilityResponse> IsHealthMonitoringAvailable(BackupHealthAvailabilityRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static async (control, req, ct) =>
+        {
+            var available = await control.IsHealthMonitoringAvailableAsync(ct).ConfigureAwait(false);
+            return new BackupHealthAvailabilityResponse { Available = available };
+        });
+
+    /// <inheritdoc />
+    public override Task<BackupHealthReportResponse> CheckBackupHealth(BackupHealthCheckRequestMessage request, ServerCallContext context)
+        => InvokeAsync(request, context, static async (control, req, ct) =>
+        {
+            var report = await control.CheckBackupHealthAsync(req.BackupId, ct).ConfigureAwait(false);
+            return new BackupHealthReportResponse { Found = true, Report = report };
+        });
+
+    /// <inheritdoc />
+    public override Task<BackupHealthReportResponse> GetBackupHealth(BackupHealthGetRequestMessage request, ServerCallContext context)
+        => InvokeAsync(request, context, static async (control, req, ct) =>
+        {
+            var report = await control.GetBackupHealthAsync(req.BackupId, ct).ConfigureAwait(false);
+            return report is null
+                ? new BackupHealthReportResponse { Found = false }
+                : new BackupHealthReportResponse { Found = true, Report = report };
+        });
+
+    /// <inheritdoc />
+    public override Task<BackupHealthConfigureResponse> ConfigureBackupHealth(BackupHealthConfigureRequestMessage request, ServerCallContext context)
+        => InvokeAsync(request, context, static async (control, req, ct) =>
+        {
+            var config = new BackupHealthConfig(req.MonitoringEnabled, TimeSpan.FromTicks(req.IntervalTicks));
+            await control.ConfigureBackupHealthAsync(req.BackupId, config, ct).ConfigureAwait(false);
+            return new BackupHealthConfigureResponse();
+        });
 
     private async Task<TResponse> InvokeAsync<TRequest, TResponse>(
         TRequest request,

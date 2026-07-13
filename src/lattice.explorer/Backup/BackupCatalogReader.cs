@@ -286,6 +286,71 @@ public sealed class BackupCatalogReader(IBackupControlClient client) : IBackupCa
         }
     }
 
+    /// <inheritdoc />
+    public async Task<bool> IsHealthMonitoringAvailableAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await _client.IsHealthMonitoringAvailableAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (LatticeAuthorizationDeniedException)
+        {
+            return false;
+        }
+        catch (RpcException)
+        {
+            return false;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<BackupHealthReport?> GetHealthAsync(string backupId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        try
+        {
+            return await _client.GetBackupHealthAsync(backupId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (LatticeAuthorizationDeniedException)
+        {
+            return null;
+        }
+        catch (RpcException)
+        {
+            return null;
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<BackupOperationResult> CheckHealthAsync(string backupId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        return RunAsync(
+            async () =>
+            {
+                var report = await _client.CheckBackupHealthAsync(backupId, cancellationToken).ConfigureAwait(false);
+                return BackupOperationResult.Success(
+                    $"Verified backup '{backupId}': {report.Status}. {report.Explanation}");
+            });
+    }
+
+    /// <inheritdoc />
+    public Task<BackupOperationResult> ConfigureHealthAsync(string backupId, bool enabled, TimeSpan interval, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(interval.Ticks);
+        return RunAsync(
+            async () =>
+            {
+                await _client
+                    .ConfigureBackupHealthAsync(backupId, new BackupHealthConfig(enabled, interval), cancellationToken)
+                    .ConfigureAwait(false);
+                return BackupOperationResult.Success(enabled
+                    ? $"Health monitoring enabled for '{backupId}' every {FormatInterval(interval)}."
+                    : $"Health monitoring disabled for '{backupId}'.");
+            });
+    }
+
     private static string FormatInterval(TimeSpan interval)
     {
         var parts = new List<string>();

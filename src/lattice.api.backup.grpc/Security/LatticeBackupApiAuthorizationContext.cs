@@ -49,6 +49,18 @@ public enum LatticeBackupApiOperation
     /// <summary>The <c>GetScopeStatus</c> schedule-status RPC.</summary>
     GetScopeStatus,
 
+    /// <summary>The <c>IsHealthMonitoringAvailable</c> capability RPC.</summary>
+    IsHealthMonitoringAvailable,
+
+    /// <summary>The <c>CheckBackupHealth</c> on-demand verification RPC.</summary>
+    CheckBackupHealth,
+
+    /// <summary>The <c>GetBackupHealth</c> stored-report read RPC.</summary>
+    GetBackupHealth,
+
+    /// <summary>The <c>ConfigureBackupHealth</c> per-backup monitor-config RPC.</summary>
+    ConfigureBackupHealth,
+
     /// <summary>
     /// A backup control-API method the interceptor does not recognise (for
     /// example a future RPC added without updating the operation map). Presented

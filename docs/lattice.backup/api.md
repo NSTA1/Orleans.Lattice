@@ -64,6 +64,10 @@ The durable, introspectable index of manifests, persisted into the reserved `sys
 
 The pluggable storage sink a backup is written to and restored from. Stores streamed, content-addressed artifacts and self-describing manifests; the artifact surface moves the payload as an ordered chunk sequence so a large tree streams without being materialized whole. Artifact ids are expected to be content-addressed (see `BackupContentHash`) so identical retries are no-ops.
 
+Capability members:
+
+- `bool IsDurable` - whether the sink stores payload outside the cluster it protects (an external, durable store such as Azure Blob or the filesystem sample sink), as opposed to the ephemeral in-cluster sink whose payload shares the fate of the cluster. Disaster-recovery features that only make sense against an off-cluster store - notably the periodic backup-health monitor - gate themselves on this flag: `false` keeps the monitor inert and hides the Explorer health column.
+
 Artifact members:
 
 - `Task WriteArtifactAsync(string artifactId, IAsyncEnumerable<ReadOnlyMemory<byte>> content, CancellationToken cancellationToken = default)` - writes an artifact as an ordered chunk stream. Idempotent for the same id and content. Throws `ArgumentException` (`artifactId` null/empty) and `ArgumentNullException` (`content` null).
@@ -100,6 +104,25 @@ Rebuilds the in-cluster catalog from the durable sink, treating the sink as the 
 Restores a backup into a **fresh** cluster from the durable sink alone, with zero dependency on any surviving `sys-backup-catalog` tree. This is the disaster-recovery entry point: a cluster that lost its grain storage (so its catalog is gone) but still has the external sink can enumerate, resolve, chain-walk, and restore its backups from the sink.
 
 - `Task<LatticeRestoreResult> ColdRestoreAsync(LatticeRestoreRequest request, CancellationToken cancellationToken = default)` - bootstraps the reserved `sys-` trees if they are absent, resolves the target manifest and its `BaseBackupId` chain directly from the sink (never the catalog), verifies every referenced artifact is present and intact, replays the chain through the HLC-preserving restore engine, then re-projects the catalog from the sink so the recovered cluster is left with a correct catalog. Reuses `LatticeRestoreRequest` / `LatticeRestoreResult`. Idempotent. Throws `LatticeRestoreValidationException` when the backup is absent from the sink, the base chain is broken, or an artifact is missing or tampered; throws `ArgumentNullException` when `request` is null.
+
+### `ILatticeBackupHealthService`
+
+Verifies that a backup's durable sink payload is present and intact, layering content-hash verification on top of the cheap presence probe. Registered by `AddLatticeBackup`.
+
+- `Task<BackupHealthReport> VerifyAsync(string backupId, CancellationToken cancellationToken = default)` - resolves the backup's manifest, checks presence and committed-metadata of every referenced artifact (reusing `ILatticeBackupSink.ProbeAsync`), then downloads each present artifact and re-hashes it against its recorded `BackupContentDescriptor.ContentHash` to catch silent corruption. Returns a fresh point-in-time `BackupHealthReport`; does not persist it. Throws `ArgumentException` when `backupId` is null or empty.
+
+### `ILatticeBackupHealthStore`
+
+Persists per-backup health state - the latest `BackupHealthReport` and the per-backup `BackupHealthConfig` - in the reserved `sys-backup-health` `ILattice` tree keyed by backup id, so the periodic monitor that writes reports and the UI that reads them share one durable projection (no second external store). Registered by `AddLatticeBackup`.
+
+- `Task SetReportAsync(BackupHealthReport report, CancellationToken cancellationToken = default)` - persists (or replaces) the latest report for its `BackupId`. Throws `ArgumentNullException` when `report` is null.
+- `Task<BackupHealthReport?> GetReportAsync(string backupId, CancellationToken cancellationToken = default)` - reads the latest report, or `null`. Throws `ArgumentException` when `backupId` is null or empty.
+- `IAsyncEnumerable<BackupHealthReport> ListReportsAsync(CancellationToken cancellationToken = default)` - enumerates every stored report in backup-id order.
+- `Task<bool> RemoveAsync(string backupId, CancellationToken cancellationToken = default)` - removes the stored report and configuration for a backup; returns `true` when anything was removed. Throws `ArgumentException` when `backupId` is null or empty.
+- `Task SetConfigAsync(string backupId, BackupHealthConfig config, CancellationToken cancellationToken = default)` - persists (or replaces) the per-backup monitor configuration. Throws `ArgumentException` (`backupId` null/empty) and `ArgumentNullException` (`config` null).
+- `Task<BackupHealthConfig?> GetConfigAsync(string backupId, CancellationToken cancellationToken = default)` - reads the per-backup configuration, or `null` when the backup uses the configured defaults. Throws `ArgumentException` when `backupId` is null or empty.
+
+The periodic monitor itself is an internal reminder-driven grain (mirroring the backup scheduler): once per sweep it enumerates the catalog and re-verifies each enrolled backup whose configured interval has elapsed, writing the result through `ILatticeBackupHealthStore`. It is inert unless the registered sink reports `IsDurable`.
 
 ## Extension seams (coordinated restore)
 
@@ -318,6 +341,20 @@ The read-only outcome of `ILatticeBackupSink.ProbeAsync`: whether a backup is re
 - Constructor: `BackupSinkResolution(string backupId, bool manifestPresent, IReadOnlyList<string> missingArtifactIds)`. Throws `ArgumentException` (`backupId` null/empty) and `ArgumentNullException` (`missingArtifactIds` null).
 - Properties: `string BackupId`, `bool ManifestPresent`, `IReadOnlyList<string> MissingArtifactIds` (referenced artifacts absent, or present but not committed), and the computed `bool IsResolvable` (`true` only when the manifest is present and no artifact is missing).
 
+### `BackupHealthReport`
+
+The result of verifying one backup's durable sink payload - presence plus content-hash consistency - precise enough to drive a diagnostics dialog. Persisted per backup by `ILatticeBackupHealthStore`.
+
+- Constructor: `BackupHealthReport(string backupId, BackupHealthStatus status, bool manifestPresent, IReadOnlyList<string> missingArtifactIds, IReadOnlyList<string> hashMismatchArtifactIds, DateTimeOffset checkedAtUtc, string explanation)`. Throws `ArgumentException` (`backupId` null/empty) and `ArgumentNullException` (`missingArtifactIds`, `hashMismatchArtifactIds`, or `explanation` null).
+- Properties: `string BackupId`, `BackupHealthStatus Status`, `bool ManifestPresent`, `IReadOnlyList<string> MissingArtifactIds` (referenced artifacts absent or uncommitted), `IReadOnlyList<string> HashMismatchArtifactIds` (present artifacts whose content no longer matches the manifest's recorded hash), `DateTimeOffset CheckedAtUtc`, `string Explanation` (a precise human-readable summary naming the missing / mismatched artifacts), and the computed `bool IsHealthy` (`true` only when `Status` is `Healthy`).
+
+### `BackupHealthConfig`
+
+The per-backup health-monitoring override: whether the periodic monitor verifies this backup, and how often. Every backup is auto-enrolled with the configured defaults; this record overrides that for a single backup. Persisted by `ILatticeBackupHealthStore`.
+
+- Constructor: `BackupHealthConfig(bool monitoringEnabled, TimeSpan interval)`. Throws `ArgumentOutOfRangeException` when `interval` is not strictly positive.
+- Properties: `bool MonitoringEnabled`, `TimeSpan Interval`.
+
 ## Enums
 
 ### `BackupKind`
@@ -340,9 +377,13 @@ The read-only outcome of `ILatticeBackupSink.ProbeAsync`: whether a backup is re
 
 `None = 0`, `Success = 1`, `Failure = 2`.
 
+### `BackupHealthStatus`
+
+`Unknown = 0` (never verified), `Healthy = 1` (manifest and every artifact present, committed, and hash-matched), `Warning = 2` (manifest present but at least one artifact missing, uncommitted, or hash-mismatched), `Missing = 3` (manifest itself absent - the catalog row is an orphan).
+
 ## Options
 
-`LatticeBackupOptions` and `LatticeBackupScheduleOptions` are documented in full in [Configuration](configuration.md).
+`LatticeBackupOptions` and `LatticeBackupScheduleOptions` are documented in full in [Configuration](configuration.md). `LatticeBackupHealthOptions` configures the periodic health monitor cluster-wide: `bool Enabled` (default `true` - health monitoring is auto-enrolled) and `TimeSpan DefaultInterval` (default six hours), plus the static `MinimumInterval` (one minute) the sweep reminder clamps up to. The monitor stays inert against a non-durable sink regardless of these options.
 
 ## Reserved-namespace guard
 
