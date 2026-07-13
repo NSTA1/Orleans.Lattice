@@ -15,6 +15,10 @@
 
   <ItemGroup>
     <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+    <!-- Reference autoscaler manifests (#1188). Shipped inside the package under
+         a deploy/ folder so operators (and the docs walkthrough authored by
+         #1189) can copy them verbatim. They are inert assets, not compiled. -->
+    <None Include="deploy\**\*" Pack="true" PackagePath="deploy\" />
   </ItemGroup>
 
   <ItemGroup>
@@ -25,6 +29,15 @@
   <ItemGroup>
     <ProjectReference Include="..\lattice\Orleans.Lattice.csproj" />
     <PackageReference Include="Microsoft.Orleans.Sdk" Version="10.2.0" />
+  </ItemGroup>
+
+  <!-- ASP.NET Core endpoint routing (IEndpointRouteBuilder / MapGet /
+       WriteAsJsonAsync) for the scrape endpoint and the health-checks
+       abstractions for the probe target (#1188). Both live in the shared
+       framework, so a FrameworkReference keeps them out of the package's
+       transitive NuGet closure. -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
 </Project>

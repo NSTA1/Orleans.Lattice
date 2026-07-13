@@ -28,4 +28,13 @@
     <ProjectReference Include="..\shared\Orleans.Lattice.Testing\Orleans.Lattice.Testing.csproj" />
   </ItemGroup>
 
+  <!-- The endpoint integration test stands up an in-memory ASP.NET Core
+       TestServer to map MapLatticeScalingSignal() and issue a real HTTP GET.
+       The shared framework supplies endpoint routing; TestHost supplies the
+       in-memory server. Both are test-only. -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="Microsoft.AspNetCore.TestHost" Version="10.0.9" />
+  </ItemGroup>
+
 </Project>
