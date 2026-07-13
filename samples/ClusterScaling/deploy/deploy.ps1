@@ -4,14 +4,16 @@
     Deploys the ClusterScaling Orleans.Lattice.Scaling sample to Azure Container Apps.
 
 .DESCRIPTION
-    Builds and pushes the silo container image (via `az acr build`, unless a
-    pre-built -ContainerImage is supplied), then provisions (idempotently) a
-    resource group, a user-assigned managed identity,
+    Provisions (idempotently) the whole sample stack: a Basic Azure Container
+    Registry (unless you point it at an existing one), builds and pushes the silo
+    image into that registry via `az acr build` (server-side, no local Docker),
+    then a user-assigned managed identity,
     a Tables-only storage account (Orleans clustering + reminders + grain state +
     Lattice WAL, shared-key access disabled), the Storage Table Data Contributor
-    role for the identity, a Log Analytics workspace, a Container Apps managed
-    environment, and the ClusterScaling silo container app with a KEDA
-    metrics-api scale rule that reads scaleValue from /lattice/scale.
+    role for the identity, an AcrPull grant so the identity can pull the image, a
+    Log Analytics workspace, a Container Apps managed environment, and the
+    ClusterScaling silo container app with a KEDA metrics-api scale rule that
+    reads scaleValue from /lattice/scale.
 
     The operator supplies a plaintext admin password (as a SecureString). This
     script hashes it with the repository's tools/New-LatticeStateCredential.ps1
@@ -27,25 +29,24 @@
     Azure region. Defaults to eastus.
 
 .PARAMETER Registry
-    Azure Container Registry NAME (not login server) to build and push the silo
-    image into, e.g. myregistry. When supplied, deploy.ps1 orchestrates the image
-    build and push itself via `az acr build` (server-side, no local Docker) and
-    derives the resulting image reference automatically. Mutually exclusive with
-    -ContainerImage. The registry must exist and the container app must be able
-    to pull from it.
+    OPTIONAL. Name of an existing Azure Container Registry (not its login server)
+    to build and push the silo image into, e.g. myregistry. When omitted, the
+    script provisions a Basic ACR as part of the deployment and uses that. Either
+    way the container app is wired to pull from the registry via the managed
+    identity (AcrPull). Mutually exclusive with -ContainerImage.
 
 .PARAMETER ContainerImage
     Escape hatch: a fully-qualified, already-built silo image (e.g.
     myregistry.azurecr.io/clusterscaling-silo:latest). Supply this INSTEAD of
-    -Registry to skip the build and deploy a pre-built image. The image's
-    registry must be reachable by the container app.
+    -Registry to skip both the registry provisioning and the build and deploy a
+    pre-built image. No AcrPull is wired; you own the image's pull access.
 
 .PARAMETER ImageName
-    Repository name for the built image. Defaults to clusterscaling-silo. Only
-    used with -Registry.
+    Repository name for the built image. Defaults to clusterscaling-silo. Unused
+    with -ContainerImage.
 
 .PARAMETER ImageTag
-    Tag for the built image. Defaults to latest. Only used with -Registry.
+    Tag for the built image. Defaults to latest. Unused with -ContainerImage.
 
 .PARAMETER AdminPassword
     Plaintext admin password as a SecureString (prompted if omitted). Presented
@@ -126,24 +127,65 @@ if ($LASTEXITCODE -ne 0) {
 # Ensure the containerapp extension is present (idempotent).
 az extension add --name containerapp --upgrade --only-show-errors --output none 2>$null
 
-# --- Resolve the silo image: build+push, or use a pre-built one ---------------
+# --- Resource group (created first so the registry + app land in it) ---------
+Write-Step "Ensuring resource group '$ResourceGroup' in $Location"
+az group create --name $ResourceGroup --location $Location --output none
+if ($LASTEXITCODE -ne 0) { throw "Resource group creation failed (az exited $LASTEXITCODE)." }
+
+# --- Resolve the silo image and registry -------------------------------------
+# Three modes:
+#   * -ContainerImage <ref> : deploy a pre-built external image as-is. No ACR is
+#     provisioned and no managed pull is wired; you own its pull access.
+#   * -Registry <name>      : build+push into an existing ACR you already have,
+#     and wire the app to pull from it via the managed identity.
+#   * (neither)             : provision a Basic ACR in this resource group, build
+#     into it, and wire the app to pull from it via the managed identity.
 $repoRoot = (Resolve-Path (Join-Path $scriptRoot '..\..\..')).Path
 $dockerfile = Join-Path $repoRoot 'samples/ClusterScaling/src/ClusterScaling.Silo/Dockerfile'
+$registryName = ''   # non-empty => main.bicep wires managed-identity pull (AcrPull)
 
 if ($ContainerImage) {
     if ($Registry) {
-        throw 'Specify either -Registry (to build and push) or -ContainerImage (pre-built), not both.'
+        throw 'Specify at most one of -ContainerImage (pre-built external image) or -Registry (existing ACR to build into).'
     }
-    Write-Step "Using pre-built image '$ContainerImage' (skipping build)"
+    Write-Step "Using pre-built image '$ContainerImage' (skipping build; you own its pull access)"
 }
-elseif ($Registry) {
+else {
     if (-not (Test-Path $dockerfile)) { throw "Dockerfile not found: $dockerfile" }
 
+    if ($Registry) {
+        $registryName = $Registry
+        Write-Step "Using existing container registry '$registryName'"
+    }
+    else {
+        # Provision a Basic ACR as part of the sample's own infrastructure.
+        $registryTemplate = Join-Path $scriptRoot 'registry.bicep'
+        if (-not (Test-Path $registryTemplate)) { throw "Template not found: $registryTemplate" }
+        $registryDeployment = "clusterscaling-acr-$([DateTime]::UtcNow.ToString('yyyyMMddHHmmss'))"
+        Write-Step 'Provisioning a Basic Azure Container Registry'
+        az deployment group create `
+            --resource-group $ResourceGroup `
+            --name $registryDeployment `
+            --template-file $registryTemplate `
+            --parameters namePrefix=$NamePrefix `
+            --output none
+        if ($LASTEXITCODE -ne 0) { throw "Registry provisioning failed (az exited $LASTEXITCODE)." }
+        $registryName = az deployment group show `
+            --resource-group $ResourceGroup `
+            --name $registryDeployment `
+            --query properties.outputs.registryName.value `
+            --output tsv
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($registryName)) {
+            throw 'Could not read the provisioned registry name from the deployment outputs.'
+        }
+        Write-Host "    registry: $registryName" -ForegroundColor DarkGray
+    }
+
     $imageRef = "${ImageName}:${ImageTag}"
-    Write-Step "Building and pushing silo image '$imageRef' into registry '$Registry'"
+    Write-Step "Building and pushing silo image '$imageRef' into registry '$registryName'"
     Write-Host '    (az acr build runs server-side in the registry and streams its logs below)' -ForegroundColor DarkGray
     az acr build `
-        --registry $Registry `
+        --registry $registryName `
         --image $imageRef `
         --file $dockerfile `
         $repoRoot
@@ -151,16 +193,13 @@ elseif ($Registry) {
         throw "Container image build/push failed (az acr build exited $LASTEXITCODE)."
     }
 
-    Write-Step "Resolving login server for registry '$Registry'"
-    $loginServer = az acr show --name $Registry --query loginServer --output tsv
+    Write-Step "Resolving login server for registry '$registryName'"
+    $loginServer = az acr show --name $registryName --query loginServer --output tsv
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($loginServer)) {
-        throw "Could not resolve the login server for registry '$Registry'. Ensure it exists and you have access."
+        throw "Could not resolve the login server for registry '$registryName'."
     }
     $ContainerImage = "$loginServer/$imageRef"
     Write-Host "    pushed: $ContainerImage" -ForegroundColor DarkGray
-}
-else {
-    throw 'Provide -Registry (to build and push the silo image) or -ContainerImage (a pre-built image reference).'
 }
 
 # --- Hash the admin password (never handle plaintext beyond this block) -------
@@ -180,24 +219,24 @@ finally {
     $plaintext = $null
 }
 
-# --- Resource group ----------------------------------------------------------
-Write-Step "Ensuring resource group '$ResourceGroup' in $Location"
-az group create --name $ResourceGroup --location $Location --output none
-
 # --- Deploy the template -----------------------------------------------------
 $deploymentName = "clusterscaling-$([DateTime]::UtcNow.ToString('yyyyMMddHHmmss'))"
 Write-Step "Deploying template (deployment: $deploymentName)"
+$deployParams = @(
+    "namePrefix=$NamePrefix"
+    "containerImage=$ContainerImage"
+    "adminUsername=$AdminUsername"
+    "adminPasswordHash=$passwordHash"
+    "minReplicas=$MinReplicas"
+    "maxReplicas=$MaxReplicas"
+)
+if ($registryName) { $deployParams += "registryName=$registryName" }
+
 az deployment group create `
     --resource-group $ResourceGroup `
     --name $deploymentName `
     --template-file $templateFile `
-    --parameters `
-        namePrefix=$NamePrefix `
-        containerImage=$ContainerImage `
-        adminUsername=$AdminUsername `
-        adminPasswordHash=$passwordHash `
-        minReplicas=$MinReplicas `
-        maxReplicas=$MaxReplicas `
+    --parameters $deployParams `
     --output none
 
 # --- Read outputs ------------------------------------------------------------

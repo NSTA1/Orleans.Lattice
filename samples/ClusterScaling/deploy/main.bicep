@@ -28,6 +28,9 @@ param namePrefix string = 'latscale'
 @description('Fully-qualified container image for the ClusterScaling silo (e.g. myregistry.azurecr.io/clusterscaling-silo:latest).')
 param containerImage string
 
+@description('Name of the Azure Container Registry the app pulls from via the managed identity (AcrPull). Empty means the image lives in a registry you manage pull access for yourself (e.g. a public image or a pre-built external -ContainerImage).')
+param registryName string = ''
+
 @description('Admin username the data API accepts. Must be an environment-variable-name-safe segment.')
 param adminUsername string = 'admin'
 
@@ -64,8 +67,14 @@ var environmentName = '${namePrefix}-env'
 var appName = '${namePrefix}-app'
 var httpTargetPort = 8080
 
+// When a managed registry name is supplied, wire the app to pull from it using
+// the user-assigned identity (AcrPull) instead of any admin key.
+var useManagedRegistry = !empty(registryName)
+
 // Storage Table Data Contributor built-in role.
 var roleDefIdTableContributor = '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3'
+// AcrPull built-in role.
+var roleDefIdAcrPull = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
 
 resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: identityName
@@ -101,6 +110,25 @@ resource raTable 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roleDefIdTableContributor)
   }
 }
+
+// The managed registry (existing; provisioned by registry.bicep) and the
+// AcrPull grant that lets the identity pull the silo image. Both are elided
+// when no managed registry is in play (external/public image).
+resource registry 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' existing = if (useManagedRegistry) {
+  name: registryName
+}
+
+resource raAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (useManagedRegistry) {
+  name: guid(registryName, identity.id, roleDefIdAcrPull)
+  scope: registry
+  properties: {
+    principalId: identity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roleDefIdAcrPull)
+  }
+}
+
+var registryLoginServer = useManagedRegistry ? '${registryName}.azurecr.io' : ''
 
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: logAnalyticsName
@@ -140,10 +168,24 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
       '${identity.id}': {}
     }
   }
+  // Ensure the data-plane and pull role assignments exist before the first
+  // revision starts (so the silo can write to Tables and pull its image).
+  dependsOn: [
+    raTable
+    raAcrPull
+  ]
   properties: {
     managedEnvironmentId: environment.id
     configuration: {
       activeRevisionsMode: 'Single'
+      // Pull from the managed registry using the user-assigned identity; empty
+      // when the image lives in a registry you manage pull access for yourself.
+      registries: useManagedRegistry ? [
+        {
+          server: registryLoginServer
+          identity: identity.id
+        }
+      ] : []
       ingress: {
         external: true
         targetPort: httpTargetPort

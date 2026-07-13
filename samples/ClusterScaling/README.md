@@ -70,8 +70,8 @@ flowchart LR
 - **Load driver** (`src/ClusterScaling.LoadDriver`) - a small .NET console that
   speaks gRPC to the data API over TLS, presents the admin Basic credential, and
   drives sustained compute-axis load, printing offered-load throughput.
-- **Deploy tooling** (`deploy/`) - `main.bicep` plus `deploy.ps1`,
-  `drive-load.ps1`, and `teardown.ps1`.
+- **Deploy tooling** (`deploy/`) - `main.bicep` and `registry.bicep` plus
+  `deploy.ps1`, `drive-load.ps1`, and `teardown.ps1`.
 
 ## Credential and TLS posture
 
@@ -95,34 +95,43 @@ flowchart LR
 ## Prerequisites
 
 - An Azure subscription and `az login`, on an account that can **create role
-  assignments** (the deploy assigns *Storage Table Data Contributor* to the
-  app's managed identity).
+  assignments** (the deploy assigns *Storage Table Data Contributor* and
+  *AcrPull* to the app's managed identity).
 - Azure CLI with the `containerapp` extension (`deploy.ps1` installs/updates it).
 - The .NET SDK (net10.0) to run the load driver.
-- An Azure Container Registry the ACA environment can pull from. `deploy.ps1`
-  builds and pushes the silo image into it for you (server-side via
-  `az acr build` - no local Docker daemon required).
 - PowerShell 7+.
+
+No container registry, image, or local Docker daemon is required up front:
+`deploy.ps1` provisions a Basic Azure Container Registry as part of the
+deployment and builds the silo image into it for you (see below).
 
 ## The silo image
 
-You don't build the image by hand - `deploy.ps1` orchestrates it. When you pass
-`-Registry <myregistry>`, the script runs `az acr build` from the repository
-root against
-[`src/ClusterScaling.Silo/Dockerfile`](src/ClusterScaling.Silo/Dockerfile),
-which builds and pushes the image **server-side in your registry** (no local
-Docker daemon required) and streams the build log to your console. It then
-derives the resulting `<loginServer>/clusterscaling-silo:latest` reference and
-deploys it.
+You don't build the image, provision a registry, or run Docker by hand -
+`deploy.ps1` orchestrates all of it. By default it:
 
-If you would rather build the image yourself (CI, a private base image, an
-air-gapped registry), pass a fully-qualified `-ContainerImage` instead of
-`-Registry` to skip the build:
+1. provisions a **Basic Azure Container Registry** (`registry.bicep`) into the
+   resource group;
+2. runs `az acr build` from the repository root against
+   [`src/ClusterScaling.Silo/Dockerfile`](src/ClusterScaling.Silo/Dockerfile),
+   which builds and pushes the image **server-side in that registry** (no local
+   Docker daemon) and streams the build log to your console; and
+3. wires the container app to pull the image using the managed identity
+   (`AcrPull`), so no registry username or key is ever used.
 
-```powershell
-az acr build --registry <myregistry> --image clusterscaling-silo:latest `
-  --file samples/ClusterScaling/src/ClusterScaling.Silo/Dockerfile .
-```
+Two overrides are available:
+
+- `-Registry <name>` - build+push into an **existing** ACR you already own
+  instead of provisioning a new one. The managed-identity `AcrPull` pull path is
+  still wired for you.
+- `-ContainerImage <ref>` - deploy a **pre-built** external image and skip both
+  the registry provisioning and the build. No `AcrPull` is wired; you own that
+  image's pull access. Build one yourself with:
+
+  ```powershell
+  az acr build --registry <myregistry> --image clusterscaling-silo:latest `
+    --file samples/ClusterScaling/src/ClusterScaling.Silo/Dockerfile .
+  ```
 
 ## Deploy
 
@@ -132,23 +141,18 @@ $pw = Read-Host -AsSecureString -Prompt 'Admin password'
 ./deploy.ps1 `
   -ResourceGroup rg-clusterscaling `
   -Location eastus `
-  -Registry <myregistry> `
   -AdminPassword $pw `
   -MinReplicas 1 -MaxReplicas 10
 ```
 
-`deploy.ps1` is idempotent. It builds and pushes the silo image (see above),
-then provisions the managed identity, the Tables-only storage account
-(shared-key access disabled), the role assignment, the Log Analytics workspace,
-the Container Apps environment, and the container app with the KEDA
+`deploy.ps1` is idempotent. It provisions the Basic container registry, builds
+and pushes the silo image into it (see above), then provisions the managed
+identity, the Tables-only storage account (shared-key access disabled), the
+Storage Table Data Contributor and AcrPull role assignments, the Log Analytics
+workspace, the Container Apps environment, and the container app with the KEDA
 `metrics-api` scale rule (`valueLocation: scaleValue`, `targetValue: 1`,
 `minReplicas`/`maxReplicas`). It prints the ingress FQDN and the exact
 `drive-load.ps1` command to run next.
-
-> If your registry needs credentials for ACA to pull, configure the container
-> app's registry after the first deploy (`az containerapp registry set ...`) or
-> grant the app's managed identity `AcrPull` on the registry. Public images and
-> ACR-with-managed-identity need no extra step.
 
 ## Drive load and observe scale-out
 
