@@ -35,28 +35,35 @@ driver keeps payloads deliberately small.
 ## Architecture
 
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph WS["Your workstation"]
-        LD["drive-load.ps1 -&gt; LoadDriver<br/>(compute load)"]
-        POLL["az poll"]
+        DEPLOY["deploy.ps1<br/>(provision + build + push)"]
+        DRIVE["drive-load.ps1<br/>LoadDriver (compute load)"]
+        POLL["az poll<br/>(replica count)"]
     end
 
-    subgraph ACA["Azure Container Apps environment"]
-        subgraph APP["Container app (1..N replicas)"]
-            API["data API gRPC<br/>(Basic-gated)"]
-            SCALE["/lattice/scale<br/>(scrape target)"]
-            SILO["Orleans silo<br/>(Azure clustering)"]
+    subgraph RG["Azure resource group"]
+        ACR["Azure Container Registry<br/>(Basic)"]
+        STORE[("Azure Storage - Tables<br/>clustering, reminders, grain state, WAL")]
+
+        subgraph ACA["Container Apps environment"]
+            KEDA["KEDA metrics-api rule"]
+            subgraph APP["Container app (1..N replicas)"]
+                SILO["Orleans silo<br/>(Azure clustering)"]
+                API["data API gRPC<br/>(Basic-gated)"]
+                SCALE["/lattice/scale<br/>(scrape target)"]
+            end
         end
-        KEDA["KEDA metrics-api"]
     end
 
-    STORE[("Azure Storage - Tables, managed identity<br/>clustering, reminders, grain state, WAL")]
-
-    LD -->|"gRPC + Basic over managed TLS"| API
+    DEPLOY -->|"1. az acr build: build + push image"| ACR
+    DEPLOY -->|"2. deploy bicep"| ACA
+    APP -->|"pull image (managed identity, AcrPull)"| ACR
+    SILO -->|"clustering, state, WAL (managed identity)"| STORE
+    DRIVE -->|"gRPC + Basic over managed TLS"| API
     POLL -->|"reads replica count"| APP
     KEDA -->|"reads scaleValue"| SCALE
     KEDA -->|"sets replica count"| APP
-    SILO --> STORE
 ```
 
 - **Silo host** (`src/ClusterScaling.Silo`) - one container image, run as many
