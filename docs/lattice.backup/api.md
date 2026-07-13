@@ -78,6 +78,17 @@ Manifest members:
 - `IAsyncEnumerable<BackupManifest> ListManifestsAsync(CancellationToken cancellationToken = default)` - enumerates every manifest in backup-id order.
 - `Task<bool> DeleteManifestAsync(string backupId, CancellationToken cancellationToken = default)` - removes a manifest; returns `true` when one was removed. Does not remove referenced artifacts. Throws `ArgumentException` when `backupId` is null or empty.
 
+Sink-existence probe members (read-only, cheap - existence and committed-metadata only, never downloading or hashing payload):
+
+- `Task<bool> ManifestExistsAsync(string backupId, CancellationToken cancellationToken = default)` - the cheap liveness check used at selection time: `true` when the manifest is present in the sink. Throws `ArgumentException` when `backupId` is null or empty.
+- `Task<BackupSinkResolution> ProbeAsync(string backupId, CancellationToken cancellationToken = default)` - the richer resolvability probe used by reconcile / scrub: reports whether the manifest is present and which referenced artifacts are missing (absent, or - for sinks that mark commit - present but not committed). Throws `ArgumentException` when `backupId` is null or empty.
+
+### `ILatticeBackupCatalogScrubService`
+
+Reconciles the in-cluster catalog against the durable sink in the opposite direction to the rebuild service: it finds catalog rows the sink can no longer resolve (orphans) rather than sink manifests the catalog is missing.
+
+- `Task<BackupCatalogScrubReport> ScrubAsync(bool pruneOrphans = false, CancellationToken cancellationToken = default)` - enumerates every catalog row and probes the sink (`ILatticeBackupSink.ProbeAsync`) for its resolvability, collecting the orphans - rows whose sink payload (manifest, or a referenced artifact) is gone. Non-destructive by default: it only flags orphans. When `pruneOrphans` is `true` it removes each orphan catalog row under system origin, which is idempotent on re-run (a pruned orphan is no longer scanned). Returns a `BackupCatalogScrubReport` summarizing counts scanned, orphaned, and removed, whether pruning ran, and the orphan backup ids.
+
 ### `ILatticeBackupCatalogRebuildService`
 
 Rebuilds the in-cluster catalog from the durable sink, treating the sink as the single source of truth and the catalog as a rebuildable, self-healing projection over it.
@@ -286,6 +297,20 @@ The outcome summary of `ILatticeBackupCatalogRebuildService.RebuildFromSinkAsync
 
 - Constructor: `BackupCatalogRebuildReport(long scannedCount, long registeredCount, long reconciledCount)`.
 - Properties: `long ScannedCount` (manifests enumerated from the sink), `long RegisteredCount` (absent from the catalog and freshly added), `long ReconciledCount` (already catalogued and reconciled in place).
+
+### `BackupCatalogScrubReport`
+
+The outcome summary of `ILatticeBackupCatalogScrubService.ScrubAsync`. Non-destructive by default, so `RemovedCount` is zero and `Pruned` is `false` unless the caller opts in to pruning; a flag-only pass still reports every orphan.
+
+- Constructor: `BackupCatalogScrubReport(long scannedCount, long orphanCount, long removedCount, bool pruned, IReadOnlyList<string> orphanBackupIds)`.
+- Properties: `long ScannedCount` (catalog rows cross-checked against the sink), `long OrphanCount` (rows with no resolvable sink payload), `long RemovedCount` (orphan rows removed, zero on a non-destructive pass), `bool Pruned` (whether destructive pruning was requested and applied), `IReadOnlyList<string> OrphanBackupIds` (the ids of the orphans found).
+
+### `BackupSinkResolution`
+
+The read-only outcome of `ILatticeBackupSink.ProbeAsync`: whether a backup is resolvable from the sink alone.
+
+- Constructor: `BackupSinkResolution(string backupId, bool manifestPresent, IReadOnlyList<string> missingArtifactIds)`. Throws `ArgumentException` (`backupId` null/empty) and `ArgumentNullException` (`missingArtifactIds` null).
+- Properties: `string BackupId`, `bool ManifestPresent`, `IReadOnlyList<string> MissingArtifactIds` (referenced artifacts absent, or present but not committed), and the computed `bool IsResolvable` (`true` only when the manifest is present and no artifact is missing).
 
 ## Enums
 

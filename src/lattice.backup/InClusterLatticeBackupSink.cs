@@ -172,6 +172,65 @@ internal sealed class InClusterLatticeBackupSink(IGrainFactory grainFactory) : I
         }
     }
 
+    /// <inheritdoc />
+    public async Task<bool> ManifestExistsAsync(string backupId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            return await KeyExistsAsync(ManifestKey(backupId), cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<BackupSinkResolution> ProbeAsync(string backupId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            var manifest = await Store.GetAsync<BackupManifest>(ManifestKey(backupId), cancellationToken).ConfigureAwait(false);
+            if (manifest is null)
+            {
+                return new BackupSinkResolution(backupId, manifestPresent: false, Array.Empty<string>());
+            }
+
+            var missing = new List<string>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var descriptor in manifest.ContentDescriptors)
+            {
+                if (!seen.Add(descriptor.ArtifactId))
+                {
+                    continue;
+                }
+
+                var prefix = ArtifactChunkPrefix(descriptor.ArtifactId);
+                if (!await KeyExistsAsync(prefix, cancellationToken, BackupConstants.PrefixUpperBound(prefix)).ConfigureAwait(false))
+                {
+                    missing.Add(descriptor.ArtifactId);
+                }
+            }
+
+            return new BackupSinkResolution(backupId, manifestPresent: true, missing);
+        }
+    }
+
+    // Bounded single-key / single-prefix existence probe: yields on the first key
+    // in [start, end) without materializing the range. The default end bound is
+    // the smallest string greater than an exact key, so the range holds only that
+    // key. Must run inside a system-origin scope (the sys-backup-store tree).
+    private async Task<bool> KeyExistsAsync(string start, CancellationToken cancellationToken, string? end = null)
+    {
+        end ??= start + "\u0000";
+        await foreach (var _ in Store
+            .KeysAsync(start, end, cancellationToken: cancellationToken)
+            .ConfigureAwait(false))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
     private static string ManifestKey(string backupId) =>
         string.Concat(BackupConstants.ManifestKeyPrefix.ToString(), BackupConstants.KeySeparator.ToString(), backupId);
 

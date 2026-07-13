@@ -288,6 +288,51 @@ internal sealed class AzureBlobLatticeBackupSink : ILatticeBackupSink
         return response.Value;
     }
 
+    /// <inheritdoc />
+    public async Task<bool> ManifestExistsAsync(string backupId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        await EnsureContainerAsync(cancellationToken).ConfigureAwait(false);
+
+        var blob = _container.GetBlobClient(BackupBlobNaming.ManifestBlobName(backupId));
+        var response = await blob.ExistsAsync(cancellationToken).ConfigureAwait(false);
+        return response.Value;
+    }
+
+    /// <inheritdoc />
+    public async Task<BackupSinkResolution> ProbeAsync(string backupId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        await EnsureContainerAsync(cancellationToken).ConfigureAwait(false);
+
+        var manifest = await ReadManifestAsync(backupId, cancellationToken).ConfigureAwait(false);
+        if (manifest is null)
+        {
+            return new BackupSinkResolution(backupId, manifestPresent: false, Array.Empty<string>());
+        }
+
+        var missing = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var descriptor in manifest.ContentDescriptors)
+        {
+            if (!seen.Add(descriptor.ArtifactId))
+            {
+                continue;
+            }
+
+            // Present-and-committed is the resolvability bar: an artifact blob that
+            // exists but is not yet marked committed is a torn write and counts as
+            // missing. Checking the committed metadata is a HEAD, never a download.
+            var blob = _container.GetAppendBlobClient(BackupBlobNaming.ArtifactBlobName(descriptor.ArtifactId));
+            if (!await IsCommittedAsync(blob, cancellationToken).ConfigureAwait(false))
+            {
+                missing.Add(descriptor.ArtifactId);
+            }
+        }
+
+        return new BackupSinkResolution(backupId, manifestPresent: true, missing);
+    }
+
     private static bool IsCommitted(IDictionary<string, string> metadata) =>
         metadata.TryGetValue(BackupBlobNaming.CommittedMetadataKey, out var value)
         && value == BackupBlobNaming.CommittedMetadataValue;

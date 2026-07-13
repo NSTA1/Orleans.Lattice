@@ -27,15 +27,19 @@ internal sealed class BackupCatalogIndexQuery
         JsonLatticeSerializer<BackupCatalogIndexRow>.Default;
 
     private readonly ILatticeBackupCatalogStore _catalog;
+    private readonly ILatticeBackupSink _sink;
     private readonly ILatticeViewFactory? _viewFactory;
 
     /// <summary>Initializes a new <see cref="BackupCatalogIndexQuery"/>.</summary>
     /// <param name="catalog">The authoritative catalog store, read for liveness and to return full manifests.</param>
+    /// <param name="sink">The durable sink, probed at selection time so an unresolvable backup is never surfaced.</param>
     /// <param name="viewFactory">The view factory used to open the index view, or <see langword="null"/> when views are not hosted.</param>
-    public BackupCatalogIndexQuery(ILatticeBackupCatalogStore catalog, ILatticeViewFactory? viewFactory)
+    public BackupCatalogIndexQuery(ILatticeBackupCatalogStore catalog, ILatticeBackupSink sink, ILatticeViewFactory? viewFactory)
     {
         ArgumentNullException.ThrowIfNull(catalog);
+        ArgumentNullException.ThrowIfNull(sink);
         _catalog = catalog;
+        _sink = sink;
         _viewFactory = viewFactory;
     }
 
@@ -291,6 +295,16 @@ internal sealed class BackupCatalogIndexQuery
             }
 
             if (!await isReadAuthorized(manifest.Scope, cancellationToken).ConfigureAwait(false))
+            {
+                continue;
+            }
+
+            // Sink liveness: a catalogued backup whose sink manifest is gone (store
+            // drift after a non-clean restart) is unresolvable and must not be
+            // offered as a base or restore point, even though its catalog row - and
+            // index row - still exist. A cheap manifest-presence probe on the sink,
+            // the single source of truth, distinct from the catalog liveness above.
+            if (!await _sink.ManifestExistsAsync(manifest.Id, cancellationToken).ConfigureAwait(false))
             {
                 continue;
             }
