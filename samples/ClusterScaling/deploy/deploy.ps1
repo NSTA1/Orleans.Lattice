@@ -135,7 +135,14 @@ $plaintextPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($AdminPass
 try {
     $plaintext = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($plaintextPtr)
     $env:LATTICE_DEPLOY_PW = $plaintext
-    $passwordHash = & $toolScript -Username $AdminUsername -PasswordEnv 'LATTICE_DEPLOY_PW' -Format value
+    # Invoke the helper as a child process: it writes the secret straight to the
+    # process stdout ([Console]::Out) rather than the PowerShell success stream, so
+    # an in-process '& $toolScript' call would not capture it. A child process's
+    # stdout IS captured, and its exit code (0 = ok, 3 = policy rejected) lands in
+    # $LASTEXITCODE. The password is passed via the inherited LATTICE_DEPLOY_PW env
+    # var, never on the command line.
+    $psExe = (Get-Process -Id $PID).Path
+    $passwordHash = (& $psExe -NoProfile -File $toolScript -Username $AdminUsername -PasswordEnv 'LATTICE_DEPLOY_PW' -Format value | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($passwordHash)) {
         throw 'Password hashing failed (see the helper diagnostics above).'
     }
