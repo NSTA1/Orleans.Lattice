@@ -48,6 +48,15 @@ public sealed record BackupCatalogIndexRow
     [Id(6)] public string? SetName { get; init; }
 
     /// <summary>
+    /// The id of the base backup this incremental is layered on, or
+    /// <see langword="null"/> for a full backup. Lets the listing fold an
+    /// incremental chain to its tip (the most recent increment) by recognising
+    /// every id referenced as a base as an ancestor that a chain-tip row owns,
+    /// without deserialising a full manifest.
+    /// </summary>
+    [Id(7)] public string? BaseBackupId { get; init; }
+
+    /// <summary>
     /// The name shown for the logical row this backup belongs to: the set name for
     /// a set member, otherwise the backup's own name. Filters that target the
     /// displayed name evaluate against this value.

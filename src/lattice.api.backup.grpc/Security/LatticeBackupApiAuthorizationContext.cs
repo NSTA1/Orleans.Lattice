@@ -43,6 +43,12 @@ public enum LatticeBackupApiOperation
     /// <summary>The <c>ScheduleBackup</c> recurring-schedule RPC.</summary>
     ScheduleBackup,
 
+    /// <summary>The <c>CancelSchedule</c> recurring-schedule removal RPC.</summary>
+    CancelSchedule,
+
+    /// <summary>The <c>GetScopeStatus</c> schedule-status RPC.</summary>
+    GetScopeStatus,
+
     /// <summary>
     /// A backup control-API method the interceptor does not recognise (for
     /// example a future RPC added without updating the operation map). Presented

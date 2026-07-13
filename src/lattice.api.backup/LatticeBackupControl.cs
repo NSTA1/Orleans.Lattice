@@ -124,6 +124,20 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
     }
 
     /// <inheritdoc />
+    public async Task CancelScheduleAsync(
+        BackupScopeSelector scope,
+        bool incremental,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        await _authorizer.AuthorizeBackupAsync(scope, cancellationToken).ConfigureAwait(false);
+        await _grainFactory
+            .GetGrain<ILatticeBackupSchedulerGrain>(BackupScopeKey.For(scope))
+            .CancelScheduleAsync(incremental)
+            .ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
     public async Task<BackupCatalogPage> ListBackupsAsync(
         BackupCatalogRequest request,
         CancellationToken cancellationToken = default)
@@ -423,6 +437,8 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         if (!runtime.FullScheduleRegistered
             && !runtime.IncrementalScheduleRegistered
             && runtime.LastRunOutcome == BackupScopeRunOutcome.None
+            && runtime.RuntimeFullBackupInterval is null
+            && runtime.RuntimeIncrementalBackupInterval is null
             && chainDepth == 0)
         {
             return null;
@@ -437,7 +453,9 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
             runtime.LastIncrementalRunUtc,
             runtime.LastIncrementalSuccessUtc,
             runtime.LastRunOutcome,
-            chainDepth);
+            chainDepth,
+            runtime.RuntimeFullBackupInterval,
+            runtime.RuntimeIncrementalBackupInterval);
     }
 
     /// <inheritdoc />

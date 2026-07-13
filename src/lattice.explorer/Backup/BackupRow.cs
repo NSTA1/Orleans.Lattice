@@ -45,6 +45,15 @@ public sealed record BackupRow
     /// <summary><see langword="true"/> when this row is a collapsed backup set.</summary>
     public bool IsSet => SetId is not null;
 
+    /// <summary>
+    /// <see langword="true"/> when this row is the tip of an incremental chain: a
+    /// standalone incremental backup that the listing collapses to a single row,
+    /// its earlier increments and base full backup folded behind it. Restoring
+    /// such a row offers a point-in-time choice across the chain; deleting it
+    /// removes every backup in the chain.
+    /// </summary>
+    public bool IsIncrementalChain => !IsSet && Kind == BackupKind.Incremental;
+
     /// <summary>The distinct scope tree ids this row covers, in first-seen order.</summary>
     public IReadOnlyList<string> TreeIds =>
         Members.Select(m => m.Scope.TreeId).Distinct(StringComparer.Ordinal).ToList();

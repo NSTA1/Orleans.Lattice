@@ -2102,14 +2102,83 @@ code, .explorer-mono {
     align-items: center;
 }
 
+.explorer-backups-actionpanel {
+    margin-top: 1rem;
+    padding: 1rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-elevated);
+    text-align: center;
+}
+
+.explorer-backups-actionpanel-title {
+    margin: 0 0 0.75rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.explorer-backups-actionpanel-table {
+    margin: 0 auto;
+    border-collapse: collapse;
+    text-align: left;
+}
+
+.explorer-backups-actionpanel-table td {
+    padding: 0.35rem 0.6rem;
+    vertical-align: middle;
+    border: none;
+}
+
+.explorer-backups-actionpanel-label {
+    color: var(--text-muted);
+    white-space: nowrap;
+    text-align: right;
+}
+
+.explorer-backups-actionpanel-table td .explorer-btn {
+    margin-right: 0.4rem;
+}
+
+.explorer-backups-actionpanel-table td .explorer-btn:last-child {
+    margin-right: 0;
+}
+
+.explorer-backups-actionpanel-table td:last-child > input[type="text"],
+.explorer-backups-actionpanel-table td:last-child > select,
+.explorer-backups-basecell > select {
+    width: 18rem;
+    box-sizing: border-box;
+}
+
+.explorer-backups-newtable {
+    margin: 0;
+}
+
+.explorer-backups-newtable td {
+    vertical-align: top;
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem;
+}
+
+.explorer-backups-basecell {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.explorer-backups-warning {
+    color: var(--warning, #d29922);
+    font-size: 0.8rem;
+}
+
 .explorer-backups-restore-mode {
     min-width: 10rem;
 }
 
 .explorer-backups-filterrow th {
     font-weight: 400;
-    padding-top: 0.25rem;
-    padding-bottom: 0.35rem;
+    padding: 0.5rem 0.7rem;
     vertical-align: top;
 }
 
@@ -2336,5 +2405,6 @@ code, .explorer-mono {
     display: flex;
     justify-content: flex-end;
     gap: 0.5rem;
+    margin-top: 1rem;
 }
 

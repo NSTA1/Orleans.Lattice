@@ -50,6 +50,15 @@ public interface ILatticeBackupScheduler
     Task ScheduleRecurringBackupAsync(LatticeBackupScheduleRequest request);
 
     /// <summary>
+    /// Removes a runtime recurring backup schedule for <paramref name="scope"/>.
+    /// Idempotent: a missing schedule is a no-op.
+    /// </summary>
+    /// <param name="scope">The scope whose runtime schedule should be removed. Must not be <c>null</c>.</param>
+    /// <param name="incremental"><c>true</c> to remove the incremental schedule, <c>false</c> for the full schedule.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="scope"/> is <c>null</c>.</exception>
+    Task CancelScheduleAsync(BackupScopeSelector scope, bool incremental);
+
+    /// <summary>
     /// Registers (or updates) the recurring full- and incremental-backup schedule
     /// reminders for <paramref name="scope"/>, honouring its configured
     /// <see cref="LatticeBackupScheduleOptions"/>. Idempotent.

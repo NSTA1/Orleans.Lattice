@@ -83,6 +83,21 @@ restores, or deletes anything.
   (non-destructive)** (in-place) or **Point-in-time replace (destructive)**
   (shadow-cutover). The two modes are explained below. Delete a backup behind a
   confirmation prompt that warns the action cannot be undone.
+- **Incremental chains show as one row.** An incremental backup builds on a
+  base, forming a chain (a full base backup followed by successive increments).
+  The list collapses that whole chain to a single row - its most recent
+  increment (the tip) - rather than one row per increment. Selecting the row
+  reveals a **restore point** dropdown listing each capture time in the chain, so
+  you can restore the tree as it stood at any point in the history; the tip is
+  chosen by default. Deleting an incremental-chain row removes *every* backup in
+  the chain (the base and all increments), and the confirmation prompt states how
+  many that is.
+- **Edit or remove a recurring schedule.** A selected single-tree row shows a
+  **Schedule** button. It opens a dialog listing the tree's full and incremental
+  schedules, each prefilled with its current cadence. Change the interval and
+  click **Save** to update it, or **Remove** to unregister it. (Multi-tree set
+  rows have no schedule button, mirroring the single-tree scheduling rule in New
+  Backup.)
 
 ### Choosing a restore mode
 

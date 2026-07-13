@@ -81,6 +81,21 @@ internal interface ILatticeBackupControl
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Removes a runtime recurring backup schedule for <paramref name="scope"/>,
+    /// after authorizing the scope fail-closed with the same grant a capture
+    /// requires. Idempotent.
+    /// </summary>
+    /// <param name="scope">The scope whose schedule should be removed. Must not be <c>null</c>.</param>
+    /// <param name="incremental"><c>true</c> to remove the incremental schedule, <c>false</c> for the full schedule.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="scope"/> is <c>null</c>.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to back up the scope.</exception>
+    Task CancelScheduleAsync(
+        BackupScopeSelector scope,
+        bool incremental,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Lists the catalogued backups as a deterministic, cursor-resumable page
     /// ordered by backup id, hiding any manifest whose scope the caller may not
     /// read. Pass the previous page's

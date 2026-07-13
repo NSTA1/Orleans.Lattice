@@ -225,6 +225,63 @@ public sealed class BackupCatalogIndexQueryTests
         Assert.That(page.Entries.Select(e => e.Id), Is.EqualTo(new[] { "dup" }));
     }
 
+    [Test]
+    public async Task Incremental_chain_collapses_to_its_tip_full_scan()
+    {
+        // full "base" <- inc "i1" <- inc "i2" (the tip). Only the tip is listed;
+        // the base and the mid-chain increment are folded behind it.
+        var catalog = new FakeCatalog(
+            Manifest("base", DateTimeOffset.UnixEpoch.AddHours(1)),
+            Manifest("i1", DateTimeOffset.UnixEpoch.AddHours(2), kind: BackupKind.Incremental, baseBackupId: "base"),
+            Manifest("i2", DateTimeOffset.UnixEpoch.AddHours(3), kind: BackupKind.Incremental, baseBackupId: "i1"));
+
+        var page = await QueryAsync(catalog, Request());
+
+        Assert.That(page.Entries.Select(e => e.Id), Is.EqualTo(new[] { "i2" }));
+    }
+
+    [Test]
+    public async Task Incremental_chain_collapses_to_its_tip_via_index()
+    {
+        var baseFull = Manifest("base", DateTimeOffset.UnixEpoch.AddHours(1));
+        var i1 = Manifest("i1", DateTimeOffset.UnixEpoch.AddHours(2), kind: BackupKind.Incremental, baseBackupId: "base");
+        var i2 = Manifest("i2", DateTimeOffset.UnixEpoch.AddHours(3), kind: BackupKind.Incremental, baseBackupId: "i1");
+
+        var catalog = new FakeCatalog(baseFull, i1, i2);
+        var view = new FakeIndexView(baseFull, i1, i2);
+
+        var page = await QueryAsync(catalog, Request(), viewFactory: new FakeViewFactory(view));
+
+        Assert.That(page.Entries.Select(e => e.Id), Is.EqualTo(new[] { "i2" }));
+    }
+
+    [Test]
+    public async Task A_full_backup_with_no_increments_is_still_listed()
+    {
+        var catalog = new FakeCatalog(
+            Manifest("lonely-full", DateTimeOffset.UnixEpoch.AddHours(1)));
+
+        var page = await QueryAsync(catalog, Request());
+
+        Assert.That(page.Entries.Select(e => e.Id), Is.EqualTo(new[] { "lonely-full" }));
+    }
+
+    [Test]
+    public async Task Chain_tip_lists_alongside_unrelated_backups_newest_first()
+    {
+        // A standalone full, plus a chain base<-inc. The listing shows the
+        // standalone and the chain tip only, newest-first, and never the folded
+        // ancestors even though they carry distinct capture times.
+        var catalog = new FakeCatalog(
+            Manifest("standalone", DateTimeOffset.UnixEpoch.AddHours(10)),
+            Manifest("base", DateTimeOffset.UnixEpoch.AddHours(1)),
+            Manifest("tip", DateTimeOffset.UnixEpoch.AddHours(5), kind: BackupKind.Incremental, baseBackupId: "base"));
+
+        var page = await QueryAsync(catalog, Request());
+
+        Assert.That(page.Entries.Select(e => e.Id), Is.EqualTo(new[] { "standalone", "tip" }));
+    }
+
     private sealed class FakeCatalog(params BackupManifest[] manifests) : ILatticeBackupCatalogStore
     {
         private readonly List<BackupManifest> _manifests = manifests.ToList();
@@ -270,6 +327,7 @@ public sealed class BackupCatalogIndexQueryTests
                         CreatedAtUtc = m.CreatedAtUtc,
                         SetId = m.SetId,
                         SetName = m.SetName,
+                        BaseBackupId = m.BaseBackupId,
                     })))
                 .OrderBy(kv => kv.Key, StringComparer.Ordinal)
                 .ToList();

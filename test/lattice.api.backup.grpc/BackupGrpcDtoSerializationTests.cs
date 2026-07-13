@@ -182,6 +182,65 @@ public sealed class BackupGrpcDtoSerializationTests
     }
 
     [Test]
+    public void BackupCancelScheduleRequestMessage_round_trips()
+    {
+        var original = new BackupCancelScheduleRequestMessage
+        {
+            Scope = BackupScopeSelector.WholeTree("orders"),
+            Incremental = true,
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Scope.TreeId, Is.EqualTo("orders"));
+            Assert.That(copy.Incremental, Is.True);
+        });
+    }
+
+    [Test]
+    public void BackupCancelScheduleResponse_round_trips()
+    {
+        Assert.That(RoundTrip(new BackupCancelScheduleResponse()), Is.Not.Null);
+    }
+
+    [Test]
+    public void BackupScopeStatusResponse_round_trips_runtime_intervals()
+    {
+        var original = new BackupScopeStatusResponse
+        {
+            Found = true,
+            Scope = BackupScopeSelector.WholeTree("orders"),
+            FullScheduleRegistered = true,
+            IncrementalScheduleRegistered = true,
+            LastRunOutcome = BackupScopeRunOutcome.Success,
+            ChainDepth = 2,
+            RuntimeFullBackupIntervalTicks = TimeSpan.FromMinutes(20).Ticks,
+            RuntimeIncrementalBackupIntervalTicks = TimeSpan.FromMinutes(45).Ticks,
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Found, Is.True);
+            Assert.That(copy.Scope!.TreeId, Is.EqualTo("orders"));
+            Assert.That(copy.RuntimeFullBackupIntervalTicks, Is.EqualTo(TimeSpan.FromMinutes(20).Ticks));
+            Assert.That(copy.RuntimeIncrementalBackupIntervalTicks, Is.EqualTo(TimeSpan.FromMinutes(45).Ticks));
+        });
+    }
+
+    [Test]
+    public void BackupScopeStatusRequestMessage_round_trips()
+    {
+        var copy = RoundTrip(new BackupScopeStatusRequestMessage
+        {
+            Scope = BackupScopeSelector.WholeTree("orders"),
+        });
+
+        Assert.That(copy.Scope.TreeId, Is.EqualTo("orders"));
+    }
+
+    [Test]
     public void BackupChainResponse_round_trips_when_not_found()
     {
         var original = new BackupChainResponse { Found = false };

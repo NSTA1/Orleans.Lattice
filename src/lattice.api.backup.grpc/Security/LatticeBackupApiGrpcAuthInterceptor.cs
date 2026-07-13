@@ -153,6 +153,8 @@ internal sealed class LatticeBackupApiGrpcAuthInterceptor : Interceptor
             LatticeBackupGrpcMethods.RevertRestoreMethodName => LatticeBackupApiOperation.RevertRestore,
             LatticeBackupGrpcMethods.ExportArtifactMethodName => LatticeBackupApiOperation.ExportArtifact,
             LatticeBackupGrpcMethods.ScheduleBackupMethodName => LatticeBackupApiOperation.ScheduleBackup,
+            LatticeBackupGrpcMethods.CancelScheduleMethodName => LatticeBackupApiOperation.CancelSchedule,
+            LatticeBackupGrpcMethods.GetScopeStatusMethodName => LatticeBackupApiOperation.GetScopeStatus,
             _ => LatticeBackupApiOperation.Unknown,
         };
 
@@ -167,6 +169,8 @@ internal sealed class LatticeBackupApiGrpcAuthInterceptor : Interceptor
             RestoreResponse r => r.BackupId,
             ArtifactExportRequest a => a.BackupId,
             BackupScheduleRequestMessage s => s.Scope?.TreeId,
+            BackupCancelScheduleRequestMessage c => c.Scope?.TreeId,
+            BackupScopeStatusRequestMessage s => s.Scope?.TreeId,
             _ => null,
         };
 

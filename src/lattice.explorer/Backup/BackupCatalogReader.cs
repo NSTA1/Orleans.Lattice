@@ -70,7 +70,6 @@ public sealed class BackupCatalogReader(IBackupControlClient client) : IBackupCa
     {
         var kinds = new HashSet<BackupKind>();
         var scopes = new HashSet<string>(StringComparer.Ordinal);
-        var fullBackups = new List<BackupManifest>();
 
         try
         {
@@ -90,10 +89,6 @@ public sealed class BackupCatalogReader(IBackupControlClient client) : IBackupCa
                 {
                     kinds.Add(manifest.Kind);
                     scopes.Add(manifest.Scope.TreeId);
-                    if (manifest.Kind == BackupKind.Full && manifest.SetId is null)
-                    {
-                        fullBackups.Add(manifest);
-                    }
                 }
 
                 token = page.NextPageToken;
@@ -114,8 +109,50 @@ public sealed class BackupCatalogReader(IBackupControlClient client) : IBackupCa
             Status = BackupOperationStatus.Succeeded,
             Kinds = kinds.OrderBy(k => k.ToString(), StringComparer.Ordinal).ToList(),
             Scopes = scopes.OrderBy(s => s, StringComparer.Ordinal).ToList(),
-            FullBackups = fullBackups,
         };
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<BackupManifest>> LoadFullBackupsAsync(string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+
+        var fullBackups = new List<BackupManifest>();
+        try
+        {
+            string? token = null;
+            var pages = 0;
+            do
+            {
+                // Push the kind and scope predicates into the index-backed catalog
+                // query - the same path the listing uses - so the server returns the
+                // tree's full backups directly rather than the client re-classifying
+                // a full-catalog sweep.
+                var request = new BackupCatalogRequest
+                {
+                    PageSize = SummaryPageSize,
+                    PageToken = token,
+                    OrderByCreatedDescending = true,
+                    Kind = BackupKind.Full,
+                    TreeId = treeId,
+                };
+
+                var page = await _client.ListBackupsAsync(request, cancellationToken).ConfigureAwait(false);
+                fullBackups.AddRange(page.Entries);
+                token = page.NextPageToken;
+            }
+            while (!string.IsNullOrEmpty(token) && ++pages < SummaryMaxPages);
+        }
+        catch (LatticeAuthorizationDeniedException)
+        {
+            return Array.Empty<BackupManifest>();
+        }
+        catch (RpcException)
+        {
+            return Array.Empty<BackupManifest>();
+        }
+
+        return fullBackups;
     }
 
     /// <inheritdoc />
@@ -216,6 +253,37 @@ public sealed class BackupCatalogReader(IBackupControlClient client) : IBackupCa
                 return BackupOperationResult.Success(
                     $"Scheduled recurring {kind} backup every {FormatInterval(effective)}.");
             });
+    }
+
+    /// <inheritdoc />
+    public Task<BackupOperationResult> UnscheduleAsync(BackupScopeSelector scope, bool incremental, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        return RunAsync(
+            async () =>
+            {
+                await _client.CancelScheduleAsync(scope, incremental, cancellationToken).ConfigureAwait(false);
+                var kind = incremental ? "incremental" : "full";
+                return BackupOperationResult.Success($"Removed the recurring {kind} backup schedule.");
+            });
+    }
+
+    /// <inheritdoc />
+    public async Task<BackupScopeStatus?> GetScheduleStatusAsync(BackupScopeSelector scope, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        try
+        {
+            return await _client.GetScopeStatusAsync(scope, cancellationToken).ConfigureAwait(false);
+        }
+        catch (LatticeAuthorizationDeniedException)
+        {
+            return null;
+        }
+        catch (RpcException)
+        {
+            return null;
+        }
     }
 
     private static string FormatInterval(TimeSpan interval)

@@ -120,6 +120,20 @@ public sealed class GrpcBackupControlClient : IBackupControlClient, IDisposable
         return InvokeAsync(client => client.ScheduleBackupAsync(scope, incremental, interval, cancellationToken));
     }
 
+    /// <inheritdoc />
+    public Task CancelScheduleAsync(BackupScopeSelector scope, bool incremental, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        return InvokeAsync(client => client.CancelScheduleAsync(scope, incremental, cancellationToken));
+    }
+
+    /// <inheritdoc />
+    public Task<BackupScopeStatus?> GetScopeStatusAsync(BackupScopeSelector scope, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        return InvokeAsync(client => client.GetScopeStatusAsync(scope, cancellationToken));
+    }
+
     private async Task<T> InvokeAsync<T>(Func<LatticeBackupApiGrpcClient, Task<T>> call)
     {
         var client = ResolveClient();
@@ -131,6 +145,19 @@ public sealed class GrpcBackupControlClient : IBackupControlClient, IDisposable
         {
             // Present the transport denial as the same typed exception the rest of
             // the explorer handles, so a UI action can degrade gracefully.
+            throw new LatticeAuthorizationDeniedException(ex.Status.Detail, ex);
+        }
+    }
+
+    private async Task InvokeAsync(Func<LatticeBackupApiGrpcClient, Task> call)
+    {
+        var client = ResolveClient();
+        try
+        {
+            await call(client).ConfigureAwait(false);
+        }
+        catch (RpcException ex) when (ex.StatusCode is StatusCode.PermissionDenied or StatusCode.Unauthenticated)
+        {
             throw new LatticeAuthorizationDeniedException(ex.Status.Detail, ex);
         }
     }

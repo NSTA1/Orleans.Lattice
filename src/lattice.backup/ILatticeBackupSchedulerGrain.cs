@@ -65,6 +65,13 @@ internal interface ILatticeBackupSchedulerGrain : IGrainWithStringKey
     Task ScheduleRecurringAsync(BackupScopeSelector scope, bool incremental, TimeSpan interval);
 
     /// <summary>
+    /// Unregisters the recurring schedule reminder of the requested kind and
+    /// clears its runtime interval. Idempotent: a missing reminder is a no-op.
+    /// </summary>
+    /// <param name="incremental"><c>true</c> to cancel the incremental schedule, <c>false</c> for the full schedule.</param>
+    Task CancelScheduleAsync(bool incremental);
+
+    /// <summary>
     /// Prunes the backup chain for <paramref name="scope"/> per the per-scope
     /// retention policy, deleting superseded manifests and artifacts through the
     /// sink and removing their catalog entries while preserving the base chain of

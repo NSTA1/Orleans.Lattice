@@ -66,7 +66,7 @@ public sealed class BackupCatalogReaderFilterTests
     }
 
     [Test]
-    public async Task LoadSummaryAsync_gathers_distinct_sorted_facets_and_full_backups()
+    public async Task LoadSummaryAsync_gathers_distinct_sorted_facets()
     {
         var client = new FakeBackupControlClient
         {
@@ -90,10 +90,50 @@ public sealed class BackupCatalogReaderFilterTests
             Assert.That(summary.Status, Is.EqualTo(BackupOperationStatus.Succeeded));
             Assert.That(summary.Kinds, Is.EqualTo(new[] { BackupKind.Full, BackupKind.Incremental }));
             Assert.That(summary.Scopes, Is.EqualTo(new[] { "customers", "orders" }));
-
-            // Only standalone full backups are candidate bases; the set member (SetId set) is excluded.
-            Assert.That(summary.FullBackups.Select(m => m.Id), Is.EquivalentTo(new[] { "f1", "f2" }));
         });
+    }
+
+    [Test]
+    public async Task LoadFullBackupsAsync_pushes_kind_and_tree_and_keeps_set_members()
+    {
+        var client = new FakeBackupControlClient
+        {
+            ListResult = new BackupCatalogPage
+            {
+                Entries = new[]
+                {
+                    SampleBackup.Manifest("f1", BackupKind.Full, treeId: "orders"),
+                    SampleBackup.Manifest("m1", BackupKind.Full, treeId: "orders", setId: "set-1", setName: "nightly"),
+                },
+                NextPageToken = null,
+            },
+        };
+
+        var fulls = await CreateReader(client).LoadFullBackupsAsync("orders");
+
+        Assert.Multiple(() =>
+        {
+            // The kind / scope predicates are pushed into the index-backed query.
+            Assert.That(client.LastListRequest!.Kind, Is.EqualTo(BackupKind.Full));
+            Assert.That(client.LastListRequest!.TreeId, Is.EqualTo("orders"));
+            Assert.That(client.LastListRequest!.OrderByCreatedDescending, Is.True);
+
+            // Every full the tree owns is a candidate base, set members included.
+            Assert.That(fulls.Select(m => m.Id), Is.EquivalentTo(new[] { "f1", "m1" }));
+        });
+    }
+
+    [Test]
+    public async Task LoadFullBackupsAsync_denied_folds_into_empty_list()
+    {
+        var client = new FakeBackupControlClient
+        {
+            ListThrows = new LatticeAuthorizationDeniedException("no"),
+        };
+
+        var fulls = await CreateReader(client).LoadFullBackupsAsync("orders");
+
+        Assert.That(fulls, Is.Empty);
     }
 
     [Test]

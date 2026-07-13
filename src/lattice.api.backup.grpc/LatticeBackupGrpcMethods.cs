@@ -69,6 +69,12 @@ internal sealed class LatticeBackupGrpcMethods
     /// <summary>The unary schedule-backup RPC method name.</summary>
     public const string ScheduleBackupMethodName = "ScheduleBackup";
 
+    /// <summary>The unary cancel-schedule RPC method name.</summary>
+    public const string CancelScheduleMethodName = "CancelSchedule";
+
+    /// <summary>The unary scope-status RPC method name.</summary>
+    public const string GetScopeStatusMethodName = "GetScopeStatus";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeBackupGrpcMethods(
         Serializer<BackupCaptureRequestMessage> captureRequestSerializer,
@@ -94,7 +100,11 @@ internal sealed class LatticeBackupGrpcMethods
         Serializer<BackupCapabilityProbeRequest> capabilityProbeRequestSerializer,
         Serializer<Orleans.Lattice.Api.Backup.BackupScopeCapabilities> capabilitiesSerializer,
         Serializer<BackupScheduleRequestMessage> scheduleRequestSerializer,
-        Serializer<BackupScheduleResponse> scheduleResponseSerializer)
+        Serializer<BackupScheduleResponse> scheduleResponseSerializer,
+        Serializer<BackupCancelScheduleRequestMessage> cancelScheduleRequestSerializer,
+        Serializer<BackupCancelScheduleResponse> cancelScheduleResponseSerializer,
+        Serializer<BackupScopeStatusRequestMessage> scopeStatusRequestSerializer,
+        Serializer<BackupScopeStatusResponse> scopeStatusResponseSerializer)
     {
         ArgumentNullException.ThrowIfNull(captureRequestSerializer);
         ArgumentNullException.ThrowIfNull(incrementalCaptureRequestSerializer);
@@ -120,6 +130,10 @@ internal sealed class LatticeBackupGrpcMethods
         ArgumentNullException.ThrowIfNull(capabilitiesSerializer);
         ArgumentNullException.ThrowIfNull(scheduleRequestSerializer);
         ArgumentNullException.ThrowIfNull(scheduleResponseSerializer);
+        ArgumentNullException.ThrowIfNull(cancelScheduleRequestSerializer);
+        ArgumentNullException.ThrowIfNull(cancelScheduleResponseSerializer);
+        ArgumentNullException.ThrowIfNull(scopeStatusRequestSerializer);
+        ArgumentNullException.ThrowIfNull(scopeStatusResponseSerializer);
 
         CreateBackup = new Method<BackupCaptureRequestMessage, BackupCaptureResponse>(
             type: MethodType.Unary,
@@ -211,6 +225,20 @@ internal sealed class LatticeBackupGrpcMethods
             name: ScheduleBackupMethodName,
             requestMarshaller: LatticeBackupGrpcMarshallers.Create(scheduleRequestSerializer),
             responseMarshaller: LatticeBackupGrpcMarshallers.Create(scheduleResponseSerializer));
+
+        CancelSchedule = new Method<BackupCancelScheduleRequestMessage, BackupCancelScheduleResponse>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: CancelScheduleMethodName,
+            requestMarshaller: LatticeBackupGrpcMarshallers.Create(cancelScheduleRequestSerializer),
+            responseMarshaller: LatticeBackupGrpcMarshallers.Create(cancelScheduleResponseSerializer));
+
+        GetScopeStatus = new Method<BackupScopeStatusRequestMessage, BackupScopeStatusResponse>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: GetScopeStatusMethodName,
+            requestMarshaller: LatticeBackupGrpcMarshallers.Create(scopeStatusRequestSerializer),
+            responseMarshaller: LatticeBackupGrpcMarshallers.Create(scopeStatusResponseSerializer));
     }
 
     /// <summary>The unary <c>CreateBackup</c> full-capture RPC.</summary>
@@ -252,6 +280,12 @@ internal sealed class LatticeBackupGrpcMethods
     /// <summary>The unary <c>ScheduleBackup</c> recurring-schedule RPC.</summary>
     public Method<BackupScheduleRequestMessage, BackupScheduleResponse> ScheduleBackup { get; }
 
+    /// <summary>The unary <c>CancelSchedule</c> recurring-schedule removal RPC.</summary>
+    public Method<BackupCancelScheduleRequestMessage, BackupCancelScheduleResponse> CancelSchedule { get; }
+
+    /// <summary>The unary <c>GetScopeStatus</c> schedule-status RPC.</summary>
+    public Method<BackupScopeStatusRequestMessage, BackupScopeStatusResponse> GetScopeStatus { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out
     /// of <paramref name="serializerProvider"/>. Shared by the server-side DI
@@ -285,7 +319,11 @@ internal sealed class LatticeBackupGrpcMethods
             serializerProvider.GetRequiredService<Serializer<BackupCapabilityProbeRequest>>(),
             serializerProvider.GetRequiredService<Serializer<Orleans.Lattice.Api.Backup.BackupScopeCapabilities>>(),
             serializerProvider.GetRequiredService<Serializer<BackupScheduleRequestMessage>>(),
-            serializerProvider.GetRequiredService<Serializer<BackupScheduleResponse>>());
+            serializerProvider.GetRequiredService<Serializer<BackupScheduleResponse>>(),
+            serializerProvider.GetRequiredService<Serializer<BackupCancelScheduleRequestMessage>>(),
+            serializerProvider.GetRequiredService<Serializer<BackupCancelScheduleResponse>>(),
+            serializerProvider.GetRequiredService<Serializer<BackupScopeStatusRequestMessage>>(),
+            serializerProvider.GetRequiredService<Serializer<BackupScopeStatusResponse>>());
     }
 }
 

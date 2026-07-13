@@ -6,9 +6,8 @@ namespace Orleans.Lattice.Explorer.Backup;
 /// The catalog-wide facets the Existing Backups filter row needs, gathered once
 /// from a full pass over the visible catalog: the distinct kinds and scope tree
 /// ids actually present (so each filter drop-down only offers values that match
-/// at least one backup), and the full standalone backups (the candidate bases an
-/// incremental capture can build on). A denial or a transport failure is folded
-/// into <see cref="Status"/> so the caller never has to catch.
+/// at least one backup). A denial or a transport failure is folded into
+/// <see cref="Status"/> so the caller never has to catch.
 /// </summary>
 public sealed record BackupCatalogSummary
 {
@@ -26,7 +25,4 @@ public sealed record BackupCatalogSummary
 
     /// <summary>The distinct scope tree ids present in the catalog, alphabetically ascending.</summary>
     public IReadOnlyList<string> Scopes { get; init; } = Array.Empty<string>();
-
-    /// <summary>The full standalone backups, newest first, that an incremental capture may build on.</summary>
-    public IReadOnlyList<BackupManifest> FullBackups { get; init; } = Array.Empty<BackupManifest>();
 }

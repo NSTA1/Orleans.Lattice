@@ -308,6 +308,46 @@ public sealed class LatticeBackupApiGrpcClient
         return TimeSpan.FromTicks(response.EffectiveIntervalTicks);
     }
 
+    /// <summary>
+    /// Removes the runtime recurring backup schedule for <paramref name="scope"/>.
+    /// Idempotent.
+    /// </summary>
+    /// <param name="scope">The scope whose schedule should be removed. Must not be <c>null</c>.</param>
+    /// <param name="incremental"><c>true</c> to remove the incremental schedule, <c>false</c> for the full schedule.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="scope"/> is <c>null</c>.</exception>
+    public async Task CancelScheduleAsync(
+        BackupScopeSelector scope,
+        bool incremental,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        await UnaryAsync(
+            _methods.CancelSchedule,
+            new BackupCancelScheduleRequestMessage { Scope = scope, Incremental = incremental },
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Reads a scope's schedule and last-run status, or returns
+    /// <see langword="null"/> when the scope is unknown.
+    /// </summary>
+    /// <param name="scope">The scope to describe. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="scope"/> is <c>null</c>.</exception>
+    public async Task<BackupScopeStatus?> GetScopeStatusAsync(
+        BackupScopeSelector scope,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        var response = await UnaryAsync(
+            _methods.GetScopeStatus,
+            new BackupScopeStatusRequestMessage { Scope = scope },
+            cancellationToken).ConfigureAwait(false);
+
+        return ToScopeStatus(response);
+    }
+
     private async Task<TResponse> UnaryAsync<TRequest, TResponse>(
         Method<TRequest, TResponse> method,
         TRequest request,
@@ -357,4 +397,25 @@ public sealed class LatticeBackupApiGrpcClient
             response.EntriesApplied,
             response.ShadowPhysicalTreeId,
             response.PreviousPhysicalTreeId);
+
+    private static BackupScopeStatus? ToScopeStatus(BackupScopeStatusResponse response)
+    {
+        if (!response.Found || response.Scope is null)
+        {
+            return null;
+        }
+
+        return new BackupScopeStatus(
+            response.Scope,
+            response.FullScheduleRegistered,
+            response.IncrementalScheduleRegistered,
+            response.LastFullRunUtc,
+            response.LastFullSuccessUtc,
+            response.LastIncrementalRunUtc,
+            response.LastIncrementalSuccessUtc,
+            response.LastRunOutcome,
+            response.ChainDepth,
+            response.RuntimeFullBackupIntervalTicks is { } fullTicks ? TimeSpan.FromTicks(fullTicks) : null,
+            response.RuntimeIncrementalBackupIntervalTicks is { } incrementalTicks ? TimeSpan.FromTicks(incrementalTicks) : null);
+    }
 }

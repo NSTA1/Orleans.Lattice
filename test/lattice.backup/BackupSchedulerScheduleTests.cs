@@ -152,6 +152,43 @@ public sealed class BackupSchedulerScheduleTests
     }
 
     [Test]
+    public async Task ScheduleRecurringAsync_status_reports_runtime_intervals()
+    {
+        _fixture = new SchedulerClusterFixture();
+        await _fixture.InitializeAsync();
+        var scope = BackupScopeSelector.WholeTree(Tree);
+
+        await _fixture.Scheduler(scope).ScheduleRecurringAsync(scope, incremental: false, TimeSpan.FromMinutes(15));
+        await _fixture.Scheduler(scope).ScheduleRecurringAsync(scope, incremental: true, TimeSpan.FromMinutes(30));
+
+        var status = await _fixture.Scheduler(scope).GetScopeRuntimeStatusAsync();
+        Assert.Multiple(() =>
+        {
+            Assert.That(status.RuntimeFullBackupInterval, Is.EqualTo(TimeSpan.FromMinutes(15)));
+            Assert.That(status.RuntimeIncrementalBackupInterval, Is.EqualTo(TimeSpan.FromMinutes(30)));
+        });
+    }
+
+    [Test]
+    public async Task CancelScheduleAsync_unregisters_the_reminder_and_clears_the_runtime_interval()
+    {
+        _fixture = new SchedulerClusterFixture();
+        await _fixture.InitializeAsync();
+        var scope = BackupScopeSelector.WholeTree(Tree);
+        await _fixture.Scheduler(scope).ScheduleRecurringAsync(scope, incremental: true, TimeSpan.FromMinutes(30));
+
+        await _fixture.Scheduler(scope).CancelScheduleAsync(incremental: true);
+
+        var status = await _fixture.Scheduler(scope).GetScopeRuntimeStatusAsync();
+        var hasIncremental = await _fixture.Scheduler(scope).HasScheduleAsync(incremental: true);
+        Assert.Multiple(() =>
+        {
+            Assert.That(hasIncremental, Is.False);
+            Assert.That(status.RuntimeIncrementalBackupInterval, Is.Null);
+        });
+    }
+
+    [Test]
     public async Task ScheduleRecurringAsync_persists_the_scope_so_a_scheduled_cycle_can_capture()
     {
         _fixture = new SchedulerClusterFixture();

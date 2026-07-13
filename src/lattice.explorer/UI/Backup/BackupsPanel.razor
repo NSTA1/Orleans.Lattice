@@ -88,103 +88,137 @@
             </div>
 
             <div class="explorer-backups-form">
-                <div class="explorer-backups-selected">
-                    <span class="explorer-backups-picker-label">Included in backup</span>
-                    @if (_selectedTrees.Count == 0)
-                    {
-                        <p class="explorer-backups-empty">Select one or more trees from the list.</p>
-                    }
-                    else
-                    {
-                        <ul class="explorer-backups-selected-list">
-                            @foreach (var id in _selectedTrees)
-                            {
-                                <li>
-                                    <button type="button" class="explorer-btn explorer-btn-icon explorer-backups-remove"
-                                            title="Remove tree" aria-label="@($"Remove {id}")"
-                                            disabled="@_busy"
-                                            @onclick="@(() => RemoveTree(id))">x</button>
-                                    <span class="explorer-backups-selected-id">@id</span>
-                                </li>
-                            }
-                        </ul>
-                        @if (_selectedTrees.Count > 1)
+                <table class="explorer-backups-actionpanel-table explorer-backups-newtable">
+                    <tbody>
+                        <tr>
+                            <td class="explorer-backups-actionpanel-label">Name</td>
+                            <td>
+                                <input type="text" value="@_captureName" @oninput="e => _captureName = e.Value?.ToString() ?? string.Empty" placeholder="backup name" />
+                            </td>
+                        </tr>
+
+                        <tr>
+                            <td class="explorer-backups-actionpanel-label">Included in backup</td>
+                            <td>
+                                @if (_selectedTrees.Count == 0)
+                                {
+                                    <p class="explorer-backups-empty">Select one or more trees from the list.</p>
+                                }
+                                else
+                                {
+                                    <ul class="explorer-backups-selected-list">
+                                        @foreach (var id in _selectedTrees)
+                                        {
+                                            <li>
+                                                <button type="button" class="explorer-btn explorer-btn-icon explorer-backups-remove"
+                                                        title="Remove tree" aria-label="@($"Remove {id}")"
+                                                        disabled="@_busy"
+                                                        @onclick="@(() => RemoveTree(id))">x</button>
+                                                <span class="explorer-backups-selected-id">@id</span>
+                                            </li>
+                                        }
+                                    </ul>
+                                    @if (_selectedTrees.Count > 1)
+                                    {
+                                        <p class="explorer-backups-note">Multiple trees are captured as a cross-tree consistent backup set.</p>
+                                    }
+                                }
+                            </td>
+                        </tr>
+
+                        <tr>
+                            <td class="explorer-backups-actionpanel-label">Kind</td>
+                            <td>
+                                <fieldset class="explorer-backups-kind" aria-label="Backup kind">
+                                    <label>
+                                        <input type="radio" name="backup-kind" checked="@(_captureKind == BackupKind.Full)"
+                                               @onchange="@(() => SetKind(BackupKind.Full))" />
+                                        Full
+                                    </label>
+                                    <label>
+                                        <input type="radio" name="backup-kind" checked="@(_captureKind == BackupKind.Incremental)"
+                                               @onchange="@(() => SetKind(BackupKind.Incremental))" />
+                                        Incremental
+                                    </label>
+                                </fieldset>
+                            </td>
+                        </tr>
+
+                        @if (_captureKind == BackupKind.Incremental)
                         {
-                            <p class="explorer-backups-note">Multiple trees are captured as a cross-tree consistent backup set.</p>
+                            <tr>
+                                <td class="explorer-backups-actionpanel-label">Base backup</td>
+                                <td>
+                                    <div class="explorer-backups-basecell">
+                                        <select value="@_incrementalBaseId" @onchange="e => _incrementalBaseId = e.Value?.ToString() ?? string.Empty"
+                                                disabled="@(IncrementalTree is null || _baseBackups.Count == 0)">
+                                            <option value="">(select a full backup)</option>
+                                            @foreach (var full in _baseBackups)
+                                            {
+                                                <option value="@full.Id">@Shorten(full.Id) - @full.Name</option>
+                                            }
+                                        </select>
+                                        @if (IncrementalTree is { } baseTree && _baseBackups.Count == 0)
+                                        {
+                                            <span class="explorer-backups-warning" role="alert">
+                                                No full backup exists for tree '@baseTree'. Create a full backup first.
+                                            </span>
+                                        }
+                                    </div>
+                                </td>
+                            </tr>
                         }
-                    }
-                </div>
 
-                <label class="explorer-backups-field">
-                    Name
-                    <input type="text" value="@_captureName" @oninput="e => _captureName = e.Value?.ToString() ?? string.Empty" placeholder="backup name" />
-                </label>
+                        <tr>
+                            <td class="explorer-backups-actionpanel-label">Schedule</td>
+                            <td>
+                                <fieldset class="explorer-backups-schedule" aria-label="Recurring schedule">
+                                    <label title="Also register a recurring backup of the selected tree at the interval below.">
+                                        <input type="checkbox" checked="@_scheduleEnabled"
+                                               @onchange="e => _scheduleEnabled = (bool?)e.Value ?? false"
+                                               disabled="@(!CanSchedule)" />
+                                        Schedule recurring
+                                    </label>
+                                    <label>
+                                        Every
+                                        <input type="number" min="0" max="168" value="@_scheduleHours"
+                                               @oninput="e => _scheduleHours = ParseInterval(e.Value, 0, 168)"
+                                               disabled="@(!_scheduleEnabled || !CanSchedule)" aria-label="Interval hours" />
+                                        h
+                                    </label>
+                                    <label>
+                                        <input type="number" min="0" max="59" value="@_scheduleMinutes"
+                                               @oninput="e => _scheduleMinutes = ParseInterval(e.Value, 0, 59)"
+                                               disabled="@(!_scheduleEnabled || !CanSchedule)" aria-label="Interval minutes" />
+                                        m
+                                    </label>
+                                </fieldset>
+                            </td>
+                        </tr>
 
-                <fieldset class="explorer-backups-kind" aria-label="Backup kind">
-                    <label>
-                        <input type="radio" name="backup-kind" checked="@(_captureKind == BackupKind.Full)"
-                               @onchange="@(() => SetKind(BackupKind.Full))" />
-                        Full
-                    </label>
-                    <label>
-                        <input type="radio" name="backup-kind" checked="@(_captureKind == BackupKind.Incremental)"
-                               @onchange="@(() => SetKind(BackupKind.Incremental))" />
-                        Incremental
-                    </label>
-                </fieldset>
+                        <tr>
+                            <td class="explorer-backups-actionpanel-label"></td>
+                            <td>
+                                <button type="button" class="explorer-btn explorer-btn-primary"
+                                        disabled="@(!CanBackup)" @onclick="BackupAsync">Backup</button>
 
-                @if (_captureKind == BackupKind.Incremental)
-                {
-                    <label class="explorer-backups-field">
-                        Base backup
-                        <select value="@_incrementalBaseId" @onchange="e => _incrementalBaseId = e.Value?.ToString() ?? string.Empty">
-                            <option value="">(select a full backup)</option>
-                            @foreach (var full in FullBackups)
-                            {
-                                <option value="@full.Id">@Shorten(full.Id) - @full.Name (@full.Scope.TreeId)</option>
-                            }
-                        </select>
-                    </label>
-                }
+                                @if (_scheduleEnabled && !CanSchedule)
+                                {
+                                    <p class="explorer-backups-hint">A recurring schedule targets a single tree - select exactly one tree.</p>
+                                }
+                                else if (_scheduleEnabled && ScheduleInterval <= TimeSpan.Zero)
+                                {
+                                    <p class="explorer-backups-hint">Set a schedule interval greater than zero.</p>
+                                }
 
-                <fieldset class="explorer-backups-schedule" aria-label="Recurring schedule">
-                    <label title="Also register a recurring backup of the selected tree at the interval below.">
-                        <input type="checkbox" checked="@_scheduleEnabled"
-                               @onchange="e => _scheduleEnabled = (bool?)e.Value ?? false"
-                               disabled="@(!CanSchedule)" />
-                        Schedule recurring
-                    </label>
-                    <label>
-                        Every
-                        <input type="number" min="0" max="168" value="@_scheduleHours"
-                               @oninput="e => _scheduleHours = ParseInterval(e.Value, 0, 168)"
-                               disabled="@(!_scheduleEnabled || !CanSchedule)" aria-label="Interval hours" />
-                        h
-                    </label>
-                    <label>
-                        <input type="number" min="0" max="59" value="@_scheduleMinutes"
-                               @oninput="e => _scheduleMinutes = ParseInterval(e.Value, 0, 59)"
-                               disabled="@(!_scheduleEnabled || !CanSchedule)" aria-label="Interval minutes" />
-                        m
-                    </label>
-                </fieldset>
-
-                <button type="button" class="explorer-btn explorer-btn-primary"
-                        disabled="@(!CanBackup)" @onclick="BackupAsync">Backup</button>
-
-                @if (_scheduleEnabled && !CanSchedule)
-                {
-                    <p class="explorer-backups-hint">A recurring schedule targets a single tree - select exactly one tree.</p>
-                }
-                else if (_scheduleEnabled && ScheduleInterval <= TimeSpan.Zero)
-                {
-                    <p class="explorer-backups-hint">Set a schedule interval greater than zero.</p>
-                }
-
-                @if (_captureKind == BackupKind.Incremental && _selectedTrees.Count > 1)
-                {
-                    <p class="explorer-backups-hint">An incremental backup targets a single tree - select exactly one tree.</p>
-                }
+                                @if (_captureKind == BackupKind.Incremental && _selectedTrees.Count > 1)
+                                {
+                                    <p class="explorer-backups-hint">An incremental backup targets a single tree - select exactly one tree.</p>
+                                }
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
             </div>
         </div>
     }
@@ -204,12 +238,12 @@
                 <table class="explorer-table explorer-backups-table">
                     <thead>
                         <tr>
-                            <th>Name</th><th>Kind</th><th>Scope</th><th>Created</th><th>Actions</th>
+                            <th>Name</th><th>Kind</th><th>Scope</th><th>Created</th>
                         </tr>
                         <tr class="explorer-backups-filterrow">
                             <th>
                                 <BackupFilterBox Placeholder="Name starts with..." InitialValue="@_filterName"
-                                                 Disabled="@_busy" OnFilter="OnNameFilterChanged" />
+                                                 OnFilter="OnNameFilterChanged" />
                             </th>
                             <th>
                                 <select class="explorer-backups-filter-select" value="@_filterKind"
@@ -233,15 +267,14 @@
                             </th>
                             <th>
                                 <BackupFilterBox Placeholder="Created starts with..." InitialValue="@_filterCreated"
-                                                 Disabled="@_busy" OnFilter="OnCreatedFilterChanged" />
+                                                 OnFilter="OnCreatedFilterChanged" />
                             </th>
-                            <th></th>
                         </tr>
                     </thead>
                     <tbody>
                         @if (Rows.Count == 0)
                         {
-                            <tr><td colspan="5" class="explorer-backups-empty">@EmptyMessage</td></tr>
+                            <tr><td colspan="4" class="explorer-backups-empty">@EmptyMessage</td></tr>
                         }
                         else
                         {
@@ -255,27 +288,6 @@
                                     <td>@row.Kind</td>
                                     <td>@(row.IsSet ? string.Join(", ", row.TreeIds) : row.Members[0].Scope.TreeId)</td>
                                     <td title="@row.CreatedAtUtc.UtcDateTime.ToString("u")">@row.CreatedAtUtc.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss")</td>
-                                    <td class="explorer-backups-actions" @onclick:stopPropagation="true">
-                                        @if (isSelected)
-                                        {
-                                            @if (!row.IsSet)
-                                            {
-                                                var manifest = row.Members[0];
-                                                <input type="text" value="@RestoreTargetFor(manifest)" @oninput="e => SetRestoreTarget(manifest.Id, e.Value?.ToString())" placeholder="target tree" />
-                                            }
-                                            <select class="explorer-backups-restore-mode" value="@_restoreMode"
-                                                    @onchange="OnRestoreModeChanged" title="Restore mode">
-                                                <option value="@LatticeRestoreMode.InPlace">Repair missing items (non-destructive)</option>
-                                                <option value="@LatticeRestoreMode.ShadowCutover">Point-in-time replace (destructive)</option>
-                                            </select>
-                                            <button type="button" class="explorer-btn"
-                                                    disabled="@(_busy || (!row.IsSet && string.IsNullOrWhiteSpace(RestoreTargetFor(row.Members[0]))))"
-                                                    @onclick="@(() => RequestRestore(row))">Restore</button>
-                                            <button type="button" class="explorer-btn explorer-btn-danger"
-                                                    disabled="@_busy"
-                                                    @onclick="@(() => RequestDelete(row))">Delete</button>
-                                        }
-                                    </td>
                                 </tr>
                             }
                         }
@@ -287,6 +299,68 @@
                     <span class="explorer-data-pagenum">Page @(_pager.PageIndex + 1)</span>
                     <button type="button" class="explorer-btn" disabled="@(_busy || !_pager.CanGoNext)" @onclick="NextPageAsync">Next</button>
                 </div>
+
+                @if (SelectedRow is { } selected)
+                {
+                    <div class="explorer-backups-actionpanel">
+                        <h4 class="explorer-backups-actionpanel-title">Actions</h4>
+                        <table class="explorer-backups-actionpanel-table">
+                            <tbody>
+                                @if (!selected.IsSet)
+                                {
+                                    var manifest = selected.Members[0];
+                                    <tr>
+                                        <td class="explorer-backups-actionpanel-label">Target tree</td>
+                                        <td><input type="text" value="@RestoreTargetFor(manifest)" @oninput="e => SetRestoreTarget(manifest.Id, e.Value?.ToString())" placeholder="target tree" /></td>
+                                    </tr>
+                                }
+                                @if (selected.IsIncrementalChain)
+                                {
+                                    <tr>
+                                        <td class="explorer-backups-actionpanel-label">Restore point</td>
+                                        <td>
+                                            <select class="explorer-backups-restore-point" value="@SelectedRestorePoint(selected)"
+                                                    @onchange="e => OnRestorePointChanged(selected, e)" title="Restore point (point in time)">
+                                                @foreach (var member in ChainMembersNewestFirst(selected))
+                                                {
+                                                    <option value="@member.Id">@member.CreatedAtUtc.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss")</option>
+                                                }
+                                            </select>
+                                        </td>
+                                    </tr>
+                                }
+                                <tr>
+                                    <td class="explorer-backups-actionpanel-label">Restore mode</td>
+                                    <td>
+                                        <select class="explorer-backups-restore-mode" value="@_restoreMode"
+                                                @onchange="OnRestoreModeChanged" title="Restore mode">
+                                            <option value="@LatticeRestoreMode.InPlace">Repair missing items (non-destructive)</option>
+                                            <option value="@LatticeRestoreMode.ShadowCutover">Point-in-time replace (destructive)</option>
+                                        </select>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td class="explorer-backups-actionpanel-label"></td>
+                                    <td>
+                                        <button type="button" class="explorer-btn"
+                                                disabled="@(_busy || (!selected.IsSet && string.IsNullOrWhiteSpace(RestoreTargetFor(selected.Members[0]))))"
+                                                @onclick="@(() => RequestRestore(selected))">Restore</button>
+                                        <button type="button" class="explorer-btn explorer-btn-danger"
+                                                disabled="@_busy"
+                                                @onclick="@(() => RequestDelete(selected))">Delete</button>
+                                        @if (!selected.IsSet)
+                                        {
+                                            <button type="button" class="explorer-btn"
+                                                    disabled="@_busy"
+                                                    @onclick="@(() => OpenScheduleAsync(selected))"
+                                                    title="Edit or remove this scope's recurring backup schedule">Schedule</button>
+                                        }
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                }
             }
         </div>
     }
@@ -296,7 +370,19 @@
         <div class="explorer-modal-backdrop" role="presentation">
             <div class="explorer-modal" role="alertdialog" aria-modal="true" aria-labelledby="explorer-delete-title">
                 <h3 id="explorer-delete-title">Delete backup?</h3>
-                @if (_pendingDelete.IsSet)
+                @if (_pendingDelete.IsIncrementalChain)
+                {
+                    var chainCount = _chainCache.TryGetValue(_pendingDelete.Members[0].Id, out var members)
+                        ? members.Count
+                        : _pendingDelete.Members.Count;
+                    <p>
+                        This permanently deletes all @chainCount backups in the incremental
+                        chain <code>@Shorten(_pendingDelete.DisplayId)</code>
+                        ('@_pendingDelete.Name') - the base full backup and every increment.
+                        <strong>This action cannot be undone.</strong>
+                    </p>
+                }
+                else if (_pendingDelete.IsSet)
                 {
                     <p>
                         This permanently deletes all @_pendingDelete.Members.Count member backups
@@ -324,7 +410,19 @@
         <div class="explorer-modal-backdrop" role="presentation">
             <div class="explorer-modal" role="alertdialog" aria-modal="true" aria-labelledby="explorer-restore-title">
                 <h3 id="explorer-restore-title">Restore backup?</h3>
-                @if (_pendingRestore.IsSet)
+                @if (_pendingRestore.IsIncrementalChain)
+                {
+                    var restoreId = SelectedRestorePoint(_pendingRestore);
+                    var point = ChainMembersNewestFirst(_pendingRestore).FirstOrDefault(m => string.Equals(m.Id, restoreId, StringComparison.Ordinal));
+                    <p>
+                        This restores the incremental chain
+                        '@_pendingRestore.Name' as at
+                        <strong>@((point?.CreatedAtUtc ?? _pendingRestore.CreatedAtUtc).UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss"))</strong>
+                        into tree <strong>@RestoreTargetFor(_pendingRestore.Members[0])</strong>,
+                        @RestoreModeDescription.
+                    </p>
+                }
+                else if (_pendingRestore.IsSet)
                 {
                     <p>
                         This restores each of the @_pendingRestore.Members.Count member backups
@@ -354,6 +452,94 @@
             </div>
         </div>
     }
+
+    @if (_pendingSchedule is not null)
+    {
+        <div class="explorer-modal-backdrop" role="presentation">
+            <div class="explorer-modal" role="dialog" aria-modal="true" aria-labelledby="explorer-schedule-title">
+                <h3 id="explorer-schedule-title">Manage schedule</h3>
+                <p>
+                    Recurring backup schedule for tree
+                    <strong>@_pendingSchedule.Members[0].Scope.TreeId</strong>.
+                </p>
+                @if (_scheduleLoading)
+                {
+                    <p class="explorer-backups-hint">Loading schedule...</p>
+                }
+                else
+                {
+                    var scheduleIncremental = _pendingSchedule.Kind == BackupKind.Incremental;
+                    if (!scheduleIncremental)
+                    {
+                        <fieldset class="explorer-backups-schedule" aria-label="Full backup schedule">
+                            <legend>Full backup @(( _scheduleStatus?.FullScheduleRegistered ?? false) ? "(scheduled)" : "(not scheduled)")</legend>
+                            <label>
+                                Every
+                                <input type="number" min="0" max="168" value="@_editFullHours"
+                                       @oninput="e => _editFullHours = ParseInterval(e.Value, 0, 168)"
+                                       disabled="@_busy" aria-label="Full interval hours" /> h
+                            </label>
+                            <label>
+                                <input type="number" min="0" max="59" value="@_editFullMinutes"
+                                       @oninput="e => _editFullMinutes = ParseInterval(e.Value, 0, 59)"
+                                       disabled="@_busy" aria-label="Full interval minutes" /> m
+                            </label>
+                            <button type="button" class="explorer-btn explorer-btn-primary"
+                                    disabled="@(_busy || EditFullInterval <= TimeSpan.Zero)"
+                                    @onclick="@(() => SaveScheduleAsync(incremental: false))">Save</button>
+                            @if (_scheduleStatus?.FullScheduleRegistered ?? false)
+                            {
+                                <button type="button" class="explorer-btn explorer-btn-danger"
+                                        disabled="@_busy"
+                                        @onclick="@(() => RemoveScheduleAsync(incremental: false))">Remove</button>
+                            }
+                        </fieldset>
+                    }
+                    else
+                    {
+                        <fieldset class="explorer-backups-schedule" aria-label="Incremental backup schedule">
+                            <legend>Incremental backup @(( _scheduleStatus?.IncrementalScheduleRegistered ?? false) ? "(scheduled)" : "(not scheduled)")</legend>
+                            <label>
+                                Every
+                                <input type="number" min="0" max="168" value="@_editIncHours"
+                                       @oninput="e => _editIncHours = ParseInterval(e.Value, 0, 168)"
+                                       disabled="@_busy" aria-label="Incremental interval hours" /> h
+                            </label>
+                            <label>
+                                <input type="number" min="0" max="59" value="@_editIncMinutes"
+                                       @oninput="e => _editIncMinutes = ParseInterval(e.Value, 0, 59)"
+                                       disabled="@_busy" aria-label="Incremental interval minutes" /> m
+                            </label>
+                            <button type="button" class="explorer-btn explorer-btn-primary"
+                                    disabled="@(_busy || EditIncrementalInterval <= TimeSpan.Zero)"
+                                    @onclick="@(() => SaveScheduleAsync(incremental: true))">Save</button>
+                            @if (_scheduleStatus?.IncrementalScheduleRegistered ?? false)
+                            {
+                                <button type="button" class="explorer-btn explorer-btn-danger"
+                                        disabled="@_busy"
+                                        @onclick="@(() => RemoveScheduleAsync(incremental: true))">Remove</button>
+                            }
+                        </fieldset>
+                    }
+
+                    var relevantRegistered = scheduleIncremental
+                        ? (_scheduleStatus?.IncrementalScheduleRegistered ?? false)
+                        : (_scheduleStatus?.FullScheduleRegistered ?? false);
+                    if (!relevantRegistered)
+                    {
+                        <p class="explorer-backups-hint">
+                            No @(scheduleIncremental ? "incremental" : "full") backup schedule is registered for
+                            this scope. Set an interval and click Save to register one, or create a scheduled
+                            backup from the New Backup tab.
+                        </p>
+                    }
+                }
+                <div class="explorer-modal-actions">
+                    <button type="button" class="explorer-btn" disabled="@_busy" @onclick="CloseSchedule">Close</button>
+                </div>
+            </div>
+        </div>
+    }
 </section>
 
 @code {
@@ -365,6 +551,10 @@
     private string _captureName = string.Empty;
     private BackupKind _captureKind = BackupKind.Full;
     private string _incrementalBaseId = string.Empty;
+    // The full backups of the single selected tree, loaded via the index-backed
+    // catalog query, that an incremental capture may build on. Refreshed whenever
+    // the incremental scope changes.
+    private IReadOnlyList<BackupManifest> _baseBackups = Array.Empty<BackupManifest>();
     private readonly Dictionary<string, string> _restoreTargets = new(StringComparer.Ordinal);
     private LatticeRestoreMode _restoreMode = LatticeRestoreMode.InPlace;
     private bool _scheduleEnabled;
@@ -373,6 +563,17 @@
     private BackupRow? _pendingDelete;
     private BackupRow? _pendingRestore;
     private bool _busy;
+
+    // Schedule-management modal state: the row (single-scope) whose recurring
+    // schedule is being edited or removed, the loaded scope status, and the
+    // per-kind interval editors prefilled from the current runtime cadence.
+    private BackupRow? _pendingSchedule;
+    private BackupScopeStatus? _scheduleStatus;
+    private bool _scheduleLoading;
+    private int _editFullHours;
+    private int _editFullMinutes;
+    private int _editIncHours;
+    private int _editIncMinutes;
 
     // The two Backups sub-tabs, with the active one retained as a durable
     // preference so the panel reopens on the same sub-tab.
@@ -391,12 +592,23 @@
     // the Existing Backups tab can highlight them right after creation.
     private readonly HashSet<string> _highlightedBackupIds = new(StringComparer.Ordinal);
 
+    // Lazily-loaded incremental chains, keyed by the tip (chain-row) backup id:
+    // the base-first ordered member manifests behind the collapsed row. Populated
+    // when an incremental-chain row is selected so the point-in-time restore
+    // dropdown and the delete-all prompt can enumerate the chain.
+    private readonly Dictionary<string, IReadOnlyList<BackupManifest>> _chainCache = new(StringComparer.Ordinal);
+
+    // The chain member the user picked to restore, per chain-tip id. Defaults to
+    // the tip (the most recent increment) so restoring a chain row without a
+    // choice restores its latest point in time.
+    private readonly Dictionary<string, string> _restorePointByTip = new(StringComparer.Ordinal);
+
     private bool HasSelection => _selectedTrees.Count > 0;
     private bool HasName => !string.IsNullOrWhiteSpace(_captureName);
 
     // Existing Backups paging + filter state. The list is served newest-first,
-    // ten rows to a page, with the filter predicates pushed into the server scan.
-    private const int ExistingPageSize = 10;
+    // five rows to a page, with the filter predicates pushed into the server scan.
+    private const int ExistingPageSize = 5;
     private string _filterName = string.Empty;
     private string _filterCreated = string.Empty;
     private string _filterKind = string.Empty;
@@ -406,9 +618,15 @@
     // set's per-tree members (sharing a stamped SetId) into a single row.
     private IReadOnlyList<BackupRow> Rows => BackupRowGrouping.Group(_pager.Current.Entries);
 
-    // The full standalone backups an incremental capture may build on, gathered
-    // across the whole catalog (not just the current page).
-    private IReadOnlyList<BackupManifest> FullBackups => _summary.FullBackups;
+    // The row backing the Actions panel: the currently selected display row on
+    // the current page, or null when nothing is selected (panel hidden).
+    private BackupRow? SelectedRow => _selectedRowId is null
+        ? null
+        : Rows.FirstOrDefault(r => string.Equals(r.DisplayId, _selectedRowId, StringComparison.Ordinal));
+
+    // The single tree an incremental would target, or null when the selection is
+    // not exactly one tree (incremental is a single-tree capture).
+    private string? IncrementalTree => _selectedTrees.Count == 1 ? _selectedTrees[0] : null;
 
     private bool HasActiveFilter =>
         !string.IsNullOrEmpty(_filterName)
@@ -439,6 +657,10 @@
     private bool CanSchedule => _selectedTrees.Count == 1;
 
     private TimeSpan ScheduleInterval => new(hours: _scheduleHours, minutes: _scheduleMinutes, seconds: 0);
+
+    // The edited intervals for the schedule-management modal, per kind.
+    private TimeSpan EditFullInterval => new(hours: _editFullHours, minutes: _editFullMinutes, seconds: 0);
+    private TimeSpan EditIncrementalInterval => new(hours: _editIncHours, minutes: _editIncMinutes, seconds: 0);
 
     private bool CanBackup
     {
@@ -523,13 +745,85 @@
 
     // Clicking a row selects it (revealing its restore/delete controls); clicking
     // the selected row again clears the selection. Interacting with the table
-    // also drops the just-created highlight.
-    private void SelectRow(BackupRow row)
+    // also drops the just-created highlight. Selecting an incremental-chain row
+    // lazily loads its chain so the point-in-time restore and delete-all prompt
+    // can enumerate the members folded behind the collapsed row.
+    private async Task SelectRow(BackupRow row)
     {
-        _selectedRowId = string.Equals(_selectedRowId, row.DisplayId, StringComparison.Ordinal)
-            ? null
-            : row.DisplayId;
+        if (string.Equals(_selectedRowId, row.DisplayId, StringComparison.Ordinal))
+        {
+            _selectedRowId = null;
+            _highlightedBackupIds.Clear();
+            return;
+        }
+
+        _selectedRowId = row.DisplayId;
         _highlightedBackupIds.Clear();
+
+        if (row.IsIncrementalChain)
+        {
+            await EnsureChainLoadedAsync(row);
+        }
+    }
+
+    // Loads (once) the base-first member manifests of an incremental chain behind
+    // its collapsed tip row. A describe failure or denial folds to the tip alone,
+    // so the row still restores/deletes its own backup.
+    private async Task EnsureChainLoadedAsync(BackupRow row)
+    {
+        var tipId = row.Members[0].Id;
+        if (_chainCache.ContainsKey(tipId))
+        {
+            return;
+        }
+
+        var members = new List<BackupManifest>();
+        try
+        {
+            var description = await Reader.DescribeAsync(tipId);
+            if (description is not null)
+            {
+                foreach (var id in description.ChainBackupIds)
+                {
+                    var memberDescription = await Reader.DescribeAsync(id);
+                    if (memberDescription is not null)
+                    {
+                        members.Add(memberDescription.Manifest);
+                    }
+                }
+            }
+        }
+        catch (LatticeAuthorizationDeniedException)
+        {
+            // Fall back to the tip alone below.
+        }
+
+        if (members.Count == 0)
+        {
+            members.Add(row.Members[0]);
+        }
+
+        _chainCache[tipId] = members;
+        _restorePointByTip[tipId] = tipId;
+    }
+
+    // The chain members of a selected incremental-chain row, newest-first for the
+    // point-in-time restore dropdown; empty until the chain has loaded.
+    private IReadOnlyList<BackupManifest> ChainMembersNewestFirst(BackupRow row) =>
+        _chainCache.TryGetValue(row.Members[0].Id, out var members)
+            ? members.OrderByDescending(m => m.CreatedAtUtc).ToList()
+            : Array.Empty<BackupManifest>();
+
+    private string SelectedRestorePoint(BackupRow row) =>
+        _restorePointByTip.TryGetValue(row.Members[0].Id, out var id) ? id : row.Members[0].Id;
+
+    private void OnRestorePointChanged(BackupRow row, ChangeEventArgs e)
+    {
+        var id = e.Value?.ToString();
+        if (!string.IsNullOrEmpty(id))
+        {
+            _restorePointByTip[row.Members[0].Id] = id;
+        }
     }
 
     private async Task LoadTreesAsync()
@@ -568,7 +862,7 @@
             .GroupBy(t => t.RestoreShadowOfTreeId!, StringComparer.Ordinal)
             .OrderBy(g => g.Key, StringComparer.Ordinal);
 
-    private void AddTree(string id)
+    private async Task AddTree(string id)
     {
         if (!_selectedTrees.Contains(id))
         {
@@ -579,15 +873,42 @@
         {
             _scheduleEnabled = false;
         }
+
+        await RefreshBaseBackupsAsync();
     }
 
-    private void RemoveTree(string id)
+    private async Task RemoveTree(string id)
     {
         _selectedTrees.Remove(id);
 
         if (!CanSchedule)
         {
             _scheduleEnabled = false;
+        }
+
+        await RefreshBaseBackupsAsync();
+    }
+
+    // Reloads the base-backup candidates for the current incremental scope from the
+    // index-backed catalog query, then drops a stale base selection. A no-op that
+    // clears the list unless an incremental of exactly one tree is being composed.
+    private async Task RefreshBaseBackupsAsync()
+    {
+        _baseBackups = _captureKind == BackupKind.Incremental && IncrementalTree is { } tree
+            ? await Reader.LoadFullBackupsAsync(tree)
+            : Array.Empty<BackupManifest>();
+
+        SyncIncrementalBase();
+    }
+
+    // Drop a chosen base backup that no longer belongs to the selected tree, so
+    // the base dropdown never keeps a stale selection after the scope changes.
+    private void SyncIncrementalBase()
+    {
+        if (_incrementalBaseId.Length > 0
+            && !_baseBackups.Any(b => string.Equals(b.Id, _incrementalBaseId, StringComparison.Ordinal)))
+        {
+            _incrementalBaseId = string.Empty;
         }
     }
 
@@ -601,7 +922,7 @@
         return min;
     }
 
-    private void SetKind(BackupKind kind)
+    private async Task SetKind(BackupKind kind)
     {
         _captureKind = kind;
         if (kind == BackupKind.Full)
@@ -609,6 +930,8 @@
             // Full captures carry no base; clear the base selector.
             _incrementalBaseId = string.Empty;
         }
+
+        await RefreshBaseBackupsAsync();
     }
 
     private async Task ReloadAsync()
@@ -632,6 +955,7 @@
     {
         _summary = await Reader.LoadSummaryAsync();
         await _pager.ResetAsync(ExistingPageSize, CurrentFilter);
+        await RefreshBaseBackupsAsync();
     }
 
     private async Task OnNameFilterChanged(string value)
@@ -788,8 +1112,118 @@
         await RestoreRowAsync(row);
     }
 
+    // Opens the schedule-management modal for a single-scope row, loading the
+    // scope's current schedule status and prefilling each interval editor from
+    // the registered runtime cadence (defaulting to one hour when unset).
+    private async Task OpenScheduleAsync(BackupRow row)
+    {
+        _pendingSchedule = row;
+        _scheduleStatus = null;
+        _scheduleLoading = true;
+
+        var scope = row.Members[0].Scope;
+        BackupScopeStatus? status = null;
+        try
+        {
+            status = await Reader.GetScheduleStatusAsync(scope);
+        }
+        finally
+        {
+            _scheduleStatus = status;
+            PrefillScheduleEditors(status);
+            _scheduleLoading = false;
+        }
+    }
+
+    private void PrefillScheduleEditors(BackupScopeStatus? status)
+    {
+        var full = status?.RuntimeFullBackupInterval ?? TimeSpan.FromHours(1);
+        _editFullHours = (int)full.TotalHours;
+        _editFullMinutes = full.Minutes;
+
+        var incremental = status?.RuntimeIncrementalBackupInterval ?? TimeSpan.FromHours(1);
+        _editIncHours = (int)incremental.TotalHours;
+        _editIncMinutes = incremental.Minutes;
+    }
+
+    private void CloseSchedule()
+    {
+        _pendingSchedule = null;
+        _scheduleStatus = null;
+    }
+
+    // Registers or updates the schedule of the chosen kind at the edited interval,
+    // then reloads the scope status so the modal reflects the new cadence.
+    private async Task SaveScheduleAsync(bool incremental)
+    {
+        var row = _pendingSchedule;
+        if (row is null)
+        {
+            return;
+        }
+
+        var scope = row.Members[0].Scope;
+        var interval = incremental ? EditIncrementalInterval : EditFullInterval;
+        if (interval <= TimeSpan.Zero)
+        {
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            _lastResult = await Reader.ScheduleAsync(scope, incremental, interval);
+            _scheduleStatus = await Reader.GetScheduleStatusAsync(scope);
+            PrefillScheduleEditors(_scheduleStatus);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    // Removes the schedule of the chosen kind, then reloads the scope status and
+    // closes the modal when no schedule remains.
+    private async Task RemoveScheduleAsync(bool incremental)
+    {
+        var row = _pendingSchedule;
+        if (row is null)
+        {
+            return;
+        }
+
+        var scope = row.Members[0].Scope;
+        _busy = true;
+        try
+        {
+            _lastResult = await Reader.UnscheduleAsync(scope, incremental);
+            _scheduleStatus = await Reader.GetScheduleStatusAsync(scope);
+            PrefillScheduleEditors(_scheduleStatus);
+        }
+        finally
+        {
+            _busy = false;
+        }
+
+        if (_scheduleStatus is null
+            || (!_scheduleStatus.FullScheduleRegistered && !_scheduleStatus.IncrementalScheduleRegistered))
+        {
+            CloseSchedule();
+        }
+    }
+
     private async Task RestoreRowAsync(BackupRow row)
     {
+        if (row.IsIncrementalChain)
+        {
+            // Restore the chosen point in time: the selected member id replays its
+            // own base-first chain server-side, into the chosen target tree.
+            var manifest = row.Members[0];
+            var restoreId = SelectedRestorePoint(row);
+            await RunAsync(() => Reader.RestoreAsync(restoreId, RestoreTargetFor(manifest), _restoreMode));
+            return;
+        }
+
         if (!row.IsSet)
         {
             var manifest = row.Members[0];
@@ -840,6 +1274,20 @@
         }
 
         _pendingDelete = null;
+
+        if (row.IsIncrementalChain)
+        {
+            // Deleting an incremental-chain row removes every backup in the chain
+            // (the base full backup and all increments), so no orphaned members
+            // remain. Fall back to the tip alone if the chain has not loaded.
+            var chain = _chainCache.TryGetValue(row.Members[0].Id, out var loaded)
+                ? loaded
+                : row.Members;
+            await RunManyAsync(
+                chain.Select(m => (Func<Task<BackupOperationResult>>)(() => Reader.DeleteAsync(m.Id))),
+                $"Deleted {chain.Count} backups in the incremental chain.");
+            return;
+        }
 
         if (!row.IsSet)
         {

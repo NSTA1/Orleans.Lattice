@@ -127,6 +127,27 @@ public sealed class LatticeBackupControlAdminTests
     }
 
     [Test]
+    public async Task GetScopeStatusAsync_carries_runtime_schedule_intervals()
+    {
+        await _fixture.InitializeAsync();
+        var scope = BackupScopeSelector.WholeTree(Source);
+
+        await _fixture.Control.ScheduleBackupAsync(
+            new LatticeBackupScheduleRequest(scope, incremental: false, TimeSpan.FromMinutes(20)));
+        await _fixture.Control.ScheduleBackupAsync(
+            new LatticeBackupScheduleRequest(scope, incremental: true, TimeSpan.FromMinutes(45)));
+
+        var status = await _fixture.Control.GetScopeStatusAsync(scope);
+
+        Assert.That(status, Is.Not.Null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(status!.RuntimeFullBackupInterval, Is.EqualTo(TimeSpan.FromMinutes(20)));
+            Assert.That(status.RuntimeIncrementalBackupInterval, Is.EqualTo(TimeSpan.FromMinutes(45)));
+        });
+    }
+
+    [Test]
     public async Task GetScopeStatusAsync_denied_permission_fails_closed()
     {
         await _fixture.InitializeAsync();

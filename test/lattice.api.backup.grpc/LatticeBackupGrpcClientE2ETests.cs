@@ -316,6 +316,43 @@ public sealed class LatticeBackupGrpcClientE2ETests
     }
 
     [Test]
+    public async Task CancelScheduleAsync_removes_a_recurring_schedule_over_the_wire()
+    {
+        var scope = BackupScopeSelector.WholeTree("orders-cancel");
+        await _host.Client.ScheduleBackupAsync(scope, incremental: false, TimeSpan.FromMinutes(30));
+
+        await _host.Client.CancelScheduleAsync(scope, incremental: false);
+
+        var grain = _fixture.GrainFactory.GetGrain<ILatticeBackupSchedulerGrain>(BackupScopeKey.For(scope));
+        var hasFull = await grain.HasScheduleAsync(incremental: false);
+        var status = await _host.Client.GetScopeStatusAsync(scope);
+        Assert.Multiple(() =>
+        {
+            Assert.That(hasFull, Is.False);
+            Assert.That(status, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task GetScopeStatusAsync_round_trips_runtime_intervals_over_the_wire()
+    {
+        var scope = BackupScopeSelector.WholeTree("orders-status");
+
+        await _host.Client.ScheduleBackupAsync(scope, incremental: false, TimeSpan.FromMinutes(20));
+        await _host.Client.ScheduleBackupAsync(scope, incremental: true, TimeSpan.FromMinutes(45));
+
+        var status = await _host.Client.GetScopeStatusAsync(scope);
+        Assert.That(status, Is.Not.Null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(status!.FullScheduleRegistered, Is.True);
+            Assert.That(status.IncrementalScheduleRegistered, Is.True);
+            Assert.That(status.RuntimeFullBackupInterval, Is.EqualTo(TimeSpan.FromMinutes(20)));
+            Assert.That(status.RuntimeIncrementalBackupInterval, Is.EqualTo(TimeSpan.FromMinutes(45)));
+        });
+    }
+
+    [Test]
     public void ScheduleBackupAsync_null_scope_throws()
     {
         Assert.That(

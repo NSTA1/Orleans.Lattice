@@ -68,11 +68,59 @@ internal sealed class BackupCatalogIndexQuery
             ? null
             : await _viewFactory.GetAsync(BackupConstants.CatalogIndexView, cancellationToken).ConfigureAwait(false);
 
+        // An incremental chain is shown as a single row: its tip (the most recent
+        // increment). Every backup referenced as another backup's base is an
+        // ancestor the tip's collapsed row owns, so it is folded out of the listing.
+        // This must be decided over the whole catalog, not per page, because chain
+        // members carry distinct capture times and are scattered across pages.
+        var referencedBaseIds = view is not null
+            ? await BuildReferencedBaseIdsFromIndexAsync(view, cancellationToken).ConfigureAwait(false)
+            : await BuildReferencedBaseIdsFromCatalogAsync(cancellationToken).ConfigureAwait(false);
+
         var source = view is not null
             ? ScanIndexAsync(view, startKey, cancellationToken)
             : ScanFullScanAsync(startKey, cancellationToken);
 
-        return await PageAsync(source, request, pageSize, isReadAuthorized, cancellationToken).ConfigureAwait(false);
+        return await PageAsync(source, request, pageSize, referencedBaseIds, isReadAuthorized, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Collects, from the compact index, every backup id referenced as another
+    /// backup's base - the ancestors an incremental chain's tip row folds in.
+    /// </summary>
+    private static async Task<HashSet<string>> BuildReferencedBaseIdsFromIndexAsync(
+        ILatticeView view,
+        CancellationToken cancellationToken)
+    {
+        var referenced = new HashSet<string>(StringComparer.Ordinal);
+        await foreach (var entry in view.EntriesAsync(null, null, cancellationToken).ConfigureAwait(false))
+        {
+            var row = RowSerializer.Deserialize(entry.Value);
+            if (row.BaseBackupId is { Length: > 0 } baseId)
+            {
+                referenced.Add(baseId);
+            }
+        }
+
+        return referenced;
+    }
+
+    /// <summary>
+    /// Collects every referenced base id from the authoritative catalog, used when
+    /// the index view is absent and the listing degrades to a full scan.
+    /// </summary>
+    private async Task<HashSet<string>> BuildReferencedBaseIdsFromCatalogAsync(CancellationToken cancellationToken)
+    {
+        var referenced = new HashSet<string>(StringComparer.Ordinal);
+        await foreach (var manifest in _catalog.ListAsync(cancellationToken).ConfigureAwait(false))
+        {
+            if (manifest.BaseBackupId is { Length: > 0 } baseId)
+            {
+                referenced.Add(baseId);
+            }
+        }
+
+        return referenced;
     }
 
     /// <summary>Streams index entries from the materialised view in newest-first key order.</summary>
@@ -132,12 +180,14 @@ internal sealed class BackupCatalogIndexQuery
         CreatedAtUtc = manifest.CreatedAtUtc,
         SetId = manifest.SetId,
         SetName = manifest.SetName,
+        BaseBackupId = manifest.BaseBackupId,
     };
 
     private async Task<BackupCatalogPage> PageAsync(
         IAsyncEnumerable<IndexEntry> source,
         BackupCatalogRequest request,
         int pageSize,
+        HashSet<string> referencedBaseIds,
         Func<BackupScopeSelector, CancellationToken, ValueTask<bool>> isReadAuthorized,
         CancellationToken cancellationToken)
     {
@@ -159,7 +209,7 @@ internal sealed class BackupCatalogIndexQuery
             var thisGroupKey = GroupKeyOf(entry.Key);
             if (groupKey is not null && !string.Equals(thisGroupKey, groupKey, StringComparison.Ordinal))
             {
-                await FinalizeGroupAsync(group, groupLastKey!, request, isReadAuthorized, matched, emitted, cancellationToken)
+                await FinalizeGroupAsync(group, groupLastKey!, request, referencedBaseIds, isReadAuthorized, matched, emitted, cancellationToken)
                     .ConfigureAwait(false);
                 group.Clear();
 
@@ -178,7 +228,7 @@ internal sealed class BackupCatalogIndexQuery
 
         if (group.Count > 0 && matched.Count <= pageSize)
         {
-            await FinalizeGroupAsync(group, groupLastKey!, request, isReadAuthorized, matched, emitted, cancellationToken)
+            await FinalizeGroupAsync(group, groupLastKey!, request, referencedBaseIds, isReadAuthorized, matched, emitted, cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -201,11 +251,20 @@ internal sealed class BackupCatalogIndexQuery
         List<BackupCatalogIndexRow> members,
         string groupLastKey,
         BackupCatalogRequest request,
+        HashSet<string> referencedBaseIds,
         Func<BackupScopeSelector, CancellationToken, ValueTask<bool>> isReadAuthorized,
         List<(IReadOnlyList<BackupManifest> Manifests, string CursorKey)> matched,
         HashSet<string> emitted,
         CancellationToken cancellationToken)
     {
+        // Fold incremental-chain ancestors: a group every one of whose distinct
+        // backups is referenced as some other backup's base is an ancestor the
+        // chain tip's collapsed row already represents, so it is not listed.
+        if (members.TrueForAll(r => referencedBaseIds.Contains(r.BackupId)))
+        {
+            return;
+        }
+
         if (!MatchesFilters(members, request))
         {
             return;

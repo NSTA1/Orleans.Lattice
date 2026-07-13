@@ -368,4 +368,83 @@ public class BackupCatalogReaderTests
             () => CreateReader(client).ScheduleAsync(BackupScopeSelector.WholeTree("t"), incremental: false, TimeSpan.Zero),
             Throws.InstanceOf<ArgumentOutOfRangeException>());
     }
+
+    [Test]
+    public async Task UnscheduleAsync_success_reports_the_removed_kind_and_forwards_the_request()
+    {
+        var client = new FakeBackupControlClient();
+        var scope = BackupScopeSelector.WholeTree("tree-a");
+
+        var result = await CreateReader(client).UnscheduleAsync(scope, incremental: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsSuccess, Is.True);
+            Assert.That(result.Message, Is.EqualTo("Removed the recurring incremental backup schedule."));
+            Assert.That(client.LastCanceledScope, Is.EqualTo(scope));
+            Assert.That(client.LastCanceledIncremental, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task UnscheduleAsync_denied_degrades_gracefully()
+    {
+        var client = new FakeBackupControlClient
+        {
+            MutationThrows = new LatticeAuthorizationDeniedException("unschedule denied"),
+        };
+
+        var result = await CreateReader(client)
+            .UnscheduleAsync(BackupScopeSelector.WholeTree("tree-a"), incremental: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(BackupOperationStatus.Denied));
+            Assert.That(result.Message, Is.EqualTo("unschedule denied"));
+        });
+    }
+
+    [Test]
+    public async Task GetScheduleStatusAsync_returns_scope_status()
+    {
+        var scope = BackupScopeSelector.WholeTree("tree-a");
+        var expected = new BackupScopeStatus(
+            scope,
+            fullScheduleRegistered: true,
+            incrementalScheduleRegistered: false,
+            lastFullRunUtc: null,
+            lastFullSuccessUtc: null,
+            lastIncrementalRunUtc: null,
+            lastIncrementalSuccessUtc: null,
+            lastRunOutcome: BackupScopeRunOutcome.None,
+            chainDepth: 0,
+            runtimeFullBackupInterval: TimeSpan.FromMinutes(20));
+        var client = new FakeBackupControlClient { ScopeStatusResult = expected };
+
+        var actual = await CreateReader(client).GetScheduleStatusAsync(scope);
+
+        Assert.That(actual, Is.SameAs(expected));
+    }
+
+    [Test]
+    public async Task GetScheduleStatusAsync_returns_null_for_denial_or_transport_failure()
+    {
+        var denied = new FakeBackupControlClient
+        {
+            ScopeStatusThrows = new LatticeAuthorizationDeniedException("status denied"),
+        };
+        var failed = new FakeBackupControlClient
+        {
+            ScopeStatusThrows = new RpcException(new Status(StatusCode.Unavailable, "gone")),
+        };
+
+        var deniedStatus = await CreateReader(denied).GetScheduleStatusAsync(BackupScopeSelector.WholeTree("tree-a"));
+        var failedStatus = await CreateReader(failed).GetScheduleStatusAsync(BackupScopeSelector.WholeTree("tree-a"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(deniedStatus, Is.Null);
+            Assert.That(failedStatus, Is.Null);
+        });
+    }
 }

@@ -108,6 +108,9 @@ public sealed class BackupCatalogPagerTests
         public Task<BackupCatalogSummary> LoadSummaryAsync(CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
+        public Task<IReadOnlyList<BackupManifest>> LoadFullBackupsAsync(string treeId, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
         public Task<BackupChainDescription?> DescribeAsync(string backupId, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
@@ -127,6 +130,12 @@ public sealed class BackupCatalogPagerTests
             throw new NotSupportedException();
 
         public Task<BackupOperationResult> ScheduleAsync(BackupScopeSelector scope, bool incremental, TimeSpan interval, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<BackupOperationResult> UnscheduleAsync(BackupScopeSelector scope, bool incremental, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<BackupScopeStatus?> GetScheduleStatusAsync(BackupScopeSelector scope, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
     }
 }

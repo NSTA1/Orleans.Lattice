@@ -24,12 +24,23 @@ public interface IBackupCatalogReader
 
     /// <summary>
     /// Gathers the catalog-wide facets the Existing Backups filter row needs: the
-    /// distinct kinds and scopes present, and the full standalone backups an
-    /// incremental capture can build on. A denial or failure folds into the
+    /// distinct kinds and scopes present. A denial or failure folds into the
     /// returned summary's status rather than throwing.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task<BackupCatalogSummary> LoadSummaryAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Loads the full backups of <paramref name="treeId"/> - the candidate bases an
+    /// incremental capture of that tree can build on - newest first. The kind and
+    /// scope predicates are pushed into the same index-backed catalog query the
+    /// listing uses, so the result is exactly the tree's full backups the catalog
+    /// holds (set members included). A denial or failure folds into an empty list
+    /// rather than throwing.
+    /// </summary>
+    /// <param name="treeId">The scope tree id to gather full backups for. Must not be <see langword="null"/> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<IReadOnlyList<BackupManifest>> LoadFullBackupsAsync(string treeId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Describes a backup chain, or returns <see langword="null"/> for an unknown
@@ -90,4 +101,15 @@ public interface IBackupCatalogReader
     /// <param name="interval">The requested cadence between captures. Must be strictly positive.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task<BackupOperationResult> ScheduleAsync(BackupScopeSelector scope, bool incremental, TimeSpan interval, CancellationToken cancellationToken = default);
+
+    /// <summary>Removes a recurring backup schedule for <paramref name="scope"/>, folding a denial into the result.</summary>
+    /// <param name="scope">The scope whose schedule should be removed. Must not be <see langword="null"/>.</param>
+    /// <param name="incremental"><see langword="true"/> to remove the incremental schedule; otherwise the full schedule.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<BackupOperationResult> UnscheduleAsync(BackupScopeSelector scope, bool incremental, CancellationToken cancellationToken = default);
+
+    /// <summary>Reads a scope's backup schedule status, returning <see langword="null"/> when unknown or unavailable.</summary>
+    /// <param name="scope">The scope to describe. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<BackupScopeStatus?> GetScheduleStatusAsync(BackupScopeSelector scope, CancellationToken cancellationToken = default);
 }

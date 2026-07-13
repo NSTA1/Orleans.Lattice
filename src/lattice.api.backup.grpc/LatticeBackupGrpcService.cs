@@ -76,6 +76,12 @@ internal abstract class LatticeBackupGrpcServiceBase
     /// <summary>Registers a recurring backup schedule. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
     public abstract Task<BackupScheduleResponse> ScheduleBackup(BackupScheduleRequestMessage request, ServerCallContext context);
 
+    /// <summary>Removes a recurring backup schedule. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<BackupCancelScheduleResponse> CancelSchedule(BackupCancelScheduleRequestMessage request, ServerCallContext context);
+
+    /// <summary>Reads a scope's backup schedule status. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<BackupScopeStatusResponse> GetScopeStatus(BackupScopeStatusRequestMessage request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at
     /// startup with <paramref name="serviceImpl"/> set to
@@ -108,6 +114,8 @@ internal abstract class LatticeBackupGrpcServiceBase
             binder.AddMethod(methods.GetAuthScheme, (UnaryServerMethod<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>?)null);
             binder.AddMethod(methods.ProbeCapabilities, (UnaryServerMethod<BackupCapabilityProbeRequest, BackupScopeCapabilities>?)null);
             binder.AddMethod(methods.ScheduleBackup, (UnaryServerMethod<BackupScheduleRequestMessage, BackupScheduleResponse>?)null);
+            binder.AddMethod(methods.CancelSchedule, (UnaryServerMethod<BackupCancelScheduleRequestMessage, BackupCancelScheduleResponse>?)null);
+            binder.AddMethod(methods.GetScopeStatus, (UnaryServerMethod<BackupScopeStatusRequestMessage, BackupScopeStatusResponse>?)null);
             return;
         }
 
@@ -124,6 +132,8 @@ internal abstract class LatticeBackupGrpcServiceBase
         binder.AddMethod(methods.GetAuthScheme, new UnaryServerMethod<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>(serviceImpl.GetAuthScheme));
         binder.AddMethod(methods.ProbeCapabilities, new UnaryServerMethod<BackupCapabilityProbeRequest, BackupScopeCapabilities>(serviceImpl.ProbeCapabilities));
         binder.AddMethod(methods.ScheduleBackup, new UnaryServerMethod<BackupScheduleRequestMessage, BackupScheduleResponse>(serviceImpl.ScheduleBackup));
+        binder.AddMethod(methods.CancelSchedule, new UnaryServerMethod<BackupCancelScheduleRequestMessage, BackupCancelScheduleResponse>(serviceImpl.CancelSchedule));
+        binder.AddMethod(methods.GetScopeStatus, new UnaryServerMethod<BackupScopeStatusRequestMessage, BackupScopeStatusResponse>(serviceImpl.GetScopeStatus));
     }
 }
 
@@ -235,6 +245,22 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
                 ? LatticeBackupScheduleOptions.MinimumInterval
                 : interval;
             return new BackupScheduleResponse { Scheduled = true, EffectiveIntervalTicks = effective.Ticks };
+        });
+
+    /// <inheritdoc />
+    public override Task<BackupCancelScheduleResponse> CancelSchedule(BackupCancelScheduleRequestMessage request, ServerCallContext context)
+        => InvokeAsync(request, context, static async (control, req, ct) =>
+        {
+            await control.CancelScheduleAsync(req.Scope, req.Incremental, ct).ConfigureAwait(false);
+            return new BackupCancelScheduleResponse();
+        });
+
+    /// <inheritdoc />
+    public override Task<BackupScopeStatusResponse> GetScopeStatus(BackupScopeStatusRequestMessage request, ServerCallContext context)
+        => InvokeAsync(request, context, static async (control, req, ct) =>
+        {
+            var status = await control.GetScopeStatusAsync(req.Scope, ct).ConfigureAwait(false);
+            return status is null ? new BackupScopeStatusResponse { Found = false } : ToScopeStatusResponse(status);
         });
 
     /// <inheritdoc />
@@ -458,6 +484,23 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
         {
             SetManifest = result.SetManifest,
             Members = result.Members.Select(ToCaptureResponse).ToList(),
+        };
+
+    private static BackupScopeStatusResponse ToScopeStatusResponse(BackupScopeStatus status) =>
+        new()
+        {
+            Found = true,
+            Scope = status.Scope,
+            FullScheduleRegistered = status.FullScheduleRegistered,
+            IncrementalScheduleRegistered = status.IncrementalScheduleRegistered,
+            LastFullRunUtc = status.LastFullRunUtc,
+            LastFullSuccessUtc = status.LastFullSuccessUtc,
+            LastIncrementalRunUtc = status.LastIncrementalRunUtc,
+            LastIncrementalSuccessUtc = status.LastIncrementalSuccessUtc,
+            LastRunOutcome = status.LastRunOutcome,
+            ChainDepth = status.ChainDepth,
+            RuntimeFullBackupIntervalTicks = status.RuntimeFullBackupInterval?.Ticks,
+            RuntimeIncrementalBackupIntervalTicks = status.RuntimeIncrementalBackupInterval?.Ticks,
         };
 
     private static RestoreResponse ToRestoreResponse(LatticeRestoreResult result) =>

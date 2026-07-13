@@ -33,7 +33,7 @@ namespace Orleans.Lattice.Backup;
 public sealed class BackupCatalogIndexProjection : ILatticeViewProjection
 {
     /// <summary>The stable code-identity version of the index projection logic.</summary>
-    public const string Version = "backup-catalog-index-v2";
+    public const string Version = "backup-catalog-index-v3";
 
     private static readonly ILatticeSerializer<BackupManifest> ManifestSerializer =
         JsonLatticeSerializer<BackupManifest>.Default;
@@ -72,6 +72,7 @@ public sealed class BackupCatalogIndexProjection : ILatticeViewProjection
             CreatedAtUtc = manifest.CreatedAtUtc,
             SetId = manifest.SetId,
             SetName = manifest.SetName,
+            BaseBackupId = manifest.BaseBackupId,
         };
 
         // SourceKey is deliberately left unset: the index key is value-derived, so

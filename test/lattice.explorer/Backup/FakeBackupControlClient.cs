@@ -99,6 +99,10 @@ internal sealed class FakeBackupControlClient : IBackupControlClient
     public bool? LastScheduledIncremental { get; private set; }
     public TimeSpan? LastScheduledInterval { get; private set; }
     public TimeSpan ScheduleResult { get; set; } = TimeSpan.FromMinutes(1);
+    public BackupScopeSelector? LastCanceledScope { get; private set; }
+    public bool? LastCanceledIncremental { get; private set; }
+    public BackupScopeStatus? ScopeStatusResult { get; set; }
+    public Exception? ScopeStatusThrows { get; set; }
 
     public Task<bool> DeleteBackupAsync(string backupId, CancellationToken cancellationToken = default)
     {
@@ -121,5 +125,27 @@ internal sealed class FakeBackupControlClient : IBackupControlClient
         }
 
         return Task.FromResult(ScheduleResult);
+    }
+
+    public Task CancelScheduleAsync(BackupScopeSelector scope, bool incremental, CancellationToken cancellationToken = default)
+    {
+        LastCanceledScope = scope;
+        LastCanceledIncremental = incremental;
+        if (MutationThrows is not null)
+        {
+            throw MutationThrows;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task<BackupScopeStatus?> GetScopeStatusAsync(BackupScopeSelector scope, CancellationToken cancellationToken = default)
+    {
+        if (ScopeStatusThrows is not null)
+        {
+            throw ScopeStatusThrows;
+        }
+
+        return Task.FromResult<BackupScopeStatus?>(ScopeStatusResult);
     }
 }

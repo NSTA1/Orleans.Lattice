@@ -78,6 +78,38 @@ public sealed class LatticeBackupControlScheduleTests
     }
 
     [Test]
+    public async Task CancelScheduleAsync_unregisters_the_requested_reminder_when_granted()
+    {
+        await _fixture.InitializeAsync();
+        var scope = BackupScopeSelector.WholeTree(Source);
+        await _fixture.Control.ScheduleBackupAsync(
+            new LatticeBackupScheduleRequest(scope, incremental: false, TimeSpan.FromMinutes(20)));
+
+        await _fixture.Control.CancelScheduleAsync(scope, incremental: false);
+
+        var grain = _fixture.GrainFactory.GetGrain<ILatticeBackupSchedulerGrain>(BackupScopeKey.For(scope));
+        Assert.That(await grain.HasScheduleAsync(incremental: false), Is.False);
+    }
+
+    [Test]
+    public async Task CancelScheduleAsync_denied_permission_fails_closed()
+    {
+        await _fixture.InitializeAsync();
+        var scope = BackupScopeSelector.WholeTree(Source);
+        await _fixture.Control.ScheduleBackupAsync(
+            new LatticeBackupScheduleRequest(scope, incremental: false, TimeSpan.FromMinutes(20)));
+        var denying = _fixture.CreateControlWith(
+            new BackupAccessAuthorizer(new DenyingAccessGate("no backup grant"), membership: null));
+
+        Assert.That(
+            async () => await denying.CancelScheduleAsync(scope, incremental: false),
+            Throws.InstanceOf<LatticeAuthorizationDeniedException>());
+
+        var grain = _fixture.GrainFactory.GetGrain<ILatticeBackupSchedulerGrain>(BackupScopeKey.For(scope));
+        Assert.That(await grain.HasScheduleAsync(incremental: false), Is.True);
+    }
+
+    [Test]
     public async Task ScheduleBackupAsync_null_request_throws()
     {
         await _fixture.InitializeAsync();
