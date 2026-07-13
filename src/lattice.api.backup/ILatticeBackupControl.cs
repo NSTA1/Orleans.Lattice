@@ -244,6 +244,31 @@ internal interface ILatticeBackupControl
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Restores a backup into a <b>fresh</b> cluster from the durable sink alone,
+    /// after authorizing the operation fail-closed as a high-privilege
+    /// administrative disaster-recovery action. Resolves the target backup and its
+    /// base chain directly from the sink (never the catalog), bootstraps the
+    /// reserved <c>sys-</c> trees if they are absent, replays the chain through the
+    /// HLC-preserving restore engine, and re-projects the catalog from the sink so
+    /// the recovered cluster ends up with a correct catalog. This is the cold entry
+    /// point that lets a cluster which lost its grain storage - and therefore its
+    /// <c>sys-backup-catalog</c> - recover its backups using only the backup
+    /// medium. Idempotent: re-running the same request converges to the same state.
+    /// </summary>
+    /// <param name="request">The restore request. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The restore outcome.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
+    /// <exception cref="LatticeRestoreValidationException">
+    /// No backup with the requested id exists in the sink, or the backup fails
+    /// pre-apply validation (a broken base chain or a missing / tampered artifact).
+    /// </exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to restore the target scope.</exception>
+    Task<LatticeRestoreResult> ColdRestoreAsync(
+        LatticeRestoreRequest request,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Reads a single scope's schedule and last-run status, or
     /// <see langword="null"/> when the scope has no registered schedule and no
     /// catalogued backup. Authorizes the scope's read grant fail-closed before

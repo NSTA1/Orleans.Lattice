@@ -95,6 +95,12 @@ Rebuilds the in-cluster catalog from the durable sink, treating the sink as the 
 
 - `Task<BackupCatalogRebuildReport> RebuildFromSinkAsync(CancellationToken cancellationToken = default)` - scans every manifest the sink holds (via `ILatticeBackupSink.ListManifestsAsync`) and re-registers each into the catalog under system-origin. Idempotent and safe to re-run: a manifest already catalogued is reconciled in place (keeping its immutable capture timestamp) rather than duplicated, and a catalog missing rows the sink has is repopulated. Returns a `BackupCatalogRebuildReport` summarizing counts scanned, freshly added, and reconciled.
 
+### `ILatticeBackupColdRestoreService`
+
+Restores a backup into a **fresh** cluster from the durable sink alone, with zero dependency on any surviving `sys-backup-catalog` tree. This is the disaster-recovery entry point: a cluster that lost its grain storage (so its catalog is gone) but still has the external sink can enumerate, resolve, chain-walk, and restore its backups from the sink.
+
+- `Task<LatticeRestoreResult> ColdRestoreAsync(LatticeRestoreRequest request, CancellationToken cancellationToken = default)` - bootstraps the reserved `sys-` trees if they are absent, resolves the target manifest and its `BaseBackupId` chain directly from the sink (never the catalog), verifies every referenced artifact is present and intact, replays the chain through the HLC-preserving restore engine, then re-projects the catalog from the sink so the recovered cluster is left with a correct catalog. Reuses `LatticeRestoreRequest` / `LatticeRestoreResult`. Idempotent. Throws `LatticeRestoreValidationException` when the backup is absent from the sink, the base chain is broken, or an artifact is missing or tampered; throws `ArgumentNullException` when `request` is null.
+
 ## Extension seams (coordinated restore)
 
 These backup-package-local seams let the replication package layer an atomic multi-tree, multi-cluster restore on top of the backup engine without the backup package taking a dependency on replication. Each has a default no-op registration installed by `AddLatticeBackup`, so a single-cluster host always takes the plain local restore path; the replication package (or the host) supplies the real implementation.

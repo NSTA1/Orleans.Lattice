@@ -147,6 +147,14 @@ public static class LatticeBackupServiceCollectionExtensions
         builder.Services.TryAddSingleton<ILatticeCoordinatedRestoreEngine>(
             sp => sp.GetRequiredService<LatticeBackupRestoreService>());
 
+        // The cold, catalog-free disaster-restore orchestrator: resolves a backup
+        // from the sink alone, bootstraps the reserved sys- trees, delegates the
+        // causal-preserving replay to the restore engine above, and re-projects the
+        // catalog from the sink afterwards. A pure orchestration over the sink,
+        // restore, catalog-rebuild, and initializer seams, so it carries no extra
+        // state and is safe to re-run.
+        builder.Services.TryAddSingleton<ILatticeBackupColdRestoreService, LatticeBackupColdRestoreService>();
+
         // The incremental-capture seam is served by the same capture-engine
         // singleton: it emits a true forward-WAL delta (as a uniform entry-array
         // artifact so the restore chain decodes base and increments through one
