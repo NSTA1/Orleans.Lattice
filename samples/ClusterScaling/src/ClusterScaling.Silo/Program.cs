@@ -54,14 +54,18 @@ var tableServiceClient = new TableServiceClient(new Uri(tableUri), credential);
 builder.Logging.AddSimpleConsole(o => o.SingleLine = true);
 
 // ACA terminates external TLS at its managed ingress and forwards to the
-// container as HTTP/2 (the ingress 'transport: http2' the bicep sets). Listen
-// with Http1AndHttp2 so the same port serves both the gRPC data API (HTTP/2)
-// and the plain GET /lattice/scale scrape (which KEDA issues as HTTP/1.1 and
-// the ingress forwards over HTTP/2). No server-side certificate is needed - the
-// TLS boundary is the ingress, not the container.
+// container as CLEARTEXT HTTP/2 - the ingress 'transport: http2' the bicep sets
+// talks h2c (HTTP/2 prior knowledge) to the backend. On a plaintext port Kestrel
+// cannot ALPN-negotiate the protocol (ALPN needs TLS), so Http1AndHttp2 would
+// silently downgrade to HTTP/1.1 only and the ingress's h2c connection preface
+// would be rejected (the caller sees 'upstream connect error / refused stream
+// reset', and /lattice/scale returns 503). Listen with Http2 (prior-knowledge
+// h2c) so the same port serves both the gRPC data API and the plain GET
+// /lattice/scale scrape - both arrive from the ingress as HTTP/2. No server
+// certificate is needed: the TLS boundary is the ingress, not the container.
 builder.WebHost.ConfigureKestrel(options =>
 {
-    options.ListenAnyIP(httpPort, listen => listen.Protocols = HttpProtocols.Http1AndHttp2);
+    options.ListenAnyIP(httpPort, listen => listen.Protocols = HttpProtocols.Http2);
 });
 
 builder.Host.UseOrleans(silo =>
