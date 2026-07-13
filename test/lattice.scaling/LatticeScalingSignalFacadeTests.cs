@@ -117,4 +117,22 @@ public sealed class LatticeScalingSignalFacadeTests
 
         Assert.That(signal.Reason, Is.EqualTo(LatticeScalingSignal.WarmingUp));
     }
+
+    [Test]
+    public async Task Sampling_publishes_the_scaling_gauges()
+    {
+        var (facade, _) = Build(new FakeCompute(new ComputePressure { Activation = 0.5 }), replicas: 4);
+
+        await facade.SampleOnceAsync(CancellationToken.None);
+        var signal = await facade.GetScalingSignalAsync();
+        var published = ScalingSignalGaugeRegistry.Latest;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(published.ScaleValue, Is.EqualTo(signal.ScaleValue).Within(1e-9));
+            Assert.That(published.RawScaleValue, Is.EqualTo(signal.RawScaleValue).Within(1e-9));
+            Assert.That(published.ActivationPressure, Is.EqualTo(signal.Compute.Activation).Within(1e-9));
+            Assert.That(published.RecommendedReplicas, Is.EqualTo(signal.RecommendedReplicas));
+        });
+    }
 }

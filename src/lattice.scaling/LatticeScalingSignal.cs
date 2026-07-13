@@ -94,6 +94,13 @@ internal sealed class LatticeScalingSignal : ILatticeScalingSignal, IHostedServi
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
     {
+        // Create the orleans.lattice.scaling observable gauges (idempotent) and
+        // publish the seeded warming-up snapshot so a scrape before the first
+        // sample reports well-formed zeros honouring the replica floor.
+        ScalingSignalGaugeRegistry.EnsureRegistered();
+        ScalingSignalGaugeRegistry.Publish(
+            ScalingGaugeSnapshot.FromSignal(Volatile.Read(ref _cachedTask).Result));
+
         _loopCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _loopTask = RunSamplingLoopAsync(_loopCts.Token);
         return Task.CompletedTask;
@@ -159,6 +166,10 @@ internal sealed class LatticeScalingSignal : ILatticeScalingSignal, IHostedServi
 
             var signal = _computer.Compute(compute, storage, replicas, splitInFlight, now);
             Volatile.Write(ref _cachedTask, Task.FromResult(signal));
+
+            // Publish the flat scalar projection for the observable gauges. The
+            // fold happens here, off the scrape path.
+            ScalingSignalGaugeRegistry.Publish(ScalingGaugeSnapshot.FromSignal(signal));
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
