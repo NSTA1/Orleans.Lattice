@@ -1,5 +1,5 @@
-# ClusterScaling silo image. Build from the REPOSITORY ROOT so the
-# ProjectReferences to src/ resolve:
+# ClusterScaling silo image. Build from the REPOSITORY ROOT so the source of the
+# referenced src/ projects is in the build context:
 #
 #   az acr build --registry <myregistry> --image clusterscaling-silo:latest \
 #     --file samples/ClusterScaling/src/ClusterScaling.Silo/Dockerfile .
@@ -8,10 +8,20 @@
 #
 #   docker build -f samples/ClusterScaling/src/ClusterScaling.Silo/Dockerfile \
 #     -t clusterscaling-silo:latest .
+#
+# deploy.ps1 orchestrates the az acr build for you. The repo-root .dockerignore
+# strips bin/obj, tests, docs, and scratch so only source is uploaded/copied.
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
-COPY . .
+
+# Copy only what the silo build needs: the root build props and the source of
+# the src/ projects (the whole src/ tree, so transitive ProjectReferences
+# resolve without enumerating the exact chain here) plus the sample sources.
+COPY Directory.Build.targets ./
+COPY src/ src/
+COPY samples/ClusterScaling/src/ samples/ClusterScaling/src/
+
 RUN dotnet publish samples/ClusterScaling/src/ClusterScaling.Silo/ClusterScaling.Silo.csproj \
     -c Release -o /app
 
