@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Scaling.Tests;
 /// it must guard a null builder, chain fluently, register the live
 /// <see cref="ILatticeScalingSignal"/> facade as a resolvable singleton that is
 /// also a hosted service, be idempotent under the <c>TryAdd</c> registrations,
-/// and register a no-op storage collector and split probe as the #1187 seam.
+/// and register the real storage collector (#1187) and no-op split probe seam.
 /// Uses a substituted <see cref="ISiloBuilder"/> over a bare
 /// <see cref="ServiceCollection"/> so no real cluster is required; the facade
 /// resolves without a grain factory and returns a warming-up signal before its
@@ -87,7 +87,9 @@ public sealed class AddLatticeScalingSignalTests
         Assert.Multiple(() =>
         {
             Assert.That(provider.GetRequiredService<IStoragePressureCollector>(),
-                Is.InstanceOf<NoOpStoragePressureCollector>());
+                Is.InstanceOf<StoragePressureCollector>());
+            Assert.That(provider.GetRequiredService<IWalStorageStateSource>(),
+                Is.InstanceOf<LatticeWalStorageStateSource>());
             Assert.That(provider.GetRequiredService<ISplitActivityProbe>(),
                 Is.InstanceOf<NoOpSplitActivityProbe>());
             Assert.That(provider.GetRequiredService<IComputePressureCollector>(),

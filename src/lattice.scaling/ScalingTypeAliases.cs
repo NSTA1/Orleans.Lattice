@@ -35,4 +35,7 @@ public static class ScalingTypeAliases
 
     /// <summary>Alias for <see cref="WalRebalanceRecommendation"/>.</summary>
     public const string WalRebalanceRecommendation = "ol.wrr";
+
+    /// <summary>Alias for <see cref="WalPressureClassification"/>.</summary>
+    public const string WalPressureClassification = "ol.wpc";
 }

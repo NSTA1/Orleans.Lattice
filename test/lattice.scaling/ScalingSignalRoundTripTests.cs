@@ -8,7 +8,8 @@ namespace Orleans.Lattice.Scaling.Tests;
 /// <c>Orleans.Lattice.Scaling</c> DTO alias
 /// (<see cref="ComputePressure"/>, <see cref="StoragePressure"/>,
 /// <see cref="WalAccountPressure"/>, <see cref="WalRebalanceRecommendation"/>,
-/// and <see cref="ScalingSignal"/>): every slot must round-trip verbatim and a
+/// <see cref="WalPressureClassification"/>, and <see cref="ScalingSignal"/>):
+/// every slot must round-trip verbatim and a
 /// default-constructed value must decode cleanly.
 /// </summary>
 [TestFixture]
@@ -78,6 +79,8 @@ public sealed class ScalingSignalRoundTripTests
             ProviderKey = "acct-a",
             WalRetainedBytes = 4096,
             Saturation = WalSaturationState.Throttled,
+            Classification = WalPressureClassification.ThroughputBound,
+            OverThreshold = true,
         };
 
         var decoded = RoundTrip(value);
@@ -87,6 +90,8 @@ public sealed class ScalingSignalRoundTripTests
             Assert.That(decoded.ProviderKey, Is.EqualTo("acct-a"));
             Assert.That(decoded.WalRetainedBytes, Is.EqualTo(4096));
             Assert.That(decoded.Saturation, Is.EqualTo(WalSaturationState.Throttled));
+            Assert.That(decoded.Classification, Is.EqualTo(WalPressureClassification.ThroughputBound));
+            Assert.That(decoded.OverThreshold, Is.True);
             Assert.That(decoded, Is.EqualTo(value));
         });
     }
@@ -101,6 +106,8 @@ public sealed class ScalingSignalRoundTripTests
             CurrentProviderKey = "acct-a",
             TargetProviderKey = "acct-b",
             Rationale = "acct-a over threshold",
+            HasHeadroom = true,
+            Classification = WalPressureClassification.CapacityBound,
         };
 
         var decoded = RoundTrip(value);
@@ -112,8 +119,19 @@ public sealed class ScalingSignalRoundTripTests
             Assert.That(decoded.CurrentProviderKey, Is.EqualTo("acct-a"));
             Assert.That(decoded.TargetProviderKey, Is.EqualTo("acct-b"));
             Assert.That(decoded.Rationale, Is.EqualTo("acct-a over threshold"));
+            Assert.That(decoded.HasHeadroom, Is.True);
+            Assert.That(decoded.Classification, Is.EqualTo(WalPressureClassification.CapacityBound));
             Assert.That(decoded, Is.EqualTo(value));
         });
+    }
+
+    [Test]
+    public void WalPressureClassification_round_trips_each_member()
+    {
+        foreach (var member in Enum.GetValues<WalPressureClassification>())
+        {
+            Assert.That(RoundTrip(member), Is.EqualTo(member));
+        }
     }
 
     [Test]

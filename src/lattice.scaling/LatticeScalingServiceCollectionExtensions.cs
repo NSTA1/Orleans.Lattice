@@ -19,8 +19,9 @@ public static partial class LatticeScalingServiceCollectionExtensions
     /// the silo. Registers the live <see cref="ILatticeScalingSignal"/> facade
     /// (a silo-scoped hosted service that samples cluster-aggregate compute
     /// pressure on a timer and caches the resulting <see cref="ScalingSignal"/>),
-    /// its compute-axis collector and cluster runtime-statistics source, a no-op
-    /// storage-axis collector (replaced by #1187) and split-activity probe, binds
+    /// its compute-axis collector and cluster runtime-statistics source, the
+    /// storage-axis collector (#1187) and its WAL storage-state source, a no-op
+    /// split-activity probe, binds
     /// <see cref="LatticeScalingSignalOptions"/>, and ensures a
     /// <see cref="TimeProvider"/> is available for sampling timestamps.
     /// <para>
@@ -65,10 +66,13 @@ public static partial class LatticeScalingServiceCollectionExtensions
         services.TryAddSingleton<IReplicaCountProvider>(
             sp => sp.GetRequiredService<ManagementClusterRuntimeStatisticsSource>());
 
-        // Axis collectors and probes. The storage collector and split probe are
-        // no-ops here; #1187 replaces the storage collector behind TryAdd.
+        // Axis collectors and probes. The compute collector is #1186; the storage
+        // collector (#1187) reads the WAL storage state through its own source
+        // seam. The split probe remains a no-op here. All use TryAdd so a host may
+        // substitute richer implementations.
         services.TryAddSingleton<IComputePressureCollector, ComputePressureCollector>();
-        services.TryAddSingleton<IStoragePressureCollector, NoOpStoragePressureCollector>();
+        services.TryAddSingleton<IWalStorageStateSource, LatticeWalStorageStateSource>();
+        services.TryAddSingleton<IStoragePressureCollector, StoragePressureCollector>();
         services.TryAddSingleton<ISplitActivityProbe, NoOpSplitActivityProbe>();
 
         services.TryAddSingleton<ScalingSignalComputer>();

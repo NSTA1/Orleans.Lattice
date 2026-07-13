@@ -119,4 +119,58 @@ public sealed class LatticeScalingSignalOptions
     /// <see cref="DefaultActivationWorkingSetTarget"/>.
     /// </summary>
     public int ActivationWorkingSetTarget { get; set; } = DefaultActivationWorkingSetTarget;
+
+    // --- Storage axis (#1187) ---------------------------------------------
+    // Knobs for the storage-axis pressure collector: the retained-bytes advisory
+    // ratio that classifies capacity pressure, the window a provider key must
+    // stay saturated before it counts as throughput-bound, and a master toggle
+    // for emitting rebalance recommendations. Kept as a contiguous region so a
+    // merge with sibling option additions stays trivial. The storage axis is
+    // report-only: none of these knobs affect the compute scale value.
+
+    /// <summary>
+    /// Default value for <see cref="RetainedBytesAdvisoryRatio"/>: <c>0.8</c>.
+    /// </summary>
+    public const double DefaultRetainedBytesAdvisoryRatio = 0.8;
+
+    /// <summary>
+    /// Default value for <see cref="StorageRecommendationsEnabled"/>:
+    /// <see langword="true"/>.
+    /// </summary>
+    public const bool DefaultStorageRecommendationsEnabled = true;
+
+    /// <summary>Default value for <see cref="AccountSaturationWindow"/>: 30 seconds.</summary>
+    public static readonly TimeSpan DefaultAccountSaturationWindow = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Fraction of <see cref="Orleans.Lattice.LatticeOptions.WalMaxRetainedBytes"/>
+    /// at or above which retained WAL bytes are treated as capacity pressure -
+    /// both for the aggregate <see cref="StoragePressure.OverThreshold"/> flag and
+    /// for per-account <see cref="WalAccountPressure.OverThreshold"/> /
+    /// <see cref="WalPressureClassification.CapacityBound"/> classification. Clamped
+    /// to the open-closed interval <c>(0, 1]</c> at evaluation time. Ignored when
+    /// <see cref="Orleans.Lattice.LatticeOptions.WalMaxRetainedBytes"/> is
+    /// <see langword="null"/> (no ceiling configured). Defaults to
+    /// <see cref="DefaultRetainedBytesAdvisoryRatio"/>.
+    /// </summary>
+    public double RetainedBytesAdvisoryRatio { get; set; } = DefaultRetainedBytesAdvisoryRatio;
+
+    /// <summary>
+    /// How long a provider key must have been continuously observed saturated
+    /// before the collector classifies it
+    /// <see cref="WalPressureClassification.ThroughputBound"/> and recommends a
+    /// move. Debounces a transient saturation blip into a durable signal. A
+    /// non-positive value classifies on the first saturated sample (no debounce).
+    /// Defaults to <see cref="DefaultAccountSaturationWindow"/>.
+    /// </summary>
+    public TimeSpan AccountSaturationWindow { get; set; } = DefaultAccountSaturationWindow;
+
+    /// <summary>
+    /// Master switch for emitting a <see cref="WalRebalanceRecommendation"/> on
+    /// the storage axis. When <see langword="false"/> the collector still reports
+    /// <see cref="StoragePressure.OverThreshold"/> and the per-account breakdown
+    /// but leaves <see cref="StoragePressure.Recommendation"/> <see langword="null"/>.
+    /// Defaults to <see cref="DefaultStorageRecommendationsEnabled"/>.
+    /// </summary>
+    public bool StorageRecommendationsEnabled { get; set; } = DefaultStorageRecommendationsEnabled;
 }
