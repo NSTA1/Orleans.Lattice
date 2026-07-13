@@ -175,4 +175,50 @@ public sealed class SharedInMemoryBackupSink : ILatticeBackupSink
         cancellationToken.ThrowIfCancellationRequested();
         return Task.FromResult(_store.Manifests.TryRemove(backupId, out _));
     }
+
+    /// <inheritdoc />
+    public Task<bool> ManifestExistsAsync(string backupId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(_store.Manifests.ContainsKey(backupId));
+    }
+
+    /// <inheritdoc />
+    public Task<BackupSinkResolution> ProbeAsync(string backupId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!_store.Manifests.TryGetValue(backupId, out var bytes))
+        {
+            return Task.FromResult(new BackupSinkResolution(backupId, manifestPresent: false, Array.Empty<string>()));
+        }
+
+        var manifest = _serializer.Deserialize<BackupManifest>(bytes);
+        var missing = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var descriptor in manifest.ContentDescriptors)
+        {
+            if (!seen.Add(descriptor.ArtifactId))
+            {
+                continue;
+            }
+
+            if (!_store.Artifacts.ContainsKey(descriptor.ArtifactId))
+            {
+                missing.Add(descriptor.ArtifactId);
+            }
+        }
+
+        return Task.FromResult(new BackupSinkResolution(backupId, manifestPresent: true, missing));
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// This shared store is the in-memory analogue of a durable off-cluster sink,
+    /// so it reports as durable: a backup written by one cluster survives to be
+    /// resolved and restored by an entirely separate cluster.
+    /// </remarks>
+    public bool IsDurable => true;
 }
