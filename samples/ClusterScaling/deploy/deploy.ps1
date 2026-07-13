@@ -127,6 +127,25 @@ if ($LASTEXITCODE -ne 0) {
 # Ensure the containerapp extension is present (idempotent).
 az extension add --name containerapp --upgrade --only-show-errors --output none 2>$null
 
+# --- Hash the admin password (never handle plaintext beyond this block) -------
+# Done up front so a weak password (or a hashing failure) fails the deploy before
+# any Azure resources are provisioned or the silo image is built and pushed.
+Write-Step 'Hashing admin password (salted PBKDF2-SHA256)'
+$plaintextPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($AdminPassword)
+try {
+    $plaintext = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($plaintextPtr)
+    $env:LATTICE_DEPLOY_PW = $plaintext
+    $passwordHash = & $toolScript -Username $AdminUsername -PasswordEnv 'LATTICE_DEPLOY_PW' -Format value
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($passwordHash)) {
+        throw 'Password hashing failed (see the helper diagnostics above).'
+    }
+}
+finally {
+    Remove-Item Env:LATTICE_DEPLOY_PW -ErrorAction SilentlyContinue
+    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($plaintextPtr)
+    $plaintext = $null
+}
+
 # --- Resource group (created first so the registry + app land in it) ---------
 Write-Step "Ensuring resource group '$ResourceGroup' in $Location"
 az group create --name $ResourceGroup --location $Location --output none
@@ -237,23 +256,6 @@ else {
     }
     $ContainerImage = "$loginServer/$imageRef"
     Write-Host "    pushed: $ContainerImage" -ForegroundColor DarkGray
-}
-
-# --- Hash the admin password (never handle plaintext beyond this block) -------
-Write-Step 'Hashing admin password (salted PBKDF2-SHA256)'
-$plaintextPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($AdminPassword)
-try {
-    $plaintext = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($plaintextPtr)
-    $env:LATTICE_DEPLOY_PW = $plaintext
-    $passwordHash = & $toolScript -Username $AdminUsername -PasswordEnv 'LATTICE_DEPLOY_PW' -Format value
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($passwordHash)) {
-        throw 'Password hashing failed (see the helper diagnostics above).'
-    }
-}
-finally {
-    Remove-Item Env:LATTICE_DEPLOY_PW -ErrorAction SilentlyContinue
-    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($plaintextPtr)
-    $plaintext = $null
 }
 
 # --- Deploy the template -----------------------------------------------------
