@@ -60,6 +60,7 @@ public sealed class ApiBackupClusterFixture
             SiloServices.GetRequiredService<ILatticeBackupCaptureService>(),
             SiloServices.GetRequiredService<ILatticeBackupIncrementalCaptureService>(),
             Catalog,
+            SiloServices.GetRequiredService<ILatticeBackupCatalogRebuildService>(),
             Sink,
             SiloServices.GetRequiredService<ILatticeBackupRestoreService>(),
             authorizer,

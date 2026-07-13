@@ -86,6 +86,68 @@ public sealed class LatticeBackupControlAdminTests
         });
     }
 
+    // ---- Catalog rebuild from sink --------------------------------------
+
+    [Test]
+    public async Task RebuildCatalogFromSinkAsync_repopulates_the_catalog_from_the_sink()
+    {
+        await _fixture.InitializeAsync();
+        var source = _fixture.GrainFactory.GetGrain<ILattice>(Source);
+        await source.SetAsync("k1", Bytes("v1"));
+
+        var captured = await _fixture.Control.CreateBackupAsync(
+            new LatticeBackupCaptureRequest("full", BackupScopeSelector.WholeTree(Source)));
+
+        // Drift: drop the catalog row while the sink still holds the manifest, as
+        // a non-clean restart would. The backup lists nothing yet is intact in the
+        // sink.
+        await _fixture.Catalog.RemoveAsync(captured.BackupId);
+        Assert.That(await _fixture.Catalog.GetAsync(captured.BackupId), Is.Null);
+
+        var report = await _fixture.Control.RebuildCatalogFromSinkAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.ScannedCount, Is.GreaterThanOrEqualTo(1));
+            Assert.That(report.RegisteredCount, Is.GreaterThanOrEqualTo(1));
+        });
+        Assert.That(await _fixture.Catalog.GetAsync(captured.BackupId), Is.Not.Null);
+    }
+
+    [Test]
+    public async Task RebuildCatalogFromSinkAsync_is_idempotent_on_re_run()
+    {
+        await _fixture.InitializeAsync();
+        var source = _fixture.GrainFactory.GetGrain<ILattice>(Source);
+        await source.SetAsync("k1", Bytes("v1"));
+        await _fixture.Control.CreateBackupAsync(
+            new LatticeBackupCaptureRequest("full", BackupScopeSelector.WholeTree(Source)));
+
+        await _fixture.Control.RebuildCatalogFromSinkAsync();
+        var second = await _fixture.Control.RebuildCatalogFromSinkAsync();
+
+        // Everything the sink holds is already catalogued, so the second pass adds
+        // nothing new and reconciles the existing rows in place.
+        Assert.Multiple(() =>
+        {
+            Assert.That(second.RegisteredCount, Is.Zero);
+            Assert.That(second.ReconciledCount, Is.EqualTo(second.ScannedCount));
+        });
+    }
+
+    [Test]
+    public async Task RebuildCatalogFromSinkAsync_denied_permission_fails_closed()
+    {
+        await _fixture.InitializeAsync();
+
+        var denying = _fixture.CreateControlWith(
+            new BackupAccessAuthorizer(new DenyingAccessGate("no restore grant"), membership: null));
+
+        Assert.That(
+            async () => await denying.RebuildCatalogFromSinkAsync(),
+            Throws.InstanceOf<LatticeAuthorizationDeniedException>());
+    }
+
     // ---- Scope status ---------------------------------------------------
 
     [Test]

@@ -204,6 +204,23 @@ internal interface ILatticeBackupControl
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Rebuilds the in-cluster backup catalog from the durable sink, after
+    /// authorizing the operation fail-closed as a high-privilege administrative
+    /// action. Scans every self-describing manifest the sink holds and
+    /// re-registers each into the reserved <c>sys-backup-catalog</c> tree, so the
+    /// sink is treated as the single source of truth and the catalog as a
+    /// disposable, self-healing projection over it. Idempotent and safe to re-run:
+    /// a manifest already catalogued is reconciled in place (keeping its immutable
+    /// capture timestamp) rather than duplicated, and a catalog missing rows the
+    /// sink has is repopulated.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A summary of how many manifests were scanned, freshly added, and reconciled.</returns>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to rebuild the catalog.</exception>
+    Task<BackupCatalogRebuildReport> RebuildCatalogFromSinkAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Reads a single scope's schedule and last-run status, or
     /// <see langword="null"/> when the scope has no registered schedule and no
     /// catalogued backup. Authorizes the scope's read grant fail-closed before
