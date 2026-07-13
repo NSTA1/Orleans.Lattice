@@ -21,14 +21,20 @@ internal sealed class LatticeBackupCatalogStore(
     {
         ArgumentNullException.ThrowIfNull(manifest);
         await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
-        await Catalog.SetAsync(manifest.Id, manifest, cancellationToken).ConfigureAwait(false);
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            await Catalog.SetAsync(manifest.Id, manifest, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <inheritdoc />
-    public Task<BackupManifest?> GetAsync(string backupId, CancellationToken cancellationToken = default)
+    public async Task<BackupManifest?> GetAsync(string backupId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(backupId);
-        return Catalog.GetAsync<BackupManifest>(backupId, cancellationToken);
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            return await Catalog.GetAsync<BackupManifest>(backupId, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <inheritdoc />
@@ -36,7 +42,10 @@ internal sealed class LatticeBackupCatalogStore(
     {
         ArgumentException.ThrowIfNullOrEmpty(backupId);
         await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
-        return await Catalog.DeleteAsync(backupId, cancellationToken).ConfigureAwait(false);
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            return await Catalog.DeleteAsync(backupId, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <inheritdoc />
@@ -46,13 +55,16 @@ internal sealed class LatticeBackupCatalogStore(
         // ScanEntriesAsync (not EntriesAsync) so a mid-flight
         // Orleans.Runtime.EnumerationAbortedException is transparently recovered
         // without duplicates or gaps.
-        await foreach (var entry in Catalog
-            .ScanEntriesAsync<BackupManifest>(cancellationToken: cancellationToken)
-            .ConfigureAwait(false))
+        using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            if (entry.Value is { } manifest)
+            await foreach (var entry in Catalog
+                .ScanEntriesAsync<BackupManifest>(cancellationToken: cancellationToken)
+                .ConfigureAwait(false))
             {
-                yield return manifest;
+                if (entry.Value is { } manifest)
+                {
+                    yield return manifest;
+                }
             }
         }
     }

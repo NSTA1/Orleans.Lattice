@@ -31,24 +31,33 @@ internal sealed class LatticeMembershipDirectory(
     {
         ArgumentNullException.ThrowIfNull(user);
         await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
-        await Users.SetAsync(user.UserId, user, cancellationToken).ConfigureAwait(false);
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            await Users.SetAsync(user.UserId, user, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <inheritdoc />
-    public Task<MembershipUser?> GetUserAsync(string userId, CancellationToken cancellationToken = default)
+    public async Task<MembershipUser?> GetUserAsync(string userId, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(userId);
-        return Users.GetAsync<MembershipUser>(userId, cancellationToken);
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            return await Users.GetAsync<MembershipUser>(userId, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <inheritdoc />
     public async IAsyncEnumerable<MembershipUser> ListUsersAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        await foreach (var entry in Users.EntriesAsync<MembershipUser>(cancellationToken: cancellationToken).ConfigureAwait(false))
+        using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            if (entry.Value is { } user)
+            await foreach (var entry in Users.EntriesAsync<MembershipUser>(cancellationToken: cancellationToken).ConfigureAwait(false))
             {
-                yield return user;
+                if (entry.Value is { } user)
+                {
+                    yield return user;
+                }
             }
         }
     }
@@ -58,7 +67,10 @@ internal sealed class LatticeMembershipDirectory(
     {
         ArgumentNullException.ThrowIfNull(userId);
         await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
-        await Users.DeleteAsync(userId, cancellationToken).ConfigureAwait(false);
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            await Users.DeleteAsync(userId, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <inheritdoc />
@@ -66,24 +78,33 @@ internal sealed class LatticeMembershipDirectory(
     {
         ArgumentNullException.ThrowIfNull(group);
         await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
-        await Groups.SetAsync(group.GroupId, group, cancellationToken).ConfigureAwait(false);
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            await Groups.SetAsync(group.GroupId, group, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <inheritdoc />
-    public Task<MembershipGroup?> GetGroupAsync(string groupId, CancellationToken cancellationToken = default)
+    public async Task<MembershipGroup?> GetGroupAsync(string groupId, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(groupId);
-        return Groups.GetAsync<MembershipGroup>(groupId, cancellationToken);
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            return await Groups.GetAsync<MembershipGroup>(groupId, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <inheritdoc />
     public async IAsyncEnumerable<MembershipGroup> ListGroupsAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        await foreach (var entry in Groups.EntriesAsync<MembershipGroup>(cancellationToken: cancellationToken).ConfigureAwait(false))
+        using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            if (entry.Value is { } group)
+            await foreach (var entry in Groups.EntriesAsync<MembershipGroup>(cancellationToken: cancellationToken).ConfigureAwait(false))
             {
-                yield return group;
+                if (entry.Value is { } group)
+                {
+                    yield return group;
+                }
             }
         }
     }
@@ -93,7 +114,10 @@ internal sealed class LatticeMembershipDirectory(
     {
         ArgumentNullException.ThrowIfNull(groupId);
         await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
-        await Groups.DeleteAsync(groupId, cancellationToken).ConfigureAwait(false);
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            await Groups.DeleteAsync(groupId, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <inheritdoc />
@@ -104,8 +128,11 @@ internal sealed class LatticeMembershipDirectory(
         await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
 
         var marker = memberKind == MembershipMemberKind.Group ? GroupMarker : UserMarker;
-        await Edges.SetAsync(ForwardKey(memberId, groupId), marker, cancellationToken).ConfigureAwait(false);
-        await Edges.SetAsync(ReverseKey(groupId, memberId), marker, cancellationToken).ConfigureAwait(false);
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            await Edges.SetAsync(ForwardKey(memberId, groupId), marker, cancellationToken).ConfigureAwait(false);
+            await Edges.SetAsync(ReverseKey(groupId, memberId), marker, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <inheritdoc />
@@ -115,8 +142,11 @@ internal sealed class LatticeMembershipDirectory(
         ArgumentNullException.ThrowIfNull(memberId);
         await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
 
-        await Edges.DeleteAsync(ForwardKey(memberId, groupId), cancellationToken).ConfigureAwait(false);
-        await Edges.DeleteAsync(ReverseKey(groupId, memberId), cancellationToken).ConfigureAwait(false);
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            await Edges.DeleteAsync(ForwardKey(memberId, groupId), cancellationToken).ConfigureAwait(false);
+            await Edges.DeleteAsync(ReverseKey(groupId, memberId), cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <inheritdoc />
@@ -129,7 +159,10 @@ internal sealed class LatticeMembershipDirectory(
         var frontier = new Queue<string>();
         frontier.Enqueue(memberId);
 
-        await WalkForwardClosureAsync(closure, visited, frontier, cancellationToken).ConfigureAwait(false);
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            await WalkForwardClosureAsync(closure, visited, frontier, cancellationToken).ConfigureAwait(false);
+        }
         return closure;
     }
 
@@ -157,7 +190,10 @@ internal sealed class LatticeMembershipDirectory(
             }
         }
 
-        await WalkForwardClosureAsync(closure, visited, frontier, cancellationToken).ConfigureAwait(false);
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            await WalkForwardClosureAsync(closure, visited, frontier, cancellationToken).ConfigureAwait(false);
+        }
         return closure;
     }
 
@@ -203,14 +239,17 @@ internal sealed class LatticeMembershipDirectory(
 
         var members = new List<string>();
         var prefix = ReversePrefix(groupId);
-        await foreach (var key in Edges
-            .KeysAsync(prefix, PrefixUpperBound(prefix), cancellationToken: cancellationToken)
-            .ConfigureAwait(false))
+        using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            var memberId = ThirdField(key);
-            if (memberId.Length > 0)
+            await foreach (var key in Edges
+                .KeysAsync(prefix, PrefixUpperBound(prefix), cancellationToken: cancellationToken)
+                .ConfigureAwait(false))
             {
-                members.Add(memberId);
+                var memberId = ThirdField(key);
+                if (memberId.Length > 0)
+                {
+                    members.Add(memberId);
+                }
             }
         }
 

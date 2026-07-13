@@ -1,5 +1,7 @@
 namespace Orleans.Lattice;
 
+using System.Runtime.InteropServices;
+
 /// <summary>
 /// A Replicated Growable Array (RGA) CRDT for collaborative ordered
 /// lists / text. Each call to
@@ -15,10 +17,15 @@ namespace Orleans.Lattice;
 /// <para>
 /// State shape: every node (live or tombstoned) is stored in
 /// <see cref="Nodes"/> keyed by its dot identity. The materialised
-/// <c>index -&gt; dot</c> projection is rebuilt on every read by
-/// <see cref="ToList"/> via an in-order traversal of the parent /
-/// child tree. A future cache layer is an optional follow-on
-/// optimisation, not part of the base primitive.
+/// <c>index -&gt; dot</c> projection produced by <see cref="ToList"/>
+/// (an in-order traversal of the parent / child tree) is cached and
+/// reused across reads; every mutation path invalidates the cache so a
+/// subsequent read rebuilds it lazily. The cache is transient (never
+/// serialized) and is rebuilt on first read after deserialization.
+/// <see cref="NextCounter"/> reads the per-replica highest counter in
+/// O(1) from the serialized <see cref="Context"/> dot-context cache
+/// instead of rescanning every node, so a bulk build is O(N) rather
+/// than O(N^2).
 /// </para>
 /// <para>
 /// Values are opaque <see cref="byte"/> arrays; the typed
@@ -37,6 +44,38 @@ public sealed class Rga : ICrdt<Rga>
     /// </summary>
     [Id(0)]
     public List<RgaNode> Nodes { get; set; } = new();
+
+    /// <summary>
+    /// Dot context: per-replica highest counter ever minted or observed
+    /// for that replica across every node in the sequence (live or
+    /// tombstoned). Lets <see cref="NextCounter"/> mint a fresh dot in
+    /// O(1) instead of rescanning every node on every
+    /// <see cref="InsertAfter(OrSetDot, string, byte[])"/>, so a bulk
+    /// build is O(N) rather than O(N^2).
+    /// <para>
+    /// This is a serialized cache, not a semantic witness: it never
+    /// influences the lattice merge (which unions nodes by dot), only the
+    /// counter chosen for the next local insert. Every mutator
+    /// (<see cref="InsertAfter(OrSetDot, string, byte[])"/>,
+    /// <see cref="MergeFrom(Rga)"/>, <see cref="MergeDelta(RgaDelta)"/>,
+    /// <see cref="Clone"/>) keeps it consistent, and it is rebuilt lazily
+    /// from the nodes on the first insert after loading a legacy payload
+    /// that predates this field (older payloads deserialize it as empty,
+    /// which is backward compatible).
+    /// </para>
+    /// </summary>
+    [Id(1)]
+    public Dictionary<string, long> Context { get; set; } = [];
+
+    /// <summary>
+    /// Transient cache of the last <see cref="ToList"/> materialisation.
+    /// Never serialized (no <c>[Id]</c>): a deserialized or cloned
+    /// sequence starts with a <c>null</c> cache and rebuilds it on first
+    /// read. Set to <c>null</c> by every mutation path so the next read
+    /// re-materialises.
+    /// </summary>
+    [NonSerialized]
+    private IReadOnlyList<(OrSetDot Dot, byte[] Value)>? _materializedCache;
 
     /// <summary>The empty dot used to represent the virtual sequence root (parent of top-level inserts).</summary>
     public static OrSetDot Root => default;
@@ -105,6 +144,11 @@ public sealed class Rga : ICrdt<Rga>
             IsTombstone = false,
         };
         Nodes.Add(node);
+
+        // counter is strictly greater than any prior counter for this
+        // replica, so record it as the new per-replica maximum.
+        Context[replicaId] = counter;
+        InvalidateMaterializedCache();
         return node.Dot;
     }
 
@@ -122,6 +166,7 @@ public sealed class Rga : ICrdt<Rga>
             {
                 if (n.IsTombstone) return false;
                 n.IsTombstone = true;
+                InvalidateMaterializedCache();
                 return true;
             }
         }
@@ -159,7 +204,8 @@ public sealed class Rga : ICrdt<Rga>
     /// </returns>
     public IReadOnlyList<(OrSetDot Dot, byte[] Value)> ToList()
     {
-        if (Nodes.Count == 0) return Array.Empty<(OrSetDot, byte[])>();
+        if (_materializedCache is { } cached) return cached;
+        if (Nodes.Count == 0) return _materializedCache = Array.Empty<(OrSetDot, byte[])>();
 
         // Build the parent -> children index once per call. The map
         // value is a list of (counter, replicaId, nodeIndex) triples
@@ -203,7 +249,7 @@ public sealed class Rga : ICrdt<Rga>
                 for (var i = kids.Count - 1; i >= 0; i--) stack.Push(kids[i]);
             }
         }
-        return result;
+        return _materializedCache = result;
     }
 
     /// <summary>
@@ -262,6 +308,9 @@ public sealed class Rga : ICrdt<Rga>
                 localByDot[n.Dot] = Nodes[^1];
             }
         }
+
+        MergeContextFrom(other);
+        InvalidateMaterializedCache();
     }
 
     /// <summary>
@@ -300,6 +349,7 @@ public sealed class Rga : ICrdt<Rga>
             foreach (var ins in inserts)
             {
                 var dot = ins.Dot;
+                BumpContext(ins.ReplicaId, ins.Counter);
                 if (byDot.TryGetValue(dot, out var existing))
                 {
                     // Idempotent refresh: the insert is authoritative for
@@ -329,6 +379,7 @@ public sealed class Rga : ICrdt<Rga>
         {
             foreach (var dot in tombstones)
             {
+                BumpContext(dot.ReplicaId, dot.Counter);
                 if (byDot.TryGetValue(dot, out var node))
                 {
                     node.IsTombstone = true;
@@ -352,6 +403,8 @@ public sealed class Rga : ICrdt<Rga>
                 }
             }
         }
+
+        InvalidateMaterializedCache();
     }
 
     /// <summary>Creates a deep copy of this sequence (every node is duplicated; value byte arrays are referenced as-is).</summary>
@@ -370,19 +423,68 @@ public sealed class Rga : ICrdt<Rga>
                 IsTombstone = n.IsTombstone,
             });
         }
+        // Copy the maintained dot-context cache so the clone mints its
+        // next counter in O(1) without a rebuild.
+        copy.Context = new Dictionary<string, long>(Context);
         return copy;
     }
 
     private long NextCounter(string replicaId)
     {
-        long max = 0;
-        foreach (var n in Nodes)
-        {
-            if (string.Equals(n.ReplicaId, replicaId, StringComparison.Ordinal) && n.Counter > max)
-                max = n.Counter;
-        }
-        return max + 1;
+        EnsureContextRebuilt();
+        return (Context.TryGetValue(replicaId, out var current) ? current : 0) + 1;
     }
+
+    /// <summary>
+    /// Rebuilds <see cref="Context"/> from the nodes the first time it is
+    /// needed on a sequence loaded from a legacy payload that predates the
+    /// field (deserialized with an empty <see cref="Context"/> but
+    /// non-empty <see cref="Nodes"/>). A no-op once the cache is populated
+    /// - every mutator keeps it consistent from then on - and a no-op on a
+    /// genuinely empty sequence. O(node count) exactly once per legacy load.
+    /// </summary>
+    private void EnsureContextRebuilt()
+    {
+        if (Context.Count > 0) return;
+        if (Nodes.Count == 0) return;
+
+        foreach (var n in Nodes) BumpContext(n.ReplicaId, n.Counter);
+    }
+
+    /// <summary>
+    /// Folds <paramref name="other"/>'s per-replica maxima into this
+    /// sequence's <see cref="Context"/> so the cache still dominates every
+    /// node after a merge. New payloads carry a maintained
+    /// <see cref="Context"/> (pointwise-max fold); a legacy
+    /// <paramref name="other"/> with an empty context but non-empty nodes
+    /// is folded directly from its nodes without mutating it.
+    /// </summary>
+    private void MergeContextFrom(Rga other)
+    {
+        foreach (var (replicaId, counter) in other.Context) BumpContext(replicaId, counter);
+
+        if (other.Context.Count == 0 && other.Nodes.Count > 0)
+        {
+            foreach (var n in other.Nodes) BumpContext(n.ReplicaId, n.Counter);
+        }
+    }
+
+    private void BumpContext(string replicaId, long counter)
+    {
+        if (string.IsNullOrEmpty(replicaId)) return;
+
+        // Single-probe pointwise-max: bump the slot only when the incoming
+        // counter is strictly greater. A missing slot is added
+        // zero-initialised, so the !existed branch installs counter.
+        ref var slot = ref CollectionsMarshal.GetValueRefOrAddDefault(Context, replicaId, out var existed);
+        if (!existed || counter > slot) slot = counter;
+    }
+
+    /// <summary>
+    /// Discards the cached <see cref="ToList"/> materialisation so the next
+    /// read rebuilds it. Called by every mutation path.
+    /// </summary>
+    private void InvalidateMaterializedCache() => _materializedCache = null;
 
     private static int CompareBytes(byte[] a, byte[] b)
     {

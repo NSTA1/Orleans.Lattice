@@ -71,17 +71,24 @@ internal sealed class BackupInitializer
     {
         var options = _options.CurrentValue;
 
-        var catalog = _grainFactory.GetGrain<ILattice>(BackupConstants.CatalogTree);
-        await catalog
-            .SetHistoryRetentionAsync(options.HistoryRetentionMode, options.HistoryRetentionWindow, CancellationToken.None)
-            .ConfigureAwait(false);
-
-        if (options.EnableDurableHistoryView && _viewFactory is not null)
+        // The reserved sys-backup-catalog tree lives in the system-data
+        // namespace, so the bootstrap addresses it under system-origin -
+        // both to skip the access gate and to keep first-party creation of
+        // the tree on the system-origin path.
+        using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            _viewFactory.Create(
-                catalog,
-                BackupConstants.CatalogHistoryView,
-                LatticeHistoryView.Definition(BackupConstants.CatalogHistoryView, _services));
+            var catalog = _grainFactory.GetGrain<ILattice>(BackupConstants.CatalogTree);
+            await catalog
+                .SetHistoryRetentionAsync(options.HistoryRetentionMode, options.HistoryRetentionWindow, CancellationToken.None)
+                .ConfigureAwait(false);
+
+            if (options.EnableDurableHistoryView && _viewFactory is not null)
+            {
+                _viewFactory.Create(
+                    catalog,
+                    BackupConstants.CatalogHistoryView,
+                    LatticeHistoryView.Definition(BackupConstants.CatalogHistoryView, _services));
+            }
         }
     }
 }

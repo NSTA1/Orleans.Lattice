@@ -828,6 +828,7 @@ public class LatticeMicroBenchmarks
         BuildOrSetFixture();
         BuildOrSetOpsFixture();
         BuildOrMapBulkSetFixture();
+        BuildRgaFixture();
         BuildLeafQueueFixture();
         BuildCrdtGrowStateFixture();
         BuildCrdtGrowStateWriterFixture();
@@ -3135,6 +3136,15 @@ public class LatticeMicroBenchmarks
     private string[] _orMapBulkSetKeys = null!;
     private readonly PnCounter _orMapBulkSetValue = new();
 
+    // ===== Rga micro-suite operands =====
+    // Pre-built value bytes and a pre-materialised sequence so the two Rga
+    // benchmarks isolate, respectively, the O(1)-per-insert counter cache
+    // (Rga_BulkInsert) and the cached-read materialisation path
+    // (Rga_ToList). Sized by BENCH_MICROBENCH_RGA_KEYS.
+    private byte[] _rgaValue = null!;
+    private int _rgaKeyCount;
+    private Rga _rgaToListFixture = null!;
+
     private void BuildShipFramingFixture()
     {
         // Self-contained ServiceProvider for the two Orleans serializers
@@ -3594,6 +3604,32 @@ public class LatticeMicroBenchmarks
     }
 
     /// <summary>
+    /// Builds the operands for the two <see cref="Rga"/> benchmarks: a shared
+    /// value buffer and a pre-materialised chained sequence of
+    /// <c>BENCH_MICROBENCH_RGA_KEYS</c> (default 256) live nodes. The bulk
+    /// insert benchmark rebuilds a fresh sequence from the value buffer; the
+    /// ToList benchmark reads the pre-built sequence repeatedly to exercise
+    /// the materialisation cache.
+    /// </summary>
+    private void BuildRgaFixture()
+    {
+        var keys = ReadIntEnv("BENCH_MICROBENCH_RGA_KEYS", 256);
+        if (keys < 1) keys = 1;
+
+        _rgaKeyCount = keys;
+        _rgaValue = new byte[24];
+
+        // Chain every node under the previous one so the visible order is the
+        // insertion order - the shape a collaborative-text buffer produces.
+        _rgaToListFixture = new Rga();
+        var parent = Rga.Root;
+        for (var i = 0; i < keys; i++)
+        {
+            parent = _rgaToListFixture.InsertAfter(parent, "replica", _rgaValue);
+        }
+    }
+
+    /// <summary>
     /// Read-path instrument: a single <see cref="OrSet.Contains(byte[])"/>
     /// against a pre-seeded set. The span-keyed alternate lookup encodes
     /// the element's base64 into a stack buffer, so the probe no longer
@@ -3646,6 +3682,43 @@ public class LatticeMicroBenchmarks
             map.Set(keys[i], "replica", value);
         }
         return map;
+    }
+
+    /// <summary>
+    /// Bulk-build instrument: <c>N</c> sequential
+    /// <see cref="Rga.InsertAfter(OrSetDot, string, byte[])"/> calls chaining
+    /// each new node under the previous one, into a fresh sequence. With the
+    /// per-replica dot-context cache each insert mints its counter in O(1), so
+    /// the whole build is O(N); before the cache every insert rescanned every
+    /// existing node to find the highest counter, making the build O(N^2). A
+    /// shared value buffer keeps the measurement on the counter path.
+    /// </summary>
+    [Benchmark(Description = "Rga bulk insert (O(N) counter)")]
+    public Rga Rga_BulkInsert()
+    {
+        var value = _rgaValue;
+        var count = _rgaKeyCount;
+        var rga = new Rga();
+        var parent = Rga.Root;
+        for (var i = 0; i < count; i++)
+        {
+            parent = rga.InsertAfter(parent, "replica", value);
+        }
+        return rga;
+    }
+
+    /// <summary>
+    /// Read-path instrument: repeated <see cref="Rga.ToList"/> over a stable,
+    /// pre-materialised sequence. The first call rebuilds the parent/children
+    /// index and sorts every sibling bucket; every subsequent call returns the
+    /// cached projection in O(1). Because the sequence is never mutated between
+    /// reads, this benchmark measures the cached-read fast path the
+    /// materialisation cache exists to provide.
+    /// </summary>
+    [Benchmark(Description = "Rga ToList (cached read)")]
+    public IReadOnlyList<(OrSetDot Dot, byte[] Value)> Rga_ToList()
+    {
+        return _rgaToListFixture.ToList();
     }
 }
 

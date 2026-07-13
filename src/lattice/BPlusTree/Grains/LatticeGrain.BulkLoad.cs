@@ -11,6 +11,7 @@ internal sealed partial class LatticeGrain
     public async Task BulkLoadAsync(IReadOnlyList<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
+        ThrowIfUserOriginSystemDataTree();
         ThrowIfProtectedView();
         ThrowIfLwwWriteToCrdtReplicatedTree();
         ArgumentNullException.ThrowIfNull(entries);
