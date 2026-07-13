@@ -118,6 +118,38 @@ $target = "https://$fqdn"
 Write-Host "  app    : $AppName"
 Write-Host "  target : $target"
 
+# --- Pre-flight: confirm the app is actually serving before offering load -----
+# Hits the unauthenticated /healthz endpoint (mapped by the silo, served over the
+# same ingress). If the container is crash-looping or has no ready replica, the
+# ingress returns 5xx / refuses the connection here - so we fail fast with the
+# exact diagnostic commands instead of the load driver's cryptic gRPC stream
+# reset thirty seconds into the run.
+Write-Step "Checking data-API readiness at $target/healthz"
+$healthUrl = "$target/healthz"
+$ready = $false
+for ($attempt = 1; $attempt -le 10; $attempt++) {
+    try {
+        $resp = Invoke-WebRequest -Uri $healthUrl -Method Get -TimeoutSec 10 -SkipHttpErrorCheck
+        if ($resp.StatusCode -eq 200) { $ready = $true; break }
+        Write-Host ("  attempt {0,2}: HTTP {1} (not ready yet)" -f $attempt, $resp.StatusCode) -ForegroundColor DarkYellow
+    }
+    catch {
+        Write-Host ("  attempt {0,2}: {1}" -f $attempt, $_.Exception.Message) -ForegroundColor DarkYellow
+    }
+    Start-Sleep -Seconds 6
+}
+if (-not $ready) {
+    Write-Host ''
+    Write-Host 'The container app is not serving: the readiness probe never returned 200.' -ForegroundColor Red
+    Write-Host 'The silo container is likely crash-looping or has no ready replica. Diagnose with:' -ForegroundColor Red
+    Write-Host "  az containerapp revision list -g $ResourceGroup -n $AppName -o table"
+    Write-Host "  az containerapp replica list  -g $ResourceGroup -n $AppName -o table"
+    Write-Host "  az containerapp logs show     -g $ResourceGroup -n $AppName --tail 200"
+    Write-Host "  az containerapp logs show     -g $ResourceGroup -n $AppName --type system --tail 100"
+    throw 'Data API not ready; aborting before generating load.'
+}
+Write-Host '  ready  : yes (healthz returned 200)' -ForegroundColor Green
+
 # --- Convert the password to plaintext for the driver argument ---------------
 $plaintextPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($AdminPassword)
 $plaintext = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($plaintextPtr)
@@ -132,7 +164,8 @@ function Get-ReplicaCount {
 
 $driverJob = $null
 try {
-    Write-Step "Baseline replica count: $(Get-ReplicaCount)"
+    $baseline = Get-ReplicaCount
+    Write-Step "Baseline replica count: $(if ($null -eq $baseline) { 'n/a (no ready replica reported)' } else { $baseline })"
 
     # Launch the LoadDriver in a background job so this script can poll replicas
     # concurrently. Its stdout is drained and echoed each poll.
@@ -160,7 +193,7 @@ try {
         Start-Sleep -Seconds $PollIntervalSeconds
         $count = Get-ReplicaCount
         $elapsed = [int]([DateTime]::UtcNow - $startUtc).TotalSeconds
-        Write-Host ("  [t={0,5}s] replicas = {1}" -f $elapsed, $count) -ForegroundColor Green
+        Write-Host ("  [t={0,5}s] replicas = {1}" -f $elapsed, ($count ?? 'n/a')) -ForegroundColor Green
 
         # Drain any driver output produced since the last poll.
         Receive-Job -Job $driverJob | ForEach-Object { Write-Host "    $_" }
@@ -174,7 +207,7 @@ try {
     for ($i = 0; $i -lt 2; $i++) {
         Start-Sleep -Seconds $PollIntervalSeconds
         $elapsed = [int]([DateTime]::UtcNow - $startUtc).TotalSeconds
-        Write-Host ("  [t={0,5}s] replicas = {1}" -f $elapsed, (Get-ReplicaCount)) -ForegroundColor Green
+        Write-Host ("  [t={0,5}s] replicas = {1}" -f $elapsed, ((Get-ReplicaCount) ?? 'n/a')) -ForegroundColor Green
     }
 
     Write-Host ''
