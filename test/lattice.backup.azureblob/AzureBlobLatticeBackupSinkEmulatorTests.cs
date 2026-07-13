@@ -242,6 +242,71 @@ public class AzureBlobLatticeBackupSinkEmulatorTests
         });
     }
 
+    // ---- Sink-existence probe -------------------------------------------
+
+    [Test]
+    public async Task ManifestExistsAsync_is_true_after_write_and_false_after_delete()
+    {
+        await _sut.WriteManifestAsync(SampleManifest("backup-exists"));
+        Assert.That(await _sut.ManifestExistsAsync("backup-exists"), Is.True);
+
+        await _sut.DeleteManifestAsync("backup-exists");
+        Assert.That(await _sut.ManifestExistsAsync("backup-exists"), Is.False);
+    }
+
+    [Test]
+    public async Task ManifestExistsAsync_is_false_for_an_unknown_backup()
+    {
+        Assert.That(await _sut.ManifestExistsAsync("never-written"), Is.False);
+    }
+
+    [Test]
+    public async Task ProbeAsync_reports_resolvable_when_manifest_and_committed_artifact_are_present()
+    {
+        await _sut.WriteManifestAsync(SampleManifest("backup-resolvable"));
+        // The sample manifest references a single artifact, "artifact-1"; writing
+        // it drives the append-blob commit path the probe tests for.
+        await _sut.WriteArtifactAsync("artifact-1", ToAsync(new[] { new byte[] { 1, 2, 3 } }));
+
+        var resolution = await _sut.ProbeAsync("backup-resolvable");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(resolution.BackupId, Is.EqualTo("backup-resolvable"));
+            Assert.That(resolution.ManifestPresent, Is.True);
+            Assert.That(resolution.MissingArtifactIds, Is.Empty);
+            Assert.That(resolution.IsResolvable, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task ProbeAsync_reports_the_missing_artifact_when_only_the_manifest_is_present()
+    {
+        await _sut.WriteManifestAsync(SampleManifest("backup-torn"));
+
+        var resolution = await _sut.ProbeAsync("backup-torn");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(resolution.ManifestPresent, Is.True);
+            Assert.That(resolution.MissingArtifactIds, Is.EqualTo(new[] { "artifact-1" }));
+            Assert.That(resolution.IsResolvable, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task ProbeAsync_reports_absent_manifest_for_an_unknown_backup()
+    {
+        var resolution = await _sut.ProbeAsync("never-written");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(resolution.ManifestPresent, Is.False);
+            Assert.That(resolution.MissingArtifactIds, Is.Empty);
+            Assert.That(resolution.IsResolvable, Is.False);
+        });
+    }
+
     private static async IAsyncEnumerable<ReadOnlyMemory<byte>> ToAsync(IEnumerable<byte[]> chunks)
     {
         foreach (var chunk in chunks)

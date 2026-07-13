@@ -69,4 +69,10 @@ internal static class BackupTypeAliases
 
     /// <summary>Alias for <see cref="BackupCatalogRebuildReport"/>.</summary>
     internal const string BackupCatalogRebuildReport = "olb.rb";
+
+    /// <summary>Alias for <see cref="BackupSinkResolution"/>.</summary>
+    internal const string BackupSinkResolution = "olb.sr";
+
+    /// <summary>Alias for <see cref="BackupCatalogScrubReport"/>.</summary>
+    internal const string BackupCatalogScrubReport = "olb.cs";
 }

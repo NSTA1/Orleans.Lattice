@@ -18,6 +18,7 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
     private readonly ILatticeBackupIncrementalCaptureService _incremental;
     private readonly ILatticeBackupCatalogStore _catalog;
     private readonly ILatticeBackupCatalogRebuildService _catalogRebuild;
+    private readonly ILatticeBackupCatalogScrubService _catalogScrub;
     private readonly ILatticeBackupSink _sink;
     private readonly ILatticeBackupRestoreService _restore;
     private readonly BackupAccessAuthorizer _authorizer;
@@ -31,6 +32,7 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
     /// <param name="incremental">The incremental-capture engine. Must not be <c>null</c>.</param>
     /// <param name="catalog">The backup catalog store. Must not be <c>null</c>.</param>
     /// <param name="catalogRebuild">The catalog rebuild-from-sink engine. Must not be <c>null</c>.</param>
+    /// <param name="catalogScrub">The catalog reconcile / scrub engine. Must not be <c>null</c>.</param>
     /// <param name="sink">The backup storage sink. Must not be <c>null</c>.</param>
     /// <param name="restore">The restore engine. Must not be <c>null</c>.</param>
     /// <param name="authorizer">The fail-closed backup authorization seam. Must not be <c>null</c>.</param>
@@ -44,6 +46,7 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         ILatticeBackupIncrementalCaptureService incremental,
         ILatticeBackupCatalogStore catalog,
         ILatticeBackupCatalogRebuildService catalogRebuild,
+        ILatticeBackupCatalogScrubService catalogScrub,
         ILatticeBackupSink sink,
         ILatticeBackupRestoreService restore,
         BackupAccessAuthorizer authorizer,
@@ -56,6 +59,7 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         ArgumentNullException.ThrowIfNull(incremental);
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(catalogRebuild);
+        ArgumentNullException.ThrowIfNull(catalogScrub);
         ArgumentNullException.ThrowIfNull(sink);
         ArgumentNullException.ThrowIfNull(restore);
         ArgumentNullException.ThrowIfNull(authorizer);
@@ -68,6 +72,7 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         _incremental = incremental;
         _catalog = catalog;
         _catalogRebuild = catalogRebuild;
+        _catalogScrub = catalogScrub;
         _sink = sink;
         _restore = restore;
         _authorizer = authorizer;
@@ -158,7 +163,7 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         // ascending-by-backup-id order and streams the catalog directly.
         if (request.OrderByCreatedDescending)
         {
-            var query = new BackupCatalogIndexQuery(_catalog, _viewFactory);
+            var query = new BackupCatalogIndexQuery(_catalog, _sink, _viewFactory);
             return await query
                 .QueryAsync(request, pageSize, IsReadAuthorizedAsync, cancellationToken)
                 .ConfigureAwait(false);
@@ -177,6 +182,14 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
             }
 
             if (!await IsReadAuthorizedAsync(manifest.Scope, cancellationToken).ConfigureAwait(false))
+            {
+                continue;
+            }
+
+            // Selection-time liveness: a catalog row whose sink manifest is gone
+            // (store drift after a non-clean restart) is unresolvable, so it must
+            // not be offered as a restore point. A cheap manifest-presence probe.
+            if (!await _sink.ManifestExistsAsync(manifest.Id, cancellationToken).ConfigureAwait(false))
             {
                 continue;
             }
@@ -202,7 +215,14 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
     {
         await foreach (var manifest in _catalog.ListAsync(cancellationToken).ConfigureAwait(false))
         {
-            if (await IsReadAuthorizedAsync(manifest.Scope, cancellationToken).ConfigureAwait(false))
+            if (!await IsReadAuthorizedAsync(manifest.Scope, cancellationToken).ConfigureAwait(false))
+            {
+                continue;
+            }
+
+            // Skip a catalog row the sink can no longer resolve, so a drained
+            // enumeration never surfaces an unresolvable backup.
+            if (await _sink.ManifestExistsAsync(manifest.Id, cancellationToken).ConfigureAwait(false))
             {
                 yield return manifest;
             }
@@ -436,6 +456,26 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
             .ConfigureAwait(false);
 
         return await _catalogRebuild.RebuildFromSinkAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<BackupCatalogScrubReport> ScrubCatalogAgainstSinkAsync(
+        bool pruneOrphans = false,
+        CancellationToken cancellationToken = default)
+    {
+        // Scrubbing reconciles rows of every scope against the sink and, when
+        // pruning, removes rows from the reserved catalog tree, so it is a
+        // cluster-wide administrative action rather than a per-scope one. Authorize
+        // it fail-closed at the catalog tree with the high-privilege Restore
+        // (author / bulk-load) authority - the same grant rebuild-from-sink requires
+        // - before any probe or delete happens. Under the default no-op gate this
+        // short-circuits to allow at zero cost; a bootstrap administrator is always
+        // permitted.
+        await _authorizer
+            .AuthorizeRestoreAsync(BackupScopeSelector.WholeTree(BackupConstants.CatalogTree), cancellationToken)
+            .ConfigureAwait(false);
+
+        return await _catalogScrub.ScrubAsync(pruneOrphans, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />

@@ -219,6 +219,43 @@ public sealed class FileSystemBackupSink : ILatticeBackupSink
         return Task.FromResult(true);
     }
 
+    /// <inheritdoc />
+    public Task<bool> ManifestExistsAsync(string backupId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(File.Exists(ManifestPath(backupId)));
+    }
+
+    /// <inheritdoc />
+    public async Task<BackupSinkResolution> ProbeAsync(string backupId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+
+        var manifest = await ReadManifestAsync(backupId, cancellationToken).ConfigureAwait(false);
+        if (manifest is null)
+        {
+            return new BackupSinkResolution(backupId, manifestPresent: false, Array.Empty<string>());
+        }
+
+        var missing = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var descriptor in manifest.ContentDescriptors)
+        {
+            if (!seen.Add(descriptor.ArtifactId))
+            {
+                continue;
+            }
+
+            if (!File.Exists(ArtifactPath(descriptor.ArtifactId)))
+            {
+                missing.Add(descriptor.ArtifactId);
+            }
+        }
+
+        return new BackupSinkResolution(backupId, manifestPresent: true, missing);
+    }
+
     private string ArtifactPath(string artifactId) =>
         Path.Combine(_artifactsRoot, Encode(artifactId));
 

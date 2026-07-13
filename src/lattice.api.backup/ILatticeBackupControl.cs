@@ -221,6 +221,29 @@ internal interface ILatticeBackupControl
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Reconciles the in-cluster backup catalog against the durable sink, after
+    /// authorizing the operation fail-closed as a high-privilege administrative
+    /// action. Cross-checks every catalog row for a resolvable sink payload (the
+    /// manifest present and every referenced artifact present and committed) and
+    /// reports orphans - catalog rows whose sink payload is gone and which must
+    /// never be offered as a restore point. <b>Non-destructive by default</b>: with
+    /// <paramref name="pruneOrphans"/> <see langword="false"/> the orphans are only
+    /// flagged and returned; with <see langword="true"/> each orphan row is removed
+    /// from the reserved <c>sys-backup-catalog</c> tree. Idempotent and safe to
+    /// re-run: a pruning re-run reports no further orphans.
+    /// </summary>
+    /// <param name="pruneOrphans">
+    /// <see langword="true"/> to destructively remove orphan rows; <see langword="false"/>
+    /// (the default) to flag them non-destructively.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A summary of how many rows were scanned, how many are orphans, and how many were removed.</returns>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to scrub the catalog.</exception>
+    Task<BackupCatalogScrubReport> ScrubCatalogAgainstSinkAsync(
+        bool pruneOrphans = false,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Reads a single scope's schedule and last-run status, or
     /// <see langword="null"/> when the scope has no registered schedule and no
     /// catalogued backup. Authorizes the scope's read grant fail-closed before

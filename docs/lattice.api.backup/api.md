@@ -41,6 +41,7 @@ The control facade (internal) exposes these operations; each is projected as one
 | Export artifact | takes a backup id and artifact id | `IAsyncEnumerable<ReadOnlyMemory<byte>>` |
 | Get inventory | (none) | `BackupInventoryReport` |
 | Rebuild catalog from sink | (none) | `BackupCatalogRebuildReport` |
+| Scrub catalog against sink | takes a `bool pruneOrphans` | `BackupCatalogScrubReport` |
 | Get scope status | takes a `BackupScopeSelector` | `BackupScopeStatus?` (null when unknown) |
 | Probe capabilities | takes a `BackupScopeSelector` | `BackupScopeCapabilities` |
 | Schedule backup | takes a `LatticeBackupScheduleRequest` | (void) |
@@ -52,6 +53,8 @@ Schedule backup registers (or updates) a recurring backup of one scope: the sche
 The request / result types prefixed `LatticeBackup*` / `LatticeRestore*` and `BackupManifest` / `BackupScopeSelector` are defined in [`Orleans.Lattice.Backup`](../lattice.backup/api.md); the package's own model records are documented below.
 
 Rebuild catalog from sink re-registers every self-describing manifest the durable sink holds into the reserved `sys-backup-catalog` tree, so the sink is the single source of truth and the catalog a rebuildable, self-healing projection over it. It is a high-privilege administrative action authorized fail-closed with the Restore (author / bulk-load) grant over the catalog tree, and is idempotent: a manifest already catalogued is reconciled in place (keeping its immutable capture timestamp) rather than duplicated, and a catalog missing rows the sink has is repopulated. It returns a `BackupCatalogRebuildReport` summarizing how many manifests were scanned, freshly added, and reconciled. The `BackupCatalogRebuildReport` type is defined in [`Orleans.Lattice.Backup`](../lattice.backup/api.md).
+
+Scrub catalog against sink is the reconcile pass in the other direction: it enumerates every catalog row and probes the durable sink for its resolvability, reporting the orphans - catalog rows whose sink payload (manifest, or a referenced artifact) is gone, so the backup can no longer be resolved or restored. It shares the rebuild op's high-privilege, fail-closed Restore grant over the catalog tree. It is non-destructive by default: it only flags orphans and leaves the catalog untouched. Removal of orphan rows is an explicit opt-in (`pruneOrphans: true`), which deletes each orphan under system origin and is idempotent on re-run (a pruned orphan is no longer scanned). It returns a `BackupCatalogScrubReport` summarizing how many rows were scanned, how many were orphans, how many were removed, whether pruning ran, and the orphan backup ids. The `BackupCatalogScrubReport` type is defined in [`Orleans.Lattice.Backup`](../lattice.backup/api.md).
 
 ## Model records
 

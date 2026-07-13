@@ -174,6 +174,15 @@ public sealed class LatticeBackupCatalogRebuildServiceTests
         public Task<bool> DeleteManifestAsync(string backupId, CancellationToken cancellationToken = default) =>
             Task.FromResult(_manifests.Remove(backupId));
 
+        public Task<bool> ManifestExistsAsync(string backupId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(_manifests.ContainsKey(backupId));
+
+        public Task<BackupSinkResolution> ProbeAsync(string backupId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new BackupSinkResolution(
+                backupId,
+                manifestPresent: _manifests.ContainsKey(backupId),
+                Array.Empty<string>()));
+
         public Task WriteArtifactAsync(
             string artifactId,
             IAsyncEnumerable<ReadOnlyMemory<byte>> content,

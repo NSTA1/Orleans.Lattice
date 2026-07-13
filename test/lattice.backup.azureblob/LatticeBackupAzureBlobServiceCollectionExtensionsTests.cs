@@ -126,6 +126,11 @@ public class LatticeBackupAzureBlobServiceCollectionExtensionsTests
         }
 
         public Task<bool> DeleteManifestAsync(string backupId, CancellationToken cancellationToken = default) => Task.FromResult(false);
+
+        public Task<bool> ManifestExistsAsync(string backupId, CancellationToken cancellationToken = default) => Task.FromResult(false);
+
+        public Task<BackupSinkResolution> ProbeAsync(string backupId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new BackupSinkResolution(backupId, manifestPresent: false, Array.Empty<string>()));
     }
 
     private sealed class StubSiloBuilder(IServiceCollection services) : ISiloBuilder
