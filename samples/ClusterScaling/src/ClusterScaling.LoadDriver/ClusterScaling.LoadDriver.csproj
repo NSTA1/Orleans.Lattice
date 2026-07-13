@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Orleans.Lattice.Samples.ClusterScaling.LoadDriver</RootNamespace>
+    <AssemblyName>Orleans.Lattice.Samples.ClusterScaling.LoadDriver</AssemblyName>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The gRPC client + wire records for the write-capable data API, and the
+         Orleans serializer registration the marshallers dial. -->
+    <PackageReference Include="Grpc.Net.Client" Version="2.80.0" />
+    <PackageReference Include="Microsoft.Orleans.Serialization" Version="10.2.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\src\lattice.api.data\Orleans.Lattice.Api.Data.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.api.data.grpc\Orleans.Lattice.Api.Data.Grpc.csproj" />
+  </ItemGroup>
+
+</Project>
