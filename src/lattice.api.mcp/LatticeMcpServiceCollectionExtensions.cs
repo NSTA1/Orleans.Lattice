@@ -73,6 +73,13 @@ public static class LatticeMcpServiceCollectionExtensions
         // The credential bridge and tool modules read the ambient HTTP context.
         services.AddHttpContextAccessor();
 
+        // Permission-aware discovery core: resolves each caller's usable facade
+        // groups (default: via the Api.Auth effective-permissions surface) and
+        // the per-session configurator that scopes the advertised tool set and
+        // the capabilities meta-tool to those grants.
+        services.TryAddSingleton<ILatticeApiMcpPermissionResolver, AuthAdminMcpPermissionResolver>();
+        services.TryAddSingleton<LatticeApiMcpSessionConfigurator>();
+
         // MCP server over the streamable-HTTP transport. No tools are registered
         // here; per-facade tool modules attach separately.
         services.AddMcpServer().WithHttpTransport();
@@ -82,6 +89,13 @@ public static class LatticeMcpServiceCollectionExtensions
         services.AddOptions<HttpServerTransportOptions>()
             .Configure<IOptions<LatticeApiMcpOptions>>(
                 (transport, lattice) => transport.Stateless = lattice.Value.Stateless);
+
+        // Install the per-session discovery hook so every initialised session has
+        // its tool set filtered, its capabilities meta-tool installed, and its
+        // instructions populated from the caller's permission-scoped view.
+        services.AddOptions<HttpServerTransportOptions>()
+            .Configure<LatticeApiMcpSessionConfigurator>(
+                (transport, configurator) => transport.ConfigureSessionOptions = configurator.ConfigureAsync);
 
         return services;
     }
