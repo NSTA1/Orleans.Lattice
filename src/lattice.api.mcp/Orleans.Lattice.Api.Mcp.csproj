@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>Orleans.Lattice.Api.Mcp</PackageId>
+    <Version>7.9.1</Version>
+    <Description>Model Context Protocol (MCP) server binding for Orleans.Lattice. Exposes the cluster's transport-agnostic API facades (state, data, backup, auth) as MCP tools over the official ModelContextProtocol SDK, with an authenticated, fail-closed credential bridge and a default-deny authorization posture. Registered with AddLatticeMcp(...) and mapped with MapLatticeMcp(). This foundation ships with no tools; per-facade tool modules are added separately.</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Mcp.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\lattice\Orleans.Lattice.csproj" />
+    <PackageReference Include="ModelContextProtocol" Version="1.4.1" />
+    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="1.4.1" />
+  </ItemGroup>
+
+</Project>
