@@ -32,7 +32,7 @@ namespace Orleans.Lattice.Api.Mcp;
 /// per-facade tool modules are added separately.
 /// </para>
 /// </remarks>
-public static class LatticeMcpServiceCollectionExtensions
+public static partial class LatticeMcpServiceCollectionExtensions
 {
     /// <summary>
     /// Registers the <c>Orleans.Lattice.Api.Mcp</c> binding: the MCP server with

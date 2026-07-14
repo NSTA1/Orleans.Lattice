@@ -86,8 +86,22 @@ public sealed class LatticeApiMcpOptions
 
     /// <summary>
     /// Whether the auth-admin control facade contributes tools. Defaults to
-    /// <see langword="false"/>. The auth tool module (a later addition) reads
-    /// this flag; the skeleton exposes no tools regardless.
+    /// <see langword="false"/>. Set to <see langword="true"/> by
+    /// <see cref="LatticeMcpServiceCollectionExtensions.AddAuthTools"/> when the
+    /// host opts the auth control plane in; the auth tool module reads it so the
+    /// capabilities report reflects that auth is enabled on this server.
     /// </summary>
     public bool EnableAuthTools { get; set; }
+
+    /// <summary>
+    /// Whether the auth tool module also contributes the mutating
+    /// <b>administration</b> verbs (user / group / membership / rule
+    /// upsert-remove) in addition to the read-only introspection tools. Defaults
+    /// to <see langword="false"/> so a host that opts the auth control plane in
+    /// exposes only introspection until it explicitly enables administration
+    /// through <see cref="LatticeMcpServiceCollectionExtensions.AddAuthTools"/>.
+    /// The mutating verbs remain administrator-gated by the facade regardless of
+    /// this flag; the flag only controls whether they are advertised at all.
+    /// </summary>
+    public bool EnableAuthAdministration { get; set; }
 }
