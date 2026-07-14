@@ -57,34 +57,34 @@ internal sealed class AuthToolGroup : ILatticeApiMcpToolGroup
         var tools = new List<McpServerTool>
         {
             // ----- Introspection (read-only) -----
-            Read(services, AuthToolHandlers.ExplainAsync, "auth_explain", "Explain an authorization decision",
+            Read(services, AuthToolHandlers.ExplainAsync, "lattice_auth_explain", "Explain an authorization decision",
                 "Explains whether a subject may perform an operation over a keyspace scope (whole tree, a key, or a "
                 + "prefix), returning the access gate's verdict and the authored rules that apply. Read-only."),
-            Read(services, AuthToolHandlers.EffectivePermissionsAsync, "auth_effective_permissions",
+            Read(services, AuthToolHandlers.EffectivePermissionsAsync, "lattice_auth_effective_permissions",
                 "List a subject's effective permissions",
                 "Returns the authorization rules currently in effect for a subject (grants and denies), resolved from "
                 + "the live policy store and the subject's group closure. Read-only."),
-            Read(services, AuthToolHandlers.GetUserAsync, "auth_get_user", "Get a user",
+            Read(services, AuthToolHandlers.GetUserAsync, "lattice_auth_get_user", "Get a user",
                 "Reads a single user record by id, or null when no such user exists. Read-only."),
-            Read(services, AuthToolHandlers.ListUsersAsync, "auth_list_users", "List users",
+            Read(services, AuthToolHandlers.ListUsersAsync, "lattice_auth_list_users", "List users",
                 "Reads one page of the user catalog in ascending user-id order. Pass the returned next page token to "
                 + "continue. Read-only."),
-            Read(services, AuthToolHandlers.GetGroupAsync, "auth_get_group", "Get a group",
+            Read(services, AuthToolHandlers.GetGroupAsync, "lattice_auth_get_group", "Get a group",
                 "Reads a single group record by id, or null when no such group exists. Read-only."),
-            Read(services, AuthToolHandlers.ListGroupsAsync, "auth_list_groups", "List groups",
+            Read(services, AuthToolHandlers.ListGroupsAsync, "lattice_auth_list_groups", "List groups",
                 "Reads one page of the group catalog in ascending group-id order. Pass the returned next page token to "
                 + "continue. Read-only."),
-            Read(services, AuthToolHandlers.ListGroupMembersAsync, "auth_list_group_members", "List a group's members",
+            Read(services, AuthToolHandlers.ListGroupMembersAsync, "lattice_auth_list_group_members", "List a group's members",
                 "Returns the direct members (users and nested groups) of a group, in ascending ordinal order. Read-only."),
-            Read(services, AuthToolHandlers.ListSubjectGroupsAsync, "auth_list_subject_groups",
+            Read(services, AuthToolHandlers.ListSubjectGroupsAsync, "lattice_auth_list_subject_groups",
                 "List a subject's groups",
                 "Returns the full transitive set of group ids a subject belongs to, walking nested groups. Read-only."),
-            Read(services, AuthToolHandlers.GetRuleAsync, "auth_get_rule", "Get an authorization rule",
+            Read(services, AuthToolHandlers.GetRuleAsync, "lattice_auth_get_rule", "Get an authorization rule",
                 "Reads a single rule by its governed tree id and rule id, or null when none exists. Read-only."),
-            Read(services, AuthToolHandlers.ListRulesAsync, "auth_list_rules", "List all authorization rules",
+            Read(services, AuthToolHandlers.ListRulesAsync, "lattice_auth_list_rules", "List all authorization rules",
                 "Reads one page of every rule in the store, ordered by (governed tree id, rule id). Pass the returned "
                 + "next page token to continue. Read-only."),
-            Read(services, AuthToolHandlers.ListRulesForTreeAsync, "auth_list_rules_for_tree",
+            Read(services, AuthToolHandlers.ListRulesForTreeAsync, "lattice_auth_list_rules_for_tree",
                 "List a tree's authorization rules",
                 "Reads one page of the rules governing a single tree, ordered by rule id. Pass the returned next page "
                 + "token to continue. Read-only."),
@@ -93,25 +93,25 @@ internal sealed class AuthToolGroup : ILatticeApiMcpToolGroup
         if (enableAdministration)
         {
             // ----- Administration (destructive) -----
-            tools.Add(Write(services, AuthToolHandlers.UpsertUserAsync, "auth_upsert_user", "Create or replace a user",
+            tools.Add(Write(services, AuthToolHandlers.UpsertUserAsync, "lattice_auth_upsert_user", "Create or replace a user",
                 "Creates or replaces a user record (id, optional display name and claim bag), returning the written "
                 + "record. Administrator-gated and destructive."));
-            tools.Add(Write(services, AuthToolHandlers.RemoveUserAsync, "auth_remove_user", "Remove a user",
+            tools.Add(Write(services, AuthToolHandlers.RemoveUserAsync, "lattice_auth_remove_user", "Remove a user",
                 "Removes a user record by id. A no-op when no such user exists. Administrator-gated and destructive."));
-            tools.Add(Write(services, AuthToolHandlers.UpsertGroupAsync, "auth_upsert_group", "Create or replace a group",
+            tools.Add(Write(services, AuthToolHandlers.UpsertGroupAsync, "lattice_auth_upsert_group", "Create or replace a group",
                 "Creates or replaces a group record (id and optional display name), returning the written record. "
                 + "Administrator-gated and destructive."));
-            tools.Add(Write(services, AuthToolHandlers.RemoveGroupAsync, "auth_remove_group", "Remove a group",
+            tools.Add(Write(services, AuthToolHandlers.RemoveGroupAsync, "lattice_auth_remove_group", "Remove a group",
                 "Removes a group record by id. A no-op when no such group exists. Administrator-gated and destructive."));
-            tools.Add(Write(services, AuthToolHandlers.AddMemberAsync, "auth_add_member", "Add a group member",
+            tools.Add(Write(services, AuthToolHandlers.AddMemberAsync, "lattice_auth_add_member", "Add a group member",
                 "Adds a membership edge making a member (a user or a nested group) a direct member of a group. "
                 + "Idempotent. Administrator-gated and destructive."));
-            tools.Add(Write(services, AuthToolHandlers.RemoveMemberAsync, "auth_remove_member", "Remove a group member",
+            tools.Add(Write(services, AuthToolHandlers.RemoveMemberAsync, "lattice_auth_remove_member", "Remove a group member",
                 "Removes a membership edge. A no-op when the edge does not exist. Administrator-gated and destructive."));
-            tools.Add(Write(services, AuthToolHandlers.PutRuleAsync, "auth_put_rule", "Create or replace a rule",
+            tools.Add(Write(services, AuthToolHandlers.PutRuleAsync, "lattice_auth_put_rule", "Create or replace a rule",
                 "Creates or replaces an authorization rule granting or denying a set of operations over a keyspace "
                 + "scope to a user or group, returning the persisted rule. Administrator-gated and destructive."));
-            tools.Add(Write(services, AuthToolHandlers.RemoveRuleAsync, "auth_remove_rule", "Remove a rule",
+            tools.Add(Write(services, AuthToolHandlers.RemoveRuleAsync, "lattice_auth_remove_rule", "Remove a rule",
                 "Removes a rule by its governed tree id and rule id, returning true when a rule was removed. "
                 + "Administrator-gated and destructive."));
         }

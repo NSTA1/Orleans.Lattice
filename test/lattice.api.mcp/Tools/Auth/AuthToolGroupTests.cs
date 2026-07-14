@@ -22,29 +22,29 @@ public sealed class AuthToolGroupTests
 {
     private static readonly string[] IntrospectionToolNames =
     {
-        "auth_explain",
-        "auth_effective_permissions",
-        "auth_get_user",
-        "auth_list_users",
-        "auth_get_group",
-        "auth_list_groups",
-        "auth_list_group_members",
-        "auth_list_subject_groups",
-        "auth_get_rule",
-        "auth_list_rules",
-        "auth_list_rules_for_tree",
+        "lattice_auth_explain",
+        "lattice_auth_effective_permissions",
+        "lattice_auth_get_user",
+        "lattice_auth_list_users",
+        "lattice_auth_get_group",
+        "lattice_auth_list_groups",
+        "lattice_auth_list_group_members",
+        "lattice_auth_list_subject_groups",
+        "lattice_auth_get_rule",
+        "lattice_auth_list_rules",
+        "lattice_auth_list_rules_for_tree",
     };
 
     private static readonly string[] AdministrationToolNames =
     {
-        "auth_upsert_user",
-        "auth_remove_user",
-        "auth_upsert_group",
-        "auth_remove_group",
-        "auth_add_member",
-        "auth_remove_member",
-        "auth_put_rule",
-        "auth_remove_rule",
+        "lattice_auth_upsert_user",
+        "lattice_auth_remove_user",
+        "lattice_auth_upsert_group",
+        "lattice_auth_remove_group",
+        "lattice_auth_add_member",
+        "lattice_auth_remove_member",
+        "lattice_auth_put_rule",
+        "lattice_auth_remove_rule",
     };
 
     private static AuthToolGroup CreateGroup(bool enableAdministration)
@@ -145,9 +145,9 @@ public sealed class AuthToolGroupTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(SchemaHasProperty(ServerTool(group, "auth_explain"), "subjectId"), Is.True);
-            Assert.That(SchemaHasProperty(ServerTool(group, "auth_upsert_user"), "userId"), Is.True);
-            Assert.That(SchemaHasProperty(ServerTool(group, "auth_put_rule"), "ruleId"), Is.True);
+            Assert.That(SchemaHasProperty(ServerTool(group, "lattice_auth_explain"), "subjectId"), Is.True);
+            Assert.That(SchemaHasProperty(ServerTool(group, "lattice_auth_upsert_user"), "userId"), Is.True);
+            Assert.That(SchemaHasProperty(ServerTool(group, "lattice_auth_put_rule"), "ruleId"), Is.True);
         });
     }
 
