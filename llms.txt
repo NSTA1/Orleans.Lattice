@@ -38,6 +38,7 @@ This file is the entry point for AI agents and LLM tooling. Documentation lives 
 - [State API gRPC binding](docs/lattice.api.state.grpc/README.md): Code-first gRPC binding and client (`Orleans.Lattice.Api.State.Grpc`).
 - [Azure Table WAL backend](docs/lattice.storage.azuretable/README.md): Durable WAL storage (`Orleans.Lattice.Storage.AzureTable`).
 - [Grafana dashboards](docs/lattice.dashboards/README.md): Bundled dashboards for the Lattice meters (`Orleans.Lattice.Dashboards`).
+- [Autoscaling signal](docs/lattice.scaling/README.md): Cluster-aggregate compute-axis replica-demand scalar for KEDA plus an advisory storage-axis WAL rebalance recommendation (`Orleans.Lattice.Scaling`).
 
 ## Working on this repository
 

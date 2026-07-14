@@ -1,0 +1,31 @@
+{
+  "//": "Azure Container Apps scale rule for Orleans.Lattice.Scaling (issue #1188).",
+  "//scraper": "A 'custom' scale rule of type 'metrics-api' polls the app's /lattice/scale endpoint and reads the scalar at valueLocation 'scaleValue'. KEDA (which backs ACA custom scale rules) divides the scraped value by targetValue to derive the desired replica count.",
+  "//placement": "This fragment goes under properties.template.scale.rules[] of a Microsoft.App/containerApps resource (api-version 2024-03-01 or later).",
+  "properties": {
+    "template": {
+      "scale": {
+        "minReplicas": 1,
+        "maxReplicas": 10,
+        "rules": [
+          {
+            "name": "lattice-scale",
+            "custom": {
+              "type": "metrics-api",
+              "metadata": {
+                "url": "http://localhost:8080/lattice/scale",
+                "valueLocation": "scaleValue",
+                "targetValue": "1",
+                "//targetValue": "One replica-unit of scaleValue maps to one desired replica. scaleValue is already expressed in replica-units, so targetValue '1' makes the autoscaler track it directly.",
+                "//url": "Point this at the in-cluster address of a silo that mapped MapLatticeScalingSignal(). The path must match LatticeScalingSignalOptions.EndpointPath (default /lattice/scale).",
+                "//unsafeSsl": "Set 'true' only when scraping a self-signed HTTPS endpoint in-cluster; prefer plain HTTP on a private network.",
+                "//pollingInterval-note": "Polling cadence is configured on the ACA scale rule host (KEDA pollingInterval, default 30s). Keep it at or above the signal's EWMA smoothing window so the autoscaler samples a settled value rather than reacting to per-scrape jitter.",
+                "//stabilizationWindow-note": "KEDA/HPA scale-down stabilization (default 300s) holds the replica count at its recent maximum before scaling in. Because scaleValue is already EWMA-smoothed on the producer side, a shorter stabilization window is safe; do not stack an aggressive stabilization window on top of a long EWMA or scale-in will lag twice."
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

@@ -98,4 +98,17 @@ public enum LatticeDashboardKind
     /// only when the backup package is registered on the silo.
     /// </summary>
     Backup = 6,
+
+    /// <summary>
+    /// Autoscaling-signal operator view for the <c>Orleans.Lattice.Scaling</c>
+    /// package. Charts the two scale-value gauges (the smoothed, scale-in-gated
+    /// value an autoscaler acts on and the raw, un-smoothed instantaneous
+    /// demand), the three normalised compute-pressure dimensions
+    /// (activation / host-resource / WAL-dispatch), the recommended silo replica
+    /// count, and the storage-axis stats (WAL catalogue keys over the advisory
+    /// threshold and whether a WAL rebalance is recommended). Sources the
+    /// <c>orleans.lattice.scaling</c> meter; useful only when the scaling package
+    /// is registered on the silo.
+    /// </summary>
+    Scaling = 7,
 }

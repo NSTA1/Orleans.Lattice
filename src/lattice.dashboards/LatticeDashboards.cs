@@ -69,6 +69,7 @@ public static class LatticeDashboards
         LatticeDashboardKind.MaterialisedViews => "Orleans.Lattice.Dashboards.Grafana.OrleansLatticeMaterialisedViews.json",
         LatticeDashboardKind.Authorization => "Orleans.Lattice.Dashboards.Grafana.OrleansLatticeAuthorization.json",
         LatticeDashboardKind.Backup => "Orleans.Lattice.Dashboards.Grafana.OrleansLatticeBackup.json",
+        LatticeDashboardKind.Scaling => "Orleans.Lattice.Dashboards.Grafana.OrleansLatticeScaling.json",
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown dashboard kind."),
     };
 }

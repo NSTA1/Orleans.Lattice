@@ -15,3 +15,14 @@
 **/results-*.json
 benchmark/grafana/dashboards/
 benchmark/.run/
+
+# Source-only build contexts: no Dockerfile in this repo needs these trees, and
+# packing them is what makes `az acr build` / `docker build` uploads slow.
+.scratch/
+.tmp/
+logs/
+artifacts/
+BenchmarkDotNet.Artifacts/
+docs/
+test/
+**/*.log
