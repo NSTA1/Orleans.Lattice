@@ -21,6 +21,8 @@
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Data.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Data.Grpc" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Data.Grpc.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Mcp" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Mcp.Tests" />
     <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
   </ItemGroup>
 

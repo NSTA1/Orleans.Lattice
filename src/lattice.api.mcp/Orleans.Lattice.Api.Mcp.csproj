@@ -24,6 +24,7 @@
   <ItemGroup>
     <ProjectReference Include="..\lattice\Orleans.Lattice.csproj" />
     <ProjectReference Include="..\lattice.api.state\Orleans.Lattice.Api.State.csproj" />
+    <ProjectReference Include="..\lattice.api.data\Orleans.Lattice.Api.Data.csproj" />
     <ProjectReference Include="..\lattice.api.auth\Orleans.Lattice.Api.Auth.csproj" />
     <PackageReference Include="ModelContextProtocol" Version="1.4.1" />
     <PackageReference Include="ModelContextProtocol.AspNetCore" Version="1.4.1" />
