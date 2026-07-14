@@ -36,6 +36,8 @@ internal sealed class LatticeApiMcpSessionConfigurator
     private readonly IReadOnlyList<ILatticeApiMcpToolGroup> _toolGroups;
     private readonly LatticeApiMcpAccessSet _registeredGroups;
     private readonly IServiceProvider _services;
+    private readonly ILatticeApiMcpGroupEndpointSource? _endpointSource;
+    private readonly ILatticeApiMcpUnsupportedToolSource? _unsupportedToolSource;
     private readonly ILogger<LatticeApiMcpSessionConfigurator> _logger;
 
     /// <summary>Initialises the session configurator from the registered discovery collaborators.</summary>
@@ -44,7 +46,9 @@ internal sealed class LatticeApiMcpSessionConfigurator
         ILatticeApiMcpPermissionResolver permissionResolver,
         IEnumerable<ILatticeApiMcpToolGroup> toolGroups,
         IServiceProvider services,
-        ILogger<LatticeApiMcpSessionConfigurator> logger)
+        ILogger<LatticeApiMcpSessionConfigurator> logger,
+        ILatticeApiMcpGroupEndpointSource? endpointSource = null,
+        ILatticeApiMcpUnsupportedToolSource? unsupportedToolSource = null)
     {
         _credentialBridge = credentialBridge ?? throw new ArgumentNullException(nameof(credentialBridge));
         _permissionResolver = permissionResolver ?? throw new ArgumentNullException(nameof(permissionResolver));
@@ -58,6 +62,8 @@ internal sealed class LatticeApiMcpSessionConfigurator
 
         _registeredGroups = registered;
         _services = services ?? throw new ArgumentNullException(nameof(services));
+        _endpointSource = endpointSource;
+        _unsupportedToolSource = unsupportedToolSource;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -165,11 +171,20 @@ internal sealed class LatticeApiMcpSessionConfigurator
             var groupTools = group.Tools;
             for (var j = 0; j < groupTools.Count; j++)
             {
-                if (!tools.TryAdd(groupTools[j]))
+                var tool = groupTools[j];
+                // Defer (omit) any tool the topology reports unsupported so a
+                // listed tool is never one that hard-errors on invoke. Under the
+                // in-silo topology no source is registered, so nothing is deferred.
+                if (_unsupportedToolSource?.IsUnsupported(tool.ProtocolTool.Name) == true)
+                {
+                    continue;
+                }
+
+                if (!tools.TryAdd(tool))
                 {
                     _logger.LogWarning(
                         "MCP tool '{ToolName}' from group '{Group}' collides with an existing tool and was skipped.",
-                        groupTools[j].ProtocolTool.Name,
+                        tool.ProtocolTool.Name,
                         group.Group);
                 }
             }
@@ -191,9 +206,11 @@ internal sealed class LatticeApiMcpSessionConfigurator
                 // Usable now: the caller holds a matching grant AND a tool module
                 // for the group is registered on this server.
                 Available = access.Contains(group) && _registeredGroups.Contains(group),
-                // In-silo topology: every group is co-hosted, so no endpoint is
-                // advertised. A later remote-host binding populates this slot.
-                Endpoint = null,
+                // In-silo topology: every group is co-hosted, so the endpoint
+                // source is absent and no endpoint is advertised. The remote-host
+                // binding registers an endpoint source that populates this slot
+                // with each group's served gRPC endpoint.
+                Endpoint = _endpointSource?.EndpointFor(group),
             };
         }
 
