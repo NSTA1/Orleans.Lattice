@@ -32,6 +32,10 @@
     <ProjectReference Include="..\..\src\lattice.api.data\Orleans.Lattice.Api.Data.csproj" />
     <ProjectReference Include="..\..\src\lattice.api.auth\Orleans.Lattice.Api.Auth.csproj" />
     <ProjectReference Include="..\..\src\lattice.api.backup\Orleans.Lattice.Api.Backup.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.state.grpc\Orleans.Lattice.Api.State.Grpc.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.data.grpc\Orleans.Lattice.Api.Data.Grpc.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.auth.grpc\Orleans.Lattice.Api.Auth.Grpc.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.backup.grpc\Orleans.Lattice.Api.Backup.Grpc.csproj" />
   </ItemGroup>
 
 </Project>
