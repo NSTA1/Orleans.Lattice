@@ -31,7 +31,12 @@ internal static class LatticeReplicationGrpcMetrics
     /// </summary>
     public const string InsecureChannelName = "orleans.lattice.replication.grpc.insecure_channel";
 
-    private static readonly Meter Meter = new(MeterName);
+    /// <summary>
+    /// The meter that owns every gRPC-transport instrument. Exposed to the test
+    /// assembly (via <c>InternalsVisibleTo</c>) so the dashboard-coverage drift
+    /// guard can enumerate its instruments.
+    /// </summary>
+    internal static readonly Meter Meter = new(MeterName);
 
     private static readonly Counter<long> InsecureChannel = Meter.CreateCounter<long>(
         InsecureChannelName,

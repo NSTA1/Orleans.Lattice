@@ -111,4 +111,17 @@ public enum LatticeDashboardKind
     /// is registered on the silo.
     /// </summary>
     Scaling = 7,
+
+    /// <summary>
+    /// Replication transport (gRPC) security view for the
+    /// <c>Orleans.Lattice.Replication.Grpc</c> package. Charts the insecure
+    /// (plaintext) channel construction counter - a cumulative total and a
+    /// per-second rate broken out by peer cluster id and transport
+    /// (<c>push</c> / <c>saga_control</c> / <c>snapshot</c>) - so an accidental
+    /// production plaintext downgrade under <c>AllowPlaintextEndpoints</c> is
+    /// visible rather than silent. Sources the
+    /// <c>orleans.lattice.replication.grpc</c> meter; useful only when the gRPC
+    /// replication transport is registered on the silo.
+    /// </summary>
+    ReplicationGrpc = 8,
 }

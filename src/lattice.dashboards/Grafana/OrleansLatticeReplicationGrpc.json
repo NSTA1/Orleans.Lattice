@@ -1,0 +1,136 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "Prometheus data source scraping the orleans.lattice.replication.grpc meter.",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "__requires": [
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "11.3.0"
+    },
+    {
+      "type": "datasource",
+      "id": "prometheus",
+      "name": "Prometheus",
+      "version": "1.0.0"
+    }
+  ],
+  "annotations": {
+    "list": []
+  },
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": [
+    "orleans",
+    "lattice",
+    "replication",
+    "grpc",
+    "security"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "refresh": 1
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "title": "Orleans.Lattice - Replication Transport (gRPC)",
+  "uid": "orleans-lattice-replication-grpc",
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Insecure (plaintext) channels constructed",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Cumulative count of gRPC replication channels built against a plaintext endpoint because AllowPlaintextEndpoints is enabled. Any non-zero value means the cross-cluster shared secret is travelling unencrypted and is intended for local/dev only - investigate immediately in a production cluster.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(orleans_lattice_replication_grpc_insecure_channel_total)"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Insecure channel construction rate by peer and transport",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Per-second rate of insecure (plaintext) gRPC channel constructions, broken out by peer cluster id and the transport (push, saga_control, snapshot) that opened the channel. A rising line pinpoints which peer and transport is downgrading to plaintext.",
+      "gridPos": {
+        "h": 8,
+        "w": 16,
+        "x": 8,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cps"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (peer, transport) (rate(orleans_lattice_replication_grpc_insecure_channel_total[5m]))",
+          "legendFormat": "{{peer}} / {{transport}}"
+        }
+      ]
+    }
+  ]
+}
