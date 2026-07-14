@@ -4,7 +4,7 @@ Code-first gRPC binding for [Orleans.Lattice.Api.State](../lattice.api.state/REA
 
 ## What is it?
 
-`Orleans.Lattice.Api.State.Grpc` is the remote transport for the cluster state API. Hosts reference it when a dashboard, a CLI explorer, or a future MCP bridge needs to reach the read-only surface over the network rather than in-process.
+`Orleans.Lattice.Api.State.Grpc` is the remote transport for the cluster state API. Hosts reference it when a dashboard, a CLI explorer, or the `Orleans.Lattice.Api.Mcp` MCP server in its remote topology needs to reach the read-only surface over the network rather than in-process.
 
 It provides:
 

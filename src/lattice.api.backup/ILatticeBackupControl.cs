@@ -4,8 +4,8 @@ namespace Orleans.Lattice.Api.Backup;
 
 /// <summary>
 /// Transport-agnostic backup / restore control facade. Every transport binding
-/// (the gRPC service now, a future MCP surface) is a thin adapter over this
-/// single surface, so the control semantics - authorization, chain walking,
+/// (the gRPC service and the Orleans.Lattice.Api.Mcp MCP server) is a thin
+/// adapter over this single surface, so the control semantics - authorization, chain walking,
 /// safe deletion, and bounded-memory enumeration - are written and tested once
 /// and no transport concern leaks into the control logic.
 /// </summary>

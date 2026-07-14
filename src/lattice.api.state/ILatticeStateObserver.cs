@@ -5,7 +5,8 @@ namespace Orleans.Lattice.Api.State;
 /// state. Yields <see cref="StateChangeNotification"/> values as changes
 /// commit, scoped to one tree and an optional key range, with a resumable
 /// cursor. Every transport binding (the gRPC server-streaming subscription
-/// now, a future MCP surface) is a thin adapter over this single surface.
+/// and the Orleans.Lattice.Api.Mcp MCP server) is a thin adapter over this
+/// single surface.
 /// </summary>
 /// <remarks>
 /// <para>

@@ -62,7 +62,7 @@ public static class LatticeApiStateServiceCollectionExtensions
         builder.Services.AddOptions<LatticeApiStateOptions>();
 
         // The transport-agnostic read facade. Registered as a silo singleton
-        // that every transport binding (gRPC now, MCP later) adapts over.
+        // that every transport binding (gRPC and MCP) adapts over.
         builder.Services.TryAddSingleton<ILatticeStateQuery, LatticeStateQuery>();
 
         // The transport-agnostic live change-observation facade. Tails the

@@ -160,6 +160,7 @@ public sealed class DocsSnippetCompilationTests
             using Orleans.Lattice.Api.State.Grpc;
             using Orleans.Lattice.Api.Data;
             using Orleans.Lattice.Api.Data.Grpc;
+            using Orleans.Lattice.Api.Mcp;
             using Microsoft.AspNetCore.Builder;
             using Microsoft.Extensions.DependencyInjection;
             using Microsoft.Extensions.Hosting;
@@ -274,6 +275,7 @@ public sealed class DocsSnippetCompilationTests
         _ = typeof(ISiloBuilder);                           // Orleans.Runtime / Hosting
         _ = typeof(Microsoft.Extensions.DependencyInjection.ServiceCollection);
         _ = typeof(ILattice);                               // Orleans.Lattice
+        _ = typeof(Orleans.Lattice.Api.Mcp.LatticeApiMcpOptions);   // Orleans.Lattice.Api.Mcp
         _ = typeof(Microsoft.AspNetCore.Builder.WebApplication);          // Microsoft.AspNetCore (shared framework)
         _ = typeof(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder);   // Microsoft.AspNetCore.Routing
         _ = typeof(Microsoft.AspNetCore.Hosting.IWebHostEnvironment);     // Microsoft.AspNetCore.Hosting.Abstractions

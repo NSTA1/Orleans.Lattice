@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Api.State</PackageId>
     <Version>7.9.1</Version>
-    <Description>Optional read-only cluster state API add-on for Orleans.Lattice. Exposes a transport-agnostic facade (and, via a sibling binding, a gRPC surface) that lets external clients query, observe, and subscribe to a cluster's tree state and metadata - trees, structure, entries, and views - for a tree-explorer dashboard and a later MCP surface. Registered with a single AddLatticeStateApi(...) call.</Description>
+    <Description>Optional read-only cluster state API add-on for Orleans.Lattice. Exposes a transport-agnostic facade (and, via a sibling binding, a gRPC surface) that lets external clients query, observe, and subscribe to a cluster's tree state and metadata - trees, structure, entries, and views - for a tree-explorer dashboard and the Orleans.Lattice.Api.Mcp MCP server. Registered with a single AddLatticeStateApi(...) call.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
     <RepositoryType>git</RepositoryType>

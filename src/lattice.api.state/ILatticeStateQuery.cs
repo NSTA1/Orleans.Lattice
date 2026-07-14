@@ -2,8 +2,9 @@ namespace Orleans.Lattice.Api.State;
 
 /// <summary>
 /// Transport-agnostic read facade over a cluster's lattice state. Every
-/// transport binding (the gRPC service now, a future MCP surface) is a thin
-/// adapter over this single surface, so the read semantics are written and
+/// transport binding (the gRPC service and the Orleans.Lattice.Api.Mcp MCP
+/// server) is a thin adapter over this single surface, so the read semantics
+/// are written and
 /// tested once and no transport concern leaks into the query logic.
 /// </summary>
 /// <remarks>

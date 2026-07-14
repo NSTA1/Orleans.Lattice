@@ -312,6 +312,29 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
     }
 
     [Test]
+    public async Task Granted_group_tools_are_wrapped_for_credential_stamping()
+    {
+        var dataGroup = new FakeToolGroup(LatticeApiMcpGroup.Data, "data_read");
+        var configurator = CreateConfigurator(
+            new LatticeCredential("alice"),
+            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data),
+            dataGroup);
+
+        var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
+
+        var groupTool = plan.Tools.Single(t => t.ProtocolTool.Name == "data_read");
+        var metaTool = plan.Tools.Single(t => t.ProtocolTool.Name == "lattice_capabilities");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(groupTool, Is.InstanceOf<CredentialStampingTool>(),
+                "A facade-backed group tool must be wrapped so the caller's credential is stamped for its invocation.");
+            Assert.That(metaTool, Is.Not.InstanceOf<CredentialStampingTool>(),
+                "The capabilities meta-tool performs no facade call and is not wrapped.");
+        });
+    }
+
+    [Test]
     public void Constructor_rejects_null_dependencies()
     {
         var bridge = new FakeBridge(null);

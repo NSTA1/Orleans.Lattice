@@ -149,7 +149,7 @@ public sealed partial class LatticeStateQueryIntegrationTests
         await _fixture.CreatePopulatedTreeAsync(treeId, keyCount: 30);
 
         // A trivial second adapter over the same facade, simulating the
-        // future MCP binding: it must observe identical results to a direct
+        // Orleans.Lattice.Api.Mcp MCP binding: it must observe identical results to a direct
         // facade call, proving transport neutrality.
         var mcpLikeAdapter = new ParityAdapter(_fixture.Query);
 

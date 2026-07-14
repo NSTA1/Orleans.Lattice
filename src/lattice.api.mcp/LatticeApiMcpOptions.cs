@@ -37,10 +37,9 @@ public sealed class LatticeApiMcpOptions
     /// <summary>
     /// Whether the HTTP transport runs in stateless mode. Defaults to
     /// <see langword="false"/> (stateful, session-based), which the
-    /// permission-scoped per-session tool collections later facade modules rely
-    /// on require. Set to <see langword="true"/> only for a stateless deployment
-    /// that needs horizontal scaling without session affinity and exposes a
-    /// fixed tool set.
+    /// permission-scoped per-session tool collections rely on. Set to
+    /// <see langword="true"/> only for a stateless deployment that needs
+    /// horizontal scaling without session affinity and exposes a fixed tool set.
     /// </summary>
     public bool Stateless { get; set; }
 
@@ -65,22 +64,22 @@ public sealed class LatticeApiMcpOptions
 
     /// <summary>
     /// Whether the read-only state facade contributes tools. Defaults to
-    /// <see langword="false"/>. The state tool module (a later addition) reads
-    /// this flag; the skeleton exposes no tools regardless.
+    /// <see langword="false"/>. Set to <see langword="true"/> by
+    /// <c>AddStateTools</c> when the host opts the state tool module in.
     /// </summary>
     public bool EnableStateTools { get; set; }
 
     /// <summary>
     /// Whether the read/write data facade contributes tools. Defaults to
-    /// <see langword="false"/>. The data tool module (a later addition) reads
-    /// this flag; the skeleton exposes no tools regardless.
+    /// <see langword="false"/>. Set to <see langword="true"/> by
+    /// <c>AddDataTools</c> when the host opts the data tool module in.
     /// </summary>
     public bool EnableDataTools { get; set; }
 
     /// <summary>
     /// Whether the backup control facade contributes tools. Defaults to
-    /// <see langword="false"/>. The backup tool module (a later addition) reads
-    /// this flag; the skeleton exposes no tools regardless.
+    /// <see langword="false"/>. Set to <see langword="true"/> by
+    /// <c>AddBackupTools</c> when the host opts the backup tool module in.
     /// </summary>
     public bool EnableBackupTools { get; set; }
 

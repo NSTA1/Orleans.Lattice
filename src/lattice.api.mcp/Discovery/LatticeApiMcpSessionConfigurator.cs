@@ -180,7 +180,7 @@ internal sealed class LatticeApiMcpSessionConfigurator
                     continue;
                 }
 
-                if (!tools.TryAdd(tool))
+                if (!tools.TryAdd(new CredentialStampingTool(tool)))
                 {
                     _logger.LogWarning(
                         "MCP tool '{ToolName}' from group '{Group}' collides with an existing tool and was skipped.",

@@ -82,6 +82,7 @@
     <ProjectReference Include="..\..\src\lattice.backup.azureblob\Orleans.Lattice.Backup.AzureBlob.csproj" />
     <ProjectReference Include="..\..\src\lattice.api.backup\Orleans.Lattice.Api.Backup.csproj" />
     <ProjectReference Include="..\..\src\lattice.api.backup.grpc\Orleans.Lattice.Api.Backup.Grpc.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.mcp\Orleans.Lattice.Api.Mcp.csproj" />
     <!--
       Pulled in solely so docs/lattice.membership/*.md and docs/lattice.auth/*.md
       can show membership + authorization registration, rule authoring, and
