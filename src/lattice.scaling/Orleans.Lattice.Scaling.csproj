@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>Orleans.Lattice.Scaling</PackageId>
+    <Version>7.9.0</Version>
+    <Description>Opt-in autoscaling signal for Orleans.Lattice - a read-only, two-axis (compute and storage) cluster-aggregate pressure snapshot that external autoscalers can scrape to size the silo pool.</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+    <!-- Reference autoscaler manifests (#1188). Shipped inside the package under
+         a deploy/ folder so operators (and the docs walkthrough authored by
+         #1189) can copy them verbatim. They are inert assets, not compiled. -->
+    <None Include="deploy\**\*" Pack="true" PackagePath="deploy\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Scaling.Tests" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\lattice\Orleans.Lattice.csproj" />
+    <PackageReference Include="Microsoft.Orleans.Sdk" Version="10.2.0" />
+  </ItemGroup>
+
+  <!-- ASP.NET Core endpoint routing (IEndpointRouteBuilder / MapGet /
+       WriteAsJsonAsync) for the scrape endpoint and the health-checks
+       abstractions for the probe target (#1188). Both live in the shared
+       framework, so a FrameworkReference keeps them out of the package's
+       transitive NuGet closure. -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+</Project>

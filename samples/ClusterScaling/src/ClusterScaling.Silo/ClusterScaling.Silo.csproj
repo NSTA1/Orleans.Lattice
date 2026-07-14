@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Orleans.Lattice.Samples.ClusterScaling.Silo</RootNamespace>
+    <AssemblyName>Orleans.Lattice.Samples.ClusterScaling.Silo</AssemblyName>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Orleans silo host plus the real Azure Storage clustering, grain-state,
+         and reminder providers. Managed identity means no key or connection
+         string is ever read; Azure.Identity supplies DefaultAzureCredential. -->
+    <PackageReference Include="Microsoft.Orleans.Server" Version="10.2.0" />
+    <PackageReference Include="Microsoft.Orleans.Clustering.AzureStorage" Version="10.2.0" />
+    <PackageReference Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.2.0" />
+    <PackageReference Include="Microsoft.Orleans.Reminders.AzureStorage" Version="10.2.0" />
+    <PackageReference Include="Azure.Identity" Version="1.21.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Core lattice + the durable Azure Table WAL (managed identity). -->
+    <ProjectReference Include="..\..\..\..\src\lattice\Orleans.Lattice.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.storage.azuretable\Orleans.Lattice.Storage.AzureTable.csproj" />
+    <!-- The write-capable data-plane facade and its gRPC binding. -->
+    <ProjectReference Include="..\..\..\..\src\lattice.api.data\Orleans.Lattice.Api.Data.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.api.data.grpc\Orleans.Lattice.Api.Data.Grpc.csproj" />
+    <!-- The autoscaling signal + its HTTP scrape endpoint and health check. -->
+    <ProjectReference Include="..\..\..\..\src\lattice.scaling\Orleans.Lattice.Scaling.csproj" />
+    <!-- LatticePasswordHash: the salted PBKDF2 verifier shared with the
+         tools/ credential-generation scripts and the deploy.ps1 hashing step. -->
+    <ProjectReference Include="..\..\..\..\src\lattice.api.state.grpc\Orleans.Lattice.Api.State.Grpc.csproj" />
+  </ItemGroup>
+
+</Project>

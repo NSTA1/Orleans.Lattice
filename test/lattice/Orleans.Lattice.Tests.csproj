@@ -91,6 +91,7 @@
     <ProjectReference Include="..\..\src\lattice.membership\Orleans.Lattice.Membership.csproj" />
     <ProjectReference Include="..\..\src\lattice.auth\Orleans.Lattice.Auth.csproj" />
     <ProjectReference Include="..\..\src\lattice.schema\Orleans.Lattice.Schema.csproj" />
+    <ProjectReference Include="..\..\src\lattice.scaling\Orleans.Lattice.Scaling.csproj" />
   </ItemGroup>
 
 </Project>

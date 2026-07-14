@@ -1,0 +1,249 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "Prometheus data source scraping the orleans.lattice.scaling meter.",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "__requires": [
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "11.3.0"
+    },
+    {
+      "type": "datasource",
+      "id": "prometheus",
+      "name": "Prometheus",
+      "version": "1.0.0"
+    }
+  ],
+  "annotations": {
+    "list": []
+  },
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": [
+    "orleans",
+    "lattice",
+    "scaling"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "refresh": 1
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "title": "Orleans.Lattice - Autoscaling Signal",
+  "uid": "orleans-lattice-scaling",
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Scale value (smoothed vs raw)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "The smoothed, scale-in-gated replica-demand scalar an autoscaler acts on, overlaid with the raw un-smoothed instantaneous demand.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(orleans_lattice_scaling_scale_value)",
+          "legendFormat": "smoothed"
+        },
+        {
+          "refId": "B",
+          "expr": "max(orleans_lattice_scaling_raw_scale_value)",
+          "legendFormat": "raw"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Compute pressure by dimension",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Normalised compute pressure per scale-relievable dimension (0.0 idle to 1.0 saturated). The dominant dimension drives the scale value.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(orleans_lattice_scaling_compute_activation_pressure)",
+          "legendFormat": "activation"
+        },
+        {
+          "refId": "B",
+          "expr": "max(orleans_lattice_scaling_compute_resource_pressure)",
+          "legendFormat": "resource"
+        },
+        {
+          "refId": "C",
+          "expr": "max(orleans_lattice_scaling_compute_wal_dispatch_pressure)",
+          "legendFormat": "wal-dispatch"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Recommended replicas",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "The concrete silo replica count the signal recommends, honouring the replica floor.",
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 0,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(orleans_lattice_scaling_compute_replicas)"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "WAL accounts over threshold",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Number of WAL catalogue keys whose retained bytes have crossed the advisory storage-pressure threshold.",
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 8,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(orleans_lattice_scaling_storage_accounts_over_threshold)"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "WAL rebalance recommended",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "1 when the storage collector is recommending a WAL move to relieve storage pressure, otherwise 0.",
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(orleans_lattice_scaling_storage_rebalance_recommendations)"
+        }
+      ]
+    }
+  ]
+}

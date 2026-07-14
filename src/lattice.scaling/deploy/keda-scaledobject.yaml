@@ -1,0 +1,55 @@
+# KEDA ScaledObject for Orleans.Lattice.Scaling (issue #1188).
+#
+# The metrics-api scaler polls the silo's /lattice/scale endpoint and reads the
+# scalar at valueLocation 'scaleValue'. KEDA divides the scraped value by
+# targetValue to derive the desired replica count and drives a target
+# Deployment through a managed HPA.
+#
+# Apply against the namespace that runs your Orleans silo Deployment. The
+# scaleTargetRef.name must match the Deployment that hosts the silos.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: lattice-scale
+  namespace: default
+spec:
+  scaleTargetRef:
+    name: orleans-silo            # the Deployment hosting the silo pool
+  # minReplicaCount is the scale-in floor; maxReplicaCount is the hard ceiling
+  # the autoscaler never scales past regardless of scaleValue.
+  minReplicaCount: 1
+  maxReplicaCount: 10
+  # pollingInterval should sit at or above the signal's producer-side EWMA
+  # smoothing window so KEDA samples a settled value rather than per-scrape
+  # jitter.
+  pollingInterval: 30
+  # cooldownPeriod is the scale-to-min idle delay. Scale-in stabilization is
+  # configured under advanced.horizontalPodAutoscalerConfig below; because
+  # scaleValue is already EWMA-smoothed on the producer side, a shorter
+  # stabilization window is safe. Do not stack a long stabilization window on
+  # top of a long EWMA or scale-in lags twice.
+  cooldownPeriod: 60
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 120
+  triggers:
+    - type: metrics-api
+      metadata:
+        # In-cluster URL of a silo that mapped MapLatticeScalingSignal(). The
+        # path must match LatticeScalingSignalOptions.EndpointPath
+        # (default /lattice/scale).
+        url: "http://orleans-silo.default.svc.cluster.local:8080/lattice/scale"
+        valueLocation: "scaleValue"
+        # scaleValue is expressed in replica-units, so targetValue "1" tracks
+        # it directly (desiredReplicas = ceil(scaleValue / 1)).
+        targetValue: "1"
+#
+# Plain-HPA alternative (no KEDA):
+# If you cannot run KEDA, expose scaleValue as a custom/external metric through
+# a metrics adapter (for example the Prometheus Adapter scraping the same
+# endpoint via a ServiceMonitor, or a custom metrics API server) and reference
+# it from a standard autoscaling/v2 HorizontalPodAutoscaler with a
+# type: External metric whose target.averageValue is "1". The metrics-api
+# scaler above is the lower-ceremony path and is recommended.
