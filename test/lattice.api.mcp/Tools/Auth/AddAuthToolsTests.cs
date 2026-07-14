@@ -69,7 +69,7 @@ public sealed class AddAuthToolsTests
             Assert.That(options.EnableAuthAdministration, Is.False);
             Assert.That(
                 group.Tools.Select(t => t.ProtocolTool.Name),
-                Does.Not.Contain("auth_put_rule"),
+                Does.Not.Contain("lattice_auth_put_rule"),
                 "Administration verbs must be absent unless administration is opted in.");
         });
     }
@@ -89,7 +89,7 @@ public sealed class AddAuthToolsTests
             Assert.That(options.EnableAuthAdministration, Is.True);
             Assert.That(
                 group.Tools.Select(t => t.ProtocolTool.Name),
-                Does.Contain("auth_put_rule"));
+                Does.Contain("lattice_auth_put_rule"));
         });
     }
 
