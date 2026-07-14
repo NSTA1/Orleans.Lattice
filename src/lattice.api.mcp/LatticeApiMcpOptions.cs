@@ -85,6 +85,19 @@ public sealed class LatticeApiMcpOptions
     public bool EnableBackupTools { get; set; }
 
     /// <summary>
+    /// Whether the backup tool module also contributes its <b>mutating</b>
+    /// control tools (capture, incremental capture, restore, revert, delete) in
+    /// addition to the read-only inspect tools. Defaults to
+    /// <see langword="false"/> so a registered backup module is inspect-only
+    /// until the host explicitly opts backup control in - either by setting this
+    /// flag or by passing <c>enableControl: true</c> to
+    /// <c>AddBackupTools(...)</c>. Every control tool it then contributes is
+    /// annotated destructive and non-read-only, and remains subject to the same
+    /// fail-closed backup access gate the facade enforces.
+    /// </summary>
+    public bool EnableBackupControlTools { get; set; }
+
+    /// <summary>
     /// Whether the auth-admin control facade contributes tools. Defaults to
     /// <see langword="false"/>. The auth tool module (a later addition) reads
     /// this flag; the skeleton exposes no tools regardless.
