@@ -2,6 +2,8 @@ using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using Grpc.Core;
 using Grpc.Net.Client;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.Primitives;
 
@@ -43,6 +45,7 @@ internal sealed class GrpcRemoteSnapshotTransport : IRemoteSnapshotTransport, ID
     private readonly IOptionsMonitor<GrpcRemoteSnapshotTransportOptions> _options;
     private readonly IReplicationSecretProvider _secrets;
     private readonly IOptionsMonitor<LatticeReplicationOptions> _replicationOptions;
+    private readonly ILogger _logger;
     private readonly ConcurrentDictionary<string, PeerChannel> _channels = new(StringComparer.Ordinal);
     private int _disposed;
 
@@ -53,7 +56,8 @@ internal sealed class GrpcRemoteSnapshotTransport : IRemoteSnapshotTransport, ID
         LatticeRemoteSnapshotGrpcMethods methods,
         IOptionsMonitor<GrpcRemoteSnapshotTransportOptions> options,
         IReplicationSecretProvider secrets,
-        IOptionsMonitor<LatticeReplicationOptions> replicationOptions)
+        IOptionsMonitor<LatticeReplicationOptions> replicationOptions,
+        ILogger<GrpcRemoteSnapshotTransport>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(methods);
         ArgumentNullException.ThrowIfNull(options);
@@ -64,6 +68,7 @@ internal sealed class GrpcRemoteSnapshotTransport : IRemoteSnapshotTransport, ID
         _options = options;
         _secrets = secrets;
         _replicationOptions = replicationOptions;
+        _logger = logger ?? NullLogger<GrpcRemoteSnapshotTransport>.Instance;
     }
 
     /// <inheritdoc />
@@ -179,16 +184,8 @@ internal sealed class GrpcRemoteSnapshotTransport : IRemoteSnapshotTransport, ID
             : _replicationOptions.CurrentValue.ClusterId;
 
         var channelOptions = new GrpcChannelOptions();
-        var callCreds = GrpcChannelHardening.BuildCallCredentials(_secrets, sourceClusterId, localClusterId);
-        if (options.AllowPlaintextEndpoints && !string.Equals(endpoint.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
-        {
-            channelOptions.UnsafeUseInsecureChannelCallCredentials = true;
-            channelOptions.Credentials = ChannelCredentials.Create(ChannelCredentials.Insecure, callCreds);
-        }
-        else
-        {
-            channelOptions.Credentials = ChannelCredentials.Create(ChannelCredentials.SecureSsl, callCreds);
-        }
+        GrpcChannelHardening.ApplyCallCredentials(
+            channelOptions, endpoint, options.AllowPlaintextEndpoints, _secrets, sourceClusterId, localClusterId, _logger, "snapshot");
 
         options.ConfigureChannel?.Invoke(sourceClusterId, channelOptions);
         var createdChannel = GrpcChannel.ForAddress(endpoint, channelOptions);

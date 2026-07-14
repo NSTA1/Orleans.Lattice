@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using Grpc.Core;
 using Grpc.Net.Client;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace Orleans.Lattice.Replication.Grpc;
@@ -31,6 +33,7 @@ internal sealed class GrpcSagaControlChannel : ISagaControlChannel, IDisposable
     private readonly IOptionsMonitor<GrpcSagaControlChannelOptions> _options;
     private readonly IReplicationSecretProvider _secrets;
     private readonly IOptionsMonitor<LatticeReplicationOptions> _replicationOptions;
+    private readonly ILogger _logger;
     private readonly ConcurrentDictionary<string, PeerChannel> _channels = new(StringComparer.Ordinal);
     private int _disposed;
 
@@ -39,7 +42,8 @@ internal sealed class GrpcSagaControlChannel : ISagaControlChannel, IDisposable
         LatticeSagaGrpcMethods methods,
         IOptionsMonitor<GrpcSagaControlChannelOptions> options,
         IReplicationSecretProvider secrets,
-        IOptionsMonitor<LatticeReplicationOptions> replicationOptions)
+        IOptionsMonitor<LatticeReplicationOptions> replicationOptions,
+        ILogger<GrpcSagaControlChannel>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(methods);
         ArgumentNullException.ThrowIfNull(options);
@@ -50,6 +54,7 @@ internal sealed class GrpcSagaControlChannel : ISagaControlChannel, IDisposable
         _options = options;
         _secrets = secrets;
         _replicationOptions = replicationOptions;
+        _logger = logger ?? NullLogger<GrpcSagaControlChannel>.Instance;
     }
 
     /// <inheritdoc />
@@ -114,16 +119,8 @@ internal sealed class GrpcSagaControlChannel : ISagaControlChannel, IDisposable
             : _replicationOptions.CurrentValue.ClusterId;
 
         var channelOptions = new GrpcChannelOptions();
-        var callCreds = GrpcChannelHardening.BuildCallCredentials(_secrets, clusterId, localClusterId);
-        if (options.AllowPlaintextEndpoints && !string.Equals(endpoint.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
-        {
-            channelOptions.UnsafeUseInsecureChannelCallCredentials = true;
-            channelOptions.Credentials = ChannelCredentials.Create(ChannelCredentials.Insecure, callCreds);
-        }
-        else
-        {
-            channelOptions.Credentials = ChannelCredentials.Create(ChannelCredentials.SecureSsl, callCreds);
-        }
+        GrpcChannelHardening.ApplyCallCredentials(
+            channelOptions, endpoint, options.AllowPlaintextEndpoints, _secrets, clusterId, localClusterId, _logger, "saga_control");
 
         options.ConfigureChannel?.Invoke(clusterId, channelOptions);
         var createdChannel = GrpcChannel.ForAddress(endpoint, channelOptions);

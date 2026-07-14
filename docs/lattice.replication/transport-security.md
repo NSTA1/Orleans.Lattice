@@ -97,7 +97,7 @@ siloBuilder.ConfigureLatticeReplicationSecurity(o =>
 
 The gRPC package (`Orleans.Lattice.Replication.Grpc`) layers transport mechanics on top of the core secret-source seam. The sender:
 
-- **Refuses non-`https://` endpoints** unless `LatticeReplicationGrpcOptions.AllowPlaintextEndpoints` is explicitly set. The check runs at channel-resolution time, so a misconfigured `Peers` entry fails fast on the first batch dispatched to that peer rather than silently downgrading.
+- **Refuses non-`https://` endpoints** unless `LatticeReplicationGrpcOptions.AllowPlaintextEndpoints` is explicitly set. The check runs at channel-resolution time, so a misconfigured `Peers` entry fails fast on the first batch dispatched to that peer rather than silently downgrading. When the opt-out is set and an insecure channel is actually built, the sender logs a warning and increments the `orleans.lattice.replication.grpc.insecure_channel` counter (tagged with the peer cluster id and the transport name) so that an accidental production plaintext downgrade is observable rather than silent.
 - **Attaches the outbound secret as gRPC `CallCredentials`** whenever the secret source returns a non-empty value. The credentials are added to the channel options the package builds, then `ConfigureChannel(...)` runs - so a host that needs to replace the credentials chain entirely (e.g. mTLS-only with no shared secret) can do so unconditionally.
 - **Stamps the local cluster id** as the `x-lattice-replication-origin` header on every call, sourced from `LatticeReplicationGrpcOptions.LocalClusterId` or, if unset, from `LatticeReplicationOptions.ClusterId`.
 
