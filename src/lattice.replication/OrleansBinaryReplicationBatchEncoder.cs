@@ -565,7 +565,15 @@ internal sealed class OrleansBinaryReplicationBatchEncoder : IReplicationBatchEn
                 + "potential decompression bomb. Raise the ceiling if this reflects a legitimately large batch.",
                 nameof(payload));
         }
-        if (cursor + compressedLength > payload.Length)
+        // Widen to long before summing: both operands are int and
+        // compressedLength is an attacker-controllable wire field (up to
+        // int.MaxValue), so cursor + compressedLength can overflow to a
+        // negative value and slip past this truncation guard. The 64-bit
+        // sum cannot overflow for two non-negative int operands, so an
+        // oversized declared length is caught here by the explicit
+        // framing-corruption message rather than by the later
+        // span.Slice(cursor, compressedLength) bounds check.
+        if ((long)cursor + compressedLength > payload.Length)
         {
             throw new ArgumentException(
                 $"Framing payload is truncated at the compressed body; declared compressed length {compressedLength} would overrun the payload (remaining {payload.Length - cursor} bytes).",

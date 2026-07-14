@@ -3,6 +3,8 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using Grpc.Core;
 using Grpc.Net.Client;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace Orleans.Lattice.Replication.Grpc;
@@ -55,6 +57,7 @@ internal sealed class GrpcPushTransport : IReplicationTransport, IReplicationDig
     private readonly IOptionsMonitor<GrpcPushTransportOptions> _options;
     private readonly IReplicationSecretProvider _secrets;
     private readonly IOptionsMonitor<LatticeReplicationOptions> _replicationOptions;
+    private readonly ILogger _logger;
     private readonly ConcurrentDictionary<string, PeerChannel> _channels = new(StringComparer.Ordinal);
     private int _disposed;
 
@@ -66,7 +69,8 @@ internal sealed class GrpcPushTransport : IReplicationTransport, IReplicationDig
         IReplicationBatchEncoder encoder,
         IOptionsMonitor<GrpcPushTransportOptions> options,
         IReplicationSecretProvider secrets,
-        IOptionsMonitor<LatticeReplicationOptions> replicationOptions)
+        IOptionsMonitor<LatticeReplicationOptions> replicationOptions,
+        ILogger<GrpcPushTransport>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(method);
         ArgumentNullException.ThrowIfNull(encoder);
@@ -79,6 +83,7 @@ internal sealed class GrpcPushTransport : IReplicationTransport, IReplicationDig
         _options = options;
         _secrets = secrets;
         _replicationOptions = replicationOptions;
+        _logger = logger ?? NullLogger<GrpcPushTransport>.Instance;
     }
 
     /// <inheritdoc />
@@ -508,17 +513,11 @@ internal sealed class GrpcPushTransport : IReplicationTransport, IReplicationDig
         // call-credentials together; when the channel is plaintext
         // (only possible with the opt-in), the secret still travels
         // via UnsafeUseInsecureChannelCallCredentials so the
-        // receiver-side interceptor can still authenticate the call.
-        var callCreds = GrpcChannelHardening.BuildCallCredentials(_secrets, targetClusterId, localClusterId);
-        if (options.AllowPlaintextEndpoints && !string.Equals(endpoint.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
-        {
-            channelOptions.UnsafeUseInsecureChannelCallCredentials = true;
-            channelOptions.Credentials = ChannelCredentials.Create(ChannelCredentials.Insecure, callCreds);
-        }
-        else
-        {
-            channelOptions.Credentials = ChannelCredentials.Create(ChannelCredentials.SecureSsl, callCreds);
-        }
+        // receiver-side interceptor can still authenticate the call -
+        // and the helper emits a warning + metric so that insecure
+        // path is never silent.
+        GrpcChannelHardening.ApplyCallCredentials(
+            channelOptions, endpoint, options.AllowPlaintextEndpoints, _secrets, targetClusterId, localClusterId, _logger, "push");
 
         // Host-supplied ConfigureChannel runs *after* the hardened
         // defaults so the host can replace any of them (e.g. supply

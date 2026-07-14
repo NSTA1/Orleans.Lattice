@@ -1,5 +1,6 @@
 using Grpc.Core;
 using Grpc.Net.Client;
+using Microsoft.Extensions.Logging;
 
 namespace Orleans.Lattice.Replication.Grpc;
 
@@ -62,6 +63,58 @@ internal static class GrpcChannelHardening
                 + "Replication batches carry secret-shaped CRDT mutations and must travel over TLS. "
                 + $"Configure an https://... endpoint, or - only for loopback / diagnostic scenarios - set "
                 + $"{nameof(GrpcPushTransportOptions)}.{nameof(GrpcPushTransportOptions.AllowPlaintextEndpoints)} = true.");
+        }
+    }
+
+    /// <summary>
+    /// Attaches the shared-secret <see cref="CallCredentials"/> to
+    /// <paramref name="channelOptions"/>, selecting the TLS-composite
+    /// credentials for an <c>https</c> endpoint and the insecure-composite
+    /// credentials for the opt-in plaintext path. When the plaintext path is
+    /// taken (because <paramref name="allowPlaintextEndpoints"/> is enabled and
+    /// the endpoint is not <c>https</c>) this emits a <see cref="LogLevel.Warning"/>
+    /// naming the peer cluster and endpoint, and increments the
+    /// <see cref="LatticeReplicationGrpcMetrics.InsecureChannelName"/> counter, so
+    /// an accidental production misconfiguration is visible rather than silent -
+    /// the cross-cluster shared secret then travels unencrypted.
+    /// </summary>
+    /// <param name="channelOptions">The channel options being built; mutated in place.</param>
+    /// <param name="endpoint">The resolved peer endpoint URI.</param>
+    /// <param name="allowPlaintextEndpoints">Whether the host opted in to plaintext endpoints.</param>
+    /// <param name="secrets">The shared-secret provider.</param>
+    /// <param name="peerClusterId">The remote peer cluster id.</param>
+    /// <param name="localClusterId">The local cluster id stamped on the origin header.</param>
+    /// <param name="logger">The transport logger the insecure-channel warning is written to.</param>
+    /// <param name="transport">The transport name for the metric tag and log field (e.g. <c>push</c>).</param>
+    public static void ApplyCallCredentials(
+        GrpcChannelOptions channelOptions,
+        Uri endpoint,
+        bool allowPlaintextEndpoints,
+        IReplicationSecretProvider secrets,
+        string peerClusterId,
+        string localClusterId,
+        ILogger logger,
+        string transport)
+    {
+        ArgumentNullException.ThrowIfNull(channelOptions);
+        ArgumentNullException.ThrowIfNull(endpoint);
+        ArgumentNullException.ThrowIfNull(logger);
+
+        var callCreds = BuildCallCredentials(secrets, peerClusterId, localClusterId);
+        var insecure = allowPlaintextEndpoints
+            && !string.Equals(endpoint.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase);
+        if (insecure)
+        {
+            channelOptions.UnsafeUseInsecureChannelCallCredentials = true;
+            channelOptions.Credentials = ChannelCredentials.Create(ChannelCredentials.Insecure, callCreds);
+            LatticeReplicationGrpcMetrics.RecordInsecureChannel(peerClusterId, transport);
+            logger.LogWarning(
+                "Replication {Transport} to cluster '{PeerClusterId}' is using an INSECURE plaintext channel to '{Endpoint}' because AllowPlaintextEndpoints is enabled; the cross-cluster shared secret is transmitted UNENCRYPTED. Intended for local / dev / loopback only - do not use in production.",
+                transport, peerClusterId, endpoint);
+        }
+        else
+        {
+            channelOptions.Credentials = ChannelCredentials.Create(ChannelCredentials.SecureSsl, callCreds);
         }
     }
 

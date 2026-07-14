@@ -18,6 +18,14 @@ namespace Orleans.Lattice.Views;
 /// registered there or constructable via <see cref="ActivatorUtilities"/> with
 /// DI-satisfiable constructor arguments.
 /// </para>
+/// <para>
+/// The persisted type name is resolved through
+/// <see cref="RuntimeViewProjectionAllowList"/>, which constrains it to the
+/// projection types already loaded on this silo. A persisted name that is not an
+/// allow-listed projection of the expected kind is rejected before the type is
+/// constructed, so a tampered registry entry cannot drive re-hydration to load
+/// or activate an arbitrary type.
+/// </para>
 /// </summary>
 internal static class RuntimeViewRehydrator
 {
@@ -31,11 +39,17 @@ internal static class RuntimeViewRehydrator
         IServiceProvider services,
         ILogger logger)
     {
-        var type = Type.GetType(record.ProjectionTypeName, throwOnError: false);
+        // Constrain type resolution to the allow-list of projection types this
+        // silo already has loaded, rather than resolving (and thereby loading)
+        // an arbitrary assembly-qualified type named by the persisted - and, in
+        // the threat model, potentially attacker-written - registry field. A
+        // name that is not an allow-listed projection of the expected kind is
+        // rejected before the type is ever constructed.
+        var type = RuntimeViewProjectionAllowList.Resolve(record.ProjectionTypeName, record.IsAggregation);
         if (type is null)
         {
             logger.LogWarning(
-                "Runtime view '{ViewName}' cannot be re-hydrated: projection type '{TypeName}' could not be loaded. The view stays dormant until it is re-created.",
+                "Runtime view '{ViewName}' cannot be re-hydrated: projection type '{TypeName}' is not a known projection type configured on this silo. The view stays dormant until it is re-created.",
                 record.ViewName, record.ProjectionTypeName);
             return null;
         }

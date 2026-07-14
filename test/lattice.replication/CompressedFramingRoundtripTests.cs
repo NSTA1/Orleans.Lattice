@@ -224,6 +224,40 @@ public class CompressedFramingRoundtripTests
     }
 
     [Test]
+    public void TryDecodeFraming_throws_framing_guard_on_forged_overflowing_compressed_length()
+    {
+        // A hostile sender can forge the declared compressed-body length
+        // up to int.MaxValue. The truncation guard sums the read cursor
+        // and the declared compressed length; if that sum is computed in
+        // 32-bit arithmetic it can overflow to a negative value and slip
+        // past the guard, downgrading a precise "truncated payload"
+        // rejection into a less specific slice exception. The widened
+        // (long) bounds check must catch the overflowing length with the
+        // explicit framing-corruption message.
+        var encoder = NewEncoderWithZstd();
+        var writer = new ArrayBufferWriter<byte>();
+        var body = new byte[256];
+        for (var i = 0; i < body.Length; i++) body[i] = (byte)(i % 9);
+        var entries = new[] { new ArraySegment<byte>(body) };
+        encoder.EncodeFraming(Header(1, LatticeCompression.Zstd), "tree-1", "site-a", entries, writer);
+
+        // Compressed-tail layout for plain Zstd: 32-byte header, then the
+        // 4-byte uncompressed length, then the 4-byte compressed length.
+        // Leave the uncompressed length intact (it is within the ceiling)
+        // and patch the compressed length to int.MaxValue so cursor +
+        // compressedLength overflows in 32-bit arithmetic.
+        var payload = writer.WrittenMemory.ToArray();
+        var compressedLengthOffset = EncodedBatchHeader.WireSize + 4;
+        BinaryPrimitives.WriteInt32LittleEndian(
+            payload.AsSpan(compressedLengthOffset, 4),
+            int.MaxValue);
+
+        Assert.That(
+            () => encoder.TryDecodeFraming(payload, out _, out _, out _, out _),
+            Throws.ArgumentException.With.Message.Contains("would overrun the payload"));
+    }
+
+    [Test]
     public void EncodeFraming_with_None_writes_canonical_uncompressed_layout()
     {
         var encoder = NewEncoderWithZstd();

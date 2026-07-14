@@ -8,6 +8,8 @@ The add-on `orleans.lattice.backup` meter is charted by the bundled Backup & Res
 
 The add-on `orleans.lattice.scaling` meter is charted by the bundled Autoscaling Signal dashboard. Its coverage is enforced the same way, from `Orleans.Lattice.Scaling.Tests` (deriving from `MeterDashboardCoverageTestsBase`).
 
+The add-on `orleans.lattice.replication.grpc` meter is charted by the bundled Replication Transport (gRPC) dashboard. Its coverage is enforced the same way, from `Orleans.Lattice.Replication.Grpc.Tests` (deriving from `MeterDashboardCoverageTestsBase`).
+
 ## `orleans.lattice` meter
 
 | Instrument | Type | Tags | Dashboard | Panel(s) |
@@ -247,3 +249,11 @@ All instruments are observable gauges published from the cached `ScalingSignal` 
 | `orleans.lattice.scaling.compute.replicas` | observable gauge (`{replica}`) | (none) | Autoscaling Signal | Recommended replicas |
 | `orleans.lattice.scaling.storage.accounts_over_threshold` | observable gauge (`{account}`) | (none) | Autoscaling Signal | WAL accounts over threshold |
 | `orleans.lattice.scaling.storage.rebalance_recommendations` | observable gauge (`{recommendation}`) | (none) | Autoscaling Signal | WAL rebalance recommended |
+
+## `orleans.lattice.replication.grpc` meter
+
+The gRPC replication transport's telemetry. Charted by the Replication Transport (gRPC) dashboard; coverage enforced from `Orleans.Lattice.Replication.Grpc.Tests`.
+
+| Instrument | Type | Tags | Dashboard | Panel(s) |
+|------------|------|------|-----------|----------|
+| `orleans.lattice.replication.grpc.insecure_channel` | counter (`{channel}`) | `peer`, `transport` | Replication Transport (gRPC) | Insecure (plaintext) channels constructed; Insecure channel construction rate by peer and transport |
