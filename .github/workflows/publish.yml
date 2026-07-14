@@ -24,6 +24,8 @@ on:
       #   lattice.backup.azureblob-v7.9.0
       #   lattice.api.backup-v7.9.0
       #   lattice.api.backup.grpc-v7.9.0
+      #   lattice.schema-v7.9.0
+      #   lattice.scaling-v7.9.0
       # The tag prefix is the literal folder name under src/, dots and all.
       - 'lattice-v*'
       - 'lattice.replication-v*'
@@ -44,6 +46,8 @@ on:
       - 'lattice.backup.azureblob-v*'
       - 'lattice.api.backup-v*'
       - 'lattice.api.backup.grpc-v*'
+      - 'lattice.schema-v*'
+      - 'lattice.scaling-v*'
 
 jobs:
   publish:
