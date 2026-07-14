@@ -54,7 +54,7 @@ Cancel a streaming call through its `CancellationToken` to unsubscribe; the serv
 
 ## In-process reuse
 
-The facade is transport-agnostic, so a consumer co-located in the silo - for example a future MCP bridge - does not need a network hop. Co-host the gRPC service in the silo process (`AddLatticeStateApiGrpc` + `MapLatticeStateApiGrpc`) and dial it over an in-process / loopback channel with the same `LatticeStateApiGrpcClient`. The client code is identical to the remote case; only the channel address changes. This is exactly what the package's MCP-reuse parity test exercises: the in-process path and the gRPC path return the same records for the same requests.
+The facade is transport-agnostic, so a consumer co-located in the silo - for example an in-process introspection host - does not need a network hop. Co-host the gRPC service in the silo process (`AddLatticeStateApiGrpc` + `MapLatticeStateApiGrpc`) and dial it over an in-process / loopback channel with the same `LatticeStateApiGrpcClient`. The client code is identical to the remote case; only the channel address changes. This is exactly what the package's MCP-reuse parity test exercises: the in-process path and the gRPC path return the same records for the same requests.
 
 The [`StateExplorer`](../../samples/StateExplorer) sample demonstrates the full journey - silo plus gRPC host in one process, a client dialing it over a loopback channel, and a walk through discovery, structure, scan, and a live change tail.
 

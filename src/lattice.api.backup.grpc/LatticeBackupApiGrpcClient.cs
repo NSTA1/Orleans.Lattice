@@ -10,9 +10,9 @@ namespace Orleans.Lattice.Api.Backup.Grpc;
 /// <see cref="CallInvoker"/> and the code-first method definitions, re-exposing
 /// the transport-agnostic <see cref="ILatticeBackupControl"/> facade surface
 /// over the wire: capture, catalog listing / streaming, describe, delete,
-/// restore, revert, and artifact export. A dashboard, CLI, or a future MCP
-/// bridge consumes the API through this client rather than hand-rolling channel
-/// calls.
+/// restore, revert, and artifact export. A dashboard, CLI, or the
+/// Orleans.Lattice.Api.Mcp MCP server consumes the API through this client
+/// rather than hand-rolling channel calls.
 /// </summary>
 /// <remarks>
 /// The client carries no transport policy of its own: address, TLS, retries,

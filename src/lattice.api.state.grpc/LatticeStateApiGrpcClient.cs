@@ -8,8 +8,8 @@ namespace Orleans.Lattice.Api.State.Grpc;
 /// Wraps a gRPC <see cref="CallInvoker"/> and the code-first method
 /// definitions, exposing one method per RPC over the same public,
 /// Orleans-serialized request/response records the server binds. A dashboard,
-/// CLI explorer, or a future MCP bridge consumes the API through this client
-/// rather than hand-rolling channel calls.
+/// CLI explorer, or the Orleans.Lattice.Api.Mcp MCP server consumes the API
+/// through this client rather than hand-rolling channel calls.
 /// </summary>
 /// <remarks>
 /// The client carries no transport policy of its own: address, TLS, retries,

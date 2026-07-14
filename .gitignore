@@ -270,6 +270,10 @@ Backup*/
 # The Explorer UI's Backups panel components live in a real Backup/ source
 # directory (UI/Backup/), not a Visual Studio upgrade-backup folder either.
 !/src/lattice.explorer/UI/Backup/
+# The MCP server's backup tool module lives in a real Tools/Backup/ source
+# directory, not a Visual Studio upgrade-backup folder either.
+!/src/lattice.api.mcp/Tools/Backup/
+!/test/lattice.api.mcp/Tools/Backup/
 UpgradeLog*.XML
 UpgradeLog*.htm
 ServiceFabricBackup/

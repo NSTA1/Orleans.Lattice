@@ -20,6 +20,6 @@ siloBuilder
     .AddLatticeStateApi();
 ```
 
-For remote access, pair it with [`Orleans.Lattice.Api.State.Grpc`](https://www.nuget.org/packages/Orleans.Lattice.Api.State.Grpc), the code-first gRPC binding and typed client over the same Orleans-serialized records. The facade is intended to back a tree-explorer dashboard and a future MCP surface.
+For remote access, pair it with [`Orleans.Lattice.Api.State.Grpc`](https://www.nuget.org/packages/Orleans.Lattice.Api.State.Grpc), the code-first gRPC binding and typed client over the same Orleans-serialized records. The facade is intended to back a tree-explorer dashboard and the `Orleans.Lattice.Api.Mcp` MCP server.
 
 See the [State API documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.api.state/README.md) for the full surface, security model, and client guide.

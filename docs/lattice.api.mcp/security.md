@@ -1,0 +1,48 @@
+# Security
+
+The MCP server exposes read, write, and control facades to an AI agent, so it is built to **fail closed**: an unauthenticated or unauthorized session can enumerate nothing and call nothing until the host explicitly opts in. Three layers combine to deliver that posture.
+
+## 1. Endpoint authorization
+
+With `RequireAuthorization` at its `true` default, `MapLatticeMcp()` applies ASP.NET Core `RequireAuthorization()` to the mapped transport, so an anonymous request never reaches the MCP server at all. Set it to `false` only when an outer authentication boundary (a gateway, a reverse proxy, another middleware) already guarantees the caller is authenticated.
+
+## 2. The coarse authorizer seam
+
+Every inbound request passes through an `ILatticeApiMcpAuthorizer` before it reaches a facade. The binding registers `DenyAllMcpAuthorizer` by default (via `TryAdd`), so a host that maps the surface without configuring authorization rejects every call rather than exposing the cluster unauthenticated. A host opts in by registering a permissive or custom authorizer:
+
+```csharp verify
+public sealed class ReadOnlyStateMcpAuthorizer : ILatticeApiMcpAuthorizer
+{
+    public Task<bool> IsAuthorizedAsync(
+        LatticeApiMcpAuthorizationContext authorizationContext,
+        CancellationToken cancellationToken)
+    {
+        // Let only the introspective state tools past the coarse gate; the
+        // per-tree / per-key access gate still applies afterwards.
+        var allowed = authorizationContext.ToolName
+            .StartsWith("lattice_state_", System.StringComparison.Ordinal);
+        return Task.FromResult(allowed);
+    }
+}
+```
+
+`AllowAllMcpAuthorizer` is the opt-in "defer everything to the access gate" implementation: it permits every request through the coarse gate and lets the per-tree / per-key enforcement on the gated `ILattice` surface make the real decision. Register it when the coarse gate adds no value beyond the subject-scoped decisions the access gate already makes.
+
+## 3. The credential bridge
+
+The coarse gate decides only whether a request may reach a facade; it does not decide what the caller may see once there. That is the job of the credential bridge. The default bridge reads the authenticated principal off the `HttpContext` and resolves a `LatticeCredential`; at each tool invocation the resolved credential is stamped onto the ambient `LatticeCredentialContext`, so every facade call the tool makes runs under the caller's subject and flows through the same per-tree / per-key access gate the gRPC bindings and the data path already use. The bridge is fail-closed: it resolves a credential only for an authenticated principal, and returns none (anonymous) otherwise. It is the public `ILatticeApiMcpCredentialBridge` seam, `TryAdd`-registered, so a host can substitute its own bridge.
+
+The `CredentialHeaderName` and `CredentialScheme` options control which inbound header the token is read from and which scheme prefix is stripped before the remaining token is used as the credential.
+
+## Permission-scoped discovery
+
+Because the bridge resolves the caller's subject, the per-session discovery configurator can filter the advertised tool list to the caller's **effective permissions** before it is returned. A caller sees and can invoke only the tools its grants allow; an ungranted tool is never listed, so there is no "list then deny" gap. The `lattice_capabilities` meta-tool reports the same permission-scoped view.
+
+## Least privilege by default
+
+The server ships no tools. Each module is added explicitly, and within a module the destructive verbs (data writes, backup control, auth administration) stay hidden unless the host enables them. A minimal deployment exposes only the read tools it needs; a control deployment opts each destructive verb in deliberately.
+
+## Next
+
+- [Tools](tools.md) - the modules, their opt-in flags, and the full catalogue.
+- [Remote hosting](remote.md) - how the credential flows to a cluster over gRPC.

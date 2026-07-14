@@ -1,8 +1,8 @@
 namespace Orleans.Lattice.Api.State.Grpc.Tests;
 
 /// <summary>
-/// Transport-neutrality (MCP-reuse) parity test. A future MCP surface is meant
-/// to be a thin adapter over the same <see cref="ILatticeStateQuery"/> /
+/// Transport-neutrality (MCP-reuse) parity test. The Orleans.Lattice.Api.Mcp
+/// MCP surface is a thin adapter over the same <see cref="ILatticeStateQuery"/> /
 /// <see cref="ILatticeStateObserver"/> facade the gRPC binding adapts, with no
 /// query logic of its own. This test stands up a minimal in-process adapter
 /// over the facade (no gRPC) and asserts it returns results identical to the
@@ -98,7 +98,7 @@ public class LatticeStateMcpReuseParityTests
 
     /// <summary>
     /// A deliberately thin, transport-free consumer of the read facade, standing
-    /// in for a future MCP binding. It owns no query logic - every method simply
+    /// in for the Orleans.Lattice.Api.Mcp MCP binding. It owns no query logic - every method simply
     /// projects the facade's result records, the same way the gRPC service does.
     /// </summary>
     private sealed class InProcessStateAdapter(ILatticeStateQuery query)
