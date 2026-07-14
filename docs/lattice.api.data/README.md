@@ -8,7 +8,7 @@ A write-capable external data-plane add-on for [Orleans.Lattice](../../README.md
 
 It is the write-capable sibling of the read-only [`Orleans.Lattice.Api.State`](../lattice.api.state/README.md) package, and is built the same way, in two layers:
 
-- **A transport-agnostic facade.** `ILatticeDataApi` (internal to the package) exposes point set/delete, single-tree atomic batch, cross-tree atomic batch, point read, and a single bounded range-read page over plain request/response records. The facade has no wire dependency, so the same surface serves an in-process consumer and a remote one.
+- **A transport-agnostic facade.** `ILatticeDataApi` (a public contract in the shared `Orleans.Lattice.Api.Abstractions` package) exposes point set/delete, single-tree atomic batch, cross-tree atomic batch, point read, and a single bounded range-read page over plain request/response records. The facade has no wire dependency, so the same surface serves an in-process consumer and a remote one.
 - **A code-first gRPC binding.** `Orleans.Lattice.Api.Data.Grpc` projects the facade onto a gRPC service whose messages are the same Orleans-serialized records, plus a public `LatticeDataApiGrpcClient`. Remote consumers talk to the cluster over HTTP/2 with no hand-rolled `.proto`.
 
 Every operation is served by fetching the cluster grain with `GetGrain<ILattice>(treeId)` and calling the **same public `ILattice` method** the in-cluster client calls. Authorization is therefore inherited, not re-implemented: the per-tree / per-key enforcement wired at the core grain fires automatically once the caller identity flows on the ambient credential context.

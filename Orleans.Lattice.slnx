@@ -1,5 +1,6 @@
 <Solution>
   <Project Path="src/lattice/Orleans.Lattice.csproj" />
+  <Project Path="src/lattice.api.abstractions/Orleans.Lattice.Api.Abstractions.csproj" />
   <Project Path="src/lattice.api.state/Orleans.Lattice.Api.State.csproj" />
   <Project Path="src/lattice.api.state.grpc/Orleans.Lattice.Api.State.Grpc.csproj" />
   <Project Path="src/lattice.api.data/Orleans.Lattice.Api.Data.csproj" />
@@ -29,6 +30,7 @@
   <Project Path="benchmark/host/Bench.Microbench/Orleans.Lattice.Benchmark.Microbench.csproj" />
   <Project Path="test/shared/Orleans.Lattice.Testing/Orleans.Lattice.Testing.csproj" />
   <Project Path="test/lattice/Orleans.Lattice.Tests.csproj" />
+  <Project Path="test/lattice.api.abstractions/Orleans.Lattice.Api.Abstractions.Tests.csproj" />
   <Project Path="test/lattice.api.state/Orleans.Lattice.Api.State.Tests.csproj" />
   <Project Path="test/lattice.api.state.grpc/Orleans.Lattice.Api.State.Grpc.Tests.csproj" />
   <Project Path="test/lattice.api.data/Orleans.Lattice.Api.Data.Tests.csproj" />

@@ -42,7 +42,7 @@ public sealed record TreeMetricsRequest
     /// <summary>
     /// Optional per-subscription sample cadence override. When
     /// <see langword="null"/> the configured
-    /// <see cref="LatticeApiStateOptions.MetricsSampleInterval"/> applies.
+    /// <c>LatticeApiStateOptions.MetricsSampleInterval</c> applies.
     /// Ignored by the one-shot poll.
     /// </summary>
     [Id(4)] public TimeSpan? SampleInterval { get; init; }

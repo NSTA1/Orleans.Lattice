@@ -27,7 +27,7 @@ namespace Orleans.Lattice.Api.State;
 /// <see cref="StateChangeNotification.Hlc"/> for a stable client-side order).
 /// </para>
 /// </remarks>
-internal interface ILatticeStateObserver
+public interface ILatticeStateObserver
 {
     /// <summary>
     /// Opens a live subscription to the changes on the requested tree and key

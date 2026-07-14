@@ -4,9 +4,9 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <PackageId>Orleans.Lattice.Api.Backup</PackageId>
-    <Version>7.9.1</Version>
-    <Description>Optional transport-agnostic control facade add-on for Orleans.Lattice backup and restore. Scaffolding release: reserves the package and its serialization-alias prefix so the backup admin surface (list, create, and restore backups) can be layered by later releases. No runtime behaviour yet.</Description>
+    <PackageId>Orleans.Lattice.Api.Abstractions</PackageId>
+    <Version>7.9.0</Version>
+    <Description>Shared contract package for the Orleans.Lattice API facades. Holds the transport-agnostic service interfaces (state query, data, auth admin, backup control) and their request/response models, so binding packages (for example the gRPC surfaces and the MCP server) depend on a public, versioned contract instead of another package's internals. Contains no implementation and starts nothing; the facade packages implement these contracts and are registered separately.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
@@ -18,13 +18,14 @@
   </ItemGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="Orleans.Lattice.Api.Backup.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Abstractions.Tests" />
     <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\lattice\Orleans.Lattice.csproj" />
-    <ProjectReference Include="..\lattice.api.abstractions\Orleans.Lattice.Api.Abstractions.csproj" />
+    <ProjectReference Include="..\lattice.membership\Orleans.Lattice.Membership.csproj" />
+    <ProjectReference Include="..\lattice.auth\Orleans.Lattice.Auth.csproj" />
     <ProjectReference Include="..\lattice.backup\Orleans.Lattice.Backup.csproj" />
     <PackageReference Include="Microsoft.Orleans.Sdk" Version="10.2.0" />
   </ItemGroup>

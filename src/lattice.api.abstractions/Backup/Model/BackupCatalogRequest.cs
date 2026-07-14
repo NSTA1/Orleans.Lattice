@@ -22,7 +22,7 @@ namespace Orleans.Lattice.Api.Backup;
 /// returned as <see cref="BackupCatalogPage.NextPageToken"/>. A request with a
 /// <see langword="null"/> token starts from the beginning. Leaving
 /// <see cref="PageSize"/> unset (<c>0</c> or negative) falls back to the facade's
-/// configured <see cref="LatticeApiBackupOptions.DefaultListPageSize"/>.
+/// configured <c>LatticeApiBackupOptions.DefaultListPageSize</c>.
 /// </para>
 /// </remarks>
 [GenerateSerializer]

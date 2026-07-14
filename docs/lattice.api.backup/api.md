@@ -1,6 +1,6 @@
 # Orleans.Lattice.Api.Backup API reference
 
-The public surface is the registration extension, the options type, and the model records the facade returns and accepts. The control facade interface itself is internal to the package - it is the contract the gRPC binding adapts over - and is described by its operations below and in [Architecture](architecture.md).
+The public surface is the registration extension, the options type, the control facade interface (`ILatticeBackupControl`, published in the shared `Orleans.Lattice.Api.Abstractions` package), and the model records the facade returns and accepts. The facade interface is the contract the gRPC binding adapts over, and is described by its operations below and in [Architecture](architecture.md).
 
 The model records are Orleans-serialized (`[GenerateSerializer]`, `[Immutable]`) with stable aliases held in the public `ApiBackupTypeAliases` constant class.
 
@@ -25,7 +25,7 @@ The read-bounding knobs the control facade honours for its paged catalog listing
 
 ## Facade operations
 
-The control facade (internal) exposes these operations; each is projected as one RPC by the [gRPC binding](../lattice.api.backup.grpc/api.md). Every operation authorizes its scope fail-closed before touching data.
+The control facade exposes these operations; each is projected as one RPC by the [gRPC binding](../lattice.api.backup.grpc/api.md). Every operation authorizes its scope fail-closed before touching data.
 
 | Operation | Shape | Returns |
 |---|---|---|

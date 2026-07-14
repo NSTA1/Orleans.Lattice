@@ -792,6 +792,30 @@ that did carry a user credential, it wraps that sub-operation in
 `LatticeCredentialContext.Suppress()` so the ambient credential is stripped
 for the duration and cannot leak onto a system-authored call.
 
+### Trusted system-origin scope
+
+A co-hosted infrastructure extension that must run a trusted, gate-bypassing
+sub-operation on a caller's behalf - for example the `Orleans.Lattice.Api.Mcp`
+server resolving a caller's effective permissions before advertising tools -
+enters that scope through the public `LatticeSystemOrigin` seam rather than
+reaching into the library's internals:
+
+```csharp verify
+using (LatticeSystemOrigin.Enter())
+{
+    // Nested calls in this scope are treated as system-origin and admitted by
+    // the access gate without a user identity. LatticeSystemOrigin.IsActive
+    // reports whether such a scope is currently open.
+    await tree.SetAsync("k", new byte[] { 1 }, cancellationToken);
+}
+```
+
+Entering the scope bypasses the access gate for its lifetime, so it is reserved
+for co-hosted code that already runs inside the silo's trust boundary. It is the
+public counterpart of the internal marker the first-party add-ons use, and it
+exists so an out-of-package extension need not take an internal-visibility grant
+into the core assembly to perform the bypass.
+
 ## WAL saturation back-pressure
 
 Lattice publishes a per-tree, three-state saturation signal so callers driving offered load into `ILattice` can throttle their own input *before* the saturation regime's failure tail surfaces to them as a `TimeoutException` from `SetAsync` / `SetManyAsync`. The surface has three shapes - polling, await, and push - all backed by a single silo-scoped sampler that ticks at `LatticeOptions.WalSaturationSampleInterval` (default 200 ms).

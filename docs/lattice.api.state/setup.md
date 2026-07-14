@@ -17,7 +17,7 @@ builder.Host.UseOrleans(silo =>
 });
 ```
 
-With only this step the facade runs **in-process**, with no transport hop. The facade interfaces (`ILatticeStateQuery` and friends) are `internal` to the package, so a co-located consumer reuses them in one of two ways: either it lives in an assembly the package grants `InternalsVisibleTo` (the path the co-hosted `Orleans.Lattice.Api.Mcp` server takes) and resolves them from DI directly, or it co-hosts the gRPC binding in the same process and dials it over a loopback channel, which still avoids a network hop. See [Client](client.md#in-process-reuse) for that path.
+With only this step the facade runs **in-process**, with no transport hop. The facade interfaces (`ILatticeStateQuery` and friends) live in the shared `Orleans.Lattice.Api.Abstractions` contract package and are `public`, so a co-located consumer reuses them in one of two ways: either it references that contract package and resolves them from DI directly (the path the co-hosted `Orleans.Lattice.Api.Mcp` server takes), or it co-hosts the gRPC binding in the same process and dials it over a loopback channel, which still avoids a network hop. See [Client](client.md#in-process-reuse) for that path.
 
 ## 2. Add the gRPC binding
 

@@ -1,12 +1,13 @@
 using Microsoft.Extensions.Options;
 using ModelContextProtocol.Server;
+using Orleans.Lattice.Api.Auth;
 
 namespace Orleans.Lattice.Api.Mcp;
 
 /// <summary>
 /// The auth-admin tool module: the <see cref="ILatticeApiMcpToolGroup"/> for
 /// <see cref="LatticeApiMcpGroup.Auth"/>. It contributes MCP tools that adapt the
-/// internal <see cref="ILatticeAuthAdmin"/> control-plane facade - policy and
+/// <see cref="ILatticeAuthAdmin"/> control-plane facade - policy and
 /// membership <b>introspection</b> reads always, and the mutating
 /// <b>administration</b> verbs only when the host opts them in through
 /// <see cref="LatticeApiMcpOptions.EnableAuthAdministration"/>.

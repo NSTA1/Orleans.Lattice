@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Api.State;
 /// registry, <c>DiagnoseAsync</c>, per-shard digests) and performs a bounded
 /// number of grain calls per request - O(1) for a tree-level summary.
 /// </remarks>
-internal interface ILatticeStateQuery
+public interface ILatticeStateQuery
 {
     /// <summary>
     /// Returns a point-in-time summary of the given tree, or a typed

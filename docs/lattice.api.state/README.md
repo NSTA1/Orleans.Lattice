@@ -8,7 +8,7 @@ A read-only cluster state-API add-on for [Orleans.Lattice](../../README.md) - qu
 
 It is built in two layers:
 
-- **A transport-agnostic facade.** `ILatticeStateQuery`, `ILatticeStateObserver`, and `ILatticeStateMetricsObserver` expose discovery, structure, entry inspection, change observation, and metrics over plain request/response records. The facade has no wire dependency, so the same surface serves an in-process consumer and a remote one. The facade interfaces are `internal` to the package; an out-of-package in-process host reuses them either by being granted `InternalsVisibleTo` (as the co-hosted `Orleans.Lattice.Api.Mcp` server is) or by co-hosting the gRPC binding and dialing it over a loopback channel - see [Client](client.md#in-process-reuse).
+- **A transport-agnostic facade.** `ILatticeStateQuery`, `ILatticeStateObserver`, and `ILatticeStateMetricsObserver` expose discovery, structure, entry inspection, change observation, and metrics over plain request/response records. The facade has no wire dependency, so the same surface serves an in-process consumer and a remote one. The facade interfaces live in the shared `Orleans.Lattice.Api.Abstractions` contract package and are `public`, so an out-of-package in-process host reuses them by referencing that package and resolving them from DI directly, or by co-hosting the gRPC binding and dialing it over a loopback channel - see [Client](client.md#in-process-reuse).
 - **A code-first gRPC binding.** `Orleans.Lattice.Api.State.Grpc` projects the facade onto a long-lived gRPC service whose messages are the same Orleans-serialized records, plus a public `LatticeStateApiGrpcClient`. Remote consumers talk to the cluster over HTTP/2 with no hand-rolled `.proto`.
 
 It covers:

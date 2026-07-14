@@ -27,7 +27,7 @@ namespace Orleans.Lattice.Api.Data;
 /// A live streaming scan / change feed is intentionally out of scope.
 /// </para>
 /// </remarks>
-internal interface ILatticeDataApi
+public interface ILatticeDataApi
 {
     /// <summary>
     /// Writes <paramref name="value"/> at <paramref name="key"/> on
