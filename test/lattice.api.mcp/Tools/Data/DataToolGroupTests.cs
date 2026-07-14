@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Api.Mcp.Tests;
 [TestFixture]
 public sealed class DataToolGroupTests
 {
-    private static readonly string[] ReadToolNames = { "lattice_data_get", "lattice_data_range_read" };
+    private static readonly string[] ReadToolNames = { "lattice_data_get", "lattice_data_read_range" };
 
     private static readonly string[] WriteToolNames =
     {

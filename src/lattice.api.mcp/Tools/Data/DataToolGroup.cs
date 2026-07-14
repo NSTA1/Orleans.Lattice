@@ -91,7 +91,7 @@ internal sealed class DataToolGroup : ILatticeApiMcpToolGroup
             ReadRangeToolAsync,
             new McpServerToolCreateOptions
             {
-                Name = "lattice_data_range_read",
+                Name = "lattice_data_read_range",
                 Title = "Read a page of data entries",
                 Description =
                     "Reads one page of a bounded, ascending key range on a tree, pruned to the "
