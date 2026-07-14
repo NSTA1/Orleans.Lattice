@@ -7,14 +7,19 @@ storage) pressure snapshot that an external autoscaler can scrape to size the
 silo pool. It is additive and off by default: nothing changes until you call
 `AddLatticeScalingSignal` on your silo builder.
 
-## Status
+## How it works
 
-This is the package skeleton. The facade returns a well-formed zero/stub signal
-(`Reason = "not yet collecting"`); live pressure collection, the storage axis,
-and the HTTP endpoint are added by follow-up work. The public surface
-(`ILatticeScalingSignal`, `ScalingSignal`, `ComputePressure`, `StoragePressure`,
-`WalAccountPressure`, `WalRebalanceRecommendation`, `LatticeScalingSignalOptions`)
-is stable for downstream integration.
+A hosted collector samples cluster compute and storage pressure live, smooths
+each axis with an exponentially-weighted moving average, and caches a two-axis
+`ScalingSignal` snapshot for cheap scrape-path reads. `GetScalingSignalAsync`
+returns the most recent snapshot; until the first collection completes it
+reports `Reason = "warming up"`. Alongside the signal the package ships a health
+check (`AddLatticeScalingHealthCheck`) and an HTTP scrape endpoint
+(`MapLatticeScalingSignal`) so an external autoscaler can consume it directly.
+
+The public surface (`ILatticeScalingSignal`, `ScalingSignal`, `ComputePressure`,
+`StoragePressure`, `WalAccountPressure`, `WalRebalanceRecommendation`,
+`LatticeScalingSignalOptions`) is stable for downstream integration.
 
 ## Getting started
 
