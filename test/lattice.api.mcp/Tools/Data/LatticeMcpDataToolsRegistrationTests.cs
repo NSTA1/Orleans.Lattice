@@ -37,7 +37,7 @@ public sealed class LatticeMcpDataToolsRegistrationTests
 
         Assert.That(
             group.Tools.Select(t => t.ProtocolTool.Name),
-            Is.EquivalentTo(new[] { "lattice_data_get", "lattice_data_range_read" }));
+            Is.EquivalentTo(new[] { "lattice_data_get", "lattice_data_read_range" }));
     }
 
     [Test]
@@ -53,7 +53,7 @@ public sealed class LatticeMcpDataToolsRegistrationTests
             group.Tools.Select(t => t.ProtocolTool.Name),
             Is.EquivalentTo(new[]
             {
-                "lattice_data_get", "lattice_data_range_read", "lattice_data_set", "lattice_data_delete",
+                "lattice_data_get", "lattice_data_read_range", "lattice_data_set", "lattice_data_delete",
                 "lattice_data_set_many_atomic", "lattice_data_set_many_atomic_cross_tree",
             }));
     }
