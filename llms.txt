@@ -39,6 +39,7 @@ This file is the entry point for AI agents and LLM tooling. Documentation lives 
 - [Azure Table WAL backend](docs/lattice.storage.azuretable/README.md): Durable WAL storage (`Orleans.Lattice.Storage.AzureTable`).
 - [Grafana dashboards](docs/lattice.dashboards/README.md): Bundled dashboards for the Lattice meters (`Orleans.Lattice.Dashboards`).
 - [Autoscaling signal](docs/lattice.scaling/README.md): Cluster-aggregate compute-axis replica-demand scalar for KEDA plus an advisory storage-axis WAL rebalance recommendation (`Orleans.Lattice.Scaling`).
+- [Schema enforcement and versioning](docs/lattice.schema/README.md): Opt-in per-tree write validation with dead-letter diversion and self-describing value versioning with read-time upcasting, over the opaque-`byte[]` core (`Orleans.Lattice.Schema`).
 
 ## Working on this repository
 

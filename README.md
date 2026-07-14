@@ -150,6 +150,7 @@ Each optional add-on ships as its own NuGet package with its own documentation s
 | `Orleans.Lattice.Api.Backup` | Transport-agnostic control facade for driving backup capture, restore, catalog listing, chain describe, and retention. | [README](docs/lattice.api.backup/README.md) |
 | `Orleans.Lattice.Api.Backup.Grpc` | The code-first gRPC binding and public client for the backup control facade. | [README](docs/lattice.api.backup.grpc/README.md) |
 | `Orleans.Lattice.Dashboards` | Bundled Grafana dashboards and provisioning templates for the `orleans.lattice` and `orleans.lattice.replication` meters. | [README](docs/lattice.dashboards/README.md) |
+| `Orleans.Lattice.Schema` | Opt-in schema enforcement and versioning companion over the opaque-`byte[]` core: per-tree write validation with dead-letter diversion of non-compliant replicated or restored items, and self-describing value versioning with read-time upcasting. | [README](docs/lattice.schema/README.md) |
 | `Orleans.Lattice.Scaling` | Cluster-aggregate autoscaling signal: a compute-axis replica-demand scalar for KEDA plus an advisory, signal-only storage-axis WAL rebalance recommendation, served over an HTTP endpoint and an ASP.NET Core health check. | [README](docs/lattice.scaling/README.md) |
 
 ## Releases
