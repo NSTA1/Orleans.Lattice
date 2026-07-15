@@ -37,6 +37,14 @@ public sealed class AuthAdminMcpPermissionResolverTests
             operations: operations,
             effect: effect);
 
+    private static LatticeAuthorizationRule ClusterWideRule(LatticeOperation operations, LatticeEffect effect)
+        => new(
+            ruleId: "r-" + Guid.NewGuid().ToString("N"),
+            subject: LatticeSubjectSelector.User("alice"),
+            scope: LatticeScope.ClusterWide(),
+            operations: operations,
+            effect: effect);
+
     private static ILatticeAuthAdmin AdminReturning(params LatticeAuthorizationRule[] rules)
     {
         var admin = Substitute.For<ILatticeAuthAdmin>();
@@ -208,6 +216,71 @@ public sealed class AuthAdminMcpPermissionResolverTests
         await resolver.ResolveAsync(new LatticeCredential("the-token"), CancellationToken.None);
 
         await admin.Received(1).EffectivePermissionsAsync("the-token", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task Telemetry_grant_over_cluster_wide_scope_makes_telemetry_usable_only()
+    {
+        var resolver = CreateResolver(AdminReturning(
+            ClusterWideRule(LatticeOperation.Telemetry, LatticeEffect.Allow)));
+
+        var access = await resolver.ResolveAsync(new LatticeCredential("alice"), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(access.Contains(LatticeApiMcpGroup.Telemetry), Is.True);
+            Assert.That(access.Contains(LatticeApiMcpGroup.State), Is.False);
+            Assert.That(access.Contains(LatticeApiMcpGroup.Data), Is.False);
+            Assert.That(access.Contains(LatticeApiMcpGroup.Backup), Is.False);
+            Assert.That(access.Contains(LatticeApiMcpGroup.Auth), Is.False);
+        });
+    }
+
+    [Test]
+    public async Task Read_grant_does_not_make_telemetry_usable()
+    {
+        var resolver = CreateResolver(AdminReturning(Rule(LatticeOperation.Read, LatticeEffect.Allow)));
+
+        var access = await resolver.ResolveAsync(new LatticeCredential("alice"), CancellationToken.None);
+
+        Assert.That(access.Contains(LatticeApiMcpGroup.Telemetry), Is.False,
+            "A read grant must not expose the scopeless telemetry group (fail-closed).");
+    }
+
+    [Test]
+    public async Task Admin_grant_does_not_make_telemetry_usable()
+    {
+        var resolver = CreateResolver(AdminReturning(Rule(LatticeOperation.Admin, LatticeEffect.Allow)));
+
+        var access = await resolver.ResolveAsync(new LatticeCredential("alice"), CancellationToken.None);
+
+        Assert.That(access.Contains(LatticeApiMcpGroup.Telemetry), Is.False,
+            "Telemetry must be granted explicitly; not even an administrator grant confers it.");
+    }
+
+    [Test]
+    public async Task Telemetry_deny_grant_does_not_make_telemetry_usable()
+    {
+        var resolver = CreateResolver(AdminReturning(
+            ClusterWideRule(LatticeOperation.Telemetry, LatticeEffect.Deny)));
+
+        var access = await resolver.ResolveAsync(new LatticeCredential("alice"), CancellationToken.None);
+
+        Assert.That(access.Contains(LatticeApiMcpGroup.Telemetry), Is.False);
+    }
+
+    [Test]
+    public async Task Anonymous_caller_sees_no_group_including_telemetry()
+    {
+        var resolver = CreateResolver(AdminReturning());
+
+        var access = await resolver.ResolveAsync(new LatticeCredential("alice"), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(access.IsEmpty, Is.True);
+            Assert.That(access.Contains(LatticeApiMcpGroup.Telemetry), Is.False);
+        });
     }
 
     [Test]
