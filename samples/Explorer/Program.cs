@@ -1,6 +1,7 @@
 using System.Text;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Orleans.Lattice;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Api.Auth.Grpc;
@@ -58,6 +59,18 @@ Environment.SetEnvironmentVariable("LATTICE_EXPLORER_INSECURE_DEV", "true");
 Environment.SetEnvironmentVariable("LATTICE_EXPLORER_USERNAME", AdminUser);
 Environment.SetEnvironmentVariable("LATTICE_EXPLORER_PASSWORD", AdminPassword);
 
+// Isolate the console's persisted configuration to a sample-owned file and start
+// each run from a clean slate. This keeps the sample off the shared per-user
+// Explorer config (%LOCALAPPDATA%\Orleans.Lattice.Explorer\config.json), so a
+// previous session's saved endpoint can never hijack the demo, and it lets the
+// environment bootstrap above re-seed the co-hosted endpoint and admin sign-in on
+// every launch.
+var sampleConfigPath = Path.Combine(AppContext.BaseDirectory, "explorer-sample-config.json");
+if (File.Exists(sampleConfigPath))
+{
+    File.Delete(sampleConfigPath);
+}
+
 var builder = WebApplication.CreateBuilder(args);
 builder.Logging.ClearProviders();
 
@@ -112,8 +125,16 @@ builder.Host.UseOrleans(silo =>
 // The gRPC binding over the state facade. Authorization is disabled here purely
 // to keep the sample one-command runnable; a real deployment registers an
 // ILatticeStateApiAuthorizer and leaves RequireAuthorization at its secure
-// default.
-builder.Services.AddLatticeStateApiGrpc(o => o.RequireAuthorization = false);
+// default. Because the sample co-hosts auth, the state API's read-visibility
+// filter is active and fail-closed: it only surfaces trees the resolved caller
+// may read. Match the console's "Basic base64(user:pass)" sign-in header so the
+// state binding resolves the caller as the bootstrap administrator (the same
+// scheme the auth and schema bindings use) - otherwise the catalog stays empty.
+builder.Services.AddLatticeStateApiGrpc(o =>
+{
+    o.RequireAuthorization = false;
+    o.CredentialScheme = DemoBasicAuthenticator.Scheme;
+});
 
 // The auth and schema control-plane gRPC bindings the Access and Schema areas
 // call. Transport authorization is left off (sample-only, so the console needs
@@ -133,7 +154,9 @@ builder.Services.AddLatticeSchemaApiGrpc(o =>
 });
 
 // The embeddable Explorer web console - the one call a consumer makes to host it.
-builder.Services.AddLatticeExplorerWeb();
+// The sample pins the console's persisted config to its own isolated file so it
+// always connects to the co-hosted endpoint seeded above.
+builder.Services.AddLatticeExplorerWeb(o => o.ConfigFilePath = sampleConfigPath);
 
 var app = builder.Build();
 

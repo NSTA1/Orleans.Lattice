@@ -33,10 +33,14 @@ The console is seeded to connect to the co-hosted gRPC endpoint through the
 launcher-friendly bootstrap environment variables (`LATTICE_EXPLORER_ENDPOINT`
 and `LATTICE_EXPLORER_INSECURE_DEV`), so it connects with no first-run setup. It
 also auto-signs-in as a demo administrator (`LATTICE_EXPLORER_USERNAME` /
-`LATTICE_EXPLORER_PASSWORD`), which is what unlocks the admin areas below. The
-gRPC surface listens on `http://localhost:5199` over HTTP/2 without TLS (h2c) to
-stay dependency-free; a real deployment would terminate TLS and register real
-authorizers instead of disabling authorization.
+`LATTICE_EXPLORER_PASSWORD`), which is what unlocks the admin areas below. To keep
+the demo deterministic, the sample pins the console's persisted configuration to
+its own file (`AddLatticeExplorerWeb(o => o.ConfigFilePath = ...)`) and clears it
+on startup, so it never inherits a saved endpoint from your per-user Explorer
+config and always reconnects to this co-hosted silo. The gRPC surface listens on
+`http://localhost:5199` over HTTP/2 without TLS (h2c) to stay dependency-free; a
+real deployment would terminate TLS and register real authorizers instead of
+disabling authorization.
 
 ## The admin areas
 
@@ -52,9 +56,13 @@ How the admin sign-in works, so you can adapt it:
   `AddLatticeAuth`) with `explorer-admin` as a bootstrap administrator, plus
   schema enforcement (`AddLatticeSchemaEnforcement`) and the auth and schema
   control facades (`AddLatticeAuthApi`, `AddLatticeSchemaApi`).
-- The auth and schema gRPC bindings (`AddLatticeAuthApiGrpc`,
-  `AddLatticeSchemaApiGrpc`) are configured with the `Basic` credential scheme so
-  the console's `authorization: Basic base64(user:pass)` header is understood.
+- The state, auth, and schema gRPC bindings (`AddLatticeStateApiGrpc`,
+  `AddLatticeAuthApiGrpc`, `AddLatticeSchemaApiGrpc`) are configured with the
+  `Basic` credential scheme so the console's `authorization: Basic base64(user:pass)`
+  header is understood. The state binding needs it too: co-hosting auth turns on
+  the state API's fail-closed read-visibility filter, so the catalog only lists
+  trees the resolved caller may read - without the scheme the caller is anonymous
+  and the tree list comes back empty.
 - `DemoBasicAuthenticator` (a trivial trusted-token authenticator) decodes that
   header to recover the `explorer-admin` subject; because it is a bootstrap
   administrator, the fail-closed capability probes accept it and the areas light
