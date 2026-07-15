@@ -11,7 +11,7 @@ namespace Orleans.Lattice.Api.Mcp;
 /// <summary>
 /// The backup tool module: an <see cref="ILatticeApiMcpToolGroup"/> for
 /// <see cref="LatticeApiMcpGroup.Backup"/> whose tools are thin adapters over the
-/// internal <see cref="ILatticeBackupControl"/> facade. The read-only inspect
+/// <see cref="ILatticeBackupControl"/> facade. The read-only inspect
 /// tools (list, describe, inventory, scope status, artifact export) are always
 /// contributed; the mutating control tools (capture, incremental capture,
 /// restore, revert, delete) are contributed only when backup control is opted in

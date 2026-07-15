@@ -18,7 +18,7 @@ namespace Orleans.Lattice.Api.Backup;
 /// large catalog or artifact enumerates with bounded memory rather than being
 /// materialized whole.
 /// </remarks>
-internal interface ILatticeBackupControl
+public interface ILatticeBackupControl
 {
     /// <summary>
     /// Captures a full backup of the request's scope, after authorizing the

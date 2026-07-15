@@ -135,6 +135,7 @@ Each optional add-on ships as its own NuGet package with its own documentation s
 |---|---|---|
 | `Orleans.Lattice.Replication` | Cross-cluster active-active replication: producer, WAL, shipper, apply, bootstrap, and anti-entropy. | [README](docs/lattice.replication/README.md) |
 | `Orleans.Lattice.Replication.Grpc` | The canonical gRPC push-transport binding for replication. | [README](docs/lattice.replication.grpc/README.md) |
+| `Orleans.Lattice.Api.Abstractions` | The shared, transport-agnostic API contract: the four facade service interfaces (state, data, auth, backup) and their request/response DTOs, referenced by the facade implementations, the gRPC bindings, and the MCP server without cross-package internal-visibility grants. | [README](docs/lattice.api.abstractions/README.md) |
 | `Orleans.Lattice.Api.State` | Read-only cluster state-API facade: query, observe, and subscribe to trees, structure, entries, change feeds, and metrics. | [README](docs/lattice.api.state/README.md) |
 | `Orleans.Lattice.Api.State.Grpc` | The code-first gRPC binding and public client for the read-only state API. | [README](docs/lattice.api.state.grpc/README.md) |
 | `Orleans.Lattice.Storage.AzureTable` | The durable Azure Table Storage write-ahead-log backend. | [README](docs/lattice.storage.azuretable/README.md) |

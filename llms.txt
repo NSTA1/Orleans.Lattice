@@ -34,6 +34,7 @@ This file is the entry point for AI agents and LLM tooling. Documentation lives 
 
 - [Replication](docs/lattice.replication/README.md): Cross-cluster active-active replication (`Orleans.Lattice.Replication`).
 - [Replication gRPC transport](docs/lattice.replication.grpc/README.md): The canonical gRPC push transport (`Orleans.Lattice.Replication.Grpc`).
+- [API contract](docs/lattice.api.abstractions/README.md): Shared transport-agnostic facade interfaces and their DTOs for the API packages (`Orleans.Lattice.Api.Abstractions`).
 - [State API](docs/lattice.api.state/README.md): Read-only cluster state facade (`Orleans.Lattice.Api.State`).
 - [State API gRPC binding](docs/lattice.api.state.grpc/README.md): Code-first gRPC binding and client (`Orleans.Lattice.Api.State.Grpc`).
 - [Azure Table WAL backend](docs/lattice.storage.azuretable/README.md): Durable WAL storage (`Orleans.Lattice.Storage.AzureTable`).

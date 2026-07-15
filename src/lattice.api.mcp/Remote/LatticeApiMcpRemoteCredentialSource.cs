@@ -14,7 +14,7 @@ namespace Orleans.Lattice.Api.Mcp;
 /// <list type="number">
 /// <item>
 /// When the current turn is a trusted system-origin introspection
-/// (<see cref="LatticeAccessGateContext.IsSystemOrigin"/>, entered by the
+/// (<see cref="LatticeSystemOrigin.IsActive"/>, entered by the
 /// discovery core to resolve a caller's effective permissions) and an
 /// <see cref="LatticeApiMcpRemoteOptions.AdministratorCredential"/> is
 /// configured, the administrator service credential is forwarded. This is
@@ -59,7 +59,7 @@ internal sealed class LatticeApiMcpRemoteCredentialSource : ILatticeApiMcpRemote
         // service credential so the remote auth gate admits the read. Falls
         // through to the caller-credential path when no service credential is
         // configured, so an administrator caller can still introspect itself.
-        if (LatticeAccessGateContext.IsSystemOrigin)
+        if (LatticeSystemOrigin.IsActive)
         {
             var administrator = _options.CurrentValue.AdministratorCredential;
             if (administrator is not null)

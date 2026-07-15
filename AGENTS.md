@@ -20,6 +20,9 @@ no consensus). See [README.md](README.md) for the capability overview and
   CRDT and low-level types under `Primitives/`.
 - `src/lattice.replication/`, `src/lattice.replication.grpc/` - cross-cluster
   replication engine and its gRPC transport.
+- `src/lattice.api.abstractions/` - the shared, public API contract (the facade
+  service interfaces and their request/response DTOs) that the facade impls, the
+  gRPC bindings, and the MCP server all reference.
 - `src/lattice.api.state/`, `src/lattice.api.state.grpc/` - read-only cluster
   state API and its gRPC binding.
 - `src/lattice.storage.azuretable/` - durable Azure Table WAL backend.

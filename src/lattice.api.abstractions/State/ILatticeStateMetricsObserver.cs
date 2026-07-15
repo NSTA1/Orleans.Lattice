@@ -9,7 +9,7 @@ namespace Orleans.Lattice.Api.State;
 /// digest and the existing metrics surface), so the feed adds no per-mutation
 /// cost: its work is bounded by tree / shard count on a timer.
 /// </summary>
-internal interface ILatticeStateMetricsObserver
+public interface ILatticeStateMetricsObserver
 {
     /// <summary>
     /// Returns a single, full metrics snapshot for the requested trees

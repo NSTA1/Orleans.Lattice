@@ -30,7 +30,7 @@ namespace Orleans.Lattice.Api.Auth;
 /// exactly as an un-secured control surface would.
 /// </para>
 /// </remarks>
-internal interface ILatticeAuthAdmin
+public interface ILatticeAuthAdmin
 {
     // ----- Membership administration -----
 

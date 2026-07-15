@@ -10,6 +10,7 @@ on:
       #   lattice.replication.grpc-v3.3.0
       #   lattice.storage.azuretable-v3.3.0
       #   lattice.dashboards-v3.3.0
+      #   lattice.api.abstractions-v7.9.0
       #   lattice.api.state-v3.3.0
       #   lattice.api.state.grpc-v3.3.0
       #   lattice.membership-v7.8.0
@@ -32,6 +33,7 @@ on:
       - 'lattice.replication.grpc-v*'
       - 'lattice.storage.azuretable-v*'
       - 'lattice.dashboards-v*'
+      - 'lattice.api.abstractions-v*'
       - 'lattice.api.state-v*'
       - 'lattice.api.state.grpc-v*'
       - 'lattice.membership-v*'

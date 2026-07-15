@@ -13,6 +13,7 @@ The package family ships from this repository:
 | `Orleans.Lattice.Replication.Grpc` | `src/lattice.replication.grpc/Orleans.Lattice.Replication.Grpc.csproj` |
 | `Orleans.Lattice.Storage.AzureTable` | `src/lattice.storage.azuretable/Orleans.Lattice.Storage.AzureTable.csproj` |
 | `Orleans.Lattice.Dashboards` | `src/lattice.dashboards/Orleans.Lattice.Dashboards.csproj` |
+| `Orleans.Lattice.Api.Abstractions` | `src/lattice.api.abstractions/Orleans.Lattice.Api.Abstractions.csproj` |
 | `Orleans.Lattice.Api.State` | `src/lattice.api.state/Orleans.Lattice.Api.State.csproj` |
 | `Orleans.Lattice.Api.State.Grpc` | `src/lattice.api.state.grpc/Orleans.Lattice.Api.State.Grpc.csproj` |
 | `Orleans.Lattice.Membership` | `src/lattice.membership/Orleans.Lattice.Membership.csproj` |
@@ -41,6 +42,7 @@ The publish workflow's per-tag trigger globs match these tag shapes:
 | `Orleans.Lattice.Replication.Grpc` | `lattice.replication.grpc-v<X.Y.Z>` |
 | `Orleans.Lattice.Storage.AzureTable` | `lattice.storage.azuretable-v<X.Y.Z>` |
 | `Orleans.Lattice.Dashboards` | `lattice.dashboards-v<X.Y.Z>` |
+| `Orleans.Lattice.Api.Abstractions` | `lattice.api.abstractions-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.State` | `lattice.api.state-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.State.Grpc` | `lattice.api.state.grpc-v<X.Y.Z>` |
 | `Orleans.Lattice.Membership` | `lattice.membership-v<X.Y.Z>` |

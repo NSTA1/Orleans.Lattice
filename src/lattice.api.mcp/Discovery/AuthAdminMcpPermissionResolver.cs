@@ -77,7 +77,7 @@ internal sealed class AuthAdminMcpPermissionResolver : ILatticeApiMcpPermissionR
             // system-origin scope makes the facade's administrator gate
             // short-circuit so the co-hosted server can resolve any caller's
             // effective rules without itself being an administrator.
-            using (LatticeAccessGateContext.EnterSystemOrigin())
+            using (LatticeSystemOrigin.Enter())
             {
                 permissions = await admin.EffectivePermissionsAsync(subjectId, cancellationToken)
                     .ConfigureAwait(false);

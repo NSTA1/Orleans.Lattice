@@ -46,7 +46,7 @@ public sealed class LatticeApiMcpRemoteCredentialSourceTests
         var admin = new LatticeCredential("admin-token");
         var source = Source(configure: o => o.AdministratorCredential = admin);
 
-        using (LatticeAccessGateContext.EnterSystemOrigin())
+        using (LatticeSystemOrigin.Enter())
         {
             Assert.That(source.ResolveOutbound(), Is.EqualTo(admin));
         }
@@ -58,7 +58,7 @@ public sealed class LatticeApiMcpRemoteCredentialSourceTests
         var ambient = new LatticeCredential("caller-token");
         var source = Source();
 
-        using (LatticeAccessGateContext.EnterSystemOrigin())
+        using (LatticeSystemOrigin.Enter())
         using (LatticeCredentialContext.With(ambient))
         {
             Assert.That(source.ResolveOutbound(), Is.EqualTo(ambient));

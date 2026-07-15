@@ -8,7 +8,7 @@ A configuration and control facade for the [Orleans.Lattice](../../README.md) au
 
 It is the authorization sibling of the read-only [`Orleans.Lattice.Api.State`](../lattice.api.state/README.md) and the read-write [`Orleans.Lattice.Api.Data`](../lattice.api.data/README.md) packages, and is built the same way, in two layers:
 
-- **A transport-agnostic facade.** `ILatticeAuthAdmin` (internal to the package) exposes membership CRUD, policy CRUD, `ExplainAsync`, and `EffectivePermissionsAsync` over plain request/response records. The facade has no wire dependency, so the same surface serves an in-process consumer and a remote one.
+- **A transport-agnostic facade.** `ILatticeAuthAdmin` (a public contract in the shared `Orleans.Lattice.Api.Abstractions` package) exposes membership CRUD, policy CRUD, `ExplainAsync`, and `EffectivePermissionsAsync` over plain request/response records. The facade has no wire dependency, so the same surface serves an in-process consumer and a remote one.
 - **A code-first gRPC binding (the sibling [`Orleans.Lattice.Api.Auth.Grpc`](../lattice.api.auth.grpc/README.md) package).** That binding projects this facade onto a remotely callable service whose messages are the same Orleans-serialized records. This package intentionally ships **no** transport of its own; it is the contract every binding adapts over.
 
 ## Core properties

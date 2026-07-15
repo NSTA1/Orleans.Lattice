@@ -5,7 +5,7 @@ namespace Orleans.Lattice.Api.Mcp;
 
 /// <summary>
 /// The auth-admin tool-module opt-in for the <c>Orleans.Lattice.Api.Mcp</c>
-/// binding. Adds the MCP tools that adapt the internal <c>ILatticeAuthAdmin</c>
+/// binding. Adds the MCP tools that adapt the <c>ILatticeAuthAdmin</c>
 /// control-plane facade.
 /// </summary>
 public static partial class LatticeMcpServiceCollectionExtensions
