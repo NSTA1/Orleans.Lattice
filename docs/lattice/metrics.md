@@ -387,6 +387,15 @@ The meter is created at assembly load time, so adding it before the silo starts
 is sufficient - every subsequently-activated grain publishes into the already-
 subscribed pipeline.
 
+## Exposing metrics to an AI agent
+
+Once the `orleans.lattice` meter is scraped into a Prometheus-compatible
+backend, the opt-in `Orleans.Lattice.Api.Mcp.Telemetry` companion package can
+expose that backend to an AI agent as read-only Model Context Protocol tools,
+behind a dedicated cluster-wide `Telemetry` authorization grant and a backend
+credential the agent never sees. See
+[MCP Telemetry](../lattice.api.mcp.telemetry/README.md).
+
 ## Bundled Grafana dashboards
 
 The companion `Orleans.Lattice.Dashboards` package ships ready-to-import
