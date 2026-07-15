@@ -1,0 +1,20 @@
+<Project>
+
+  <!--
+    The Explorer's interactive Blazor components (the App root and its
+    interactive server render mode) ship inside this hosting library, not in the
+    consuming app project. Because the consumer app has no .razor Content of its
+    own, the ASP.NET SDK does not auto-detect that it hosts Blazor and omits the
+    framework's _framework/blazor.web.js script, so the mounted console renders
+    but never becomes interactive (capability probes never run, tabs stay
+    greyed, catalogs never load). Setting RequiresAspNetWebAssets here pulls the
+    Blazor Web script into the consumer's static web assets so the interactive
+    circuit starts. This is imported before the SDK targets that read the
+    property, and the SDK only defaults it when it is unset, so an explicit
+    consumer override still wins.
+  -->
+  <PropertyGroup>
+    <RequiresAspNetWebAssets Condition="'$(RequiresAspNetWebAssets)' == ''">true</RequiresAspNetWebAssets>
+  </PropertyGroup>
+
+</Project>

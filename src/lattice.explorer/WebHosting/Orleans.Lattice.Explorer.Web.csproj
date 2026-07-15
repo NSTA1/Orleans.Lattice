@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+    <None Include="build\Orleans.Lattice.Explorer.Web.props" Pack="true" PackagePath="build\" />
   </ItemGroup>
 
   <ItemGroup>

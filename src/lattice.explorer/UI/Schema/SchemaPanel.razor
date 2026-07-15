@@ -1,11 +1,13 @@
 @using Orleans.Lattice.Schema
 @using Orleans.Lattice.Explorer.Schema
+@using Orleans.Lattice.Explorer.Core.Catalog
 @using Orleans.Lattice.Explorer.Core.Navigation
 @implements IDisposable
 @inject ISchemaPolicyService PolicyService
 @inject ISchemaVersioningService VersioningService
 @inject ISchemaComplianceService ComplianceService
 @inject ISchemaAdminCapabilityService CapabilityService
+@inject ICatalogReader CatalogReader
 @inject IExplorerCapabilityStore Capabilities
 
 @*
@@ -22,57 +24,121 @@
 *@
 
 <section class="explorer-backups explorer-schema" aria-label="Schema">
-    <header class="explorer-backups-header">
-        <div class="explorer-tabstrip" role="tablist" aria-label="Schema tabs">
-            <button type="button" role="tab"
-                    class="explorer-tab @(_tab == SchemaTab.Policy ? "is-active" : null)"
-                    aria-selected="@(_tab == SchemaTab.Policy)"
-                    @onclick="@(() => SetTab(SchemaTab.Policy))">Policy</button>
-            <button type="button" role="tab"
-                    class="explorer-tab @(_tab == SchemaTab.Versions ? "is-active" : null)"
-                    aria-selected="@(_tab == SchemaTab.Versions)"
-                    @onclick="@(() => SetTab(SchemaTab.Versions))">Versions</button>
-            <button type="button" role="tab"
-                    class="explorer-tab @(_tab == SchemaTab.Compliance ? "is-active" : null)"
-                    aria-selected="@(_tab == SchemaTab.Compliance)"
-                    @onclick="@(() => SetTab(SchemaTab.Compliance))">Compliance</button>
-            <button type="button" role="tab"
-                    class="explorer-tab @(_tab == SchemaTab.DeadLetters ? "is-active" : null)"
-                    aria-selected="@(_tab == SchemaTab.DeadLetters)"
-                    @onclick="@(() => SetTab(SchemaTab.DeadLetters))">Dead letters</button>
-        </div>
-    </header>
+    <div class="explorer-schema-layout">
+        <aside class="explorer-schema-treepanel" aria-label="Schema tree selection">
+            <header class="explorer-schema-treepanel-header">
+                <span class="explorer-schema-treepanel-title">Trees</span>
+                <button type="button"
+                        class="explorer-nav-refresh"
+                        title="Refresh trees"
+                        aria-label="Refresh trees"
+                        disabled="@(_treesLoading || !_allowed)"
+                        @onclick="RefreshTreesAsync">
+                    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+                        <path fill="currentColor"
+                              d="M17.65 6.35A8 8 0 1 0 19.73 14h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35Z" />
+                    </svg>
+                </button>
+            </header>
+            <div class="explorer-schema-treelist">
+                @if (!_allowed)
+                {
+                    <p class="explorer-nav-state">Schema management is unavailable.</p>
+                }
+                else if (_treesLoading && _trees.Count == 0)
+                {
+                    <p class="explorer-nav-state">Loading trees...</p>
+                }
+                else if (_treesError is not null)
+                {
+                    <div class="explorer-nav-state explorer-nav-error">
+                        <span>@_treesError</span>
+                        <button type="button" class="explorer-btn-link" @onclick="RefreshTreesAsync">Try again</button>
+                    </div>
+                }
+                else if (_trees.Count == 0)
+                {
+                    <p class="explorer-nav-state">No trees found.</p>
+                }
+                else
+                {
+                    <ul class="explorer-nav-list" role="listbox" aria-label="Trees">
+                        @foreach (var tree in _trees)
+                        {
+                            var isSelected = string.Equals(_treeId, tree.Id, StringComparison.Ordinal);
+                            <li role="option" aria-selected="@isSelected">
+                                <button type="button"
+                                        class="explorer-nav-item @(isSelected ? "is-selected" : null)"
+                                        disabled="@_busy"
+                                        @onclick="@(() => SelectTreeAsync(tree.Id))">
+                                    <span class="explorer-nav-item-id">@tree.Label</span>
+                                    @if (tree.Lifecycle is not null || tree.ShardCount is int)
+                                    {
+                                        <span class="explorer-nav-item-meta">
+                                            @if (tree.Lifecycle is not null)
+                                            {
+                                                <span class="explorer-badge">@tree.Lifecycle</span>
+                                            }
+                                            @if (tree.ShardCount is int shards)
+                                            {
+                                                <span class="explorer-badge" title="Shard count">@shards sh</span>
+                                            }
+                                        </span>
+                                    }
+                                </button>
+                            </li>
+                        }
+                    </ul>
+                }
+            </div>
+        </aside>
 
-    <div class="explorer-schema-treebar">
-        <label class="explorer-access-field">
-            <span>Tree</span>
-            <input type="text" value="@_treeId" disabled="@(_busy || !_allowed)"
-                   @oninput="e => _treeId = e.Value?.ToString() ?? string.Empty" placeholder="tree id" />
-        </label>
-        <button type="button" class="explorer-btn"
-                disabled="@(_busy || !_allowed || string.IsNullOrWhiteSpace(_treeId))" @onclick="LoadAsync">Load</button>
-    </div>
+        <div class="explorer-schema-content">
+            <header class="explorer-backups-header">
+                <div class="explorer-tabstrip" role="tablist" aria-label="Schema tabs">
+                    <button type="button" role="tab"
+                            class="explorer-tab @(_tab == SchemaTab.Policy ? "is-active" : null)"
+                            aria-selected="@(_tab == SchemaTab.Policy)"
+                            @onclick="@(() => SetTab(SchemaTab.Policy))">Policy</button>
+                    <button type="button" role="tab"
+                            class="explorer-tab @(_tab == SchemaTab.Versions ? "is-active" : null)"
+                            aria-selected="@(_tab == SchemaTab.Versions)"
+                            @onclick="@(() => SetTab(SchemaTab.Versions))">Versions</button>
+                    <button type="button" role="tab"
+                            class="explorer-tab @(_tab == SchemaTab.Compliance ? "is-active" : null)"
+                            aria-selected="@(_tab == SchemaTab.Compliance)"
+                            @onclick="@(() => SetTab(SchemaTab.Compliance))">Compliance</button>
+                    <button type="button" role="tab"
+                            class="explorer-tab @(_tab == SchemaTab.DeadLetters ? "is-active" : null)"
+                            aria-selected="@(_tab == SchemaTab.DeadLetters)"
+                            @onclick="@(() => SetTab(SchemaTab.DeadLetters))">Dead letters</button>
+                </div>
+            </header>
 
-    @if (!_allowed)
+            @if (!_allowed)
+            {
+                <p class="explorer-backups-result is-denied" role="status">
+                    Schema management is not available: the cluster has no schema control endpoint configured, or it is unreachable.
+                </p>
+            }
+            else if (_probedTreeId is null)
+            {
+                <p class="explorer-backups-empty">Select a tree from the list to manage its schema.</p>
+            }
+
+            @if (_lastResult is not null)
+            {
+                <p class="explorer-backups-result @ResultClass(_lastResult.Status)" role="status">@_lastResult.Message</p>
+            }
+
+            @if (_tab == SchemaTab.Policy)
     {
-        <p class="explorer-backups-result is-denied" role="status">
-            Schema management is not available: the cluster has no schema control endpoint configured, or it is unreachable.
-        </p>
-    }
-
-    @if (_lastResult is not null)
-    {
-        <p class="explorer-backups-result @ResultClass(_lastResult.Status)" role="status">@_lastResult.Message</p>
-    }
-
-    @if (_tab == SchemaTab.Policy)
-    {
-        <div class="explorer-access-grid">
+        <div class="explorer-access-grid explorer-schema-narrow">
             <div class="explorer-access-listcol">
                 <h3 class="explorer-access-title">Current policy</h3>
                 @if (_policyView is null)
                 {
-                    <p class="explorer-backups-empty">Load a tree to view its policy.</p>
+                    <p class="explorer-backups-empty">Select a tree to view its policy.</p>
                 }
                 else if (!_policyView.IsSuccess)
                 {
@@ -187,12 +253,12 @@
     }
     else if (_tab == SchemaTab.Versions)
     {
-        <div class="explorer-access-grid">
+        <div class="explorer-access-grid explorer-schema-narrow">
             <div class="explorer-access-listcol">
                 <h3 class="explorer-access-title">Version config</h3>
                 @if (_versionView is null)
                 {
-                    <p class="explorer-backups-empty">Load a tree to view its version config.</p>
+                    <p class="explorer-backups-empty">Select a tree to view its version config.</p>
                 }
                 else if (!_versionView.IsSuccess)
                 {
@@ -212,7 +278,7 @@
                 <h3 class="explorer-access-title">Remediation status</h3>
                 @if (_remediationView is null)
                 {
-                    <p class="explorer-backups-empty">Load a tree to view its remediation status.</p>
+                    <p class="explorer-backups-empty">Select a tree to view its remediation status.</p>
                 }
                 else if (!_remediationView.IsSuccess)
                 {
@@ -271,7 +337,7 @@
     }
     else if (_tab == SchemaTab.Compliance)
     {
-        <div class="explorer-access-grid">
+        <div class="explorer-access-grid explorer-schema-narrow">
             <div class="explorer-access-formcol">
                 <h3 class="explorer-access-title">Compliance audit</h3>
                 <p class="explorer-backups-note">A read-only scan of every current value against the tree's compiled policy. It never rewrites or dead-letters data.</p>
@@ -281,7 +347,7 @@
             <div class="explorer-access-formcol">
                 @if (_complianceView is null)
                 {
-                    <p class="explorer-backups-empty">Scan a tree to view its compliance.</p>
+                    <p class="explorer-backups-empty">Select and scan a tree to view its compliance.</p>
                 }
                 else if (!_complianceView.IsSuccess)
                 {
@@ -326,7 +392,7 @@
             <div class="explorer-access-formcol">
                 @if (_deadLetterView is null)
                 {
-                    <p class="explorer-backups-empty">Load a tree to view its dead letters.</p>
+                    <p class="explorer-backups-empty">Select a tree, then load its dead letters.</p>
                 }
                 else if (!_deadLetterView.IsSuccess)
                 {
@@ -361,4 +427,6 @@
             </div>
         </div>
     }
+        </div>
+    </div>
 </section>

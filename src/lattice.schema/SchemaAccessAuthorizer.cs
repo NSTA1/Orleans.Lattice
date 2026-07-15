@@ -98,7 +98,7 @@ internal sealed class SchemaAccessAuthorizer
     {
         try
         {
-            await AuthorizeManageAsync(treeId, cancellationToken);
+            await AuthorizeManageAsync(treeId, cancellationToken).ConfigureAwait(false);
             return true;
         }
         catch (LatticeAuthorizationDeniedException)
@@ -120,7 +120,7 @@ internal sealed class SchemaAccessAuthorizer
     {
         try
         {
-            await AuthorizeReadAsync(treeId, cancellationToken);
+            await AuthorizeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
             return true;
         }
         catch (LatticeAuthorizationDeniedException)

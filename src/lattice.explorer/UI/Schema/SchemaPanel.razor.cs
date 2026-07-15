@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Schema;
+using Orleans.Lattice.Explorer.Core.Catalog;
 using Orleans.Lattice.Explorer.Core.Navigation;
 using Orleans.Lattice.Explorer.Schema;
 
@@ -35,6 +36,7 @@ public partial class SchemaPanel : ComponentBase, IDisposable
     }
 
     private const int DeadLetterPageSize = 100;
+    private const int TreePageSize = 200;
 
     private static readonly SchemaRuleDraftKind[] RuleKinds =
     [
@@ -51,6 +53,11 @@ public partial class SchemaPanel : ComponentBase, IDisposable
     private string? _probedTreeId;
     private SchemaCapabilitySnapshot _caps = SchemaCapabilitySnapshot.None;
     private SchemaOperationResult? _lastResult;
+
+    // ----- Tree selection (left panel) -----
+    private readonly List<CatalogItem> _trees = new();
+    private bool _treesLoading;
+    private string? _treesError;
 
     // ----- Policy -----
     private SchemaReadView<LatticeSchemaPolicy>? _policyView;
@@ -85,6 +92,15 @@ public partial class SchemaPanel : ComponentBase, IDisposable
         Capabilities.Changed += OnCapabilitiesChanged;
     }
 
+    /// <inheritdoc />
+    protected override async Task OnInitializedAsync()
+    {
+        if (_allowed)
+        {
+            await LoadTreesAsync();
+        }
+    }
+
     private void OnCapabilitiesChanged()
     {
         var allowed = Capabilities.Current.SchemaAllowed;
@@ -94,10 +110,87 @@ public partial class SchemaPanel : ComponentBase, IDisposable
         }
 
         _allowed = allowed;
-        InvokeAsync(StateHasChanged);
+        InvokeAsync(async () =>
+        {
+            // When the gate freshly opens (for example after the connection reaches
+            // the cluster or an admin signs in) populate the tree list so the panel
+            // is usable without a manual refresh.
+            if (_allowed && _trees.Count == 0)
+            {
+                await LoadTreesAsync();
+            }
+
+            StateHasChanged();
+        });
     }
 
-    private void SetTab(SchemaTab tab)
+    /// <summary>
+    /// Loads the full tree catalog into the left selection panel through the shared
+    /// state-API connection. Trees are the schema governance unit, so only trees
+    /// (not views or tag indexes) are listed. A discovery failure surfaces as a
+    /// retryable error rather than an unhandled exception.
+    /// </summary>
+    private async Task LoadTreesAsync()
+    {
+        _treesLoading = true;
+        _treesError = null;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            var loaded = new List<CatalogItem>();
+            string? token = null;
+            do
+            {
+                var page = await CatalogReader.LoadAsync(CatalogKind.Trees, token, TreePageSize);
+                foreach (var item in page.Items)
+                {
+                    // Restore-shadow trees are an internal restore artifact, never a
+                    // governance target; they are surfaced only in the Backups area.
+                    if (!item.IsRestoreShadow)
+                    {
+                        loaded.Add(item);
+                    }
+                }
+
+                token = page.NextPageToken;
+            }
+            while (token is not null);
+
+            _trees.Clear();
+            _trees.AddRange(loaded);
+        }
+        catch (Exception ex)
+        {
+            _treesError = ex.Message;
+        }
+        finally
+        {
+            _treesLoading = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private Task RefreshTreesAsync() => LoadTreesAsync();
+
+    /// <summary>
+    /// Selects a tree from the left panel: pins it as the active tree, then probes
+    /// its per-action capabilities and loads the active tab. Selecting is the single
+    /// entry point that re-probes the grey-out for the chosen tree, so the per-action
+    /// gating always reflects the tree currently in view.
+    /// </summary>
+    private async Task SelectTreeAsync(string treeId)
+    {
+        if (_busy || (string.Equals(_treeId, treeId, StringComparison.Ordinal) && _probedTreeId == treeId))
+        {
+            return;
+        }
+
+        _treeId = treeId;
+        await LoadAsync();
+    }
+
+    private async Task SetTab(SchemaTab tab)
     {
         if (_tab == tab)
         {
@@ -106,6 +199,22 @@ public partial class SchemaPanel : ComponentBase, IDisposable
 
         _tab = tab;
         _lastResult = null;
+
+        // A tree is already selected/probed, so load the newly activated tab's
+        // views for it immediately - the tab strip is the only navigation now that
+        // selection (not a Load button) drives loading.
+        if (_probedTreeId is not null)
+        {
+            _busy = true;
+            try
+            {
+                await ReloadActiveTabAsync();
+            }
+            finally
+            {
+                _busy = false;
+            }
+        }
     }
 
     /// <summary>

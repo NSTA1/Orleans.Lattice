@@ -57,6 +57,21 @@ and the auth / cookie / data-protection plumbing.
 with the UI additional assembly), the static assets, and the server-side
 `/auth/login` and `/auth/logout` endpoints under the configured base path.
 
+## Interactivity and static assets
+
+The explorer's interactive Blazor components live in this hosting library, not in
+your host project. So that the framework's `_framework/blazor.web.js` script is
+composed into your app (without it the console renders but never becomes
+interactive), the package's `build/Orleans.Lattice.Explorer.Web.props`
+automatically sets `RequiresAspNetWebAssets` for you; you do not need to set
+anything. If you have already set that property yourself, your value is kept.
+
+The UI's stylesheet and scripts ship as static web assets of the referenced
+`Orleans.Lattice.Explorer.UI` package and are served automatically under the
+Development environment. When you run under a non-Development environment, call
+`builder.WebHost.UseStaticWebAssets()` so those assets are mapped and the console
+is styled.
+
 ## Deployment note: session affinity
 
 The web head is Blazor Server, so scaling it beyond a single instance requires
