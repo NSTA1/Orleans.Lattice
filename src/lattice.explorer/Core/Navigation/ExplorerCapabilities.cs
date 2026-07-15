@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Explorer.Core.Navigation;
 /// </summary>
 public sealed record ExplorerCapabilities
 {
-    /// <summary>The empty map: the backup and access areas are unreachable and every scope is denied.</summary>
+    /// <summary>The empty map: the backup, access, and schema areas are unreachable and every scope is denied.</summary>
     public static ExplorerCapabilities Empty { get; } = new();
 
     /// <summary>
@@ -29,6 +29,15 @@ public sealed record ExplorerCapabilities
     /// flag is a UX affordance only.
     /// </summary>
     public bool AuthAdminAllowed { get; init; }
+
+    /// <summary>
+    /// The coarse top-level gate for the Schema area: <see langword="true"/> when the
+    /// schema control plane is reachable (a side-effect-free capability probe
+    /// completes without a transport fault). The per-tree, per-action grey-out inside
+    /// the panel is driven by a separate per-tree probe, so this flag is a UX
+    /// affordance only and every schema operation is still gated on the server.
+    /// </summary>
+    public bool SchemaAllowed { get; init; }
 
     /// <summary>
     /// The per-scope (per-tree) capability snapshots gathered as the user opens

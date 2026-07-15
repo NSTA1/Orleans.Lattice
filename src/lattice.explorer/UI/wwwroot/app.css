@@ -2589,3 +2589,48 @@ code, .explorer-mono {
 .explorer-access-ruletable tr.is-deny td {
     color: var(--danger, #f85149);
 }
+
+
+/* ----- Schema (policy, versioning & compliance) area ----- */
+.explorer-schema-treebar {
+    display: flex;
+    align-items: flex-end;
+    gap: 0.6rem;
+    margin: 0.6rem 0;
+}
+
+.explorer-schema-treebar > .explorer-access-field {
+    flex: 1 1 18rem;
+}
+
+.explorer-schema-subtitle {
+    margin: 0.5rem 0 0.2rem;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+.explorer-schema-ruleform {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm, 6px);
+    padding: 0.6rem 0.7rem;
+    margin: 0.3rem 0;
+}
+
+.explorer-schema-compliant {
+    margin: 0.1rem 0;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--success, #3fb950);
+}
+
+.explorer-schema-noncompliant {
+    margin: 0.1rem 0;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--danger, #f85149);
+}
+

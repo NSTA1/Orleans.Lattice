@@ -10,6 +10,7 @@ using Orleans.Lattice.Explorer.Core.Session;
 using Orleans.Lattice.Explorer.Core.Topology;
 using Orleans.Lattice.Explorer.Backup;
 using Orleans.Lattice.Explorer.Access;
+using Orleans.Lattice.Explorer.Schema;
 using Orleans.Lattice.Explorer.UI.Authentication;
 
 namespace Orleans.Lattice.Explorer;
@@ -77,6 +78,9 @@ public static class MauiProgram
 
         // The Access (membership & access-control) area (see the web head).
         builder.Services.AddExplorerAccess();
+
+        // The Schema management area (see the web head).
+        builder.Services.AddExplorerSchema();
 
 #if DEBUG
         builder.Services.AddBlazorWebViewDeveloperTools();

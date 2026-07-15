@@ -22,6 +22,7 @@
     <InternalsVisibleTo Include="Orleans.Lattice.Explorer.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Explorer.Backup" />
     <InternalsVisibleTo Include="Orleans.Lattice.Explorer.Access" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Explorer.Schema" />
     <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
   </ItemGroup>
 

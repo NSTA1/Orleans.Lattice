@@ -17,7 +17,9 @@ public static class AppAreas
     /// enabled; Backups is enabled only when the capability map reports at least
     /// list / read backup access (the coarse top-level rule); Access is enabled
     /// only when the auth-admin control plane grants the coarse administrator
-    /// probe (the <see cref="ExplorerCapabilities.AuthAdminAllowed"/> gate).
+    /// probe (the <see cref="ExplorerCapabilities.AuthAdminAllowed"/> gate); Schema
+    /// is enabled only when the schema control plane is reachable (the
+    /// <see cref="ExplorerCapabilities.SchemaAllowed"/> gate).
     /// </summary>
     public static IReadOnlyList<AppAreaDescriptor> Ordered { get; } = new[]
     {
@@ -39,6 +41,12 @@ public static class AppAreas
             Area = AppArea.Access,
             Label = "Access",
             IsEnabled = static caps => caps.AuthAdminAllowed,
+        },
+        new AppAreaDescriptor
+        {
+            Area = AppArea.Schema,
+            Label = "Schema",
+            IsEnabled = static caps => caps.SchemaAllowed,
         },
     };
 

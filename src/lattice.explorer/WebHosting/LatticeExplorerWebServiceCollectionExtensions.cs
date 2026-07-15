@@ -12,6 +12,7 @@ using Orleans.Lattice.Explorer.Core.History;
 using Orleans.Lattice.Explorer.Core.Metrics;
 using Orleans.Lattice.Explorer.Core.Session;
 using Orleans.Lattice.Explorer.Core.Topology;
+using Orleans.Lattice.Explorer.Schema;
 using Orleans.Lattice.Explorer.UI.Authentication;
 
 namespace Orleans.Lattice.Explorer.Web;
@@ -110,6 +111,11 @@ public static class LatticeExplorerWebServiceCollectionExtensions
         // control-API client, its membership and policy services, and the
         // capability probe that gates the area.
         services.AddExplorerAccess();
+
+        // The Schema management area: the schema control-API client, its policy,
+        // versioning, and compliance services, and the capability probe that gates
+        // the area.
+        services.AddExplorerSchema();
 
         return services;
     }
