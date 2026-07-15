@@ -1,14 +1,14 @@
+@inject LatticeExplorerWebOptions Options
 <!DOCTYPE html>
 <html lang="en">
 
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <base href="/" />
+    <base href="@Options.BaseHref" />
     <title>Lattice Explorer</title>
     <link rel="icon" type="image/svg+xml" href="_content/Orleans.Lattice.Explorer.UI/favicon.svg" />
     <link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.UI/app.css" />
-    <link rel="stylesheet" href="Orleans.Lattice.Explorer.Web.styles.css" />
     <HeadOutlet @rendermode="InteractiveServer" />
 </head>
 
