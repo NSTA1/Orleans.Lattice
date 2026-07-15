@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Orleans.Lattice.Explorer.Access</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Explorer.Tests" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+
+  <!--
+    Unlike Explorer.Core (which is walled off to the state-API client), this
+    feature project is allowed to reference the auth-API (control plane) gRPC
+    client, which transitively pulls in the authorization / membership model and
+    core. It bridges that client to the pure navigation / capability model in
+    Core, exactly as the Backup feature project bridges the backup control API.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\Core\Orleans.Lattice.Explorer.Core.csproj" />
+    <ProjectReference Include="..\..\lattice.api.auth.grpc\Orleans.Lattice.Api.Auth.Grpc.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Grpc.Net.Client" Version="2.80.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.5" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.5" />
+    <PackageReference Include="Microsoft.Orleans.Serialization" Version="10.2.0" />
+  </ItemGroup>
+
+</Project>

@@ -2454,3 +2454,138 @@ code, .explorer-mono {
     word-break: break-all;
 }
 
+
+/* ----- Access (membership & access-control) area ----- */
+.explorer-access-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+    align-items: flex-start;
+}
+
+.explorer-access-listcol,
+.explorer-access-formcol {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    min-width: 18rem;
+    flex: 1 1 22rem;
+}
+
+.explorer-access-title {
+    margin: 0.4rem 0 0.2rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.explorer-access-sub {
+    display: block;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+}
+
+.explorer-access-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.explorer-access-field > input[type="text"],
+.explorer-access-field > select {
+    box-sizing: border-box;
+    width: 100%;
+}
+
+.explorer-access-inline {
+    display: flex;
+    gap: 0.4rem;
+    align-items: center;
+}
+
+.explorer-access-inline > input[type="text"] {
+    flex: 1;
+    min-width: 0;
+}
+
+.explorer-access-actions {
+    display: flex;
+    gap: 0.4rem;
+    align-items: center;
+    margin-top: 0.4rem;
+}
+
+.explorer-access-danger {
+    color: var(--danger, #f85149);
+}
+
+.explorer-access-memberlist,
+.explorer-access-addmember {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.explorer-access-addmember {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.explorer-access-memberlist > li {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.explorer-access-member-id {
+    font-family: var(--font-mono, monospace);
+    font-size: 0.85rem;
+}
+
+.explorer-access-ops {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm, 6px);
+    padding: 0.5rem 0.7rem;
+    margin: 0;
+}
+
+.explorer-access-ops legend {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    padding: 0 0.3rem;
+}
+
+.explorer-access-opcheck {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.82rem;
+    color: var(--text);
+}
+
+.explorer-access-ruletable {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82rem;
+}
+
+.explorer-access-ruletable th,
+.explorer-access-ruletable td {
+    text-align: left;
+    padding: 0.3rem 0.5rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+}
+
+.explorer-access-ruletable tr.is-deny td {
+    color: var(--danger, #f85149);
+}

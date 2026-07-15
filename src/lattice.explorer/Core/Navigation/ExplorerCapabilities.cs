@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Explorer.Core.Navigation;
 /// </summary>
 public sealed record ExplorerCapabilities
 {
-    /// <summary>The empty map: the backup area is unreachable and every scope is denied.</summary>
+    /// <summary>The empty map: the backup and access areas are unreachable and every scope is denied.</summary>
     public static ExplorerCapabilities Empty { get; } = new();
 
     /// <summary>
@@ -20,6 +20,15 @@ public sealed record ExplorerCapabilities
     /// probe.
     /// </summary>
     public bool BackupListAllowed { get; init; }
+
+    /// <summary>
+    /// The coarse top-level gate for the Access (membership &amp; access-control)
+    /// area: <see langword="true"/> when the auth-admin control plane accepts the
+    /// caller as an administrator (a light, side-effect-free list probe
+    /// succeeds). Every admin operation is gated twice more on the server, so this
+    /// flag is a UX affordance only.
+    /// </summary>
+    public bool AuthAdminAllowed { get; init; }
 
     /// <summary>
     /// The per-scope (per-tree) capability snapshots gathered as the user opens

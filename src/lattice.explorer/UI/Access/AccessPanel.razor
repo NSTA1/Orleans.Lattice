@@ -1,0 +1,395 @@
+@using Orleans.Lattice.Api.Auth
+@using Orleans.Lattice.Auth
+@using Orleans.Lattice.Membership
+@using Orleans.Lattice.Explorer.Access
+@using Orleans.Lattice.Explorer.Core.Navigation
+@implements IDisposable
+@inject IMembershipAdminService Membership
+@inject IPolicyAdminService Policy
+@inject IExplorerCapabilityStore Capabilities
+
+@*
+    The Access (membership & access-control) management area. Four sub-tabs:
+    Users and Groups administer the membership directory; Policies authors the
+    authorization rules; Explain drives the facade's Explain / EffectivePermissions
+    introspection. The coarse AuthAdminAllowed capability gates the whole area (the
+    shell greys the top-level tab when it is denied); within the area every action
+    additionally renders disabled while a request is in flight, and every server
+    denial folds into a clean "not permitted" banner rather than an unhandled error.
+    The area never re-implements a verdict: the Explain view renders the facade's
+    Allowed flag verbatim, and the precedence ranking is a presentation-only aid.
+*@
+
+<section class="explorer-backups explorer-access" aria-label="Access">
+    <header class="explorer-backups-header">
+        <div class="explorer-tabstrip" role="tablist" aria-label="Access tabs">
+            <button type="button" role="tab"
+                    class="explorer-tab @(_tab == AccessTab.Users ? "is-active" : null)"
+                    aria-selected="@(_tab == AccessTab.Users)"
+                    @onclick="@(() => SetTab(AccessTab.Users))">Users</button>
+            <button type="button" role="tab"
+                    class="explorer-tab @(_tab == AccessTab.Groups ? "is-active" : null)"
+                    aria-selected="@(_tab == AccessTab.Groups)"
+                    @onclick="@(() => SetTab(AccessTab.Groups))">Groups</button>
+            <button type="button" role="tab"
+                    class="explorer-tab @(_tab == AccessTab.Policies ? "is-active" : null)"
+                    aria-selected="@(_tab == AccessTab.Policies)"
+                    @onclick="@(() => SetTab(AccessTab.Policies))">Policies</button>
+            <button type="button" role="tab"
+                    class="explorer-tab @(_tab == AccessTab.Explain ? "is-active" : null)"
+                    aria-selected="@(_tab == AccessTab.Explain)"
+                    @onclick="@(() => SetTab(AccessTab.Explain))">Explain</button>
+        </div>
+        <button type="button" class="explorer-btn" disabled="@(_busy || !_allowed)" @onclick="ReloadAsync">Refresh</button>
+    </header>
+
+    @if (!_allowed)
+    {
+        <p class="explorer-backups-result is-denied" role="status">
+            Access administration is not permitted for your account, or the cluster has no auth-admin endpoint configured.
+        </p>
+    }
+
+    @if (_lastResult is not null)
+    {
+        <p class="explorer-backups-result @ResultClass(_lastResult.Status)" role="status">@_lastResult.Message</p>
+    }
+
+    @if (_tab == AccessTab.Users)
+    {
+        <div class="explorer-access-grid">
+            <div class="explorer-access-listcol">
+                <h3 class="explorer-access-title">Users</h3>
+                @if (_users.Count == 0)
+                {
+                    <p class="explorer-backups-empty">No users to show.</p>
+                }
+                else
+                {
+                    <ul class="explorer-nav-list" role="listbox" aria-label="Users">
+                        @foreach (var user in _users)
+                        {
+                            var id = user.UserId;
+                            <li role="option" aria-selected="@(id == _selectedUserId)">
+                                <button type="button"
+                                        class="explorer-nav-item @(id == _selectedUserId ? "is-selected" : null)"
+                                        disabled="@_busy"
+                                        @onclick="@(() => SelectUser(user))">
+                                    <span class="explorer-nav-item-id">@id</span>
+                                    @if (!string.IsNullOrEmpty(user.DisplayName))
+                                    {
+                                        <span class="explorer-access-sub">@user.DisplayName</span>
+                                    }
+                                </button>
+                            </li>
+                        }
+                    </ul>
+                    @if (_usersNextToken is not null)
+                    {
+                        <button type="button" class="explorer-btn" disabled="@(_busy || !_allowed)" @onclick="LoadMoreUsersAsync">Load more</button>
+                    }
+                }
+            </div>
+            <div class="explorer-access-formcol">
+                <h3 class="explorer-access-title">@(_editingExistingUser ? "Edit user" : "New user")</h3>
+                <label class="explorer-access-field">
+                    <span>User id</span>
+                    <input type="text" value="@_userIdInput" disabled="@(_busy || !_allowed || _editingExistingUser)"
+                           @oninput="e => _userIdInput = e.Value?.ToString() ?? string.Empty" placeholder="user id" />
+                </label>
+                <label class="explorer-access-field">
+                    <span>Display name</span>
+                    <input type="text" value="@_userDisplayInput" disabled="@(_busy || !_allowed)"
+                           @oninput="e => _userDisplayInput = e.Value?.ToString() ?? string.Empty" placeholder="optional" />
+                </label>
+                <div class="explorer-access-actions">
+                    <button type="button" class="explorer-btn" disabled="@(_busy || !_allowed || string.IsNullOrWhiteSpace(_userIdInput))" @onclick="SaveUserAsync">Save</button>
+                    <button type="button" class="explorer-btn" disabled="@_busy" @onclick="ResetUserForm">Clear</button>
+                    <button type="button" class="explorer-btn explorer-access-danger"
+                            disabled="@(_busy || !_allowed || !_editingExistingUser)" @onclick="DeleteUserAsync">Delete</button>
+                </div>
+            </div>
+        </div>
+    }
+    else if (_tab == AccessTab.Groups)
+    {
+        <div class="explorer-access-grid">
+            <div class="explorer-access-listcol">
+                <h3 class="explorer-access-title">Groups</h3>
+                @if (_groups.Count == 0)
+                {
+                    <p class="explorer-backups-empty">No groups to show.</p>
+                }
+                else
+                {
+                    <ul class="explorer-nav-list" role="listbox" aria-label="Groups">
+                        @foreach (var group in _groups)
+                        {
+                            var id = group.GroupId;
+                            <li role="option" aria-selected="@(id == _selectedGroupId)">
+                                <button type="button"
+                                        class="explorer-nav-item @(id == _selectedGroupId ? "is-selected" : null)"
+                                        disabled="@_busy"
+                                        @onclick="@(() => SelectGroupAsync(group))">
+                                    <span class="explorer-nav-item-id">@id</span>
+                                    @if (!string.IsNullOrEmpty(group.DisplayName))
+                                    {
+                                        <span class="explorer-access-sub">@group.DisplayName</span>
+                                    }
+                                </button>
+                            </li>
+                        }
+                    </ul>
+                    @if (_groupsNextToken is not null)
+                    {
+                        <button type="button" class="explorer-btn" disabled="@(_busy || !_allowed)" @onclick="LoadMoreGroupsAsync">Load more</button>
+                    }
+                }
+            </div>
+            <div class="explorer-access-formcol">
+                <h3 class="explorer-access-title">@(_editingExistingGroup ? "Edit group" : "New group")</h3>
+                <label class="explorer-access-field">
+                    <span>Group id</span>
+                    <input type="text" value="@_groupIdInput" disabled="@(_busy || !_allowed || _editingExistingGroup)"
+                           @oninput="e => _groupIdInput = e.Value?.ToString() ?? string.Empty" placeholder="group id" />
+                </label>
+                <label class="explorer-access-field">
+                    <span>Display name</span>
+                    <input type="text" value="@_groupDisplayInput" disabled="@(_busy || !_allowed)"
+                           @oninput="e => _groupDisplayInput = e.Value?.ToString() ?? string.Empty" placeholder="optional" />
+                </label>
+                <div class="explorer-access-actions">
+                    <button type="button" class="explorer-btn" disabled="@(_busy || !_allowed || string.IsNullOrWhiteSpace(_groupIdInput))" @onclick="SaveGroupAsync">Save</button>
+                    <button type="button" class="explorer-btn" disabled="@_busy" @onclick="ResetGroupForm">Clear</button>
+                    <button type="button" class="explorer-btn explorer-access-danger"
+                            disabled="@(_busy || !_allowed || !_editingExistingGroup)" @onclick="DeleteGroupAsync">Delete</button>
+                </div>
+
+                @if (_selectedGroupId is not null)
+                {
+                    <h3 class="explorer-access-title">Direct members of '@_selectedGroupId'</h3>
+                    @if (_directMembers.Count == 0)
+                    {
+                        <p class="explorer-backups-empty">No direct members.</p>
+                    }
+                    else
+                    {
+                        <ul class="explorer-access-memberlist">
+                            @foreach (var member in _directMembers)
+                            {
+                                <li>
+                                    <button type="button" class="explorer-btn explorer-btn-icon explorer-access-danger"
+                                            title="Remove member" aria-label="@($"Remove {member}")"
+                                            disabled="@(_busy || !_allowed)" @onclick="@(() => RemoveMemberAsync(member))">x</button>
+                                    <span class="explorer-access-member-id">@member</span>
+                                </li>
+                            }
+                        </ul>
+                    }
+                    <div class="explorer-access-addmember">
+                        <input type="text" value="@_memberIdInput" disabled="@(_busy || !_allowed)"
+                               @oninput="e => _memberIdInput = e.Value?.ToString() ?? string.Empty" placeholder="member id" />
+                        <select value="@_memberKind" disabled="@(_busy || !_allowed)"
+                                @onchange="e => _memberKind = Enum.Parse<MembershipMemberKind>(e.Value?.ToString() ?? nameof(MembershipMemberKind.User))">
+                            <option value="@nameof(MembershipMemberKind.User)">User</option>
+                            <option value="@nameof(MembershipMemberKind.Group)">Group (nested)</option>
+                        </select>
+                        <button type="button" class="explorer-btn"
+                                disabled="@(_busy || !_allowed || string.IsNullOrWhiteSpace(_memberIdInput))" @onclick="AddMemberAsync">Add member</button>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+    else if (_tab == AccessTab.Policies)
+    {
+        <div class="explorer-access-grid">
+            <div class="explorer-access-listcol">
+                <h3 class="explorer-access-title">Rules</h3>
+                @if (_rules.Count == 0)
+                {
+                    <p class="explorer-backups-empty">No rules to show.</p>
+                }
+                else
+                {
+                    <table class="explorer-access-ruletable">
+                        <thead>
+                            <tr><th>Rule</th><th>Subject</th><th>Scope</th><th>Ops</th><th>Effect</th><th></th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var ranked in _rankedRules)
+                            {
+                                var rule = ranked.Rule;
+                                <tr class="@(ranked.DenyOverrides ? "is-deny" : null)">
+                                    <td>@rule.RuleId</td>
+                                    <td>@AccessRuleFormat.SubjectLabel(rule.Subject)</td>
+                                    <td>@AccessRuleFormat.ScopeLabel(rule.Scope)</td>
+                                    <td>@AccessRuleFormat.OperationsLabel(rule.Operations)</td>
+                                    <td>@rule.Effect</td>
+                                    <td>
+                                        <button type="button" class="explorer-btn" disabled="@_busy" @onclick="@(() => EditRule(rule))">Edit</button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                    <p class="explorer-backups-note">Ordered by precedence: most-specific scope first, deny ahead of allow (deny-override). The server's verdict is authoritative; use Explain to confirm an outcome.</p>
+                    @if (_rulesNextToken is not null)
+                    {
+                        <button type="button" class="explorer-btn" disabled="@(_busy || !_allowed)" @onclick="LoadMoreRulesAsync">Load more</button>
+                    }
+                }
+            </div>
+            <div class="explorer-access-formcol">
+                <h3 class="explorer-access-title">@(_editingExistingRule ? "Edit rule" : "New rule")</h3>
+                <label class="explorer-access-field">
+                    <span>Rule id</span>
+                    <input type="text" value="@_ruleIdInput" disabled="@(_busy || !_allowed || _editingExistingRule)"
+                           @oninput="e => _ruleIdInput = e.Value?.ToString() ?? string.Empty" placeholder="rule id" />
+                </label>
+                <label class="explorer-access-field">
+                    <span>Subject</span>
+                    <span class="explorer-access-inline">
+                        <select value="@_ruleSubjectKind" disabled="@(_busy || !_allowed)"
+                                @onchange="e => _ruleSubjectKind = Enum.Parse<LatticeSubjectSelectorKind>(e.Value?.ToString() ?? nameof(LatticeSubjectSelectorKind.User))">
+                            <option value="@nameof(LatticeSubjectSelectorKind.User)">User</option>
+                            <option value="@nameof(LatticeSubjectSelectorKind.Group)">Group</option>
+                        </select>
+                        <input type="text" value="@_ruleSubjectId" disabled="@(_busy || !_allowed)"
+                               @oninput="e => _ruleSubjectId = e.Value?.ToString() ?? string.Empty" placeholder="subject id" />
+                    </span>
+                </label>
+                <label class="explorer-access-field">
+                    <span>Tree</span>
+                    <input type="text" value="@_ruleTreeId" disabled="@(_busy || !_allowed)"
+                           @oninput="e => _ruleTreeId = e.Value?.ToString() ?? string.Empty" placeholder="tree id" />
+                </label>
+                <label class="explorer-access-field">
+                    <span>Scope</span>
+                    <span class="explorer-access-inline">
+                        <select value="@_ruleScopeKind" disabled="@(_busy || !_allowed)"
+                                @onchange="e => _ruleScopeKind = Enum.Parse<LatticeScopeKind>(e.Value?.ToString() ?? nameof(LatticeScopeKind.Tree))">
+                            <option value="@nameof(LatticeScopeKind.Tree)">Whole tree</option>
+                            <option value="@nameof(LatticeScopeKind.Prefix)">Prefix</option>
+                            <option value="@nameof(LatticeScopeKind.Key)">Key</option>
+                        </select>
+                        @if (_ruleScopeKind != LatticeScopeKind.Tree)
+                        {
+                            <input type="text" value="@_ruleScopeKeyOrPrefix" disabled="@(_busy || !_allowed)"
+                                   @oninput="e => _ruleScopeKeyOrPrefix = e.Value?.ToString() ?? string.Empty"
+                                   placeholder="@(_ruleScopeKind == LatticeScopeKind.Key ? "key" : "prefix")" />
+                        }
+                    </span>
+                </label>
+                <fieldset class="explorer-access-ops" disabled="@(_busy || !_allowed)">
+                    <legend>Operations</legend>
+                    @foreach (var op in AccessRuleFormat.Operations)
+                    {
+                        var flag = op.Flag;
+                        <label class="explorer-access-opcheck">
+                            <input type="checkbox" checked="@_ruleOperations.Contains(flag)"
+                                   @onchange="e => ToggleOperation(flag, (bool)(e.Value ?? false))" />
+                            <span>@op.Label</span>
+                        </label>
+                    }
+                </fieldset>
+                <label class="explorer-access-field">
+                    <span>Effect</span>
+                    <select value="@_ruleEffect" disabled="@(_busy || !_allowed)"
+                            @onchange="e => _ruleEffect = Enum.Parse<LatticeEffect>(e.Value?.ToString() ?? nameof(LatticeEffect.Allow))">
+                        <option value="@nameof(LatticeEffect.Allow)">Allow</option>
+                        <option value="@nameof(LatticeEffect.Deny)">Deny</option>
+                    </select>
+                </label>
+                <div class="explorer-access-actions">
+                    <button type="button" class="explorer-btn" disabled="@(_busy || !_allowed || !CanSaveRule())" @onclick="SaveRuleAsync">Save</button>
+                    <button type="button" class="explorer-btn" disabled="@_busy" @onclick="ResetRuleForm">Clear</button>
+                    <button type="button" class="explorer-btn explorer-access-danger"
+                            disabled="@(_busy || !_allowed || !_editingExistingRule)" @onclick="DeleteRuleAsync">Delete</button>
+                </div>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="explorer-access-grid">
+            <div class="explorer-access-formcol">
+                <h3 class="explorer-access-title">Explain a decision</h3>
+                <label class="explorer-access-field">
+                    <span>Subject id</span>
+                    <input type="text" value="@_explainSubjectId" disabled="@(_busy || !_allowed)"
+                           @oninput="e => _explainSubjectId = e.Value?.ToString() ?? string.Empty" placeholder="user or group id" />
+                </label>
+                <label class="explorer-access-field">
+                    <span>Operation</span>
+                    <select value="@_explainOperation" disabled="@(_busy || !_allowed)"
+                            @onchange="e => _explainOperation = Enum.Parse<LatticeOperation>(e.Value?.ToString() ?? nameof(LatticeOperation.Read))">
+                        @foreach (var op in AccessRuleFormat.Operations)
+                        {
+                            <option value="@op.Flag">@op.Label</option>
+                        }
+                    </select>
+                </label>
+                <label class="explorer-access-field">
+                    <span>Tree</span>
+                    <input type="text" value="@_explainTreeId" disabled="@(_busy || !_allowed)"
+                           @oninput="e => _explainTreeId = e.Value?.ToString() ?? string.Empty" placeholder="tree id" />
+                </label>
+                <label class="explorer-access-field">
+                    <span>Scope</span>
+                    <span class="explorer-access-inline">
+                        <select value="@_explainScopeKind" disabled="@(_busy || !_allowed)"
+                                @onchange="e => _explainScopeKind = Enum.Parse<LatticeScopeKind>(e.Value?.ToString() ?? nameof(LatticeScopeKind.Tree))">
+                            <option value="@nameof(LatticeScopeKind.Tree)">Whole tree</option>
+                            <option value="@nameof(LatticeScopeKind.Prefix)">Prefix</option>
+                            <option value="@nameof(LatticeScopeKind.Key)">Key</option>
+                        </select>
+                        @if (_explainScopeKind != LatticeScopeKind.Tree)
+                        {
+                            <input type="text" value="@_explainScopeKeyOrPrefix" disabled="@(_busy || !_allowed)"
+                                   @oninput="e => _explainScopeKeyOrPrefix = e.Value?.ToString() ?? string.Empty"
+                                   placeholder="@(_explainScopeKind == LatticeScopeKind.Key ? "key" : "prefix")" />
+                        }
+                    </span>
+                </label>
+                <div class="explorer-access-actions">
+                    <button type="button" class="explorer-btn"
+                            disabled="@(_busy || !_allowed || string.IsNullOrWhiteSpace(_explainSubjectId) || string.IsNullOrWhiteSpace(_explainTreeId))"
+                            @onclick="RunExplainAsync">Explain</button>
+                    <button type="button" class="explorer-btn"
+                            disabled="@(_busy || !_allowed || string.IsNullOrWhiteSpace(_explainSubjectId))"
+                            @onclick="RunEffectiveAsync">Effective permissions</button>
+                </div>
+            </div>
+            <div class="explorer-access-formcol">
+                @if (_explanation is not null)
+                {
+                    <h3 class="explorer-access-title">Verdict</h3>
+                    <p class="explorer-backups-result @(_explanation.Allowed ? "is-success" : "is-denied")" role="status">
+                        @(_explanation.Allowed ? (_explanation.Filtered ? "Allowed (filtered - a subset of keys)" : "Allowed") : "Denied")
+                        @if (!string.IsNullOrEmpty(_explanation.Reason))
+                        {
+                            <span> - @_explanation.Reason</span>
+                        }
+                    </p>
+                    <p class="explorer-access-sub">Default effect when no rule matches: @_explanation.DefaultEffect</p>
+                    @if (_explanation.GroupIds.Count > 0)
+                    {
+                        <p class="explorer-access-sub">Group closure: @string.Join(", ", _explanation.GroupIds)</p>
+                    }
+                    <h3 class="explorer-access-title">Matched rules</h3>
+                    <RankedRuleTable Rules="_explainRankedRules" />
+                }
+                @if (_effective is not null)
+                {
+                    <h3 class="explorer-access-title">Effective permissions for '@_effective.SubjectId'</h3>
+                    @if (_effective.GroupIds.Count > 0)
+                    {
+                        <p class="explorer-access-sub">Group closure: @string.Join(", ", _effective.GroupIds)</p>
+                    }
+                    <RankedRuleTable Rules="_effectiveRankedRules" />
+                }
+            </div>
+        </div>
+    }
+</section>

@@ -8,6 +8,7 @@ using Orleans.Lattice.Explorer.Core.Metrics;
 using Orleans.Lattice.Explorer.Core.Session;
 using Orleans.Lattice.Explorer.Core.Topology;
 using Orleans.Lattice.Explorer.Backup;
+using Orleans.Lattice.Explorer.Access;
 using Orleans.Lattice.Explorer.UI.Authentication;
 using Orleans.Lattice.Explorer.Web;
 using Orleans.Lattice.Explorer.Web.Components;
@@ -64,6 +65,11 @@ builder.Services.AddExplorerAuth();
 // endpoint / sign-in as the state connection), its catalog reader, and the
 // capability probe that gates the area and its per-scope actions.
 builder.Services.AddExplorerBackup();
+
+// The Access (membership & access-control) management area: the auth-admin
+// control-API client (over the same endpoint / sign-in), its membership and
+// policy services, and the capability probe that gates the area.
+builder.Services.AddExplorerAccess();
 
 var app = builder.Build();
 

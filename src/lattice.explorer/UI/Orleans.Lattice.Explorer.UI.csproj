@@ -18,6 +18,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Core\Orleans.Lattice.Explorer.Core.csproj" />
     <ProjectReference Include="..\Backup\Orleans.Lattice.Explorer.Backup.csproj" />
+    <ProjectReference Include="..\Access\Orleans.Lattice.Explorer.Access.csproj" />
   </ItemGroup>
 
 </Project>

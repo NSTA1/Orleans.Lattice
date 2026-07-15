@@ -15,7 +15,9 @@ public static class AppAreas
     /// <summary>
     /// The registered areas in left-to-right display order. Explore is always
     /// enabled; Backups is enabled only when the capability map reports at least
-    /// list / read backup access (the coarse top-level rule).
+    /// list / read backup access (the coarse top-level rule); Access is enabled
+    /// only when the auth-admin control plane grants the coarse administrator
+    /// probe (the <see cref="ExplorerCapabilities.AuthAdminAllowed"/> gate).
     /// </summary>
     public static IReadOnlyList<AppAreaDescriptor> Ordered { get; } = new[]
     {
@@ -31,6 +33,12 @@ public static class AppAreas
             Label = "Backups",
             IsEnabled = static caps => caps.BackupListAllowed
                 || caps.BackupByScope.Values.Any(static s => s.CanList),
+        },
+        new AppAreaDescriptor
+        {
+            Area = AppArea.Access,
+            Label = "Access",
+            IsEnabled = static caps => caps.AuthAdminAllowed,
         },
     };
 
