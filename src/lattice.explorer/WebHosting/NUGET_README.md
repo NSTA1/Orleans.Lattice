@@ -23,6 +23,7 @@ the shared explorer libraries, which restore automatically for a consumer:
 - `Orleans.Lattice.Explorer.Backup` - the Backups management area.
 - `Orleans.Lattice.Explorer.Access` - the Access (membership and access-control)
   management area.
+- `Orleans.Lattice.Explorer.Schema` - the Schema (schema-policy management) area.
 
 ## Usage
 
@@ -49,8 +50,8 @@ app.Run();
 components with interactive server components, the shared explorer UI, the
 state-API connection seam, the configuration backing store plus environment
 bootstrap, the catalog / metrics / topology / data / dead-letter / history /
-session services, the capability store, the Backups and Access areas, and the
-auth / cookie / data-protection plumbing.
+session services, the capability store, the Backups, Access, and Schema areas,
+and the auth / cookie / data-protection plumbing.
 
 `MapLatticeExplorer` maps the Razor components (interactive server render mode
 with the UI additional assembly), the static assets, and the server-side
