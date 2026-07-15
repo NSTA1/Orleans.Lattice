@@ -10,6 +10,7 @@
   <Project Path="src/lattice.api.backup/Orleans.Lattice.Api.Backup.csproj" />
   <Project Path="src/lattice.api.backup.grpc/Orleans.Lattice.Api.Backup.Grpc.csproj" />
   <Project Path="src/lattice.api.mcp/Orleans.Lattice.Api.Mcp.csproj" />
+  <Project Path="src/lattice.api.mcp.telemetry/Orleans.Lattice.Api.Mcp.Telemetry.csproj" />
   <Project Path="src/lattice.membership/Orleans.Lattice.Membership.csproj" />
   <Project Path="src/lattice.membership.entra/Orleans.Lattice.Membership.Entra.csproj" />
   <Project Path="src/lattice.membership.entra.graph/Orleans.Lattice.Membership.Entra.Graph.csproj" />
@@ -40,6 +41,7 @@
   <Project Path="test/lattice.api.backup/Orleans.Lattice.Api.Backup.Tests.csproj" />
   <Project Path="test/lattice.api.backup.grpc/Orleans.Lattice.Api.Backup.Grpc.Tests.csproj" />
   <Project Path="test/lattice.api.mcp/Orleans.Lattice.Api.Mcp.Tests.csproj" />
+  <Project Path="test/lattice.api.mcp.telemetry/Orleans.Lattice.Api.Mcp.Telemetry.Tests.csproj" />
   <Project Path="test/lattice.membership/Orleans.Lattice.Membership.Tests.csproj" />
   <Project Path="test/lattice.membership.entra/Orleans.Lattice.Membership.Entra.Tests.csproj" />
   <Project Path="test/lattice.membership.entra.graph/Orleans.Lattice.Membership.Entra.Graph.Tests.csproj" />
