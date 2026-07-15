@@ -84,6 +84,12 @@
     <ProjectReference Include="..\..\src\lattice.api.backup.grpc\Orleans.Lattice.Api.Backup.Grpc.csproj" />
     <ProjectReference Include="..\..\src\lattice.api.mcp\Orleans.Lattice.Api.Mcp.csproj" />
     <!--
+      Pulled in solely so docs/lattice.api.mcp.telemetry/*.md can show the
+      telemetry tool-module registration and options as `csharp verify` snippets
+      on the same DocsSnippetCompilationTests reference-graph mechanism.
+    -->
+    <ProjectReference Include="..\..\src\lattice.api.mcp.telemetry\Orleans.Lattice.Api.Mcp.Telemetry.csproj" />
+    <!--
       Pulled in solely so docs/lattice.membership/*.md and docs/lattice.auth/*.md
       can show membership + authorization registration, rule authoring, and
       options as `csharp verify` snippets, on the same DocsSnippetCompilationTests

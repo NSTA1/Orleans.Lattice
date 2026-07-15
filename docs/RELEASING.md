@@ -28,6 +28,8 @@ The package family ships from this repository:
 | `Orleans.Lattice.Backup.AzureBlob` | `src/lattice.backup.azureblob/Orleans.Lattice.Backup.AzureBlob.csproj` |
 | `Orleans.Lattice.Api.Backup` | `src/lattice.api.backup/Orleans.Lattice.Api.Backup.csproj` |
 | `Orleans.Lattice.Api.Backup.Grpc` | `src/lattice.api.backup.grpc/Orleans.Lattice.Api.Backup.Grpc.csproj` |
+| `Orleans.Lattice.Api.Mcp` | `src/lattice.api.mcp/Orleans.Lattice.Api.Mcp.csproj` |
+| `Orleans.Lattice.Api.Mcp.Telemetry` | `src/lattice.api.mcp.telemetry/Orleans.Lattice.Api.Mcp.Telemetry.csproj` |
 | `Orleans.Lattice.Schema` | `src/lattice.schema/Orleans.Lattice.Schema.csproj` |
 | `Orleans.Lattice.Scaling` | `src/lattice.scaling/Orleans.Lattice.Scaling.csproj` | across the family. Patch digits may advance independently per package.
 
@@ -57,6 +59,8 @@ The publish workflow's per-tag trigger globs match these tag shapes:
 | `Orleans.Lattice.Backup.AzureBlob` | `lattice.backup.azureblob-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.Backup` | `lattice.api.backup-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.Backup.Grpc` | `lattice.api.backup.grpc-v<X.Y.Z>` |
+| `Orleans.Lattice.Api.Mcp` | `lattice.api.mcp-v<X.Y.Z>` |
+| `Orleans.Lattice.Api.Mcp.Telemetry` | `lattice.api.mcp.telemetry-v<X.Y.Z>` |
 | `Orleans.Lattice.Schema` | `lattice.schema-v<X.Y.Z>` |
 | `Orleans.Lattice.Scaling` | `lattice.scaling-v<X.Y.Z>` |
 

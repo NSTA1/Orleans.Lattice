@@ -11,7 +11,7 @@ namespace Orleans.Lattice.Api.Mcp.Tests;
 public sealed class LatticeApiMcpGroupCapabilityMapTests
 {
     [Test]
-    public void AllGroups_lists_the_four_groups_in_declaration_order()
+    public void AllGroups_lists_the_groups_in_declaration_order()
     {
         Assert.That(LatticeApiMcpGroupCapabilityMap.AllGroups, Is.EqualTo(new[]
         {
@@ -19,7 +19,23 @@ public sealed class LatticeApiMcpGroupCapabilityMapTests
             LatticeApiMcpGroup.Data,
             LatticeApiMcpGroup.Backup,
             LatticeApiMcpGroup.Auth,
+            LatticeApiMcpGroup.Telemetry,
         }));
+    }
+
+    [Test]
+    public void Existing_group_ordinals_are_unchanged()
+    {
+        // The access-set bitmask keys on 1 << (int)group, so the four original
+        // members must keep their ordinal values; Telemetry appends after Auth.
+        Assert.Multiple(() =>
+        {
+            Assert.That((int)LatticeApiMcpGroup.State, Is.EqualTo(0));
+            Assert.That((int)LatticeApiMcpGroup.Data, Is.EqualTo(1));
+            Assert.That((int)LatticeApiMcpGroup.Backup, Is.EqualTo(2));
+            Assert.That((int)LatticeApiMcpGroup.Auth, Is.EqualTo(3));
+            Assert.That((int)LatticeApiMcpGroup.Telemetry, Is.EqualTo(4));
+        });
     }
 
     [Test]
@@ -64,6 +80,35 @@ public sealed class LatticeApiMcpGroupCapabilityMapTests
     }
 
     [Test]
+    public void Telemetry_mask_is_telemetry_only()
+    {
+        Assert.That(
+            LatticeApiMcpGroupCapabilityMap.RequiredOperations(LatticeApiMcpGroup.Telemetry),
+            Is.EqualTo(LatticeOperation.Telemetry));
+    }
+
+    [Test]
+    public void Telemetry_mask_does_not_overlap_any_other_group()
+    {
+        var telemetry = LatticeApiMcpGroupCapabilityMap.RequiredOperations(LatticeApiMcpGroup.Telemetry);
+
+        Assert.Multiple(() =>
+        {
+            foreach (var group in LatticeApiMcpGroupCapabilityMap.AllGroups)
+            {
+                if (group == LatticeApiMcpGroup.Telemetry)
+                {
+                    continue;
+                }
+
+                var other = LatticeApiMcpGroupCapabilityMap.RequiredOperations(group);
+                Assert.That(telemetry & other, Is.EqualTo(LatticeOperation.None),
+                    $"No other operation - including {group} - may confer telemetry.");
+            }
+        });
+    }
+
+    [Test]
     public void State_and_auth_masks_do_not_overlap()
     {
         var state = LatticeApiMcpGroupCapabilityMap.RequiredOperations(LatticeApiMcpGroup.State);
@@ -77,6 +122,7 @@ public sealed class LatticeApiMcpGroupCapabilityMapTests
     [TestCase(LatticeApiMcpGroup.Data, "data")]
     [TestCase(LatticeApiMcpGroup.Backup, "backup")]
     [TestCase(LatticeApiMcpGroup.Auth, "auth")]
+    [TestCase(LatticeApiMcpGroup.Telemetry, "telemetry")]
     public void DisplayName_is_the_stable_lowercase_name(LatticeApiMcpGroup group, string expected)
     {
         Assert.That(LatticeApiMcpGroupCapabilityMap.DisplayName(group), Is.EqualTo(expected));

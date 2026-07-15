@@ -19,6 +19,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Mcp.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Mcp.Telemetry" />
   </ItemGroup>
 
   <ItemGroup>

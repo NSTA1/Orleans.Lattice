@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Api.Mcp;
 internal static class LatticeApiMcpGroupCapabilityMap
 {
     /// <summary>
-    /// The four facade groups in <see cref="LatticeApiMcpGroup"/> declaration
+    /// The facade groups in <see cref="LatticeApiMcpGroup"/> declaration
     /// order. Used to project a stable, deterministic capability list.
     /// </summary>
     public static readonly IReadOnlyList<LatticeApiMcpGroup> AllGroups = new[]
@@ -21,6 +21,7 @@ internal static class LatticeApiMcpGroupCapabilityMap
         LatticeApiMcpGroup.Data,
         LatticeApiMcpGroup.Backup,
         LatticeApiMcpGroup.Auth,
+        LatticeApiMcpGroup.Telemetry,
     };
 
     /// <summary>
@@ -49,6 +50,9 @@ internal static class LatticeApiMcpGroupCapabilityMap
         // Administrator control plane.
         LatticeApiMcpGroup.Auth => LatticeOperation.Admin,
 
+        // Cluster-wide, scopeless operational telemetry.
+        LatticeApiMcpGroup.Telemetry => LatticeOperation.Telemetry,
+
         _ => LatticeOperation.None,
     };
 
@@ -59,6 +63,7 @@ internal static class LatticeApiMcpGroupCapabilityMap
         LatticeApiMcpGroup.Data => "data",
         LatticeApiMcpGroup.Backup => "backup",
         LatticeApiMcpGroup.Auth => "auth",
+        LatticeApiMcpGroup.Telemetry => "telemetry",
         _ => group.ToString().ToLowerInvariant(),
     };
 }

@@ -25,6 +25,8 @@ on:
       #   lattice.backup.azureblob-v7.9.0
       #   lattice.api.backup-v7.9.0
       #   lattice.api.backup.grpc-v7.9.0
+      #   lattice.api.mcp-v7.9.1
+      #   lattice.api.mcp.telemetry-v7.9.1
       #   lattice.schema-v7.9.0
       #   lattice.scaling-v7.9.0
       # The tag prefix is the literal folder name under src/, dots and all.
@@ -48,6 +50,8 @@ on:
       - 'lattice.backup.azureblob-v*'
       - 'lattice.api.backup-v*'
       - 'lattice.api.backup.grpc-v*'
+      - 'lattice.api.mcp-v*'
+      - 'lattice.api.mcp.telemetry-v*'
       - 'lattice.schema-v*'
       - 'lattice.scaling-v*'
 

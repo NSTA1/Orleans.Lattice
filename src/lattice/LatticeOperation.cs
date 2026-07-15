@@ -92,4 +92,18 @@ public enum LatticeOperation
     /// capability.
     /// </summary>
     SchemaAdmin = 2048,
+
+    /// <summary>
+    /// Read the cluster's operational <b>telemetry</b>: a <b>cluster-wide,
+    /// scopeless</b> capability that is deliberately <b>distinct</b> from every
+    /// other operation. Unlike the data-plane operations it does not attach to a
+    /// tree, prefix, or key - it authorizes reading cluster-level telemetry as a
+    /// whole - so it is never part of the data-plane <c>All</c> aggregate.
+    /// Holding it grants <b>nothing else</b>: no data read, no administration, no
+    /// schema or backup authority. Conversely <b>no</b> other operation confers
+    /// it - not even <see cref="Admin"/> - so a full data-plane or administrative
+    /// grant never silently exposes telemetry, and a telemetry grant never
+    /// silently exposes data. It must be granted explicitly and on its own.
+    /// </summary>
+    Telemetry = 4096,
 }

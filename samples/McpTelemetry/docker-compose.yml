@@ -1,0 +1,27 @@
+# McpTelemetry sample - a single real Prometheus that scrapes the sample process.
+#
+# Start it before running the sample:
+#
+#     docker compose up -d
+#     dotnet run
+#
+# Prometheus scrapes the host process's /metrics endpoint (host.docker.internal
+# -> the machine running `dotnet run`) and publishes its HTTP API on
+# http://localhost:9090, which the sample's telemetry tools query over PromQL.
+#
+# Tear down with:  docker compose down
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: lattice-mcp-telemetry-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    extra_hosts:
+      # Lets the container reach the host process on Linux as well as Docker
+      # Desktop, where host.docker.internal is already provided.
+      - "host.docker.internal:host-gateway"

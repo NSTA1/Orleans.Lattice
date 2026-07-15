@@ -1,0 +1,21 @@
+# Prometheus scrape config for the McpTelemetry sample.
+#
+# Prometheus runs in Docker and scrapes the sample process, which runs on the
+# host and exposes the orleans.lattice meter at /metrics via the OpenTelemetry
+# Prometheus exporter (see Program.cs). host.docker.internal resolves to the
+# host from inside the container (Docker Desktop provides it; the compose file
+# adds a host-gateway mapping so it also works on Linux).
+#
+# The job_name is "lattice-silo" so the sample's `up{job="lattice-silo"}`
+# scrape-health query resolves.
+
+global:
+  scrape_interval: 2s
+  evaluation_interval: 2s
+
+scrape_configs:
+  - job_name: lattice-silo
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - host.docker.internal:5290
