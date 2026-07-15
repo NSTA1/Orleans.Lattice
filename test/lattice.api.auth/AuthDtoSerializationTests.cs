@@ -182,4 +182,29 @@ public sealed class AuthDtoSerializationTests
             Assert.That(copy.Rules.Select(r => r.RuleId), Is.EqualTo(new[] { "r1", "r2" }));
         });
     }
+
+    [Test]
+    public void AuthEffectivePermissions_round_trips_a_cluster_wide_telemetry_rule()
+    {
+        var telemetryRule = new LatticeAuthorizationRule(
+            "r-telemetry",
+            LatticeSubjectSelector.User("u1"),
+            LatticeScope.ClusterWide(),
+            LatticeOperation.Telemetry,
+            LatticeEffect.Allow);
+        var original = new AuthEffectivePermissions
+        {
+            SubjectId = "u1",
+            Rules = [telemetryRule],
+        };
+
+        var copy = RoundTrip(original);
+        var copied = copy.Rules.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(copied.Scope.TreeId, Is.EqualTo(LatticeScope.ClusterWideTreeId));
+            Assert.That(copied.Scope.Kind, Is.EqualTo(LatticeScopeKind.Tree));
+            Assert.That(copied.Operations, Is.EqualTo(LatticeOperation.Telemetry));
+        });
+    }
 }

@@ -90,6 +90,45 @@ public class LatticeAuthorizationRuleModelTests
     }
 
     [Test]
+    public void Scope_ClusterWide_is_a_whole_tree_scope_over_the_sentinel()
+    {
+        var scope = LatticeScope.ClusterWide();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scope.Kind, Is.EqualTo(LatticeScopeKind.Tree));
+            Assert.That(scope.TreeId, Is.EqualTo(LatticeScope.ClusterWideTreeId));
+            Assert.That(scope.KeyOrPrefix, Is.Null);
+        });
+    }
+
+    [Test]
+    public void Scope_ClusterWide_equals_a_tree_scope_over_the_sentinel_id()
+    {
+        Assert.That(
+            LatticeScope.ClusterWide(),
+            Is.EqualTo(LatticeScope.Tree(LatticeScope.ClusterWideTreeId)));
+    }
+
+    [Test]
+    public void Rule_can_carry_a_cluster_wide_telemetry_grant()
+    {
+        var rule = new LatticeAuthorizationRule(
+            "r-telemetry",
+            LatticeSubjectSelector.User("observer"),
+            LatticeScope.ClusterWide(),
+            LatticeOperation.Telemetry,
+            LatticeEffect.Allow);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rule.Scope.TreeId, Is.EqualTo(LatticeScope.ClusterWideTreeId));
+            Assert.That(rule.Operations, Is.EqualTo(LatticeOperation.Telemetry));
+            Assert.That(rule.Operations.HasFlag(LatticeOperation.Telemetry), Is.True);
+        });
+    }
+
+    [Test]
     public void Scope_constructor_rejects_tree_kind_carrying_a_key()
     {
         Assert.That(
