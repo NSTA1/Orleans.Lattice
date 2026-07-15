@@ -214,6 +214,39 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
     }
 
     [Test]
+    public async Task Telemetry_group_is_unavailable_in_core_without_a_registered_module_even_when_granted()
+    {
+        // B1 lands no telemetry tools in core: a granted-but-unregistered
+        // telemetry group is discoverable but not usable until the companion
+        // package registers its tool module.
+        var configurator = CreateConfigurator(
+            new LatticeCredential("alice"),
+            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Telemetry));
+
+        var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
+
+        Assert.That(GroupAvailable(plan.Capabilities, LatticeApiMcpGroup.Telemetry), Is.False);
+    }
+
+    [Test]
+    public async Task Telemetry_group_is_available_when_granted_and_a_module_is_registered()
+    {
+        var telemetryGroup = new FakeToolGroup(LatticeApiMcpGroup.Telemetry, "telemetry_read");
+        var configurator = CreateConfigurator(
+            new LatticeCredential("alice"),
+            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Telemetry),
+            telemetryGroup);
+
+        var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(GroupAvailable(plan.Capabilities, LatticeApiMcpGroup.Telemetry), Is.True);
+            Assert.That(ToolNames(plan.Tools), Is.EquivalentTo(new[] { "lattice_capabilities", "telemetry_read" }));
+        });
+    }
+
+    [Test]
     public async Task Every_group_capability_slot_is_present_in_declaration_order()
     {
         var configurator = CreateConfigurator(
@@ -230,6 +263,7 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
                 LatticeApiMcpGroup.Data,
                 LatticeApiMcpGroup.Backup,
                 LatticeApiMcpGroup.Auth,
+                LatticeApiMcpGroup.Telemetry,
             }));
     }
 

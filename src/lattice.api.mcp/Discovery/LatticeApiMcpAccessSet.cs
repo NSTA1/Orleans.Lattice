@@ -13,7 +13,7 @@ internal readonly struct LatticeApiMcpAccessSet : IEquatable<LatticeApiMcpAccess
 
     private LatticeApiMcpAccessSet(int mask) => _mask = mask;
 
-    /// <summary>An access set granting none of the four facade groups (fail-closed default).</summary>
+    /// <summary>An access set granting none of the facade groups (fail-closed default).</summary>
     public static LatticeApiMcpAccessSet None => new(0);
 
     /// <summary>Whether no group is granted.</summary>
