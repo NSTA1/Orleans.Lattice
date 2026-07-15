@@ -475,4 +475,118 @@ public sealed class CompiledPolicyEvaluationTests
                 "the more specific prefix-scope deny beats the tree-scope allow");
         });
     }
+
+    // ---- Cluster-wide, scopeless Telemetry grant -------------------------
+
+    private static LatticeAccessDecision EvalClusterWide(
+        IEnumerable<LatticeAuthorizationRule> rules,
+        LatticeSubject subject,
+        LatticeOperation operation,
+        LatticeAuthOptions? options = null)
+    {
+        var policy = CompiledPolicy.Compile(rules);
+        return PolicyEvaluator.Evaluate(
+            policy,
+            options ?? new LatticeAuthOptions(),
+            subject,
+            LatticeScope.ClusterWideTreeId,
+            operation,
+            key: null,
+            rangeStart: null,
+            rangeEnd: null);
+    }
+
+    [Test]
+    public void Evaluate_telemetry_authorizes_when_the_cluster_wide_grant_is_present()
+    {
+        var rules = new[]
+        {
+            User("r", "observer", LatticeScope.ClusterWide(), LatticeOperation.Telemetry, LatticeEffect.Allow),
+        };
+
+        Assert.That(
+            EvalClusterWide(rules, Subject("observer"), LatticeOperation.Telemetry).Allowed,
+            Is.True,
+            "a cluster-wide telemetry grant authorizes a telemetry request");
+    }
+
+    [Test]
+    public void Evaluate_telemetry_denies_by_default_when_the_grant_is_absent()
+    {
+        Assert.That(
+            EvalClusterWide(Array.Empty<LatticeAuthorizationRule>(), Subject("observer"), LatticeOperation.Telemetry).Allowed,
+            Is.False,
+            "absent a grant, telemetry is denied by the deny-by-default effect");
+    }
+
+    [Test]
+    public void Evaluate_telemetry_denies_when_only_another_subject_is_granted()
+    {
+        var rules = new[]
+        {
+            User("r", "observer", LatticeScope.ClusterWide(), LatticeOperation.Telemetry, LatticeEffect.Allow),
+        };
+
+        Assert.That(
+            EvalClusterWide(rules, Subject("intruder"), LatticeOperation.Telemetry).Allowed,
+            Is.False,
+            "the grant is scoped to its subject only");
+    }
+
+    [Test]
+    public void Evaluate_telemetry_is_not_conferred_by_a_full_data_plane_grant()
+    {
+        // A whole-data-plane grant (LatticeAuthOperations.All) over the sentinel
+        // tree must not confer the scopeless Telemetry capability.
+        var rules = new[]
+        {
+            User("r", "admin", LatticeScope.ClusterWide(), LatticeAuthOperations.All, LatticeEffect.Allow),
+        };
+
+        Assert.That(
+            EvalClusterWide(rules, Subject("admin"), LatticeOperation.Telemetry).Allowed,
+            Is.False,
+            "Telemetry is excluded from LatticeAuthOperations.All and is not conferred by it");
+    }
+
+    [Test]
+    public void Evaluate_telemetry_grant_does_not_confer_data_plane_read()
+    {
+        // Holding Telemetry must grant nothing else: a Telemetry-only grant does
+        // not authorize a data-plane Read on an ordinary tree.
+        var rules = new[]
+        {
+            User("r", "observer", LatticeScope.ClusterWide(), LatticeOperation.Telemetry, LatticeEffect.Allow),
+        };
+        var policy = CompiledPolicy.Compile(rules);
+
+        Assert.That(
+            PolicyEvaluator.Evaluate(policy, new LatticeAuthOptions(), Subject("observer"), Tree, LatticeOperation.Read, "k", null, null).Allowed,
+            Is.False,
+            "a telemetry grant confers no data-plane capability on a data tree");
+    }
+
+    [Test]
+    public void Evaluate_existing_mask_is_unaffected_by_the_new_telemetry_bit()
+    {
+        // Backward-compatibility regression: a rule authored before Telemetry
+        // existed carries the same integer mask and resolves exactly as before -
+        // the new bit neither appears in nor perturbs an existing grant.
+        var legacyMask = LatticeOperation.Read | LatticeOperation.Write;
+        var rules = new[] { User("r", "alice", LatticeScope.Tree(Tree), legacyMask, LatticeEffect.Allow) };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That((int)legacyMask, Is.EqualTo(3), "the legacy mask value is byte-stable");
+            Assert.That(legacyMask.HasFlag(LatticeOperation.Telemetry), Is.False);
+            Assert.That(Eval(rules, Subject("alice"), LatticeOperation.Read, key: "k").Allowed, Is.True);
+            Assert.That(Eval(rules, Subject("alice"), LatticeOperation.Write, key: "k").Allowed, Is.True);
+            Assert.That(
+                PolicyEvaluator.Evaluate(
+                    CompiledPolicy.Compile(rules), new LatticeAuthOptions(), Subject("alice"),
+                    LatticeScope.ClusterWideTreeId, LatticeOperation.Telemetry, null, null, null).Allowed,
+                Is.False,
+                "the legacy grant does not accidentally confer the new telemetry bit");
+        });
+    }
 }

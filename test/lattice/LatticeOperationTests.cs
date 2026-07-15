@@ -29,6 +29,8 @@ public class LatticeOperationTests
             Assert.That((int)LatticeOperation.Admin, Is.EqualTo(256));
             Assert.That((int)LatticeOperation.Backup, Is.EqualTo(512));
             Assert.That((int)LatticeOperation.Restore, Is.EqualTo(1024));
+            Assert.That((int)LatticeOperation.SchemaAdmin, Is.EqualTo(2048));
+            Assert.That((int)LatticeOperation.Telemetry, Is.EqualTo(4096));
         });
     }
 
@@ -40,7 +42,8 @@ public class LatticeOperationTests
             LatticeOperation.Read, LatticeOperation.Write, LatticeOperation.Delete,
             LatticeOperation.RangeRead, LatticeOperation.RangeDelete, LatticeOperation.CrdtApply,
             LatticeOperation.AtomicWrite, LatticeOperation.BulkLoad, LatticeOperation.Admin,
-            LatticeOperation.Backup, LatticeOperation.Restore,
+            LatticeOperation.Backup, LatticeOperation.Restore, LatticeOperation.SchemaAdmin,
+            LatticeOperation.Telemetry,
         };
 
         var union = LatticeOperation.None;
@@ -70,5 +73,24 @@ public class LatticeOperationTests
     public void Enum_carries_the_Flags_attribute()
     {
         Assert.That(typeof(LatticeOperation).IsDefined(typeof(FlagsAttribute), inherit: false), Is.True);
+    }
+
+    [Test]
+    public void Telemetry_does_not_overlap_any_other_operation()
+    {
+        // Telemetry is a cluster-wide, scopeless capability: no other operation
+        // (including Admin) may confer it, and holding it confers nothing else.
+        var everythingElse =
+            LatticeOperation.Read | LatticeOperation.Write | LatticeOperation.Delete
+            | LatticeOperation.RangeRead | LatticeOperation.RangeDelete | LatticeOperation.CrdtApply
+            | LatticeOperation.AtomicWrite | LatticeOperation.BulkLoad | LatticeOperation.Admin
+            | LatticeOperation.Backup | LatticeOperation.Restore | LatticeOperation.SchemaAdmin;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(everythingElse.HasFlag(LatticeOperation.Telemetry), Is.False);
+            Assert.That(LatticeOperation.Telemetry.HasFlag(LatticeOperation.Admin), Is.False);
+            Assert.That((everythingElse & LatticeOperation.Telemetry), Is.EqualTo(LatticeOperation.None));
+        });
     }
 }

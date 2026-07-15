@@ -93,4 +93,33 @@ public sealed record LatticeScope
     /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="prefix"/> is <c>null</c> or empty.</exception>
     public static LatticeScope Prefix(string treeId, string prefix) =>
         new(LatticeScopeKind.Prefix, treeId, prefix);
+
+    /// <summary>
+    /// The sentinel tree id representing <b>every tree / no specific tree</b>: the
+    /// all-trees wildcard used to author a <b>cluster-wide, scopeless</b> grant
+    /// such as <see cref="LatticeOperation.Telemetry"/>. Because the authorization
+    /// model always keys a rule by a tree id, a capability that is not attached to
+    /// any single tree is represented as an ordinary <see cref="Tree(string)"/>
+    /// scope over this well-known sentinel, and the matching access-gate request
+    /// targets the same sentinel. It is deliberately a value that no real
+    /// application tree is expected to use; even were it to collide with a real
+    /// tree name the collision is harmless, because a scopeless capability bit
+    /// (for example <see cref="LatticeOperation.Telemetry"/>) never overlaps a
+    /// data-plane operation bit, so a data-plane rule on the tree can never grant
+    /// the scopeless capability and a scopeless grant can never grant a data-plane
+    /// operation.
+    /// </summary>
+    public const string ClusterWideTreeId = "*";
+
+    /// <summary>
+    /// Creates the <b>cluster-wide, scopeless</b> scope over
+    /// <see cref="ClusterWideTreeId"/>. Use it to author a grant for a capability
+    /// that is not attached to any single tree - notably
+    /// <see cref="LatticeOperation.Telemetry"/>. The returned value is an ordinary
+    /// whole-tree scope over the all-trees sentinel, so it compiles, persists, and
+    /// evaluates through the standard policy pipeline with no special-casing.
+    /// </summary>
+    /// <returns>A whole-tree scope over the all-trees sentinel id.</returns>
+    public static LatticeScope ClusterWide() =>
+        new(LatticeScopeKind.Tree, ClusterWideTreeId);
 }

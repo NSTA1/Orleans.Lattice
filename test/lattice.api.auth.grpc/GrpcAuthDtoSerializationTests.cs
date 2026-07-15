@@ -121,6 +121,30 @@ public sealed class GrpcAuthDtoSerializationTests
     }
 
     [Test]
+    public void AuthPutRule_round_trips_a_cluster_wide_telemetry_grant()
+    {
+        var original = new AuthPutRule
+        {
+            Rule = new LatticeAuthorizationRule(
+                "r-telemetry",
+                LatticeSubjectSelector.User("observer"),
+                LatticeScope.ClusterWide(),
+                LatticeOperation.Telemetry,
+                LatticeEffect.Allow),
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Rule.RuleId, Is.EqualTo("r-telemetry"));
+            Assert.That(copy.Rule.Scope.Kind, Is.EqualTo(LatticeScopeKind.Tree));
+            Assert.That(copy.Rule.Scope.TreeId, Is.EqualTo(LatticeScope.ClusterWideTreeId));
+            Assert.That(copy.Rule.Operations, Is.EqualTo(LatticeOperation.Telemetry));
+            Assert.That(copy.Rule.Effect, Is.EqualTo(LatticeEffect.Allow));
+        });
+    }
+
+    [Test]
     public void AuthTreeRulesPage_round_trips()
     {
         var original = new AuthTreeRulesPage
