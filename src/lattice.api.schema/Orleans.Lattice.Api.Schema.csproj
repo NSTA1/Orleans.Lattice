@@ -4,9 +4,9 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <PackageId>Orleans.Lattice.Schema</PackageId>
-    <Version>7.9.0</Version>
-    <Description>Schema add-on foundation for Orleans.Lattice. Ships LatticeValueTransform - a shared, serializable value-to-value transform IR (a sibling of the boolean LatticePredicateNode) with a client-side translator, a deterministic server-side JSON evaluator, and an ILatticeValueTransform DI escape hatch. Consumed by the schema-enforcement remediation and schema-versioning upcast layers delivered by later releases.</Description>
+    <PackageId>Orleans.Lattice.Api.Schema</PackageId>
+    <Version>7.9.1</Version>
+    <Description>Optional transport-agnostic control facade add-on for Orleans.Lattice schema management. Wraps the in-process schema admin surface (policy, versioning, remediation, and a read-only per-tree compliance audit) behind a single fail-closed control interface every transport binding (for example the gRPC surface) adapts over. Registered separately; adds no transport behaviour of its own.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
@@ -18,16 +18,14 @@
   </ItemGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="Orleans.Lattice.Schema.Tests" />
-    <InternalsVisibleTo Include="Orleans.Lattice.Api.Schema" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Schema.Tests" />
-    <InternalsVisibleTo Include="Orleans.Lattice.Api.Schema.Grpc" />
-    <InternalsVisibleTo Include="Orleans.Lattice.Api.Schema.Grpc.Tests" />
     <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\lattice\Orleans.Lattice.csproj" />
+    <ProjectReference Include="..\lattice.api.abstractions\Orleans.Lattice.Api.Abstractions.csproj" />
+    <ProjectReference Include="..\lattice.schema\Orleans.Lattice.Schema.csproj" />
     <PackageReference Include="Microsoft.Orleans.Sdk" Version="10.2.0" />
   </ItemGroup>
 
