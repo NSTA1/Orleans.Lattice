@@ -6,21 +6,99 @@ namespace Orleans.Lattice.Api.Mcp.Telemetry;
 /// The telemetry tool module: the <see cref="ILatticeApiMcpToolGroup"/> for
 /// <see cref="LatticeApiMcpGroup.Telemetry"/>. It plugs the companion telemetry
 /// package into the MCP binding's permission-aware discovery core so a caller
-/// holding a <c>LatticeOperation.Telemetry</c> grant is offered the telemetry
-/// tools.
+/// holding a <c>LatticeOperation.Telemetry</c> grant is offered the four
+/// read-only <c>lattice_telemetry_*</c> tools that proxy the configured
+/// Prometheus / PromQL-compatible backend.
 /// </summary>
 /// <remarks>
-/// C1 is the package skeleton: this group contributes <b>no</b> tools yet. Phase
-/// D materialises the metric-query tools into <see cref="Tools"/>. The group is
-/// built once (its <see cref="Tools"/> list is the empty singleton), so the
-/// per-session discovery filter selects from a prebuilt list and never
-/// re-materialises the group.
+/// <para>
+/// The tools are built <b>once</b> in the constructor from the static
+/// <see cref="TelemetryToolHandlers"/> method groups. Each tool resolves its
+/// <see cref="IPrometheusQueryClient"/>, <see cref="TelemetryMetricAccessPolicy"/>,
+/// and options collaborators from the request service provider at call time, so
+/// the per-session discovery filter selects from this prebuilt list and never
+/// re-materialises a tool per <c>tools/list</c> or <c>tools/call</c>.
+/// </para>
+/// <para>
+/// Every tool is read-only and non-destructive. Metric-access enforcement,
+/// range guardrails, and backend-fault mapping live in the handlers, so the module
+/// itself adds no query logic.
+/// </para>
 /// </remarks>
 internal sealed class TelemetryToolGroup : ILatticeApiMcpToolGroup
 {
+    /// <summary>
+    /// Builds the telemetry tool list once from the supplied service provider,
+    /// which the SDK consults to mark the <see cref="IPrometheusQueryClient"/>,
+    /// <see cref="TelemetryMetricAccessPolicy"/>, and options handler parameters as
+    /// DI-injected (schema-excluded); the instances themselves are resolved per
+    /// invocation from the request's service scope.
+    /// </summary>
+    /// <param name="services">
+    /// The service provider whose <c>IServiceProviderIsService</c> recognises the
+    /// registered backend client, metric-access policy, and telemetry options.
+    /// </param>
+    public TelemetryToolGroup(IServiceProvider services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        Tools = new McpServerTool[]
+        {
+            Create(
+                services,
+                TelemetryToolHandlers.QueryAsync,
+                "lattice_telemetry_query",
+                "Run an instant telemetry query",
+                "Evaluates a PromQL expression at a single instant against the cluster's read-only metrics "
+                + "backend, returning the projected vector or scalar series. Read-only."),
+            Create(
+                services,
+                TelemetryToolHandlers.QueryRangeAsync,
+                "lattice_telemetry_query_range",
+                "Run a range telemetry query",
+                "Evaluates a PromQL expression over a time range at a fixed resolution, returning the projected "
+                + "matrix series. The range and step are bounded by the configured guardrails; an over-budget "
+                + "request returns a clean error. Read-only."),
+            Create(
+                services,
+                TelemetryToolHandlers.ListMetricsAsync,
+                "lattice_telemetry_list_metrics",
+                "List telemetry metric names",
+                "Lists the metric names the backend exposes, filtered to those the metric-access policy admits "
+                + "in the deny-all posture. Read-only."),
+            Create(
+                services,
+                TelemetryToolHandlers.MetricMetadataAsync,
+                "lattice_telemetry_metric_metadata",
+                "Read telemetry metric metadata",
+                "Reads backend metadata (type, help text, and unit) for a named metric, or for every admitted "
+                + "metric when none is named. A non-admitted named metric is rejected in the deny-all posture. "
+                + "Read-only."),
+        };
+    }
+
     /// <inheritdoc />
     public LatticeApiMcpGroup Group => LatticeApiMcpGroup.Telemetry;
 
     /// <inheritdoc />
-    public IReadOnlyList<McpServerTool> Tools { get; } = Array.Empty<McpServerTool>();
+    public IReadOnlyList<McpServerTool> Tools { get; }
+
+    private static McpServerTool Create(
+        IServiceProvider services,
+        Delegate handler,
+        string name,
+        string title,
+        string description)
+        => McpServerTool.Create(
+            handler,
+            new McpServerToolCreateOptions
+            {
+                Services = services,
+                Name = name,
+                Title = title,
+                Description = description,
+                ReadOnly = true,
+                Destructive = false,
+                UseStructuredContent = true,
+            });
 }

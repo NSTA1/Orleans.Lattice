@@ -113,6 +113,28 @@ public sealed class AddTelemetryToolsTests
     }
 
     [Test]
+    public void AddTelemetryTools_registers_the_metric_access_policy()
+    {
+        var services = new ServiceCollection();
+        services.AddTelemetryTools(o =>
+        {
+            ConfigureValid(o);
+            o.MetricAccess = LatticeTelemetryMetricAccessMode.DenyAllExceptAllowed;
+            o.AllowedMetrics.Add("lattice_wal_*");
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var policy = provider.GetRequiredService<TelemetryMetricAccessPolicy>();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(policy.IsReadAll, Is.False);
+            Assert.That(policy.IsAdmitted("lattice_wal_append_total"), Is.True);
+            Assert.That(policy.IsAdmitted("up"), Is.False);
+        });
+    }
+
+    [Test]
     public void AddTelemetryTools_rejects_a_null_service_collection()
         => Assert.Throws<ArgumentNullException>(
             () => ((IServiceCollection)null!).AddTelemetryTools(ConfigureValid));

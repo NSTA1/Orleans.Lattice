@@ -50,6 +50,12 @@ public static class LatticeMcpTelemetryServiceCollectionExtensions
             IValidateOptions<LatticeApiMcpTelemetryOptions>,
             LatticeApiMcpTelemetryOptionsValidator>());
 
+        // The metric-access policy is built once from the bound options (its
+        // wildcard patterns are precompiled), so a per-call admission check never
+        // recompiles a pattern.
+        services.TryAddSingleton(provider => new TelemetryMetricAccessPolicy(
+            provider.GetRequiredService<IOptions<LatticeApiMcpTelemetryOptions>>().Value));
+
         // Default backend proxy and its HTTP client. Guarded so a host may register
         // its own IPrometheusQueryClient first and have this call defer to it, and
         // so a second AddTelemetryTools call does not register a duplicate client.
