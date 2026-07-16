@@ -15,6 +15,13 @@ public sealed record AuthExplainQuery
     /// <summary>The subject to explain the decision for.</summary>
     [Id(0)] public required string SubjectId { get; init; }
 
+    /// <summary>
+    /// Whether <see cref="SubjectId"/> names a user or a group. Defaults to
+    /// <see cref="LatticeSubjectSelectorKind.User"/>, so an older client that
+    /// omits it is interpreted exactly as before.
+    /// </summary>
+    [Id(3)] public LatticeSubjectSelectorKind SubjectKind { get; init; } = LatticeSubjectSelectorKind.User;
+
     /// <summary>The operation to evaluate.</summary>
     [Id(1)] public LatticeOperation Operation { get; init; }
 

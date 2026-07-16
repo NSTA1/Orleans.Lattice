@@ -337,11 +337,11 @@ internal sealed class LatticeAuthApiGrpcService : LatticeAuthApiGrpcServiceBase
 
     /// <inheritdoc />
     public override Task<AuthExplanation> Explain(AuthExplainQuery request, ServerCallContext context)
-        => InvokeAsync(request, context, static (admin, req, ct) => admin.ExplainAsync(req.SubjectId, req.Operation, req.Scope, ct));
+        => InvokeAsync(request, context, static (admin, req, ct) => admin.ExplainAsync(req.SubjectId, req.Operation, req.Scope, req.SubjectKind, ct));
 
     /// <inheritdoc />
     public override Task<AuthEffectivePermissions> EffectivePermissions(AuthSubjectRef request, ServerCallContext context)
-        => InvokeAsync(request, context, static (admin, req, ct) => admin.EffectivePermissionsAsync(req.SubjectId, ct));
+        => InvokeAsync(request, context, static (admin, req, ct) => admin.EffectivePermissionsAsync(req.SubjectId, req.SubjectKind, ct));
 
     private async Task<TResponse> InvokeAsync<TRequest, TResponse>(
         TRequest request,

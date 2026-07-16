@@ -25,7 +25,7 @@ public sealed class AuthToolHandlersTests
     {
         var admin = Admin();
         var expected = new AuthExplanation { SubjectId = "alice", Scope = LatticeScope.Key("orders", "k1"), Allowed = true };
-        admin.ExplainAsync("alice", LatticeOperation.Read, Arg.Any<LatticeScope>(), Arg.Any<CancellationToken>())
+        admin.ExplainAsync("alice", LatticeOperation.Read, Arg.Any<LatticeScope>(), Arg.Any<LatticeSubjectSelectorKind>(), Arg.Any<CancellationToken>())
             .Returns(expected);
 
         var result = await AuthToolHandlers.ExplainAsync(
@@ -36,6 +36,7 @@ public sealed class AuthToolHandlersTests
             "alice",
             LatticeOperation.Read,
             Arg.Is<LatticeScope>(s => s.Kind == LatticeScopeKind.Key && s.TreeId == "orders" && s.KeyOrPrefix == "k1"),
+            Arg.Any<LatticeSubjectSelectorKind>(),
             Arg.Any<CancellationToken>());
     }
 
@@ -44,7 +45,7 @@ public sealed class AuthToolHandlersTests
     {
         var admin = Admin();
         var expected = new AuthEffectivePermissions { SubjectId = "alice" };
-        admin.EffectivePermissionsAsync("alice", Arg.Any<CancellationToken>()).Returns(expected);
+        admin.EffectivePermissionsAsync("alice", Arg.Any<LatticeSubjectSelectorKind>(), Arg.Any<CancellationToken>()).Returns(expected);
 
         var result = await AuthToolHandlers.EffectivePermissionsAsync(admin, "alice", CancellationToken.None);
 

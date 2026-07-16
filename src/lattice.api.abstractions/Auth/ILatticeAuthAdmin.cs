@@ -150,11 +150,20 @@ public interface ILatticeAuthAdmin
     /// <param name="subjectId">The subject to explain the decision for. Must not be <c>null</c> or empty.</param>
     /// <param name="operation">The operation to evaluate.</param>
     /// <param name="scope">The keyspace scope to evaluate (whole tree, a key, or a prefix). Must not be <c>null</c>.</param>
+    /// <param name="subjectKind">
+    /// Whether <paramref name="subjectId"/> names a user or a group. When
+    /// <see cref="LatticeSubjectSelectorKind.Group"/>, the decision is evaluated
+    /// for a principal that is a member of the named group (and its ancestor
+    /// groups), so <c>group</c>-scoped rules targeting it match exactly as they
+    /// would for a real member. Defaults to
+    /// <see cref="LatticeSubjectSelectorKind.User"/>.
+    /// </param>
     /// <param name="cancellationToken">Cancels the evaluation.</param>
     Task<AuthExplanation> ExplainAsync(
         string subjectId,
         LatticeOperation operation,
         LatticeScope scope,
+        LatticeSubjectSelectorKind subjectKind = LatticeSubjectSelectorKind.User,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -164,6 +173,15 @@ public interface ILatticeAuthAdmin
     /// computed from the live policy store.
     /// </summary>
     /// <param name="subjectId">The subject to resolve permissions for. Must not be <c>null</c> or empty.</param>
+    /// <param name="subjectKind">
+    /// Whether <paramref name="subjectId"/> names a user or a group. When
+    /// <see cref="LatticeSubjectSelectorKind.Group"/>, the resolved set is the
+    /// rules matching the named group (and its ancestor groups). Defaults to
+    /// <see cref="LatticeSubjectSelectorKind.User"/>.
+    /// </param>
     /// <param name="cancellationToken">Cancels the scan.</param>
-    Task<AuthEffectivePermissions> EffectivePermissionsAsync(string subjectId, CancellationToken cancellationToken = default);
+    Task<AuthEffectivePermissions> EffectivePermissionsAsync(
+        string subjectId,
+        LatticeSubjectSelectorKind subjectKind = LatticeSubjectSelectorKind.User,
+        CancellationToken cancellationToken = default);
 }

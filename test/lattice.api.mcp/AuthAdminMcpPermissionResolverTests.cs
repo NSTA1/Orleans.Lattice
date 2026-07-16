@@ -48,7 +48,7 @@ public sealed class AuthAdminMcpPermissionResolverTests
     private static ILatticeAuthAdmin AdminReturning(params LatticeAuthorizationRule[] rules)
     {
         var admin = Substitute.For<ILatticeAuthAdmin>();
-        admin.EffectivePermissionsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+        admin.EffectivePermissionsAsync(Arg.Any<string>(), Arg.Any<LatticeSubjectSelectorKind>(), Arg.Any<CancellationToken>())
             .Returns(new AuthEffectivePermissions { SubjectId = "alice", Rules = rules });
         return admin;
     }
@@ -177,14 +177,14 @@ public sealed class AuthAdminMcpPermissionResolverTests
         var access = await resolver.ResolveAsync(new LatticeCredential(string.Empty), CancellationToken.None);
 
         Assert.That(access.IsEmpty, Is.True);
-        await admin.DidNotReceive().EffectivePermissionsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await admin.DidNotReceive().EffectivePermissionsAsync(Arg.Any<string>(), Arg.Any<LatticeSubjectSelectorKind>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
     public async Task Introspection_failure_fails_closed()
     {
         var admin = Substitute.For<ILatticeAuthAdmin>();
-        admin.EffectivePermissionsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+        admin.EffectivePermissionsAsync(Arg.Any<string>(), Arg.Any<LatticeSubjectSelectorKind>(), Arg.Any<CancellationToken>())
             .Returns<Task<AuthEffectivePermissions>>(_ => throw new InvalidOperationException("boom"));
         var resolver = CreateResolver(admin);
 
@@ -204,7 +204,7 @@ public sealed class AuthAdminMcpPermissionResolverTests
             new LatticeCredential("the-token", principalId: "the-principal"),
             CancellationToken.None);
 
-        await admin.Received(1).EffectivePermissionsAsync("the-principal", Arg.Any<CancellationToken>());
+        await admin.Received(1).EffectivePermissionsAsync("the-principal", Arg.Any<LatticeSubjectSelectorKind>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -215,7 +215,7 @@ public sealed class AuthAdminMcpPermissionResolverTests
 
         await resolver.ResolveAsync(new LatticeCredential("the-token"), CancellationToken.None);
 
-        await admin.Received(1).EffectivePermissionsAsync("the-token", Arg.Any<CancellationToken>());
+        await admin.Received(1).EffectivePermissionsAsync("the-token", Arg.Any<LatticeSubjectSelectorKind>(), Arg.Any<CancellationToken>());
     }
 
     [Test]

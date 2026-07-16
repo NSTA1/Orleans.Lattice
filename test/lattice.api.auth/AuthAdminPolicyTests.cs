@@ -1,4 +1,5 @@
 using Orleans.Lattice.Auth;
+using Orleans.Lattice.Membership;
 
 namespace Orleans.Lattice.Api.Auth.Tests;
 
@@ -44,6 +45,10 @@ public sealed class AuthAdminPolicyTests
     private static LatticeAuthorizationRule AllowUserKey(
         string ruleId, string subject, string treeId, string key, LatticeOperation ops) =>
         new(ruleId, LatticeSubjectSelector.User(subject), LatticeScope.Key(treeId, key), ops, LatticeEffect.Allow);
+
+    private static LatticeAuthorizationRule AllowGroupTree(
+        string ruleId, string group, string treeId, LatticeOperation ops) =>
+        new(ruleId, LatticeSubjectSelector.Group(group), LatticeScope.Tree(treeId), ops, LatticeEffect.Allow);
 
     /// <summary>
     /// Resolves a named subject exactly as the facade does (system-origin group
@@ -193,6 +198,100 @@ public sealed class AuthAdminPolicyTests
                 Assert.That(afterRemoval.Rules.Select(r => r.RuleId), Does.Contain("eff-2"));
             });
         }
+    }
+
+    [Test]
+    public async Task explain_evaluates_a_group_subject_when_kind_is_group()
+    {
+        const string tree = "policy-group-explain";
+        const string group = "explain-group-solo";
+        var scope = LatticeScope.Tree(tree);
+
+        using (AsAdmin())
+        {
+            await _fixture.Admin.PutRuleAsync(AllowGroupTree("r-group-explain", group, tree, LatticeOperation.Read));
+        }
+
+        await _fixture.RebuildAsync();
+
+        AuthExplanation asGroup;
+        AuthExplanation asUser;
+        using (AsAdmin())
+        {
+            // Explaining the id as a group subject: the group-scoped Allow applies,
+            // flipping the fail-closed default.
+            asGroup = await _fixture.Admin.ExplainAsync(
+                group, LatticeOperation.Read, scope, LatticeSubjectSelectorKind.Group);
+
+            // Explaining the same id as a user subject: that user is not a member of
+            // the group, so nothing matches and the default Deny stands. Before the
+            // fix, the group kind was ignored and this (wrong) verdict was returned
+            // for both.
+            asUser = await _fixture.Admin.ExplainAsync(
+                group, LatticeOperation.Read, scope, LatticeSubjectSelectorKind.User);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(asGroup.Allowed, Is.True, "a group subject must match a group-scoped rule targeting it");
+            Assert.That(asGroup.MatchedRules.Select(r => r.RuleId), Does.Contain("r-group-explain"));
+
+            Assert.That(asUser.Allowed, Is.False, "a user named after the group is not a member of it");
+            Assert.That(asUser.MatchedRules.Select(r => r.RuleId), Does.Not.Contain("r-group-explain"));
+        });
+    }
+
+    [Test]
+    public async Task effective_permissions_resolves_a_group_subject_when_kind_is_group()
+    {
+        const string tree = "policy-group-effective";
+        const string group = "effective-group-solo";
+
+        using (AsAdmin())
+        {
+            await _fixture.Admin.PutRuleAsync(AllowGroupTree("r-group-eff", group, tree, LatticeOperation.Read));
+
+            var asGroup = await _fixture.Admin.EffectivePermissionsAsync(group, LatticeSubjectSelectorKind.Group);
+            var asUser = await _fixture.Admin.EffectivePermissionsAsync(group, LatticeSubjectSelectorKind.User);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(asGroup.Rules.Select(r => r.RuleId), Does.Contain("r-group-eff"));
+                Assert.That(asUser.Rules.Select(r => r.RuleId), Does.Not.Contain("r-group-eff"));
+            });
+        }
+    }
+
+    [Test]
+    public async Task explain_group_subject_includes_ancestor_group_rules()
+    {
+        const string tree = "policy-group-nested";
+        const string parent = "explain-parent-group";
+        const string child = "explain-child-group";
+        var scope = LatticeScope.Tree(tree);
+
+        using (AsAdmin())
+        {
+            // The child group is a member of the parent group; the Allow rule targets
+            // only the parent, so it can reach the child solely via the group closure.
+            await _fixture.Admin.AddMemberAsync(parent, child, MembershipMemberKind.Group);
+            await _fixture.Admin.PutRuleAsync(AllowGroupTree("r-group-parent", parent, tree, LatticeOperation.Read));
+        }
+
+        await _fixture.RebuildAsync();
+
+        AuthExplanation asGroup;
+        using (AsAdmin())
+        {
+            asGroup = await _fixture.Admin.ExplainAsync(
+                child, LatticeOperation.Read, scope, LatticeSubjectSelectorKind.Group);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(asGroup.Allowed, Is.True, "an ancestor group's rule must apply to the nested group subject");
+            Assert.That(asGroup.MatchedRules.Select(r => r.RuleId), Does.Contain("r-group-parent"));
+        });
     }
 
     [Test]

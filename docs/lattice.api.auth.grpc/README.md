@@ -102,3 +102,5 @@ var explanation = await client.ExplainAsync(new AuthExplainQuery
 ```
 
 The `serializerProvider` must have Orleans serialization registered (`AddSerializer()`) so the client and server wire marshallers match exactly. Transport concerns (address, TLS, deadlines, retries, call credentials) are configured on the channel the caller supplies. A call the server rejects arrives as a `PermissionDenied` `RpcException`.
+
+`AuthExplainQuery.SubjectKind` (and `AuthSubjectRef.SubjectKind`) select whether `SubjectId` names a user or a group; both default to `LatticeSubjectSelectorKind.User`, so existing messages deserialize unchanged. Set it to `LatticeSubjectSelectorKind.Group` to explain (or resolve the effective permissions of) a group subject - the decision is then evaluated for a principal that is a member of that group and its ancestors, so `group`-scoped rules match exactly as they would for a real member.

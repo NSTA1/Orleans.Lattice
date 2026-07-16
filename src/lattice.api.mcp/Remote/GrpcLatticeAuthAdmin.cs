@@ -124,12 +124,18 @@ internal sealed class GrpcLatticeAuthAdmin : ILatticeAuthAdmin
         string subjectId,
         LatticeOperation operation,
         LatticeScope scope,
+        LatticeSubjectSelectorKind subjectKind = LatticeSubjectSelectorKind.User,
         CancellationToken cancellationToken = default)
         => _client.ExplainAsync(
-            new AuthExplainQuery { SubjectId = subjectId, Operation = operation, Scope = scope },
+            new AuthExplainQuery { SubjectId = subjectId, Operation = operation, Scope = scope, SubjectKind = subjectKind },
             cancellationToken);
 
     /// <inheritdoc />
-    public Task<AuthEffectivePermissions> EffectivePermissionsAsync(string subjectId, CancellationToken cancellationToken = default)
-        => _client.EffectivePermissionsAsync(new AuthSubjectRef { SubjectId = subjectId }, cancellationToken);
+    public Task<AuthEffectivePermissions> EffectivePermissionsAsync(
+        string subjectId,
+        LatticeSubjectSelectorKind subjectKind = LatticeSubjectSelectorKind.User,
+        CancellationToken cancellationToken = default)
+        => _client.EffectivePermissionsAsync(
+            new AuthSubjectRef { SubjectId = subjectId, SubjectKind = subjectKind },
+            cancellationToken);
 }

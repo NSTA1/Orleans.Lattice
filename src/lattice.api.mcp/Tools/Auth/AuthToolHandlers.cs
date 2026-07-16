@@ -38,7 +38,7 @@ internal static class AuthToolHandlers
     {
         ArgumentNullException.ThrowIfNull(admin);
         var scope = new LatticeScope(scopeKind, treeId, keyOrPrefix);
-        return admin.ExplainAsync(subjectId, operation, scope, cancellationToken);
+        return admin.ExplainAsync(subjectId, operation, scope, cancellationToken: cancellationToken);
     }
 
     /// <summary>Returns the authorization rules currently in effect for a subject.</summary>
@@ -48,7 +48,7 @@ internal static class AuthToolHandlers
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(admin);
-        return admin.EffectivePermissionsAsync(subjectId, cancellationToken);
+        return admin.EffectivePermissionsAsync(subjectId, cancellationToken: cancellationToken);
     }
 
     /// <summary>Reads a single user record, or <c>null</c> when no such user exists.</summary>
