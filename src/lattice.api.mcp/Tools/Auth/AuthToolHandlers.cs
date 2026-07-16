@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Membership;
@@ -34,21 +35,25 @@ internal static class AuthToolHandlers
         LatticeScopeKind scopeKind,
         string treeId,
         string? keyOrPrefix = null,
+        [Description("Whether subjectId names a user or a group. Set to Group to explain a group subject (evaluated as a member of that group and its ancestors); defaults to User.")]
+        LatticeSubjectSelectorKind subjectKind = LatticeSubjectSelectorKind.User,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(admin);
         var scope = new LatticeScope(scopeKind, treeId, keyOrPrefix);
-        return admin.ExplainAsync(subjectId, operation, scope, cancellationToken: cancellationToken);
+        return admin.ExplainAsync(subjectId, operation, scope, subjectKind, cancellationToken);
     }
 
     /// <summary>Returns the authorization rules currently in effect for a subject.</summary>
     public static Task<AuthEffectivePermissions> EffectivePermissionsAsync(
         ILatticeAuthAdmin admin,
         string subjectId,
+        [Description("Whether subjectId names a user or a group. Set to Group to resolve a group subject's rules (the group and its ancestors); defaults to User.")]
+        LatticeSubjectSelectorKind subjectKind = LatticeSubjectSelectorKind.User,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(admin);
-        return admin.EffectivePermissionsAsync(subjectId, cancellationToken: cancellationToken);
+        return admin.EffectivePermissionsAsync(subjectId, subjectKind, cancellationToken);
     }
 
     /// <summary>Reads a single user record, or <c>null</c> when no such user exists.</summary>

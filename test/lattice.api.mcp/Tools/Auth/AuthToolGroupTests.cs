@@ -146,6 +146,8 @@ public sealed class AuthToolGroupTests
         Assert.Multiple(() =>
         {
             Assert.That(SchemaHasProperty(ServerTool(group, "lattice_auth_explain"), "subjectId"), Is.True);
+            Assert.That(SchemaHasProperty(ServerTool(group, "lattice_auth_explain"), "subjectKind"), Is.True);
+            Assert.That(SchemaHasProperty(ServerTool(group, "lattice_auth_effective_permissions"), "subjectKind"), Is.True);
             Assert.That(SchemaHasProperty(ServerTool(group, "lattice_auth_upsert_user"), "userId"), Is.True);
             Assert.That(SchemaHasProperty(ServerTool(group, "lattice_auth_put_rule"), "ruleId"), Is.True);
         });

@@ -108,6 +108,8 @@ Authorization administration over `ILatticeAuthAdmin`. Registered by `AddAuthToo
 | `lattice_auth_put_rule` | admin | Create or replace a rule. |
 | `lattice_auth_remove_rule` | admin | Remove a rule. |
 
+`lattice_auth_explain` and `lattice_auth_effective_permissions` take an optional `subjectKind` argument (`User` by default). Set it to `Group` when `subjectId` names a group, so the tool resolves the group's rule closure instead of treating the id as a user; otherwise a group subject matches no rules and the decision falls through to the tree's default effect.
+
 ## Next
 
 - [Security](security.md) - how tools are gated and how the caller credential flows.
