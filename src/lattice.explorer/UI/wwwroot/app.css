@@ -2487,6 +2487,11 @@ code, .explorer-mono {
     padding: 0.45rem 0.55rem;
     border: 1px solid transparent;
     border-radius: var(--radius-sm);
+    cursor: pointer;
+}
+
+.explorer-access-itemrow:hover {
+    background: var(--bg-elevated);
 }
 
 .explorer-access-itemrow.is-selected {

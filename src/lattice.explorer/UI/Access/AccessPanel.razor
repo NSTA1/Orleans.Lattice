@@ -150,7 +150,8 @@
                         @foreach (var user in _users)
                         {
                             var id = user.UserId;
-                            <li class="explorer-access-itemrow @(id == _selectedUserId ? "is-selected" : null)">
+                            <li class="explorer-access-itemrow @(id == _selectedUserId ? "is-selected" : null)"
+                                @onclick="@(() => SelectUser(user))">
                                 <span class="explorer-access-itemlabel">
                                     <span class="explorer-nav-item-id">@id</span>
                                     @if (!string.IsNullOrEmpty(user.DisplayName))
@@ -159,7 +160,7 @@
                                     }
                                 </span>
                                 <button type="button" class="explorer-btn explorer-access-edit"
-                                        disabled="@(_busy || !_allowed)" @onclick="@(() => EditUser(user))">Edit</button>
+                                        disabled="@(_busy || !_allowed)" @onclick="@(() => EditUser(user))" @onclick:stopPropagation="true">Edit</button>
                             </li>
                         }
                     </ul>
@@ -217,7 +218,8 @@
                         @foreach (var group in _groups)
                         {
                             var id = group.GroupId;
-                            <li class="explorer-access-itemrow @(id == _selectedGroupId ? "is-selected" : null)">
+                            <li class="explorer-access-itemrow @(id == _selectedGroupId ? "is-selected" : null)"
+                                @onclick="@(() => SelectGroupAsync(group))">
                                 <span class="explorer-access-itemlabel">
                                     <span class="explorer-nav-item-id">@id</span>
                                     @if (!string.IsNullOrEmpty(group.DisplayName))
@@ -226,7 +228,7 @@
                                     }
                                 </span>
                                 <button type="button" class="explorer-btn explorer-access-edit"
-                                        disabled="@(_busy || !_allowed)" @onclick="@(() => EditGroupAsync(group))">Edit</button>
+                                        disabled="@(_busy || !_allowed)" @onclick="@(() => EditGroupAsync(group))" @onclick:stopPropagation="true">Edit</button>
                             </li>
                         }
                     </ul>
