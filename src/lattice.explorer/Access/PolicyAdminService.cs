@@ -103,13 +103,13 @@ public sealed class PolicyAdminService(IAuthAdminClient client) : IPolicyAdminSe
     }
 
     /// <inheritdoc />
-    public async Task<ExplainView> ExplainAsync(string subjectId, LatticeOperation operation, LatticeScope scope, CancellationToken cancellationToken = default)
+    public async Task<ExplainView> ExplainAsync(string subjectId, LatticeOperation operation, LatticeScope scope, LatticeSubjectSelectorKind subjectKind = LatticeSubjectSelectorKind.User, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(subjectId);
         ArgumentNullException.ThrowIfNull(scope);
         try
         {
-            var explanation = await _client.ExplainAsync(subjectId, operation, scope, cancellationToken).ConfigureAwait(false);
+            var explanation = await _client.ExplainAsync(subjectId, operation, scope, subjectKind, cancellationToken).ConfigureAwait(false);
             return new ExplainView { Status = AccessOperationStatus.Succeeded, Explanation = explanation };
         }
         catch (LatticeAuthorizationDeniedException ex)

@@ -42,6 +42,7 @@ internal sealed class FakeAuthAdminClient : IAuthAdminClient
     public string? LastExplainSubjectId { get; private set; }
     public LatticeOperation? LastExplainOperation { get; private set; }
     public LatticeScope? LastExplainScope { get; private set; }
+    public LatticeSubjectSelectorKind? LastExplainSubjectKind { get; private set; }
 
     public Task<AuthUserPage> ListUsersAsync(AuthPageRequest request, CancellationToken cancellationToken = default)
     {
@@ -208,11 +209,13 @@ internal sealed class FakeAuthAdminClient : IAuthAdminClient
         string subjectId,
         LatticeOperation operation,
         LatticeScope scope,
+        LatticeSubjectSelectorKind subjectKind = LatticeSubjectSelectorKind.User,
         CancellationToken cancellationToken = default)
     {
         LastExplainSubjectId = subjectId;
         LastExplainOperation = operation;
         LastExplainScope = scope;
+        LastExplainSubjectKind = subjectKind;
         if (ExplainThrows is not null)
         {
             throw ExplainThrows;

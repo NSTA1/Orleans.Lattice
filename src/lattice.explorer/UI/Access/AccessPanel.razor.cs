@@ -818,7 +818,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
             _effective = null;
             _effectiveRankedRules = Array.Empty<RankedRule>();
             var scope = BuildScope(_explainScopeKind, _selectedTreeId!.Trim(), _explainScopeKeyOrPrefix);
-            var view = await Policy.ExplainAsync(_explainSubjectId.Trim(), _explainOperation, scope);
+            var view = await Policy.ExplainAsync(_explainSubjectId.Trim(), _explainOperation, scope, _explainSubjectKind);
             if (view.IsSuccess && view.Explanation is not null)
             {
                 _explanation = view.Explanation;

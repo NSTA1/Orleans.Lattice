@@ -54,8 +54,9 @@ public interface IPolicyAdminService
     /// <param name="subjectId">The subject to explain the decision for. Must not be <see langword="null"/> or empty.</param>
     /// <param name="operation">The operation to evaluate.</param>
     /// <param name="scope">The keyspace scope to evaluate. Must not be <see langword="null"/>.</param>
+    /// <param name="subjectKind">Whether <paramref name="subjectId"/> names a user or a group. Defaults to <see cref="LatticeSubjectSelectorKind.User"/>.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    Task<ExplainView> ExplainAsync(string subjectId, LatticeOperation operation, LatticeScope scope, CancellationToken cancellationToken = default);
+    Task<ExplainView> ExplainAsync(string subjectId, LatticeOperation operation, LatticeScope scope, LatticeSubjectSelectorKind subjectKind = LatticeSubjectSelectorKind.User, CancellationToken cancellationToken = default);
 
     /// <summary>Returns the authorization rules currently in effect for <paramref name="subjectId"/>.</summary>
     /// <param name="subjectId">The subject to resolve permissions for. Must not be <see langword="null"/> or empty.</param>

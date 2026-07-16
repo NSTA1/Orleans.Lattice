@@ -205,11 +205,12 @@ public sealed class GrpcAuthAdminClient : IAuthAdminClient, IDisposable
         string subjectId,
         LatticeOperation operation,
         LatticeScope scope,
+        LatticeSubjectSelectorKind subjectKind = LatticeSubjectSelectorKind.User,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(subjectId);
         ArgumentNullException.ThrowIfNull(scope);
-        var query = new AuthExplainQuery { SubjectId = subjectId, Operation = operation, Scope = scope };
+        var query = new AuthExplainQuery { SubjectId = subjectId, Operation = operation, Scope = scope, SubjectKind = subjectKind };
         return InvokeAsync(client => client.ExplainAsync(query, cancellationToken));
     }
 
