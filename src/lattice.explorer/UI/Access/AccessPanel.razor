@@ -333,15 +333,10 @@
                 </label>
                 <label class="explorer-access-field">
                     <span>Subject</span>
-                    <span class="explorer-access-inline">
-                        <select value="@_ruleSubjectKind" disabled="@(_busy || !_allowed)"
-                                @onchange="e => _ruleSubjectKind = Enum.Parse<LatticeSubjectSelectorKind>(e.Value?.ToString() ?? nameof(LatticeSubjectSelectorKind.User))">
-                            <option value="@nameof(LatticeSubjectSelectorKind.User)">User</option>
-                            <option value="@nameof(LatticeSubjectSelectorKind.Group)">Group</option>
-                        </select>
-                        <input type="text" value="@_ruleSubjectId" disabled="@(_busy || !_allowed)"
-                               @oninput="e => _ruleSubjectId = e.Value?.ToString() ?? string.Empty" placeholder="subject id" />
-                    </span>
+                    <SubjectPicker Users="_users" Groups="_groups"
+                                   @bind-Kind="_ruleSubjectKind"
+                                   @bind-SubjectId="_ruleSubjectId"
+                                   Disabled="@(_busy || !_allowed)" />
                 </label>
                 <label class="explorer-access-field">
                     <span>Tree</span>
@@ -410,9 +405,11 @@
                     <div class="explorer-access-formcol">
                         <h3 class="explorer-access-title">Explain a decision</h3>
                 <label class="explorer-access-field">
-                    <span>Subject id</span>
-                    <input type="text" value="@_explainSubjectId" disabled="@(_busy || !_allowed)"
-                           @oninput="e => _explainSubjectId = e.Value?.ToString() ?? string.Empty" placeholder="user or group id" />
+                    <span>Subject</span>
+                    <SubjectPicker Users="_users" Groups="_groups"
+                                   @bind-Kind="_explainSubjectKind"
+                                   @bind-SubjectId="_explainSubjectId"
+                                   Disabled="@(_busy || !_allowed)" />
                 </label>
                 <label class="explorer-access-field">
                     <span>Operation</span>

@@ -2510,6 +2510,11 @@ code, .explorer-mono {
     min-width: 0;
 }
 
+.explorer-access-inline > .explorer-access-subject {
+    flex: 1;
+    min-width: 0;
+}
+
 .explorer-access-actions {
     display: flex;
     gap: 0.4rem;

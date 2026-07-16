@@ -71,6 +71,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
     private LatticeEffect _ruleEffect = LatticeEffect.Allow;
 
     // ----- Explain / Effective -----
+    private LatticeSubjectSelectorKind _explainSubjectKind = LatticeSubjectSelectorKind.User;
     private string _explainSubjectId = string.Empty;
     private LatticeOperation _explainOperation = LatticeOperation.Read;
     private LatticeScopeKind _explainScopeKind = LatticeScopeKind.Tree;
@@ -180,7 +181,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _selectedTreeId = treeId;
     }
 
-    private void SetTab(AccessTab tab)
+    private async Task SetTab(AccessTab tab)
     {
         if (_tab == tab)
         {
@@ -189,24 +190,74 @@ public partial class AccessPanel : ComponentBase, IDisposable
 
         _tab = tab;
         _lastResult = null;
+
+        // Load the newly activated tab's data if it has not been loaded yet, so the
+        // list (and, for the tree-scoped tabs, the subject drop-down) is populated
+        // without requiring a manual Refresh.
+        await LoadForTabAsync(force: false);
     }
 
     private async Task ReloadAsync()
     {
         _lastResult = null;
+        await LoadForTabAsync(force: true);
+    }
+
+    /// <summary>
+    /// Loads the data the active tab needs. The Policies and Explain tabs also load
+    /// the users and groups so the shared subject drop-down is populated. When
+    /// <paramref name="force"/> is false the membership lists are only loaded if
+    /// still empty, so switching tabs does not clobber data already in view.
+    /// </summary>
+    private async Task LoadForTabAsync(bool force)
+    {
         switch (_tab)
         {
             case AccessTab.Users:
-                await LoadUsersAsync(reset: true);
+                if (force || _users.Count == 0)
+                {
+                    await LoadUsersAsync(reset: true);
+                }
+
                 break;
             case AccessTab.Groups:
-                await LoadGroupsAsync(reset: true);
+                if (force || _groups.Count == 0)
+                {
+                    await LoadGroupsAsync(reset: true);
+                }
+
                 break;
             case AccessTab.Policies:
-                await LoadRulesAsync(reset: true);
+                if (force || _rules.Count == 0)
+                {
+                    await LoadRulesAsync(reset: true);
+                }
+
+                await LoadSubjectListsAsync(force);
+                break;
+            case AccessTab.Explain:
+                await LoadSubjectListsAsync(force);
                 break;
             default:
                 break;
+        }
+    }
+
+    /// <summary>
+    /// Loads the users and groups that back the shared subject drop-down on the
+    /// Policies and Explain tabs. Uses the guarded loaders, so it is safe to call
+    /// when not already busy.
+    /// </summary>
+    private async Task LoadSubjectListsAsync(bool force)
+    {
+        if (force || _users.Count == 0)
+        {
+            await LoadUsersAsync(reset: true);
+        }
+
+        if (force || _groups.Count == 0)
+        {
+            await LoadGroupsAsync(reset: true);
         }
     }
 

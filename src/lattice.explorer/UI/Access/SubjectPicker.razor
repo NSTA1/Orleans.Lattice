@@ -1,0 +1,140 @@
+@using Orleans.Lattice.Auth
+@using Orleans.Lattice.Api.Auth
+
+@*
+    Shared subject selector for the Access area. Presents a User/Group kind toggle
+    and a sorted drop-down of the existing users or groups (rather than a free-text
+    id box), so both the Policies rule form and the Explain view pick a real subject
+    the same way. Switching the kind clears the previously chosen id. An already
+    selected id that is not present in the loaded page (for example when editing a
+    rule whose subject is on a later page) is kept visible as a leading option.
+*@
+
+<span class="explorer-access-inline explorer-access-subjectpicker">
+    <select class="explorer-access-subject-kind" value="@Kind" disabled="@Disabled"
+            @onchange="OnKindChangedAsync">
+        <option value="@nameof(LatticeSubjectSelectorKind.User)">User</option>
+        <option value="@nameof(LatticeSubjectSelectorKind.Group)">Group</option>
+    </select>
+    <select class="explorer-access-subject" value="@SubjectId"
+            disabled="@(Disabled || _options.Count == 0)" @onchange="OnSubjectChangedAsync">
+        <option value="">@(_options.Count == 0 ? EmptyLabel : PlaceholderLabel)</option>
+        @foreach (var option in _options)
+        {
+            <option value="@option.Value">@option.Label</option>
+        }
+    </select>
+</span>
+
+@code {
+    private const string PlaceholderLabel = "Select a subject...";
+    private const string EmptyLabel = "No subjects available";
+
+    private readonly List<SubjectOption> _options = new();
+
+    /// <summary>The users available to select when the kind is <see cref="LatticeSubjectSelectorKind.User"/>.</summary>
+    [Parameter]
+    public IReadOnlyList<AuthUser> Users { get; set; } = Array.Empty<AuthUser>();
+
+    /// <summary>The groups available to select when the kind is <see cref="LatticeSubjectSelectorKind.Group"/>.</summary>
+    [Parameter]
+    public IReadOnlyList<AuthGroup> Groups { get; set; } = Array.Empty<AuthGroup>();
+
+    /// <summary>The selected subject kind (user or group).</summary>
+    [Parameter]
+    public LatticeSubjectSelectorKind Kind { get; set; }
+
+    /// <summary>Raised when the subject kind changes (supports <c>@bind-Kind</c>).</summary>
+    [Parameter]
+    public EventCallback<LatticeSubjectSelectorKind> KindChanged { get; set; }
+
+    /// <summary>The selected subject id.</summary>
+    [Parameter]
+    public string SubjectId { get; set; } = string.Empty;
+
+    /// <summary>Raised when the selected subject id changes (supports <c>@bind-SubjectId</c>).</summary>
+    [Parameter]
+    public EventCallback<string> SubjectIdChanged { get; set; }
+
+    /// <summary>Renders the selects disabled when set.</summary>
+    [Parameter]
+    public bool Disabled { get; set; }
+
+    /// <inheritdoc />
+    protected override void OnParametersSet() => RebuildOptions();
+
+    private void RebuildOptions()
+    {
+        _options.Clear();
+        if (Kind == LatticeSubjectSelectorKind.Group)
+        {
+            foreach (var group in Groups)
+            {
+                _options.Add(new SubjectOption(group.GroupId, Label(group.GroupId, group.DisplayName)));
+            }
+        }
+        else
+        {
+            foreach (var user in Users)
+            {
+                _options.Add(new SubjectOption(user.UserId, Label(user.UserId, user.DisplayName)));
+            }
+        }
+
+        _options.Sort(static (a, b) => string.CompareOrdinal(a.Value, b.Value));
+
+        if (!string.IsNullOrEmpty(SubjectId) && !ContainsValue(SubjectId))
+        {
+            _options.Insert(0, new SubjectOption(SubjectId, SubjectId));
+        }
+    }
+
+    private bool ContainsValue(string value)
+    {
+        foreach (var option in _options)
+        {
+            if (string.Equals(option.Value, value, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string Label(string id, string? displayName) =>
+        string.IsNullOrWhiteSpace(displayName) ? id : $"{id} ({displayName})";
+
+    private async Task OnKindChangedAsync(ChangeEventArgs e)
+    {
+        var kind = Enum.Parse<LatticeSubjectSelectorKind>(e.Value?.ToString() ?? nameof(LatticeSubjectSelectorKind.User));
+        if (kind == Kind)
+        {
+            return;
+        }
+
+        Kind = kind;
+        await KindChanged.InvokeAsync(kind);
+
+        // Switching the kind invalidates the previously chosen id.
+        if (!string.IsNullOrEmpty(SubjectId))
+        {
+            SubjectId = string.Empty;
+            await SubjectIdChanged.InvokeAsync(string.Empty);
+        }
+    }
+
+    private async Task OnSubjectChangedAsync(ChangeEventArgs e)
+    {
+        var id = e.Value?.ToString() ?? string.Empty;
+        if (string.Equals(id, SubjectId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        SubjectId = id;
+        await SubjectIdChanged.InvokeAsync(id);
+    }
+
+    private readonly record struct SubjectOption(string Value, string Label);
+}
