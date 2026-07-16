@@ -43,6 +43,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
     private string? _usersNextToken;
     private string? _selectedUserId;
     private bool _editingExistingUser;
+    private bool _userFormOpen;
     private string _userIdInput = string.Empty;
     private string _userDisplayInput = string.Empty;
 
@@ -51,6 +52,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
     private string? _groupsNextToken;
     private string? _selectedGroupId;
     private bool _editingExistingGroup;
+    private bool _groupFormOpen;
     private string _groupIdInput = string.Empty;
     private string _groupDisplayInput = string.Empty;
     private readonly List<string> _directMembers = new();
@@ -73,6 +75,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
     private readonly List<LatticeAuthorizationRule> _rules = new();
     private IReadOnlyList<RankedRule> _rankedRules = Array.Empty<RankedRule>();
     private string? _rulesNextToken;
+    private bool _ruleFormOpen;
     private bool _editingExistingRule;
     private string _ruleIdInput = string.Empty;
     private LatticeSubjectSelectorKind _ruleSubjectKind = LatticeSubjectSelectorKind.User;
@@ -203,6 +206,12 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _tab = tab;
         _lastResult = null;
 
+        // Leaving a tab closes any open create/edit form so the user always returns
+        // to the list-first view with an explicit call to action.
+        _userFormOpen = false;
+        _groupFormOpen = false;
+        _ruleFormOpen = false;
+
         // Load the newly activated tab's data if it has not been loaded yet, so the
         // list (and, for the tree-scoped tabs, the subject drop-down) is populated
         // without requiring a manual Refresh.
@@ -328,6 +337,27 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _userDisplayInput = user.DisplayName ?? string.Empty;
     }
 
+    // Opens the empty create form (the "New user" call to action).
+    private void NewUser()
+    {
+        ResetUserForm();
+        _userFormOpen = true;
+    }
+
+    // Opens the form pre-filled to edit an existing user.
+    private void EditUser(AuthUser user)
+    {
+        SelectUser(user);
+        _userFormOpen = true;
+    }
+
+    // Closes the form without saving.
+    private void CancelUserForm()
+    {
+        ResetUserForm();
+        _userFormOpen = false;
+    }
+
     private void ResetUserForm()
     {
         _selectedUserId = null;
@@ -380,6 +410,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
             if (_lastResult.IsSuccess)
             {
                 ResetUserForm();
+                _userFormOpen = false;
                 await LoadUsersCoreAsync(reset: true);
             }
         }
@@ -454,6 +485,27 @@ public partial class AccessPanel : ComponentBase, IDisposable
         }
 
         await LoadDirectMembersAsync();
+    }
+
+    // Opens the empty create form (the "New group" call to action).
+    private void NewGroup()
+    {
+        ResetGroupForm();
+        _groupFormOpen = true;
+    }
+
+    // Opens the form pre-filled to edit an existing group (and load its members).
+    private async Task EditGroupAsync(AuthGroup group)
+    {
+        await SelectGroupAsync(group);
+        _groupFormOpen = true;
+    }
+
+    // Closes the form without saving.
+    private void CancelGroupForm()
+    {
+        ResetGroupForm();
+        _groupFormOpen = false;
     }
 
     private void ResetGroupForm()
@@ -531,6 +583,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
             if (_lastResult.IsSuccess)
             {
                 ResetGroupForm();
+                _groupFormOpen = false;
                 await LoadGroupsCoreAsync(reset: true);
             }
         }
@@ -635,6 +688,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
 
     private void EditRule(LatticeAuthorizationRule rule)
     {
+        _ruleFormOpen = true;
         _editingExistingRule = true;
         _ruleIdInput = rule.RuleId;
         _ruleSubjectKind = rule.Subject.Kind;
@@ -663,6 +717,18 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _ruleScopeKeyOrPrefix = string.Empty;
         _ruleOperations.Clear();
         _ruleEffect = LatticeEffect.Allow;
+    }
+
+    private void NewRule()
+    {
+        ResetRuleForm();
+        _ruleFormOpen = true;
+    }
+
+    private void CancelRuleForm()
+    {
+        ResetRuleForm();
+        _ruleFormOpen = false;
     }
 
     private void ToggleOperation(LatticeOperation flag, bool enabled)
@@ -727,6 +793,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
             if (_lastResult.IsSuccess)
             {
                 ResetRuleForm();
+                _ruleFormOpen = false;
                 await LoadRulesCoreAsync(reset: true);
             }
         }

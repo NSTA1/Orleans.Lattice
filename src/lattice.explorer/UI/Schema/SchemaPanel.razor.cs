@@ -62,6 +62,7 @@ public partial class SchemaPanel : ComponentBase, IDisposable
     // ----- Policy -----
     private SchemaReadView<LatticeSchemaPolicy>? _policyView;
     private readonly List<SchemaPolicyRuleRow> _policyRuleRows = new();
+    private bool _policyFormOpen;
     private bool _draftStrictIngest;
     private readonly List<LatticeSchemaRule> _draftRules = new();
     private readonly List<string> _draftRuleLabels = new();
@@ -74,6 +75,7 @@ public partial class SchemaPanel : ComponentBase, IDisposable
     // ----- Versions -----
     private SchemaReadView<LatticeSchemaVersionConfig>? _versionView;
     private SchemaReadView<LatticeSchemaRemediationReport>? _remediationView;
+    private bool _versionFormOpen;
     private uint _setSchemaId;
     private uint _setTargetVersion = 1;
     private bool _setStrictIngest;
@@ -187,6 +189,8 @@ public partial class SchemaPanel : ComponentBase, IDisposable
         }
 
         _treeId = treeId;
+        _policyFormOpen = false;
+        _versionFormOpen = false;
         await LoadAsync();
     }
 
@@ -199,6 +203,11 @@ public partial class SchemaPanel : ComponentBase, IDisposable
 
         _tab = tab;
         _lastResult = null;
+
+        // Leaving a tab closes any open editor so the user returns to the
+        // read-first view with an explicit call to action.
+        _policyFormOpen = false;
+        _versionFormOpen = false;
 
         // A tree is already selected/probed, so load the newly activated tab's
         // views for it immediately - the tab strip is the only navigation now that
@@ -350,6 +359,7 @@ public partial class SchemaPanel : ComponentBase, IDisposable
             _lastResult = await PolicyService.SetPolicyAsync(_treeId, policy);
             if (_lastResult.IsSuccess)
             {
+                _policyFormOpen = false;
                 await LoadPolicyAsync();
             }
         }
@@ -372,6 +382,7 @@ public partial class SchemaPanel : ComponentBase, IDisposable
             _lastResult = await PolicyService.ClearPolicyAsync(_treeId);
             if (_lastResult.IsSuccess)
             {
+                _policyFormOpen = false;
                 await LoadPolicyAsync();
             }
         }
@@ -379,6 +390,39 @@ public partial class SchemaPanel : ComponentBase, IDisposable
         {
             _busy = false;
         }
+    }
+
+    /// <summary>
+    /// Opens the policy editor, seeding the draft from the tree's current policy so
+    /// an edit starts from the applied state rather than an empty form (which would
+    /// otherwise silently replace the whole policy on Set).
+    /// </summary>
+    private void EditPolicy()
+    {
+        _draftRules.Clear();
+        _draftRuleLabels.Clear();
+        var policy = _policyView?.Value;
+        _draftStrictIngest = policy?.StrictIngest ?? false;
+        if (policy is not null)
+        {
+            foreach (var rule in policy.Rules)
+            {
+                _draftRules.Add(rule);
+                _draftRuleLabels.Add(DescribeRule(rule));
+            }
+        }
+
+        _draftRuleKind = SchemaRuleDraftKind.Utf8;
+        _draftRuleMaxLength = 0;
+        _draftRuleRegex = string.Empty;
+        _draftRuleMemberPath = string.Empty;
+        _draftRuleDescription = string.Empty;
+        _policyFormOpen = true;
+    }
+
+    private void CancelPolicyForm()
+    {
+        _policyFormOpen = false;
     }
 
     // ----- Versions -----
@@ -407,6 +451,7 @@ public partial class SchemaPanel : ComponentBase, IDisposable
             _lastResult = await VersioningService.SetVersionConfigAsync(_treeId, config);
             if (_lastResult.IsSuccess)
             {
+                _versionFormOpen = false;
                 await LoadVersionAsync();
             }
         }
@@ -429,6 +474,7 @@ public partial class SchemaPanel : ComponentBase, IDisposable
             _lastResult = await VersioningService.ClearVersionConfigAsync(_treeId);
             if (_lastResult.IsSuccess)
             {
+                _versionFormOpen = false;
                 await LoadVersionAsync();
             }
         }
@@ -436,6 +482,28 @@ public partial class SchemaPanel : ComponentBase, IDisposable
         {
             _busy = false;
         }
+    }
+
+    /// <summary>
+    /// Opens the version-config editor, seeding the set/advance inputs from the
+    /// tree's current version config so an edit starts from the applied state.
+    /// </summary>
+    private void EditVersionConfig()
+    {
+        if (_versionView is { IsSuccess: true } view && view.Value.TargetVersion != 0)
+        {
+            _setSchemaId = view.Value.SchemaId;
+            _setTargetVersion = view.Value.TargetVersion;
+            _setStrictIngest = view.Value.StrictIngest;
+            _advanceTargetVersion = view.Value.TargetVersion;
+        }
+
+        _versionFormOpen = true;
+    }
+
+    private void CancelVersionForm()
+    {
+        _versionFormOpen = false;
     }
 
     private async Task AdvanceTargetVersionAsync()

@@ -135,7 +135,11 @@
     {
         <div class="explorer-access-grid explorer-schema-narrow">
             <div class="explorer-access-listcol">
-                <h3 class="explorer-access-title">Current policy</h3>
+                <div class="explorer-access-listhead">
+                    <h3 class="explorer-access-title">Current policy</h3>
+                    <button type="button" class="explorer-btn"
+                            disabled="@(_busy || !_allowed || !_caps.CanManagePolicy || string.IsNullOrWhiteSpace(_treeId))" @onclick="EditPolicy">Edit policy</button>
+                </div>
                 @if (_policyView is null)
                 {
                     <p class="explorer-backups-empty">Select a tree to view its policy.</p>
@@ -170,6 +174,8 @@
                     }
                 }
             </div>
+            @if (_policyFormOpen)
+            {
             <div class="explorer-access-formcol">
                 <h3 class="explorer-access-title">Set policy</h3>
                 <label class="explorer-access-opcheck">
@@ -245,17 +251,29 @@
                 <div class="explorer-access-actions">
                     <button type="button" class="explorer-btn"
                             disabled="@(_busy || !_allowed || !_caps.CanManagePolicy || string.IsNullOrWhiteSpace(_treeId))" @onclick="SavePolicyAsync">Set policy</button>
+                    <button type="button" class="explorer-btn" disabled="@_busy" @onclick="CancelPolicyForm">Cancel</button>
                     <button type="button" class="explorer-btn explorer-access-danger"
                             disabled="@(_busy || !_allowed || !_caps.CanManagePolicy || string.IsNullOrWhiteSpace(_treeId))" @onclick="ClearPolicyAsync">Clear policy</button>
                 </div>
             </div>
+            }
+            else
+            {
+                <div class="explorer-access-formcol">
+                    <p class="explorer-backups-empty">Choose 'Edit policy' to author or replace this tree's schema policy.</p>
+                </div>
+            }
         </div>
     }
     else if (_tab == SchemaTab.Versions)
     {
         <div class="explorer-access-grid explorer-schema-narrow">
             <div class="explorer-access-listcol">
-                <h3 class="explorer-access-title">Version config</h3>
+                <div class="explorer-access-listhead">
+                    <h3 class="explorer-access-title">Version config</h3>
+                    <button type="button" class="explorer-btn"
+                            disabled="@(_busy || !_allowed || !_caps.CanManageVersion || string.IsNullOrWhiteSpace(_treeId))" @onclick="EditVersionConfig">Edit config</button>
+                </div>
                 @if (_versionView is null)
                 {
                     <p class="explorer-backups-empty">Select a tree to view its version config.</p>
@@ -294,6 +312,8 @@
                     }
                 }
             </div>
+            @if (_versionFormOpen)
+            {
             <div class="explorer-access-formcol">
                 <h3 class="explorer-access-title">Set version config</h3>
                 <label class="explorer-access-field">
@@ -314,6 +334,7 @@
                 <div class="explorer-access-actions">
                     <button type="button" class="explorer-btn"
                             disabled="@(_busy || !_allowed || !_caps.CanManageVersion || _setTargetVersion == 0 || string.IsNullOrWhiteSpace(_treeId))" @onclick="SetVersionConfigAsync">Set config</button>
+                    <button type="button" class="explorer-btn" disabled="@_busy" @onclick="CancelVersionForm">Cancel</button>
                     <button type="button" class="explorer-btn explorer-access-danger"
                             disabled="@(_busy || !_allowed || !_caps.CanManageVersion || string.IsNullOrWhiteSpace(_treeId))" @onclick="ClearVersionConfigAsync">Clear config</button>
                 </div>
@@ -333,6 +354,13 @@
                             disabled="@(_busy || !_allowed || !_caps.CanManageVersion || string.IsNullOrWhiteSpace(_treeId))" @onclick="MigrateToTargetVersionAsync">Migrate to target</button>
                 </div>
             </div>
+            }
+            else
+            {
+                <div class="explorer-access-formcol">
+                    <p class="explorer-backups-empty">Choose 'Edit config' to set this tree's schema version, or advance and migrate it.</p>
+                </div>
+            }
         </div>
     }
     else if (_tab == SchemaTab.Compliance)

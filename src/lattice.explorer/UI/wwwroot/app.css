@@ -2472,6 +2472,39 @@ code, .explorer-mono {
     flex: 1 1 22rem;
 }
 
+.explorer-access-listhead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.explorer-access-itemrow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.45rem 0.55rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+}
+
+.explorer-access-itemrow.is-selected {
+    background: var(--bg-elevated);
+    border-color: var(--accent);
+}
+
+.explorer-access-itemlabel {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    min-width: 0;
+}
+
+.explorer-access-edit {
+    flex: 0 0 auto;
+}
+
 .explorer-access-title {
     margin: 0.4rem 0 0.2rem;
     font-size: 0.9rem;
