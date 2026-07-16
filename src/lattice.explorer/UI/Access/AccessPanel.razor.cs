@@ -57,6 +57,18 @@ public partial class AccessPanel : ComponentBase, IDisposable
     private string _memberIdInput = string.Empty;
     private MembershipMemberKind _memberKind = MembershipMemberKind.User;
 
+    // Bridges the shared SubjectPicker (which speaks LatticeSubjectSelectorKind)
+    // to the membership member kind. Both enums share User=0/Group=1 semantics.
+    private LatticeSubjectSelectorKind MemberPickerKind
+    {
+        get => _memberKind == MembershipMemberKind.Group
+            ? LatticeSubjectSelectorKind.Group
+            : LatticeSubjectSelectorKind.User;
+        set => _memberKind = value == LatticeSubjectSelectorKind.Group
+            ? MembershipMemberKind.Group
+            : MembershipMemberKind.User;
+    }
+
     // ----- Policies -----
     private readonly List<LatticeAuthorizationRule> _rules = new();
     private IReadOnlyList<RankedRule> _rankedRules = Array.Empty<RankedRule>();
@@ -430,6 +442,17 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _editingExistingGroup = true;
         _groupIdInput = group.GroupId;
         _groupDisplayInput = group.DisplayName ?? string.Empty;
+        _memberIdInput = string.Empty;
+        _memberKind = MembershipMemberKind.User;
+
+        // The member picker chooses from users or groups; groups are already loaded
+        // on this tab, so ensure the user list is available too. Use the core loader
+        // so this is safe whether or not the busy flag is already held.
+        if (_users.Count == 0)
+        {
+            await LoadUsersCoreAsync(reset: true);
+        }
+
         await LoadDirectMembersAsync();
     }
 

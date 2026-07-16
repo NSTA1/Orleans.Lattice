@@ -135,6 +135,25 @@
     @if (_tab == AccessTab.Users)
     {
         <div class="explorer-access-grid">
+            <div class="explorer-access-formcol">
+                <h3 class="explorer-access-title">@(_editingExistingUser ? "Edit user" : "New user")</h3>
+                <label class="explorer-access-field">
+                    <span>User id</span>
+                    <input type="text" value="@_userIdInput" disabled="@(_busy || !_allowed || _editingExistingUser)"
+                           @oninput="e => _userIdInput = e.Value?.ToString() ?? string.Empty" placeholder="user id" />
+                </label>
+                <label class="explorer-access-field">
+                    <span>Display name</span>
+                    <input type="text" value="@_userDisplayInput" disabled="@(_busy || !_allowed)"
+                           @oninput="e => _userDisplayInput = e.Value?.ToString() ?? string.Empty" placeholder="optional" />
+                </label>
+                <div class="explorer-access-actions">
+                    <button type="button" class="explorer-btn" disabled="@(_busy || !_allowed || string.IsNullOrWhiteSpace(_userIdInput))" @onclick="SaveUserAsync">Save</button>
+                    <button type="button" class="explorer-btn" disabled="@_busy" @onclick="ResetUserForm">Clear</button>
+                    <button type="button" class="explorer-btn explorer-access-danger"
+                            disabled="@(_busy || !_allowed || !_editingExistingUser)" @onclick="DeleteUserAsync">Delete</button>
+                </div>
+            </div>
             <div class="explorer-access-listcol">
                 <h3 class="explorer-access-title">Users</h3>
                 @if (_users.Count == 0)
@@ -167,62 +186,11 @@
                     }
                 }
             </div>
-            <div class="explorer-access-formcol">
-                <h3 class="explorer-access-title">@(_editingExistingUser ? "Edit user" : "New user")</h3>
-                <label class="explorer-access-field">
-                    <span>User id</span>
-                    <input type="text" value="@_userIdInput" disabled="@(_busy || !_allowed || _editingExistingUser)"
-                           @oninput="e => _userIdInput = e.Value?.ToString() ?? string.Empty" placeholder="user id" />
-                </label>
-                <label class="explorer-access-field">
-                    <span>Display name</span>
-                    <input type="text" value="@_userDisplayInput" disabled="@(_busy || !_allowed)"
-                           @oninput="e => _userDisplayInput = e.Value?.ToString() ?? string.Empty" placeholder="optional" />
-                </label>
-                <div class="explorer-access-actions">
-                    <button type="button" class="explorer-btn" disabled="@(_busy || !_allowed || string.IsNullOrWhiteSpace(_userIdInput))" @onclick="SaveUserAsync">Save</button>
-                    <button type="button" class="explorer-btn" disabled="@_busy" @onclick="ResetUserForm">Clear</button>
-                    <button type="button" class="explorer-btn explorer-access-danger"
-                            disabled="@(_busy || !_allowed || !_editingExistingUser)" @onclick="DeleteUserAsync">Delete</button>
-                </div>
-            </div>
         </div>
     }
     else if (_tab == AccessTab.Groups)
     {
         <div class="explorer-access-grid">
-            <div class="explorer-access-listcol">
-                <h3 class="explorer-access-title">Groups</h3>
-                @if (_groups.Count == 0)
-                {
-                    <p class="explorer-backups-empty">No groups to show.</p>
-                }
-                else
-                {
-                    <ul class="explorer-nav-list" role="listbox" aria-label="Groups">
-                        @foreach (var group in _groups)
-                        {
-                            var id = group.GroupId;
-                            <li role="option" aria-selected="@(id == _selectedGroupId)">
-                                <button type="button"
-                                        class="explorer-nav-item @(id == _selectedGroupId ? "is-selected" : null)"
-                                        disabled="@_busy"
-                                        @onclick="@(() => SelectGroupAsync(group))">
-                                    <span class="explorer-nav-item-id">@id</span>
-                                    @if (!string.IsNullOrEmpty(group.DisplayName))
-                                    {
-                                        <span class="explorer-access-sub">@group.DisplayName</span>
-                                    }
-                                </button>
-                            </li>
-                        }
-                    </ul>
-                    @if (_groupsNextToken is not null)
-                    {
-                        <button type="button" class="explorer-btn" disabled="@(_busy || !_allowed)" @onclick="LoadMoreGroupsAsync">Load more</button>
-                    }
-                }
-            </div>
             <div class="explorer-access-formcol">
                 <h3 class="explorer-access-title">@(_editingExistingGroup ? "Edit group" : "New group")</h3>
                 <label class="explorer-access-field">
@@ -264,16 +232,45 @@
                         </ul>
                     }
                     <div class="explorer-access-addmember">
-                        <input type="text" value="@_memberIdInput" disabled="@(_busy || !_allowed)"
-                               @oninput="e => _memberIdInput = e.Value?.ToString() ?? string.Empty" placeholder="member id" />
-                        <select value="@_memberKind" disabled="@(_busy || !_allowed)"
-                                @onchange="e => _memberKind = Enum.Parse<MembershipMemberKind>(e.Value?.ToString() ?? nameof(MembershipMemberKind.User))">
-                            <option value="@nameof(MembershipMemberKind.User)">User</option>
-                            <option value="@nameof(MembershipMemberKind.Group)">Group (nested)</option>
-                        </select>
+                        <SubjectPicker Users="_users" Groups="_groups"
+                                       @bind-Kind="MemberPickerKind"
+                                       @bind-SubjectId="_memberIdInput"
+                                       Disabled="@(_busy || !_allowed)" />
                         <button type="button" class="explorer-btn"
                                 disabled="@(_busy || !_allowed || string.IsNullOrWhiteSpace(_memberIdInput))" @onclick="AddMemberAsync">Add member</button>
                     </div>
+                }
+            </div>
+            <div class="explorer-access-listcol">
+                <h3 class="explorer-access-title">Groups</h3>
+                @if (_groups.Count == 0)
+                {
+                    <p class="explorer-backups-empty">No groups to show.</p>
+                }
+                else
+                {
+                    <ul class="explorer-nav-list" role="listbox" aria-label="Groups">
+                        @foreach (var group in _groups)
+                        {
+                            var id = group.GroupId;
+                            <li role="option" aria-selected="@(id == _selectedGroupId)">
+                                <button type="button"
+                                        class="explorer-nav-item @(id == _selectedGroupId ? "is-selected" : null)"
+                                        disabled="@_busy"
+                                        @onclick="@(() => SelectGroupAsync(group))">
+                                    <span class="explorer-nav-item-id">@id</span>
+                                    @if (!string.IsNullOrEmpty(group.DisplayName))
+                                    {
+                                        <span class="explorer-access-sub">@group.DisplayName</span>
+                                    }
+                                </button>
+                            </li>
+                        }
+                    </ul>
+                    @if (_groupsNextToken is not null)
+                    {
+                        <button type="button" class="explorer-btn" disabled="@(_busy || !_allowed)" @onclick="LoadMoreGroupsAsync">Load more</button>
+                    }
                 }
             </div>
         </div>
