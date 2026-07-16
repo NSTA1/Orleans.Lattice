@@ -500,10 +500,19 @@ internal sealed class WalCommitLogWriter(
     /// the existing dispatch-deadline path.
     /// </para>
     /// </summary>
-    /// <param name="cancellationToken">Host-level shutdown token; observed only for the synchronous transition (the drain itself does not block).</param>
+    /// <param name="cancellationToken">
+    /// Accepted for signature and caller-convenience compatibility, but
+    /// intentionally not observed: the drain is the shutdown-safety path that
+    /// releases parked admission-semaphore callers, and the host stop token is
+    /// frequently already cancelled by the time the stop stage fires (Ctrl-C /
+    /// SIGTERM). Honouring it here would skip the drain exactly when it is most
+    /// needed and surface an <see cref="OperationCanceledException"/> that
+    /// crashes the host on shutdown. The transition is synchronous and
+    /// non-blocking, so there is nothing to time out.
+    /// </param>
     public Task DrainAsync(CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
+        _ = cancellationToken;
         _isDraining = true;
         // Cancel asynchronously: CancelAsync (.NET 8+) queues every
         // registered callback's continuation to the threadpool rather

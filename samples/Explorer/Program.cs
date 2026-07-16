@@ -114,6 +114,28 @@ builder.Host.UseOrleans(silo =>
     // Schema enforcement plus its control facade so the Schema admin area is
     // reachable and can govern trees from the console.
     silo.AddLatticeSchemaEnforcement();
+
+    // Per-value versioning, so the Schema area's Versions tab has a live schema
+    // registry to target rather than reporting "schema versioning is not
+    // registered". A single demo schema (id 1) with two versions and a v1 -> v2
+    // upcaster lets an operator set a tree's version config and exercise the
+    // advance / migrate actions from the console. (Enforcement is registered
+    // first: versioning composes its write interceptor, so the order matters.)
+    silo.AddLatticeSchemaVersioning(registry =>
+    {
+        registry.AddSchema(schemaId: 1, version: 1, name: "machine-status");
+        registry.AddSchema(schemaId: 1, version: 2, name: "machine-status");
+
+        // v1 -> v2 adds a default "state": "unknown" member.
+        registry.AddUpcaster(
+            schemaId: 1,
+            fromVersion: 1,
+            toVersion: 2,
+            transform: LatticeValueTransform.Passthrough(
+                LatticeValueTransform.SetMember(
+                    "state", LatticeValueTransform.Const(LatticeConstant.Text("unknown")))));
+    });
+
     silo.AddLatticeSchemaApi();
 
     // Trusts the console's auto-applied Basic sign-in: the auth / schema gRPC
