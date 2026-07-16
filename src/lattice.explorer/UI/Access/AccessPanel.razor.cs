@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Explorer.Access;
+using Orleans.Lattice.Explorer.Core.Catalog;
 using Orleans.Lattice.Membership;
 
 namespace Orleans.Lattice.Explorer.UI.Access;
@@ -30,6 +31,13 @@ public partial class AccessPanel : ComponentBase, IDisposable
     private bool _allowed;
     private AccessOperationResult? _lastResult;
 
+    // ----- Tree selection (shared by the Policies and Explain tabs) -----
+    private const int TreePageSize = 200;
+    private readonly List<CatalogItem> _trees = new();
+    private bool _treesLoading;
+    private string? _treesError;
+    private string? _selectedTreeId;
+
     // ----- Users -----
     private readonly List<AuthUser> _users = new();
     private string? _usersNextToken;
@@ -57,7 +65,6 @@ public partial class AccessPanel : ComponentBase, IDisposable
     private string _ruleIdInput = string.Empty;
     private LatticeSubjectSelectorKind _ruleSubjectKind = LatticeSubjectSelectorKind.User;
     private string _ruleSubjectId = string.Empty;
-    private string _ruleTreeId = string.Empty;
     private LatticeScopeKind _ruleScopeKind = LatticeScopeKind.Tree;
     private string _ruleScopeKeyOrPrefix = string.Empty;
     private readonly HashSet<LatticeOperation> _ruleOperations = new();
@@ -66,7 +73,6 @@ public partial class AccessPanel : ComponentBase, IDisposable
     // ----- Explain / Effective -----
     private string _explainSubjectId = string.Empty;
     private LatticeOperation _explainOperation = LatticeOperation.Read;
-    private string _explainTreeId = string.Empty;
     private LatticeScopeKind _explainScopeKind = LatticeScopeKind.Tree;
     private string _explainScopeKeyOrPrefix = string.Empty;
     private AuthExplanation? _explanation;
@@ -81,6 +87,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
         Capabilities.Changed += OnCapabilitiesChanged;
         if (_allowed)
         {
+            await LoadTreesAsync();
             await ReloadAsync();
         }
     }
@@ -94,7 +101,83 @@ public partial class AccessPanel : ComponentBase, IDisposable
         }
 
         _allowed = allowed;
-        InvokeAsync(StateHasChanged);
+        InvokeAsync(async () =>
+        {
+            // When the gate freshly opens (for example after the connection reaches
+            // the cluster or an admin signs in) populate the tree list so the
+            // tree-scoped tabs are usable without a manual refresh.
+            if (_allowed && _trees.Count == 0)
+            {
+                await LoadTreesAsync();
+            }
+
+            StateHasChanged();
+        });
+    }
+
+    // ----- Tree selection (shared by Policies and Explain) -----
+
+    /// <summary>
+    /// Loads the full tree catalog into the shared left selection panel through the
+    /// same state-API connection the Explore area uses. Trees are the policy scope
+    /// unit, so only trees (not views or tag indexes) are listed, and restore-shadow
+    /// trees are filtered out. A discovery failure surfaces as a retryable error
+    /// rather than an unhandled exception.
+    /// </summary>
+    private async Task LoadTreesAsync()
+    {
+        _treesLoading = true;
+        _treesError = null;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            var loaded = new List<CatalogItem>();
+            string? token = null;
+            do
+            {
+                var page = await CatalogReader.LoadAsync(CatalogKind.Trees, token, TreePageSize);
+                foreach (var item in page.Items)
+                {
+                    if (!item.IsRestoreShadow)
+                    {
+                        loaded.Add(item);
+                    }
+                }
+
+                token = page.NextPageToken;
+            }
+            while (token is not null);
+
+            _trees.Clear();
+            _trees.AddRange(loaded);
+        }
+        catch (Exception ex)
+        {
+            _treesError = ex.Message;
+        }
+        finally
+        {
+            _treesLoading = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private Task RefreshTreesAsync() => LoadTreesAsync();
+
+    /// <summary>
+    /// Selects a tree from the shared panel, pinning it as the active tree for rule
+    /// authoring (Policies) and Explain. Selection is presentation state only; it
+    /// does not itself issue a request.
+    /// </summary>
+    private void SelectTree(string treeId)
+    {
+        if (_busy)
+        {
+            return;
+        }
+
+        _selectedTreeId = treeId;
     }
 
     private void SetTab(AccessTab tab)
@@ -139,25 +222,37 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _busy = true;
         try
         {
-            var view = await Membership.ListUsersAsync(pageToken: reset ? null : _usersNextToken);
-            if (!view.IsSuccess)
-            {
-                _lastResult = ToResult(view.Status, view.Message);
-                return;
-            }
-
-            if (reset)
-            {
-                _users.Clear();
-            }
-
-            _users.AddRange(view.Entries);
-            _usersNextToken = view.NextPageToken;
+            await LoadUsersCoreAsync(reset);
         }
         finally
         {
             _busy = false;
         }
+    }
+
+    // The core list load without the busy guard, so a mutation (which already holds
+    // the busy flag) can repopulate the list before re-selecting the affected item.
+    private async Task LoadUsersCoreAsync(bool reset)
+    {
+        if (!_allowed)
+        {
+            return;
+        }
+
+        var view = await Membership.ListUsersAsync(pageToken: reset ? null : _usersNextToken);
+        if (!view.IsSuccess)
+        {
+            _lastResult = ToResult(view.Status, view.Message);
+            return;
+        }
+
+        if (reset)
+        {
+            _users.Clear();
+        }
+
+        _users.AddRange(view.Entries);
+        _usersNextToken = view.NextPageToken;
     }
 
     private Task LoadMoreUsersAsync() => LoadUsersAsync(reset: false);
@@ -196,8 +291,10 @@ public partial class AccessPanel : ComponentBase, IDisposable
             _lastResult = await Membership.UpsertUserAsync(user);
             if (_lastResult.IsSuccess)
             {
-                ResetUserForm();
-                await LoadUsersAsync(reset: true);
+                // Repopulate the list, then keep the just-saved user selected and
+                // highlighted so the operator sees the result of their action.
+                await LoadUsersCoreAsync(reset: true);
+                SelectUser(user);
             }
         }
         finally
@@ -220,7 +317,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
             if (_lastResult.IsSuccess)
             {
                 ResetUserForm();
-                await LoadUsersAsync(reset: true);
+                await LoadUsersCoreAsync(reset: true);
             }
         }
         finally
@@ -241,25 +338,37 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _busy = true;
         try
         {
-            var view = await Membership.ListGroupsAsync(pageToken: reset ? null : _groupsNextToken);
-            if (!view.IsSuccess)
-            {
-                _lastResult = ToResult(view.Status, view.Message);
-                return;
-            }
-
-            if (reset)
-            {
-                _groups.Clear();
-            }
-
-            _groups.AddRange(view.Entries);
-            _groupsNextToken = view.NextPageToken;
+            await LoadGroupsCoreAsync(reset);
         }
         finally
         {
             _busy = false;
         }
+    }
+
+    // The core list load without the busy guard, so a mutation (which already holds
+    // the busy flag) can repopulate the list before re-selecting the affected group.
+    private async Task LoadGroupsCoreAsync(bool reset)
+    {
+        if (!_allowed)
+        {
+            return;
+        }
+
+        var view = await Membership.ListGroupsAsync(pageToken: reset ? null : _groupsNextToken);
+        if (!view.IsSuccess)
+        {
+            _lastResult = ToResult(view.Status, view.Message);
+            return;
+        }
+
+        if (reset)
+        {
+            _groups.Clear();
+        }
+
+        _groups.AddRange(view.Entries);
+        _groupsNextToken = view.NextPageToken;
     }
 
     private Task LoadMoreGroupsAsync() => LoadGroupsAsync(reset: false);
@@ -321,7 +430,11 @@ public partial class AccessPanel : ComponentBase, IDisposable
             _lastResult = await Membership.UpsertGroupAsync(group);
             if (_lastResult.IsSuccess)
             {
-                await LoadGroupsAsync(reset: true);
+                // Repopulate the list, then keep the just-saved group selected and
+                // highlighted (and load its direct members) so the operator sees the
+                // result of their action.
+                await LoadGroupsCoreAsync(reset: true);
+                await SelectGroupAsync(group);
             }
         }
         finally
@@ -344,7 +457,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
             if (_lastResult.IsSuccess)
             {
                 ResetGroupForm();
-                await LoadGroupsAsync(reset: true);
+                await LoadGroupsCoreAsync(reset: true);
             }
         }
         finally
@@ -410,26 +523,38 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _busy = true;
         try
         {
-            var view = await Policy.ListRulesAsync(pageToken: reset ? null : _rulesNextToken);
-            if (!view.IsSuccess)
-            {
-                _lastResult = ToResult(view.Status, view.Message);
-                return;
-            }
-
-            if (reset)
-            {
-                _rules.Clear();
-            }
-
-            _rules.AddRange(view.Entries);
-            _rulesNextToken = view.NextPageToken;
-            _rankedRules = RulePrecedence.Rank(_rules);
+            await LoadRulesCoreAsync(reset);
         }
         finally
         {
             _busy = false;
         }
+    }
+
+    // The core list load without the busy guard, so a mutation (which already holds
+    // the busy flag) can repopulate the rule table.
+    private async Task LoadRulesCoreAsync(bool reset)
+    {
+        if (!_allowed)
+        {
+            return;
+        }
+
+        var view = await Policy.ListRulesAsync(pageToken: reset ? null : _rulesNextToken);
+        if (!view.IsSuccess)
+        {
+            _lastResult = ToResult(view.Status, view.Message);
+            return;
+        }
+
+        if (reset)
+        {
+            _rules.Clear();
+        }
+
+        _rules.AddRange(view.Entries);
+        _rulesNextToken = view.NextPageToken;
+        _rankedRules = RulePrecedence.Rank(_rules);
     }
 
     private Task LoadMoreRulesAsync() => LoadRulesAsync(reset: false);
@@ -440,7 +565,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _ruleIdInput = rule.RuleId;
         _ruleSubjectKind = rule.Subject.Kind;
         _ruleSubjectId = rule.Subject.Id;
-        _ruleTreeId = rule.Scope.TreeId;
+        _selectedTreeId = rule.Scope.TreeId;
         _ruleScopeKind = rule.Scope.Kind;
         _ruleScopeKeyOrPrefix = rule.Scope.KeyOrPrefix ?? string.Empty;
         _ruleEffect = rule.Effect;
@@ -460,7 +585,6 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _ruleIdInput = string.Empty;
         _ruleSubjectKind = LatticeSubjectSelectorKind.User;
         _ruleSubjectId = string.Empty;
-        _ruleTreeId = string.Empty;
         _ruleScopeKind = LatticeScopeKind.Tree;
         _ruleScopeKeyOrPrefix = string.Empty;
         _ruleOperations.Clear();
@@ -482,7 +606,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
     private bool CanSaveRule() =>
         !string.IsNullOrWhiteSpace(_ruleIdInput)
         && !string.IsNullOrWhiteSpace(_ruleSubjectId)
-        && !string.IsNullOrWhiteSpace(_ruleTreeId)
+        && !string.IsNullOrWhiteSpace(_selectedTreeId)
         && _ruleOperations.Count > 0
         && (_ruleScopeKind == LatticeScopeKind.Tree || !string.IsNullOrWhiteSpace(_ruleScopeKeyOrPrefix));
 
@@ -499,14 +623,14 @@ public partial class AccessPanel : ComponentBase, IDisposable
             var subject = _ruleSubjectKind == LatticeSubjectSelectorKind.Group
                 ? LatticeSubjectSelector.Group(_ruleSubjectId.Trim())
                 : LatticeSubjectSelector.User(_ruleSubjectId.Trim());
-            var scope = BuildScope(_ruleScopeKind, _ruleTreeId.Trim(), _ruleScopeKeyOrPrefix);
+            var scope = BuildScope(_ruleScopeKind, _selectedTreeId!.Trim(), _ruleScopeKeyOrPrefix);
             var operations = CombineOperations(_ruleOperations);
             var rule = new LatticeAuthorizationRule(_ruleIdInput.Trim(), subject, scope, operations, _ruleEffect);
 
             _lastResult = await Policy.PutRuleAsync(rule);
             if (_lastResult.IsSuccess)
             {
-                await LoadRulesAsync(reset: true);
+                await LoadRulesCoreAsync(reset: true);
             }
         }
         finally
@@ -517,7 +641,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
 
     private async Task DeleteRuleAsync()
     {
-        if (_busy || !_allowed || !_editingExistingRule || string.IsNullOrWhiteSpace(_ruleTreeId) || string.IsNullOrWhiteSpace(_ruleIdInput))
+        if (_busy || !_allowed || !_editingExistingRule || string.IsNullOrWhiteSpace(_selectedTreeId) || string.IsNullOrWhiteSpace(_ruleIdInput))
         {
             return;
         }
@@ -525,11 +649,11 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _busy = true;
         try
         {
-            _lastResult = await Policy.DeleteRuleAsync(_ruleTreeId.Trim(), _ruleIdInput.Trim());
+            _lastResult = await Policy.DeleteRuleAsync(_selectedTreeId.Trim(), _ruleIdInput.Trim());
             if (_lastResult.IsSuccess)
             {
                 ResetRuleForm();
-                await LoadRulesAsync(reset: true);
+                await LoadRulesCoreAsync(reset: true);
             }
         }
         finally
@@ -542,7 +666,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
 
     private async Task RunExplainAsync()
     {
-        if (_busy || !_allowed || string.IsNullOrWhiteSpace(_explainSubjectId) || string.IsNullOrWhiteSpace(_explainTreeId))
+        if (_busy || !_allowed || string.IsNullOrWhiteSpace(_explainSubjectId) || string.IsNullOrWhiteSpace(_selectedTreeId))
         {
             return;
         }
@@ -552,7 +676,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
         {
             _effective = null;
             _effectiveRankedRules = Array.Empty<RankedRule>();
-            var scope = BuildScope(_explainScopeKind, _explainTreeId.Trim(), _explainScopeKeyOrPrefix);
+            var scope = BuildScope(_explainScopeKind, _selectedTreeId!.Trim(), _explainScopeKeyOrPrefix);
             var view = await Policy.ExplainAsync(_explainSubjectId.Trim(), _explainOperation, scope);
             if (view.IsSuccess && view.Explanation is not null)
             {

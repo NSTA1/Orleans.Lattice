@@ -2,10 +2,12 @@
 @using Orleans.Lattice.Auth
 @using Orleans.Lattice.Membership
 @using Orleans.Lattice.Explorer.Access
+@using Orleans.Lattice.Explorer.Core.Catalog
 @using Orleans.Lattice.Explorer.Core.Navigation
 @implements IDisposable
 @inject IMembershipAdminService Membership
 @inject IPolicyAdminService Policy
+@inject ICatalogReader CatalogReader
 @inject IExplorerCapabilityStore Capabilities
 
 @*
@@ -19,6 +21,81 @@
     The area never re-implements a verdict: the Explain view renders the facade's
     Allowed flag verbatim, and the precedence ranking is a presentation-only aid.
 *@
+
+@{
+    // The Policies and Explain tabs are both scoped to a single tree. Rather than a
+    // free-text tree box, they share this left-hand tree-selection panel (the same
+    // catalog-driven list the Explore and Schema areas use); selecting a tree pins
+    // it as the active tree for rule authoring and Explain across both tabs.
+    RenderFragment treePanel =
+        @<aside class="explorer-access-treepanel" aria-label="Tree selection">
+            <header class="explorer-access-treepanel-header">
+                <span class="explorer-access-treepanel-title">Trees</span>
+                <button type="button"
+                        class="explorer-nav-refresh"
+                        title="Refresh trees"
+                        aria-label="Refresh trees"
+                        disabled="@(_treesLoading || !_allowed)"
+                        @onclick="RefreshTreesAsync">
+                    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+                        <path fill="currentColor"
+                              d="M17.65 6.35A8 8 0 1 0 19.73 14h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35Z" />
+                    </svg>
+                </button>
+            </header>
+            <div class="explorer-access-treelist">
+                @if (!_allowed)
+                {
+                    <p class="explorer-nav-state">Access administration is unavailable.</p>
+                }
+                else if (_treesLoading && _trees.Count == 0)
+                {
+                    <p class="explorer-nav-state">Loading trees...</p>
+                }
+                else if (_treesError is not null)
+                {
+                    <div class="explorer-nav-state explorer-nav-error">
+                        <span>@_treesError</span>
+                        <button type="button" class="explorer-btn-link" @onclick="RefreshTreesAsync">Try again</button>
+                    </div>
+                }
+                else if (_trees.Count == 0)
+                {
+                    <p class="explorer-nav-state">No trees found.</p>
+                }
+                else
+                {
+                    <ul class="explorer-nav-list" role="listbox" aria-label="Trees">
+                        @foreach (var tree in _trees)
+                        {
+                            var isSelected = string.Equals(_selectedTreeId, tree.Id, StringComparison.Ordinal);
+                            <li role="option" aria-selected="@isSelected">
+                                <button type="button"
+                                        class="explorer-nav-item @(isSelected ? "is-selected" : null)"
+                                        disabled="@_busy"
+                                        @onclick="@(() => SelectTree(tree.Id))">
+                                    <span class="explorer-nav-item-id">@tree.Label</span>
+                                    @if (tree.Lifecycle is not null || tree.ShardCount is int)
+                                    {
+                                        <span class="explorer-nav-item-meta">
+                                            @if (tree.Lifecycle is not null)
+                                            {
+                                                <span class="explorer-badge">@tree.Lifecycle</span>
+                                            }
+                                            @if (tree.ShardCount is int shards)
+                                            {
+                                                <span class="explorer-badge" title="Shard count">@shards sh</span>
+                                            }
+                                        </span>
+                                    }
+                                </button>
+                            </li>
+                        }
+                    </ul>
+                }
+            </div>
+        </aside>;
+}
 
 <section class="explorer-backups explorer-access" aria-label="Access">
     <header class="explorer-backups-header">
@@ -203,9 +280,16 @@
     }
     else if (_tab == AccessTab.Policies)
     {
-        <div class="explorer-access-grid">
-            <div class="explorer-access-listcol">
-                <h3 class="explorer-access-title">Rules</h3>
+        <div class="explorer-access-layout">
+            @treePanel
+            <div class="explorer-access-content">
+                @if (_selectedTreeId is null)
+                {
+                    <p class="explorer-backups-empty">Select a tree from the list to author or edit a rule for it.</p>
+                }
+                <div class="explorer-access-grid explorer-access-narrow">
+                    <div class="explorer-access-listcol">
+                        <h3 class="explorer-access-title">Rules</h3>
                 @if (_rules.Count == 0)
                 {
                     <p class="explorer-backups-empty">No rules to show.</p>
@@ -261,8 +345,9 @@
                 </label>
                 <label class="explorer-access-field">
                     <span>Tree</span>
-                    <input type="text" value="@_ruleTreeId" disabled="@(_busy || !_allowed)"
-                           @oninput="e => _ruleTreeId = e.Value?.ToString() ?? string.Empty" placeholder="tree id" />
+                    <span class="explorer-access-treevalue">
+                        @(_selectedTreeId ?? "Select a tree from the list")
+                    </span>
                 </label>
                 <label class="explorer-access-field">
                     <span>Scope</span>
@@ -309,12 +394,21 @@
                 </div>
             </div>
         </div>
+                </div>
+            </div>
     }
     else
     {
-        <div class="explorer-access-grid">
-            <div class="explorer-access-formcol">
-                <h3 class="explorer-access-title">Explain a decision</h3>
+        <div class="explorer-access-layout">
+            @treePanel
+            <div class="explorer-access-content">
+                @if (_selectedTreeId is null)
+                {
+                    <p class="explorer-backups-empty">Select a tree from the list to explain a decision within it.</p>
+                }
+                <div class="explorer-access-grid">
+                    <div class="explorer-access-formcol">
+                        <h3 class="explorer-access-title">Explain a decision</h3>
                 <label class="explorer-access-field">
                     <span>Subject id</span>
                     <input type="text" value="@_explainSubjectId" disabled="@(_busy || !_allowed)"
@@ -332,8 +426,9 @@
                 </label>
                 <label class="explorer-access-field">
                     <span>Tree</span>
-                    <input type="text" value="@_explainTreeId" disabled="@(_busy || !_allowed)"
-                           @oninput="e => _explainTreeId = e.Value?.ToString() ?? string.Empty" placeholder="tree id" />
+                    <span class="explorer-access-treevalue">
+                        @(_selectedTreeId ?? "Select a tree from the list")
+                    </span>
                 </label>
                 <label class="explorer-access-field">
                     <span>Scope</span>
@@ -354,7 +449,7 @@
                 </label>
                 <div class="explorer-access-actions">
                     <button type="button" class="explorer-btn"
-                            disabled="@(_busy || !_allowed || string.IsNullOrWhiteSpace(_explainSubjectId) || string.IsNullOrWhiteSpace(_explainTreeId))"
+                            disabled="@(_busy || !_allowed || string.IsNullOrWhiteSpace(_explainSubjectId) || string.IsNullOrWhiteSpace(_selectedTreeId))"
                             @onclick="RunExplainAsync">Explain</button>
                     <button type="button" class="explorer-btn"
                             disabled="@(_busy || !_allowed || string.IsNullOrWhiteSpace(_explainSubjectId))"
@@ -389,6 +484,8 @@
                     }
                     <RankedRuleTable Rules="_effectiveRankedRules" />
                 }
+            </div>
+        </div>
             </div>
         </div>
     }
