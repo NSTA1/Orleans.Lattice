@@ -25,17 +25,39 @@ public sealed class AuthToolHandlersTests
     {
         var admin = Admin();
         var expected = new AuthExplanation { SubjectId = "alice", Scope = LatticeScope.Key("orders", "k1"), Allowed = true };
-        admin.ExplainAsync("alice", LatticeOperation.Read, Arg.Any<LatticeScope>(), Arg.Any<CancellationToken>())
+        admin.ExplainAsync("alice", LatticeOperation.Read, Arg.Any<LatticeScope>(), Arg.Any<LatticeSubjectSelectorKind>(), Arg.Any<CancellationToken>())
             .Returns(expected);
 
         var result = await AuthToolHandlers.ExplainAsync(
-            admin, "alice", LatticeOperation.Read, LatticeScopeKind.Key, "orders", "k1", CancellationToken.None);
+            admin, "alice", LatticeOperation.Read, LatticeScopeKind.Key, "orders", "k1", cancellationToken: CancellationToken.None);
 
         Assert.That(result, Is.SameAs(expected));
         await admin.Received(1).ExplainAsync(
             "alice",
             LatticeOperation.Read,
             Arg.Is<LatticeScope>(s => s.Kind == LatticeScopeKind.Key && s.TreeId == "orders" && s.KeyOrPrefix == "k1"),
+            LatticeSubjectSelectorKind.User,
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ExplainAsync_forwards_the_group_subject_kind()
+    {
+        var admin = Admin();
+        var expected = new AuthExplanation { SubjectId = "team", Scope = LatticeScope.Tree("orders"), Allowed = false };
+        admin.ExplainAsync("team", LatticeOperation.Read, Arg.Any<LatticeScope>(), Arg.Any<LatticeSubjectSelectorKind>(), Arg.Any<CancellationToken>())
+            .Returns(expected);
+
+        var result = await AuthToolHandlers.ExplainAsync(
+            admin, "team", LatticeOperation.Read, LatticeScopeKind.Tree, "orders",
+            subjectKind: LatticeSubjectSelectorKind.Group, cancellationToken: CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).ExplainAsync(
+            "team",
+            LatticeOperation.Read,
+            Arg.Any<LatticeScope>(),
+            LatticeSubjectSelectorKind.Group,
             Arg.Any<CancellationToken>());
     }
 
@@ -44,11 +66,26 @@ public sealed class AuthToolHandlersTests
     {
         var admin = Admin();
         var expected = new AuthEffectivePermissions { SubjectId = "alice" };
-        admin.EffectivePermissionsAsync("alice", Arg.Any<CancellationToken>()).Returns(expected);
+        admin.EffectivePermissionsAsync("alice", Arg.Any<LatticeSubjectSelectorKind>(), Arg.Any<CancellationToken>()).Returns(expected);
 
-        var result = await AuthToolHandlers.EffectivePermissionsAsync(admin, "alice", CancellationToken.None);
+        var result = await AuthToolHandlers.EffectivePermissionsAsync(admin, "alice", cancellationToken: CancellationToken.None);
 
         Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).EffectivePermissionsAsync("alice", LatticeSubjectSelectorKind.User, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task EffectivePermissionsAsync_forwards_the_group_subject_kind()
+    {
+        var admin = Admin();
+        var expected = new AuthEffectivePermissions { SubjectId = "team" };
+        admin.EffectivePermissionsAsync("team", Arg.Any<LatticeSubjectSelectorKind>(), Arg.Any<CancellationToken>()).Returns(expected);
+
+        var result = await AuthToolHandlers.EffectivePermissionsAsync(
+            admin, "team", subjectKind: LatticeSubjectSelectorKind.Group, cancellationToken: CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).EffectivePermissionsAsync("team", LatticeSubjectSelectorKind.Group, Arg.Any<CancellationToken>());
     }
 
     [Test]

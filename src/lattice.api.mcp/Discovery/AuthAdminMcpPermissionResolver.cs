@@ -79,7 +79,7 @@ internal sealed class AuthAdminMcpPermissionResolver : ILatticeApiMcpPermissionR
             // effective rules without itself being an administrator.
             using (LatticeSystemOrigin.Enter())
             {
-                permissions = await admin.EffectivePermissionsAsync(subjectId, cancellationToken)
+                permissions = await admin.EffectivePermissionsAsync(subjectId, cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
             }
         }

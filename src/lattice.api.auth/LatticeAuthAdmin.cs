@@ -325,13 +325,14 @@ internal sealed class LatticeAuthAdmin(
         string subjectId,
         LatticeOperation operation,
         LatticeScope scope,
+        LatticeSubjectSelectorKind subjectKind = LatticeSubjectSelectorKind.User,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(subjectId);
         ArgumentNullException.ThrowIfNull(scope);
         await AuthorizeAdminAsync(cancellationToken).ConfigureAwait(false);
 
-        var subject = await ResolveNamedSubjectAsync(subjectId, cancellationToken).ConfigureAwait(false);
+        var subject = await ResolveNamedSubjectAsync(subjectId, subjectKind, cancellationToken).ConfigureAwait(false);
 
         // Evaluate against the SAME access gate the data plane consults, so the
         // explained verdict is identical to the enforced decision by construction.
@@ -356,12 +357,15 @@ internal sealed class LatticeAuthAdmin(
     }
 
     /// <inheritdoc />
-    public async Task<AuthEffectivePermissions> EffectivePermissionsAsync(string subjectId, CancellationToken cancellationToken = default)
+    public async Task<AuthEffectivePermissions> EffectivePermissionsAsync(
+        string subjectId,
+        LatticeSubjectSelectorKind subjectKind = LatticeSubjectSelectorKind.User,
+        CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(subjectId);
         await AuthorizeAdminAsync(cancellationToken).ConfigureAwait(false);
 
-        var subject = await ResolveNamedSubjectAsync(subjectId, cancellationToken).ConfigureAwait(false);
+        var subject = await ResolveNamedSubjectAsync(subjectId, subjectKind, cancellationToken).ConfigureAwait(false);
         var groupSet = ToGroupSet(subject.GroupIds);
 
         var rules = new List<LatticeAuthorizationRule>();
@@ -410,11 +414,26 @@ internal sealed class LatticeAuthAdmin(
     /// system-origin so it bypasses the gate exactly as the in-cluster subject
     /// resolver does.
     /// </summary>
-    private async ValueTask<LatticeSubject> ResolveNamedSubjectAsync(string subjectId, CancellationToken cancellationToken)
+    /// <remarks>
+    /// A <see cref="LatticeSubjectSelectorKind.User"/> subject carries the groups
+    /// it belongs to (its own id is not a group and is excluded). A
+    /// <see cref="LatticeSubjectSelectorKind.Group"/> subject is evaluated as a
+    /// principal that is a member of the named group: its closure is the group
+    /// itself plus every ancestor group (via
+    /// <see cref="ILatticeMembershipDirectory.ExpandGroupsAsync"/>), so a
+    /// <c>group</c>-scoped rule targeting it (or a parent) matches exactly as it
+    /// would for any real member.
+    /// </remarks>
+    private async ValueTask<LatticeSubject> ResolveNamedSubjectAsync(
+        string subjectId,
+        LatticeSubjectSelectorKind subjectKind,
+        CancellationToken cancellationToken)
     {
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            var groups = await _directory.GroupsOfAsync(subjectId, cancellationToken).ConfigureAwait(false);
+            var groups = subjectKind == LatticeSubjectSelectorKind.Group
+                ? await _directory.ExpandGroupsAsync(new[] { subjectId }, cancellationToken).ConfigureAwait(false)
+                : await _directory.GroupsOfAsync(subjectId, cancellationToken).ConfigureAwait(false);
             return new LatticeSubject(subjectId, groups);
         }
     }

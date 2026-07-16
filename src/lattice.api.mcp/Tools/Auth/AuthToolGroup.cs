@@ -60,11 +60,13 @@ internal sealed class AuthToolGroup : ILatticeApiMcpToolGroup
             // ----- Introspection (read-only) -----
             Read(services, AuthToolHandlers.ExplainAsync, "lattice_auth_explain", "Explain an authorization decision",
                 "Explains whether a subject may perform an operation over a keyspace scope (whole tree, a key, or a "
-                + "prefix), returning the access gate's verdict and the authored rules that apply. Read-only."),
+                + "prefix), returning the access gate's verdict and the authored rules that apply. Set subjectKind to "
+                + "Group to explain a group subject rather than a user. Read-only."),
             Read(services, AuthToolHandlers.EffectivePermissionsAsync, "lattice_auth_effective_permissions",
                 "List a subject's effective permissions",
                 "Returns the authorization rules currently in effect for a subject (grants and denies), resolved from "
-                + "the live policy store and the subject's group closure. Read-only."),
+                + "the live policy store and the subject's group closure. Set subjectKind to Group to resolve a group "
+                + "subject rather than a user. Read-only."),
             Read(services, AuthToolHandlers.GetUserAsync, "lattice_auth_get_user", "Get a user",
                 "Reads a single user record by id, or null when no such user exists. Read-only."),
             Read(services, AuthToolHandlers.ListUsersAsync, "lattice_auth_list_users", "List users",
