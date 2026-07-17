@@ -69,10 +69,16 @@ How the admin sign-in works, so you can adapt it:
   up. A real deployment resolves the subject from a validated JWT / Entra token
   instead, and leaves transport authorization enabled.
 
-The data-plane default is kept permissive (`DefaultEffect = Allow`) so the
-read-only Explore area works without a sign-in; the reserved control plane
-(membership and policy) is always governed and only the bootstrap administrator
-can manage it. See:
+The data-plane authorization default is **deny-by-default** (`DefaultEffect =
+Deny`, the framework default): a subject with no matching rule is refused. So the
+Access area shows a real allow-vs-deny split out of the box, the sample seeds one
+grant on startup - the `operators` group may `Read` the `factory-floor` tree,
+with `alice` as a member - so in **Access > Explain** `alice` reading
+`factory-floor` resolves to *Allowed* (a matched rule) while `bob` resolves to
+*Denied* (the default). The console's own admin areas keep working because the
+signed-in `explorer-admin` is a bootstrap administrator, which bypasses the
+decision engine; the reserved control plane (membership and policy) is always
+governed and only that administrator can manage it. See:
 
 - [Running the Explorer](../../docs/lattice.explorer/running-the-explorer.md) -
   hosting, options, subpath mounting, and the isolated-head deployment note.

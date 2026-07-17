@@ -189,7 +189,14 @@ builder.Host.UseOrleans(silo =>
     }
     silo.AddLatticeAuth(options =>
     {
-        options.DefaultEffect = LatticeEffect.Allow;
+        // Deny-by-default (the framework default): a subject with no matching
+        // rule is refused, which is the intuitive fail-closed authorization
+        // posture. The demo seeds one illustrative grant after startup (the
+        // 'operators' group may Read factory-floor) so the Access > Explain tab
+        // shows a real allow-vs-deny split rather than a blanket allow. The
+        // bootstrap administrator bypasses the decision engine, so the console's
+        // own admin areas keep working regardless of this default.
+        options.DefaultEffect = LatticeEffect.Deny;
         options.BootstrapAdministrators.Add(AdminUser);
     });
     silo.AddLatticeAuthApi();
@@ -274,17 +281,45 @@ app.MapLatticeExplorer();
 
 await app.StartAsync();
 
-// Seed a small demo tree so the Explore area has live data. A plain SetAsync
-// auto-registers the tree, so it surfaces in the console's catalog with no extra
-// wiring.
+// Seed demo data and the illustrative authorization policy under a system-origin
+// scope so these trusted startup writes bypass the (now deny-by-default) access
+// gate - exactly as a co-hosted infrastructure component does. A plain SetAsync
+// auto-registers the demo tree, so it surfaces in the console's catalog with no
+// extra wiring.
 var grainFactory = app.Services.GetRequiredService<IGrainFactory>();
-var tree = grainFactory.GetGrain<ILattice>(DemoTree);
-for (var i = 0; i < 12; i++)
+using (LatticeSystemOrigin.Enter())
 {
-    await tree.SetAsync($"machine-{i:D3}", Encoding.UTF8.GetBytes($"status-{i:D3}"));
-}
+    var tree = grainFactory.GetGrain<ILattice>(DemoTree);
+    for (var i = 0; i < 12; i++)
+    {
+        await tree.SetAsync($"machine-{i:D3}", Encoding.UTF8.GetBytes($"status-{i:D3}"));
+    }
 
-Console.WriteLine($"Seeded '{DemoTree}' with 12 entries.");
+    Console.WriteLine($"Seeded '{DemoTree}' with 12 entries.");
+
+    // With deny-by-default authorization, seed one illustrative grant so the Access
+    // area shows a real allow-vs-deny split out of the box: the 'operators' group
+    // may Read the demo tree, and 'alice' is a member of it. These ids match the
+    // static roster seeded above; the Entra mode addresses subjects by real tenant
+    // object ids, so there the operator authors rules against their own directory.
+    if (!useEntraDirectory)
+    {
+        var membership = app.Services.GetRequiredService<ILatticeMembershipDirectory>();
+        await membership.AddMemberAsync("operators", "alice");
+
+        var policyStore = app.Services.GetRequiredService<ILatticeAuthorizationPolicyStore>();
+        await policyStore.PutRuleAsync(new LatticeAuthorizationRule(
+            ruleId: "operators-read-factory-floor",
+            subject: LatticeSubjectSelector.Group("operators"),
+            scope: LatticeScope.Tree(DemoTree),
+            operations: LatticeOperation.Read | LatticeOperation.RangeRead,
+            effect: LatticeEffect.Allow));
+
+        Console.WriteLine(
+            $"Seeded authorization: deny-by-default, with 'operators' (member 'alice') granted Read on '{DemoTree}'.");
+        Console.WriteLine("  In Access > Explain: 'alice' Read -> Allowed (matched rule); 'bob' Read -> Denied (default).");
+    }
+}
 Console.WriteLine($"Silo + state/auth/schema gRPC surface started on http://localhost:{GrpcPort}");
 Console.WriteLine($"Explorer console: open http://localhost:{WebPort}/ in a browser.");
 Console.WriteLine($"Auto-signed in as bootstrap administrator '{AdminUser}' - the Explore, Access, and Schema areas are all enabled.");
