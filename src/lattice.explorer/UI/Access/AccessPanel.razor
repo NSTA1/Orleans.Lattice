@@ -132,6 +132,19 @@
         <p class="explorer-backups-result @ResultClass(_lastResult.Status)" role="status">@_lastResult.Message</p>
     }
 
+    @if (_allowed && _accessModel.Model.IsSuccess)
+    {
+        <p class="explorer-access-authmode" role="status">
+            Authentication mode: <strong>@_accessModel.AuthenticationModeLabel</strong>
+        </p>
+        @if (_accessModel.ShowEnforcementNotice)
+        {
+            <p class="explorer-access-enforcement is-warning" role="status">
+                @AccessCreateModel.EnforcementNoticeText
+            </p>
+        }
+    }
+
     @if (_tab == AccessTab.Users)
     {
         <div class="explorer-access-grid">
@@ -174,11 +187,29 @@
             {
                 <div class="explorer-access-formcol">
                     <h3 class="explorer-access-title">@(_editingExistingUser ? "Edit user" : "New user")</h3>
-                    <label class="explorer-access-field">
-                        <span>User id</span>
-                        <input type="text" value="@_userIdInput" disabled="@(_busy || !_allowed || _editingExistingUser)"
-                               @oninput="e => _userIdInput = e.Value?.ToString() ?? string.Empty" placeholder="user id" />
-                    </label>
+                    @if (_editingExistingUser)
+                    {
+                        <label class="explorer-access-field">
+                            <span>User id</span>
+                            <input type="text" value="@_userIdInput" disabled="true" placeholder="user id" />
+                        </label>
+                    }
+                    else
+                    {
+                        <label class="explorer-access-field">
+                            <span>User id</span>
+                            <SubjectPicker Kind="LatticeSubjectSelectorKind.User" KindLocked="true"
+                                           @bind-SubjectId="_userIdInput" Disabled="@(_busy || !_allowed)" />
+                        </label>
+                        @if (!string.IsNullOrEmpty(_accessModel.DirectoryExplanation))
+                        {
+                            <p class="explorer-access-hint">@_accessModel.DirectoryExplanation</p>
+                        }
+                        @if (_userCreateError is not null)
+                        {
+                            <p class="explorer-backups-result is-failed" role="status">@_userCreateError</p>
+                        }
+                    }
                     <label class="explorer-access-field">
                         <span>Display name</span>
                         <input type="text" value="@_userDisplayInput" disabled="@(_busy || !_allowed)"
@@ -242,11 +273,29 @@
             {
                 <div class="explorer-access-formcol">
                     <h3 class="explorer-access-title">@(_editingExistingGroup ? "Edit group" : "New group")</h3>
-                    <label class="explorer-access-field">
-                        <span>Group id</span>
-                        <input type="text" value="@_groupIdInput" disabled="@(_busy || !_allowed || _editingExistingGroup)"
-                               @oninput="e => _groupIdInput = e.Value?.ToString() ?? string.Empty" placeholder="group id" />
-                    </label>
+                    @if (_editingExistingGroup)
+                    {
+                        <label class="explorer-access-field">
+                            <span>Group id</span>
+                            <input type="text" value="@_groupIdInput" disabled="true" placeholder="group id" />
+                        </label>
+                    }
+                    else
+                    {
+                        <label class="explorer-access-field">
+                            <span>Group id</span>
+                            <SubjectPicker Kind="LatticeSubjectSelectorKind.Group" KindLocked="true"
+                                           @bind-SubjectId="_groupIdInput" Disabled="@(_busy || !_allowed)" />
+                        </label>
+                        @if (!string.IsNullOrEmpty(_accessModel.DirectoryExplanation))
+                        {
+                            <p class="explorer-access-hint">@_accessModel.DirectoryExplanation</p>
+                        }
+                        @if (_groupCreateError is not null)
+                        {
+                            <p class="explorer-backups-result is-failed" role="status">@_groupCreateError</p>
+                        }
+                    }
                     <label class="explorer-access-field">
                         <span>Display name</span>
                         <input type="text" value="@_groupDisplayInput" disabled="@(_busy || !_allowed)"

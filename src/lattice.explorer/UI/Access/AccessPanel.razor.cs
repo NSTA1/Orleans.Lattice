@@ -31,6 +31,12 @@ public partial class AccessPanel : ComponentBase, IDisposable
     private bool _allowed;
     private AccessOperationResult? _lastResult;
 
+    // The extracted create-form / access-state model: directory availability, the
+    // provider explanation, the auth-mode + enforcement banner, and the
+    // resolve-and-block decision for a new principal. Constructed in
+    // OnInitializedAsync once the injected membership service is available.
+    private AccessCreateModel _accessModel = null!;
+
     // ----- Tree selection (shared by the Policies and Explain tabs) -----
     private const int TreePageSize = 200;
     private readonly List<CatalogItem> _trees = new();
@@ -46,6 +52,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
     private bool _userFormOpen;
     private string _userIdInput = string.Empty;
     private string _userDisplayInput = string.Empty;
+    private string? _userCreateError;
 
     // ----- Groups -----
     private readonly List<AuthGroup> _groups = new();
@@ -55,6 +62,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
     private bool _groupFormOpen;
     private string _groupIdInput = string.Empty;
     private string _groupDisplayInput = string.Empty;
+    private string? _groupCreateError;
     private readonly List<string> _directMembers = new();
     private string _memberIdInput = string.Empty;
     private MembershipMemberKind _memberKind = MembershipMemberKind.User;
@@ -99,10 +107,12 @@ public partial class AccessPanel : ComponentBase, IDisposable
     /// <inheritdoc />
     protected override async Task OnInitializedAsync()
     {
+        _accessModel = new AccessCreateModel(Membership);
         _allowed = Capabilities.Current.AuthAdminAllowed;
         Capabilities.Changed += OnCapabilitiesChanged;
         if (_allowed)
         {
+            await LoadAccessModelAsync();
             await LoadTreesAsync();
             await ReloadAsync();
         }
@@ -121,9 +131,11 @@ public partial class AccessPanel : ComponentBase, IDisposable
         {
             // When the gate freshly opens (for example after the connection reaches
             // the cluster or an admin signs in) populate the tree list so the
-            // tree-scoped tabs are usable without a manual refresh.
+            // tree-scoped tabs are usable without a manual refresh, and read the
+            // access model so the create forms and enforcement banner are accurate.
             if (_allowed && _trees.Count == 0)
             {
+                await LoadAccessModelAsync();
                 await LoadTreesAsync();
             }
 
@@ -221,7 +233,25 @@ public partial class AccessPanel : ComponentBase, IDisposable
     private async Task ReloadAsync()
     {
         _lastResult = null;
+        await LoadAccessModelAsync();
         await LoadForTabAsync(force: true);
+    }
+
+    /// <summary>
+    /// Reads the cluster's best-effort access model into <see cref="_accessModel"/>
+    /// so the create forms know whether to fail closed against a directory, what a
+    /// valid id is for this deployment, and whether the active authorizer actually
+    /// enforces the recorded rules and membership. A denial or transport failure
+    /// folds into the safe unavailable snapshot rather than throwing.
+    /// </summary>
+    private async Task LoadAccessModelAsync()
+    {
+        if (!_allowed)
+        {
+            return;
+        }
+
+        _accessModel.Apply(await Membership.GetAccessModelAsync());
     }
 
     /// <summary>
@@ -335,6 +365,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _editingExistingUser = true;
         _userIdInput = user.UserId;
         _userDisplayInput = user.DisplayName ?? string.Empty;
+        _userCreateError = null;
     }
 
     // Opens the empty create form (the "New user" call to action).
@@ -364,6 +395,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _editingExistingUser = false;
         _userIdInput = string.Empty;
         _userDisplayInput = string.Empty;
+        _userCreateError = null;
     }
 
     private async Task SaveUserAsync()
@@ -376,6 +408,22 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _busy = true;
         try
         {
+            _userCreateError = null;
+
+            // Fail closed for a NEW user: when a directory is available the chosen /
+            // entered id must resolve to a real user, otherwise the create is blocked
+            // with an inline reason. The edit path (an existing user) skips this - its
+            // id is fixed and already known to the directory.
+            if (!_editingExistingUser)
+            {
+                var decision = await _accessModel.ValidateAsync(_userIdInput, DirectoryPrincipalKind.User);
+                if (decision.IsBlocked)
+                {
+                    _userCreateError = decision.Reason;
+                    return;
+                }
+            }
+
             var user = new AuthUser
             {
                 UserId = _userIdInput.Trim(),
@@ -473,6 +521,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _editingExistingGroup = true;
         _groupIdInput = group.GroupId;
         _groupDisplayInput = group.DisplayName ?? string.Empty;
+        _groupCreateError = null;
         _memberIdInput = string.Empty;
         _memberKind = MembershipMemberKind.User;
 
@@ -514,6 +563,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _editingExistingGroup = false;
         _groupIdInput = string.Empty;
         _groupDisplayInput = string.Empty;
+        _groupCreateError = null;
         _directMembers.Clear();
         _memberIdInput = string.Empty;
         _memberKind = MembershipMemberKind.User;
@@ -548,6 +598,21 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _busy = true;
         try
         {
+            _groupCreateError = null;
+
+            // Fail closed for a NEW group: when a directory is available the chosen /
+            // entered id must resolve to a real group, otherwise the create is blocked
+            // with an inline reason. The edit path (an existing group) skips this.
+            if (!_editingExistingGroup)
+            {
+                var decision = await _accessModel.ValidateAsync(_groupIdInput, DirectoryPrincipalKind.Group);
+                if (decision.IsBlocked)
+                {
+                    _groupCreateError = decision.Reason;
+                    return;
+                }
+            }
+
             var group = new AuthGroup
             {
                 GroupId = _groupIdInput.Trim(),

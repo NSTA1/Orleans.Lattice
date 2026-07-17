@@ -18,7 +18,7 @@
 
 <div class="explorer-access-subjectpicker">
     <div class="explorer-access-inline">
-        <select class="explorer-access-subject-kind" value="@Kind" disabled="@Disabled"
+        <select class="explorer-access-subject-kind" value="@Kind" disabled="@(Disabled || KindLocked)"
                 @onchange="OnKindChangedAsync">
             <option value="@nameof(LatticeSubjectSelectorKind.User)">User</option>
             <option value="@nameof(LatticeSubjectSelectorKind.Group)">Group</option>
@@ -95,6 +95,13 @@
     /// <summary>Renders the picker disabled when set.</summary>
     [Parameter]
     public bool Disabled { get; set; }
+
+    /// <summary>
+    /// Locks the user / group kind toggle to the bound <see cref="Kind"/> when set,
+    /// so a create form scoped to a single principal kind cannot switch it.
+    /// </summary>
+    [Parameter]
+    public bool KindLocked { get; set; }
 
     private bool _initialized;
 
