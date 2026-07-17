@@ -24,7 +24,7 @@ The members are:
 
 | Member | Purpose |
 |---|---|
-| `ProviderId` | A stable, short id for the active provider (`"null"`, `"static"`, `"entra-graph"`, or your own). Surfaced to the Explorer so it can label the source. |
+| `ProviderId` | A stable, short id for the active provider (`"null"`, `"static"`, `"entra"`, or your own). Surfaced to the Explorer so it can label the source. |
 | `Explanation` | One human-readable sentence describing what a *valid* id looks like for this source. The Explorer shows it under the create form so an operator knows what to type. |
 | `SearchAsync` | Returns a `DirectorySearchPage` of `DirectoryPrincipal`s matching a term, optionally filtered by `DirectoryPrincipalKind`, with an opaque continuation token for paging. |
 | `ResolveAsync` | Looks up a single principal id and returns its `DirectoryPrincipal`, or `null` when the source has no such principal. This is the fail-closed validation call. |
@@ -80,21 +80,25 @@ siloBuilder.AddStaticIdentityDirectory(roster =>
     roster.AddGroup("editors", "Editors");
 
     // Also admit any Basic user ids discovered from the process environment,
-    // so the roster stays in step with the deployed credential set.
-    roster.AddUsersFromEnvironment("LATTICE_BASIC_USER_");
+    // so the roster stays in step with the deployed credential set. With no
+    // argument this scans the default LATTICE_STATE_USER_ prefix - the same
+    // prefix the reference environment-variable Basic authorizer provisions.
+    roster.AddUsersFromEnvironment();
 });
 ```
 
 It registers with a last-wins `AddSingleton`, so it cleanly overrides the default
 `NullIdentityDirectory`. `AddUsersFromEnvironment(prefix)` scans the process
-environment for variables whose name starts with `prefix` and admits the suffix as
-a user id - the mechanism the sample uses to keep the identity directory aligned
-with its `DemoBasicAuthenticator` roster.
+environment for variables whose name starts with `prefix` (defaulting to
+`LATTICE_STATE_USER_`) and admits the suffix as a user id - the mechanism that
+keeps the identity directory aligned with the `LATTICE_STATE_USER_*` Basic
+credentials provisioned for the reference environment-variable Basic authorizer.
+It reads only variable names, never the credential values.
 
 ## The Entra Graph provider (`AddEntraGraphGroupResolver`)
 
 `Orleans.Lattice.Membership.Entra.Graph` registers a Microsoft Graph-backed
-`ILatticeIdentityDirectory` (`ProviderId` `"entra-graph"`) that searches and
+`ILatticeIdentityDirectory` (`ProviderId` `"entra"`) that searches and
 resolves real users and groups in an Entra tenant. It is **app-only**: it uses the
 client-credentials flow with an application registration, independent of how a
 console operator signs in.
@@ -127,11 +131,14 @@ Microsoft Graph permissions, each granted admin consent:
 | `User.Read.All` | Search and resolve users in the tenant. |
 | `Group.Read.All` | Search and resolve groups, and expand group membership. |
 
-**Token degradation.** When the app-only token is present the provider returns
-fully-populated `DirectoryPrincipal`s (display name + claims). If the token cannot
-be minted or a Graph call is denied, the provider degrades to token-only behaviour
-and reports the directory as unavailable rather than throwing, so the Explorer
-falls back to unvalidated free-text create instead of failing the whole area.
+**Graph unavailability.** On the normal path the provider returns
+`DirectoryPrincipal`s carrying the id, display name, and kind (it does not attach a
+claim bag). If the app-only token cannot be minted, or a Graph call is denied or
+fails, the provider degrades cleanly rather than throwing: a search returns an
+empty page and a resolve returns `null`. The provider stays registered, so the
+directory is still reported as configured - a search simply surfaces no matches,
+and an id that cannot be resolved is blocked as an unknown principal rather than
+created.
 
 For the app-registration walkthrough (ids, secret, permission GUIDs) see
 [Entra setup](../lattice.membership.entra/entra-setup.md), and for a runnable

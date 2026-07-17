@@ -23,13 +23,14 @@ The underlying MSAL confidential-client cache serves and renews the token, and t
 ## Identity directory
 
 The same registration also installs a Microsoft Graph-backed
-`ILatticeIdentityDirectory` (`ProviderId` `"entra-graph"`) - the provider-agnostic
+`ILatticeIdentityDirectory` (`ProviderId` `"entra"`) - the provider-agnostic
 identity source that the Explorer Access area searches and validates against when
 an operator picks or creates a subject. It searches users and groups in the tenant
 over the same app-only Graph token described above, requiring the `User.Read.All`
 and `Group.Read.All` application permissions. When the token cannot be minted or a
-Graph call is denied, it degrades to reporting the directory as unavailable rather
-than throwing, so the Explorer falls back to unvalidated free-text create.
+Graph call is denied, it degrades cleanly rather than throwing: a search returns an
+empty page and a resolve returns `null`, so the Access area keeps working without
+an unhandled fault.
 
 See [Identity-directory providers](../lattice.membership/identity-directory-providers.md)
 for the seam, the static and custom alternatives, and the fail-closed create flow.
