@@ -66,6 +66,46 @@ public sealed class LatticeMembershipMetricsTests
     }
 
     [Test]
+    public void RecordDirectorySearch_matched_records_duration_and_one_hit()
+    {
+        using var duration = new MeterCollector<double>(
+            LatticeMembershipMetrics.MeterName, LatticeMembershipMetrics.DirectorySearchDurationName);
+        using var hits = new MeterCollector<long>(
+            LatticeMembershipMetrics.MeterName, LatticeMembershipMetrics.DirectorySearchHitsName);
+        using var misses = new MeterCollector<long>(
+            LatticeMembershipMetrics.MeterName, LatticeMembershipMetrics.DirectorySearchMissesName);
+
+        LatticeMembershipMetrics.RecordDirectorySearch(12.5, matched: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(duration.Measurements.Select(m => m.Value), Is.EqualTo(new[] { 12.5 }));
+            Assert.That(hits.Sum(), Is.EqualTo(1), "a matched search counts one hit");
+            Assert.That(misses.Sum(), Is.Zero, "a matched search counts no miss");
+        });
+    }
+
+    [Test]
+    public void RecordDirectorySearch_unmatched_records_duration_and_one_miss()
+    {
+        using var duration = new MeterCollector<double>(
+            LatticeMembershipMetrics.MeterName, LatticeMembershipMetrics.DirectorySearchDurationName);
+        using var hits = new MeterCollector<long>(
+            LatticeMembershipMetrics.MeterName, LatticeMembershipMetrics.DirectorySearchHitsName);
+        using var misses = new MeterCollector<long>(
+            LatticeMembershipMetrics.MeterName, LatticeMembershipMetrics.DirectorySearchMissesName);
+
+        LatticeMembershipMetrics.RecordDirectorySearch(3.0, matched: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(duration.Measurements.Select(m => m.Value), Is.EqualTo(new[] { 3.0 }));
+            Assert.That(misses.Sum(), Is.EqualTo(1), "an unmatched search counts one miss");
+            Assert.That(hits.Sum(), Is.Zero, "an unmatched search counts no hit");
+        });
+    }
+
+    [Test]
     public async Task Cold_resolve_counts_one_miss_and_warm_re_resolves_count_hits()
     {
         var (cache, _) = CreateCache();

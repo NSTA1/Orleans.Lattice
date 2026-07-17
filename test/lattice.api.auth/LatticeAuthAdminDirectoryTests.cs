@@ -127,6 +127,80 @@ public sealed class LatticeAuthAdminDirectoryTests
         Assert.ThrowsAsync<ArgumentNullException>(() => admin.SearchDirectoryAsync(null!));
     }
 
+    [Test]
+    public async Task SearchDirectoryAsync_records_latency_and_a_hit_when_the_search_matches()
+    {
+        var directory = new FakeIdentityDirectory
+        {
+            NextPage = new DirectorySearchPage(
+                new[] { new DirectoryPrincipal("u-1", "Alice", DirectoryPrincipalKind.User) },
+                ContinuationToken: null),
+        };
+        var admin = CreateAdmin(directory);
+
+        using var duration = new MeterCollector<double>(
+            LatticeMembershipMetrics.MeterName, LatticeMembershipMetrics.DirectorySearchDurationName);
+        using var hits = new MeterCollector<long>(
+            LatticeMembershipMetrics.MeterName, LatticeMembershipMetrics.DirectorySearchHitsName);
+        using var misses = new MeterCollector<long>(
+            LatticeMembershipMetrics.MeterName, LatticeMembershipMetrics.DirectorySearchMissesName);
+
+        await admin.SearchDirectoryAsync(new DirectorySearchRequest { Term = SearchTerm });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(duration.Count, Is.EqualTo(1), "a directory-backed search records one latency sample");
+            Assert.That(hits.Sum(), Is.EqualTo(1), "a search returning a principal counts a hit");
+            Assert.That(misses.Sum(), Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task SearchDirectoryAsync_records_a_miss_when_the_search_returns_nothing()
+    {
+        var directory = new FakeIdentityDirectory
+        {
+            NextPage = new DirectorySearchPage(Array.Empty<DirectoryPrincipal>(), ContinuationToken: null),
+        };
+        var admin = CreateAdmin(directory);
+
+        using var hits = new MeterCollector<long>(
+            LatticeMembershipMetrics.MeterName, LatticeMembershipMetrics.DirectorySearchHitsName);
+        using var misses = new MeterCollector<long>(
+            LatticeMembershipMetrics.MeterName, LatticeMembershipMetrics.DirectorySearchMissesName);
+
+        await admin.SearchDirectoryAsync(new DirectorySearchRequest { Term = SearchTerm });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(misses.Sum(), Is.EqualTo(1), "an empty search counts a miss");
+            Assert.That(hits.Sum(), Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task SearchDirectoryAsync_records_nothing_when_no_directory_is_configured()
+    {
+        var admin = CreateAdmin(new NullIdentityDirectory());
+
+        using var duration = new MeterCollector<double>(
+            LatticeMembershipMetrics.MeterName, LatticeMembershipMetrics.DirectorySearchDurationName);
+        using var hits = new MeterCollector<long>(
+            LatticeMembershipMetrics.MeterName, LatticeMembershipMetrics.DirectorySearchHitsName);
+        using var misses = new MeterCollector<long>(
+            LatticeMembershipMetrics.MeterName, LatticeMembershipMetrics.DirectorySearchMissesName);
+
+        var result = await admin.SearchDirectoryAsync(new DirectorySearchRequest { Term = SearchTerm });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Available, Is.False, "no configured directory folds to an unavailable result");
+            Assert.That(duration.Count, Is.Zero, "the no-op provider is never called, so nothing is timed");
+            Assert.That(hits.Sum(), Is.Zero);
+            Assert.That(misses.Sum(), Is.Zero);
+        });
+    }
+
     // ----- ResolveDirectoryPrincipalAsync -----
 
     [Test]

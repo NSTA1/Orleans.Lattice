@@ -198,6 +198,9 @@ Charted by the Identity & Authorization dashboard.
 |------------|------|------|-----------|----------|
 | `orleans.lattice.membership.resolution_cache.hits` | counter | (none) | Authorization | Subject-resolution cache hit ratio; Subject-resolution cache hits vs misses (rate) |
 | `orleans.lattice.membership.resolution_cache.misses` | counter | (none) | Authorization | Subject-resolution cache hit ratio; Subject-resolution cache hits vs misses (rate) |
+| `orleans.lattice.membership.directory.search.duration` | histogram (ms) | (none) | Authorization | Identity-directory search latency p50/p95/p99 (ms) |
+| `orleans.lattice.membership.directory.search.hits` | counter | (none) | Authorization | Identity-directory search hits vs misses (rate); Identity-directory search hit ratio |
+| `orleans.lattice.membership.directory.search.misses` | counter | (none) | Authorization | Identity-directory search hits vs misses (rate); Identity-directory search hit ratio |
 
 ## `orleans.lattice.backup` meter
 

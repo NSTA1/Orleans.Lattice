@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Membership;
@@ -420,7 +421,11 @@ internal sealed class LatticeAuthAdmin(
             request.Kind,
             request.PageSize,
             request.ContinuationToken);
+        var startTimestamp = Stopwatch.GetTimestamp();
         var page = await _identityDirectory.SearchAsync(query, cancellationToken).ConfigureAwait(false);
+        LatticeMembershipMetrics.RecordDirectorySearch(
+            Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
+            matched: page.Principals.Count > 0);
 
         var descriptors = new List<DirectoryPrincipalDescriptor>(page.Principals.Count);
         foreach (var principal in page.Principals)
