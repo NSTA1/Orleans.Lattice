@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Backup</PackageId>
-    <Version>7.9.3</Version>
+    <Version>7.9.4</Version>
     <Description>Backup and restore add-on for Orleans.Lattice. Scaffolding release: reserves the package, the serialization-alias prefix, and the reserved system-tree namespace that the backup catalog and manifest engine build on. No runtime behaviour yet.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
