@@ -221,6 +221,84 @@ public sealed class MembershipAdminService(IAuthAdminClient client) : IMembershi
     private static AccessListView<T> Denied<T>(LatticeAuthorizationDeniedException ex) =>
         new() { Status = AccessOperationStatus.Denied, Message = AccessFailure.DenialMessage(ex) };
 
+    /// <inheritdoc />
+    public async Task<DirectorySearchView> SearchDirectoryAsync(
+        string term,
+        DirectoryPrincipalKind? kind = null,
+        int pageSize = 0,
+        string? pageToken = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new DirectorySearchRequest
+        {
+            Term = term ?? string.Empty,
+            Kind = kind,
+            PageSize = pageSize,
+            ContinuationToken = string.IsNullOrEmpty(pageToken) ? null : pageToken,
+        };
+
+        try
+        {
+            var result = await _client.SearchDirectoryAsync(request, cancellationToken).ConfigureAwait(false);
+            if (!result.Available)
+            {
+                return DirectorySearchView.Unavailable;
+            }
+
+            return new DirectorySearchView
+            {
+                Status = AccessOperationStatus.Succeeded,
+                Principals = result.Principals,
+                NextPageToken = result.ContinuationToken,
+                Available = true,
+            };
+        }
+        catch (LatticeAuthorizationDeniedException ex)
+        {
+            return new DirectorySearchView { Status = AccessOperationStatus.Denied, Message = AccessFailure.DenialMessage(ex) };
+        }
+        catch (RpcException ex)
+        {
+            return new DirectorySearchView { Status = AccessOperationStatus.Failed, Message = AccessFailure.FailureMessage(ex) };
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<DirectoryPrincipalDescriptor?> ResolveDirectoryPrincipalAsync(string principalId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(principalId);
+        try
+        {
+            return await _client.ResolveDirectoryPrincipalAsync(principalId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (LatticeAuthorizationDeniedException)
+        {
+            return null;
+        }
+        catch (RpcException)
+        {
+            return null;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<AccessModelView> GetAccessModelAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var descriptor = await _client.GetAccessModelAsync(cancellationToken).ConfigureAwait(false);
+            return AccessModelView.FromDescriptor(descriptor);
+        }
+        catch (LatticeAuthorizationDeniedException ex)
+        {
+            return AccessModelView.Unavailable with { Status = AccessOperationStatus.Denied, Message = AccessFailure.DenialMessage(ex) };
+        }
+        catch (RpcException ex)
+        {
+            return AccessModelView.Unavailable with { Message = AccessFailure.FailureMessage(ex) };
+        }
+    }
+
     private static AccessListView<T> Failed<T>(RpcException ex) =>
         new() { Status = AccessOperationStatus.Failed, Message = AccessFailure.FailureMessage(ex) };
 

@@ -17,6 +17,17 @@ public class ExplorerCapabilitiesTests
     }
 
     [Test]
+    public void Empty_denies_the_access_area_and_reports_unknown_auth_mode()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(ExplorerCapabilities.Empty.AuthAdminAllowed, Is.False);
+            Assert.That(ExplorerCapabilities.Empty.AuthDirectoryAvailable, Is.False);
+            Assert.That(ExplorerCapabilities.Empty.AuthAuthenticationMode, Is.EqualTo(ExplorerAccessAuthenticationMode.Unknown));
+        });
+    }
+
+    [Test]
     public void ForScope_returns_probed_snapshot_when_present()
     {
         var snapshot = new BackupScopeCapabilitySnapshot { CanList = true, CanRestore = true };

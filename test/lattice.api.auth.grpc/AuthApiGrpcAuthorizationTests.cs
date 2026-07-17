@@ -74,6 +74,9 @@ public sealed class AuthApiGrpcAuthorizationTests
             Scope = LatticeScope.Tree("t"),
         }));
         yield return Case("EffectivePermissions", c => c.EffectivePermissionsAsync(new AuthSubjectRef { SubjectId = "u" }));
+        yield return Case("SearchDirectory", c => c.SearchDirectoryAsync(new DirectorySearchRequest { Term = "u" }));
+        yield return Case("ResolveDirectoryPrincipal", c => c.ResolveDirectoryPrincipalAsync(new AuthPrincipalRef { PrincipalId = "u" }));
+        yield return Case("GetAccessModel", c => c.GetAccessModelAsync(new AuthAccessModelQuery()));
     }
 
     [TestCaseSource(nameof(AllOperations))]

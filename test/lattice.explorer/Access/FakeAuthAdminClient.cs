@@ -26,10 +26,17 @@ internal sealed class FakeAuthAdminClient : IAuthAdminClient
     public AuthExplanation? ExplanationResult { get; set; }
     public AuthEffectivePermissions? EffectiveResult { get; set; }
 
+    public DirectorySearchResult DirectorySearchResult { get; set; } = DirectorySearchResult.Unavailable;
+    public DirectoryPrincipalDescriptor? DirectoryPrincipalResult { get; set; }
+    public AccessModelDescriptor AccessModelResult { get; set; }
+        = new() { DirectoryProviderId = "null", DirectoryExplanation = string.Empty };
+
     public Exception? ListUsersThrows { get; set; }
     public Exception? MutationThrows { get; set; }
     public Exception? ListThrows { get; set; }
     public Exception? ExplainThrows { get; set; }
+    public Exception? DirectoryThrows { get; set; }
+    public Exception? AccessModelThrows { get; set; }
 
     public int ListUsersCallCount { get; private set; }
     public AuthPageRequest? LastUsersRequest { get; private set; }
@@ -43,6 +50,9 @@ internal sealed class FakeAuthAdminClient : IAuthAdminClient
     public LatticeOperation? LastExplainOperation { get; private set; }
     public LatticeScope? LastExplainScope { get; private set; }
     public LatticeSubjectSelectorKind? LastExplainSubjectKind { get; private set; }
+    public DirectorySearchRequest? LastDirectorySearchRequest { get; private set; }
+    public string? LastResolvedPrincipalId { get; private set; }
+    public int GetAccessModelCallCount { get; private set; }
 
     public Task<AuthUserPage> ListUsersAsync(AuthPageRequest request, CancellationToken cancellationToken = default)
     {
@@ -238,5 +248,38 @@ internal sealed class FakeAuthAdminClient : IAuthAdminClient
         }
 
         return Task.FromResult(EffectiveResult ?? new AuthEffectivePermissions { SubjectId = subjectId });
+    }
+
+    public Task<DirectorySearchResult> SearchDirectoryAsync(DirectorySearchRequest request, CancellationToken cancellationToken = default)
+    {
+        LastDirectorySearchRequest = request;
+        if (DirectoryThrows is not null)
+        {
+            throw DirectoryThrows;
+        }
+
+        return Task.FromResult(DirectorySearchResult);
+    }
+
+    public Task<DirectoryPrincipalDescriptor?> ResolveDirectoryPrincipalAsync(string principalId, CancellationToken cancellationToken = default)
+    {
+        LastResolvedPrincipalId = principalId;
+        if (DirectoryThrows is not null)
+        {
+            throw DirectoryThrows;
+        }
+
+        return Task.FromResult(DirectoryPrincipalResult);
+    }
+
+    public Task<AccessModelDescriptor> GetAccessModelAsync(CancellationToken cancellationToken = default)
+    {
+        GetAccessModelCallCount++;
+        if (AccessModelThrows is not null)
+        {
+            throw AccessModelThrows;
+        }
+
+        return Task.FromResult(AccessModelResult);
     }
 }

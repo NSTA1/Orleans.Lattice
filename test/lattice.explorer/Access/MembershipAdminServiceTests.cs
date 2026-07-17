@@ -202,4 +202,217 @@ public class MembershipAdminServiceTests
 
         Assert.That(user, Is.Not.Null);
     }
+
+    [Test]
+    public async Task SearchDirectoryAsync_available_returns_principals_and_token()
+    {
+        var client = new FakeAuthAdminClient
+        {
+            DirectorySearchResult = new DirectorySearchResult
+            {
+                Principals = new[]
+                {
+                    new DirectoryPrincipalDescriptor { Id = "alice", DisplayName = "Alice", Kind = DirectoryPrincipalKind.User },
+                },
+                ContinuationToken = "next",
+                Available = true,
+            },
+        };
+        var service = Create(client);
+
+        var view = await service.SearchDirectoryAsync("al", DirectoryPrincipalKind.User, pageSize: 10, pageToken: "cursor");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(view.IsSuccess, Is.True);
+            Assert.That(view.Available, Is.True);
+            Assert.That(view.Principals, Has.Count.EqualTo(1));
+            Assert.That(view.Principals[0].Id, Is.EqualTo("alice"));
+            Assert.That(view.NextPageToken, Is.EqualTo("next"));
+            Assert.That(client.LastDirectorySearchRequest!.Term, Is.EqualTo("al"));
+            Assert.That(client.LastDirectorySearchRequest!.Kind, Is.EqualTo(DirectoryPrincipalKind.User));
+            Assert.That(client.LastDirectorySearchRequest!.PageSize, Is.EqualTo(10));
+            Assert.That(client.LastDirectorySearchRequest!.ContinuationToken, Is.EqualTo("cursor"));
+        });
+    }
+
+    [Test]
+    public async Task SearchDirectoryAsync_empty_token_is_normalized_to_null()
+    {
+        var client = new FakeAuthAdminClient { DirectorySearchResult = new DirectorySearchResult { Available = true } };
+        var service = Create(client);
+
+        await service.SearchDirectoryAsync("al", pageToken: string.Empty);
+
+        Assert.That(client.LastDirectorySearchRequest!.ContinuationToken, Is.Null);
+    }
+
+    [Test]
+    public async Task SearchDirectoryAsync_no_directory_folds_into_unavailable_view()
+    {
+        var client = new FakeAuthAdminClient { DirectorySearchResult = DirectorySearchResult.Unavailable };
+        var service = Create(client);
+
+        var view = await service.SearchDirectoryAsync("al");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(view.IsSuccess, Is.True, "a missing directory is a clean state, not a failure");
+            Assert.That(view.Available, Is.False);
+            Assert.That(view.Principals, Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task SearchDirectoryAsync_denied_folds_into_denied_view_without_throwing()
+    {
+        var client = new FakeAuthAdminClient { DirectoryThrows = new LatticeAuthorizationDeniedException("denied") };
+        var service = Create(client);
+
+        var view = await service.SearchDirectoryAsync("al");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(view.Status, Is.EqualTo(AccessOperationStatus.Denied));
+            Assert.That(view.Available, Is.False);
+            Assert.That(view.Principals, Is.Empty);
+            Assert.That(view.Message, Is.Not.Empty);
+        });
+    }
+
+    [Test]
+    public async Task SearchDirectoryAsync_transport_failure_folds_into_failed_view_without_throwing()
+    {
+        var client = new FakeAuthAdminClient
+        {
+            DirectoryThrows = new RpcException(new Status(StatusCode.Unavailable, "gone")),
+        };
+        var service = Create(client);
+
+        var view = await service.SearchDirectoryAsync("al");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(view.Status, Is.EqualTo(AccessOperationStatus.Failed));
+            Assert.That(view.Available, Is.False);
+            Assert.That(view.Principals, Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task ResolveDirectoryPrincipalAsync_success_returns_descriptor()
+    {
+        var client = new FakeAuthAdminClient
+        {
+            DirectoryPrincipalResult = new DirectoryPrincipalDescriptor { Id = "g-1", DisplayName = "Group One", Kind = DirectoryPrincipalKind.Group },
+        };
+        var service = Create(client);
+
+        var principal = await service.ResolveDirectoryPrincipalAsync("g-1");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(principal, Is.Not.Null);
+            Assert.That(principal!.Id, Is.EqualTo("g-1"));
+            Assert.That(client.LastResolvedPrincipalId, Is.EqualTo("g-1"));
+        });
+    }
+
+    [Test]
+    public void ResolveDirectoryPrincipalAsync_empty_id_throws()
+    {
+        var service = Create(new FakeAuthAdminClient());
+
+        Assert.That(() => service.ResolveDirectoryPrincipalAsync(string.Empty), Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public async Task ResolveDirectoryPrincipalAsync_denied_folds_into_null_without_throwing()
+    {
+        var client = new FakeAuthAdminClient { DirectoryThrows = new LatticeAuthorizationDeniedException("denied") };
+        var service = Create(client);
+
+        var principal = await service.ResolveDirectoryPrincipalAsync("g-1");
+
+        Assert.That(principal, Is.Null);
+    }
+
+    [Test]
+    public async Task ResolveDirectoryPrincipalAsync_transport_failure_folds_into_null_without_throwing()
+    {
+        var client = new FakeAuthAdminClient
+        {
+            DirectoryThrows = new RpcException(new Status(StatusCode.Unavailable, "gone")),
+        };
+        var service = Create(client);
+
+        var principal = await service.ResolveDirectoryPrincipalAsync("g-1");
+
+        Assert.That(principal, Is.Null);
+    }
+
+    [Test]
+    public async Task GetAccessModelAsync_success_maps_descriptor()
+    {
+        var client = new FakeAuthAdminClient
+        {
+            AccessModelResult = new AccessModelDescriptor
+            {
+                AuthenticationMode = AccessAuthenticationMode.Claims,
+                RulesEnforced = true,
+                DirectoryAvailable = true,
+                DirectoryProviderId = "entra",
+                DirectoryExplanation = "Use the object id.",
+            },
+        };
+        var service = Create(client);
+
+        var view = await service.GetAccessModelAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(view.IsSuccess, Is.True);
+            Assert.That(view.AuthenticationMode, Is.EqualTo(AccessAuthenticationMode.Claims));
+            Assert.That(view.RulesEnforced, Is.True);
+            Assert.That(view.DirectoryAvailable, Is.True);
+            Assert.That(view.DirectoryProviderId, Is.EqualTo("entra"));
+            Assert.That(view.DirectoryExplanation, Is.EqualTo("Use the object id."));
+        });
+    }
+
+    [Test]
+    public async Task GetAccessModelAsync_denied_folds_into_safe_snapshot_without_throwing()
+    {
+        var client = new FakeAuthAdminClient { AccessModelThrows = new LatticeAuthorizationDeniedException("denied") };
+        var service = Create(client);
+
+        var view = await service.GetAccessModelAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(view.Status, Is.EqualTo(AccessOperationStatus.Denied));
+            Assert.That(view.AuthenticationMode, Is.EqualTo(AccessAuthenticationMode.Unknown));
+            Assert.That(view.DirectoryAvailable, Is.False);
+            Assert.That(view.Message, Is.Not.Empty);
+        });
+    }
+
+    [Test]
+    public async Task GetAccessModelAsync_transport_failure_folds_into_safe_snapshot_without_throwing()
+    {
+        var client = new FakeAuthAdminClient
+        {
+            AccessModelThrows = new RpcException(new Status(StatusCode.Unavailable, "gone")),
+        };
+        var service = Create(client);
+
+        var view = await service.GetAccessModelAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(view.Status, Is.EqualTo(AccessOperationStatus.Failed));
+            Assert.That(view.AuthenticationMode, Is.EqualTo(AccessAuthenticationMode.Unknown));
+            Assert.That(view.DirectoryAvailable, Is.False);
+        });
+    }
 }

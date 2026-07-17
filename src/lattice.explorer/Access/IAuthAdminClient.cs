@@ -141,4 +141,28 @@ public interface IAuthAdminClient
     /// <param name="subjectId">The subject to resolve permissions for. Must not be <see langword="null"/> or empty.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task<AuthEffectivePermissions> EffectivePermissionsAsync(string subjectId, CancellationToken cancellationToken = default);
+
+    // ----- Identity directory -----
+
+    /// <summary>
+    /// Searches or browses the configured identity directory. When no directory
+    /// is configured the result is <see cref="DirectorySearchResult.Unavailable"/>
+    /// (empty and <see cref="DirectorySearchResult.Available"/> <see langword="false"/>).
+    /// </summary>
+    /// <param name="request">The typeahead / browse request. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<DirectorySearchResult> SearchDirectoryAsync(DirectorySearchRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Resolves a single directory principal by its exact id, or
+    /// <see langword="null"/> when no such principal exists (or no directory is
+    /// configured).
+    /// </summary>
+    /// <param name="principalId">The exact principal id to resolve. Must not be <see langword="null"/> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<DirectoryPrincipalDescriptor?> ResolveDirectoryPrincipalAsync(string principalId, CancellationToken cancellationToken = default);
+
+    /// <summary>Reads the cluster's best-effort access model (authentication mode, rule enforcement, directory availability).</summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<AccessModelDescriptor> GetAccessModelAsync(CancellationToken cancellationToken = default);
 }

@@ -81,6 +81,15 @@ internal sealed class LatticeAuthApiGrpcMethods
     /// <summary>The unary effective-permissions RPC method name.</summary>
     public const string EffectivePermissionsMethodName = "EffectivePermissions";
 
+    /// <summary>The unary directory-search RPC method name.</summary>
+    public const string SearchDirectoryMethodName = "SearchDirectory";
+
+    /// <summary>The unary directory-principal-resolve RPC method name.</summary>
+    public const string ResolveDirectoryPrincipalMethodName = "ResolveDirectoryPrincipal";
+
+    /// <summary>The unary access-model-read RPC method name.</summary>
+    public const string GetAccessModelMethodName = "GetAccessModel";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeAuthApiGrpcMethods(
         Serializer<AuthUser> userSerializer,
@@ -105,7 +114,13 @@ internal sealed class LatticeAuthApiGrpcMethods
         Serializer<AuthExplanation> explanationSerializer,
         Serializer<AuthSubjectRef> subjectRefSerializer,
         Serializer<AuthEffectivePermissions> effectivePermissionsSerializer,
-        Serializer<AuthAck> ackSerializer)
+        Serializer<AuthAck> ackSerializer,
+        Serializer<DirectorySearchRequest> directorySearchRequestSerializer,
+        Serializer<DirectorySearchResult> directorySearchResultSerializer,
+        Serializer<AuthPrincipalRef> principalRefSerializer,
+        Serializer<AuthDirectoryPrincipalResult> directoryPrincipalResultSerializer,
+        Serializer<AuthAccessModelQuery> accessModelQuerySerializer,
+        Serializer<AccessModelDescriptor> accessModelSerializer)
     {
         ArgumentNullException.ThrowIfNull(userSerializer);
         ArgumentNullException.ThrowIfNull(userRefSerializer);
@@ -130,6 +145,12 @@ internal sealed class LatticeAuthApiGrpcMethods
         ArgumentNullException.ThrowIfNull(subjectRefSerializer);
         ArgumentNullException.ThrowIfNull(effectivePermissionsSerializer);
         ArgumentNullException.ThrowIfNull(ackSerializer);
+        ArgumentNullException.ThrowIfNull(directorySearchRequestSerializer);
+        ArgumentNullException.ThrowIfNull(directorySearchResultSerializer);
+        ArgumentNullException.ThrowIfNull(principalRefSerializer);
+        ArgumentNullException.ThrowIfNull(directoryPrincipalResultSerializer);
+        ArgumentNullException.ThrowIfNull(accessModelQuerySerializer);
+        ArgumentNullException.ThrowIfNull(accessModelSerializer);
 
         UpsertUser = Unary(UpsertUserMethodName, userSerializer, ackSerializer);
         GetUser = Unary(GetUserMethodName, userRefSerializer, userResultSerializer);
@@ -154,6 +175,10 @@ internal sealed class LatticeAuthApiGrpcMethods
 
         Explain = Unary(ExplainMethodName, explainQuerySerializer, explanationSerializer);
         EffectivePermissions = Unary(EffectivePermissionsMethodName, subjectRefSerializer, effectivePermissionsSerializer);
+
+        SearchDirectory = Unary(SearchDirectoryMethodName, directorySearchRequestSerializer, directorySearchResultSerializer);
+        ResolveDirectoryPrincipal = Unary(ResolveDirectoryPrincipalMethodName, principalRefSerializer, directoryPrincipalResultSerializer);
+        GetAccessModel = Unary(GetAccessModelMethodName, accessModelQuerySerializer, accessModelSerializer);
     }
 
     private static Method<TRequest, TResponse> Unary<TRequest, TResponse>(
@@ -226,6 +251,15 @@ internal sealed class LatticeAuthApiGrpcMethods
     /// <summary>The unary <c>EffectivePermissions</c> RPC.</summary>
     public Method<AuthSubjectRef, AuthEffectivePermissions> EffectivePermissions { get; }
 
+    /// <summary>The unary <c>SearchDirectory</c> RPC.</summary>
+    public Method<DirectorySearchRequest, DirectorySearchResult> SearchDirectory { get; }
+
+    /// <summary>The unary <c>ResolveDirectoryPrincipal</c> RPC.</summary>
+    public Method<AuthPrincipalRef, AuthDirectoryPrincipalResult> ResolveDirectoryPrincipal { get; }
+
+    /// <summary>The unary <c>GetAccessModel</c> RPC.</summary>
+    public Method<AuthAccessModelQuery, AccessModelDescriptor> GetAccessModel { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out of
     /// <paramref name="serializerProvider"/>. Shared by the server-side DI factory
@@ -258,7 +292,13 @@ internal sealed class LatticeAuthApiGrpcMethods
             serializerProvider.GetRequiredService<Serializer<AuthExplanation>>(),
             serializerProvider.GetRequiredService<Serializer<AuthSubjectRef>>(),
             serializerProvider.GetRequiredService<Serializer<AuthEffectivePermissions>>(),
-            serializerProvider.GetRequiredService<Serializer<AuthAck>>());
+            serializerProvider.GetRequiredService<Serializer<AuthAck>>(),
+            serializerProvider.GetRequiredService<Serializer<DirectorySearchRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<DirectorySearchResult>>(),
+            serializerProvider.GetRequiredService<Serializer<AuthPrincipalRef>>(),
+            serializerProvider.GetRequiredService<Serializer<AuthDirectoryPrincipalResult>>(),
+            serializerProvider.GetRequiredService<Serializer<AuthAccessModelQuery>>(),
+            serializerProvider.GetRequiredService<Serializer<AccessModelDescriptor>>());
     }
 }
 

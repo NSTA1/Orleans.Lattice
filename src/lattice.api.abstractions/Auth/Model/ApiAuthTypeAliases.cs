@@ -104,4 +104,13 @@ public static class ApiAuthTypeAliases
 
     /// <summary>Alias for the gRPC rule-removed response (a single boolean).</summary>
     public const string AuthRuleRemoved = "oli.rv";
+
+    /// <summary>Alias for the gRPC single-principal reference request (a bare directory principal id).</summary>
+    public const string AuthPrincipalRef = "oli.pn";
+
+    /// <summary>Alias for the gRPC nullable-directory-principal result response.</summary>
+    public const string AuthDirectoryPrincipalResult = "oli.dr";
+
+    /// <summary>Alias for the gRPC no-argument access-model read request.</summary>
+    public const string AuthAccessModelQuery = "oli.aq";
 }

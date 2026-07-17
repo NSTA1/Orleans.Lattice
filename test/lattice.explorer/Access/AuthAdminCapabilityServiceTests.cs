@@ -99,4 +99,94 @@ public class AuthAdminCapabilityServiceTests
             Assert.That(store.Current.BackupListAllowed, Is.True);
         });
     }
+
+    [Test]
+    public async Task RefreshAsync_reports_directory_availability_and_auth_mode()
+    {
+        var client = new FakeAuthAdminClient
+        {
+            UsersResult = new AuthUserPage(),
+            AccessModelResult = new AccessModelDescriptor
+            {
+                AuthenticationMode = AccessAuthenticationMode.Claims,
+                DirectoryAvailable = true,
+                DirectoryProviderId = "entra",
+                DirectoryExplanation = "Use the object id.",
+            },
+        };
+        var (service, store) = Create(client);
+
+        await service.RefreshAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(store.Current.AuthAdminAllowed, Is.True);
+            Assert.That(store.Current.AuthDirectoryAvailable, Is.True);
+            Assert.That(store.Current.AuthAuthenticationMode, Is.EqualTo(ExplorerAccessAuthenticationMode.Claims));
+        });
+    }
+
+    [Test]
+    public async Task RefreshAsync_maps_basic_auth_mode()
+    {
+        var client = new FakeAuthAdminClient
+        {
+            AccessModelResult = new AccessModelDescriptor
+            {
+                AuthenticationMode = AccessAuthenticationMode.Basic,
+                DirectoryAvailable = false,
+                DirectoryProviderId = "null",
+                DirectoryExplanation = string.Empty,
+            },
+        };
+        var (service, store) = Create(client);
+
+        await service.RefreshAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(store.Current.AuthAuthenticationMode, Is.EqualTo(ExplorerAccessAuthenticationMode.Basic));
+            Assert.That(store.Current.AuthDirectoryAvailable, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task RefreshAsync_denied_skips_the_access_model_probe_and_reports_unknown()
+    {
+        var client = new FakeAuthAdminClient
+        {
+            ListUsersThrows = new LatticeAuthorizationDeniedException("denied"),
+        };
+        var (service, store) = Create(client);
+
+        await service.RefreshAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(store.Current.AuthAdminAllowed, Is.False);
+            Assert.That(store.Current.AuthDirectoryAvailable, Is.False);
+            Assert.That(store.Current.AuthAuthenticationMode, Is.EqualTo(ExplorerAccessAuthenticationMode.Unknown));
+            Assert.That(client.GetAccessModelCallCount, Is.EqualTo(0), "a denied caller must not trigger a second admin probe");
+        });
+    }
+
+    [Test]
+    public async Task RefreshAsync_access_model_probe_failure_yields_safe_snapshot()
+    {
+        var client = new FakeAuthAdminClient
+        {
+            UsersResult = new AuthUserPage(),
+            AccessModelThrows = new RpcException(new Status(StatusCode.Unavailable, "gone")),
+        };
+        var (service, store) = Create(client);
+
+        await service.RefreshAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(store.Current.AuthAdminAllowed, Is.True, "the coarse gate still passed");
+            Assert.That(store.Current.AuthDirectoryAvailable, Is.False);
+            Assert.That(store.Current.AuthAuthenticationMode, Is.EqualTo(ExplorerAccessAuthenticationMode.Unknown));
+        });
+    }
 }

@@ -222,6 +222,26 @@ public sealed class GrpcAuthAdminClient : IAuthAdminClient, IDisposable
             client.EffectivePermissionsAsync(new AuthSubjectRef { SubjectId = subjectId }, cancellationToken));
     }
 
+    /// <inheritdoc />
+    public Task<DirectorySearchResult> SearchDirectoryAsync(DirectorySearchRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return InvokeAsync(client => client.SearchDirectoryAsync(request, cancellationToken));
+    }
+
+    /// <inheritdoc />
+    public async Task<DirectoryPrincipalDescriptor?> ResolveDirectoryPrincipalAsync(string principalId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(principalId);
+        var result = await InvokeAsync(client =>
+            client.ResolveDirectoryPrincipalAsync(new AuthPrincipalRef { PrincipalId = principalId }, cancellationToken)).ConfigureAwait(false);
+        return result.Principal;
+    }
+
+    /// <inheritdoc />
+    public Task<AccessModelDescriptor> GetAccessModelAsync(CancellationToken cancellationToken = default)
+        => InvokeAsync(client => client.GetAccessModelAsync(new AuthAccessModelQuery(), cancellationToken));
+
     private async Task<T> InvokeAsync<T>(Func<LatticeAuthApiGrpcClient, Task<T>> call)
     {
         var client = ResolveClient();
