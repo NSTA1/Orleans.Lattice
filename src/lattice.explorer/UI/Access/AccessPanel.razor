@@ -9,6 +9,7 @@
 @inject IPolicyAdminService Policy
 @inject ICatalogReader CatalogReader
 @inject IExplorerCapabilityStore Capabilities
+@inject PrincipalLabelResolver Labels
 
 @*
     The Access (membership & access-control) management area. Four sub-tabs:
@@ -165,12 +166,8 @@
                             var id = user.UserId;
                             <li class="explorer-access-itemrow @(id == _selectedUserId ? "is-selected" : null)"
                                 @onclick="@(() => SelectUser(user))">
-                                <span class="explorer-access-itemlabel">
-                                    <span class="explorer-nav-item-id">@id</span>
-                                    @if (!string.IsNullOrEmpty(user.DisplayName))
-                                    {
-                                        <span class="explorer-access-sub">@user.DisplayName</span>
-                                    }
+                                <span class="explorer-access-itemlabel" title="@id">
+                                    <span class="explorer-nav-item-id">@(string.IsNullOrWhiteSpace(user.DisplayName) ? id : user.DisplayName)</span>
                                 </span>
                                 <button type="button" class="explorer-btn explorer-access-edit"
                                         disabled="@(_busy || !_allowed)" @onclick="@(() => EditUser(user))" @onclick:stopPropagation="true">Edit</button>
@@ -253,12 +250,8 @@
                             var id = group.GroupId;
                             <li class="explorer-access-itemrow @(id == _selectedGroupId ? "is-selected" : null)"
                                 @onclick="@(() => SelectGroupAsync(group))">
-                                <span class="explorer-access-itemlabel">
-                                    <span class="explorer-nav-item-id">@id</span>
-                                    @if (!string.IsNullOrEmpty(group.DisplayName))
-                                    {
-                                        <span class="explorer-access-sub">@group.DisplayName</span>
-                                    }
+                                <span class="explorer-access-itemlabel" title="@id">
+                                    <span class="explorer-nav-item-id">@(string.IsNullOrWhiteSpace(group.DisplayName) ? id : group.DisplayName)</span>
                                 </span>
                                 <button type="button" class="explorer-btn explorer-access-edit"
                                         disabled="@(_busy || !_allowed)" @onclick="@(() => EditGroupAsync(group))" @onclick:stopPropagation="true">Edit</button>
@@ -314,7 +307,7 @@
 
                     @if (_selectedGroupId is not null)
                     {
-                        <h3 class="explorer-access-title">Direct members of '@_selectedGroupId'</h3>
+                        <h3 class="explorer-access-title" title="@_selectedGroupId">Direct members of '@SelectedGroupLabel'</h3>
                         @if (_directMembers.Count == 0)
                         {
                             <p class="explorer-backups-empty">No direct members.</p>
@@ -328,7 +321,7 @@
                                         <button type="button" class="explorer-btn explorer-btn-icon explorer-access-danger"
                                                 title="Remove member" aria-label="@($"Remove {member}")"
                                                 disabled="@(_busy || !_allowed)" @onclick="@(() => RemoveMemberAsync(member))">x</button>
-                                        <span class="explorer-access-member-id">@member</span>
+                                        <span class="explorer-access-member-id" title="@member">@Labels.Label(member)</span>
                                     </li>
                                 }
                             </ul>
@@ -383,7 +376,7 @@
                                 var rule = ranked.Rule;
                                 <tr class="@(ranked.DenyOverrides ? "is-deny" : null)">
                                     <td>@rule.RuleId</td>
-                                    <td>@AccessRuleFormat.SubjectLabel(rule.Subject)</td>
+                                    <td title="@AccessRuleFormat.SubjectLabel(rule.Subject)">@AccessRuleFormat.SubjectDisplayLabel(rule.Subject, Labels)</td>
                                     <td>@AccessRuleFormat.ScopeLabel(rule.Scope)</td>
                                     <td>@AccessRuleFormat.OperationsLabel(rule.Operations)</td>
                                     <td>@rule.Effect</td>
@@ -551,19 +544,31 @@
                     <p class="explorer-access-sub">Default effect when no rule matches: @_explanation.DefaultEffect</p>
                     @if (_explanation.GroupIds.Count > 0)
                     {
-                        <p class="explorer-access-sub">Group closure: @string.Join(", ", _explanation.GroupIds)</p>
+                        <p class="explorer-access-sub">Group closure:
+                            @for (var i = 0; i < _explanation.GroupIds.Count; i++)
+                            {
+                                var gid = _explanation.GroupIds[i];
+                                <span title="@gid">@Labels.Label(gid)</span>@(i < _explanation.GroupIds.Count - 1 ? ", " : string.Empty)
+                            }
+                        </p>
                     }
                     <h3 class="explorer-access-title">Matched rules</h3>
-                    <RankedRuleTable Rules="_explainRankedRules" />
+                    <RankedRuleTable Rules="_explainRankedRules" Labels="Labels" />
                 }
                 @if (_effective is not null)
                 {
-                    <h3 class="explorer-access-title">Effective permissions for '@_effective.SubjectId'</h3>
+                    <h3 class="explorer-access-title">Effective permissions for '<span title="@_effective.SubjectId">@Labels.Label(_effective.SubjectId)</span>'</h3>
                     @if (_effective.GroupIds.Count > 0)
                     {
-                        <p class="explorer-access-sub">Group closure: @string.Join(", ", _effective.GroupIds)</p>
+                        <p class="explorer-access-sub">Group closure:
+                            @for (var i = 0; i < _effective.GroupIds.Count; i++)
+                            {
+                                var gid = _effective.GroupIds[i];
+                                <span title="@gid">@Labels.Label(gid)</span>@(i < _effective.GroupIds.Count - 1 ? ", " : string.Empty)
+                            }
+                        </p>
                     }
-                    <RankedRuleTable Rules="_effectiveRankedRules" />
+                    <RankedRuleTable Rules="_effectiveRankedRules" Labels="Labels" />
                 }
             </div>
         </div>

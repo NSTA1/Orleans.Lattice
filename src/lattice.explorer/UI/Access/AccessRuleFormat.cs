@@ -1,4 +1,5 @@
 using Orleans.Lattice.Auth;
+using Orleans.Lattice.Explorer.Access;
 
 namespace Orleans.Lattice.Explorer.UI.Access;
 
@@ -46,6 +47,29 @@ internal static class AccessRuleFormat
         ArgumentNullException.ThrowIfNull(subject);
         var kind = subject.Kind == LatticeSubjectSelectorKind.Group ? "group" : "user";
         return $"{kind}:{subject.Id}";
+    }
+
+    /// <summary>
+    /// Formats a subject selector with its friendly directory display name as the
+    /// primary text, for example <c>user:Alice Ng</c>, resolving the id through
+    /// <paramref name="labels"/> when supplied. Falls back to the raw
+    /// <see cref="SubjectLabel(LatticeSubjectSelector)"/> form when no resolver is
+    /// supplied or the id is not yet resolved, so the display degrades to exactly
+    /// the id-only label. The raw id form belongs on the hover tooltip.
+    /// </summary>
+    /// <param name="subject">The subject selector. Must not be <see langword="null"/>.</param>
+    /// <param name="labels">The label resolver, or <see langword="null"/> to render the id only.</param>
+    /// <returns>The display label.</returns>
+    internal static string SubjectDisplayLabel(LatticeSubjectSelector subject, PrincipalLabelResolver? labels)
+    {
+        ArgumentNullException.ThrowIfNull(subject);
+        if (labels is null)
+        {
+            return SubjectLabel(subject);
+        }
+
+        var kind = subject.Kind == LatticeSubjectSelectorKind.Group ? "group" : "user";
+        return $"{kind}:{labels.Label(subject.Id)}";
     }
 
     /// <summary>Formats a scope as, for example, <c>tree</c>, <c>prefix 'foo'</c>, or <c>key 'bar'</c>.</summary>

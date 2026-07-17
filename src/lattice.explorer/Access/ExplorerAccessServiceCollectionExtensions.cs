@@ -38,6 +38,10 @@ public static class ExplorerAccessServiceCollectionExtensions
         // instance resolves a fresh model over a fresh debounce.
         services.TryAddTransient<ISubjectSearchDebounce, TimerSubjectSearchDebounce>();
         services.TryAddTransient<SubjectPickerModel>();
+        // The principal-label resolver caches directory display names for the
+        // lifetime of the Access panel it is injected into, so it is transient:
+        // each panel resolves a fresh resolver whose cache is scoped to that view.
+        services.TryAddTransient<PrincipalLabelResolver>();
         return services;
     }
 }

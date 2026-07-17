@@ -67,6 +67,11 @@ public partial class AccessPanel : ComponentBase, IDisposable
     private string _memberIdInput = string.Empty;
     private MembershipMemberKind _memberKind = MembershipMemberKind.User;
 
+    // The selected group's friendly display name, captured at selection time so the
+    // 'Direct members of X' heading and the client-side add / remove status banner
+    // render the name (falling back to the id) without re-resolving.
+    private string _selectedGroupDisplayName = string.Empty;
+
     // Bridges the shared SubjectPicker (which speaks LatticeSubjectSelectorKind)
     // to the membership member kind. Both enums share User=0/Group=1 semantics.
     private LatticeSubjectSelectorKind MemberPickerKind
@@ -535,6 +540,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _editingExistingGroup = true;
         _groupIdInput = group.GroupId;
         _groupDisplayInput = group.DisplayName ?? string.Empty;
+        _selectedGroupDisplayName = group.DisplayName ?? string.Empty;
         _groupCreateError = null;
         _memberIdInput = string.Empty;
         _memberKind = MembershipMemberKind.User;
@@ -577,6 +583,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _editingExistingGroup = false;
         _groupIdInput = string.Empty;
         _groupDisplayInput = string.Empty;
+        _selectedGroupDisplayName = string.Empty;
         _groupCreateError = null;
         _directMembers.Clear();
         _memberIdInput = string.Empty;
@@ -609,6 +616,9 @@ public partial class AccessPanel : ComponentBase, IDisposable
         if (view.IsSuccess)
         {
             _directMembers.AddRange(view.Entries);
+            // Warm the label cache for every member in view (bounded by the page) so
+            // each row upgrades from its raw id to a friendly display name on render.
+            await Labels.ResolveManyAsync(_directMembers);
         }
         else
         {
@@ -696,9 +706,14 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _busy = true;
         try
         {
-            _lastResult = await Membership.AddMemberAsync(_selectedGroupId, _memberIdInput.Trim(), _memberKind);
+            var memberId = _memberIdInput.Trim();
+            _lastResult = await Membership.AddMemberAsync(_selectedGroupId, memberId, _memberKind);
             if (_lastResult.IsSuccess)
             {
+                // Replace the server's raw-id success message with a friendly,
+                // display-name status line resolved client-side.
+                var memberLabel = await Labels.ResolveLabelAsync(memberId);
+                _lastResult = AccessOperationResult.Success($"Added {memberLabel} to {SelectedGroupLabel}.");
                 _memberIdInput = string.Empty;
                 await LoadDirectMembersAsync();
             }
@@ -722,6 +737,10 @@ public partial class AccessPanel : ComponentBase, IDisposable
             _lastResult = await Membership.RemoveMemberAsync(_selectedGroupId, memberId);
             if (_lastResult.IsSuccess)
             {
+                // Replace the server's raw-id success message with a friendly,
+                // display-name status line resolved client-side.
+                var memberLabel = await Labels.ResolveLabelAsync(memberId);
+                _lastResult = AccessOperationResult.Success($"Removed {memberLabel} from {SelectedGroupLabel}.");
                 await LoadDirectMembersAsync();
             }
         }
@@ -775,6 +794,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _rules.AddRange(view.Entries);
         _rulesNextToken = view.NextPageToken;
         _rankedRules = RulePrecedence.Rank(_rules);
+        await ResolveRuleSubjectsAsync(_rankedRules);
     }
 
     private Task LoadMoreRulesAsync() => LoadRulesAsync(reset: false);
@@ -916,6 +936,8 @@ public partial class AccessPanel : ComponentBase, IDisposable
             {
                 _explanation = view.Explanation;
                 _explainRankedRules = RulePrecedence.Rank(view.Explanation.MatchedRules);
+                await ResolveRuleSubjectsAsync(_explainRankedRules);
+                await Labels.ResolveManyAsync(view.Explanation.GroupIds);
                 _lastResult = null;
             }
             else
@@ -948,6 +970,9 @@ public partial class AccessPanel : ComponentBase, IDisposable
             {
                 _effective = view.Permissions;
                 _effectiveRankedRules = RulePrecedence.Rank(view.Permissions.Rules);
+                await ResolveRuleSubjectsAsync(_effectiveRankedRules);
+                await Labels.ResolveLabelAsync(view.Permissions.SubjectId);
+                await Labels.ResolveManyAsync(view.Permissions.GroupIds);
                 _lastResult = null;
             }
             else
@@ -964,6 +989,34 @@ public partial class AccessPanel : ComponentBase, IDisposable
     }
 
     // ----- Helpers -----
+
+    /// <summary>
+    /// The friendly label for the currently selected group: its captured display
+    /// name, or the group id when no display name is set.
+    /// </summary>
+    private string SelectedGroupLabel =>
+        string.IsNullOrWhiteSpace(_selectedGroupDisplayName)
+            ? _selectedGroupId ?? string.Empty
+            : _selectedGroupDisplayName;
+
+    // Warms the label cache for the subject id of every ranked rule about to be
+    // rendered, so each subject cell upgrades from its raw id to a friendly name.
+    // Bounded by the loaded rule page and only run on data load, never per render.
+    private async Task ResolveRuleSubjectsAsync(IReadOnlyList<RankedRule> ranked)
+    {
+        if (ranked.Count == 0)
+        {
+            return;
+        }
+
+        var ids = new List<string>(ranked.Count);
+        foreach (var rule in ranked)
+        {
+            ids.Add(rule.Rule.Subject.Id);
+        }
+
+        await Labels.ResolveManyAsync(ids);
+    }
 
     private static LatticeScope BuildScope(LatticeScopeKind kind, string treeId, string keyOrPrefix) => kind switch
     {

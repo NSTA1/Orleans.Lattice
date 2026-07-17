@@ -24,7 +24,7 @@ else
                 var rule = ranked.Rule;
                 <tr class="@(ranked.DenyOverrides ? "is-deny" : null)">
                     <td>@rule.RuleId</td>
-                    <td>@AccessRuleFormat.SubjectLabel(rule.Subject)</td>
+                    <td title="@AccessRuleFormat.SubjectLabel(rule.Subject)">@AccessRuleFormat.SubjectDisplayLabel(rule.Subject, Labels)</td>
                     <td>@AccessRuleFormat.ScopeLabel(rule.Scope)</td>
                     <td>@AccessRuleFormat.OperationsLabel(rule.Operations)</td>
                     <td>@rule.Effect</td>
@@ -38,4 +38,13 @@ else
     /// <summary>The precedence-ranked rules to render, highest precedence first.</summary>
     [Parameter]
     public IReadOnlyList<RankedRule> Rules { get; set; } = Array.Empty<RankedRule>();
+
+    /// <summary>
+    /// An optional label resolver used to render each rule's subject id as its
+    /// friendly directory display name (raw id on hover). When
+    /// <see langword="null"/>, or when an id is not yet resolved, the subject
+    /// renders as the raw <c>kind:id</c> label exactly as before.
+    /// </summary>
+    [Parameter]
+    public PrincipalLabelResolver? Labels { get; set; }
 }

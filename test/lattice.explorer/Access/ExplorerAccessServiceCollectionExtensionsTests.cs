@@ -31,7 +31,19 @@ public class ExplorerAccessServiceCollectionExtensionsTests
             Assert.That(services.Any(d => d.ServiceType == typeof(IMembershipAdminService)), Is.True);
             Assert.That(services.Any(d => d.ServiceType == typeof(IPolicyAdminService)), Is.True);
             Assert.That(services.Any(d => d.ServiceType == typeof(IAuthAdminCapabilityService)), Is.True);
+            Assert.That(services.Any(d => d.ServiceType == typeof(PrincipalLabelResolver)), Is.True);
         });
+    }
+
+    [Test]
+    public async Task AddExplorerAccess_principal_label_resolver_resolves_over_a_fake_client()
+    {
+        var services = new ServiceCollection();
+        services.AddExplorerAccess();
+        services.AddSingleton<IAuthAdminClient, FakeAuthAdminClient>();
+        await using var provider = services.BuildServiceProvider();
+
+        Assert.That(provider.GetRequiredService<PrincipalLabelResolver>(), Is.InstanceOf<PrincipalLabelResolver>());
     }
 
     [Test]
