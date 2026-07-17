@@ -104,11 +104,35 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      # The packed csproj's own <Version> is the single source of truth for
+      # both the package version AND every emitted ProjectReference dependency
+      # floor. We must NOT stamp the version as a global MSBuild property (a
+      # global -p:Version / -p:PackageVersion propagates into every referenced
+      # project, so a package that references e.g. Orleans.Lattice would emit a
+      # dependency on Orleans.Lattice at the *tag* version instead of core's
+      # real published version - which silently produces un-restorable packages
+      # when the referenced package has a lower real version). Instead we trust
+      # each csproj <Version> and fail the release here if it has drifted from
+      # the release tag, so the operator bumps the csproj rather than shipping a
+      # mis-versioned package with inflated dependency floors.
+      - name: Verify csproj version matches tag
+        run: |
+          csprojVersion=$(dotnet msbuild "${{ steps.parse.outputs.CSPROJ }}" -getProperty:Version)
+          echo "csproj <Version> = '${csprojVersion}', tag version = '${{ steps.parse.outputs.VERSION }}'"
+          if [ "${csprojVersion}" != "${{ steps.parse.outputs.VERSION }}" ]; then
+            echo "::error::The packed project's <Version> (${csprojVersion}) does not match the release tag version (${{ steps.parse.outputs.VERSION }}). Bump the csproj <Version> to match the tag (or fix the tag) before releasing - the csproj version is the source of truth for dependency floors."
+            exit 1
+          fi
+
       - name: Restore
         run: dotnet restore
 
+      # No global -p:Version here (see 'Verify csproj version matches tag'):
+      # the csproj <Version> drives the assembly and package version so that
+      # ProjectReference dependency floors resolve to each referenced package's
+      # real version, not the tag version.
       - name: Build
-        run: dotnet build --no-restore --configuration Release -p:Version=${{ steps.parse.outputs.VERSION }}
+        run: dotnet build --no-restore --configuration Release
 
       - name: Test (chaos first - isolate flaky-prone surface)
         if: steps.parse.outputs.TEST_PROJECT != ''
@@ -122,8 +146,12 @@ jobs:
         if: steps.parse.outputs.TEST_PROJECT != ''
         run: dotnet test "${{ steps.parse.outputs.TEST_PROJECT }}" --no-build --configuration Release --filter "TestCategory!=Chaos&TestCategory!=AzureTableEmulator" --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full
 
+      # No global -p:PackageVersion here (see 'Verify csproj version matches
+      # tag' and 'Build'): --no-build reuses the already-correct assembly, and
+      # the csproj <Version> is the single source of truth for both the package
+      # version and its emitted ProjectReference dependency floors.
       - name: Pack
-        run: dotnet pack "${{ steps.parse.outputs.CSPROJ }}" --no-build --configuration Release -p:PackageVersion=${{ steps.parse.outputs.VERSION }} --output ./artifacts
+        run: dotnet pack "${{ steps.parse.outputs.CSPROJ }}" --no-build --configuration Release --output ./artifacts
 
       - name: NuGet login (OIDC)
         uses: NuGet/login@v1

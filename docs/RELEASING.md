@@ -100,5 +100,15 @@ If multiple tags were pushed in a single `git push origin tag1 tag2 ...` operati
 
 ## Updating `CHANGELOG.md`
 
-Every release moves the working tree's `## [Unreleased]` section into a new dated `## [X.Y.Z] - YYYY-MM-DD` section. The footer `[X.Y.Z]: ...` compare link must be added in the same edit. The ship commit that merges the changelog edit is the commit the tag points at.
+Every release moves the working tree's `## [Unreleased]` section into a new dated `## [X.Y.Z] - YYYY-MM-DD` section. The ship commit that merges the changelog edit is the commit the tag points at.
+
+### Compare links
+
+The footer `[X.Y.Z]: .../compare/<base>...<target>` links follow the "Keep a Changelog" convention, but they only work when a git tag exists for both ends. Because this repo tags **per-package** (`lattice.<pkg>-v<X.Y.Z>`) and only creates a **family** tag (`vX.Y.Z`) for a coordinated lockstep release, the rule is:
+
+- **Add a compare link only when a real family `vX.Y.Z` tag exists for the section** (a coordinated lockstep release - typically a minor/major boundary, plus any patch wave that was actually tagged family-wide). Point its `<base>` at the **nearest existing prior family tag**, skipping over any intervening per-package waves that have no family tag.
+- **Do not add a compare link for a per-package patch wave** (where each package ships under its own `lattice.<pkg>-v<X.Y.Z>` tag and there is no single family `vX.Y.Z` tag). The section header is a family-umbrella label naming the highest package patch in the wave; it has no tag to link to. Instead, the section's prose enumerates the exact per-package versions, which is the authoritative record.
+- Keep `[Unreleased]` pointed at the most recent existing family tag (`compare/vX.Y.Z...HEAD`), never at a per-package-wave label.
+
+A footer comment in `CHANGELOG.md` records which sections intentionally carry no compare link, so the omission is not mistaken for an oversight.
 
