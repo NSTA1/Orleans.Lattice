@@ -1,8 +1,9 @@
 # Managing backups from the Explorer
 
 The Orleans.Lattice Explorer has a top-level area switcher above the per-tree
-detail tabs. It starts with two areas - **Explore** (the tree browser) and
-**Backups** (backup and restore management) - and is built so a future area can
+detail tabs. It carries the **Explore** (the tree browser), **Backups** (backup
+and restore management), **Access** (membership and access-control admin), and
+**Schema** (schema-policy management) areas, and is built so a future area can
 join the switcher without reworking the shell.
 
 ## The area switcher

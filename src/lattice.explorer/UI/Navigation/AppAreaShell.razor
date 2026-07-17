@@ -3,6 +3,8 @@
 @implements IDisposable
 @inject IExplorerCapabilityStore Capabilities
 @inject IBackupCapabilityService CapabilityService
+@inject IAuthAdminCapabilityService AccessCapabilityService
+@inject ISchemaAdminCapabilityService SchemaCapabilityService
 @inject IExplorerAuthSession Auth
 @inject ILatticeStateConnection Connection
 
@@ -36,6 +38,14 @@
     @if (_area == AppArea.Backups)
     {
         <BackupsPanel />
+    }
+    else if (_area == AppArea.Access)
+    {
+        <AccessPanel />
+    }
+    else if (_area == AppArea.Schema)
+    {
+        <SchemaPanel />
     }
     else
     {
@@ -84,6 +94,26 @@
         {
             // Capability probing is advisory; a probe failure must never break the
             // shell. The store keeps its last value (deny-by-default at worst).
+        }
+
+        try
+        {
+            await AccessCapabilityService.RefreshAsync();
+        }
+        catch
+        {
+            // The Access gate is probed independently and is equally advisory; a
+            // probe failure leaves the area deny-by-default and never breaks the shell.
+        }
+
+        try
+        {
+            await SchemaCapabilityService.RefreshAsync();
+        }
+        catch
+        {
+            // The Schema gate is probed independently and is equally advisory; a
+            // probe failure leaves the area deny-by-default and never breaks the shell.
         }
     }
 

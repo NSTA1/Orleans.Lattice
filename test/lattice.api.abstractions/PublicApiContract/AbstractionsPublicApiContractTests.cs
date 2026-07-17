@@ -2,20 +2,21 @@ using System.Reflection;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Api.Data;
+using Orleans.Lattice.Api.Schema;
 using Orleans.Lattice.Api.State;
 
 namespace Orleans.Lattice.Api.Abstractions.Tests.PublicApiContract;
 
 /// <summary>
 /// Guards the public-surface contract the abstractions package exists to provide.
-/// The contract-extraction refactor promoted the four facade service interfaces
+/// The contract-extraction refactor promoted the five facade service interfaces
 /// (and the state observer/metrics seams) from <c>internal</c> to <c>public</c>
 /// and relocated them - together with their DTOs - into
 /// <c>Orleans.Lattice.Api.Abstractions</c> while deliberately preserving their
-/// original <c>Orleans.Lattice.Api.{State,Data,Auth,Backup}</c> namespaces so
-/// existing consumers keep compiling unchanged. This fixture fails if any of
+/// original <c>Orleans.Lattice.Api.{State,Data,Auth,Backup,Schema}</c> namespaces
+/// so existing consumers keep compiling unchanged. This fixture fails if any of
 /// those interfaces silently reverts to internal, or if a type strays outside
-/// the four contracted namespaces.
+/// the five contracted namespaces.
 /// </summary>
 [TestFixture]
 public class AbstractionsPublicApiContractTests
@@ -30,6 +31,7 @@ public class AbstractionsPublicApiContractTests
         typeof(ILatticeDataApi),
         typeof(ILatticeAuthAdmin),
         typeof(ILatticeBackupControl),
+        typeof(ILatticeSchemaControl),
     };
 
     private static readonly IReadOnlyList<string> ContractNamespaces = new[]
@@ -38,6 +40,7 @@ public class AbstractionsPublicApiContractTests
         "Orleans.Lattice.Api.Data",
         "Orleans.Lattice.Api.Auth",
         "Orleans.Lattice.Api.Backup",
+        "Orleans.Lattice.Api.Schema",
     };
 
     [TestCaseSource(nameof(ServiceInterfaces))]

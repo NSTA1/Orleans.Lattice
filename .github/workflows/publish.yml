@@ -27,9 +27,22 @@ on:
       #   lattice.api.backup.grpc-v7.9.0
       #   lattice.api.mcp-v7.9.1
       #   lattice.api.mcp.telemetry-v7.9.1
+      #   lattice.api.schema-v7.9.1
+      #   lattice.api.schema.grpc-v7.9.1
       #   lattice.schema-v7.9.0
       #   lattice.scaling-v7.9.0
+      #   lattice.explorer.core-v7.9.1
+      #   lattice.explorer.ui-v7.9.1
+      #   lattice.explorer.backup-v7.9.1
+      #   lattice.explorer.access-v7.9.1
+      #   lattice.explorer.schema-v7.9.1
+      #   lattice.explorer.web-v7.9.1
+      #   lattice.explorer.entra-v7.7.1
       # The tag prefix is the literal folder name under src/, dots and all.
+      # Packages that live in a shared app folder's sub-directory (the
+      # explorer's Core/UI/Web/... hosting libraries) have no folder of their
+      # own under src/; those tags resolve to the project whose <PackageId> is
+      # 'Orleans.<tag>' (case-insensitive) - see the parse step below.
       - 'lattice-v*'
       - 'lattice.replication-v*'
       - 'lattice.replication.grpc-v*'
@@ -52,8 +65,17 @@ on:
       - 'lattice.api.backup.grpc-v*'
       - 'lattice.api.mcp-v*'
       - 'lattice.api.mcp.telemetry-v*'
+      - 'lattice.api.schema-v*'
+      - 'lattice.api.schema.grpc-v*'
       - 'lattice.schema-v*'
       - 'lattice.scaling-v*'
+      - 'lattice.explorer.core-v*'
+      - 'lattice.explorer.ui-v*'
+      - 'lattice.explorer.backup-v*'
+      - 'lattice.explorer.access-v*'
+      - 'lattice.explorer.schema-v*'
+      - 'lattice.explorer.web-v*'
+      - 'lattice.explorer.entra-v*'
 
 jobs:
   publish:
@@ -65,7 +87,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Parse tag → package + version
+      - name: Parse tag -> package + version
         id: parse
         run: |
           set -euo pipefail
@@ -75,18 +97,43 @@ jobs:
           pkg="${tag%-v*}"
           ver="${tag##*-v}"
 
-          if [ ! -d "src/${pkg}" ]; then
-            echo "::error::Tag '${tag}' does not map to any src/${pkg}/ folder."
-            echo "::error::Expected convention: <src-folder-name>-v<X.Y.Z>"
-            exit 1
+          # Fast path: the one-package-per-top-level-src-folder convention,
+          # where the tag prefix is the literal folder name under src/.
+          csproj=""
+          if [ -d "src/${pkg}" ]; then
+            csproj=$(ls "src/${pkg}"/*.csproj 2>/dev/null | head -n1 || true)
           fi
 
-          csproj=$(ls "src/${pkg}"/*.csproj | head -n1)
+          # Fallback: some src folders host several publishable libraries in
+          # sub-folders (e.g. the explorer app folder ships the Core/UI/Web
+          # hosting libraries). Those cannot be addressed by folder name, so
+          # resolve the csproj by matching the tag against each project's
+          # <PackageId> (lowercased, with the "Orleans." prefix stripped).
           if [ -z "${csproj}" ]; then
-            echo "::error::No .csproj found under src/${pkg}/"
+            while IFS= read -r cand; do
+              pid=$(grep -oP '(?<=<PackageId>)[^<]+' "$cand" | head -n1 || true)
+              [ -z "${pid}" ] && continue
+              candtag=$(printf '%s' "${pid}" | tr '[:upper:]' '[:lower:]')
+              candtag="${candtag#orleans.}"
+              if [ "${candtag}" = "${pkg}" ]; then
+                csproj="${cand}"
+                break
+              fi
+            done < <(find src -name '*.csproj')
+          fi
+
+          if [ -z "${csproj}" ]; then
+            echo "::error::Tag '${tag}' does not resolve to any src/ project."
+            echo "::error::Expected either a src/${pkg}/ folder or a project whose"
+            echo "::error::<PackageId> is 'Orleans.${pkg}' (case-insensitive)."
             exit 1
           fi
 
+          pkgDir=$(dirname "${csproj}")
+
+          # Test discovery follows the same top-level convention. Packages that
+          # live in a shared app folder share one test project (run by CI), so a
+          # missing test/${pkg}/ folder here just means "no publish-time tests".
           testProj=""
           if [ -d "test/${pkg}" ]; then
             testProj=$(ls "test/${pkg}"/*.Tests.csproj 2>/dev/null | head -n1 || true)
@@ -97,7 +144,7 @@ jobs:
           echo "CSPROJ=${csproj}"   >> "$GITHUB_OUTPUT"
           echo "TEST_PROJECT=${testProj}" >> "$GITHUB_OUTPUT"
 
-          echo "::notice::Publishing src/${pkg} as version ${ver} (csproj: ${csproj}, test: ${testProj:-<none>})"
+          echo "::notice::Publishing ${pkgDir} as version ${ver} (csproj: ${csproj}, test: ${testProj:-<none>})"
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4

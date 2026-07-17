@@ -5,7 +5,18 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>Orleans.Lattice.Explorer.UI</RootNamespace>
+    <PackageId>Orleans.Lattice.Explorer.UI</PackageId>
+    <Version>7.9.1</Version>
+    <Description>Shared Razor component class library (RCL) for the Orleans.Lattice Explorer: the routable pages, layout, navigation, detail, backup, access, and authentication components rendered identically by every explorer head, plus the packaged static web assets (css, favicon, topology interop). Served by a referencing app at _content/Orleans.Lattice.Explorer.UI.</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 
   <ItemGroup>
     <SupportedPlatform Include="browser" />
@@ -18,6 +29,8 @@
   <ItemGroup>
     <ProjectReference Include="..\Core\Orleans.Lattice.Explorer.Core.csproj" />
     <ProjectReference Include="..\Backup\Orleans.Lattice.Explorer.Backup.csproj" />
+    <ProjectReference Include="..\Access\Orleans.Lattice.Explorer.Access.csproj" />
+    <ProjectReference Include="..\Schema\Orleans.Lattice.Explorer.Schema.csproj" />
   </ItemGroup>
 
 </Project>

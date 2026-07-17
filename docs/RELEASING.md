@@ -30,7 +30,16 @@ The package family ships from this repository:
 | `Orleans.Lattice.Api.Backup.Grpc` | `src/lattice.api.backup.grpc/Orleans.Lattice.Api.Backup.Grpc.csproj` |
 | `Orleans.Lattice.Api.Mcp` | `src/lattice.api.mcp/Orleans.Lattice.Api.Mcp.csproj` |
 | `Orleans.Lattice.Api.Mcp.Telemetry` | `src/lattice.api.mcp.telemetry/Orleans.Lattice.Api.Mcp.Telemetry.csproj` |
+| `Orleans.Lattice.Api.Schema` | `src/lattice.api.schema/Orleans.Lattice.Api.Schema.csproj` |
+| `Orleans.Lattice.Api.Schema.Grpc` | `src/lattice.api.schema.grpc/Orleans.Lattice.Api.Schema.Grpc.csproj` |
 | `Orleans.Lattice.Schema` | `src/lattice.schema/Orleans.Lattice.Schema.csproj` |
+| `Orleans.Lattice.Explorer.Core` | `src/lattice.explorer/Core/Orleans.Lattice.Explorer.Core.csproj` |
+| `Orleans.Lattice.Explorer.UI` | `src/lattice.explorer/UI/Orleans.Lattice.Explorer.UI.csproj` |
+| `Orleans.Lattice.Explorer.Backup` | `src/lattice.explorer/Backup/Orleans.Lattice.Explorer.Backup.csproj` |
+| `Orleans.Lattice.Explorer.Access` | `src/lattice.explorer/Access/Orleans.Lattice.Explorer.Access.csproj` |
+| `Orleans.Lattice.Explorer.Schema` | `src/lattice.explorer/Schema/Orleans.Lattice.Explorer.Schema.csproj` |
+| `Orleans.Lattice.Explorer.Web` | `src/lattice.explorer/WebHosting/Orleans.Lattice.Explorer.Web.csproj` |
+| `Orleans.Lattice.Explorer.Entra` | `src/lattice.explorer.entra/Orleans.Lattice.Explorer.Entra.csproj` |
 | `Orleans.Lattice.Scaling` | `src/lattice.scaling/Orleans.Lattice.Scaling.csproj` | across the family. Patch digits may advance independently per package.
 
 ## Tag shape
@@ -61,7 +70,16 @@ The publish workflow's per-tag trigger globs match these tag shapes:
 | `Orleans.Lattice.Api.Backup.Grpc` | `lattice.api.backup.grpc-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.Mcp` | `lattice.api.mcp-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.Mcp.Telemetry` | `lattice.api.mcp.telemetry-v<X.Y.Z>` |
+| `Orleans.Lattice.Api.Schema` | `lattice.api.schema-v<X.Y.Z>` |
+| `Orleans.Lattice.Api.Schema.Grpc` | `lattice.api.schema.grpc-v<X.Y.Z>` |
 | `Orleans.Lattice.Schema` | `lattice.schema-v<X.Y.Z>` |
+| `Orleans.Lattice.Explorer.Core` | `lattice.explorer.core-v<X.Y.Z>` |
+| `Orleans.Lattice.Explorer.UI` | `lattice.explorer.ui-v<X.Y.Z>` |
+| `Orleans.Lattice.Explorer.Backup` | `lattice.explorer.backup-v<X.Y.Z>` |
+| `Orleans.Lattice.Explorer.Access` | `lattice.explorer.access-v<X.Y.Z>` |
+| `Orleans.Lattice.Explorer.Schema` | `lattice.explorer.schema-v<X.Y.Z>` |
+| `Orleans.Lattice.Explorer.Web` | `lattice.explorer.web-v<X.Y.Z>` |
+| `Orleans.Lattice.Explorer.Entra` | `lattice.explorer.entra-v<X.Y.Z>` |
 | `Orleans.Lattice.Scaling` | `lattice.scaling-v<X.Y.Z>` |
 
 For historical compatibility, the `v<X.Y.Z>` family tag (e.g. `v3.2.0`) is reserved for "the whole family at this version". When the family moves in lockstep, push **both** the family tag *and* each per-package tag - the publish workflow keys off the per-package tags.

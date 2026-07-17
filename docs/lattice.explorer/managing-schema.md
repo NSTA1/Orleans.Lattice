@@ -1,0 +1,77 @@
+# Managing schema from the Explorer
+
+The Orleans.Lattice Explorer has a top-level area switcher above the per-tree
+detail tabs. **Schema** is the schema-management admin area. It lets an operator
+inspect and edit a tree's write-validation policy and its value-versioning
+config, run a read-only compliance audit, and inspect the strict-mode dead-letter
+queue - over the schema control gRPC binding, with no new server surface.
+
+## Where it sits
+
+Schema is one of the switcher's areas, alongside **Explore** (the tree browser),
+**Backups**, and **Access**. Selecting it swaps the working surface to the schema
+admin tabs. Like every area, it is registered in one place and carries an
+advisory availability rule.
+
+The area drives the schema control API
+([`Orleans.Lattice.Api.Schema.Grpc`](../lattice.api.schema.grpc/README.md)) over
+the transport-agnostic facade
+([`Orleans.Lattice.Api.Schema`](../lattice.api.schema/README.md)); the underlying
+enforcement, versioning, and dead-letter semantics belong to
+[`Orleans.Lattice.Schema`](../lattice.schema/README.md) and are not
+re-implemented here.
+
+## Per-tree, load first
+
+Schema state is per tree. Each tab starts empty; you type or pick a tree id and
+click **Load** to probe that tree. The area is capability-gated as a whole (see
+below), and the per-tree load also reports whether the specific tree is governed
+by a policy at all - a tree with no policy accepts all values, and the area says
+so rather than showing an error.
+
+## The four tabs
+
+- **Policy** - view, set, and clear the tree's write-validation policy. A tree
+  with no policy accepts every value; setting a policy turns on validation for
+  subsequent writes.
+- **Versions** - view, set, advance, migrate, and clear the tree's
+  envelope-version config, and see the status of the last remediation run.
+  Advancing the target version can either leave existing values in place or
+  migrate them up to the new version. Version operations require the versioning
+  add-on to be registered on the silo; when it is not, the area reports that
+  clearly instead of failing opaquely.
+- **Compliance** - run a **read-only** audit that scans the tree's entries
+  against its compiled policy and reports how many values are compliant versus
+  non-compliant, with a breakdown of the reasons. It never mutates anything; a
+  tree with no policy is reported as ungoverned.
+- **Dead letters** - list the writes that strict-mode validation diverted (the
+  schema-rejected entries), and show their count.
+
+## Capability-aware, grey-out not hide
+
+The whole area is gated by a single coarse capability, **SchemaAllowed**,
+discovered with a fail-closed reachability probe. If the probe is denied or the
+endpoint is unreachable, the area entry stays visible but **disabled (greyed
+out)**. Inside the area, every mutating action - setting or clearing a policy,
+changing or advancing the version config, running remediation - is shown
+disabled, not hidden, whenever the capability is absent, no tree is loaded, or an
+action is already in flight.
+
+## Advisory, not a security boundary
+
+The grey-out is a usability affordance only. The **server remains the
+fail-closed enforcement point**: every real read or mutation authorizes the
+tree's scope on the server when it runs - Read authority for the inspect verbs
+and the compliance audit, SchemaAdmin authority for the mutations - regardless of
+what the cached capability said. An over-optimistic capability still fails closed
+on the server, and the Explorer surfaces a clean "not permitted" message rather
+than an unhandled error. The capability probe itself has no side effects.
+
+## See also
+
+- [Schema enforcement and versioning](../lattice.schema/README.md) - the engine
+  whose control surface this area drives.
+- [`Orleans.Lattice.Api.Schema`](../lattice.api.schema/README.md) - the
+  transport-agnostic schema control facade.
+- [`Orleans.Lattice.Api.Schema.Grpc`](../lattice.api.schema.grpc/README.md) - the
+  gRPC binding and typed client the area drives.

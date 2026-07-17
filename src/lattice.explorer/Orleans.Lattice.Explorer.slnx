@@ -1,8 +1,11 @@
 <Solution>
   <Project Path="Core/Orleans.Lattice.Explorer.Core.csproj" />
   <Project Path="Backup/Orleans.Lattice.Explorer.Backup.csproj" />
+  <Project Path="Access/Orleans.Lattice.Explorer.Access.csproj" />
+  <Project Path="Schema/Orleans.Lattice.Explorer.Schema.csproj" />
   <Project Path="UI/Orleans.Lattice.Explorer.UI.csproj" />
-  <Project Path="Web/Orleans.Lattice.Explorer.Web.csproj" />
+  <Project Path="WebHosting/Orleans.Lattice.Explorer.Web.csproj" />
+  <Project Path="Web/Orleans.Lattice.Explorer.WebHost.csproj" />
   <Project Path="Maui/Orleans.Lattice.Explorer.csproj" />
   <Project Path="../../test/lattice.explorer/Orleans.Lattice.Explorer.Tests.csproj" />
 </Solution>

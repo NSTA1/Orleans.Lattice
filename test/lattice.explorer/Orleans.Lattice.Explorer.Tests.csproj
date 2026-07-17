@@ -30,8 +30,10 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\lattice.explorer\Core\Orleans.Lattice.Explorer.Core.csproj" />
     <ProjectReference Include="..\..\src\lattice.explorer\Backup\Orleans.Lattice.Explorer.Backup.csproj" />
+    <ProjectReference Include="..\..\src\lattice.explorer\Access\Orleans.Lattice.Explorer.Access.csproj" />
+    <ProjectReference Include="..\..\src\lattice.explorer\Schema\Orleans.Lattice.Explorer.Schema.csproj" />
     <ProjectReference Include="..\shared\Orleans.Lattice.Testing\Orleans.Lattice.Testing.csproj" />
-    <ProjectReference Include="..\..\src\lattice.explorer\Web\Orleans.Lattice.Explorer.Web.csproj" />
+    <ProjectReference Include="..\..\src\lattice.explorer\WebHosting\Orleans.Lattice.Explorer.Web.csproj" />
   </ItemGroup>
 
 </Project>

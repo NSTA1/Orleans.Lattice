@@ -3,9 +3,11 @@ namespace Orleans.Lattice.Explorer.Core.Navigation;
 /// <summary>
 /// A top-level application area shown in the shell's area switcher, above the
 /// per-tree detail tab strip. Areas are the app-level navigation tier: the
-/// existing tree browser (<see cref="Explore"/>) and the backup management
-/// surface (<see cref="Backups"/>). This is deliberately distinct from
-/// <c>DetailTab</c>, which is the per-tree detail tier within the Explore area.
+/// existing tree browser (<see cref="Explore"/>), the backup management surface
+/// (<see cref="Backups"/>), the membership / access-control administration surface
+/// (<see cref="Access"/>), and the schema management surface (<see cref="Schema"/>).
+/// This is deliberately distinct from <c>DetailTab</c>, which is the per-tree detail
+/// tier within the Explore area.
 /// </summary>
 public enum AppArea
 {
@@ -14,4 +16,10 @@ public enum AppArea
 
     /// <summary>The backup and restore management surface.</summary>
     Backups,
+
+    /// <summary>The membership and access-control administration surface.</summary>
+    Access,
+
+    /// <summary>The schema management surface: enforcement policy, versioning, remediation, and compliance.</summary>
+    Schema,
 }

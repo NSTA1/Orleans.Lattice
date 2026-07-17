@@ -1,4 +1,7 @@
 using Microsoft.AspNetCore.Antiforgery;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Routing;
 using Orleans.Lattice.Explorer.Core.Authentication;
 
 namespace Orleans.Lattice.Explorer.Web;
@@ -15,14 +18,21 @@ namespace Orleans.Lattice.Explorer.Web;
 public static class AuthEndpoints
 {
     /// <summary>
-    /// Registers the <c>/auth/login</c> and <c>/auth/logout</c> POST endpoints,
+    /// Registers the <c>auth/login</c> and <c>auth/logout</c> POST endpoints,
     /// each guarded by antiforgery-token validation.
     /// </summary>
     /// <param name="endpoints">The endpoint route builder to map onto.</param>
+    /// <param name="redirectTo">
+    /// The path a successful sign-in / sign-out redirects to. Defaults to
+    /// <c>/</c>; pass the explorer's base href when it is mounted under a subpath.
+    /// </param>
     /// <returns>The same <paramref name="endpoints"/> for chaining.</returns>
-    public static IEndpointRouteBuilder MapExplorerAuthEndpoints(this IEndpointRouteBuilder endpoints)
+    public static IEndpointRouteBuilder MapExplorerAuthEndpoints(
+        this IEndpointRouteBuilder endpoints,
+        string redirectTo = "/")
     {
         ArgumentNullException.ThrowIfNull(endpoints);
+        ArgumentException.ThrowIfNullOrEmpty(redirectTo);
 
         endpoints.MapPost("/auth/login", async (HttpContext context, IExplorerAuthSession auth, IAntiforgery antiforgery) =>
         {
@@ -39,7 +49,7 @@ public static class AuthEndpoints
                 await auth.LoginAsync(username.Trim(), password);
             }
 
-            return Results.Redirect("/");
+            return Results.Redirect(redirectTo);
         });
 
         endpoints.MapPost("/auth/logout", async (HttpContext context, IExplorerAuthSession auth, IAntiforgery antiforgery) =>
@@ -50,7 +60,7 @@ public static class AuthEndpoints
             }
 
             await auth.LogoutAsync();
-            return Results.Redirect("/");
+            return Results.Redirect(redirectTo);
         });
 
         return endpoints;

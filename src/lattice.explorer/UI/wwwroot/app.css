@@ -2454,3 +2454,352 @@ code, .explorer-mono {
     word-break: break-all;
 }
 
+
+/* ----- Access (membership & access-control) area ----- */
+.explorer-access-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+    align-items: flex-start;
+}
+
+.explorer-access-listcol,
+.explorer-access-formcol {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    min-width: 18rem;
+    flex: 1 1 22rem;
+}
+
+.explorer-access-listhead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.explorer-access-itemrow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.45rem 0.55rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+}
+
+.explorer-access-itemrow:hover {
+    background: var(--bg-elevated);
+}
+
+.explorer-access-itemrow.is-selected {
+    background: var(--bg-elevated);
+    border-color: var(--accent);
+}
+
+.explorer-access-itemlabel {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    min-width: 0;
+}
+
+.explorer-access-edit {
+    flex: 0 0 auto;
+}
+
+.explorer-access-title {
+    margin: 0.4rem 0 0.2rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.explorer-access-sub {
+    display: block;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+}
+
+.explorer-access-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.explorer-access-field > input[type="text"],
+.explorer-access-field > select {
+    box-sizing: border-box;
+    width: 100%;
+}
+
+.explorer-access-inline {
+    display: flex;
+    gap: 0.4rem;
+    align-items: center;
+}
+
+.explorer-access-inline > input[type="text"] {
+    flex: 1;
+    min-width: 0;
+}
+
+.explorer-access-inline > .explorer-access-subject {
+    flex: 1;
+    min-width: 0;
+}
+
+.explorer-access-actions {
+    display: flex;
+    gap: 0.4rem;
+    align-items: center;
+    margin-top: 0.4rem;
+}
+
+.explorer-access-danger {
+    color: var(--danger, #f85149);
+}
+
+.explorer-access-memberlist,
+.explorer-access-addmember {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.explorer-access-addmember {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.explorer-access-memberlist > li {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.explorer-access-member-id {
+    font-family: var(--font-mono, monospace);
+    font-size: 0.85rem;
+}
+
+.explorer-access-ops {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm, 6px);
+    padding: 0.5rem 0.7rem;
+    margin: 0;
+}
+
+.explorer-access-ops legend {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    padding: 0 0.3rem;
+}
+
+.explorer-access-opcheck {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.82rem;
+    color: var(--text);
+}
+
+.explorer-access-ruletable {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82rem;
+}
+
+.explorer-access-ruletable th,
+.explorer-access-ruletable td {
+    text-align: left;
+    padding: 0.3rem 0.5rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+}
+
+.explorer-access-ruletable tr.is-deny td {
+    color: var(--danger, #f85149);
+}
+
+/* The Policies and Explain tabs place the shared tree-selection panel to the left
+   of their content. These aliases reuse the schema area's tree-panel layout so the
+   two admin areas stay visually consistent. */
+.explorer-access-layout {
+    display: flex;
+    gap: 1.25rem;
+    align-items: stretch;
+    flex: 1;
+    min-height: 0;
+}
+
+.explorer-access-treepanel {
+    display: flex;
+    flex-direction: column;
+    flex: 0 0 15rem;
+    min-width: 12rem;
+    max-width: 18rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm, 6px);
+    overflow: hidden;
+}
+
+.explorer-access-treepanel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.5rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.explorer-access-treepanel-title {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.explorer-access-treelist {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0.4rem;
+    min-height: 6rem;
+}
+
+.explorer-access-content {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+    flex: 1;
+    min-width: 0;
+    text-align: left;
+    align-items: stretch;
+}
+
+.explorer-access-treevalue {
+    font-family: var(--font-mono, monospace);
+    font-size: 0.85rem;
+    color: var(--text);
+    padding: 0.35rem 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm, 6px);
+    background: var(--surface-muted, rgba(255, 255, 255, 0.03));
+}
+
+
+/* ----- Schema (policy, versioning & compliance) area ----- */
+.explorer-schema-layout {
+    display: flex;
+    gap: 1.25rem;
+    align-items: stretch;
+    flex: 1;
+    min-height: 0;
+}
+
+.explorer-schema-treepanel {
+    display: flex;
+    flex-direction: column;
+    flex: 0 0 15rem;
+    min-width: 12rem;
+    max-width: 18rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm, 6px);
+    overflow: hidden;
+}
+
+.explorer-schema-treepanel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.5rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.explorer-schema-treepanel-title {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.explorer-schema-treelist {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0.4rem;
+    min-height: 6rem;
+}
+
+.explorer-schema-content {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+    flex: 1;
+    min-width: 0;
+    text-align: left;
+    align-items: stretch;
+}
+
+/* The read/write tabs (Policy, Versions, Compliance) pack their two columns to
+   the left at a natural width instead of stretching each to half the surface,
+   which otherwise strands the form column against the far right edge. The Dead
+   letters tab keeps the full-width grid so its wide result table has room. */
+.explorer-access-grid.explorer-schema-narrow,
+.explorer-access-grid.explorer-access-narrow {
+    justify-content: flex-start;
+    gap: 2.5rem;
+}
+
+.explorer-access-grid.explorer-schema-narrow > .explorer-access-listcol,
+.explorer-access-grid.explorer-access-narrow > .explorer-access-listcol {
+    flex: 0 1 auto;
+    min-width: 16rem;
+    max-width: 30rem;
+}
+
+.explorer-access-grid.explorer-schema-narrow > .explorer-access-formcol,
+.explorer-access-grid.explorer-access-narrow > .explorer-access-formcol {
+    flex: 0 0 28rem;
+}
+
+.explorer-schema-subtitle {
+    margin: 0.5rem 0 0.2rem;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+.explorer-schema-ruleform {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm, 6px);
+    padding: 0.6rem 0.7rem;
+    margin: 0.3rem 0;
+}
+
+.explorer-schema-compliant {
+    margin: 0.1rem 0;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--success, #3fb950);
+}
+
+.explorer-schema-noncompliant {
+    margin: 0.1rem 0;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--danger, #f85149);
+}
+

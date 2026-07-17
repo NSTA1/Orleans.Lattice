@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Orleans.Lattice.Samples.Explorer</RootNamespace>
+    <AssemblyName>Orleans.Lattice.Samples.Explorer</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <!--
+      The Explorer's Razor components (including the App root and interactive
+      server render mode) live in the referenced RCLs, not this host project, so
+      the SDK does not auto-detect that this app hosts Blazor and omits the
+      framework's _framework/blazor.web.js script - leaving the console rendered
+      but non-interactive. Opting in explicitly pulls the Blazor Web script into
+      this app's static web assets so the interactive circuit starts.
+    -->
+    <RequiresAspNetWebAssets>true</RequiresAspNetWebAssets>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Orleans.Server" Version="10.2.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\lattice\Orleans.Lattice.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.state\Orleans.Lattice.Api.State.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.state.grpc\Orleans.Lattice.Api.State.Grpc.csproj" />
+    <ProjectReference Include="..\..\src\lattice.membership\Orleans.Lattice.Membership.csproj" />
+    <ProjectReference Include="..\..\src\lattice.auth\Orleans.Lattice.Auth.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.auth\Orleans.Lattice.Api.Auth.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.auth.grpc\Orleans.Lattice.Api.Auth.Grpc.csproj" />
+    <ProjectReference Include="..\..\src\lattice.schema\Orleans.Lattice.Schema.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.schema\Orleans.Lattice.Api.Schema.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.schema.grpc\Orleans.Lattice.Api.Schema.Grpc.csproj" />
+    <ProjectReference Include="..\..\src\lattice.explorer\WebHosting\Orleans.Lattice.Explorer.Web.csproj" />
+  </ItemGroup>
+
+</Project>

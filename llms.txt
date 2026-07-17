@@ -41,6 +41,9 @@ This file is the entry point for AI agents and LLM tooling. Documentation lives 
 - [Grafana dashboards](docs/lattice.dashboards/README.md): Bundled dashboards for the Lattice meters (`Orleans.Lattice.Dashboards`).
 - [Autoscaling signal](docs/lattice.scaling/README.md): Cluster-aggregate compute-axis replica-demand scalar for KEDA plus an advisory storage-axis WAL rebalance recommendation (`Orleans.Lattice.Scaling`).
 - [Schema enforcement and versioning](docs/lattice.schema/README.md): Opt-in per-tree write validation with dead-letter diversion and self-describing value versioning with read-time upcasting, over the opaque-`byte[]` core (`Orleans.Lattice.Schema`).
+- [Schema control API](docs/lattice.api.schema/README.md): Transport-agnostic schema-management facade - policy, dead letters, versioning, remediation, and compliance audit (`Orleans.Lattice.Api.Schema`).
+- [Schema control API gRPC binding](docs/lattice.api.schema.grpc/README.md): Code-first gRPC binding and client for the schema control facade (`Orleans.Lattice.Api.Schema.Grpc`).
+- [Explorer web console](docs/lattice.explorer/running-the-explorer.md): Opt-in, auth-aware web console for a running cluster - tree browser plus Backups, Access, and Schema admin areas over the gRPC APIs (`Orleans.Lattice.Explorer.Web`).
 
 ## Working on this repository
 

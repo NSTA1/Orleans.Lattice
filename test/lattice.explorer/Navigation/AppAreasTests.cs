@@ -12,11 +12,11 @@ public class AppAreasTests
     }
 
     [Test]
-    public void Ordered_lists_explore_then_backups()
+    public void Ordered_lists_explore_then_backups_then_access_then_schema()
     {
         var areas = AppAreas.Ordered.Select(a => a.Area).ToArray();
 
-        Assert.That(areas, Is.EqualTo(new[] { AppArea.Explore, AppArea.Backups }));
+        Assert.That(areas, Is.EqualTo(new[] { AppArea.Explore, AppArea.Backups, AppArea.Access, AppArea.Schema }));
     }
 
     [Test]
@@ -74,12 +74,42 @@ public class AppAreasTests
     }
 
     [Test]
+    public void IsEnabled_access_false_when_no_capability()
+    {
+        Assert.That(AppAreas.IsEnabled(AppArea.Access, ExplorerCapabilities.Empty), Is.False);
+    }
+
+    [Test]
+    public void IsEnabled_access_true_when_auth_admin_allowed()
+    {
+        var caps = new ExplorerCapabilities { AuthAdminAllowed = true };
+
+        Assert.That(AppAreas.IsEnabled(AppArea.Access, caps), Is.True);
+    }
+
+    [Test]
+    public void IsEnabled_schema_false_when_no_capability()
+    {
+        Assert.That(AppAreas.IsEnabled(AppArea.Schema, ExplorerCapabilities.Empty), Is.False);
+    }
+
+    [Test]
+    public void IsEnabled_schema_true_when_schema_allowed()
+    {
+        var caps = new ExplorerCapabilities { SchemaAllowed = true };
+
+        Assert.That(AppAreas.IsEnabled(AppArea.Schema, caps), Is.True);
+    }
+
+    [Test]
     public void Label_returns_registered_label()
     {
         Assert.Multiple(() =>
         {
             Assert.That(AppAreas.Label(AppArea.Explore), Is.EqualTo("Explore"));
             Assert.That(AppAreas.Label(AppArea.Backups), Is.EqualTo("Backups"));
+            Assert.That(AppAreas.Label(AppArea.Access), Is.EqualTo("Access"));
+            Assert.That(AppAreas.Label(AppArea.Schema), Is.EqualTo("Schema"));
         });
     }
 

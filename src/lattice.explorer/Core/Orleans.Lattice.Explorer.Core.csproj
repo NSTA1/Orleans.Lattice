@@ -5,11 +5,24 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>Orleans.Lattice.Explorer.Core</RootNamespace>
+    <PackageId>Orleans.Lattice.Explorer.Core</PackageId>
+    <Version>7.9.1</Version>
+    <Description>Head-agnostic core of the Orleans.Lattice Explorer: the read-only state-API connection seam, configuration store, session, capability model, and the catalog / metrics / topology / data / dead-letter / history navigation services shared by every explorer head. Its only cluster dependency is the public read-only state-API gRPC client.</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="Orleans.Lattice.Explorer.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Explorer.Backup" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Explorer.Access" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Explorer.Schema" />
     <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
   </ItemGroup>
 

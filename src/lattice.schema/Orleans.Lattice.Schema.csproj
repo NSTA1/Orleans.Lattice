@@ -19,6 +19,10 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Orleans.Lattice.Schema.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Schema" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Schema.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Schema.Grpc" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Schema.Grpc.Tests" />
     <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
   </ItemGroup>
 

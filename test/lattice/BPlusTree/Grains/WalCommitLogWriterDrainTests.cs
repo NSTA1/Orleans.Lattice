@@ -322,7 +322,51 @@ public class WalCommitLogWriterDrainTests
     }
 
     /// <summary>
-    /// AC3 (admission-semaphore drain metric attribution): the writer
+    /// Regression for the ungraceful Ctrl-C / SIGTERM shutdown crash: the host
+    /// stop stage frequently hands <see cref="WalCommitLogWriter.DrainAsync"/>
+    /// an already-cancelled token (the console lifetime cancels its stopping
+    /// token on Ctrl-C before the stop stage runs). The drain is the
+    /// shutdown-safety path that releases parked admission callers, so it must
+    /// run unconditionally rather than observing the token and throwing
+    /// <see cref="OperationCanceledException"/> - which previously surfaced as
+    /// an unhandled exception that crashed the host on exit. This test pins
+    /// both halves of the contract: the call does not throw, and the drain
+    /// still takes effect (a post-drain append fails fast at the writer-level
+    /// gate rather than re-entering the admission queue).
+    /// </summary>
+    [Test]
+    public async Task DrainAsync_with_already_cancelled_token_does_not_throw_and_still_drains()
+    {
+        var heldRelease = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var shard = Substitute.For<IWalShardGrain>();
+        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(heldRelease.Task);
+
+        var writer = CreateWriter(shard, new LatticeOptions
+        {
+            WalMaxPendingBatches = 1,
+            WalAppendDispatchTimeout = TimeSpan.FromMinutes(5),
+            WalDrainBudget = TimeSpan.FromMilliseconds(150),
+        });
+
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        // Must complete without throwing even though the token is already
+        // cancelled - the drain is the shutdown-safety path and cannot abort.
+        Assert.That(async () => await writer.DrainAsync(cts.Token), Throws.Nothing);
+
+        // And the drain must actually have taken effect: a post-drain append
+        // fails fast at the writer-level gate (a LatticeShuttingDownException,
+        // which derives from InvalidOperationException) rather than parking on
+        // the admission queue.
+        var postDrain = writer.AppendAsync(MakeMutation("shared-key"));
+        Assert.That(
+            async () => await postDrain.WaitAsync(TimeSpan.FromMilliseconds(500)),
+            Throws.InstanceOf<InvalidOperationException>().Or.InstanceOf<TimeoutException>(),
+            "an already-cancelled drain token must not skip the drain: the writer must still enter the draining regime and fail-fast subsequent appends");
+
+        heldRelease.TrySetResult(0L);
+    }
     /// must record a counter sample for every drain-triggered release
     /// so a dashboard can graph "how often did we hit this on shutdown"
     /// and so the regression test for the §32.6 wedge has an

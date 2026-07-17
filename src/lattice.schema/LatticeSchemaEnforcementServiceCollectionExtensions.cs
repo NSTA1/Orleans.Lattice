@@ -98,6 +98,16 @@ public static class LatticeSchemaEnforcementServiceCollectionExtensions
         // Orleans from this assembly; only the operator-facing admin needs wiring.
         builder.Services.TryAddSingleton<ILatticeSchemaRemediationAdmin, LatticeSchemaRemediationAdmin>();
 
+        // The read-only compliance-audit control plane: scans a tree's values
+        // against its cached compiled policy. Reuses the enforcement policy-provider
+        // cache and the ILattice read seam; never mutates data.
+        builder.Services.TryAddSingleton<ILatticeSchemaComplianceAdmin, LatticeSchemaComplianceAdmin>();
+
+        // The schema-management authorization seam consulted by the remote schema
+        // control facade. Fails closed on SchemaAdmin (mutations) / Read (inspect,
+        // audit) via the shared core access-gate enforcement primitive.
+        builder.Services.TryAddSingleton<SchemaAccessAuthorizer>();
+
         // CRDT merge-result observer: opt-in, because registering a non-null merge
         // observer makes every merge in the silo pay the observer round-trip. Read
         // the flag from a probe of the configure delegate so the merge path keeps
