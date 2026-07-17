@@ -20,6 +20,20 @@ The resolver authenticates to Graph with its own application-only token acquired
 
 The underlying MSAL confidential-client cache serves and renews the token, and the resolver layers a single-flight guard over it so the whole path stays allocation-light and free of duplicate network calls under load.
 
+## Identity directory
+
+The same registration also installs a Microsoft Graph-backed
+`ILatticeIdentityDirectory` (`ProviderId` `"entra-graph"`) - the provider-agnostic
+identity source that the Explorer Access area searches and validates against when
+an operator picks or creates a subject. It searches users and groups in the tenant
+over the same app-only Graph token described above, requiring the `User.Read.All`
+and `Group.Read.All` application permissions. When the token cannot be minted or a
+Graph call is denied, it degrades to reporting the directory as unavailable rather
+than throwing, so the Explorer falls back to unvalidated free-text create.
+
+See [Identity-directory providers](../lattice.membership/identity-directory-providers.md)
+for the seam, the static and custom alternatives, and the fail-closed create flow.
+
 ## Registration and ordering
 
 The Graph resolver is registered on the silo builder after the Entra authenticator. Registration guards this ordering and fails fast with a clear message when the Entra authenticator has not been registered first. When the add-on is not registered it has zero runtime cost and the authenticator uses its token-only fallback.
