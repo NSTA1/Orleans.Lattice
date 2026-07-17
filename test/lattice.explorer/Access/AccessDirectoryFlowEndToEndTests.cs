@@ -69,7 +69,7 @@ public sealed class AccessDirectoryFlowEndToEndTests
 
         // First page of the typeahead maps the wire principals and exposes 'load more'.
         string? selected = null;
-        picker.SubjectSelected += id => selected = id;
+        picker.SubjectSelected += (id, _) => selected = id;
         await picker.SetSearchTermAsync("a");
         await picker.SearchNowAsync();
         Assert.Multiple(() =>

@@ -45,8 +45,11 @@ rule, or naming the subject to explain - it offers the same **searchable subject
 picker** instead of a raw id box. As the operator types, the picker searches the
 configured [identity-directory provider](../lattice.membership/identity-directory-providers.md)
 across users and groups, coalescing keystrokes so a burst of typing issues a
-single search, and pages further matches with a *Load more* control. Selecting a
-result fills in both the id and its kind.
+single search, and pages further matches with a *Load more* control. Each result
+shows the principal's friendly display name as its primary label, with the
+underlying id (for example the object id) available as a hover tooltip. Selecting a
+result fills in both the id and its kind, and the "Selected" line likewise leads
+with the friendly name and keeps the id on hover.
 
 When the configured provider is the no-op default (no directory), the picker
 reports the directory as **unavailable** and degrades to a plain free-text box:
@@ -68,7 +71,10 @@ resolved against it before the principal is saved:
 Only when the directory is unavailable does the form fall back to accepting the id
 unvalidated, and it says so. Each provider supplies a one-line **Explanation** of
 what a valid id looks like (for example an object id, or a UPN), which the form
-shows beneath the input so the operator knows what to type.
+shows beneath the input so the operator knows what to type. When a directory
+result is selected in a create form, its friendly display name also auto-fills the
+new principal's display-name field, which the operator can still edit before
+saving.
 
 ## Access-state banner
 
