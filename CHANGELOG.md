@@ -39,6 +39,8 @@ Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.
 
 ### Fixed
 
+- **Release engineering: the publish workflow no longer inflates cross-package dependency floors.** `.github/workflows/publish.yml` stamped the release version as a global MSBuild property (`-p:Version` on build, `-p:PackageVersion` on pack), so every ProjectReference'd project in the graph evaluated to the tag version and each packed package emitted its intra-family dependency floors at the tag version instead of the referenced package's real published version. Whenever a referenced package's real version was lower than the tag (the normal case in a per-package patch wave), this silently shipped un-restorable packages - a package requiring, say, `Orleans.Lattice >= 7.9.3` when core was only ever published at 7.9.1. The workflow now trusts each csproj's own `<Version>` as the single source of truth (no global version override), so a packed package's dependency floors resolve to each referenced package's real version; and a new pre-restore guard step reads the packed csproj `<Version>` with `dotnet msbuild -getProperty:Version` and fails the release if it has drifted from the release tag, so a mis-versioned package can no longer be published. CI / release-tooling change only; no library, wire-format, or public-API change.
+
 - **Orleans.Lattice.Api.Backup.Grpc / Orleans.Lattice.Explorer: a restore that fails a precondition now surfaces an actionable reason instead of an opaque internal error.** A restore that could not proceed - most notably a coordinated (replicated-tree) restore whose backup sink is not actually shared across every participating cluster, so a peer cannot resolve the sibling-captured backup and the saga aborts - threw a `LatticeRestoreValidationException` that the gRPC control service mapped to a generic `Internal: "The backup control-API request failed."`, giving the Explorer nothing to show. The service now maps `LatticeRestoreValidationException` to `FailedPrecondition` carrying its (id / tree / byte-count, no-secret) message, and the Explorer's Backups area recognises the unshared-sink signature and renders a friendly "the backup store must be reachable from every cluster" configuration message rather than a raw error. Additionally, the `MultiSiteManufacturing` sample now provisions a dedicated shared Azurite blob account (`azurite-backup`) multi-homed onto both cluster networks and points every silo at it through `Orleans.Lattice.Backup.AzureBlob`, so its coordinated restore actually works under `docker compose` instead of relying on a per-container filesystem path that is not shared; the single-machine `FileSystemBackupSink` path remains the fallback. Explorer and sample changes plus a `FailedPrecondition` mapping in the gRPC binding; no wire-format change to the package family.
 
 - **Orleans.Lattice.Explorer: a replicated CRDT change now renders in entry history as a membership snapshot, not a raw full-value blob.** Follow-up to FX-062. A single CRDT change appeared on the receiving cluster as a `CrdtDelta` member diff, but a later anti-entropy / committed-projection resync still shipped a full-state row (`Set`, value = whole serialized OR-Set/PN-counter/OR-Map, no delta) that recorded as a full-value set and rendered as a raw blob tripping the explorer's value-preview cap - confusing duplicate-looking noise on CRDT trees. The history row already carries the source merge mode, so the explorer now classifies a CRDT-mode `Set` as a membership snapshot (decoded members, visually distinct from an LWW overwrite) rather than a last-writer-wins value diff; LWW sets still render as value diffs. Replication apply correctness and wire format are unchanged - bootstrap full-state stays a correct full-state merge, it just renders nicely. Presentation/classification fix in `Orleans.Lattice.Explorer`; no public-API or wire-format change (#1010).
@@ -48,6 +50,8 @@ Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.
 ## [7.9.3] - 2026-07-14
 
 Per-package patch wave over `7.9.0`, shipping the Explorer-independent work accumulated on `main`: the disaster-recoverable backup engine, the two new opt-in companion packages `Orleans.Lattice.Schema` (schema enforcement and versioning) and `Orleans.Lattice.Scaling` (two-axis autoscaling signal) - both debuting at `7.9.0` - plus CRDT hot-path allocation reductions and a batch of defence-in-depth read-path hardening fixes. Versions advance per-package: `Orleans.Lattice`, `Orleans.Lattice.Replication`, `Orleans.Lattice.Dashboards`, `Orleans.Lattice.Storage.AzureTable`, `Orleans.Lattice.Api.State`, `Orleans.Lattice.Api.State.Grpc`, `Orleans.Lattice.Auth`, `Orleans.Lattice.Membership`, `Orleans.Lattice.Api.Backup`, and `Orleans.Lattice.Api.Backup.Grpc` to `7.9.1`; `Orleans.Lattice.Replication.Grpc` and `Orleans.Lattice.Backup.AzureBlob` to `7.9.2`; `Orleans.Lattice.Backup` to `7.9.3`; and `Orleans.Lattice.Schema` and `Orleans.Lattice.Scaling` debut at `7.9.0`. The remaining `Orleans.Lattice.Explorer` UI features stay held in [Unreleased] until the Explorer is published. No public-API break and no change to any serialized wire format; a safe drop-in patch over `7.9.0`.
+
+> **Post-release packaging erratum.** The publish workflow used for this wave stamped the release version as a global MSBuild property, which inflated each packed package's ProjectReference dependency floors to the tag version instead of the referenced package's real published version. Four packages in this wave consequently shipped with un-restorable dependency floors: `Orleans.Lattice.Backup` 7.9.3 (floor `Orleans.Lattice >= 7.9.3`, a version never published), `Orleans.Lattice.Replication.Grpc` 7.9.2 (floor `Orleans.Lattice.Replication >= 7.9.2`, never published), and `Orleans.Lattice.Api.State` 7.9.1 (floor `Orleans.Lattice.Schema >= 7.9.1`, never published) together with `Orleans.Lattice.Api.State.Grpc` 7.9.1 transitively. Do not depend on these exact versions; a corrected re-release from the fixed workflow is required. The workflow root cause is fixed under [Unreleased].
 
 ### Added
 
@@ -78,6 +82,8 @@ Per-package patch wave over `7.9.0`, shipping the Explorer-independent work accu
 ## [7.9.2] - 2026-07-12
 
 Per-package patch release. Only `Orleans.Lattice.Backup` advances to `7.9.2`; every other package in the family stays at its current version (`7.9.1` for `Orleans.Lattice.Replication.Grpc` and `Orleans.Lattice.Backup.AzureBlob`, `7.9.0` for the rest). One defect made the per-scope backup scheduler grain unpersistable on a durable grain-storage provider, surfacing as an opaque `Internal` error the first time a schedule or trigger call ran. No public-API break and no change to any serialized wire format; a safe drop-in patch over `7.9.0`.
+
+> **Post-release packaging erratum.** `Orleans.Lattice.Backup` 7.9.2 originally shipped with an inflated floor (`Orleans.Lattice >= 7.9.2`) from the version-stamping publish-workflow bug fixed under [Unreleased]. To repair the un-restorable chain, `Orleans.Lattice` was subsequently republished at `7.9.2` as a packaging-only release: the assembly is byte-identical to `7.9.1` (same source commit), lifting core to `7.9.2` so the floor resolves. No code, API, or wire-format change from `7.9.1`.
 
 ### Fixed
 
@@ -562,21 +568,23 @@ Major release across the package family. Two source-affecting changes set the ma
 Changelog entries for v6.x and earlier - down to the historical pre-v6.0.0 notes - have been archived to [`CHANGELOG.old.v6.md`](CHANGELOG.old.v6.md).
 
 ---
-[Unreleased]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.8.2...HEAD
-[7.9.3]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.9.2...v7.9.3
-[7.9.2]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.9.1...v7.9.2
+<!--
+  Compare links exist only for sections backed by a real family git tag (a
+  coordinated lockstep release). Per-package patch waves (7.9.3, 7.9.2, 7.8.2,
+  7.4.0, 7.3.3, 7.3.2, 7.3.1) ship each package under its own
+  `lattice.<pkg>-v<X.Y.Z>` tag and have no single family `vX.Y.Z` tag, so they
+  intentionally carry no compare link; each such section's prose lists the exact
+  per-package versions instead. Each link below chains to the nearest existing
+  prior family tag.
+-->
+[Unreleased]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.9.1...HEAD
 [7.9.1]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.9.0...v7.9.1
-[7.9.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.8.2...v7.9.0
-[7.8.2]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.8.1...v7.8.2
+[7.9.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.8.1...v7.9.0
 [7.8.1]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.8.0...v7.8.1
 [7.8.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.7.0...v7.8.0
 [7.7.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.6.0...v7.7.0
 [7.6.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.5.0...v7.6.0
-[7.5.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.4.0...v7.5.0
-[7.4.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.3.3...v7.4.0
-[7.3.3]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.3.2...v7.3.3
-[7.3.2]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.3.1...v7.3.2
-[7.3.1]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.3.0...v7.3.1
+[7.5.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.3.0...v7.5.0
 [7.3.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.2.0...v7.3.0
 [7.2.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.1.0...v7.2.0
 [7.1.0]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.0.0...v7.1.0
