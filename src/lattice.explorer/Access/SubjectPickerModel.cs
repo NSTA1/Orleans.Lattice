@@ -44,8 +44,13 @@ public sealed class SubjectPickerModel
     /// <summary>Raised whenever the model's observable state changes, so the view can re-render.</summary>
     public event Action? Changed;
 
-    /// <summary>Raised with the chosen id whenever the selected subject changes (empty when the selection is cleared).</summary>
-    public event Action<string>? SubjectSelected;
+    /// <summary>
+    /// Raised with the chosen id and its directory display name whenever the
+    /// selected subject changes. The id is empty when the selection is cleared,
+    /// and the display name is empty whenever no meaningful directory name is
+    /// known for the id (a cleared selection or the free-text fallback path).
+    /// </summary>
+    public event Action<string, string>? SubjectSelected;
 
     /// <summary>The kind of principal the search is restricted to.</summary>
     public DirectoryPrincipalKind Kind { get; private set; } = DirectoryPrincipalKind.User;
@@ -55,6 +60,14 @@ public sealed class SubjectPickerModel
 
     /// <summary>The currently selected subject id, or empty when nothing is selected.</summary>
     public string SelectedId { get; private set; } = string.Empty;
+
+    /// <summary>
+    /// The directory display name of the currently selected subject, or empty
+    /// when nothing is selected, when the selection came from the free-text
+    /// fallback, or when the matched principal carries no meaningful display name
+    /// (one that is blank or equal to its id).
+    /// </summary>
+    public string SelectedDisplayName { get; private set; } = string.Empty;
 
     /// <summary>The bounded page of matched principals from the most recent search.</summary>
     public IReadOnlyList<DirectoryPrincipalDescriptor> Results => _results;
@@ -246,6 +259,36 @@ public sealed class SubjectPickerModel
         }
 
         SelectedId = id;
-        SubjectSelected?.Invoke(id);
+        SelectedDisplayName = ResolveMeaningfulDisplayName(id);
+        SubjectSelected?.Invoke(id, SelectedDisplayName);
+    }
+
+    /// <summary>
+    /// Looks the id up in the current result page and returns its display name
+    /// only when that name is meaningful (non-blank and not equal to the id);
+    /// returns empty for a cleared selection, a free-text id absent from the page,
+    /// or a principal whose display name merely echoes its id.
+    /// </summary>
+    private string ResolveMeaningfulDisplayName(string id)
+    {
+        if (string.IsNullOrEmpty(id))
+        {
+            return string.Empty;
+        }
+
+        foreach (var principal in _results)
+        {
+            if (!string.Equals(principal.Id, id, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            return string.IsNullOrWhiteSpace(principal.DisplayName)
+                || string.Equals(principal.DisplayName, principal.Id, StringComparison.Ordinal)
+                    ? string.Empty
+                    : principal.DisplayName;
+        }
+
+        return string.Empty;
     }
 }

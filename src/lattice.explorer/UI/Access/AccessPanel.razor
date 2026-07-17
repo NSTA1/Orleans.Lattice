@@ -199,7 +199,9 @@
                         <label class="explorer-access-field">
                             <span>User id</span>
                             <SubjectPicker Kind="LatticeSubjectSelectorKind.User" KindLocked="true"
-                                           @bind-SubjectId="_userIdInput" Disabled="@(_busy || !_allowed)" />
+                                           @bind-SubjectId="_userIdInput"
+                                           SubjectDisplayNameChanged="OnUserDisplayNameSuggested"
+                                           Disabled="@(_busy || !_allowed)" />
                         </label>
                         @if (!string.IsNullOrEmpty(_accessModel.DirectoryExplanation))
                         {
@@ -285,7 +287,9 @@
                         <label class="explorer-access-field">
                             <span>Group id</span>
                             <SubjectPicker Kind="LatticeSubjectSelectorKind.Group" KindLocked="true"
-                                           @bind-SubjectId="_groupIdInput" Disabled="@(_busy || !_allowed)" />
+                                           @bind-SubjectId="_groupIdInput"
+                                           SubjectDisplayNameChanged="OnGroupDisplayNameSuggested"
+                                           Disabled="@(_busy || !_allowed)" />
                         </label>
                         @if (!string.IsNullOrEmpty(_accessModel.DirectoryExplanation))
                         {

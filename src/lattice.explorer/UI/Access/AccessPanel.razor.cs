@@ -398,6 +398,20 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _userCreateError = null;
     }
 
+    /// <summary>
+    /// Auto-fills the New user display-name field from a directory selection, but
+    /// only when the picker surfaced a meaningful name (the model already yields
+    /// empty for a cleared or free-text selection or one that merely echoes the
+    /// id), so an operator's own edit is never clobbered.
+    /// </summary>
+    private void OnUserDisplayNameSuggested(string displayName)
+    {
+        if (!string.IsNullOrWhiteSpace(displayName))
+        {
+            _userDisplayInput = displayName;
+        }
+    }
+
     private async Task SaveUserAsync()
     {
         if (_busy || !_allowed || string.IsNullOrWhiteSpace(_userIdInput))
@@ -567,6 +581,20 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _directMembers.Clear();
         _memberIdInput = string.Empty;
         _memberKind = MembershipMemberKind.User;
+    }
+
+    /// <summary>
+    /// Auto-fills the New group display-name field from a directory selection, but
+    /// only when the picker surfaced a meaningful name (the model already yields
+    /// empty for a cleared or free-text selection or one that merely echoes the
+    /// id), so an operator's own edit is never clobbered.
+    /// </summary>
+    private void OnGroupDisplayNameSuggested(string displayName)
+    {
+        if (!string.IsNullOrWhiteSpace(displayName))
+        {
+            _groupDisplayInput = displayName;
+        }
     }
 
     private async Task LoadDirectMembersAsync()

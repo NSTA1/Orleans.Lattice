@@ -92,6 +92,18 @@
     [Parameter]
     public EventCallback<string> SubjectIdChanged { get; set; }
 
+    /// <summary>
+    /// The selected subject's directory display name. Optional: call sites that do
+    /// not bind it are unaffected, and it is only pushed when a directory selection
+    /// carries a meaningful display name.
+    /// </summary>
+    [Parameter]
+    public string SubjectDisplayName { get; set; } = string.Empty;
+
+    /// <summary>Raised when the selected subject's display name changes (supports <c>@bind-SubjectDisplayName</c>).</summary>
+    [Parameter]
+    public EventCallback<string> SubjectDisplayNameChanged { get; set; }
+
     /// <summary>Renders the picker disabled when set.</summary>
     [Parameter]
     public bool Disabled { get; set; }
@@ -133,13 +145,15 @@
 
     private void OnModelChanged() => InvokeAsync(StateHasChanged);
 
-    private void OnModelSubjectSelected(string id) =>
+    private void OnModelSubjectSelected(string id, string displayName) =>
         InvokeAsync(async () =>
         {
             Kind = MapKind(Model.Kind);
             await KindChanged.InvokeAsync(Kind);
             SubjectId = id;
             await SubjectIdChanged.InvokeAsync(id);
+            SubjectDisplayName = displayName;
+            await SubjectDisplayNameChanged.InvokeAsync(displayName);
         });
 
     private async Task OnKindChangedAsync(ChangeEventArgs e)

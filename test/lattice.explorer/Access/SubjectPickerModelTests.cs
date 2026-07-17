@@ -20,6 +20,9 @@ public sealed class SubjectPickerModelTests
     private static DirectoryPrincipalDescriptor Principal(string id, DirectoryPrincipalKind kind = DirectoryPrincipalKind.User) =>
         new() { Id = id, DisplayName = id, Kind = kind };
 
+    private static DirectoryPrincipalDescriptor Principal(string id, string displayName, DirectoryPrincipalKind kind = DirectoryPrincipalKind.User) =>
+        new() { Id = id, DisplayName = displayName, Kind = kind };
+
     private static DirectorySearchView Available(IReadOnlyList<DirectoryPrincipalDescriptor> principals, string? next = null) =>
         new()
         {
@@ -139,7 +142,7 @@ public sealed class SubjectPickerModelTests
         await model.InitializeAsync();
         var initialCalls = directory.Calls.Count;
         string? raised = null;
-        model.SubjectSelected += id => raised = id;
+        model.SubjectSelected += (id, _) => raised = id;
 
         await model.SetSearchTermAsync("raw-id");
 
@@ -160,7 +163,7 @@ public sealed class SubjectPickerModelTests
         await model.InitializeAsync("alice");
         var callsAfterInit = directory.Calls.Count;
         string? raised = "unset";
-        model.SubjectSelected += id => raised = id;
+        model.SubjectSelected += (id, _) => raised = id;
 
         await model.SetKindAsync(DirectoryPrincipalKind.Group);
 
@@ -229,7 +232,7 @@ public sealed class SubjectPickerModelTests
     {
         var model = Create(new FakeDirectory(), new ManualDebounce());
         string? raised = null;
-        model.SubjectSelected += id => raised = id;
+        model.SubjectSelected += (id, _) => raised = id;
 
         await model.SelectAsync("grp1");
 
@@ -252,7 +255,7 @@ public sealed class SubjectPickerModelTests
     {
         var model = Create(new FakeDirectory(), new ManualDebounce());
         var raiseCount = 0;
-        model.SubjectSelected += _ => raiseCount++;
+        model.SubjectSelected += (_, _) => raiseCount++;
 
         await model.SelectAsync("x");
         await model.SelectAsync("x");
@@ -266,7 +269,7 @@ public sealed class SubjectPickerModelTests
         var directory = new FakeDirectory();
         var model = Create(directory, new ManualDebounce());
         var raised = false;
-        model.SubjectSelected += _ => raised = true;
+        model.SubjectSelected += (_, _) => raised = true;
 
         model.SyncExternalState(DirectoryPrincipalKind.Group, "seeded");
 
@@ -304,6 +307,121 @@ public sealed class SubjectPickerModelTests
     {
         var model = Create(new FakeDirectory(), new ManualDebounce());
         Assert.That(model.PageSize, Is.EqualTo(SubjectPickerModel.DefaultPageSize));
+    }
+
+    [Test]
+    public async Task SelectAsync_result_with_meaningful_name_sets_and_raises_display_name()
+    {
+        var directory = new FakeDirectory { Default = Available(new[] { Principal("alice", "Alice Adams") }) };
+        var model = Create(directory, new ManualDebounce());
+        await model.SearchNowAsync();
+        string? raisedId = null;
+        string? raisedName = null;
+        model.SubjectSelected += (id, name) =>
+        {
+            raisedId = id;
+            raisedName = name;
+        };
+
+        await model.SelectAsync("alice");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(model.SelectedDisplayName, Is.EqualTo("Alice Adams"));
+            Assert.That(raisedId, Is.EqualTo("alice"));
+            Assert.That(raisedName, Is.EqualTo("Alice Adams"), "the selection event carries the display name");
+        });
+    }
+
+    [Test]
+    public async Task SelectAsync_result_whose_name_equals_id_yields_empty_display_name()
+    {
+        var directory = new FakeDirectory { Default = Available(new[] { Principal("alice", "alice") }) };
+        var model = Create(directory, new ManualDebounce());
+        await model.SearchNowAsync();
+        string? raisedName = "unset";
+        model.SubjectSelected += (_, name) => raisedName = name;
+
+        await model.SelectAsync("alice");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(model.SelectedDisplayName, Is.Empty);
+            Assert.That(raisedName, Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task SelectAsync_result_with_blank_name_yields_empty_display_name()
+    {
+        var directory = new FakeDirectory { Default = Available(new[] { Principal("alice", "   ") }) };
+        var model = Create(directory, new ManualDebounce());
+        await model.SearchNowAsync();
+
+        await model.SelectAsync("alice");
+
+        Assert.That(model.SelectedDisplayName, Is.Empty);
+    }
+
+    [Test]
+    public async Task SelectAsync_id_absent_from_results_yields_empty_display_name()
+    {
+        var directory = new FakeDirectory { Default = Available(new[] { Principal("alice", "Alice Adams") }) };
+        var model = Create(directory, new ManualDebounce());
+        await model.SearchNowAsync();
+
+        await model.SelectAsync("not-in-page");
+
+        Assert.That(model.SelectedDisplayName, Is.Empty);
+    }
+
+    [Test]
+    public async Task SetSearchTermAsync_fallback_leaves_display_name_empty()
+    {
+        var directory = new FakeDirectory { Default = DirectorySearchView.Unavailable };
+        var model = Create(directory, new ManualDebounce());
+        await model.InitializeAsync();
+        string? raisedName = "unset";
+        model.SubjectSelected += (_, name) => raisedName = name;
+
+        await model.SetSearchTermAsync("raw-id");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(model.SelectedId, Is.EqualTo("raw-id"));
+            Assert.That(model.SelectedDisplayName, Is.Empty, "the free-text fallback carries no directory display name");
+            Assert.That(raisedName, Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task SetKindAsync_clears_display_name_alongside_the_selection()
+    {
+        var directory = new FakeDirectory { Default = Available(new[] { Principal("alice", "Alice Adams") }) };
+        var model = Create(directory, new ManualDebounce());
+        await model.SearchNowAsync();
+        await model.SelectAsync("alice");
+        Assume.That(model.SelectedDisplayName, Is.EqualTo("Alice Adams"));
+        string? raisedName = "unset";
+        model.SubjectSelected += (_, name) => raisedName = name;
+
+        await model.SetKindAsync(DirectoryPrincipalKind.Group);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(model.SelectedId, Is.Empty);
+            Assert.That(model.SelectedDisplayName, Is.Empty, "clearing the selection also clears the display name");
+            Assert.That(raisedName, Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task SelectedDisplayName_defaults_to_empty()
+    {
+        var model = Create(new FakeDirectory(), new ManualDebounce());
+        await model.InitializeAsync();
+
+        Assert.That(model.SelectedDisplayName, Is.Empty);
     }
 
     /// <summary>
