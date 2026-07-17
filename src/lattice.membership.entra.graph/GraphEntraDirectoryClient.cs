@@ -23,7 +23,10 @@ internal sealed class GraphEntraDirectoryClient : IEntraGraphDirectoryClient
     private static readonly string[] GroupSelect = { "id", "displayName", "mail" };
     private static readonly string[] OrderByDisplayName = { "displayName" };
 
+    private const string InvalidContinuationToken = "The directory continuation token was not a valid Microsoft Graph pagination cursor.";
+
     private readonly GraphServiceClient _graphClient;
+    private readonly Uri? _graphBaseUrl;
 
     /// <summary>
     /// Initializes a new <see cref="GraphEntraDirectoryClient"/>.
@@ -33,6 +36,11 @@ internal sealed class GraphEntraDirectoryClient : IEntraGraphDirectoryClient
     {
         ArgumentNullException.ThrowIfNull(graphClient);
         _graphClient = graphClient;
+
+        // Capture the configured Graph endpoint host once so continuation tokens can be
+        // validated against it. Honours national-cloud endpoints (graph.microsoft.us, etc.)
+        // rather than hard-coding graph.microsoft.com. An unparseable base URL fails closed.
+        _graphBaseUrl = GraphContinuationToken.ParseGraphBaseUrl(graphClient.RequestAdapter.BaseUrl);
     }
 
     /// <inheritdoc />
@@ -43,6 +51,11 @@ internal sealed class GraphEntraDirectoryClient : IEntraGraphDirectoryClient
             UserCollectionResponse? response;
             if (!string.IsNullOrEmpty(continuationToken))
             {
+                if (!GraphContinuationToken.IsValid(continuationToken, _graphBaseUrl))
+                {
+                    throw new EntraDirectoryUnavailableException(InvalidContinuationToken);
+                }
+
                 response = await _graphClient.Users
                     .WithUrl(continuationToken)
                     .GetAsync(cancellationToken: cancellationToken)
@@ -84,6 +97,11 @@ internal sealed class GraphEntraDirectoryClient : IEntraGraphDirectoryClient
             GroupCollectionResponse? response;
             if (!string.IsNullOrEmpty(continuationToken))
             {
+                if (!GraphContinuationToken.IsValid(continuationToken, _graphBaseUrl))
+                {
+                    throw new EntraDirectoryUnavailableException(InvalidContinuationToken);
+                }
+
                 response = await _graphClient.Groups
                     .WithUrl(continuationToken)
                     .GetAsync(cancellationToken: cancellationToken)
