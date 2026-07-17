@@ -55,11 +55,11 @@ public sealed class EntraGraphIdentityDirectory : ILatticeIdentityDirectory
     /// <inheritdoc />
     public string Explanation =>
         _subjectIdSource == EntraDirectorySubjectIdSource.UserPrincipalName
-            ? "A valid entry is a user or group from the connected Entra directory. Search by name, " +
-              "user principal name, or email and pick a match. For a user the recorded identifier is its " +
+            ? "A valid entry is a user or group from the connected Entra directory. Search by name or " +
+              "user principal name and pick a match. For a user the recorded identifier is its " +
               "user principal name (the configured subject claim); for a group it is the Entra object id."
-            : "A valid entry is a user or group from the connected Entra directory. Search by name, " +
-              "user principal name, or email and pick a match. The recorded identifier is the Entra object " +
+            : "A valid entry is a user or group from the connected Entra directory. Search by name or " +
+              "user principal name and pick a match. The recorded identifier is the Entra object " +
               "id (oid) - the same value the token's subject claim carries.";
 
     /// <inheritdoc />
