@@ -20,13 +20,12 @@ public partial class AccessPanel : ComponentBase, IDisposable
     /// <summary>The active sub-tab of the Access area.</summary>
     private enum AccessTab
     {
-        Users,
         Groups,
         Policies,
         Explain,
     }
 
-    private AccessTab _tab = AccessTab.Users;
+    private AccessTab _tab = AccessTab.Groups;
     private bool _busy;
     private bool _allowed;
     private AccessOperationResult? _lastResult;
@@ -44,15 +43,10 @@ public partial class AccessPanel : ComponentBase, IDisposable
     private string? _treesError;
     private string? _selectedTreeId;
 
-    // ----- Users -----
+    // ----- Users (list shared with the Groups member picker and the Policies /
+    // Explain subject drop-down; the Explorer has no dedicated Users admin tab) -----
     private readonly List<AuthUser> _users = new();
     private string? _usersNextToken;
-    private string? _selectedUserId;
-    private bool _editingExistingUser;
-    private bool _userFormOpen;
-    private string _userIdInput = string.Empty;
-    private string _userDisplayInput = string.Empty;
-    private string? _userCreateError;
 
     // ----- Groups -----
     private readonly List<AuthGroup> _groups = new();
@@ -225,7 +219,6 @@ public partial class AccessPanel : ComponentBase, IDisposable
 
         // Leaving a tab closes any open create/edit form so the user always returns
         // to the list-first view with an explicit call to action.
-        _userFormOpen = false;
         _groupFormOpen = false;
         _ruleFormOpen = false;
 
@@ -269,13 +262,6 @@ public partial class AccessPanel : ComponentBase, IDisposable
     {
         switch (_tab)
         {
-            case AccessTab.Users:
-                if (force || _users.Count == 0)
-                {
-                    await LoadUsersAsync(reset: true);
-                }
-
-                break;
             case AccessTab.Groups:
                 if (force || _groups.Count == 0)
                 {
@@ -360,139 +346,6 @@ public partial class AccessPanel : ComponentBase, IDisposable
 
         _users.AddRange(view.Entries);
         _usersNextToken = view.NextPageToken;
-    }
-
-    private Task LoadMoreUsersAsync() => LoadUsersAsync(reset: false);
-
-    private void SelectUser(AuthUser user)
-    {
-        _selectedUserId = user.UserId;
-        _editingExistingUser = true;
-        _userIdInput = user.UserId;
-        _userDisplayInput = user.DisplayName ?? string.Empty;
-        _userCreateError = null;
-    }
-
-    // Opens the empty create form (the "New user" call to action).
-    private void NewUser()
-    {
-        ResetUserForm();
-        _userFormOpen = true;
-    }
-
-    // Opens the form pre-filled to edit an existing user.
-    private void EditUser(AuthUser user)
-    {
-        SelectUser(user);
-        _userFormOpen = true;
-    }
-
-    // Closes the form without saving.
-    private void CancelUserForm()
-    {
-        ResetUserForm();
-        _userFormOpen = false;
-    }
-
-    private void ResetUserForm()
-    {
-        _selectedUserId = null;
-        _editingExistingUser = false;
-        _userIdInput = string.Empty;
-        _userDisplayInput = string.Empty;
-        _userCreateError = null;
-    }
-
-    /// <summary>
-    /// Auto-fills the New user display-name field from a directory selection, but
-    /// only when the picker surfaced a meaningful name (the model already yields
-    /// empty for a cleared or free-text selection or one that merely echoes the
-    /// id), so an operator's own edit is never clobbered.
-    /// </summary>
-    private void OnUserDisplayNameSuggested(string displayName)
-    {
-        if (!string.IsNullOrWhiteSpace(displayName))
-        {
-            _userDisplayInput = displayName;
-        }
-    }
-
-    private async Task SaveUserAsync()
-    {
-        if (_busy || !_allowed || string.IsNullOrWhiteSpace(_userIdInput))
-        {
-            return;
-        }
-
-        _busy = true;
-        try
-        {
-            _userCreateError = null;
-
-            // Fail closed for a NEW user: when a directory is available the chosen /
-            // entered id must resolve to a real user, otherwise the create is blocked
-            // with an inline reason. The edit path (an existing user) skips this - its
-            // id is fixed and already known to the directory.
-            if (!_editingExistingUser)
-            {
-                var decision = await _accessModel.ValidateAsync(_userIdInput, DirectoryPrincipalKind.User);
-                if (decision.IsBlocked)
-                {
-                    _userCreateError = decision.Reason;
-                    return;
-                }
-            }
-
-            var user = new AuthUser
-            {
-                UserId = _userIdInput.Trim(),
-                DisplayName = string.IsNullOrWhiteSpace(_userDisplayInput) ? null : _userDisplayInput.Trim(),
-            };
-            _lastResult = await Membership.UpsertUserAsync(user);
-            if (_lastResult.IsSuccess)
-            {
-                // Replace the server's raw-id success message with a friendly,
-                // display-name status line composed client-side.
-                var label = string.IsNullOrWhiteSpace(user.DisplayName) ? user.UserId : user.DisplayName;
-                _lastResult = AccessOperationResult.Success($"Saved user '{label}'.");
-
-                // Repopulate the list, then keep the just-saved user selected and
-                // highlighted so the operator sees the result of their action.
-                await LoadUsersCoreAsync(reset: true);
-                SelectUser(user);
-            }
-        }
-        finally
-        {
-            _busy = false;
-        }
-    }
-
-    private async Task DeleteUserAsync()
-    {
-        if (_busy || !_allowed || _selectedUserId is null)
-        {
-            return;
-        }
-
-        _busy = true;
-        try
-        {
-            // Capture a friendly label before the reset clears the form fields.
-            var label = string.IsNullOrWhiteSpace(_userDisplayInput) ? _selectedUserId : _userDisplayInput;
-            _lastResult = await Membership.DeleteUserAsync(_selectedUserId);
-            if (_lastResult.IsSuccess)
-            {
-                _lastResult = AccessOperationResult.Success($"Deleted user '{label}'.");
-                ResetUserForm();
-                _userFormOpen = false;
-                await LoadUsersCoreAsync(reset: true);
-            }
-        }
-        finally
-        {
-            _busy = false;
-        }
     }
 
     // ----- Groups -----

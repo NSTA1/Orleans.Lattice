@@ -12,8 +12,8 @@
 @inject PrincipalLabelResolver Labels
 
 @*
-    The Access (membership & access-control) management area. Four sub-tabs:
-    Users and Groups administer the membership directory; Policies authors the
+    The Access (membership & access-control) management area. Three sub-tabs:
+    Groups administers the membership directory; Policies authors the
     authorization rules; Explain drives the facade's Explain / EffectivePermissions
     introspection. The coarse AuthAdminAllowed capability gates the whole area (the
     shell greys the top-level tab when it is denied); within the area every action
@@ -102,10 +102,6 @@
     <header class="explorer-backups-header">
         <div class="explorer-tabstrip" role="tablist" aria-label="Access tabs">
             <button type="button" role="tab"
-                    class="explorer-tab @(_tab == AccessTab.Users ? "is-active" : null)"
-                    aria-selected="@(_tab == AccessTab.Users)"
-                    @onclick="@(() => SetTab(AccessTab.Users))">Users</button>
-            <button type="button" role="tab"
                     class="explorer-tab @(_tab == AccessTab.Groups ? "is-active" : null)"
                     aria-selected="@(_tab == AccessTab.Groups)"
                     @onclick="@(() => SetTab(AccessTab.Groups))">Groups</button>
@@ -146,91 +142,7 @@
         }
     }
 
-    @if (_tab == AccessTab.Users)
-    {
-        <div class="explorer-access-grid">
-            <div class="explorer-access-listcol">
-                <div class="explorer-access-listhead">
-                    <h3 class="explorer-access-title">Users</h3>
-                    <button type="button" class="explorer-btn" disabled="@(_busy || !_allowed)" @onclick="NewUser">New user</button>
-                </div>
-                @if (_users.Count == 0)
-                {
-                    <p class="explorer-backups-empty">No users to show.</p>
-                }
-                else
-                {
-                    <ul class="explorer-nav-list" role="list" aria-label="Users">
-                        @foreach (var user in _users)
-                        {
-                            var id = user.UserId;
-                            <li class="explorer-access-itemrow @(id == _selectedUserId ? "is-selected" : null)"
-                                @onclick="@(() => SelectUser(user))">
-                                <span class="explorer-access-itemlabel" title="@id">
-                                    <span class="explorer-nav-item-id">@(string.IsNullOrWhiteSpace(user.DisplayName) ? id : user.DisplayName)</span>
-                                </span>
-                                <button type="button" class="explorer-btn explorer-access-edit"
-                                        disabled="@(_busy || !_allowed)" @onclick="@(() => EditUser(user))" @onclick:stopPropagation="true">Edit</button>
-                            </li>
-                        }
-                    </ul>
-                    @if (_usersNextToken is not null)
-                    {
-                        <button type="button" class="explorer-btn" disabled="@(_busy || !_allowed)" @onclick="LoadMoreUsersAsync">Load more</button>
-                    }
-                }
-            </div>
-            @if (_userFormOpen)
-            {
-                <div class="explorer-access-formcol">
-                    <h3 class="explorer-access-title">@(_editingExistingUser ? "Edit user" : "New user")</h3>
-                    @if (_editingExistingUser)
-                    {
-                        <label class="explorer-access-field">
-                            <span>User id</span>
-                            <input type="text" value="@_userIdInput" disabled="true" placeholder="user id" />
-                        </label>
-                    }
-                    else
-                    {
-                        <label class="explorer-access-field">
-                            <span>User id</span>
-                            <SubjectPicker Kind="LatticeSubjectSelectorKind.User" KindLocked="true"
-                                           @bind-SubjectId="_userIdInput"
-                                           SubjectDisplayNameChanged="OnUserDisplayNameSuggested"
-                                           Disabled="@(_busy || !_allowed)" />
-                        </label>
-                        @if (!string.IsNullOrEmpty(_accessModel.DirectoryExplanation))
-                        {
-                            <p class="explorer-access-hint">@_accessModel.DirectoryExplanation</p>
-                        }
-                        @if (_userCreateError is not null)
-                        {
-                            <p class="explorer-backups-result is-failed" role="status">@_userCreateError</p>
-                        }
-                    }
-                    <label class="explorer-access-field">
-                        <span>Display name</span>
-                        <input type="text" value="@_userDisplayInput" disabled="@(_busy || !_allowed)"
-                               @oninput="e => _userDisplayInput = e.Value?.ToString() ?? string.Empty" placeholder="optional" />
-                    </label>
-                    <div class="explorer-access-actions">
-                        <button type="button" class="explorer-btn" disabled="@(_busy || !_allowed || string.IsNullOrWhiteSpace(_userIdInput))" @onclick="SaveUserAsync">Save</button>
-                        <button type="button" class="explorer-btn" disabled="@_busy" @onclick="CancelUserForm">Cancel</button>
-                        <button type="button" class="explorer-btn explorer-access-danger"
-                                disabled="@(_busy || !_allowed || !_editingExistingUser)" @onclick="DeleteUserAsync">Delete</button>
-                    </div>
-                </div>
-            }
-            else
-            {
-                <div class="explorer-access-formcol">
-                    <p class="explorer-backups-empty">Select a user to edit, or choose 'New user' to add one.</p>
-                </div>
-            }
-        </div>
-    }
-    else if (_tab == AccessTab.Groups)
+    @if (_tab == AccessTab.Groups)
     {
         <div class="explorer-access-grid">
             <div class="explorer-access-listcol">
@@ -482,6 +394,12 @@
                 <div class="explorer-access-grid">
                     <div class="explorer-access-formcol">
                         <h3 class="explorer-access-title">Explain a decision</h3>
+                        @if (_accessModel.DirectoryAvailable)
+                        {
+                            <p class="explorer-access-hint">
+                                Explain and Effective compute group membership from the local membership directory, not the connected directory. A caller's live token or directory groups may differ, so a real request can resolve to a different set of groups than shown here.
+                            </p>
+                        }
                 <label class="explorer-access-field">
                     <span>Subject</span>
                     <SubjectPicker @bind-Kind="_explainSubjectKind"
