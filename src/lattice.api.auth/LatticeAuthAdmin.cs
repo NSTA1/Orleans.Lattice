@@ -470,7 +470,10 @@ internal sealed class LatticeAuthAdmin(
             RulesEnforced = _gate is not NullLatticeAccessGate,
             DirectoryAvailable = DirectoryAvailable,
             DirectoryProviderId = _identityDirectory.ProviderId,
-            DirectoryExplanation = _identityDirectory.Explanation,
+            // The Explorer's sole create form is the group form (the user form was
+            // removed), so surface the group-scoped guidance; the seam stays
+            // kind-aware for a future user or combined form.
+            DirectoryExplanation = _identityDirectory.DescribeEntry(DirectoryPrincipalKind.Group),
         };
     }
 

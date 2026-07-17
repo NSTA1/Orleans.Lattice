@@ -30,13 +30,17 @@ public class StaticIdentityDirectoryTests
     }
 
     [Test]
-    public void Explanation_describes_the_deployment_provisioned_roster()
+    public void DescribeEntry_describes_the_deployment_provisioned_roster_for_every_kind()
     {
         var directory = CreateDirectory(_ => { });
 
-        Assert.That(directory.Explanation, Does.Contain("deployment"));
-        Assert.That(directory.Explanation, Does.Contain("LATTICE_STATE_USER_"));
-        Assert.That(directory.Explanation, Does.Not.Contain("without validation"));
+        foreach (var kind in new DirectoryPrincipalKind?[] { null, DirectoryPrincipalKind.User, DirectoryPrincipalKind.Group })
+        {
+            var guidance = directory.DescribeEntry(kind);
+            Assert.That(guidance, Does.Contain("deployment"));
+            Assert.That(guidance, Does.Contain("LATTICE_STATE_USER_"));
+            Assert.That(guidance, Does.Not.Contain("without validation"));
+        }
     }
 
     [Test]

@@ -74,7 +74,7 @@ public sealed class StaticIdentityDirectory : ILatticeIdentityDirectory
     public string ProviderId => StaticProviderId;
 
     /// <inheritdoc />
-    public string Explanation =>
+    public string DescribeEntry(DirectoryPrincipalKind? kind) =>
         "Enter an exact id provisioned at deployment time - a static-roster principal or a " +
         "LATTICE_STATE_USER_<name> Basic credential - not an arbitrary string. Ids that are " +
         "not in the deployed roster are rejected.";

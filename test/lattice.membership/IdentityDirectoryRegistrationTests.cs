@@ -52,7 +52,7 @@ public class IdentityDirectoryRegistrationTests
         var resolved = await directory.ResolveAsync("someone");
 
         Assert.That(directory.ProviderId, Is.EqualTo(NullIdentityDirectory.NullProviderId));
-        Assert.That(directory.Explanation, Does.Contain("accepted without validation"));
+        Assert.That(directory.DescribeEntry(null), Does.Contain("accepted without validation"));
         Assert.That(page.Principals, Is.Empty);
         Assert.That(resolved, Is.Null);
     }
@@ -94,7 +94,7 @@ public class IdentityDirectoryRegistrationTests
     {
         public string ProviderId => "fake";
 
-        public string Explanation => "A fake provider for tests.";
+        public string DescribeEntry(DirectoryPrincipalKind? kind) => "A fake provider for tests.";
 
         public Task<DirectorySearchPage> SearchAsync(DirectorySearchQuery query, CancellationToken cancellationToken = default) =>
             Task.FromResult(DirectorySearchPage.Empty);

@@ -3,7 +3,8 @@ namespace Orleans.Lattice.Membership.Entra.Graph.Tests;
 /// <summary>
 /// Unit tests for <see cref="EntraGraphIdentityDirectory"/>: search paging and
 /// kind filtering, resolve hit / miss, subject-id shaping, the operator-facing
-/// <see cref="EntraGraphIdentityDirectory.Explanation"/>, page-size clamping, and
+/// kind-aware <see cref="EntraGraphIdentityDirectory.DescribeEntry"/>, page-size
+/// clamping, and
 /// the clean degradation when Graph is unavailable. Every case runs against
 /// <see cref="FakeGraphDirectoryClient"/> - no live Graph call.
 /// </summary>
@@ -52,20 +53,67 @@ public class EntraGraphIdentityDirectoryTests
     }
 
     [Test]
-    public void Explanation_object_id_source_mentions_object_id()
+    public void DescribeEntry_group_kind_is_group_specific_and_omits_user_wording()
     {
         var directory = CreateDirectory(new FakeGraphDirectoryClient(), subjectIdSource: EntraDirectorySubjectIdSource.ObjectId);
 
-        Assert.That(directory.Explanation, Does.Contain("Entra directory"));
-        Assert.That(directory.Explanation, Does.Contain("object id"));
+        var guidance = directory.DescribeEntry(DirectoryPrincipalKind.Group);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(guidance, Does.Contain("a group from the connected Entra directory"));
+            Assert.That(guidance, Does.Not.Contain("user"));
+            // The id-semantics fact must survive the group-specific rewrite.
+            Assert.That(
+                guidance,
+                Does.Contain("The recorded identifier is the Entra object id (oid) - the same value the token's subject claim carries."));
+        });
     }
 
     [Test]
-    public void Explanation_upn_source_mentions_user_principal_name()
+    public void DescribeEntry_user_kind_is_user_specific_and_invites_upn_search()
+    {
+        var directory = CreateDirectory(new FakeGraphDirectoryClient(), subjectIdSource: EntraDirectorySubjectIdSource.ObjectId);
+
+        var guidance = directory.DescribeEntry(DirectoryPrincipalKind.User);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(guidance, Does.Contain("a user from the connected Entra directory"));
+            Assert.That(guidance, Does.Contain("user principal name"));
+            Assert.That(guidance, Does.Not.Contain("group"));
+            Assert.That(guidance, Does.Contain("object id"));
+        });
+    }
+
+    [Test]
+    public void DescribeEntry_combined_kind_mentions_both_users_and_groups()
+    {
+        var directory = CreateDirectory(new FakeGraphDirectoryClient(), subjectIdSource: EntraDirectorySubjectIdSource.ObjectId);
+
+        var guidance = directory.DescribeEntry(null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(guidance, Does.Contain("a user or group from the connected Entra directory"));
+            Assert.That(guidance, Does.Contain("object id"));
+        });
+    }
+
+    [Test]
+    public void DescribeEntry_upn_source_records_upn_for_users_but_object_id_for_groups()
     {
         var directory = CreateDirectory(new FakeGraphDirectoryClient(), subjectIdSource: EntraDirectorySubjectIdSource.UserPrincipalName);
 
-        Assert.That(directory.Explanation, Does.Contain("user principal name"));
+        var userGuidance = directory.DescribeEntry(DirectoryPrincipalKind.User);
+        var groupGuidance = directory.DescribeEntry(DirectoryPrincipalKind.Group);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(userGuidance, Does.Contain("user principal name"));
+            Assert.That(groupGuidance, Does.Contain("The recorded identifier is the Entra object id."));
+            Assert.That(groupGuidance, Does.Not.Contain("user"));
+        });
     }
 
     [Test]

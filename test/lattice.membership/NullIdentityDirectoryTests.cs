@@ -16,13 +16,17 @@ public class NullIdentityDirectoryTests
     }
 
     [Test]
-    public void Explanation_describes_the_unvalidated_default()
+    public void DescribeEntry_describes_the_unvalidated_default_for_every_kind()
     {
         var directory = new NullIdentityDirectory();
 
-        Assert.That(
-            directory.Explanation,
-            Is.EqualTo("No identity directory is configured - ids are accepted without validation."));
+        const string expected = "No identity directory is configured - ids are accepted without validation.";
+        Assert.Multiple(() =>
+        {
+            Assert.That(directory.DescribeEntry(null), Is.EqualTo(expected));
+            Assert.That(directory.DescribeEntry(DirectoryPrincipalKind.User), Is.EqualTo(expected));
+            Assert.That(directory.DescribeEntry(DirectoryPrincipalKind.Group), Is.EqualTo(expected));
+        });
     }
 
     [Test]

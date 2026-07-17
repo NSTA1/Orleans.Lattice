@@ -48,7 +48,9 @@ public sealed record AccessModelDescriptor
 
     /// <summary>
     /// The operator-facing explanation of what a valid principal id is for this
-    /// deployment, suitable for rendering inline in a create form.
+    /// deployment, scoped to the kind of principal the Access create form enters
+    /// (the group create form), suitable for rendering inline beneath that form's
+    /// picker.
     /// </summary>
     [Id(4)] public required string DirectoryExplanation { get; init; }
 }

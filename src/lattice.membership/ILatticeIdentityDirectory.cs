@@ -22,12 +22,20 @@ public interface ILatticeIdentityDirectory
 
     /// <summary>
     /// A human-readable, operator-facing description of what a valid principal id
-    /// is for this deployment and where it comes from - surfaced inline in the
-    /// New user / New group forms so the operator sees exactly what to enter.
-    /// Every provider should override this with wording specific to its identity
-    /// source.
+    /// is for this deployment and where it comes from, scoped to the
+    /// <paramref name="kind"/> of principal a create form is entering - surfaced
+    /// inline beneath that form's picker so the operator sees exactly what to
+    /// enter. Every provider should return wording specific to its identity source
+    /// and appropriate to the requested kind.
     /// </summary>
-    string Explanation { get; }
+    /// <param name="kind">
+    /// The kind of principal the guidance describes:
+    /// <see cref="DirectoryPrincipalKind.User"/> for a user-only form,
+    /// <see cref="DirectoryPrincipalKind.Group"/> for a group-only form, or
+    /// <c>null</c> for a combined form that accepts either a user or a group.
+    /// </param>
+    /// <returns>The operator-facing guidance for the requested kind.</returns>
+    string DescribeEntry(DirectoryPrincipalKind? kind);
 
     /// <summary>
     /// Searches or browses the external identity source for principals matching

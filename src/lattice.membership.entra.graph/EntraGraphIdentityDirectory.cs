@@ -53,14 +53,47 @@ public sealed class EntraGraphIdentityDirectory : ILatticeIdentityDirectory
     public string ProviderId => EntraProviderId;
 
     /// <inheritdoc />
-    public string Explanation =>
-        _subjectIdSource == EntraDirectorySubjectIdSource.UserPrincipalName
-            ? "A valid entry is a user or group from the connected Entra directory. Search by name or " +
-              "user principal name and pick a match. For a user the recorded identifier is its " +
-              "user principal name (the configured subject claim); for a group it is the Entra object id."
-            : "A valid entry is a user or group from the connected Entra directory. Search by name or " +
-              "user principal name and pick a match. The recorded identifier is the Entra object " +
-              "id (oid) - the same value the token's subject claim carries.";
+    public string DescribeEntry(DirectoryPrincipalKind? kind)
+    {
+        var entry = kind switch
+        {
+            DirectoryPrincipalKind.User => "A valid entry is a user from the connected Entra directory.",
+            DirectoryPrincipalKind.Group => "A valid entry is a group from the connected Entra directory.",
+            _ => "A valid entry is a user or group from the connected Entra directory.",
+        };
+
+        // A group has no user principal name, so a group-only form must not invite
+        // searching by one.
+        var search = kind == DirectoryPrincipalKind.Group
+            ? "Search by name and pick a match."
+            : "Search by name or user principal name and pick a match.";
+
+        return $"{entry} {search} {DescribeRecordedIdentifier(kind)}";
+    }
+
+    private string DescribeRecordedIdentifier(DirectoryPrincipalKind? kind)
+    {
+        // The object-id source records the oid for every principal kind, so the
+        // id-semantics sentence is kind-independent.
+        if (_subjectIdSource != EntraDirectorySubjectIdSource.UserPrincipalName)
+        {
+            return "The recorded identifier is the Entra object id (oid) - the same value the " +
+                   "token's subject claim carries.";
+        }
+
+        // Under the user-principal-name source only a user records its UPN; a group
+        // always records its object id.
+        return kind switch
+        {
+            DirectoryPrincipalKind.User =>
+                "The recorded identifier is its user principal name (the configured subject claim).",
+            DirectoryPrincipalKind.Group =>
+                "The recorded identifier is the Entra object id.",
+            _ =>
+                "For a user the recorded identifier is its user principal name (the configured " +
+                "subject claim); for a group it is the Entra object id.",
+        };
+    }
 
     /// <inheritdoc />
     public Task<DirectorySearchPage> SearchAsync(DirectorySearchQuery query, CancellationToken cancellationToken = default)

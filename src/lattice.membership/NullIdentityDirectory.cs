@@ -3,7 +3,7 @@ namespace Orleans.Lattice.Membership;
 /// <summary>
 /// The default no-op <see cref="ILatticeIdentityDirectory"/>: no external identity
 /// source is configured, so search returns an empty page, resolve returns
-/// <c>null</c> for every id, and <see cref="Explanation"/> tells the operator that
+/// <c>null</c> for every id, and <see cref="DescribeEntry"/> tells the operator that
 /// ids are accepted without validation. Registered as the default in
 /// <see cref="LatticeMembershipServiceCollectionExtensions.AddLatticeMembership(Orleans.Hosting.ISiloBuilder, System.Action{LatticeMembershipOptions})"/>,
 /// so the facade always resolves an instance and any real provider overrides it
@@ -21,7 +21,7 @@ public sealed class NullIdentityDirectory : ILatticeIdentityDirectory
     public string ProviderId => NullProviderId;
 
     /// <inheritdoc />
-    public string Explanation =>
+    public string DescribeEntry(DirectoryPrincipalKind? kind) =>
         "No identity directory is configured - ids are accepted without validation.";
 
     /// <inheritdoc />
