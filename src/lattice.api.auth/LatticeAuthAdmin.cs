@@ -37,6 +37,8 @@ internal sealed class LatticeAuthAdmin(
     ILatticeMembershipDirectory directory,
     ILatticeAccessGate gate,
     ILatticeMembershipContext membership,
+    ILatticeIdentityDirectory identityDirectory,
+    IEnumerable<ILatticeCredentialAuthenticator> authenticators,
     IOptions<LatticeApiAuthOptions> apiOptions,
     IOptionsMonitor<LatticeAuthOptions> authOptions) : ILatticeAuthAdmin
 {
@@ -55,6 +57,8 @@ internal sealed class LatticeAuthAdmin(
     private readonly ILatticeMembershipDirectory _directory = directory ?? throw new ArgumentNullException(nameof(directory));
     private readonly ILatticeAccessGate _gate = gate ?? throw new ArgumentNullException(nameof(gate));
     private readonly ILatticeMembershipContext _membership = membership ?? throw new ArgumentNullException(nameof(membership));
+    private readonly ILatticeIdentityDirectory _identityDirectory = identityDirectory ?? throw new ArgumentNullException(nameof(identityDirectory));
+    private readonly ILatticeCredentialAuthenticator[] _authenticators = (authenticators ?? throw new ArgumentNullException(nameof(authenticators))).ToArray();
     private readonly LatticeApiAuthOptions _apiOptions = (apiOptions ?? throw new ArgumentNullException(nameof(apiOptions))).Value;
     private readonly IOptionsMonitor<LatticeAuthOptions> _authOptions = authOptions ?? throw new ArgumentNullException(nameof(authOptions));
 
@@ -395,6 +399,76 @@ internal sealed class LatticeAuthAdmin(
         };
     }
 
+    // ----- Identity directory -----
+
+    /// <inheritdoc />
+    public async Task<DirectorySearchResult> SearchDirectoryAsync(DirectorySearchRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        await AuthorizeAdminAsync(cancellationToken).ConfigureAwait(false);
+
+        // No configured directory: fold to an explicit unavailable result rather
+        // than calling the no-op provider and hiding the distinction between
+        // "nothing matched" and "validation is off".
+        if (!DirectoryAvailable)
+        {
+            return DirectorySearchResult.Unavailable;
+        }
+
+        var query = new DirectorySearchQuery(
+            request.Term ?? string.Empty,
+            request.Kind,
+            request.PageSize,
+            request.ContinuationToken);
+        var page = await _identityDirectory.SearchAsync(query, cancellationToken).ConfigureAwait(false);
+
+        var descriptors = new List<DirectoryPrincipalDescriptor>(page.Principals.Count);
+        foreach (var principal in page.Principals)
+        {
+            descriptors.Add(ToDescriptor(principal));
+        }
+
+        return new DirectorySearchResult
+        {
+            Principals = descriptors,
+            ContinuationToken = page.ContinuationToken,
+            Available = true,
+        };
+    }
+
+    /// <inheritdoc />
+    public async Task<DirectoryPrincipalDescriptor?> ResolveDirectoryPrincipalAsync(string principalId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(principalId);
+        await AuthorizeAdminAsync(cancellationToken).ConfigureAwait(false);
+
+        // With no directory configured the resolve is unresolvable: a null result
+        // (the same "not found" answer) rather than an error, matching the no-op
+        // provider's own behaviour.
+        if (!DirectoryAvailable)
+        {
+            return null;
+        }
+
+        var principal = await _identityDirectory.ResolveAsync(principalId, cancellationToken).ConfigureAwait(false);
+        return principal is null ? null : ToDescriptor(principal);
+    }
+
+    /// <inheritdoc />
+    public async Task<AccessModelDescriptor> GetAccessModelAsync(CancellationToken cancellationToken = default)
+    {
+        await AuthorizeAdminAsync(cancellationToken).ConfigureAwait(false);
+
+        return new AccessModelDescriptor
+        {
+            AuthenticationMode = DetermineAuthenticationMode(),
+            RulesEnforced = _gate is not NullLatticeAccessGate,
+            DirectoryAvailable = DirectoryAvailable,
+            DirectoryProviderId = _identityDirectory.ProviderId,
+            DirectoryExplanation = _identityDirectory.Explanation,
+        };
+    }
+
     // ----- Internals -----
 
     /// <summary>
@@ -595,4 +669,46 @@ internal sealed class LatticeAuthAdmin(
 
     private static AuthGroup ToAuthGroup(MembershipGroup group) =>
         new() { GroupId = group.GroupId, DisplayName = group.DisplayName };
+
+    private static DirectoryPrincipalDescriptor ToDescriptor(DirectoryPrincipal principal) =>
+        new()
+        {
+            Id = principal.Id,
+            DisplayName = principal.DisplayName,
+            Kind = principal.Kind,
+            Claims = principal.Claims,
+        };
+
+    /// <summary>
+    /// <see langword="true"/> when a real, searchable identity directory is
+    /// configured; <see langword="false"/> when the default no-op
+    /// <see cref="NullIdentityDirectory"/> is in force (ids are accepted without
+    /// validation).
+    /// </summary>
+    private bool DirectoryAvailable => _identityDirectory is not NullIdentityDirectory;
+
+    /// <summary>
+    /// Best-effort authentication mode from the silo's registered credential
+    /// authenticators: any real authenticator beyond the anonymous fallback means
+    /// the silo can authenticate a caller from claims; only the anonymous
+    /// fallback means no caller is ever authenticated; no authenticator at all is
+    /// indeterminate. A transport-specific authorizer (for example the flat-Basic
+    /// authorizer at the gRPC state layer) is not registered here and so is not
+    /// visible - <see cref="AccessAuthenticationMode.Basic"/> is left to the
+    /// transport capability probe layered above this facade.
+    /// </summary>
+    private AccessAuthenticationMode DetermineAuthenticationMode()
+    {
+        var hasAnyAuthenticator = false;
+        foreach (var authenticator in _authenticators)
+        {
+            hasAnyAuthenticator = true;
+            if (authenticator is not AnonymousCredentialAuthenticator)
+            {
+                return AccessAuthenticationMode.Claims;
+            }
+        }
+
+        return hasAnyAuthenticator ? AccessAuthenticationMode.Anonymous : AccessAuthenticationMode.Unknown;
+    }
 }

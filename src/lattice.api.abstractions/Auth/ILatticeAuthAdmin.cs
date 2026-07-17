@@ -184,4 +184,39 @@ public interface ILatticeAuthAdmin
         string subjectId,
         LatticeSubjectSelectorKind subjectKind = LatticeSubjectSelectorKind.User,
         CancellationToken cancellationToken = default);
+
+    // ----- Identity directory -----
+
+    /// <summary>
+    /// Searches or browses the configured external identity directory for
+    /// principals matching <paramref name="request"/>, so an operator can pick a
+    /// real user or group before granting it access. When no directory is
+    /// configured the result is an explicit
+    /// <see cref="DirectorySearchResult.Unavailable"/> (empty and
+    /// <see cref="DirectorySearchResult.Available"/> <see langword="false"/>)
+    /// rather than an error.
+    /// </summary>
+    /// <param name="request">The typeahead / browse request. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancels the search.</param>
+    Task<DirectorySearchResult> SearchDirectoryAsync(DirectorySearchRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Resolves a single principal by its exact id against the configured
+    /// external identity directory, confirming it exists, or returns
+    /// <c>null</c> when no such principal exists (or when no directory is
+    /// configured).
+    /// </summary>
+    /// <param name="principalId">The exact principal id to resolve. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancels the resolve.</param>
+    Task<DirectoryPrincipalDescriptor?> ResolveDirectoryPrincipalAsync(string principalId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reports the cluster's best-effort access model: the active authentication
+    /// mode, whether authorization rules are actually enforced, and whether an
+    /// identity directory is available for validating candidate ids (with its
+    /// provider id and operator-facing explanation), so a UI can render the right
+    /// create-form guidance.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    Task<AccessModelDescriptor> GetAccessModelAsync(CancellationToken cancellationToken = default);
 }

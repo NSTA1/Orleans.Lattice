@@ -39,6 +39,18 @@ public static class ApiAuthTypeAliases
     /// <summary>Alias for <see cref="AuthEffectivePermissions"/>.</summary>
     public const string AuthEffectivePermissions = "oli.ep";
 
+    /// <summary>Alias for <see cref="DirectorySearchRequest"/>.</summary>
+    public const string DirectorySearchRequest = "oli.dq";
+
+    /// <summary>Alias for <see cref="DirectorySearchResult"/>.</summary>
+    public const string DirectorySearchResult = "oli.ds";
+
+    /// <summary>Alias for <see cref="DirectoryPrincipalDescriptor"/>.</summary>
+    public const string DirectoryPrincipalDescriptor = "oli.dp";
+
+    /// <summary>Alias for <see cref="AccessModelDescriptor"/>.</summary>
+    public const string AccessModelDescriptor = "oli.am";
+
     // ----- gRPC binding wire envelopes -----
     // The sibling gRPC binding (Orleans.Lattice.Api.Auth.Grpc) adds a small set
     // of request / response envelope records for RPCs whose facade signature is

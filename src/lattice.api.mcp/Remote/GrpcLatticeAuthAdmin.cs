@@ -138,4 +138,29 @@ internal sealed class GrpcLatticeAuthAdmin : ILatticeAuthAdmin
         => _client.EffectivePermissionsAsync(
             new AuthSubjectRef { SubjectId = subjectId, SubjectKind = subjectKind },
             cancellationToken);
+
+    // ----- Identity directory (issue #1248) -----
+    // The identity-directory and access-model facade operations are not yet
+    // carried over gRPC: their wire envelopes and client methods are the job of
+    // the gRPC-binding issue (#1249). Until that lands this remote adapter has no
+    // transport for them and refuses rather than silently returning a wrong
+    // (empty / unavailable) answer for a cluster that actually has a directory.
+
+    /// <inheritdoc />
+    public Task<DirectorySearchResult> SearchDirectoryAsync(DirectorySearchRequest request, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException(
+            "SearchDirectoryAsync is not yet available over the gRPC remote adapter; the gRPC binding for the "
+            + "identity-directory facade operations is tracked by issue #1249.");
+
+    /// <inheritdoc />
+    public Task<DirectoryPrincipalDescriptor?> ResolveDirectoryPrincipalAsync(string principalId, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException(
+            "ResolveDirectoryPrincipalAsync is not yet available over the gRPC remote adapter; the gRPC binding for "
+            + "the identity-directory facade operations is tracked by issue #1249.");
+
+    /// <inheritdoc />
+    public Task<AccessModelDescriptor> GetAccessModelAsync(CancellationToken cancellationToken = default)
+        => throw new NotSupportedException(
+            "GetAccessModelAsync is not yet available over the gRPC remote adapter; the gRPC binding for the "
+            + "access-model facade operation is tracked by issue #1249.");
 }
