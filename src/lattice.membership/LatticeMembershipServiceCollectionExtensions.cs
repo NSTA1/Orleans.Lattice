@@ -18,8 +18,10 @@ public static class LatticeMembershipServiceCollectionExtensions
     /// <c>sys-membership-*</c> trees, the default subject mapper and anonymous
     /// authenticator, and the per-silo resolution cache (wired to the core
     /// <see cref="IMutationObserver"/> seam for change-feed invalidation). Also
-    /// ensures the view infrastructure is present so the membership trees get
-    /// durable per-key history out of the box.
+    /// registers the default no-op <see cref="ILatticeIdentityDirectory"/>
+    /// (<see cref="NullIdentityDirectory"/>) so the identity-source seam always
+    /// resolves, and ensures the view infrastructure is present so the membership
+    /// trees get durable per-key history out of the box.
     /// <para>
     /// Must be called <i>after</i>
     /// <see cref="LatticeServiceCollectionExtensions.AddLattice(ISiloBuilder, Action{ISiloBuilder, string})"/>:
@@ -73,6 +75,15 @@ public static class LatticeMembershipServiceCollectionExtensions
         builder.Services.AddOptions<LatticeMembershipOptions>();
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IValidateOptions<LatticeMembershipOptions>, LatticeMembershipOptionsValidator>());
+
+        builder.Services.AddOptions<LatticeIdentityDirectoryOptions>();
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<LatticeIdentityDirectoryOptions>, LatticeIdentityDirectoryOptionsValidator>());
+
+        // The default identity-source seam: no external directory is configured,
+        // so ids are accepted without validation. A real provider (Entra/static)
+        // overrides it with a plain last-wins AddSingleton.
+        builder.Services.TryAddSingleton<ILatticeIdentityDirectory, NullIdentityDirectory>();
 
         // The fallback authenticator: matches nothing, so an unrecognized
         // credential resolves to anonymous rather than throwing.
