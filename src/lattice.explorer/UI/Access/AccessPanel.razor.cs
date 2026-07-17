@@ -953,6 +953,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
                 _explanation = view.Explanation;
                 _explainRankedRules = RulePrecedence.Rank(view.Explanation.MatchedRules);
                 await ResolveRuleSubjectsAsync(_explainRankedRules);
+                await Labels.ResolveLabelAsync(view.Explanation.SubjectId);
                 await Labels.ResolveManyAsync(view.Explanation.GroupIds);
                 _lastResult = null;
             }

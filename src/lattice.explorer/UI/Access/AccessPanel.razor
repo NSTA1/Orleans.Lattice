@@ -536,9 +536,19 @@
                     <h3 class="explorer-access-title">Verdict</h3>
                     <p class="explorer-backups-result @(_explanation.Allowed ? "is-success" : "is-denied")" role="status">
                         @(_explanation.Allowed ? (_explanation.Filtered ? "Allowed (filtered - a subset of keys)" : "Allowed") : "Denied")
-                        @if (!string.IsNullOrEmpty(_explanation.Reason))
+                        @{
+                            var friendlyReason = AccessRuleFormat.FriendlyReason(_explanation, Labels);
+                        }
+                        @if (!string.IsNullOrEmpty(friendlyReason))
                         {
-                            <span> - @_explanation.Reason</span>
+                            @if (!string.IsNullOrEmpty(_explanation.SubjectId))
+                            {
+                                <span title="@_explanation.SubjectId"> - @friendlyReason</span>
+                            }
+                            else
+                            {
+                                <span> - @friendlyReason</span>
+                            }
                         }
                     </p>
                     <p class="explorer-access-sub">Default effect when no rule matches: @_explanation.DefaultEffect</p>

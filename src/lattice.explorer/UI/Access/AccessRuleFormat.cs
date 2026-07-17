@@ -1,3 +1,4 @@
+using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Explorer.Access;
 
@@ -70,6 +71,45 @@ internal static class AccessRuleFormat
 
         var kind = subject.Kind == LatticeSubjectSelectorKind.Group ? "group" : "user";
         return $"{kind}:{labels.Label(subject.Id)}";
+    }
+
+    /// <summary>
+    /// Returns <paramref name="explanation"/>'s reason text with the raw subject id
+    /// swapped for its friendly directory display name, matching the Access area's
+    /// display-name-primary, id-on-hover convention. The swap is applied only when
+    /// the subject id is non-empty and resolves through <paramref name="labels"/> to
+    /// a label that differs from the id, so an unresolved id (or an absent directory)
+    /// degrades to exactly the server-authored reason text, byte for byte. Returns
+    /// <see langword="null"/> when <see cref="AuthExplanation.Reason"/> is
+    /// <see langword="null"/>. Allocates a single replaced string per call, on the
+    /// Explain data-load render path only.
+    /// </summary>
+    /// <param name="explanation">The authorization explanation. Must not be <see langword="null"/>.</param>
+    /// <param name="labels">The label resolver. Must not be <see langword="null"/>.</param>
+    /// <returns>The reason with the subject id replaced by its label, or <see langword="null"/>.</returns>
+    internal static string? FriendlyReason(AuthExplanation explanation, PrincipalLabelResolver labels)
+    {
+        ArgumentNullException.ThrowIfNull(explanation);
+        ArgumentNullException.ThrowIfNull(labels);
+        var reason = explanation.Reason;
+        if (reason is null)
+        {
+            return null;
+        }
+
+        var subjectId = explanation.SubjectId;
+        if (string.IsNullOrEmpty(subjectId))
+        {
+            return reason;
+        }
+
+        var label = labels.Label(subjectId);
+        if (string.Equals(label, subjectId, StringComparison.Ordinal))
+        {
+            return reason;
+        }
+
+        return reason.Replace(subjectId, label, StringComparison.Ordinal);
     }
 
     /// <summary>Formats a scope as, for example, <c>tree</c>, <c>prefix 'foo'</c>, or <c>key 'bar'</c>.</summary>
