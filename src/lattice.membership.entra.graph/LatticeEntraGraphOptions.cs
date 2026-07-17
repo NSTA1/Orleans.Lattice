@@ -48,6 +48,18 @@ public sealed class LatticeEntraGraphOptions
     /// </summary>
     public TimeSpan TokenRefreshSkew { get; set; } = TimeSpan.FromMinutes(5);
 
+    /// <summary>
+    /// Which Entra identifier the Graph-backed
+    /// <see cref="ILatticeIdentityDirectory"/> records as a
+    /// <see cref="DirectoryPrincipal.Id"/>, so directory validation matches the
+    /// active authenticator's subject claim. Defaults to
+    /// <see cref="EntraDirectorySubjectIdSource.ObjectId"/> (the <c>oid</c>), which
+    /// aligns with a typical Entra deployment whose
+    /// <see cref="JwtAuthenticatorOptions.SubjectClaimTypes"/> resolves the subject
+    /// to the object id.
+    /// </summary>
+    public EntraDirectorySubjectIdSource DirectorySubjectIdSource { get; set; } = EntraDirectorySubjectIdSource.ObjectId;
+
     /// <summary>Builds the MSAL authority from <see cref="AuthorityHost"/> and <see cref="TenantId"/>.</summary>
     /// <returns>The authority URL, or an empty string when either input is missing.</returns>
     public string ResolveAuthority()
