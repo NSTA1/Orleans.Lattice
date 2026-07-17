@@ -451,6 +451,11 @@ public partial class AccessPanel : ComponentBase, IDisposable
             _lastResult = await Membership.UpsertUserAsync(user);
             if (_lastResult.IsSuccess)
             {
+                // Replace the server's raw-id success message with a friendly,
+                // display-name status line composed client-side.
+                var label = string.IsNullOrWhiteSpace(user.DisplayName) ? user.UserId : user.DisplayName;
+                _lastResult = AccessOperationResult.Success($"Saved user '{label}'.");
+
                 // Repopulate the list, then keep the just-saved user selected and
                 // highlighted so the operator sees the result of their action.
                 await LoadUsersCoreAsync(reset: true);
@@ -473,9 +478,12 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _busy = true;
         try
         {
+            // Capture a friendly label before the reset clears the form fields.
+            var label = string.IsNullOrWhiteSpace(_userDisplayInput) ? _selectedUserId : _userDisplayInput;
             _lastResult = await Membership.DeleteUserAsync(_selectedUserId);
             if (_lastResult.IsSuccess)
             {
+                _lastResult = AccessOperationResult.Success($"Deleted user '{label}'.");
                 ResetUserForm();
                 _userFormOpen = false;
                 await LoadUsersCoreAsync(reset: true);
@@ -659,6 +667,11 @@ public partial class AccessPanel : ComponentBase, IDisposable
             _lastResult = await Membership.UpsertGroupAsync(group);
             if (_lastResult.IsSuccess)
             {
+                // Replace the server's raw-id success message with a friendly,
+                // display-name status line composed client-side.
+                var label = string.IsNullOrWhiteSpace(group.DisplayName) ? group.GroupId : group.DisplayName;
+                _lastResult = AccessOperationResult.Success($"Saved group '{label}'.");
+
                 // Repopulate the list, then keep the just-saved group selected and
                 // highlighted (and load its direct members) so the operator sees the
                 // result of their action.
@@ -682,9 +695,12 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _busy = true;
         try
         {
+            // Capture a friendly label before the reset clears the form fields.
+            var label = SelectedGroupLabel;
             _lastResult = await Membership.DeleteGroupAsync(_selectedGroupId);
             if (_lastResult.IsSuccess)
             {
+                _lastResult = AccessOperationResult.Success($"Deleted group '{label}'.");
                 ResetGroupForm();
                 _groupFormOpen = false;
                 await LoadGroupsCoreAsync(reset: true);
