@@ -34,7 +34,14 @@
         @if (!string.IsNullOrEmpty(Model.SelectedId))
         {
             <p class="explorer-access-subject-selected">
-                Selected: <span class="explorer-access-member-id">@Model.SelectedId</span>
+                @if (!string.IsNullOrEmpty(Model.SelectedDisplayName))
+                {
+                    <text>Selected: </text><span class="explorer-access-member-id" title="@Model.SelectedId">@Model.SelectedDisplayName</span>
+                }
+                else
+                {
+                    <text>Selected: </text><span class="explorer-access-member-id">@Model.SelectedId</span>
+                }
             </p>
         }
 
@@ -47,6 +54,7 @@
                         <button type="button"
                                 class="explorer-btn-link explorer-access-subject-result @(string.Equals(principal.Id, Model.SelectedId, StringComparison.Ordinal) ? "is-selected" : null)"
                                 disabled="@Disabled"
+                                title="@principal.Id"
                                 @onclick="@(() => OnResultSelectedAsync(principal.Id))">
                             @PrincipalLabel(principal)
                         </button>
@@ -178,7 +186,7 @@
     private static string PrincipalLabel(DirectoryPrincipalDescriptor principal) =>
         string.IsNullOrWhiteSpace(principal.DisplayName) || string.Equals(principal.DisplayName, principal.Id, StringComparison.Ordinal)
             ? principal.Id
-            : $"{principal.Id} ({principal.DisplayName})";
+            : principal.DisplayName;
 
     /// <inheritdoc />
     public void Dispose()
