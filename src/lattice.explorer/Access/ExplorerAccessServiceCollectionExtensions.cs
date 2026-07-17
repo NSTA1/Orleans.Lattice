@@ -33,6 +33,11 @@ public static class ExplorerAccessServiceCollectionExtensions
         services.TryAddSingleton<IMembershipAdminService, MembershipAdminService>();
         services.TryAddSingleton<IPolicyAdminService, PolicyAdminService>();
         services.TryAddSingleton<IAuthAdminCapabilityService, AuthAdminCapabilityService>();
+        // The subject picker's search state is per-component and each carries its
+        // own single in-flight debounce timer, so both are transient: every picker
+        // instance resolves a fresh model over a fresh debounce.
+        services.TryAddTransient<ISubjectSearchDebounce, TimerSubjectSearchDebounce>();
+        services.TryAddTransient<SubjectPickerModel>();
         return services;
     }
 }

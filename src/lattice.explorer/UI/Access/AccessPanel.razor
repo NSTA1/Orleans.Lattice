@@ -281,8 +281,7 @@
                             </ul>
                         }
                         <div class="explorer-access-addmember">
-                            <SubjectPicker Users="_users" Groups="_groups"
-                                           @bind-Kind="MemberPickerKind"
+                            <SubjectPicker @bind-Kind="MemberPickerKind"
                                            @bind-SubjectId="_memberIdInput"
                                            Disabled="@(_busy || !_allowed)" />
                             <button type="button" class="explorer-btn"
@@ -360,8 +359,7 @@
                 </label>
                 <label class="explorer-access-field">
                     <span>Subject</span>
-                    <SubjectPicker Users="_users" Groups="_groups"
-                                   @bind-Kind="_ruleSubjectKind"
+                    <SubjectPicker @bind-Kind="_ruleSubjectKind"
                                    @bind-SubjectId="_ruleSubjectId"
                                    Disabled="@(_busy || !_allowed)" />
                 </label>
@@ -440,8 +438,7 @@
                         <h3 class="explorer-access-title">Explain a decision</h3>
                 <label class="explorer-access-field">
                     <span>Subject</span>
-                    <SubjectPicker Users="_users" Groups="_groups"
-                                   @bind-Kind="_explainSubjectKind"
+                    <SubjectPicker @bind-Kind="_explainSubjectKind"
                                    @bind-SubjectId="_explainSubjectId"
                                    Disabled="@(_busy || !_allowed)" />
                 </label>
