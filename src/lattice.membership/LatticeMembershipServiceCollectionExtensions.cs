@@ -137,6 +137,32 @@ public static class LatticeMembershipServiceCollectionExtensions
     }
 
     /// <summary>
+    /// Registers the <see cref="StaticIdentityDirectory"/> as the active
+    /// <see cref="ILatticeIdentityDirectory"/>, surfacing the roster configured by
+    /// <paramref name="configure"/> (declared users / groups, or the deployed
+    /// Basic user ids discovered via
+    /// <see cref="StaticIdentityDirectoryOptions.AddUsersFromEnvironment(string, IStaticRosterEnvironment?)"/>).
+    /// Uses a plain last-wins <c>AddSingleton</c> so it overrides the default
+    /// no-op <see cref="NullIdentityDirectory"/> registered by
+    /// <see cref="AddLatticeMembership"/>.
+    /// </summary>
+    /// <param name="builder">The silo builder.</param>
+    /// <param name="configure">Delegate that populates the <see cref="StaticIdentityDirectoryOptions"/> roster.</param>
+    /// <returns>The same <paramref name="builder"/> for chaining.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="builder"/> or <paramref name="configure"/> is <c>null</c>.</exception>
+    public static ISiloBuilder AddStaticIdentityDirectory(
+        this ISiloBuilder builder,
+        Action<StaticIdentityDirectoryOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(configure);
+
+        builder.Services.Configure(configure);
+        builder.Services.AddSingleton<ILatticeIdentityDirectory, StaticIdentityDirectory>();
+        return builder;
+    }
+
+    /// <summary>
     /// Layers an additional <see cref="LatticeMembershipOptions"/> configuration
     /// delegate. Use to adjust membership options after
     /// <see cref="AddLatticeMembership"/>.
