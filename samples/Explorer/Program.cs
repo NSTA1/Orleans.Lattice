@@ -12,6 +12,8 @@ using Orleans.Lattice.Api.State.Grpc;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Explorer.Web;
 using Orleans.Lattice.Membership;
+using Orleans.Lattice.Membership.Entra;
+using Orleans.Lattice.Membership.Entra.Graph;
 using Orleans.Lattice.Samples.Explorer;
 using Orleans.Lattice.Schema;
 
@@ -46,6 +48,44 @@ const string AdminPassword = "explorer";
 // h2c (HTTP/2 without TLS) keeps the sample dependency-free - no dev cert - and
 // matches the insecure-loopback-dev transport the console is seeded with below.
 AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
+
+// -- Identity-directory mode selection --------------------------------------
+// The Access area's subject picker and validated create form run against an
+// identity directory. This sample offers two config-gated modes, fail-closed by
+// default:
+//
+//   * Static (default, no configuration): a small in-memory roster backs the
+//     picker and the create form. An id that is not in the roster fails closed
+//     ("No such principal in the directory.") rather than being created as an
+//     unvalidated free-text entry. This mode is one-command runnable and is what
+//     the sample's own tests exercise.
+//
+//   * Entra (opt-in): set ALL THREE of LATTICE_ENTRA_TENANT_ID,
+//     LATTICE_ENTRA_CLIENT_ID, and LATTICE_ENTRA_CLIENT_SECRET to back the picker
+//     with your real Microsoft Entra tenant over Microsoft Graph (app-only). The
+//     enablement walkthrough is in this sample's README.
+//
+// Half-configuring Entra (some but not all three variables) is rejected up front
+// with a non-zero exit, so a partial configuration never silently degrades to the
+// static directory.
+var entraTenantId = Environment.GetEnvironmentVariable("LATTICE_ENTRA_TENANT_ID");
+var entraClientId = Environment.GetEnvironmentVariable("LATTICE_ENTRA_CLIENT_ID");
+var entraClientSecret = Environment.GetEnvironmentVariable("LATTICE_ENTRA_CLIENT_SECRET");
+
+var entraVarsSet = new[] { entraTenantId, entraClientId, entraClientSecret }
+    .Count(v => !string.IsNullOrWhiteSpace(v));
+var useEntraDirectory = entraVarsSet == 3;
+if (entraVarsSet is > 0 and < 3)
+{
+    Console.WriteLine("Entra directory mode is half-configured.");
+    Console.WriteLine(
+        "Set ALL of LATTICE_ENTRA_TENANT_ID, LATTICE_ENTRA_CLIENT_ID, and LATTICE_ENTRA_CLIENT_SECRET");
+    Console.WriteLine(
+        "to back the Access directory with your real Entra tenant, or unset all three to use the");
+    Console.WriteLine("built-in static directory. See samples/Explorer/README.md for the walkthrough.");
+    return 2;
+}
+
 
 // Seed the console's first-run connection through the bootstrap environment
 // variables (read by AddLatticeExplorerWeb's environment bootstrap): point it at
@@ -104,6 +144,49 @@ builder.Host.UseOrleans(silo =>
     // reserved control plane (membership + policy) is always governed and only the
     // bootstrap administrator below may manage it.
     silo.AddLatticeMembership();
+
+    // The identity directory the Access area validates and searches against. In
+    // the default static mode this is a small in-memory roster, so an unknown
+    // principal id fails closed in the create form; in Entra mode it is the real
+    // tenant over Microsoft Graph (see the mode selection above).
+    if (useEntraDirectory)
+    {
+        // The Graph identity directory is app-only, but AddEntraGraphGroupResolver
+        // requires an Entra authenticator to be registered first, so we add one
+        // here. The console itself still signs in as the local bootstrap admin
+        // over Basic (DemoBasicAuthenticator, below) - the Entra authenticator only
+        // governs bearer-token callers, of which the console is not one.
+        silo.AddEntraCredentialAuthenticator(options =>
+        {
+            options.Authority = $"https://login.microsoftonline.com/{entraTenantId}/v2.0";
+            options.TenantIds.Add(entraTenantId!);
+            options.Audiences.Add(entraClientId!);
+            options.Audiences.Add($"api://{entraClientId}");
+        });
+
+        // Backs the Access area's subject picker and validated create with a live
+        // Microsoft Graph search/resolve over your tenant (last-wins over the
+        // default no-op directory).
+        silo.AddEntraGraphGroupResolver(options =>
+        {
+            options.TenantId = entraTenantId!;
+            options.ClientId = entraClientId!;
+            options.ClientSecret = entraClientSecret!;
+        });
+    }
+    else
+    {
+        // A small in-memory roster: the subject picker searches it and the create
+        // form validates against it, so an id that is not listed here is blocked
+        // ("No such principal in the directory.") instead of being created as an
+        // unvalidated free-text id. This is the epic's fail-closed create posture.
+        silo.AddStaticIdentityDirectory(roster => roster
+            .AddUser(AdminUser, "Explorer Administrator")
+            .AddUser("alice", "Alice Ng")
+            .AddUser("bob", "Bob Ito")
+            .AddUser("carol", "Carol Diaz")
+            .AddGroup("operators", "Floor Operators"));
+    }
     silo.AddLatticeAuth(options =>
     {
         options.DefaultEffect = LatticeEffect.Allow;
@@ -205,6 +288,10 @@ Console.WriteLine($"Seeded '{DemoTree}' with 12 entries.");
 Console.WriteLine($"Silo + state/auth/schema gRPC surface started on http://localhost:{GrpcPort}");
 Console.WriteLine($"Explorer console: open http://localhost:{WebPort}/ in a browser.");
 Console.WriteLine($"Auto-signed in as bootstrap administrator '{AdminUser}' - the Explore, Access, and Schema areas are all enabled.");
+Console.WriteLine(useEntraDirectory
+    ? "Identity directory: Microsoft Entra (Graph) - the Access subject picker and validated create run against your real tenant."
+    : "Identity directory: static in-memory roster - the Access create form fails closed on any id not in the roster (try 'alice', 'operators', or an unknown id).");
 Console.WriteLine("Press Ctrl+C to stop.");
 
 await app.WaitForShutdownAsync();
+return 0;
