@@ -227,7 +227,7 @@
             @if (_policyFormOpen)
             {
             <div class="explorer-access-formcol">
-                <h3 class="explorer-access-title">Set policy</h3>
+                <h3 class="explorer-access-title">Policy editor</h3>
                 <label class="explorer-access-opcheck">
                     <input type="checkbox" checked="@_draftStrictIngest" disabled="@(_busy || !_allowed || !_caps.CanManagePolicy)"
                            @onchange="e => _draftStrictIngest = (bool)(e.Value ?? false)" />
@@ -261,7 +261,7 @@
                     <label class="explorer-access-field">
                         <span>Rule kind</span>
                         <select value="@_draftRuleKind" disabled="@(_busy || !_allowed || !_caps.CanManagePolicy)"
-                                @onchange="e => _draftRuleKind = Enum.Parse<SchemaRuleDraftKind>(e.Value?.ToString() ?? nameof(SchemaRuleDraftKind.Utf8))">
+                                @onchange="e => { _draftRuleKind = Enum.Parse<SchemaRuleDraftKind>(e.Value?.ToString() ?? nameof(SchemaRuleDraftKind.Utf8)); _ruleBuilderDirty = true; }">
                             @foreach (var kind in RuleKinds)
                             {
                                 <option value="@kind">@kind</option>
@@ -273,7 +273,7 @@
                         <label class="explorer-access-field">
                             <span>Max byte length</span>
                             <input type="number" min="0" value="@_draftRuleMaxLength" disabled="@(_busy || !_allowed || !_caps.CanManagePolicy)"
-                                   @oninput="e => int.TryParse(e.Value?.ToString(), out _draftRuleMaxLength)" />
+                                   @oninput="e => { int.TryParse(e.Value?.ToString(), out _draftRuleMaxLength); _ruleBuilderDirty = true; }" />
                         </label>
                     }
                     @if (_draftRuleKind == SchemaRuleDraftKind.Regex)
@@ -281,37 +281,31 @@
                         <label class="explorer-access-field">
                             <span>Pattern</span>
                             <input type="text" value="@_draftRuleRegex" disabled="@(_busy || !_allowed || !_caps.CanManagePolicy)"
-                                   @oninput="e => _draftRuleRegex = e.Value?.ToString() ?? string.Empty" placeholder="regex pattern" />
+                                   @oninput="e => { _draftRuleRegex = e.Value?.ToString() ?? string.Empty; _ruleBuilderDirty = true; }" placeholder="regex pattern" />
                         </label>
                         <label class="explorer-access-field">
                             <span>Member path</span>
                             <input type="text" value="@_draftRuleMemberPath" disabled="@(_busy || !_allowed || !_caps.CanManagePolicy)"
-                                   @oninput="e => _draftRuleMemberPath = e.Value?.ToString() ?? string.Empty" placeholder="optional dotted path" />
+                                   @oninput="e => { _draftRuleMemberPath = e.Value?.ToString() ?? string.Empty; _ruleBuilderDirty = true; }" placeholder="optional dotted path" />
                         </label>
                     }
                     <label class="explorer-access-field">
                         <span>Description</span>
                         <input type="text" value="@_draftRuleDescription" disabled="@(_busy || !_allowed || !_caps.CanManagePolicy)"
-                               @oninput="e => _draftRuleDescription = e.Value?.ToString() ?? string.Empty" placeholder="optional" />
+                               @oninput="e => { _draftRuleDescription = e.Value?.ToString() ?? string.Empty; _ruleBuilderDirty = true; }" placeholder="optional" />
                     </label>
-                    <button type="button" class="explorer-btn"
+                    <button type="button" class="explorer-btn explorer-btn-primary"
                             disabled="@(_busy || !_allowed || !_caps.CanManagePolicy || !CanAddDraftRule())" @onclick="AddDraftRule">Add rule</button>
                 </div>
 
                 <div class="explorer-access-actions">
                     <button type="button" class="explorer-btn"
-                            disabled="@(_busy || !_allowed || !_caps.CanManagePolicy || string.IsNullOrWhiteSpace(_treeId))" @onclick="SavePolicyAsync">Set policy</button>
+                            disabled="@(_busy || !_allowed || !_caps.CanManagePolicy || string.IsNullOrWhiteSpace(_treeId))" @onclick="SavePolicyAsync">Save changes</button>
                     <button type="button" class="explorer-btn" disabled="@_busy" @onclick="CancelPolicyForm">Cancel</button>
                     <button type="button" class="explorer-btn explorer-access-danger"
                             disabled="@(_busy || !_allowed || !_caps.CanManagePolicy || string.IsNullOrWhiteSpace(_treeId))" @onclick="ClearPolicyAsync">Clear policy</button>
                 </div>
             </div>
-            }
-            else
-            {
-                <div class="explorer-access-formcol">
-                    <p class="explorer-backups-empty">Choose 'Edit policy' to author or replace this tree's schema policy.</p>
-                </div>
             }
         </div>
     }

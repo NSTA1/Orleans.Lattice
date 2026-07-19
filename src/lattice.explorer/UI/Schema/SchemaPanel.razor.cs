@@ -83,6 +83,7 @@ public partial class SchemaPanel : ComponentBase, IDisposable
     private string _draftRuleRegex = string.Empty;
     private string _draftRuleMemberPath = string.Empty;
     private string _draftRuleDescription = string.Empty;
+    private bool _ruleBuilderDirty;
 
     // ----- Versions -----
     private SchemaReadView<LatticeSchemaVersionConfig>? _versionView;
@@ -352,6 +353,7 @@ public partial class SchemaPanel : ComponentBase, IDisposable
         _draftRuleMemberPath = string.Empty;
         _draftRuleDescription = string.Empty;
         _draftRuleMaxLength = 0;
+        _ruleBuilderDirty = false;
     }
 
     private void RemoveDraftRule(int index)
@@ -375,6 +377,15 @@ public partial class SchemaPanel : ComponentBase, IDisposable
         _busy = true;
         try
         {
+            // A rule configured in the builder but not yet committed with "Add rule"
+            // would otherwise be silently dropped when the policy is saved. Fold a
+            // valid, user-edited pending rule into the draft first so the common
+            // "configure one rule then Set policy" flow does not lose it.
+            if (_ruleBuilderDirty && CanAddDraftRule())
+            {
+                AddDraftRule();
+            }
+
             var policy = new LatticeSchemaPolicy(_draftRules.ToArray(), _draftStrictIngest);
             _lastResult = await PolicyService.SetPolicyAsync(_treeId, policy);
             if (_lastResult.IsSuccess)
@@ -437,12 +448,14 @@ public partial class SchemaPanel : ComponentBase, IDisposable
         _draftRuleRegex = string.Empty;
         _draftRuleMemberPath = string.Empty;
         _draftRuleDescription = string.Empty;
+        _ruleBuilderDirty = false;
         _policyFormOpen = true;
     }
 
     private void CancelPolicyForm()
     {
         _policyFormOpen = false;
+        _ruleBuilderDirty = false;
     }
 
     // ----- Versions -----
