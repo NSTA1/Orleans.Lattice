@@ -2871,3 +2871,29 @@ code, .explorer-mono {
     color: var(--danger, #f85149);
 }
 
+/* State-first status card leading the Policy and Versions list columns: a bordered
+   panel that states the tree's current schema state in plain words and hosts the
+   primary next-step action, so the user sees "where am I / what next" before any
+   raw admin control. */
+.explorer-schema-statuscard {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm, 6px);
+    padding: 0.7rem 0.8rem;
+    margin: 0.2rem 0;
+}
+
+/* The collapsed-by-default advanced ops revealed under a versioned tree's status
+   card (set config directly, migrate stored values), separated from the primary
+   action by a hairline rule. */
+.explorer-schema-advanced {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    margin-top: 0.4rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--border);
+}
+

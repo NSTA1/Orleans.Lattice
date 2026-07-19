@@ -116,7 +116,7 @@
             </header>
 
             <p class="explorer-backups-note">
-                Schema governance is opt-in per tree. Policy enforces the shape of each stored value; Versions stamps values with a schema version so their shape can evolve; Compliance audits stored values against the policy; Dead letters lists items that strict mode rejected. A tree that opts out stores values verbatim with no overhead.
+                Schema governance is opt-in per tree: control how values are validated (Policy) and how their shape evolves over time (Versions).
             </p>
 
             @if (!_allowed)
@@ -137,9 +137,6 @@
 
             @if (_tab == SchemaTab.Policy)
     {
-        <p class="explorer-backups-note">
-            A policy validates every value written to this tree - checks such as well-formed UTF-8, a maximum byte length, or a regex over a member path. With strict ingest on, a value that fails is diverted to the dead-letter queue instead of being applied; with it off, the write is accepted and the failure only shows up in a Compliance scan. No policy means every value is accepted.
-        </p>
         <div class="explorer-access-grid explorer-schema-narrow">
             <div class="explorer-access-listcol">
                 <div class="explorer-access-listhead">
@@ -157,7 +154,14 @@
                 }
                 else if (_policyView.Value is null)
                 {
-                    <p class="explorer-backups-empty">Tree '@_probedTreeId' has no schema policy (all values accepted).</p>
+                    <div class="explorer-schema-statuscard">
+                        <p class="explorer-access-title">This tree has no schema policy</p>
+                        <p class="explorer-access-sub">Every value is accepted. Add a policy to validate the shape of each value written to this tree.</p>
+                        <div class="explorer-access-actions">
+                            <button type="button" class="explorer-btn explorer-btn-primary"
+                                    disabled="@(_busy || !_allowed || !_caps.CanManagePolicy || string.IsNullOrWhiteSpace(_treeId))" @onclick="EditPolicy">Add a policy</button>
+                        </div>
+                    </div>
                 }
                 else
                 {
@@ -274,19 +278,14 @@
     }
     else if (_tab == SchemaTab.Versions)
     {
-        <p class="explorer-backups-note">
-            Versioning stamps each value with a schema id and version so a value's shape can change over time without rewriting stored data. New writes are stamped at the target version; older values are upcast to it as they are read. 'Advance target' raises the target version (it can only go up); 'Migrate to target' (or 'Advance and migrate') eagerly re-stamps stored values so reads stop paying the per-read upcast cost. Remediation status reports the progress of that background re-stamp. An unversioned tree stores values verbatim.
-        </p>
         <div class="explorer-access-grid explorer-schema-narrow">
             <div class="explorer-access-listcol">
                 <div class="explorer-access-listhead">
-                    <h3 class="explorer-access-title">Version config</h3>
-                    <button type="button" class="explorer-btn"
-                            disabled="@(_busy || !_allowed || !_caps.CanManageVersion || string.IsNullOrWhiteSpace(_treeId))" @onclick="EditVersionConfig">Edit config</button>
+                    <h3 class="explorer-access-title">Versioning</h3>
                 </div>
                 @if (_versionView is null)
                 {
-                    <p class="explorer-backups-empty">Select a tree to view its version config.</p>
+                    <p class="explorer-backups-empty">Select a tree to view its versioning.</p>
                 }
                 else if (!_versionView.IsSuccess)
                 {
@@ -294,45 +293,62 @@
                 }
                 else if (_versionView.Value.TargetVersion == 0)
                 {
-                    <p class="explorer-backups-empty">Tree '@_probedTreeId' is unversioned.</p>
+                    <div class="explorer-schema-statuscard">
+                        <p class="explorer-access-title">This tree is unversioned</p>
+                        <p class="explorer-access-sub">Values are stored exactly as written. Enable versioning to stamp each value with a schema version so its shape can evolve over time.</p>
+                        <div class="explorer-access-actions">
+                            <button type="button" class="explorer-btn explorer-btn-primary"
+                                    disabled="@(_busy || !_allowed || !_caps.CanManageVersion || string.IsNullOrWhiteSpace(_treeId))" @onclick="EnableVersioning">Enable versioning</button>
+                        </div>
+                    </div>
                 }
                 else
                 {
-                    <p class="explorer-access-sub">Schema id: @_versionView.Value.SchemaId</p>
-                    <p class="explorer-access-sub">Target version: v@_versionView.Value.TargetVersion</p>
-                    <p class="explorer-access-sub">Strict ingest: @(_versionView.Value.StrictIngest ? "on" : "off")</p>
-                }
-
-                <h3 class="explorer-access-title">Remediation status</h3>
-                @if (_remediationView is null)
-                {
-                    <p class="explorer-backups-empty">Select a tree to view its remediation status.</p>
-                }
-                else if (!_remediationView.IsSuccess)
-                {
-                    <p class="explorer-backups-result @ResultClass(_remediationView.Status)" role="status">@_remediationView.Message</p>
-                }
-                else
-                {
-                    <p class="explorer-access-sub">Phase: @_remediationView.Value.Phase (@(_remediationView.Value.InProgress ? "in progress" : "idle"))</p>
-                    <p class="explorer-access-sub">Scanned: @_remediationView.Value.ScannedCount</p>
-                    @if (_remediationView.Value.DidAbort)
-                    {
-                        <p class="explorer-access-sub">Aborted on key '@_remediationView.Value.OffendingKey': @_remediationView.Value.Reason</p>
-                    }
+                    <div class="explorer-schema-statuscard">
+                        <p class="explorer-access-sub">Schema @_versionView.Value.SchemaId, target v@(_versionView.Value.TargetVersion), strict ingest @(_versionView.Value.StrictIngest ? "on" : "off").</p>
+                        <p class="explorer-access-sub">New writes are stamped v@(_versionView.Value.TargetVersion); older values are upcast to v@(_versionView.Value.TargetVersion) when read.</p>
+                        @if (_remediationView is { IsSuccess: true })
+                        {
+                            <p class="explorer-access-sub">Re-stamp: @_remediationView.Value.Phase, @(_remediationView.Value.InProgress ? "in progress" : "idle"), scanned @_remediationView.Value.ScannedCount.</p>
+                            @if (_remediationView.Value.DidAbort)
+                            {
+                                <p class="explorer-access-sub">Aborted on key '@_remediationView.Value.OffendingKey': @_remediationView.Value.Reason</p>
+                            }
+                        }
+                        else if (_remediationView is not null && !_remediationView.IsSuccess)
+                        {
+                            <p class="explorer-backups-result @ResultClass(_remediationView.Status)" role="status">@_remediationView.Message</p>
+                        }
+                        <div class="explorer-access-actions">
+                            <button type="button" class="explorer-btn explorer-btn-primary"
+                                    disabled="@(_busy || !_allowed || !_caps.CanManageVersion || string.IsNullOrWhiteSpace(_treeId))" @onclick="BeginAdvance">Advance version</button>
+                            <button type="button" class="explorer-btn-link"
+                                    @onclick="@(() => _showAdvancedVersions = !_showAdvancedVersions)">@(_showAdvancedVersions ? "Hide advanced" : "Advanced")</button>
+                        </div>
+                        @if (_showAdvancedVersions)
+                        {
+                            <div class="explorer-schema-advanced">
+                                <button type="button" class="explorer-btn"
+                                        disabled="@(_busy || !_allowed || !_caps.CanManageVersion || string.IsNullOrWhiteSpace(_treeId))" @onclick="ShowAdvancedSetConfig">Set config directly</button>
+                                <button type="button" class="explorer-btn"
+                                        disabled="@(_busy || !_allowed || !_caps.CanManageVersion || string.IsNullOrWhiteSpace(_treeId))" @onclick="MigrateToTargetVersionAsync">Migrate stored values to target</button>
+                                <p class="explorer-access-sub">Re-stamps existing values now so reads stop paying the per-read upcast cost.</p>
+                            </div>
+                        }
+                    </div>
                 }
             </div>
-            @if (_versionFormOpen)
+            @if (_versionEditor == VersionEditor.Configure)
             {
             <div class="explorer-access-formcol">
-                <h3 class="explorer-access-title">Set version config</h3>
+                <h3 class="explorer-access-title">@(IsVersioned ? "Set config directly" : "Enable versioning")</h3>
                 <label class="explorer-access-field">
                     <span>Schema id</span>
                     <input type="number" min="0" value="@_setSchemaId" disabled="@(_busy || !_allowed || !_caps.CanManageVersion)"
                            @oninput="e => uint.TryParse(e.Value?.ToString(), out _setSchemaId)" />
                 </label>
                 <label class="explorer-access-field">
-                    <span>Target version</span>
+                    <span>@(IsVersioned ? "Target version" : "Starting version")</span>
                     <input type="number" min="1" value="@_setTargetVersion" disabled="@(_busy || !_allowed || !_caps.CanManageVersion)"
                            @oninput="e => uint.TryParse(e.Value?.ToString(), out _setTargetVersion)" />
                 </label>
@@ -343,32 +359,39 @@
                 </label>
                 <div class="explorer-access-actions">
                     <button type="button" class="explorer-btn"
-                            disabled="@(_busy || !_allowed || !_caps.CanManageVersion || _setTargetVersion == 0 || string.IsNullOrWhiteSpace(_treeId))" @onclick="SetVersionConfigAsync">Set config</button>
-                    <button type="button" class="explorer-btn" disabled="@_busy" @onclick="CancelVersionForm">Cancel</button>
-                    <button type="button" class="explorer-btn explorer-access-danger"
-                            disabled="@(_busy || !_allowed || !_caps.CanManageVersion || string.IsNullOrWhiteSpace(_treeId))" @onclick="ClearVersionConfigAsync">Clear config</button>
+                            disabled="@(_busy || !_allowed || !_caps.CanManageVersion || _setTargetVersion == 0 || string.IsNullOrWhiteSpace(_treeId))" @onclick="SetVersionConfigAsync">@(IsVersioned ? "Set config" : "Enable versioning")</button>
+                    <button type="button" class="explorer-btn" disabled="@_busy" @onclick="CancelVersionEditor">Cancel</button>
+                    @if (IsVersioned)
+                    {
+                        <button type="button" class="explorer-btn explorer-access-danger"
+                                disabled="@(_busy || !_allowed || !_caps.CanManageVersion || string.IsNullOrWhiteSpace(_treeId))" @onclick="ClearVersionConfigAsync">Clear config</button>
+                    }
                 </div>
-
-                <h3 class="explorer-access-title">Advance / migrate</h3>
+            </div>
+            }
+            else if (_versionEditor == VersionEditor.Advance)
+            {
+            <div class="explorer-access-formcol">
+                <h3 class="explorer-access-title">Advance version</h3>
                 <label class="explorer-access-field">
                     <span>New target version</span>
                     <input type="number" min="1" value="@_advanceTargetVersion" disabled="@(_busy || !_allowed || !_caps.CanManageVersion)"
                            @oninput="e => uint.TryParse(e.Value?.ToString(), out _advanceTargetVersion)" />
                 </label>
+                <p class="explorer-access-sub">Advance changes only new writes; re-stamp also rewrites stored values now.</p>
                 <div class="explorer-access-actions">
                     <button type="button" class="explorer-btn"
                             disabled="@(_busy || !_allowed || !_caps.CanManageVersion || _advanceTargetVersion == 0 || string.IsNullOrWhiteSpace(_treeId))" @onclick="AdvanceTargetVersionAsync">Advance target</button>
                     <button type="button" class="explorer-btn"
-                            disabled="@(_busy || !_allowed || !_caps.CanManageVersion || _advanceTargetVersion == 0 || string.IsNullOrWhiteSpace(_treeId))" @onclick="AdvanceAndMigrateAsync">Advance and migrate</button>
-                    <button type="button" class="explorer-btn"
-                            disabled="@(_busy || !_allowed || !_caps.CanManageVersion || string.IsNullOrWhiteSpace(_treeId))" @onclick="MigrateToTargetVersionAsync">Migrate to target</button>
+                            disabled="@(_busy || !_allowed || !_caps.CanManageVersion || _advanceTargetVersion == 0 || string.IsNullOrWhiteSpace(_treeId))" @onclick="AdvanceAndMigrateAsync">Advance and re-stamp existing values</button>
+                    <button type="button" class="explorer-btn" disabled="@_busy" @onclick="CancelVersionEditor">Cancel</button>
                 </div>
             </div>
             }
             else
             {
                 <div class="explorer-access-formcol">
-                    <p class="explorer-backups-empty">Choose 'Edit config' to set this tree's schema version, or advance and migrate it.</p>
+                    <p class="explorer-backups-empty">Choose 'Enable versioning' or 'Advance version' to change this tree's schema versioning.</p>
                 </div>
             }
         </div>
