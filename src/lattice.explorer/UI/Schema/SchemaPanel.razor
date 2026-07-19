@@ -115,6 +115,10 @@
                 </div>
             </header>
 
+            <p class="explorer-backups-note">
+                Schema governance is opt-in per tree. Policy enforces the shape of each stored value; Versions stamps values with a schema version so their shape can evolve; Compliance audits stored values against the policy; Dead letters lists items that strict mode rejected. A tree that opts out stores values verbatim with no overhead.
+            </p>
+
             @if (!_allowed)
             {
                 <p class="explorer-backups-result is-denied" role="status">
@@ -133,6 +137,9 @@
 
             @if (_tab == SchemaTab.Policy)
     {
+        <p class="explorer-backups-note">
+            A policy validates every value written to this tree - checks such as well-formed UTF-8, a maximum byte length, or a regex over a member path. With strict ingest on, a value that fails is diverted to the dead-letter queue instead of being applied; with it off, the write is accepted and the failure only shows up in a Compliance scan. No policy means every value is accepted.
+        </p>
         <div class="explorer-access-grid explorer-schema-narrow">
             <div class="explorer-access-listcol">
                 <div class="explorer-access-listhead">
@@ -267,6 +274,9 @@
     }
     else if (_tab == SchemaTab.Versions)
     {
+        <p class="explorer-backups-note">
+            Versioning stamps each value with a schema id and version so a value's shape can change over time without rewriting stored data. New writes are stamped at the target version; older values are upcast to it as they are read. 'Advance target' raises the target version (it can only go up); 'Migrate to target' (or 'Advance and migrate') eagerly re-stamps stored values so reads stop paying the per-read upcast cost. Remediation status reports the progress of that background re-stamp. An unversioned tree stores values verbatim.
+        </p>
         <div class="explorer-access-grid explorer-schema-narrow">
             <div class="explorer-access-listcol">
                 <div class="explorer-access-listhead">
