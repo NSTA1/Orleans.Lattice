@@ -302,8 +302,11 @@
                     <button type="button" class="explorer-btn"
                             disabled="@(_busy || !_allowed || !_caps.CanManagePolicy || string.IsNullOrWhiteSpace(_treeId))" @onclick="SavePolicyAsync">Save changes</button>
                     <button type="button" class="explorer-btn" disabled="@_busy" @onclick="CancelPolicyForm">Cancel</button>
-                    <button type="button" class="explorer-btn explorer-access-danger"
-                            disabled="@(_busy || !_allowed || !_caps.CanManagePolicy || string.IsNullOrWhiteSpace(_treeId))" @onclick="ClearPolicyAsync">Clear policy</button>
+                    @if (_policyView is { IsSuccess: true, Value: not null })
+                    {
+                        <button type="button" class="explorer-btn explorer-access-danger"
+                                disabled="@(_busy || !_allowed || !_caps.CanManagePolicy || string.IsNullOrWhiteSpace(_treeId))" @onclick="ClearPolicyAsync">Clear policy</button>
+                    }
                 </div>
             </div>
             }
