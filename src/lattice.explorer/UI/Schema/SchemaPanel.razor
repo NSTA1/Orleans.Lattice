@@ -94,6 +94,9 @@
         </aside>
 
         <div class="explorer-schema-content">
+            <p class="explorer-backups-note">
+                Schema governance is opt-in per tree: control how values are validated (Policy) and how their shape evolves over time (Versions).
+            </p>
             <header class="explorer-backups-header">
                 <div class="explorer-tabstrip" role="tablist" aria-label="Schema tabs">
                     <button type="button" role="tab"
@@ -110,10 +113,6 @@
                             @onclick="@(() => SetTab(SchemaTab.DeadLetters))">Dead letters</button>
                 </div>
             </header>
-
-            <p class="explorer-backups-note">
-                Schema governance is opt-in per tree: control how values are validated (Policy) and how their shape evolves over time (Versions).
-            </p>
 
             @if (!_allowed)
             {
