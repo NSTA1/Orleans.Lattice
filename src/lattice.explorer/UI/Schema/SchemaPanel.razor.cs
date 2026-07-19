@@ -84,6 +84,7 @@ public partial class SchemaPanel : ComponentBase, IDisposable
     private string _draftRuleMemberPath = string.Empty;
     private string _draftRuleDescription = string.Empty;
     private bool _ruleBuilderDirty;
+    private bool _showNoRulesDialog;
 
     // ----- Versions -----
     private SchemaReadView<LatticeSchemaVersionConfig>? _versionView;
@@ -386,6 +387,15 @@ public partial class SchemaPanel : ComponentBase, IDisposable
                 AddDraftRule();
             }
 
+            // A policy with no rules accepts every value, which is indistinguishable
+            // from having no policy. Block the save and prompt the user rather than
+            // persisting a meaningless empty policy.
+            if (_draftRules.Count == 0)
+            {
+                _showNoRulesDialog = true;
+                return;
+            }
+
             var policy = new LatticeSchemaPolicy(_draftRules.ToArray(), _draftStrictIngest);
             _lastResult = await PolicyService.SetPolicyAsync(_treeId, policy);
             if (_lastResult.IsSuccess)
@@ -457,6 +467,8 @@ public partial class SchemaPanel : ComponentBase, IDisposable
         _policyFormOpen = false;
         _ruleBuilderDirty = false;
     }
+
+    private void DismissNoRulesDialog() => _showNoRulesDialog = false;
 
     // ----- Versions -----
 

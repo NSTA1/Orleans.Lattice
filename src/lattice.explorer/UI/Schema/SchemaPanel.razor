@@ -311,6 +311,23 @@
             </div>
             }
         </div>
+
+        @if (_showNoRulesDialog)
+        {
+            <div class="explorer-modal-backdrop" role="presentation">
+                <div class="explorer-modal" role="alertdialog" aria-modal="true" aria-labelledby="explorer-norules-title">
+                    <h3 id="explorer-norules-title">Add at least one rule</h3>
+                    <p>
+                        A policy must define at least one rule. An empty policy accepts
+                        every value, which is the same as having no policy at all.
+                        Configure a rule and choose 'Add rule', then save.
+                    </p>
+                    <div class="explorer-modal-actions">
+                        <button type="button" class="explorer-btn explorer-btn-primary" @onclick="DismissNoRulesDialog">OK</button>
+                    </div>
+                </div>
+            </div>
+        }
     }
     else if (_tab == SchemaTab.Versions)
     {
