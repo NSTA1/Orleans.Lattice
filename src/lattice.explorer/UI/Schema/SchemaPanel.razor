@@ -105,10 +105,6 @@
                             aria-selected="@(_tab == SchemaTab.Versions)"
                             @onclick="@(() => SetTab(SchemaTab.Versions))">Versions</button>
                     <button type="button" role="tab"
-                            class="explorer-tab @(_tab == SchemaTab.Compliance ? "is-active" : null)"
-                            aria-selected="@(_tab == SchemaTab.Compliance)"
-                            @onclick="@(() => SetTab(SchemaTab.Compliance))">Compliance</button>
-                    <button type="button" role="tab"
                             class="explorer-tab @(_tab == SchemaTab.DeadLetters ? "is-active" : null)"
                             aria-selected="@(_tab == SchemaTab.DeadLetters)"
                             @onclick="@(() => SetTab(SchemaTab.DeadLetters))">Dead letters</button>
@@ -183,6 +179,46 @@
                             </tbody>
                         </table>
                     }
+                }
+
+                @if (_policyView is { IsSuccess: true, Value: not null })
+                {
+                    <div class="explorer-schema-advanced">
+                        <h3 class="explorer-access-title">Compliance</h3>
+                        <p class="explorer-backups-note">A read-only scan of every current value against this policy. It never rewrites or dead-letters data.</p>
+                        <button type="button" class="explorer-btn"
+                                disabled="@(_busy || !_allowed || !_caps.CanScanCompliance || string.IsNullOrWhiteSpace(_treeId))" @onclick="ScanComplianceAsync">Scan compliance</button>
+                        @if (_complianceView is not null)
+                        {
+                            @if (!_complianceView.IsSuccess)
+                            {
+                                <p class="explorer-backups-result @ResultClass(_complianceView.Status)" role="status">@_complianceView.Message</p>
+                            }
+                            else if (!_complianceView.Value.HasPolicy)
+                            {
+                                <p class="explorer-backups-empty">Tree '@_complianceView.Value.TreeId' is ungoverned (no policy).</p>
+                            }
+                            else
+                            {
+                                <p class="explorer-schema-compliant">Compliant: @_complianceView.Value.CompliantCount</p>
+                                <p class="explorer-schema-noncompliant">Non-compliant: @_complianceView.Value.NonCompliantCount</p>
+                                <p class="explorer-access-sub">Scanned: @_complianceView.Value.ScannedCount</p>
+                                @if (_complianceView.Value.RuleBreakdown.Count > 0)
+                                {
+                                    <h4 class="explorer-schema-subtitle">Breakdown by reason</h4>
+                                    <table class="explorer-access-ruletable">
+                                        <thead><tr><th>Reason</th><th>Count</th></tr></thead>
+                                        <tbody>
+                                            @foreach (var row in _complianceView.Value.RuleBreakdown)
+                                            {
+                                                <tr><td>@row.Reason</td><td>@row.Count</td></tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                }
+                            }
+                        }
+                    </div>
                 }
             </div>
             @if (_policyFormOpen)
@@ -394,51 +430,6 @@
                     <p class="explorer-backups-empty">Choose 'Enable versioning' or 'Advance version' to change this tree's schema versioning.</p>
                 </div>
             }
-        </div>
-    }
-    else if (_tab == SchemaTab.Compliance)
-    {
-        <div class="explorer-access-grid explorer-schema-narrow">
-            <div class="explorer-access-formcol">
-                <h3 class="explorer-access-title">Compliance audit</h3>
-                <p class="explorer-backups-note">A read-only scan of every current value against the tree's compiled policy. It never rewrites or dead-letters data.</p>
-                <button type="button" class="explorer-btn"
-                        disabled="@(_busy || !_allowed || !_caps.CanScanCompliance || string.IsNullOrWhiteSpace(_treeId))" @onclick="ScanComplianceAsync">Scan compliance</button>
-            </div>
-            <div class="explorer-access-formcol">
-                @if (_complianceView is null)
-                {
-                    <p class="explorer-backups-empty">Select and scan a tree to view its compliance.</p>
-                }
-                else if (!_complianceView.IsSuccess)
-                {
-                    <p class="explorer-backups-result @ResultClass(_complianceView.Status)" role="status">@_complianceView.Message</p>
-                }
-                else if (!_complianceView.Value.HasPolicy)
-                {
-                    <p class="explorer-backups-empty">Tree '@_complianceView.Value.TreeId' is ungoverned (no policy).</p>
-                }
-                else
-                {
-                    <h3 class="explorer-access-title">Result for '@_complianceView.Value.TreeId'</h3>
-                    <p class="explorer-schema-compliant">Compliant: @_complianceView.Value.CompliantCount</p>
-                    <p class="explorer-schema-noncompliant">Non-compliant: @_complianceView.Value.NonCompliantCount</p>
-                    <p class="explorer-access-sub">Scanned: @_complianceView.Value.ScannedCount</p>
-                    @if (_complianceView.Value.RuleBreakdown.Count > 0)
-                    {
-                        <h4 class="explorer-schema-subtitle">Breakdown by reason</h4>
-                        <table class="explorer-access-ruletable">
-                            <thead><tr><th>Reason</th><th>Count</th></tr></thead>
-                            <tbody>
-                                @foreach (var row in _complianceView.Value.RuleBreakdown)
-                                {
-                                    <tr><td>@row.Reason</td><td>@row.Count</td></tr>
-                                }
-                            </tbody>
-                        </table>
-                    }
-                }
-            </div>
         </div>
     }
     else

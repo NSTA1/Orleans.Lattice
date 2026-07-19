@@ -22,7 +22,6 @@ public partial class SchemaPanel : ComponentBase, IDisposable
     {
         Policy,
         Versions,
-        Compliance,
         DeadLetters,
     }
 
@@ -281,9 +280,6 @@ public partial class SchemaPanel : ComponentBase, IDisposable
             case SchemaTab.Versions:
                 await LoadVersionAsync();
                 break;
-            case SchemaTab.Compliance:
-                // Compliance is an explicit scan action, not an auto-load.
-                break;
             case SchemaTab.DeadLetters:
                 // Dead letters load on explicit action.
                 break;
@@ -294,6 +290,11 @@ public partial class SchemaPanel : ComponentBase, IDisposable
 
     private async Task LoadPolicyAsync()
     {
+        // A fresh policy load invalidates any prior compliance audit (it was scanned
+        // against the tree's previous policy state), so clear it to avoid showing a
+        // stale result beneath the reloaded policy.
+        _complianceView = null;
+
         if (!_caps.CanViewPolicy)
         {
             _policyView = null;
