@@ -137,8 +137,11 @@
             <div class="explorer-access-listcol">
                 <div class="explorer-access-listhead">
                     <h3 class="explorer-access-title">Current policy</h3>
-                    <button type="button" class="explorer-btn"
-                            disabled="@(_busy || !_allowed || !_caps.CanManagePolicy || string.IsNullOrWhiteSpace(_treeId))" @onclick="EditPolicy">Edit policy</button>
+                    @if (_policyView is { IsSuccess: true, Value: not null })
+                    {
+                        <button type="button" class="explorer-btn"
+                                disabled="@(_busy || !_allowed || !_caps.CanManagePolicy || string.IsNullOrWhiteSpace(_treeId))" @onclick="EditPolicy">Edit policy</button>
+                    }
                 </div>
                 @if (_policyView is null)
                 {
