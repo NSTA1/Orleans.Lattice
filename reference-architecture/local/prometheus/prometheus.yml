@@ -1,0 +1,13 @@
+# Local smoke-test Prometheus config.
+# Scrapes the reference silo's OpenTelemetry /metrics endpoint so the bundled
+# Grafana dashboards and the MCP telemetry tools have live data.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: orleans-lattice-silo
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - silo:8080

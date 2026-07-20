@@ -1,0 +1,139 @@
+# ---------------------------------------------------------------------------
+# Local smoke-test harness for the Orleans.Lattice reference architecture.
+#
+# Brings up a single-region cluster entirely on your machine, WITHOUT Azure:
+#
+#   azurite     - Azure Storage emulator (Table + Blob + Queue) backing the
+#                 Orleans clustering table, the durable Table WAL, the grain
+#                 state store, the reminders table, and the Blob backup sink.
+#   silo        - the reference Silo head (hosts/Silo), the always-on cluster.
+#   mcp         - the reference MCP head (hosts/Mcp), a stateless gRPC client.
+#   explorer    - the reference Explorer web head (hosts/Explorer), a gRPC-web
+#                 client to the silo's State + Auth API.
+#   prometheus  - scrapes the silo's /metrics OpenTelemetry endpoint.
+#   grafana     - grafana/grafana-oss, provisioned with the Prometheus data
+#                 source and the bundled Orleans.Lattice dashboards.
+#
+# Goal: `docker compose up` yields a browsable Explorer (http://localhost:8080)
+# and a reachable MCP endpoint (http://localhost:8090) against a live local
+# cluster, plus Grafana (http://localhost:3000) with live dashboards.
+#
+# SECURITY / DEV BYPASS: this harness is a local dev convenience and is NOT a
+# secure deployment template. It deliberately runs a fully-open cluster:
+#   * Entra auth is DISABLED (Entra__Enabled=false) on every head.
+#   * The State/Auth gRPC surface does NOT require authorization
+#     (StateApi__RequireAuthorization=false, Mcp__RequireAuthorization=false).
+#   * The authorization core runs allow-by-default (Auth__DefaultEffect=Allow).
+#   * Cross-region replication endpoints permit plaintext h2c
+#     (Replication__AllowPlaintext=true).
+# The only "secret", the per-cluster replication key, is a documented dev
+# placeholder injected from .env (copy .env.example to .env). No real secret is
+# ever baked into an image, this file, or source. In Azure these toggles flip to
+# their secure defaults (Deny, RequireAuthorization=true, Entra enabled, managed
+# identity for storage); see reference-architecture/hosts/README.md.
+# ---------------------------------------------------------------------------
+
+name: lattice-reference-local
+
+services:
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:latest
+    command: azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck
+    ports:
+      - "10000:10000"
+      - "10001:10001"
+      - "10002:10002"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "10002"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  silo:
+    build:
+      context: ..
+      dockerfile: hosts/Silo/Dockerfile
+    depends_on:
+      azurite:
+        condition: service_healthy
+    environment:
+      # Storage: point every Orleans + Lattice Azure provider at Azurite.
+      Storage__ConnectionString: "${STORAGE_CONNECTION_STRING}"
+      # Cluster identity.
+      Cluster__Id: "lattice-local"
+      Cluster__ServiceId: "lattice-local"
+      # Dev bypass: allow-by-default authorization + unauthenticated gRPC.
+      Auth__DefaultEffect: "Allow"
+      StateApi__RequireAuthorization: "false"
+      Entra__Enabled: "false"
+      # Single-region: no replication peers; plaintext allowed for h2c.
+      Replication__AllowPlaintext: "true"
+      LATTICE_REPLICATION_SECRET: "${LATTICE_REPLICATION_SECRET}"
+      # This lone silo owns the backup schedule (primary).
+      Backup__Primary: "true"
+      Scaling__MinReplicas: "1"
+    ports:
+      # Silo HTTP (health / scaling signal / Prometheus /metrics).
+      - "18080:8080"
+      # Silo gRPC (state / auth / replication) - exposed for host-side tooling.
+      - "18081:8081"
+
+  mcp:
+    build:
+      context: ..
+      dockerfile: hosts/Mcp/Dockerfile
+    depends_on:
+      - silo
+    environment:
+      # Front the silo's gRPC State + Auth facades over h2c by service name.
+      Mcp__StateEndpoint: "http://silo:8081"
+      Mcp__AuthEndpoint: "http://silo:8081"
+      # Cluster telemetry tools proxy the local Prometheus.
+      Mcp__Telemetry__BackendAddress: "http://prometheus:9090"
+      # Dev bypass: open MCP endpoint, no Entra.
+      Entra__Enabled: "false"
+      Mcp__RequireAuthorization: "false"
+    ports:
+      - "8090:8080"
+
+  explorer:
+    build:
+      context: ..
+      dockerfile: hosts/Explorer/Dockerfile
+    depends_on:
+      - silo
+    environment:
+      # Standalone Explorer head connects to the silo's State/Auth gRPC endpoint.
+      LATTICE_EXPLORER_ENDPOINT: "http://silo:8081"
+      # Dev bypass: plaintext h2c to the silo, no Entra sign-in.
+      LATTICE_EXPLORER_INSECURE_DEV: "true"
+      Entra__Enabled: "false"
+    ports:
+      - "8080:8080"
+
+  prometheus:
+    image: prom/prometheus:latest
+    depends_on:
+      - silo
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana-oss:latest
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: "admin"
+      GF_SECURITY_ADMIN_PASSWORD: "admin"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
+    volumes:
+      # Bundled provisioning + dashboards shipped by Orleans.Lattice.Dashboards.
+      - ../../src/lattice.dashboards/Provisioning/datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
+      - ../../src/lattice.dashboards/Provisioning/dashboards.yaml:/etc/grafana/provisioning/dashboards/dashboards.yaml:ro
+      - ../../src/lattice.dashboards/Grafana:/var/lib/grafana/dashboards/orleans-lattice:ro
+    ports:
+      - "3000:3000"

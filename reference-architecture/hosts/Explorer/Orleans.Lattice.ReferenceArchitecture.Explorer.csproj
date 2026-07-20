@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Orleans.Lattice.ReferenceArchitecture.Explorer</RootNamespace>
+    <AssemblyName>Orleans.Lattice.ReferenceArchitecture.Explorer</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <!--
+      InvariantGlobalization is enabled after the ordinal-only audit recorded in
+      reference-architecture/hosts/README.md. For this Blazor Server head the
+      only culture-sensitive residue is display-side formatting (numbers, dates)
+      and UI-list ordering; tree keys and access decisions are compared
+      ordinally by the underlying explorer. Dropping ICU is therefore
+      correctness-safe here and only alters cosmetic display formatting to the
+      invariant culture, which is acceptable for an operator console.
+    -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <!--
+    Published Orleans.Lattice v8.0.0 NuGet packages (nuget.org), NOT project
+    references into src/. Orleans.Lattice.Explorer.Web brings the shared UI, Core,
+    Access, Backup, and Schema explorer libraries transitively; the Entra package
+    adds the interactive Entra sign-in provider.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Orleans.Lattice.Explorer.Web" Version="8.0.0" />
+    <PackageReference Include="Orleans.Lattice.Explorer.Entra" Version="8.0.0" />
+  </ItemGroup>
+
+</Project>

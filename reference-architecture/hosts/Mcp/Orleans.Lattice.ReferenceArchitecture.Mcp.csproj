@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Orleans.Lattice.ReferenceArchitecture.Mcp</RootNamespace>
+    <AssemblyName>Orleans.Lattice.ReferenceArchitecture.Mcp</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <!--
+      InvariantGlobalization is enabled after the ordinal-only audit recorded in
+      reference-architecture/hosts/README.md. This head is a stateless gRPC
+      client + MCP transport; it performs no culture-sensitive comparison on any
+      correctness-relevant path, so dropping ICU is safe and shrinks the image.
+    -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <!--
+    Published Orleans.Lattice v8.0.0 NuGet packages (nuget.org), NOT project
+    references into src/. Orleans.Lattice.Api.Mcp brings the ModelContextProtocol
+    server transport and the four facade gRPC client packages transitively.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Orleans.Lattice.Api.Mcp" Version="8.0.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Mcp.Telemetry" Version="8.0.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
+  </ItemGroup>
+
+</Project>
