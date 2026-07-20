@@ -17,8 +17,8 @@ namespace Orleans.Lattice.Api.Mcp.Tests;
 /// data tool module registered and a stub credential bridge / permission
 /// resolver that grant the caller the data group, so the only thing that can
 /// keep the data tools out of reach is the authorizer. The test proves the
-/// authorizer both hides the data tools from discovery and rejects a direct
-/// invocation.
+/// authorizer hides the data tools from discovery and that a denied data tool
+/// is unreachable end to end.
 /// </summary>
 /// <remarks>
 /// Marked <c>Integration</c>: it binds a loopback TCP port and drives the full
@@ -54,13 +54,20 @@ public sealed class DenyAllMcpAuthorizerEndToEndTests
                 "The default-deny authorizer must hide the granted data tools from discovery.");
         });
 
-        // A direct invocation of a data tool is rejected: whether it is unlisted
-        // or gated at invoke time, the default-deny posture blocks it end to end.
-        Assert.ThrowsAsync<McpException>(
+        // A direct invocation of a denied data tool is unreachable end to end.
+        // Because the gate is lock-step, DenyAll hides lattice_data_get at
+        // discovery, so it is never registered in the session and a direct call
+        // fails at the protocol layer (McpProtocolException, derived from
+        // McpException) before it can reach the CredentialStampingTool invoke
+        // gate. Assert on the McpException base so the test accepts either the
+        // discovery-gate ("unknown tool") or the invoke-gate outcome; the exact
+        // invoke-time McpException path is covered by the gate unit tests.
+        Assert.That(
             () => client.CallToolAsync(
                 "lattice_data_get",
                 new Dictionary<string, object?> { ["treeId"] = "t", ["key"] = "k" },
-                cancellationToken: cts.Token).AsTask());
+                cancellationToken: cts.Token).AsTask(),
+            Throws.InstanceOf<McpException>());
 
         await host.StopAsync(cts.Token);
     }
