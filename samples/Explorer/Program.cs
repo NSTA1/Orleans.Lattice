@@ -86,6 +86,22 @@ if (entraVarsSet is > 0 and < 3)
     return 2;
 }
 
+// The group-merge mode governs whether locally-defined membership contributes to
+// authorization. Set LATTICE_MEMBERSHIP_MERGE_MODE to Union (default), TokenOnly,
+// or DirectoryOnly to exercise how the Access area reflects it: under TokenOnly
+// the group-create and member add/remove controls are disabled (with an
+// explanatory banner) but stay read-only viewable, while Policies and Explain stay
+// live. An unrecognised value is rejected up front.
+var mergeModeVar = Environment.GetEnvironmentVariable("LATTICE_MEMBERSHIP_MERGE_MODE");
+var groupMergeMode = SubjectGroupMergeMode.Union;
+if (!string.IsNullOrWhiteSpace(mergeModeVar)
+    && !Enum.TryParse(mergeModeVar, ignoreCase: true, out groupMergeMode))
+{
+    Console.WriteLine($"LATTICE_MEMBERSHIP_MERGE_MODE '{mergeModeVar}' is not recognised.");
+    Console.WriteLine("Set it to Union, TokenOnly, or DirectoryOnly, or unset it to use Union.");
+    return 2;
+}
+
 
 // Seed the console's first-run connection through the bootstrap environment
 // variables (read by AddLatticeExplorerWeb's environment bootstrap): point it at
@@ -143,7 +159,7 @@ builder.Host.UseOrleans(silo =>
     // default is left permissive so the Explore area works without a sign-in; the
     // reserved control plane (membership + policy) is always governed and only the
     // bootstrap administrator below may manage it.
-    silo.AddLatticeMembership();
+    silo.AddLatticeMembership(options => options.GroupMergeMode = groupMergeMode);
 
     // The identity directory the Access area validates and searches against. In
     // the default static mode this is a small in-memory roster, so an unknown
@@ -339,6 +355,9 @@ Console.WriteLine($"Auto-signed in as bootstrap administrator '{AdminUser}' - th
 Console.WriteLine(useEntraDirectory
     ? "Identity directory: Microsoft Entra (Graph) - the Access subject picker and validated create run against your real tenant."
     : "Identity directory: static in-memory roster - the Access create form fails closed on any id not in the roster (try 'alice', 'operators', or an unknown id).");
+Console.WriteLine(groupMergeMode == SubjectGroupMergeMode.TokenOnly
+    ? "Group-merge mode: TokenOnly - locally-defined membership is inert, so the Access group-create and member editing controls render disabled with an explanatory banner (Policies and Explain stay live)."
+    : $"Group-merge mode: {groupMergeMode} - locally-defined membership is effective, so group and member editing is enabled. Set LATTICE_MEMBERSHIP_MERGE_MODE=TokenOnly to see the merge-mode-aware gating.");
 Console.WriteLine("Press Ctrl+C to stop.");
 
 await app.WaitForShutdownAsync();
