@@ -133,6 +133,124 @@ public sealed class TelemetryToolHandlersTests
     }
 
     [Test]
+    public async Task Query_in_deny_all_rejects_a_name_matcher_naming_a_denied_metric()
+    {
+        var client = Client("{\"status\":\"success\",\"data\":{}}", out var handler);
+
+        var result = await TelemetryToolHandlers.QueryAsync(
+            client, DenyAll("lattice_wal_append_total"), CancellationToken.None, "{__name__=\"secret_metric\"}");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Success, Is.False);
+            Assert.That(result.Error, Does.Contain("secret_metric"));
+            Assert.That(handler.LastRequest, Is.Null, "A denied query must not reach the backend.");
+        });
+    }
+
+    [Test]
+    public async Task Query_in_deny_all_admits_a_name_matcher_naming_an_allowed_metric()
+    {
+        const string json =
+            "{\"status\":\"success\",\"data\":{\"resultType\":\"vector\",\"result\":"
+            + "[{\"metric\":{\"__name__\":\"lattice_wal_append_total\"},\"value\":[1.0,\"5\"]}]}}";
+        var client = Client(json, out _);
+
+        var result = await TelemetryToolHandlers.QueryAsync(
+            client,
+            DenyAll("lattice_wal_append_total"),
+            CancellationToken.None,
+            "{__name__=\"lattice_wal_append_total\"}");
+
+        Assert.That(result.Success, Is.True);
+    }
+
+    [Test]
+    public async Task Query_in_deny_all_rejects_a_regex_name_matcher()
+    {
+        var client = Client("{\"status\":\"success\",\"data\":{}}", out var handler);
+
+        var result = await TelemetryToolHandlers.QueryAsync(
+            client, DenyAll("secret_metric"), CancellationToken.None, "{__name__=~\"secret_.*\"}");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Success, Is.False);
+            Assert.That(result.Error, Is.Not.Null.And.Not.Empty);
+            Assert.That(handler.LastRequest, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task Query_in_deny_all_rejects_a_label_only_selector_with_no_metric_name()
+    {
+        var client = Client("{\"status\":\"success\",\"data\":{}}", out var handler);
+
+        var result = await TelemetryToolHandlers.QueryAsync(
+            client, DenyAll("up"), CancellationToken.None, "{job=\"api\"}");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Success, Is.False);
+            Assert.That(result.Error, Is.Not.Null.And.Not.Empty);
+            Assert.That(handler.LastRequest, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task Query_in_read_all_admits_a_name_matcher_deny_all_would_reject()
+    {
+        const string json =
+            "{\"status\":\"success\",\"data\":{\"resultType\":\"vector\",\"result\":"
+            + "[{\"metric\":{\"__name__\":\"secret_metric\"},\"value\":[1.0,\"1\"]}]}}";
+        var client = Client(json, out _);
+
+        var result = await TelemetryToolHandlers.QueryAsync(
+            client, ReadAll(), CancellationToken.None, "{__name__=~\"secret_.*\"}");
+
+        Assert.That(result.Success, Is.True);
+    }
+
+    [Test]
+    public async Task QueryRange_in_deny_all_rejects_a_name_matcher_naming_a_denied_metric()
+    {
+        var client = Client("{\"status\":\"success\",\"data\":{}}", out var handler);
+
+        var result = await TelemetryToolHandlers.QueryRangeAsync(
+            client, DenyAll("lattice_wal_append_total"), Guardrails(), CancellationToken.None,
+            "{__name__=\"secret_metric\"}",
+            DateTimeOffset.FromUnixTimeSeconds(0),
+            DateTimeOffset.FromUnixTimeSeconds(600),
+            TimeSpan.FromSeconds(30));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Success, Is.False);
+            Assert.That(result.Error, Does.Contain("secret_metric"));
+            Assert.That(handler.LastRequest, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task QueryRange_in_deny_all_rejects_a_label_only_selector_with_no_metric_name()
+    {
+        var client = Client("{\"status\":\"success\",\"data\":{}}", out var handler);
+
+        var result = await TelemetryToolHandlers.QueryRangeAsync(
+            client, DenyAll("up"), Guardrails(), CancellationToken.None,
+            "{job=\"api\"}",
+            DateTimeOffset.FromUnixTimeSeconds(0),
+            DateTimeOffset.FromUnixTimeSeconds(600),
+            TimeSpan.FromSeconds(30));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Success, Is.False);
+            Assert.That(handler.LastRequest, Is.Null);
+        });
+    }
+
+    [Test]
     public async Task Query_in_read_all_passes_a_metric_that_deny_all_would_reject()
     {
         const string json =

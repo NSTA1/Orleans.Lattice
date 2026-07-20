@@ -45,9 +45,9 @@ internal static class TelemetryToolHandlers
         ArgumentNullException.ThrowIfNull(policy);
         ArgumentNullException.ThrowIfNull(query);
 
-        if (!TryAuthorizeQuery(policy, query, out var deniedMetric))
+        if (!TryAuthorizeQuery(policy, query, out var denialMessage))
         {
-            return TelemetryQueryResult.Failure(DeniedMessage(deniedMetric!));
+            return TelemetryQueryResult.Failure(denialMessage!);
         }
 
         try
@@ -109,9 +109,9 @@ internal static class TelemetryToolHandlers
                 $"The requested step of {step} exceeds the configured maximum of {settings.MaxStep}.");
         }
 
-        if (!TryAuthorizeQuery(policy, query, out var deniedMetric))
+        if (!TryAuthorizeQuery(policy, query, out var denialMessage))
         {
-            return TelemetryQueryResult.Failure(DeniedMessage(deniedMetric!));
+            return TelemetryQueryResult.Failure(denialMessage!);
         }
 
         try
@@ -206,19 +206,37 @@ internal static class TelemetryToolHandlers
     private static bool TryAuthorizeQuery(
         TelemetryMetricAccessPolicy policy,
         string query,
-        out string? deniedMetric)
+        out string? denialMessage)
     {
-        deniedMetric = null;
+        denialMessage = null;
         if (policy.IsReadAll)
         {
             return true;
         }
 
-        foreach (var name in PromQlMetricExtractor.Extract(query))
+        var references = PromQlMetricExtractor.ExtractReferences(query);
+        if (references.HasUnresolvableNameMatcher)
+        {
+            denialMessage =
+                "The query references a metric by a '__name__' pattern or negative matcher, "
+                + "which the telemetry metric-access allow-list cannot admit.";
+            return false;
+        }
+
+        if (references.Names.Count == 0)
+        {
+            // Fail closed: a deny-all query whose metric names cannot be extracted
+            // (for example a label-only selector) is rejected rather than admitted.
+            denialMessage =
+                "The query does not name a metric the telemetry metric-access allow-list can admit.";
+            return false;
+        }
+
+        foreach (var name in references.Names)
         {
             if (!policy.IsAdmitted(name))
             {
-                deniedMetric = name;
+                denialMessage = DeniedMessage(name);
                 return false;
             }
         }
