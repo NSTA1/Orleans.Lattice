@@ -273,9 +273,14 @@ builder.Services.AddLatticeExplorerWeb(o =>
     o.ConfigFilePath = sampleConfigPath;
 
     // The Schema area is withheld from the Explorer's default UI for the initial
-    // release; this sample opts into it so the schema governance walkthrough below
-    // still works end to end.
-    o.EnableSchemaArea = true;
+    // release, so this sample hides it too - matching the shipped experience. A
+    // developer working on the area can bring it back for a run by setting
+    // LATTICE_EXPLORER_ENABLE_SCHEMA=true, with no code change.
+    o.EnableSchemaArea =
+        string.Equals(
+            Environment.GetEnvironmentVariable("LATTICE_EXPLORER_ENABLE_SCHEMA"),
+            "true",
+            StringComparison.OrdinalIgnoreCase);
 });
 
 var app = builder.Build();
