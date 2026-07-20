@@ -98,7 +98,7 @@ public class ExplorerAccessServiceCollectionExtensionsTests
         var client = provider.GetRequiredService<IAuthAdminClient>();
 
         Assert.That(
-            async () => await client.ListUsersAsync(new AuthPageRequest { PageSize = 1 }),
+            async () => await client.ListGroupsAsync(new AuthPageRequest { PageSize = 1 }),
             Throws.InstanceOf<Grpc.Core.RpcException>());
     }
 }

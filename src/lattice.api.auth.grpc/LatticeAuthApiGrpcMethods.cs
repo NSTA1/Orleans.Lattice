@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Api.Auth.Grpc;
 /// </summary>
 /// <remarks>
 /// The contract is a flat set of unary RPCs mirroring the transport-agnostic
-/// facade: membership CRUD (users, groups, members), policy CRUD (rules), and
+/// facade: membership CRUD (groups, members), policy CRUD (rules), and
 /// policy introspection (explain, effective permissions). Contract-versioning
 /// policy: fields on the wire messages are additive-only (new <c>[Id(n)]</c>);
 /// aliases and field numbers are never renumbered, so a newer response decodes
@@ -23,18 +23,6 @@ internal sealed class LatticeAuthApiGrpcMethods
 {
     /// <summary>The fully-qualified gRPC service name.</summary>
     public const string ServiceName = "orleans.lattice.api.auth";
-
-    /// <summary>The unary user-upsert RPC method name.</summary>
-    public const string UpsertUserMethodName = "UpsertUser";
-
-    /// <summary>The unary user-get RPC method name.</summary>
-    public const string GetUserMethodName = "GetUser";
-
-    /// <summary>The unary user-remove RPC method name.</summary>
-    public const string RemoveUserMethodName = "RemoveUser";
-
-    /// <summary>The unary user-list RPC method name.</summary>
-    public const string ListUsersMethodName = "ListUsers";
 
     /// <summary>The unary group-upsert RPC method name.</summary>
     public const string UpsertGroupMethodName = "UpsertGroup";
@@ -92,10 +80,6 @@ internal sealed class LatticeAuthApiGrpcMethods
 
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeAuthApiGrpcMethods(
-        Serializer<AuthUser> userSerializer,
-        Serializer<AuthUserRef> userRefSerializer,
-        Serializer<AuthUserResult> userResultSerializer,
-        Serializer<AuthUserPage> userPageSerializer,
         Serializer<AuthGroup> groupSerializer,
         Serializer<AuthGroupRef> groupRefSerializer,
         Serializer<AuthGroupResult> groupResultSerializer,
@@ -122,10 +106,6 @@ internal sealed class LatticeAuthApiGrpcMethods
         Serializer<AuthAccessModelQuery> accessModelQuerySerializer,
         Serializer<AccessModelDescriptor> accessModelSerializer)
     {
-        ArgumentNullException.ThrowIfNull(userSerializer);
-        ArgumentNullException.ThrowIfNull(userRefSerializer);
-        ArgumentNullException.ThrowIfNull(userResultSerializer);
-        ArgumentNullException.ThrowIfNull(userPageSerializer);
         ArgumentNullException.ThrowIfNull(groupSerializer);
         ArgumentNullException.ThrowIfNull(groupRefSerializer);
         ArgumentNullException.ThrowIfNull(groupResultSerializer);
@@ -151,11 +131,6 @@ internal sealed class LatticeAuthApiGrpcMethods
         ArgumentNullException.ThrowIfNull(directoryPrincipalResultSerializer);
         ArgumentNullException.ThrowIfNull(accessModelQuerySerializer);
         ArgumentNullException.ThrowIfNull(accessModelSerializer);
-
-        UpsertUser = Unary(UpsertUserMethodName, userSerializer, ackSerializer);
-        GetUser = Unary(GetUserMethodName, userRefSerializer, userResultSerializer);
-        RemoveUser = Unary(RemoveUserMethodName, userRefSerializer, ackSerializer);
-        ListUsers = Unary(ListUsersMethodName, pageRequestSerializer, userPageSerializer);
 
         UpsertGroup = Unary(UpsertGroupMethodName, groupSerializer, ackSerializer);
         GetGroup = Unary(GetGroupMethodName, groupRefSerializer, groupResultSerializer);
@@ -193,18 +168,6 @@ internal sealed class LatticeAuthApiGrpcMethods
             name: name,
             requestMarshaller: LatticeAuthApiGrpcMarshallers.Create(requestSerializer),
             responseMarshaller: LatticeAuthApiGrpcMarshallers.Create(responseSerializer));
-
-    /// <summary>The unary <c>UpsertUser</c> RPC.</summary>
-    public Method<AuthUser, AuthAck> UpsertUser { get; }
-
-    /// <summary>The unary <c>GetUser</c> RPC.</summary>
-    public Method<AuthUserRef, AuthUserResult> GetUser { get; }
-
-    /// <summary>The unary <c>RemoveUser</c> RPC.</summary>
-    public Method<AuthUserRef, AuthAck> RemoveUser { get; }
-
-    /// <summary>The unary <c>ListUsers</c> RPC.</summary>
-    public Method<AuthPageRequest, AuthUserPage> ListUsers { get; }
 
     /// <summary>The unary <c>UpsertGroup</c> RPC.</summary>
     public Method<AuthGroup, AuthAck> UpsertGroup { get; }
@@ -270,10 +233,6 @@ internal sealed class LatticeAuthApiGrpcMethods
         ArgumentNullException.ThrowIfNull(serializerProvider);
 
         return new LatticeAuthApiGrpcMethods(
-            serializerProvider.GetRequiredService<Serializer<AuthUser>>(),
-            serializerProvider.GetRequiredService<Serializer<AuthUserRef>>(),
-            serializerProvider.GetRequiredService<Serializer<AuthUserResult>>(),
-            serializerProvider.GetRequiredService<Serializer<AuthUserPage>>(),
             serializerProvider.GetRequiredService<Serializer<AuthGroup>>(),
             serializerProvider.GetRequiredService<Serializer<AuthGroupRef>>(),
             serializerProvider.GetRequiredService<Serializer<AuthGroupResult>>(),

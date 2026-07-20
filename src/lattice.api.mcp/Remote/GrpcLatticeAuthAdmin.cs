@@ -26,25 +26,6 @@ internal sealed class GrpcLatticeAuthAdmin : ILatticeAuthAdmin
     }
 
     /// <inheritdoc />
-    public async Task UpsertUserAsync(AuthUser user, CancellationToken cancellationToken = default)
-        => await _client.UpsertUserAsync(user, cancellationToken).ConfigureAwait(false);
-
-    /// <inheritdoc />
-    public async Task<AuthUser?> GetUserAsync(string userId, CancellationToken cancellationToken = default)
-    {
-        var result = await _client.GetUserAsync(new AuthUserRef { UserId = userId }, cancellationToken).ConfigureAwait(false);
-        return result.User;
-    }
-
-    /// <inheritdoc />
-    public async Task RemoveUserAsync(string userId, CancellationToken cancellationToken = default)
-        => await _client.RemoveUserAsync(new AuthUserRef { UserId = userId }, cancellationToken).ConfigureAwait(false);
-
-    /// <inheritdoc />
-    public Task<AuthUserPage> ListUsersAsync(AuthPageRequest request, CancellationToken cancellationToken = default)
-        => _client.ListUsersAsync(request, cancellationToken);
-
-    /// <inheritdoc />
     public async Task UpsertGroupAsync(AuthGroup group, CancellationToken cancellationToken = default)
         => await _client.UpsertGroupAsync(group, cancellationToken).ConfigureAwait(false);
 

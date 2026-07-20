@@ -14,10 +14,6 @@ rejected with `PermissionDenied`.
 
 | RPC | Facade method |
 |-----|---------------|
-| `UpsertUser` | `UpsertUserAsync` |
-| `GetUser` | `GetUserAsync` |
-| `RemoveUser` | `RemoveUserAsync` |
-| `ListUsers` | `ListUsersAsync` |
 | `UpsertGroup` | `UpsertGroupAsync` |
 | `GetGroup` | `GetGroupAsync` |
 | `RemoveGroup` | `RemoveGroupAsync` |

@@ -1,33 +1,14 @@
 namespace Orleans.Lattice.Membership;
 
 /// <summary>
-/// The introspectable user / group directory backing subject resolution. Users,
-/// groups, and membership edges are stored in reserved, dogfooded
-/// <c>sys-membership-*</c> <c>ILattice</c> trees, so every record is readable
-/// through the ordinary read / scan / change-feed surface and every mutation is
-/// durably auditable via the per-key history view.
+/// The introspectable group directory backing subject resolution. Groups and
+/// membership edges are stored in reserved, dogfooded <c>sys-membership-*</c>
+/// <c>ILattice</c> trees, so every record is readable through the ordinary read /
+/// scan / change-feed surface and every mutation is durably auditable via the
+/// per-key history view.
 /// </summary>
 public interface ILatticeMembershipDirectory
 {
-    /// <summary>Creates or replaces a user record.</summary>
-    /// <param name="user">The user to upsert. Must not be <c>null</c>.</param>
-    /// <param name="cancellationToken">Cancels the write.</param>
-    Task UpsertUserAsync(MembershipUser user, CancellationToken cancellationToken = default);
-
-    /// <summary>Reads a user record, or <c>null</c> when no such user exists.</summary>
-    /// <param name="userId">The user id. Must not be <c>null</c>.</param>
-    /// <param name="cancellationToken">Cancels the read.</param>
-    Task<MembershipUser?> GetUserAsync(string userId, CancellationToken cancellationToken = default);
-
-    /// <summary>Enumerates every user record in id order.</summary>
-    /// <param name="cancellationToken">Cancels the scan.</param>
-    IAsyncEnumerable<MembershipUser> ListUsersAsync(CancellationToken cancellationToken = default);
-
-    /// <summary>Removes a user record. A no-op when no such user exists. Does not remove the user's membership edges.</summary>
-    /// <param name="userId">The user id. Must not be <c>null</c>.</param>
-    /// <param name="cancellationToken">Cancels the write.</param>
-    Task RemoveUserAsync(string userId, CancellationToken cancellationToken = default);
-
     /// <summary>Creates or replaces a group record.</summary>
     /// <param name="group">The group to upsert. Must not be <c>null</c>.</param>
     /// <param name="cancellationToken">Cancels the write.</param>

@@ -27,7 +27,7 @@ namespace Orleans.Lattice.Replication;
 /// </para>
 /// <para>
 /// Membership and policy trees replicate last-writer-wins
-/// (<see cref="LatticeMergeMode.LwwRegister"/>): each user, group, edge, and rule
+/// (<see cref="LatticeMergeMode.LwwRegister"/>): each group, edge, and rule
 /// is an independent key whose latest HLC-stamped write wins on convergence, which
 /// is the correct model for a mutable identity/authorization record. The optional
 /// audit tree is append-only and replicates as an observed-remove set
@@ -37,9 +37,6 @@ namespace Orleans.Lattice.Replication;
 /// </remarks>
 public static class LatticeSystemTreeNames
 {
-    /// <summary>The membership users tree (mirrors <c>MembershipConstants.UsersTree</c>).</summary>
-    public const string MembershipUsers = "sys-membership-users";
-
     /// <summary>The membership groups tree (mirrors <c>MembershipConstants.GroupsTree</c>).</summary>
     public const string MembershipGroups = "sys-membership-groups";
 
@@ -71,7 +68,6 @@ public static class LatticeSystemTreeNames
     {
         var map = new Dictionary<string, LatticeMergeMode>(StringComparer.Ordinal)
         {
-            [MembershipUsers] = LatticeMergeMode.LwwRegister,
             [MembershipGroups] = LatticeMergeMode.LwwRegister,
             [MembershipEdges] = LatticeMergeMode.LwwRegister,
             [AuthPolicy] = LatticeMergeMode.LwwRegister,

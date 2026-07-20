@@ -67,11 +67,6 @@ internal sealed class AuthToolGroup : ILatticeApiMcpToolGroup
                 "Returns the authorization rules currently in effect for a subject (grants and denies), resolved from "
                 + "the live policy store and the subject's group closure. Set subjectKind to Group to resolve a group "
                 + "subject rather than a user. Read-only."),
-            Read(services, AuthToolHandlers.GetUserAsync, "lattice_auth_get_user", "Get a user",
-                "Reads a single user record by id, or null when no such user exists. Read-only."),
-            Read(services, AuthToolHandlers.ListUsersAsync, "lattice_auth_list_users", "List users",
-                "Reads one page of the user catalog in ascending user-id order. Pass the returned next page token to "
-                + "continue. Read-only."),
             Read(services, AuthToolHandlers.GetGroupAsync, "lattice_auth_get_group", "Get a group",
                 "Reads a single group record by id, or null when no such group exists. Read-only."),
             Read(services, AuthToolHandlers.ListGroupsAsync, "lattice_auth_list_groups", "List groups",
@@ -96,11 +91,6 @@ internal sealed class AuthToolGroup : ILatticeApiMcpToolGroup
         if (enableAdministration)
         {
             // ----- Administration (destructive) -----
-            tools.Add(Write(services, AuthToolHandlers.UpsertUserAsync, "lattice_auth_upsert_user", "Create or replace a user",
-                "Creates or replaces a user record (id, optional display name and claim bag), returning the written "
-                + "record. Administrator-gated and destructive."));
-            tools.Add(Write(services, AuthToolHandlers.RemoveUserAsync, "lattice_auth_remove_user", "Remove a user",
-                "Removes a user record by id. A no-op when no such user exists. Administrator-gated and destructive."));
             tools.Add(Write(services, AuthToolHandlers.UpsertGroupAsync, "lattice_auth_upsert_group", "Create or replace a group",
                 "Creates or replaces a group record (id and optional display name), returning the written record. "
                 + "Administrator-gated and destructive."));

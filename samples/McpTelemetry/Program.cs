@@ -132,21 +132,17 @@ await app.StartAsync();
 
 Console.WriteLine($"Silo + MCP server started; /metrics on http://localhost:{Port}/metrics\n");
 
-var directory = app.Services.GetRequiredService<ILatticeMembershipDirectory>();
 var store = app.Services.GetRequiredService<ILatticeAuthorizationPolicyStore>();
 var grainFactory = app.Services.GetRequiredService<IGrainFactory>();
 var tree = grainFactory.GetGrain<ILattice>(DemoTree);
 
 // -- Seed the agent, its Telemetry-only grant, and drive some load -----------
-// Seeding writes the reserved membership / policy trees, which require Admin, so
-// it runs as the bootstrap administrator (which bypasses the gate). The writes
-// also drive the orleans.lattice meter so Prometheus has cluster metrics to
-// serve.
+// Seeding writes the reserved policy tree, which requires Admin, so it runs as
+// the bootstrap administrator (which bypasses the gate). The writes also drive
+// the orleans.lattice meter so Prometheus has cluster metrics to serve.
 Console.WriteLine("Seeding an 'agent' subject with a cluster-wide Telemetry grant, and driving load...");
 using (LatticeCredentialContext.Use("root-admin", scheme: Scheme))
 {
-    await directory.UpsertUserAsync(new MembershipUser(Agent, "Automation agent"));
-
     // A cluster-wide Telemetry grant: an Allow rule over the all-trees sentinel
     // scope, conferring only LatticeOperation.Telemetry.
     await store.PutRuleAsync(new LatticeAuthorizationRule(

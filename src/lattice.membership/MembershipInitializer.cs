@@ -96,7 +96,6 @@ internal sealed class MembershipInitializer
 
     private static string HistoryViewNameFor(string tree) => tree switch
     {
-        MembershipConstants.UsersTree => MembershipConstants.UsersHistoryView,
         MembershipConstants.GroupsTree => MembershipConstants.GroupsHistoryView,
         MembershipConstants.EdgesTree => MembershipConstants.EdgesHistoryView,
         _ => tree + "-history",

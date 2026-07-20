@@ -56,27 +56,6 @@ internal static class AuthToolHandlers
         return admin.EffectivePermissionsAsync(subjectId, subjectKind, cancellationToken);
     }
 
-    /// <summary>Reads a single user record, or <c>null</c> when no such user exists.</summary>
-    public static Task<AuthUser?> GetUserAsync(
-        ILatticeAuthAdmin admin,
-        string userId,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(admin);
-        return admin.GetUserAsync(userId, cancellationToken);
-    }
-
-    /// <summary>Reads one page of the user catalog in ascending user-id order.</summary>
-    public static Task<AuthUserPage> ListUsersAsync(
-        ILatticeAuthAdmin admin,
-        int pageSize = 0,
-        string? pageToken = null,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(admin);
-        return admin.ListUsersAsync(new AuthPageRequest { PageSize = pageSize, PageToken = pageToken }, cancellationToken);
-    }
-
     /// <summary>Reads a single group record, or <c>null</c> when no such group exists.</summary>
     public static Task<AuthGroup?> GetGroupAsync(
         ILatticeAuthAdmin admin,
@@ -153,30 +132,6 @@ internal static class AuthToolHandlers
     }
 
     // ----- Administration (destructive) -----
-
-    /// <summary>Creates or replaces a user record, returning the written record.</summary>
-    public static async Task<AuthUser> UpsertUserAsync(
-        ILatticeAuthAdmin admin,
-        string userId,
-        string? displayName = null,
-        IReadOnlyDictionary<string, string>? claims = null,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(admin);
-        var user = new AuthUser { UserId = userId, DisplayName = displayName, Claims = claims };
-        await admin.UpsertUserAsync(user, cancellationToken).ConfigureAwait(false);
-        return user;
-    }
-
-    /// <summary>Removes a user record. A no-op when no such user exists.</summary>
-    public static Task RemoveUserAsync(
-        ILatticeAuthAdmin admin,
-        string userId,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(admin);
-        return admin.RemoveUserAsync(userId, cancellationToken);
-    }
 
     /// <summary>Creates or replaces a group record, returning the written record.</summary>
     public static async Task<AuthGroup> UpsertGroupAsync(

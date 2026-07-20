@@ -107,8 +107,8 @@ internal sealed class LatticeAuthApiGrpcAuthInterceptor : Interceptor
     /// Decodes the inbound call's operation (from the gRPC method name) and the
     /// primary id it administers (from the request payload), so the authorizer
     /// receives a faithful per-operation, per-target description of every
-    /// auth-API RPC. The catalog-wide list operations (<c>ListUsers</c>,
-    /// <c>ListGroups</c>, <c>ListRules</c>) carry a <see langword="null"/> target.
+    /// auth-API RPC. The catalog-wide list operations (<c>ListGroups</c>,
+    /// <c>ListRules</c>) carry a <see langword="null"/> target.
     /// An unrecognised method maps to
     /// <see cref="LatticeAuthApiOperation.Unknown"/> (never a permissive default)
     /// so a deny-by-default policy refuses it.
@@ -120,10 +120,6 @@ internal sealed class LatticeAuthApiGrpcAuthInterceptor : Interceptor
         var methodName = fullMethodName[(fullMethodName.LastIndexOf('/') + 1)..];
         var operation = methodName switch
         {
-            LatticeAuthApiGrpcMethods.UpsertUserMethodName => LatticeAuthApiOperation.UpsertUser,
-            LatticeAuthApiGrpcMethods.GetUserMethodName => LatticeAuthApiOperation.GetUser,
-            LatticeAuthApiGrpcMethods.RemoveUserMethodName => LatticeAuthApiOperation.RemoveUser,
-            LatticeAuthApiGrpcMethods.ListUsersMethodName => LatticeAuthApiOperation.ListUsers,
             LatticeAuthApiGrpcMethods.UpsertGroupMethodName => LatticeAuthApiOperation.UpsertGroup,
             LatticeAuthApiGrpcMethods.GetGroupMethodName => LatticeAuthApiOperation.GetGroup,
             LatticeAuthApiGrpcMethods.RemoveGroupMethodName => LatticeAuthApiOperation.RemoveGroup,
@@ -147,8 +143,6 @@ internal sealed class LatticeAuthApiGrpcAuthInterceptor : Interceptor
 
         var targetId = request switch
         {
-            AuthUser u => u.UserId,
-            AuthUserRef ur => ur.UserId,
             AuthGroup g => g.GroupId,
             AuthGroupRef gr => gr.GroupId,
             AuthMemberRef mr => mr.MemberId,

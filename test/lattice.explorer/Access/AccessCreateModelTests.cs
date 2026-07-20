@@ -336,14 +336,6 @@ public sealed class AccessCreateModelTests
 
         public Task<AccessModelView> GetAccessModelAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
-        public Task<AccessListView<AuthUser>> ListUsersAsync(int pageSize = 0, string? pageToken = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
-        public Task<AuthUser?> GetUserAsync(string userId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
-        public Task<AccessOperationResult> UpsertUserAsync(AuthUser user, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
-        public Task<AccessOperationResult> DeleteUserAsync(string userId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
         public Task<AccessListView<AuthGroup>> ListGroupsAsync(int pageSize = 0, string? pageToken = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
         public Task<AuthGroup?> GetGroupAsync(string groupId, CancellationToken cancellationToken = default) => throw new NotSupportedException();

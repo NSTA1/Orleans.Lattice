@@ -48,23 +48,6 @@ public sealed class AuthApiGrpcEndToEndTests
     }
 
     [Test]
-    public async Task user_crud_round_trips_over_the_wire()
-    {
-        await _admin.UpsertUserAsync(new AuthUser { UserId = "e2e-alice", DisplayName = "Alice" });
-
-        var fetched = await _admin.GetUserAsync(new AuthUserRef { UserId = "e2e-alice" });
-        Assert.That(fetched.User, Is.Not.Null);
-        Assert.That(fetched.User!.DisplayName, Is.EqualTo("Alice"));
-
-        var page = await _admin.ListUsersAsync(new AuthPageRequest { PageSize = 100 });
-        Assert.That(page.Entries.Select(u => u.UserId), Does.Contain("e2e-alice"));
-
-        await _admin.RemoveUserAsync(new AuthUserRef { UserId = "e2e-alice" });
-        var afterRemoval = await _admin.GetUserAsync(new AuthUserRef { UserId = "e2e-alice" });
-        Assert.That(afterRemoval.User, Is.Null);
-    }
-
-    [Test]
     public async Task group_and_membership_crud_round_trips_over_the_wire()
     {
         await _admin.UpsertGroupAsync(new AuthGroup { GroupId = "e2e-admins", DisplayName = "Admins" });

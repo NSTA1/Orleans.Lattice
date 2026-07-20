@@ -89,20 +89,6 @@ public sealed class AuthToolHandlersTests
     }
 
     [Test]
-    public async Task ListUsersAsync_maps_paging_arguments_into_a_page_request()
-    {
-        var admin = Admin();
-        admin.ListUsersAsync(Arg.Any<AuthPageRequest>(), Arg.Any<CancellationToken>())
-            .Returns(new AuthUserPage());
-
-        await AuthToolHandlers.ListUsersAsync(admin, pageSize: 25, pageToken: "cursor", CancellationToken.None);
-
-        await admin.Received(1).ListUsersAsync(
-            Arg.Is<AuthPageRequest>(r => r.PageSize == 25 && r.PageToken == "cursor"),
-            Arg.Any<CancellationToken>());
-    }
-
-    [Test]
     public async Task ListRulesForTreeAsync_forwards_the_tree_id_and_paging()
     {
         var admin = Admin();
@@ -114,25 +100,6 @@ public sealed class AuthToolHandlersTests
         await admin.Received(1).ListRulesForTreeAsync(
             "orders",
             Arg.Is<AuthPageRequest>(r => r.PageSize == 10 && r.PageToken == null),
-            Arg.Any<CancellationToken>());
-    }
-
-    [Test]
-    public async Task UpsertUserAsync_builds_and_writes_the_user_and_echoes_it()
-    {
-        var admin = Admin();
-        var claims = new Dictionary<string, string> { ["team"] = "ops" };
-
-        var written = await AuthToolHandlers.UpsertUserAsync(admin, "alice", "Alice", claims, CancellationToken.None);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(written.UserId, Is.EqualTo("alice"));
-            Assert.That(written.DisplayName, Is.EqualTo("Alice"));
-            Assert.That(written.Claims, Is.EqualTo(claims));
-        });
-        await admin.Received(1).UpsertUserAsync(
-            Arg.Is<AuthUser>(u => u.UserId == "alice" && u.DisplayName == "Alice" && u.Claims == claims),
             Arg.Any<CancellationToken>());
     }
 
@@ -219,16 +186,6 @@ public sealed class AuthToolHandlersTests
     }
 
     [Test]
-    public async Task RemoveUserAsync_forwards_to_the_facade()
-    {
-        var admin = Admin();
-
-        await AuthToolHandlers.RemoveUserAsync(admin, "alice", CancellationToken.None);
-
-        await admin.Received(1).RemoveUserAsync("alice", Arg.Any<CancellationToken>());
-    }
-
-    [Test]
     public void Handlers_reject_a_null_facade()
     {
         Assert.Multiple(() =>
@@ -236,8 +193,8 @@ public sealed class AuthToolHandlersTests
             Assert.That(
                 () => AuthToolHandlers.ExplainAsync(null!, "s", LatticeOperation.Read, LatticeScopeKind.Tree, "t"),
                 Throws.ArgumentNullException);
-            Assert.That(() => AuthToolHandlers.GetUserAsync(null!, "u"), Throws.ArgumentNullException);
-            Assert.That(() => AuthToolHandlers.UpsertUserAsync(null!, "u"), Throws.ArgumentNullException);
+            Assert.That(() => AuthToolHandlers.GetGroupAsync(null!, "g"), Throws.ArgumentNullException);
+            Assert.That(() => AuthToolHandlers.UpsertGroupAsync(null!, "g"), Throws.ArgumentNullException);
             Assert.That(
                 () => AuthToolHandlers.PutRuleAsync(
                     null!, "r", LatticeSubjectSelectorKind.User, "u", LatticeScopeKind.Tree, "t",

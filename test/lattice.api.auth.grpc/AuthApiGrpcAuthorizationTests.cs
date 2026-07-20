@@ -46,10 +46,6 @@ public sealed class AuthApiGrpcAuthorizationTests
         static TestCaseData Case(string name, Func<LatticeAuthApiGrpcClient, Task> op) =>
             new TestCaseData(op).SetName($"every_admin_op_is_denied_by_the_default_meta_authorizer({name})");
 
-        yield return Case("UpsertUser", c => c.UpsertUserAsync(new AuthUser { UserId = "u" }));
-        yield return Case("GetUser", c => c.GetUserAsync(new AuthUserRef { UserId = "u" }));
-        yield return Case("RemoveUser", c => c.RemoveUserAsync(new AuthUserRef { UserId = "u" }));
-        yield return Case("ListUsers", c => c.ListUsersAsync(new AuthPageRequest()));
         yield return Case("UpsertGroup", c => c.UpsertGroupAsync(new AuthGroup { GroupId = "g" }));
         yield return Case("GetGroup", c => c.GetGroupAsync(new AuthGroupRef { GroupId = "g" }));
         yield return Case("RemoveGroup", c => c.RemoveGroupAsync(new AuthGroupRef { GroupId = "g" }));
@@ -101,10 +97,10 @@ public sealed class AuthApiGrpcAuthorizationTests
 
         // Past the permissive transport gate, the facade's administrator check
         // admits the bootstrap admin: the call completes without throwing.
-        await admin.UpsertUserAsync(new AuthUser { UserId = "allow-all-ok", DisplayName = "Ok" });
+        await admin.UpsertGroupAsync(new AuthGroup { GroupId = "allow-all-ok", DisplayName = "Ok" });
 
-        var fetched = await admin.GetUserAsync(new AuthUserRef { UserId = "allow-all-ok" });
-        Assert.That(fetched.User, Is.Not.Null);
+        var fetched = await admin.GetGroupAsync(new AuthGroupRef { GroupId = "allow-all-ok" });
+        Assert.That(fetched.Group, Is.Not.Null);
     }
 
     [Test]
@@ -119,7 +115,7 @@ public sealed class AuthApiGrpcAuthorizationTests
         var anonymous = host.ClientFor(subject: null);
 
         var ex = Assert.ThrowsAsync<RpcException>(async () =>
-            await anonymous.UpsertUserAsync(new AuthUser { UserId = "anon-should-fail" }));
+            await anonymous.UpsertGroupAsync(new AuthGroup { GroupId = "anon-should-fail" }));
 
         Assert.Multiple(() =>
         {

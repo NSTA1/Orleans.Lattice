@@ -20,15 +20,12 @@ no policy logic of its own. It never re-implements a verdict: the Explain view
 renders the server's `Allowed` flag verbatim, and any precedence ranking it shows
 is a presentation-only aid to reading the rule set, not a second opinion.
 
-## The four tabs
+## The three tabs
 
-- **Users** - browse the identity directory's users, one page at a time with a
-  *Load more* control, and select a user to see the groups it belongs to
-  (directly and transitively) and the rules that mention it.
-- **Groups** - browse groups, add and remove members (including nested groups),
-  and see a group's direct and transitive membership. Group nesting is resolved
-  through the server's membership listing, so the transitive views match what the
-  server actually evaluates.
+- **Groups** - browse groups, create and edit them, add and remove members
+  (including nested groups), and see a group's direct and transitive membership.
+  Group nesting is resolved through the server's membership listing, so the
+  transitive views match what the server actually evaluates.
 - **Policies** - author the authorization rules. A rule targets a scope chosen
   with the scope picker (whole tree, a key prefix, or a single key), one or more
   `LatticeOperation` values chosen from a multi-select, and an **Allow** or
@@ -52,7 +49,7 @@ result fills in both the id and its kind, and the "Selected" line likewise leads
 with the friendly name and keeps the id on hover.
 
 The whole area follows the same convention: everywhere it renders a principal -
-the user and group lists, a group's direct members, the member add and remove
+the group list, a group's direct members, the member add and remove
 status messages, and the subject and group-closure lines in an Explain verdict or
 an Effective-permissions result - it leads with the friendly display name resolved
 from the directory and keeps the raw id on a hover tooltip. Names are resolved on
@@ -67,13 +64,13 @@ tenant in that state - it simply takes what is typed.
 
 ## Fail-closed create
 
-The Users and Groups tabs create principals through the same picker, and creation
+The Groups tab creates a group through the same picker, and creation
 is **validated and fail-closed**. When a directory is available, the entered id is
-resolved against it before the principal is saved:
+resolved against it before the group is saved:
 
-- resolved, and the kind matches, the create proceeds;
-- resolved as the wrong kind (a group id typed into the user form, or vice
-  versa), it is blocked with an inline kind-mismatch message;
+- resolved, and it is a group, the create proceeds;
+- resolved as the wrong kind (a user id typed into the group-create form), it is
+  blocked with an inline kind-mismatch message;
 - not resolved at all, it is blocked with a "no such principal in the directory"
   message - an unknown id can never be created.
 
@@ -81,8 +78,8 @@ Only when the directory is unavailable does the form fall back to accepting the 
 unvalidated, and it says so. Each provider supplies a one-line **Explanation** of
 what a valid id looks like (for example an object id, or a UPN), which the form
 shows beneath the input so the operator knows what to type. When a directory
-result is selected in a create form, its friendly display name also auto-fills the
-new principal's display-name field, which the operator can still edit before
+result is selected in the create form, its friendly display name also auto-fills the
+new group's display-name field, which the operator can still edit before
 saving.
 
 ## Access-state banner

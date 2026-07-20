@@ -107,7 +107,7 @@ public sealed class LatticeApiMcpOptions
 
     /// <summary>
     /// Whether the auth tool module also contributes the mutating
-    /// <b>administration</b> verbs (user / group / membership / rule
+    /// <b>administration</b> verbs (group / membership / rule
     /// upsert-remove) in addition to the read-only introspection tools. Defaults
     /// to <see langword="false"/> so a host that opts the auth control plane in
     /// exposes only introspection until it explicitly enables administration

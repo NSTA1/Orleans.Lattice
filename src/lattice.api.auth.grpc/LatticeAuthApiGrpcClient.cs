@@ -54,22 +54,6 @@ public sealed class LatticeAuthApiGrpcClient
             LatticeAuthApiGrpcMethods.FromServiceProvider(serializerProvider));
     }
 
-    /// <summary>Creates or replaces a user record.</summary>
-    public Task<AuthAck> UpsertUserAsync(AuthUser request, CancellationToken cancellationToken = default)
-        => UnaryAsync(_methods.UpsertUser, request, cancellationToken);
-
-    /// <summary>Reads a user record; <see cref="AuthUserResult.User"/> is <see langword="null"/> when none exists.</summary>
-    public Task<AuthUserResult> GetUserAsync(AuthUserRef request, CancellationToken cancellationToken = default)
-        => UnaryAsync(_methods.GetUser, request, cancellationToken);
-
-    /// <summary>Removes a user record. A no-op when no such user exists.</summary>
-    public Task<AuthAck> RemoveUserAsync(AuthUserRef request, CancellationToken cancellationToken = default)
-        => UnaryAsync(_methods.RemoveUser, request, cancellationToken);
-
-    /// <summary>Reads one page of the user catalog in ascending user-id order.</summary>
-    public Task<AuthUserPage> ListUsersAsync(AuthPageRequest request, CancellationToken cancellationToken = default)
-        => UnaryAsync(_methods.ListUsers, request, cancellationToken);
-
     /// <summary>Creates or replaces a group record.</summary>
     public Task<AuthAck> UpsertGroupAsync(AuthGroup request, CancellationToken cancellationToken = default)
         => UnaryAsync(_methods.UpsertGroup, request, cancellationToken);

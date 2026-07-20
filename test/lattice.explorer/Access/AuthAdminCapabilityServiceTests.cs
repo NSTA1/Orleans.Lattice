@@ -29,7 +29,7 @@ public class AuthAdminCapabilityServiceTests
     [Test]
     public async Task RefreshAsync_probe_reachable_sets_coarse_allowed()
     {
-        var client = new FakeAuthAdminClient { UsersResult = new AuthUserPage() };
+        var client = new FakeAuthAdminClient { GroupsResult = new AuthGroupPage() };
         var (service, store) = Create(client);
 
         await service.RefreshAsync();
@@ -37,7 +37,7 @@ public class AuthAdminCapabilityServiceTests
         Assert.Multiple(() =>
         {
             Assert.That(store.Current.AuthAdminAllowed, Is.True);
-            Assert.That(client.LastUsersRequest!.PageSize, Is.EqualTo(1));
+            Assert.That(client.LastGroupsRequest!.PageSize, Is.EqualTo(1));
         });
     }
 
@@ -46,7 +46,7 @@ public class AuthAdminCapabilityServiceTests
     {
         var client = new FakeAuthAdminClient
         {
-            ListUsersThrows = new LatticeAuthorizationDeniedException("denied"),
+            ListThrows = new LatticeAuthorizationDeniedException("denied"),
         };
         var (service, store) = Create(client);
 
@@ -60,7 +60,7 @@ public class AuthAdminCapabilityServiceTests
     {
         var client = new FakeAuthAdminClient
         {
-            ListUsersThrows = new RpcException(new Status(StatusCode.Unavailable, "gone")),
+            ListThrows = new RpcException(new Status(StatusCode.Unavailable, "gone")),
         };
         var (service, store) = Create(client);
 
@@ -74,7 +74,7 @@ public class AuthAdminCapabilityServiceTests
     {
         var client = new FakeAuthAdminClient
         {
-            ListUsersThrows = new InvalidOperationException("explorer is not configured with an endpoint"),
+            ListThrows = new InvalidOperationException("explorer is not configured with an endpoint"),
         };
         var (service, store) = Create(client);
 
@@ -105,7 +105,7 @@ public class AuthAdminCapabilityServiceTests
     {
         var client = new FakeAuthAdminClient
         {
-            UsersResult = new AuthUserPage(),
+            GroupsResult = new AuthGroupPage(),
             AccessModelResult = new AccessModelDescriptor
             {
                 AuthenticationMode = AccessAuthenticationMode.Claims,
@@ -155,7 +155,7 @@ public class AuthAdminCapabilityServiceTests
     {
         var client = new FakeAuthAdminClient
         {
-            ListUsersThrows = new LatticeAuthorizationDeniedException("denied"),
+            ListThrows = new LatticeAuthorizationDeniedException("denied"),
         };
         var (service, store) = Create(client);
 
@@ -175,7 +175,7 @@ public class AuthAdminCapabilityServiceTests
     {
         var client = new FakeAuthAdminClient
         {
-            UsersResult = new AuthUserPage(),
+            GroupsResult = new AuthGroupPage(),
             AccessModelThrows = new RpcException(new Status(StatusCode.Unavailable, "gone")),
         };
         var (service, store) = Create(client);

@@ -26,10 +26,6 @@ Administering authorization is the most sensitive surface in the cluster, so the
 
 | RPC | Facade method |
 |-----|---------------|
-| `UpsertUser` | `UpsertUserAsync` |
-| `GetUser` | `GetUserAsync` |
-| `RemoveUser` | `RemoveUserAsync` |
-| `ListUsers` | `ListUsersAsync` |
 | `UpsertGroup` | `UpsertGroupAsync` |
 | `GetGroup` | `GetGroupAsync` |
 | `RemoveGroup` | `RemoveGroupAsync` |
@@ -91,7 +87,7 @@ The host must expose `ILatticeAuthAdmin` in the same service provider - typicall
 var channel = GrpcChannel.ForAddress("https://admin.example:443");
 var client = LatticeAuthApiGrpcClient.Create(channel.CreateCallInvoker(), serializerProvider);
 
-await client.UpsertUserAsync(new AuthUser { UserId = "alice", DisplayName = "Alice" });
+await client.UpsertGroupAsync(new AuthGroup { GroupId = "admins", DisplayName = "Admins" });
 await client.PutRuleAsync(new AuthPutRule { Rule = rule });
 var explanation = await client.ExplainAsync(new AuthExplainQuery
 {

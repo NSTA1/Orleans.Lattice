@@ -27,60 +27,6 @@ public sealed class LatticeAuthApiInterceptorDescribeCallTests
         new("r1", LatticeSubjectSelector.User("u"), LatticeScope.Tree(treeId), LatticeOperation.Read, LatticeEffect.Allow);
 
     [Test]
-    public void UpsertUser_targets_the_user_id()
-    {
-        var result = Describe(
-            LatticeAuthApiGrpcMethods.UpsertUserMethodName,
-            new AuthUser { UserId = "alice" });
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(result.Operation, Is.EqualTo(LatticeAuthApiOperation.UpsertUser));
-            Assert.That(result.TargetId, Is.EqualTo("alice"));
-        });
-    }
-
-    [Test]
-    public void GetUser_targets_the_user_id()
-    {
-        var result = Describe(
-            LatticeAuthApiGrpcMethods.GetUserMethodName,
-            new AuthUserRef { UserId = "alice" });
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(result.Operation, Is.EqualTo(LatticeAuthApiOperation.GetUser));
-            Assert.That(result.TargetId, Is.EqualTo("alice"));
-        });
-    }
-
-    [Test]
-    public void RemoveUser_targets_the_user_id()
-    {
-        var result = Describe(
-            LatticeAuthApiGrpcMethods.RemoveUserMethodName,
-            new AuthUserRef { UserId = "alice" });
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(result.Operation, Is.EqualTo(LatticeAuthApiOperation.RemoveUser));
-            Assert.That(result.TargetId, Is.EqualTo("alice"));
-        });
-    }
-
-    [Test]
-    public void ListUsers_has_no_single_target()
-    {
-        var result = Describe(LatticeAuthApiGrpcMethods.ListUsersMethodName, new AuthPageRequest());
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(result.Operation, Is.EqualTo(LatticeAuthApiOperation.ListUsers));
-            Assert.That(result.TargetId, Is.Null, "a catalog-wide list targets no single id");
-        });
-    }
-
-    [Test]
     public void UpsertGroup_targets_the_group_id()
     {
         var result = Describe(
@@ -334,7 +280,7 @@ public sealed class LatticeAuthApiInterceptorDescribeCallTests
     [Test]
     public void An_unrecognised_method_maps_to_Unknown()
     {
-        var result = Describe("SomeFutureRpc", new AuthUserRef { UserId = "alice" });
+        var result = Describe("SomeFutureRpc", new AuthGroupRef { GroupId = "alice" });
 
         Assert.That(
             result.Operation,

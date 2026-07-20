@@ -3,15 +3,20 @@
 `Orleans.Lattice.Membership` separates two directories that are easy to confuse:
 
 - The **membership directory** (`ILatticeMembershipDirectory`) is the roster the
-  cluster *owns* - the users, groups, and nested-membership edges it persists in a
-  dogfooded `ILattice` tree and resolves subjects against. See
+  cluster *owns* - the groups and nested-membership edges it persists in a
+  dogfooded `ILattice` tree and resolves subjects against. A membership edge names
+  its member by id (a user or nested group id); the cluster does not persist a
+  separate per-user record, so a member id is a plain subject id that is asserted
+  through a credential or validated against an identity-directory provider. See
   [the package README](README.md#managing-the-directory).
 - The **identity-directory provider** (`ILatticeIdentityDirectory`) is a
   read-only view onto the *external* identity source the deployment trusts - a
   static roster, an Entra tenant, or your own system. It exists to **search** and
-  **validate** principal ids before an operator promotes them into the membership
-  directory, so the Explorer Access area can offer a real typeahead and fail
-  closed on unknown ids.
+  **validate** principal ids before an operator references them from the membership
+  directory (as a group, or as a group's member), so the Explorer Access area can
+  offer a real typeahead and fail closed on unknown ids. A principal returned by
+  this provider - often called a "directory user" - is a searchable identity, not a
+  credential: it never grants access on its own.
 
 This document covers the identity-directory provider seam: the interface, the
 three built-in providers, and how to write your own.
@@ -25,7 +30,7 @@ The members are:
 | Member | Purpose |
 |---|---|
 | `ProviderId` | A stable, short id for the active provider (`"null"`, `"static"`, `"entra"`, or your own). Surfaced to the Explorer so it can label the source. |
-| `Explanation` | One human-readable sentence describing what a *valid* id looks like for this source. The Explorer shows it under the create form so an operator knows what to type. |
+| `DescribeEntry` | One human-readable sentence describing what a *valid* id looks like for this source, scoped to the `DirectoryPrincipalKind?` a create form is entering (`User`, `Group`, or `null` for a combined form). The Explorer shows it under the create form so an operator knows what to type. |
 | `SearchAsync` | Returns a `DirectorySearchPage` of `DirectoryPrincipal`s matching a term, optionally filtered by `DirectoryPrincipalKind`, with an opaque continuation token for paging. |
 | `ResolveAsync` | Looks up a single principal id and returns its `DirectoryPrincipal`, or `null` when the source has no such principal. This is the fail-closed validation call. |
 
@@ -157,8 +162,11 @@ public sealed class LdapIdentityDirectory : ILatticeIdentityDirectory
 {
     public string ProviderId => "ldap";
 
-    public string Explanation =>
-        "Enter an LDAP sAMAccountName, for example 'jsmith'.";
+    public string DescribeEntry(DirectoryPrincipalKind? kind) => kind switch
+    {
+        DirectoryPrincipalKind.Group => "Enter an LDAP group cn, for example 'engineering'.",
+        _ => "Enter an LDAP sAMAccountName, for example 'jsmith'.",
+    };
 
     public Task<DirectorySearchPage> SearchAsync(
         DirectorySearchQuery query,

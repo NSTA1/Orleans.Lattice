@@ -68,71 +68,6 @@ internal sealed class LatticeAuthAdmin(
     // ----- Membership administration -----
 
     /// <inheritdoc />
-    public async Task UpsertUserAsync(AuthUser user, CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(user);
-        ArgumentException.ThrowIfNullOrEmpty(user.UserId);
-        await AuthorizeAdminAsync(cancellationToken).ConfigureAwait(false);
-
-        using (LatticeAccessGateContext.EnterSystemOrigin())
-        {
-            await _directory
-                .UpsertUserAsync(new MembershipUser(user.UserId, user.DisplayName, user.Claims), cancellationToken)
-                .ConfigureAwait(false);
-        }
-    }
-
-    /// <inheritdoc />
-    public async Task<AuthUser?> GetUserAsync(string userId, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(userId);
-        await AuthorizeAdminAsync(cancellationToken).ConfigureAwait(false);
-
-        using (LatticeAccessGateContext.EnterSystemOrigin())
-        {
-            var user = await _directory.GetUserAsync(userId, cancellationToken).ConfigureAwait(false);
-            return user is null ? null : ToAuthUser(user);
-        }
-    }
-
-    /// <inheritdoc />
-    public async Task RemoveUserAsync(string userId, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(userId);
-        await AuthorizeAdminAsync(cancellationToken).ConfigureAwait(false);
-
-        using (LatticeAccessGateContext.EnterSystemOrigin())
-        {
-            await _directory.RemoveUserAsync(userId, cancellationToken).ConfigureAwait(false);
-        }
-    }
-
-    /// <inheritdoc />
-    public async Task<AuthUserPage> ListUsersAsync(AuthPageRequest request, CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        await AuthorizeAdminAsync(cancellationToken).ConfigureAwait(false);
-
-        using (LatticeAccessGateContext.EnterSystemOrigin())
-        {
-            var (page, next) = await PageAsync(
-                _directory.ListUsersAsync(cancellationToken),
-                request.PageToken,
-                request.EffectivePageSize,
-                static u => u.UserId,
-                cancellationToken).ConfigureAwait(false);
-
-            var entries = new List<AuthUser>(page.Count);
-            foreach (var user in page)
-            {
-                entries.Add(ToAuthUser(user));
-            }
-
-            return new AuthUserPage { Entries = entries, NextPageToken = next };
-        }
-    }
-
-    /// <inheritdoc />
     public async Task UpsertGroupAsync(AuthGroup group, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(group);
@@ -472,9 +407,8 @@ internal sealed class LatticeAuthAdmin(
             RulesEnforced = _gate is not NullLatticeAccessGate,
             DirectoryAvailable = DirectoryAvailable,
             DirectoryProviderId = _identityDirectory.ProviderId,
-            // The Explorer's sole create form is the group form (the user form was
-            // removed), so surface the group-scoped guidance; the seam stays
-            // kind-aware for a future user or combined form.
+            // The Explorer's create form is the group form, so surface the
+            // group-scoped guidance; the seam stays kind-aware.
             DirectoryExplanation = _identityDirectory.DescribeEntry(DirectoryPrincipalKind.Group),
             // Locally-defined membership is inert when the cluster resolves groups
             // solely from the identity-provider token (TokenOnly merge mode).
@@ -677,9 +611,6 @@ internal sealed class LatticeAuthAdmin(
         list.Sort(StringComparer.Ordinal);
         return list;
     }
-
-    private static AuthUser ToAuthUser(MembershipUser user) =>
-        new() { UserId = user.UserId, DisplayName = user.DisplayName, Claims = user.Claims };
 
     private static AuthGroup ToAuthGroup(MembershipGroup group) =>
         new() { GroupId = group.GroupId, DisplayName = group.DisplayName };

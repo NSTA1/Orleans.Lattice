@@ -22,7 +22,6 @@ public sealed class ApiAuthGrpcTypeAliasesTests
 
     private static readonly (Type Type, string ExpectedAlias)[] WireTypes =
     [
-        (typeof(AuthUserRef), ApiAuthTypeAliases.AuthUserRef),
         (typeof(AuthGroupRef), ApiAuthTypeAliases.AuthGroupRef),
         (typeof(AuthMemberRef), ApiAuthTypeAliases.AuthMemberRef),
         (typeof(AuthRuleRef), ApiAuthTypeAliases.AuthRuleRef),
@@ -32,7 +31,6 @@ public sealed class ApiAuthGrpcTypeAliasesTests
         (typeof(AuthExplainQuery), ApiAuthTypeAliases.AuthExplainQuery),
         (typeof(AuthSubjectRef), ApiAuthTypeAliases.AuthSubjectRef),
         (typeof(AuthAck), ApiAuthTypeAliases.AuthAck),
-        (typeof(AuthUserResult), ApiAuthTypeAliases.AuthUserResult),
         (typeof(AuthGroupResult), ApiAuthTypeAliases.AuthGroupResult),
         (typeof(AuthRuleResult), ApiAuthTypeAliases.AuthRuleResult),
         (typeof(AuthStringList), ApiAuthTypeAliases.AuthStringList),

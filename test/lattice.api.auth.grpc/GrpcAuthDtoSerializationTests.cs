@@ -48,14 +48,6 @@ public sealed class GrpcAuthDtoSerializationTests
     }
 
     [Test]
-    public void AuthUserRef_round_trips()
-    {
-        var original = new AuthUserRef { UserId = "alice" };
-
-        Assert.That(RoundTrip(original), Is.EqualTo(original));
-    }
-
-    [Test]
     public void AuthGroupRef_round_trips()
     {
         var original = new AuthGroupRef { GroupId = "admins" };
@@ -194,19 +186,6 @@ public sealed class GrpcAuthDtoSerializationTests
     public void AuthAck_round_trips()
     {
         Assert.That(RoundTrip(new AuthAck()), Is.EqualTo(new AuthAck()));
-    }
-
-    [Test]
-    public void AuthUserResult_round_trips_present_and_absent()
-    {
-        var present = RoundTrip(new AuthUserResult { User = new AuthUser { UserId = "alice", DisplayName = "Alice" } });
-        var absent = RoundTrip(new AuthUserResult { User = null });
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(present.User!.UserId, Is.EqualTo("alice"));
-            Assert.That(absent.User, Is.Null);
-        });
     }
 
     [Test]

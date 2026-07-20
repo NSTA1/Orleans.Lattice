@@ -4,7 +4,7 @@
 trees for their identity directory and authorization policy store. In a
 single-cluster deployment those trees stay local. In a multi-cluster deployment you
 usually want a **single converged identity and authorization surface** across every
-site: a user created on site A should exist on site B, and a policy revoke authored
+site: a group or membership edge created on site A should exist on site B, and a policy revoke authored
 on site A should eventually be enforced on site B.
 
 `ReplicateLatticeSystemTrees` is the first-class, explicit, gated way to opt those
@@ -20,13 +20,12 @@ The reserved tree ids and their merge modes are the public contract on
 
 | Tree id | Constant | Merge mode | Enrolled |
 |---|---|---|---|
-| `sys-membership-users` | `LatticeSystemTreeNames.MembershipUsers` | LWW-Register | always |
 | `sys-membership-groups` | `LatticeSystemTreeNames.MembershipGroups` | LWW-Register | always |
 | `sys-membership-edges` | `LatticeSystemTreeNames.MembershipEdges` | LWW-Register | always |
 | `sys-auth-policy` | `LatticeSystemTreeNames.AuthPolicy` | LWW-Register | always |
 | `sys-auth-audit` | `LatticeSystemTreeNames.AuthAudit` | OR-Set | opt-in only |
 
-Membership and policy trees replicate **last-writer-wins**: each user, group, edge,
+Membership and policy trees replicate **last-writer-wins**: each group, edge,
 and rule is an independent key whose latest HLC-stamped write wins on convergence,
 which is the correct model for a mutable identity/authorization record.
 

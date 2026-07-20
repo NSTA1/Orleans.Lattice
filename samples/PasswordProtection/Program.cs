@@ -112,13 +112,9 @@ Console.WriteLine($"  Silo + state-API gRPC listening on http://localhost:{Port}
 // and author the reader's per-tree read rule.
 var grainFactory = app.Services.GetRequiredService<IGrainFactory>();
 var store = app.Services.GetRequiredService<ILatticeAuthorizationPolicyStore>();
-var directory = app.Services.GetRequiredService<ILatticeMembershipDirectory>();
 
 using (LatticeCredentialContext.Use(AdminUser, scheme: PasswordAuthenticator.Scheme))
 {
-    await directory.UpsertUserAsync(new MembershipUser(AdminUser, "Administrator"));
-    await directory.UpsertUserAsync(new MembershipUser(ReaderUser, "Read-only user"));
-
     // reader may read (point + range) the 'orders' tree, and nothing else.
     await store.PutRuleAsync(new LatticeAuthorizationRule(
         "reader-read-orders",

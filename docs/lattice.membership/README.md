@@ -6,7 +6,7 @@ Identity and subject-resolution add-on for [Orleans.Lattice](../../README.md).
 
 `Orleans.Lattice.Membership` turns the raw credential a caller presents into the **subject** the authorization layer reasons about. It owns two things:
 
-- **A directory** of users and groups (with transitive group membership), persisted in an ordinary, dogfooded `ILattice` tree so it is fully introspectable through the standard read / scan / change-feed surface.
+- **A directory** of groups and their membership edges (with transitive group membership), persisted in an ordinary, dogfooded `ILattice` tree so it is fully introspectable through the standard read / scan / change-feed surface.
 - **A credential-to-subject resolution pipeline** that maps an incoming credential (an opaque scheme + token, or an anonymous request) onto a stable subject id plus the flat closure of every group that subject belongs to.
 
 It is the identity foundation the [`Orleans.Lattice.Auth`](../lattice.auth/README.md) package builds its policy and enforcement on. Registering membership alone adds identity resolution and the directory; it does **not** enforce anything on its own. Enforcement arrives only when `Orleans.Lattice.Auth` is also registered.
@@ -51,7 +51,7 @@ material effect on which rules apply to a caller.
 
 **Choosing a mode.** Use `Union` when either source may legitimately contribute
 groups. Use `TokenOnly` when the IdP is authoritative and the local directory is
-only a user/display-name registry. Use `DirectoryOnly` when you curate membership
+only a display-name registry. Use `DirectoryOnly` when you curate membership
 locally and do not want to trust the IdP's group claims.
 
 **On the default.** `Union` is the least-surprising, additive choice, and its
@@ -84,19 +84,17 @@ siloBuilder.Services.AddSingleton<ILatticeCredentialAuthenticator, MyAuthenticat
 
 ## Managing the directory
 
-Users and groups are managed through `ILatticeMembershipDirectory`, resolved from the silo's service provider. Group membership is transitive: a group can be a member of another group, and a subject's resolved closure includes every group reachable from it.
+Groups and their membership edges are managed through `ILatticeMembershipDirectory`, resolved from the silo's service provider. Group membership is transitive: a group can be a member of another group, and a subject's resolved closure includes every group reachable from it. A membership edge references a member by id (a user or nested group id); the directory does not maintain a separate user record - member ids are resolved from the configured identity source (an [identity directory provider](identity-directory-providers.md)) and asserted through credentials.
 
 ```csharp verify
 public sealed class DirectorySeeder(ILatticeMembershipDirectory directory)
 {
     public async Task SeedAsync(CancellationToken cancellationToken)
     {
-        // Create users and a group.
-        await directory.UpsertUserAsync(new MembershipUser("alice", "Alice"), cancellationToken);
-        await directory.UpsertUserAsync(new MembershipUser("bob", "Bob"), cancellationToken);
+        // Create a group.
         await directory.UpsertGroupAsync(new MembershipGroup("editors", "Editors"), cancellationToken);
 
-        // Add members. A member can itself be a group (nested membership).
+        // Add members by id. A member can itself be a group (nested membership).
         await directory.AddMemberAsync("editors", "alice", MembershipMemberKind.User, cancellationToken);
         await directory.AddMemberAsync("editors", "bob", MembershipMemberKind.User, cancellationToken);
 
@@ -110,9 +108,8 @@ public sealed class DirectorySeeder(ILatticeMembershipDirectory directory)
 
 | Concept | Type | Notes |
 |---|---|---|
-| User | `MembershipUser` | Stable `UserId`, optional display name and claim bag. |
 | Group | `MembershipGroup` | Stable `GroupId`, optional display name. |
-| Membership edge | `MembershipMemberKind` | An edge is a user-in-group or a group-in-group (nested). |
+| Membership edge | `MembershipMemberKind` | An edge is a user-in-group or a group-in-group (nested); the member is referenced by id. |
 | Resolved principal | `LatticePrincipal` | The subject id + group closure a credential resolved to. |
 | Credential authenticator | `ILatticeCredentialAuthenticator` | Scheme-selected credential to principal mapper. |
 | Subject mapper | `ILatticeSubjectMapper` | Maps a principal's claims onto additional groups. |

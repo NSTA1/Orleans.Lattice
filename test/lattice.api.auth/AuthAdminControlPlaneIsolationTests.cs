@@ -45,7 +45,6 @@ public sealed class AuthAdminControlPlaneIsolationTests
             LatticeOperation.Read,
             LatticeEffect.Allow))),
         ("RemoveRuleAsync", () => _fixture.Admin.RemoveRuleAsync("victim-tree", "escalation")),
-        ("UpsertUserAsync", () => _fixture.Admin.UpsertUserAsync(new AuthUser { UserId = "ghost" })),
         ("UpsertGroupAsync", () => _fixture.Admin.UpsertGroupAsync(new AuthGroup { GroupId = "cabal" })),
         ("AddMemberAsync", () => _fixture.Admin.AddMemberAsync("cabal", Intruder)),
         ("RemoveMemberAsync", () => _fixture.Admin.RemoveMemberAsync("cabal", Intruder)),

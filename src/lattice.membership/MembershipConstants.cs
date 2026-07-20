@@ -14,9 +14,6 @@ internal static class MembershipConstants
     /// <summary>The shared prefix identifying every membership-owned tree.</summary>
     internal const string TreePrefix = "sys-membership-";
 
-    /// <summary>Tree holding user records, keyed by user id.</summary>
-    internal const string UsersTree = "sys-membership-users";
-
     /// <summary>Tree holding group records, keyed by group id.</summary>
     internal const string GroupsTree = "sys-membership-groups";
 
@@ -27,9 +24,6 @@ internal static class MembershipConstants
     /// <c>r\u001f{groupId}\u001f{memberId}</c> (used by <c>MembersOfAsync</c>).
     /// </summary>
     internal const string EdgesTree = "sys-membership-edges";
-
-    /// <summary>Durable per-key history view name for <see cref="UsersTree"/>.</summary>
-    internal const string UsersHistoryView = "sys-membership-users-history";
 
     /// <summary>Durable per-key history view name for <see cref="GroupsTree"/>.</summary>
     internal const string GroupsHistoryView = "sys-membership-groups-history";
@@ -46,7 +40,7 @@ internal static class MembershipConstants
     /// <summary>Reverse-edge key discriminator (group -&gt; member).</summary>
     internal const char ReverseEdge = 'r';
 
-    /// <summary>Enumerates the three backing tree names.</summary>
+    /// <summary>Enumerates the two backing tree names.</summary>
     internal static IReadOnlyList<string> AllTrees { get; } =
-        new[] { UsersTree, GroupsTree, EdgesTree };
+        new[] { GroupsTree, EdgesTree };
 }
