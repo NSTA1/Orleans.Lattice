@@ -70,6 +70,20 @@ param prometheusQueryEndpoint string = ''
 @description('regionCode of the single backup-PRIMARY region whose silo runs the scheduled-backup writer. That region gets Storage Blob Data Contributor on the shared backup sink; every other region is restore-read only. Must equal one regions[].regionCode. Defaults to the first region.')
 param backupPrimaryRegionCode string = regions[0].regionCode
 
+@description('Cross-region replication transport option. "public" (default, cost-optimized) rides the ACA-managed ingress FQDN over server TLS, authenticated by a replication key held in a per-region Key Vault. "private" provisions per-region VNets with delegated ACA infrastructure subnets and full-mesh peering so the transport is never publicly reachable. Private is default-OFF (opt-in).')
+@allowed([
+  'public'
+  'private'
+])
+param deploymentOption string = 'public'
+
+@description('PUBLIC option: the per-cluster Lattice replication key, matched across EVERY region. The deployer generates it once and passes it at deploy time (never committed). Written only into each region Key Vault secret by the networking module; never emitted as an output.')
+@secure()
+param replicationKey string = ''
+
+@description('PUBLIC option ingress allow-list seam: CIDR ranges permitted to reach the region ingress / front door. Empty applies no restriction here. Echoed by the networking module for the AFD sub-issue to apply.')
+param ingressAllowedCidrs array = []
+
 // AcrPull built-in role definition id.
 var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
 
@@ -99,10 +113,26 @@ resource registry 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' = 
 }
 
 // =============================================================================
+// Private-option network foundation (VNets + full-mesh peering) - F-190.
+// -----------------------------------------------------------------------------
+// Provisioned BEFORE compute (and only for the private option) so the ACA
+// environment can consume its delegated infrastructure subnet. Keeping the VNet
+// foundation ahead of compute - and the public Key Vault after compute - makes
+// the compute <-> networking ordering one-directional (no compile-time cycle).
+// =============================================================================
+
+module vnet 'modules/vnet.bicep' = if (deploymentOption == 'private') {
+  name: 'vnet'
+  params: {
+    regions: regions
+  }
+}
+
+// =============================================================================
 // Per-region compute stack
 // =============================================================================
 
-module compute 'modules/compute.bicep' = [for region in regions: {
+module compute 'modules/compute.bicep' = [for (region, i) in regions: {
   name: 'compute-${region.regionCode}'
   params: {
     location: region.location
@@ -122,6 +152,11 @@ module compute 'modules/compute.bicep' = [for region in regions: {
     siloMinReplicas: siloMinReplicas
     siloMaxReplicas: siloMaxReplicas
     prometheusQueryEndpoint: prometheusQueryEndpoint
+    // Private option: the environment is VNet-integrated and internal-only; the
+    // subnet is provisioned by the vnet module above. Public option: empty
+    // subnet -> public baseline environment.
+    infrastructureSubnetId: deploymentOption == 'private' ? vnet!.outputs.perRegionPrivate[i].infrastructureSubnetId : ''
+    internalEnvironment: deploymentOption == 'private'
     // Keyless storage endpoints are DETERMINISTIC functions of
     // (resourceGroup().id, baseName, regionCode) matching the names the storage
     // module creates, so compute is fed strings and there is no module cycle.
@@ -152,6 +187,29 @@ module storage 'modules/storage.bicep' = {
       location: region.location
       managedIdentityPrincipalId: compute[i].outputs.managedIdentityPrincipalId
     }]
+  }
+}
+
+// =============================================================================
+// Public-option replication endpoint security (per-region Key Vault) - F-190.
+// -----------------------------------------------------------------------------
+// Invoked AFTER the compute loop because it grants Key Vault Secrets User to each
+// region's workload identity (compute owns the identities). The silo consumes the
+// replication key via its Key Vault secret reference; that cross-region silo env
+// wiring (peer list, wire merge mode, receiver enrollment, and the KV secret ref)
+// is applied symmetrically by the deployer sub-issue, which computes the per-region
+// peer FQDN set. For the private option this module provisions nothing (the VNet
+// transport is the isolation boundary).
+// =============================================================================
+
+module networking 'modules/networking.bicep' = {
+  name: 'networking'
+  params: {
+    deploymentOption: deploymentOption
+    regions: regions
+    regionManagedIdentityPrincipalIds: [for (region, i) in regions: compute[i].outputs.managedIdentityPrincipalId]
+    replicationKey: replicationKey
+    ingressAllowedCidrs: ingressAllowedCidrs
   }
 }
 
@@ -207,3 +265,12 @@ output backupBlobEndpoint string = storage.outputs.backupBlobEndpoint
 
 @description('Name of the shared global backup blob account (single source of truth for cold-restore).')
 output backupAccountName string = storage.outputs.backupAccountNameOut
+
+@description('Selected cross-region replication transport option ("public" or "private").')
+output deploymentOption string = deploymentOption
+
+@description('PUBLIC option per-region Key Vault seams (keyless secret URIs, no secret material) for the deployer to wire the silo replication-key secret reference. Empty for the private option.')
+output perRegionReplicationKeyVault array = networking.outputs.perRegionPublic
+
+@description('PRIVATE option per-region VNet / infrastructure-subnet seams. Empty for the public option.')
+output perRegionPrivateNetwork array = deploymentOption == 'private' ? vnet!.outputs.perRegionPrivate : []

@@ -1,17 +1,17 @@
 // =============================================================================
-// networking-private.bicepparam - PRIVATE replication transport example.
+// vnet.bicepparam - PRIVATE-option network foundation example.
 // -----------------------------------------------------------------------------
 // Provisions a VNet per region with an ACA-delegated infrastructure subnet and
 // full-mesh global peering, so the replication transport is never publicly
 // reachable. `infrastructureSubnetId` from perRegionPrivate feeds compute's
-// VNet-integration seam with `internalEnvironment = true`. Per-region address
-// space is derived non-overlapping by region index (override via the explicit
-// prefix parameters if the estate needs specific CIDRs).
+// VNet-integration seam (main.bicep sets `internalEnvironment = true` for the
+// private option). Per-region address space is derived non-overlapping by region
+// index (override via the explicit prefix parameters if the estate needs
+// specific CIDRs). Deployed only for the private option; the public option does
+// not provision these resources.
 // =============================================================================
 
-using '../modules/networking.bicep'
-
-param deploymentOption = 'private'
+using '../modules/vnet.bicep'
 
 param regions = [
   {
