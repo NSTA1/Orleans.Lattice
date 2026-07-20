@@ -91,6 +91,32 @@ param grafanaAdminPassword string = ''
 @description('Azure Front Door id (GUID) threaded to every client-facing head so it rejects inbound traffic that bypasses the global ingress (X-Azure-FDID origin lock). Empty on the first deploy pass (heads unlocked, Front Door not yet created); the deployer runs a SECOND compute pass supplying the frontdoor module\'s frontDoorId output. Threading frontdoor.outputs.frontDoorId here directly would form a compile cycle because Front Door consumes the head FQDNs compute exports.')
 param frontDoorId string = ''
 
+// --- Estate-wide host application configuration (bound to the reference host
+//     IConfiguration contract under reference-architecture/hosts). Secure by
+//     default; a throwaway dev cluster relaxes these explicitly. ---
+
+@description('Authorization default effect for every region. Deny-by-default is the secure baseline; set "Allow" ONLY for a throwaway open dev cluster.')
+@allowed([
+  'Deny'
+  'Allow'
+])
+param authDefaultEffect string = 'Deny'
+
+@description('Whether the State/auth gRPC surfaces and the MCP endpoint require authorization. Secure default true.')
+param requireApiAuthorization bool = true
+
+@description('Whether Entra authentication is enabled on the exposed facades and heads across the estate.')
+param entraEnabled bool = false
+
+@description('Entra tenant id (required when entraEnabled).')
+param entraTenantId string = ''
+
+@description('Entra application (client) id for the exposed facades / heads (required when entraEnabled).')
+param entraClientId string = ''
+
+@description('Comma-separated additional Entra token audiences accepted by the silo facades. Empty lets the host derive {clientId, api://{clientId}}.')
+param entraAudiences string = ''
+
 // AcrPull built-in role definition id.
 var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
 
@@ -164,6 +190,15 @@ module compute 'modules/compute.bicep' = [for (region, i) in regions: {
     // Threading that output here directly would cycle (Front Door consumes the
     // head FQDNs compute exports).
     frontDoorId: frontDoorId
+    // Estate-wide host application configuration (bound to the reference host
+    // IConfiguration contract). Secure-by-default: deny-by-default authorization
+    // and an authorization-required API; Entra opt-in.
+    authDefaultEffect: authDefaultEffect
+    requireApiAuthorization: requireApiAuthorization
+    entraEnabled: entraEnabled
+    entraTenantId: entraTenantId
+    entraClientId: entraClientId
+    entraAudiences: entraAudiences
     // Private option: the environment is VNet-integrated and internal-only; the
     // subnet is provisioned by the vnet module above. Public option: empty
     // subnet -> public baseline environment.
@@ -172,9 +207,9 @@ module compute 'modules/compute.bicep' = [for (region, i) in regions: {
     // Keyless storage endpoints are DETERMINISTIC functions of
     // (resourceGroup().id, baseName, regionCode) matching the names the storage
     // module creates, so compute is fed strings and there is no module cycle.
-    // WAL and Orleans clustering share the per-region account by design.
+    // The per-region table account backs the WAL, clustering, grain state and
+    // reminders; the shared global blob account backs backup.
     walTableEndpoint: 'https://st${uniqueString(resourceGroup().id, baseName, region.regionCode)}.table.${environment().suffixes.storage}/'
-    clusteringTableEndpoint: 'https://st${uniqueString(resourceGroup().id, baseName, region.regionCode)}.table.${environment().suffixes.storage}/'
     backupBlobEndpoint: 'https://stbk${uniqueString(resourceGroup().id, baseName)}.blob.${environment().suffixes.storage}/'
     backupIsPrimary: region.regionCode == backupPrimaryRegionCode
   }

@@ -61,13 +61,10 @@ param explorerImageRepository string
 // deterministic keyless endpoint strings so there is no compute<->storage module
 // dependency cycle). All access is managed-identity + RBAC; no keys/SAS here. ---
 
-@description('STORAGE-SUBISSUE SEAM: keyless table endpoint backing the durable Azure Table WAL. Consumed via AZURE_CLIENT_ID managed identity.')
+@description('STORAGE-SUBISSUE SEAM: keyless table endpoint backing the durable Azure Table WAL, Orleans clustering, grain state and reminders (one per-region account). Bound to the host Storage:TableServiceUri; consumed via AZURE_CLIENT_ID managed identity.')
 param walTableEndpoint string = ''
 
-@description('STORAGE-SUBISSUE SEAM: keyless table endpoint backing Orleans Azure Table clustering (shares the per-region account with the WAL by design).')
-param clusteringTableEndpoint string = ''
-
-@description('STORAGE-SUBISSUE SEAM: keyless blob endpoint of the shared global backup sink consumed by Orleans.Lattice.Backup.AzureBlob.')
+@description('STORAGE-SUBISSUE SEAM: keyless blob endpoint of the shared global backup sink consumed by Orleans.Lattice.Backup.AzureBlob. Bound to the host Storage:BlobServiceUri.')
 param backupBlobEndpoint string = ''
 
 @description('STORAGE-SUBISSUE SEAM: true only for the single backup-PRIMARY region whose silo runs the scheduled-backup writer; standbys are restore-read only.')
@@ -98,8 +95,6 @@ param orleansSiloPort int = 11111
 @description('Orleans gateway (client) port.')
 param orleansGatewayPort int = 30000
 
-@description('Target port the silo State API (read-only gRPC) listens on inside the container.')
-param siloStateApiPort int = 8080
 
 // --- Silo autoscaling (lattice.scaling KEDA bridge) ---
 
@@ -142,6 +137,52 @@ param headHttpConcurrency int = 20
 @minValue(30)
 @maxValue(600)
 param siloTerminationGracePeriodSeconds int = 120
+
+// --- Host application configuration (matches the reference host IConfiguration
+//     contract: the silo/MCP/Explorer projects under reference-architecture/hosts
+//     read these keys, so the ACA env var names use the .NET double-underscore
+//     form for exact binding) ---
+
+@description('Silo gRPC (HTTP/2) port serving the read-only State API and the auth-admin control plane. This is the client-facing surface fronted by the global ingress. Matches the host Silo:GrpcPort.')
+param siloGrpcPort int = 8081
+
+@description('Silo plain-HTTP (HTTP/1) port serving the liveness probe, the lattice.scaling signal and the Prometheus /metrics scrape. Matches the host Silo:HttpPort.')
+param siloHttpPort int = 8080
+
+@description('Deny-by-default authorization is the secure default for every deployed region. Set to "Allow" ONLY for a throwaway open dev cluster. Bound to the host Auth:DefaultEffect.')
+@allowed([
+  'Deny'
+  'Allow'
+])
+param authDefaultEffect string = 'Deny'
+
+@description('Whether the State/auth gRPC surfaces require authorization. Secure default true; the local compose harness sets false. Bound to the host StateApi:RequireAuthorization and the MCP Mcp:RequireAuthorization.')
+param requireApiAuthorization bool = true
+
+@description('Whether Entra authentication is enabled on the exposed facades and heads. Bound to the host Entra:Enabled on all three heads.')
+param entraEnabled bool = false
+
+@description('Entra tenant id (required when entraEnabled).')
+param entraTenantId string = ''
+
+@description('Entra application (client) id for the exposed facades / heads (required when entraEnabled).')
+param entraClientId string = ''
+
+@description('Comma-separated additional Entra token audiences accepted by the silo facades. When empty the host derives {clientId, api://{clientId}}.')
+param entraAudiences string = ''
+
+@description('DEPLOYER SEAM: comma-separated clusterId=endpoint replication peers for THIS region (every OTHER region), applied symmetrically. Empty until the deployer resolves the peer FQDNs post-provision. Bound to the host Replication:Peers.')
+param replicationPeers string = ''
+
+@description('DEPLOYER SEAM: comma-separated treeName=MergeMode wire-merge-mode map, identical estate-wide. Empty until the deployer supplies it. Bound to the host Replication:Trees.')
+param replicationTrees string = ''
+
+@description('DEPLOYER SEAM: Key Vault secret URI holding the per-cluster replication key. When non-empty a managed-identity-backed ACA secret is created and surfaced to the silo as LATTICE_REPLICATION_SECRET; empty leaves it unset so the module deploys standalone before the Key Vault secret exists. Never a plaintext key.')
+param replicationKeySecretUri string = ''
+
+@description('DEPLOYER SEAM: PromQL backend address the MCP cluster-telemetry tools proxy (the managed Prometheus query endpoint). Empty leaves the telemetry tool group off (the host skips it when unset). Bound to the host Mcp:Telemetry:BackendAddress.')
+param mcpTelemetryBackendAddress string = ''
+
 
 // --- Container sizing ---
 
@@ -285,6 +326,17 @@ resource siloApp 'Microsoft.App/containerApps@2024-03-01' = {
     managedEnvironmentId: environment.id
     configuration: {
       activeRevisionsMode: 'Single'
+      // Per-cluster replication key, sourced from Key Vault via the region's
+      // managed identity (no plaintext secret in the template). Present only when
+      // the deployer has supplied the secret URI; empty otherwise so the module
+      // deploys standalone before the Key Vault secret exists.
+      secrets: empty(replicationKeySecretUri) ? [] : [
+        {
+          name: 'replication-secret'
+          keyVaultUrl: replicationKeySecretUri
+          identity: identity.id
+        }
+      ]
       // Image pull via managed identity - no admin user, no password secret.
       registries: [
         {
@@ -293,12 +345,12 @@ resource siloApp 'Microsoft.App/containerApps@2024-03-01' = {
         }
       ]
       ingress: {
-        // State API (read-only gRPC) is the silo's client-facing surface. It is
-        // exposed here and locked to the global Front Door by the networking /
-        // AFD sub-issue (AFD id header access restriction). transport http2 for
-        // gRPC.
+        // State API + auth-admin control plane (read-only / control gRPC over
+        // HTTP/2) is the silo's client-facing surface, fronted by the global
+        // Front Door and locked to it via the X-Azure-FDID assertion. The plain
+        // HTTP/1 health+metrics+scaling port is internal-only (probes below).
         external: true
-        targetPort: siloStateApiPort
+        targetPort: siloGrpcPort
         transport: 'http2'
         allowInsecure: false
         // Orleans replica-to-replica ports on the environment-internal network.
@@ -331,31 +383,65 @@ resource siloApp 'Microsoft.App/containerApps@2024-03-01' = {
             cpu: json(siloCpu)
             memory: siloMemory
           }
-          env: [
-            { name: 'ORLEANS_CLUSTER_ID', value: orleansClusterId }
-            { name: 'ORLEANS_SERVICE_ID', value: orleansServiceId }
-            { name: 'ORLEANS_SILO_PORT', value: string(orleansSiloPort) }
-            { name: 'ORLEANS_GATEWAY_PORT', value: string(orleansGatewayPort) }
-            // Managed-identity client id for token-based access to Azure
-            // resources (storage / Key Vault). The storage and networking
-            // sub-issues supply the concrete endpoints via their own env seams.
-            { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
-            { name: 'ASPNETCORE_URLS', value: 'http://0.0.0.0:${siloStateApiPort}' }
-            // Keyless storage seams (managed identity + RBAC; no keys/SAS). WAL
-            // and Orleans clustering intentionally share the per-region account.
-            { name: 'LATTICE_WAL_TABLE_ENDPOINT', value: walTableEndpoint }
-            { name: 'ORLEANS_CLUSTERING_TABLE_ENDPOINT', value: clusteringTableEndpoint }
-            { name: 'LATTICE_BACKUP_BLOB_ENDPOINT', value: backupBlobEndpoint }
-            { name: 'LATTICE_BACKUP_IS_PRIMARY', value: string(backupIsPrimary) }
-            // Graceful scale-in: the host honours LatticeShuttingDownException
-            // so a draining replica finishes or hands off in-flight shard
-            // transfers within the termination grace period below.
-            { name: 'LATTICE_SHUTDOWN_DRAIN_SECONDS', value: string(siloTerminationGracePeriodSeconds) }
-            // Global-ingress origin lock: the State API head rejects any request
-            // whose X-Azure-FDID does not match this id, so traffic that bypasses
-            // Front Door is refused. Empty until the deployer's second pass.
-            { name: 'LATTICE_FRONT_DOOR_ID', value: frontDoorId }
+          // Liveness on the plain HTTP/1 port so the platform can probe without
+          // a shell and without negotiating HTTP/2.
+          probes: [
+            {
+              type: 'Liveness'
+              httpGet: {
+                path: '/health'
+                port: siloHttpPort
+              }
+              initialDelaySeconds: 15
+              periodSeconds: 30
+            }
           ]
+          env: concat([
+            // Cluster identity: region-scoped cluster, estate-wide service id.
+            { name: 'Cluster__Id', value: orleansClusterId }
+            { name: 'Cluster__ServiceId', value: orleansServiceId }
+            { name: 'Replication__ClusterId', value: orleansClusterId }
+            // Kestrel dual-port: HTTP/1 health+metrics+scaling, HTTP/2 gRPC.
+            { name: 'Silo__HttpPort', value: string(siloHttpPort) }
+            { name: 'Silo__GrpcPort', value: string(siloGrpcPort) }
+            { name: 'Silo__SiloPort', value: string(orleansSiloPort) }
+            { name: 'Silo__GatewayPort', value: string(orleansGatewayPort) }
+            // Managed-identity client id -> DefaultAzureCredential for keyless
+            // Azure Storage / Key Vault access. No account keys, no SAS.
+            { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
+            // Keyless storage: the per-region table account backs Orleans
+            // clustering, grain state, reminders and the durable WAL; the shared
+            // global blob sink backs backup. Both via managed identity + RBAC.
+            { name: 'Storage__TableServiceUri', value: walTableEndpoint }
+            { name: 'Storage__BlobServiceUri', value: backupBlobEndpoint }
+            // Exactly one region owns the backup schedule; standbys restore-only.
+            { name: 'Backup__Primary', value: string(backupIsPrimary) }
+            // Compute-axis scaling floor for the lattice.scaling signal.
+            { name: 'Scaling__MinReplicas', value: string(siloMinReplicas) }
+            // Secure-by-default control plane: deny-by-default authorization and
+            // an authorization-required State/auth API; TLS-only replication.
+            { name: 'Auth__DefaultEffect', value: authDefaultEffect }
+            { name: 'StateApi__RequireAuthorization', value: string(requireApiAuthorization) }
+            { name: 'Replication__AllowPlaintext', value: 'false' }
+            // Symmetric cross-region replication topology (deployer supplies the
+            // peer/tree maps post-provision; empty here so the module deploys
+            // standalone before the peer FQDNs are known).
+            { name: 'Replication__Peers', value: replicationPeers }
+            { name: 'Replication__Trees', value: replicationTrees }
+            // Entra authentication for the exposed facades.
+            { name: 'Entra__Enabled', value: string(entraEnabled) }
+            { name: 'Entra__TenantId', value: entraTenantId }
+            { name: 'Entra__ClientId', value: entraClientId }
+            { name: 'Entra__Audiences', value: entraAudiences }
+            // Global-ingress origin lock: the head asserts inbound X-Azure-FDID
+            // matches this id (deployer's second pass supplies it). Empty = off.
+            { name: 'LATTICE_FRONT_DOOR_ID', value: frontDoorId }
+          ], empty(replicationKeySecretUri) ? [] : [
+            // Per-cluster replication key, read by the host's
+            // EnvironmentVariableSecretSource. Sourced from Key Vault via a
+            // managed-identity-backed ACA secret; never a plaintext value here.
+            { name: 'LATTICE_REPLICATION_SECRET', secretRef: 'replication-secret' }
+          ])
         }
       ]
       scale: {
@@ -435,8 +521,20 @@ resource mcpApp 'Microsoft.App/containerApps@2024-03-01' = {
             memory: headMemory
           }
           env: [
-            { name: 'ORLEANS_CLUSTER_ID', value: orleansClusterId }
-            { name: 'ORLEANS_SERVICE_ID', value: orleansServiceId }
+            // Silo gRPC State + auth-admin facades, dialed over server TLS by the
+            // internal ACA FQDN. One endpoint serves both surfaces.
+            { name: 'Mcp__StateEndpoint', value: 'https://${siloApp.properties.configuration.ingress.fqdn}' }
+            { name: 'Mcp__AuthEndpoint', value: 'https://${siloApp.properties.configuration.ingress.fqdn}' }
+            // Cluster-telemetry MCP tools proxy a PromQL backend. Empty leaves the
+            // group off (the host skips it) - the deployer wires the managed
+            // Prometheus query endpoint once its telemetry auth shim exists.
+            { name: 'Mcp__Telemetry__BackendAddress', value: mcpTelemetryBackendAddress }
+            // Secure-by-default: the MCP endpoint requires authorization and
+            // validates the inbound Entra JWT (forwarded to the silo for re-check).
+            { name: 'Mcp__RequireAuthorization', value: string(requireApiAuthorization) }
+            { name: 'Entra__Enabled', value: string(entraEnabled) }
+            { name: 'Entra__TenantId', value: entraTenantId }
+            { name: 'Entra__ClientId', value: entraClientId }
             { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
             { name: 'ASPNETCORE_URLS', value: 'http://0.0.0.0:8080' }
             // Global-ingress origin lock (see silo head). Empty until pass 2.
@@ -463,7 +561,10 @@ resource mcpApp 'Microsoft.App/containerApps@2024-03-01' = {
 }
 
 // =============================================================================
-// Explorer head (stateless operator console; scale to zero)
+// Explorer head (standalone Blazor Server operator console; scale to zero).
+// Isolated as its own container app so its SignalR session-affinity requirement
+// stays contained to this low-traffic admin head and never taxes the silo
+// cluster's scaling - the core reason the console is not co-hosted in the silo.
 // =============================================================================
 
 resource explorerApp 'Microsoft.App/containerApps@2024-03-01' = {
@@ -490,6 +591,12 @@ resource explorerApp 'Microsoft.App/containerApps@2024-03-01' = {
         targetPort: 8080
         transport: 'auto'
         allowInsecure: false
+        // Blazor Server holds a stateful SignalR circuit per user, so pin each
+        // client to the replica that owns its circuit when more than one replica
+        // is warm.
+        stickySessions: {
+          affinity: 'sticky'
+        }
       }
     }
     template: {
@@ -502,8 +609,15 @@ resource explorerApp 'Microsoft.App/containerApps@2024-03-01' = {
             memory: headMemory
           }
           env: [
-            { name: 'ORLEANS_CLUSTER_ID', value: orleansClusterId }
-            { name: 'ORLEANS_SERVICE_ID', value: orleansServiceId }
+            // Remote silo State + auth gRPC endpoint the console dials (as a
+            // gRPC / gRPC-web client) over server TLS. Seeds the console's
+            // first-run connection via the Explorer env bootstrap.
+            { name: 'LATTICE_EXPLORER_ENDPOINT', value: 'https://${siloApp.properties.configuration.ingress.fqdn}' }
+            // Interactive Entra sign-in when enabled; the acquired token is
+            // attached to calls and re-validated by the silo authenticator.
+            { name: 'Entra__Enabled', value: string(entraEnabled) }
+            { name: 'Entra__TenantId', value: entraTenantId }
+            { name: 'Entra__ClientId', value: entraClientId }
             { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
             { name: 'ASPNETCORE_URLS', value: 'http://0.0.0.0:8080' }
             // Global-ingress origin lock (see silo head). Empty until pass 2.
