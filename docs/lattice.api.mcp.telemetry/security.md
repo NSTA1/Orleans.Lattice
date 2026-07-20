@@ -46,11 +46,11 @@ Beyond the yes/no capability, the host can restrict *which* metrics a granted ca
 
 The allow-list is enforced consistently across all four tools:
 
-- `lattice_telemetry_query` and `lattice_telemetry_query_range` extract the metric names referenced by the PromQL expression and reject the call if **any** referenced name is not admitted - before the backend is called.
+- `lattice_telemetry_query` and `lattice_telemetry_query_range` extract the metric names referenced by the PromQL expression and reject the call if **any** referenced name is not admitted, or if the expression names a metric through a matcher that cannot be reduced to an exact name - before the backend is called.
 - `lattice_telemetry_list_metrics` filters the returned names to the admitted set.
 - `lattice_telemetry_metric_metadata` rejects a non-admitted named metric and, for an unnamed call, returns only admitted metrics.
 
-The PromQL metric-name extraction is **conservative**: it scans for identifiers in metric-name position and skips function and aggregation calls, PromQL keywords and operators, grouping-modifier label lists, `{...}` label matchers, quoted strings, and numeric or duration literals. It is an allow-list gate, not a full PromQL parser: a selector that references a metric only through a `__name__` label value (for example `{__name__="up"}`) yields no extracted name, and is therefore not matched against the allow-list - so prefer naming metrics directly in the expression when running under `DenyAllExceptAllowed`.
+The PromQL metric-name extraction is an allow-list gate, not a full PromQL parser, and it is **fail-closed**. It scans for identifiers in metric-name position and for the reserved `__name__` label matcher inside a `{...}` label set, and gates **every** name it resolves against the allow-list - whether the metric is written directly (`up`) or through an exact `__name__` matcher (`{__name__="up"}`, which contributes `up` as a referenced name). A selector that references a metric through a form that cannot be reduced to a fixed name under `DenyAllExceptAllowed` is **rejected**, not allowed through: a regex `__name__=~"..."` matcher, a negated `__name__!="..."` / `__name__!~"..."` matcher, and any malformed or unterminated `__name__` matcher all fail the call closed. Function and aggregation calls, PromQL keywords and operators, grouping-modifier label lists, other `{...}` label names, quoted strings, and numeric or duration literals are skipped. This closes the allow-list bypass where a caller named a denied series only through `__name__`; naming metrics directly in the expression remains the clearest way to write an admitted query.
 
 ## Range guardrails
 

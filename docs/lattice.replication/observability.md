@@ -40,7 +40,7 @@ A receiver that operates entirely under HWM dedupe (i.e. every entry it sees has
 
 The `peer` tag carries the same value as `apply.lag`'s `peer` tag - the entry's `OriginClusterId`, identifying the authoring cluster rather than the transport hop. The batch path's `ApplyOriginRunAsync` groups entries into contiguous same-`(treeId, originClusterId)` runs and records each per-entry duration with the run's shared `peer` value, so multi-origin batches surface as one `peer` per run rather than collapsing into a single dominant value.
 
-The `outcome` tag partitions the histogram into four mutually-exclusive buckets:
+The `outcome` tag partitions the histogram into seven mutually-exclusive buckets:
 
 | Value | Constant | When |
 |---|---|---|
@@ -48,6 +48,9 @@ The `outcome` tag partitions the histogram into four mutually-exclusive buckets:
 | `dedup` | `LatticeReplicationMetrics.OutcomeDedup` | The entry was short-circuited before merge - either the per-origin high-water-mark already covers `entry.Timestamp`, or the local-origin defence-in-depth gate detected an entry that must not loop back onto its authoring cluster. |
 | `failure` | `LatticeReplicationMetrics.OutcomeFailure` | The apply attempt threw. Recorded in the `finally` path before the exception unwinds. Includes payload-shape faults (`ArgumentException`, `InvalidOperationException`), `OperationCanceledException` from a cancelled `cancellationToken` (graceful shutdown traffic appears here), transport / IO failures, and any other unhandled exception out of the apply pipeline. |
 | `parked-causal-buffer` | `LatticeReplicationMetrics.OutcomeParkedCausalBuffer` | The entry parked on the causal-apply buffer because its declared `VectorClock` was not yet dominated by the local vector clock. The original delivery did not advance the high-water-mark; the entry re-enters the apply pipeline through the buffer drain when its dependencies arrive. |
+| `shadow-forward-dedup` | `LatticeReplicationMetrics.OutcomeShadowForwardDedup` | The entry was suppressed by the per-tree shadow-forward dedupe cache because a matching identity tuple (`(originClusterId, timestamp, key, op)`) was already applied since the last cache eviction. The duplicate arises when a structural rewrite (shard split / merge / saga compensate) shadow-forwards a user write into a different shard, so both emits ride the WAL with identical identity tuples. |
+| `rejected-not-replicated` | `LatticeReplicationMetrics.OutcomeRejectedNotReplicated` | The inbound entry was rejected by the receiver-side enrollment gate because its `TreeId` is not enrolled for replication on this receiver (the local per-tree resolver returns no merge mode for it). The entry is dropped without applying and without dead-lettering - a non-enrolled tree id is peer-controlled, so parking it would let a peer spawn unbounded dead-letter-queue activations. |
+| `rejected-mode-mismatch` | `LatticeReplicationMetrics.OutcomeRejectedModeMismatch` | The inbound entry was rejected by the receiver-side merge-mode gate because its peer-supplied `Mode` disagrees with the merge mode the receiver resolves locally for the entry's `TreeId`. The entry is not applied; because the tree is enrolled (and therefore bounded) the entry is dead-lettered with the `mode_mismatch` reason rather than silently dropped. |
 
 A receiver with a single overwhelmed subscriber surfaces as a rising `failure` bucket; a receiver with persistent causal skew surfaces as a rising `parked-causal-buffer` bucket. Both are independent of `apply.lag`, which only samples successful merges.
 
