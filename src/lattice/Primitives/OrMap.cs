@@ -139,15 +139,10 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
         var counter = NextCounter(replicaId);
         if (!Adds.TryGetValue(key, out var entries))
         {
-            entries = new List<OrMapEntry<TValue>>();
+            entries = new List<OrMapEntry<TValue>>(1);
             Adds[key] = entries;
         }
-        entries.Add(new OrMapEntry<TValue>
-        {
-            ReplicaId = replicaId,
-            Counter = counter,
-            Value = value,
-        });
+        entries.Add(new OrMapEntry<TValue>(replicaId, counter, value));
 
         // counter is strictly greater than any prior counter for this
         // replica, so record it as the new per-replica maximum.
@@ -481,12 +476,7 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
                 }
                 else
                 {
-                    entries.Add(new OrMapEntry<TValue>
-                    {
-                        ReplicaId = add.ReplicaId,
-                        Counter = add.Counter,
-                        Value = add.Value,
-                    });
+                    entries.Add(new OrMapEntry<TValue>(add.ReplicaId, add.Counter, add.Value));
                 }
             }
         }
