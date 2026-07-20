@@ -47,6 +47,15 @@ internal static class ExplorerSecurityHeaders
     /// </summary>
     internal const string ContentTypeOptionsValue = "nosniff";
 
+    /// <summary>
+    /// The <c>Referrer-Policy</c> value: <c>no-referrer</c>. The authenticated
+    /// admin console must never leak a request URL (which can carry tree, key, or
+    /// subject context in its path or query) to a foreign origin via the
+    /// <c>Referer</c> header on an outbound navigation, so no referrer is sent at
+    /// all.
+    /// </summary>
+    internal const string ReferrerPolicyValue = "no-referrer";
+
     /// <summary>The cached <c>Content-Security-Policy</c> header value.</summary>
     internal static readonly StringValues ContentSecurityPolicy = ContentSecurityPolicyValue;
 
@@ -55,4 +64,7 @@ internal static class ExplorerSecurityHeaders
 
     /// <summary>The cached <c>X-Content-Type-Options</c> header value.</summary>
     internal static readonly StringValues ContentTypeOptions = ContentTypeOptionsValue;
+
+    /// <summary>The cached <c>Referrer-Policy</c> header value.</summary>
+    internal static readonly StringValues ReferrerPolicy = ReferrerPolicyValue;
 }

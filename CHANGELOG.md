@@ -10,6 +10,10 @@ This changelog covers the **package family**: `Orleans.Lattice`, `Orleans.Lattic
 
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), labelled `lattice` or `lattice.replication`. See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
 
+### Security
+
+- **Orleans.Lattice.Explorer.Web: the console now emits a `Referrer-Policy: no-referrer` response header.** The Explorer web head's baseline security-header middleware previously omitted `Referrer-Policy`, a member of the documented hardening set. Without it, a browser navigating from an authenticated console page to a foreign origin could leak the full request URL - which can carry tree, key, or subject context in its path or query - in the `Referer` header. The middleware now sets `Referrer-Policy: no-referrer` (behind the same "do not clobber an existing value" guard as the other headers) on every response on the Explorer branch, at the root and under a base path. No public API change.
+
 ## [8.0.0] - 2026-07-20
 
 Coordinated family major release - every package in the family advances in lockstep to `8.0.0`. Alongside a wave of incremental improvements and a pre-release security-hardening pass, this release publishes several major new capabilities for the first time:
