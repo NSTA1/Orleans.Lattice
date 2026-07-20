@@ -7,6 +7,7 @@
 @inject ISchemaAdminCapabilityService SchemaCapabilityService
 @inject IExplorerAuthSession Auth
 @inject ILatticeStateConnection Connection
+@inject IServiceProvider Services
 
 @*
     The app-level area switcher: a tab strip above the per-tree detail tabs that
@@ -14,11 +15,12 @@
     management area. Areas register through AppAreas.Ordered, so a future area
     joins here with no change to this component. An area the user lacks the
     capability for renders disabled (greyed) rather than hidden; the grey-out is
-    advisory only - the server still enforces access when an action runs.
+    advisory only - the server still enforces access when an action runs. An
+    opt-in area the head withholds (AppAreas.Visible) is not rendered at all.
 *@
 
 <div class="explorer-areastrip" role="tablist" aria-label="Application areas">
-    @foreach (var descriptor in AppAreas.Ordered)
+    @foreach (var descriptor in AppAreas.Visible(_navOptions))
     {
         var enabled = descriptor.IsEnabled(_capabilities);
         var isActive = descriptor.Area == _area;
@@ -55,6 +57,7 @@
 
 @code {
     private ExplorerCapabilities _capabilities = ExplorerCapabilities.Empty;
+    private ExplorerNavigationOptions _navOptions = new();
     private AppArea _area = AppAreas.Default;
     private LatticeConnectionState _lastConnectionState;
 
@@ -63,6 +66,7 @@
 
     protected override async Task OnInitializedAsync()
     {
+        _navOptions = (ExplorerNavigationOptions?)Services.GetService(typeof(ExplorerNavigationOptions)) ?? new ExplorerNavigationOptions();
         _capabilities = Capabilities.Current;
         Capabilities.Changed += OnCapabilitiesChanged;
         Auth.AuthenticationChanged += OnAuthenticationChanged;
@@ -75,7 +79,7 @@
 
     private void SetArea(AppArea area)
     {
-        if (_area == area || !AppAreas.IsEnabled(area, _capabilities))
+        if (_area == area || !AppAreas.IsVisible(area, _navOptions) || !AppAreas.IsEnabled(area, _capabilities))
         {
             return;
         }

@@ -268,7 +268,15 @@ builder.Services.AddLatticeSchemaApiGrpc(o =>
 // The embeddable Explorer web console - the one call a consumer makes to host it.
 // The sample pins the console's persisted config to its own isolated file so it
 // always connects to the co-hosted endpoint seeded above.
-builder.Services.AddLatticeExplorerWeb(o => o.ConfigFilePath = sampleConfigPath);
+builder.Services.AddLatticeExplorerWeb(o =>
+{
+    o.ConfigFilePath = sampleConfigPath;
+
+    // The Schema area is withheld from the Explorer's default UI for the initial
+    // release; this sample opts into it so the schema governance walkthrough below
+    // still works end to end.
+    o.EnableSchemaArea = true;
+});
 
 var app = builder.Build();
 

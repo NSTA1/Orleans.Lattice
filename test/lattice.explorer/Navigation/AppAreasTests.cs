@@ -118,4 +118,57 @@ public class AppAreasTests
     {
         Assert.That(() => AppAreas.Describe((AppArea)999), Throws.InstanceOf<ArgumentOutOfRangeException>());
     }
+
+    [Test]
+    public void Visible_hides_schema_by_default()
+    {
+        var areas = AppAreas.Visible(new ExplorerNavigationOptions()).Select(a => a.Area).ToArray();
+
+        Assert.That(areas, Is.EqualTo(new[] { AppArea.Explore, AppArea.Backups, AppArea.Access }));
+    }
+
+    [Test]
+    public void Visible_includes_schema_when_enabled()
+    {
+        var options = new ExplorerNavigationOptions { EnableSchemaArea = true };
+
+        var areas = AppAreas.Visible(options).Select(a => a.Area).ToArray();
+
+        Assert.That(areas, Is.EqualTo(new[] { AppArea.Explore, AppArea.Backups, AppArea.Access, AppArea.Schema }));
+    }
+
+    [Test]
+    public void Visible_null_options_throws()
+    {
+        Assert.That(() => AppAreas.Visible(null!).ToArray(), Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public void IsVisible_schema_follows_flag()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(AppAreas.IsVisible(AppArea.Schema, new ExplorerNavigationOptions()), Is.False);
+            Assert.That(AppAreas.IsVisible(AppArea.Schema, new ExplorerNavigationOptions { EnableSchemaArea = true }), Is.True);
+        });
+    }
+
+    [Test]
+    public void IsVisible_non_schema_areas_always_visible()
+    {
+        var hidden = new ExplorerNavigationOptions();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(AppAreas.IsVisible(AppArea.Explore, hidden), Is.True);
+            Assert.That(AppAreas.IsVisible(AppArea.Backups, hidden), Is.True);
+            Assert.That(AppAreas.IsVisible(AppArea.Access, hidden), Is.True);
+        });
+    }
+
+    [Test]
+    public void IsVisible_null_options_throws()
+    {
+        Assert.That(() => AppAreas.IsVisible(AppArea.Schema, null!), Throws.InstanceOf<ArgumentNullException>());
+    }
 }

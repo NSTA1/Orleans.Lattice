@@ -1,5 +1,13 @@
 # Managing schema from the Explorer
 
+> **Hidden by default.** The Schema area is withheld from the Explorer's switcher
+> for the initial release because its versioning UI cannot yet express what
+> differs between schema versions. Surface it by setting `EnableSchemaArea` to
+> `true` on `LatticeExplorerWebOptions` (see
+> [Running the Explorer](running-the-explorer.md)). The schema control services
+> ship and stay registered regardless, so this only toggles visibility. Tracking
+> issue: re-surface the area once version-shape differences are expressible.
+
 The Orleans.Lattice Explorer has a top-level area switcher above the per-tree
 detail tabs. **Schema** is the schema-management admin area. It lets an operator
 inspect and edit a tree's write-validation policy and its value-versioning

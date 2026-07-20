@@ -13,7 +13,9 @@ The console is registered and mounted with the exact two calls a consumer makes
 to embed it in their own ASP.NET app:
 
 - `AddLatticeExplorerWeb()` registers the Razor components, the shared explorer
-  UI, the state-API connection seam, and the Backups, Access, and Schema areas.
+  UI, the state-API connection seam, and the Backups and Access areas. This
+  sample also sets `EnableSchemaArea = true` to surface the Schema area, which
+  ships hidden by default.
 - `MapLatticeExplorer()` maps the interactive-server components, static assets,
   and sign-in / sign-out endpoints.
 
@@ -45,10 +47,12 @@ disabling authorization.
 ## The admin areas
 
 The console's top-level areas are capability-gated and fail closed. This sample
-co-hosts the auth and schema gRPC admin APIs and auto-signs-in as a bootstrap
-administrator (`explorer-admin`), so the **Explore**, **Access**, and **Schema**
-areas are all enabled out of the box. The **Backups** area stays disabled because
-this sample does not co-host the backup gRPC API.
+co-hosts the auth and schema gRPC admin APIs, auto-signs-in as a bootstrap
+administrator (`explorer-admin`), and opts into the Schema area with
+`EnableSchemaArea = true`, so the **Explore**, **Access**, and **Schema** areas
+are all enabled out of the box. (In a default deployment the Schema area is
+hidden.) The **Backups** area stays disabled because this sample does not
+co-host the backup gRPC API.
 
 How the admin sign-in works, so you can adapt it:
 

@@ -10,6 +10,7 @@ using Orleans.Lattice.Explorer.Core.Data;
 using Orleans.Lattice.Explorer.Core.DeadLetter;
 using Orleans.Lattice.Explorer.Core.History;
 using Orleans.Lattice.Explorer.Core.Metrics;
+using Orleans.Lattice.Explorer.Core.Navigation;
 using Orleans.Lattice.Explorer.Core.Session;
 using Orleans.Lattice.Explorer.Core.Topology;
 using Orleans.Lattice.Explorer.Schema;
@@ -50,6 +51,14 @@ public static class LatticeExplorerWebServiceCollectionExtensions
         var options = new LatticeExplorerWebOptions();
         configure?.Invoke(options);
         services.TryAddSingleton(options);
+
+        // Surface only the areas this head opts into. Every area stays registered
+        // in AppAreas.Ordered and its services below stay wired; the switcher just
+        // hides an opt-in area (the Schema area is withheld by default).
+        services.TryAddSingleton(new ExplorerNavigationOptions
+        {
+            EnableSchemaArea = options.EnableSchemaArea,
+        });
 
         // The web head is Blazor Server: the server process holds the gRPC channel
         // to the cluster's state API and the browser renders over the SignalR
