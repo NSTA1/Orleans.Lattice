@@ -1,10 +1,12 @@
 namespace Orleans.Lattice.Api.Mcp.Telemetry;
 
 /// <summary>
-/// A conservative extractor of the metric names a PromQL expression references in
-/// metric-name position, used to gate a query in the deny-all metric-access
-/// posture. It scans the expression for identifiers that sit where a metric
-/// selector may appear and reports the distinct set.
+/// A conservative extractor of the metric names a PromQL expression references,
+/// used to gate a query in the deny-all metric-access posture. It scans the
+/// expression for identifiers that sit where a metric selector may appear, and for
+/// the reserved <c>__name__</c> label matcher inside a <c>{...}</c> label set, and
+/// reports the distinct set of names together with whether an unresolvable
+/// <c>__name__</c> matcher was seen.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -12,16 +14,20 @@ namespace Orleans.Lattice.Api.Mcp.Telemetry;
 /// It recognises an identifier (<c>[a-zA-Z_:][a-zA-Z0-9_:]*</c>) as a metric name
 /// only when it is <b>not</b> immediately followed by <c>(</c> (a function or
 /// aggregation call), <b>not</b> a PromQL keyword or aggregation operator,
-/// <b>not</b> inside a <c>{...}</c> label matcher, and <b>not</b> inside a quoted
-/// string or a numeric / duration literal such as <c>5m</c>.
+/// <b>not</b> inside a quoted string or a numeric / duration literal such as
+/// <c>5m</c>, and <b>not</b> inside a <c>{...}</c> label matcher unless it is the
+/// reserved <c>__name__</c> label.
 /// </para>
 /// <para>
-/// Two known conservatism gaps follow from this: a selector that names its metric
-/// only through the reserved <c>__name__</c> label (for example
-/// <c>{__name__="up"}</c>) yields no extracted name, and an aggregation whose
-/// operator token happens to collide with a real metric name is skipped. Callers
-/// use the extractor solely to reject an obviously non-whitelisted metric in
-/// deny-all mode; it is not a security boundary against a crafted expression.
+/// The reserved <c>__name__</c> label designates a metric by name from inside a
+/// label matcher (for example <c>{__name__="up"}</c>). An exact
+/// <c>__name__="up"</c> matcher contributes its value as a referenced name so the
+/// deny-all gate can admit or reject it like any name-position identifier. A regex
+/// <c>__name__=~"..."</c> matcher or a negative <c>__name__!="..."</c> /
+/// <c>__name__!~"..."</c> matcher cannot be reduced to a fixed set of names, so it
+/// sets <see cref="PromQlMetricReferences.HasUnresolvableNameMatcher"/> and the
+/// deny-all gate fails closed. This closes the allow-list bypass where a caller
+/// named a denied series only through <c>__name__</c>.
 /// </para>
 /// </remarks>
 internal static class PromQlMetricExtractor
@@ -45,19 +51,22 @@ internal static class PromQlMetricExtractor
 
     /// <summary>
     /// Extracts the distinct metric names <paramref name="query"/> references in
-    /// metric-name position, in first-seen order.
+    /// metric-name position or through an exact <c>__name__</c> label matcher, in
+    /// first-seen order, and reports whether it carries an unresolvable
+    /// <c>__name__</c> matcher.
     /// </summary>
     /// <param name="query">The PromQL expression to scan.</param>
     /// <returns>
-    /// The distinct metric names found, or an empty list when the expression names
-    /// none in an extractable position.
+    /// The referenced metric names and the unresolvable-matcher flag. The name list
+    /// is empty when the expression names none in an extractable position.
     /// </returns>
-    public static IReadOnlyList<string> Extract(string query)
+    public static PromQlMetricReferences ExtractReferences(string query)
     {
         ArgumentNullException.ThrowIfNull(query);
 
         List<string>? names = null;
         HashSet<string>? seen = null;
+        var hasUnresolvableNameMatcher = false;
         var braceDepth = 0;
         var i = 0;
         var length = query.Length;
@@ -100,6 +109,14 @@ internal static class PromQlMetricExtractor
 
                 if (braceDepth != 0)
                 {
+                    // Inside a label matcher only the reserved __name__ label names a
+                    // metric; every other identifier is a label name, not a metric.
+                    // Compare the span so a plain label name allocates no substring.
+                    if (query.AsSpan(start, i - start).SequenceEqual("__name__"))
+                    {
+                        i = ReadNameMatcher(query, i, ref names, ref seen, ref hasUnresolvableNameMatcher);
+                    }
+
                     continue;
                 }
 
@@ -130,12 +147,7 @@ internal static class PromQlMetricExtractor
                     continue;
                 }
 
-                seen ??= new HashSet<string>(StringComparer.Ordinal);
-                if (seen.Add(identifier))
-                {
-                    (names ??= []).Add(identifier);
-                }
-
+                AddName(identifier, ref names, ref seen);
                 continue;
             }
 
@@ -154,7 +166,88 @@ internal static class PromQlMetricExtractor
             i++;
         }
 
-        return names is null ? [] : names;
+        return new PromQlMetricReferences
+        {
+            Names = names is null ? [] : names,
+            HasUnresolvableNameMatcher = hasUnresolvableNameMatcher,
+        };
+    }
+
+    /// <summary>
+    /// Reads a <c>__name__</c> label matcher whose label token ends at
+    /// <paramref name="afterLabel"/>. An exact <c>=</c> matcher contributes its
+    /// quoted value as a referenced name; a regex <c>=~</c> matcher or a negative
+    /// <c>!=</c> / <c>!~</c> matcher, or any malformed form, sets the unresolvable
+    /// flag so the deny-all gate fails closed.
+    /// </summary>
+    /// <returns>The index just past the matcher's value (or operator when no value follows).</returns>
+    private static int ReadNameMatcher(
+        string query,
+        int afterLabel,
+        ref List<string>? names,
+        ref HashSet<string>? seen,
+        ref bool hasUnresolvableNameMatcher)
+    {
+        var length = query.Length;
+        var i = SkipWhitespaceIndex(query, afterLabel);
+        if (i >= length)
+        {
+            hasUnresolvableNameMatcher = true;
+            return i;
+        }
+
+        var op = query[i];
+        if (op == '=')
+        {
+            i++;
+            if (i < length && query[i] == '~')
+            {
+                // =~ regex matcher: cannot be reduced to a fixed set of names.
+                hasUnresolvableNameMatcher = true;
+                return i + 1;
+            }
+
+            i = SkipWhitespaceIndex(query, i);
+            if (i < length && IsQuote(query[i]))
+            {
+                var end = ReadStringValue(query, i, out var value);
+                if (value is null)
+                {
+                    // Unterminated string literal: fail closed.
+                    hasUnresolvableNameMatcher = true;
+                }
+                else
+                {
+                    AddName(value, ref names, ref seen);
+                }
+
+                return end;
+            }
+
+            // '=' not followed by a quoted value: malformed, fail closed.
+            hasUnresolvableNameMatcher = true;
+            return i;
+        }
+
+        if (op == '!' && i + 1 < length && (query[i + 1] == '=' || query[i + 1] == '~'))
+        {
+            // != or !~ negative matcher: does not constrain to allow-listed names.
+            hasUnresolvableNameMatcher = true;
+            return i + 2;
+        }
+
+        // No recognised matcher operator after __name__: fail closed.
+        hasUnresolvableNameMatcher = true;
+        return i;
+    }
+
+    private static void AddName(string name, ref List<string>? names, ref HashSet<string>? seen)
+    {
+        seen ??= new HashSet<string>(StringComparer.Ordinal);
+        if (seen.Add(name))
+        {
+            (names ??= []).Add(name);
+        }
     }
 
     private static int SkipString(string text, int openIndex)
@@ -178,6 +271,33 @@ internal static class PromQlMetricExtractor
             i++;
         }
 
+        return i;
+    }
+
+    private static int ReadStringValue(string text, int quoteIndex, out string? value)
+    {
+        var quote = text[quoteIndex];
+        var start = quoteIndex + 1;
+        var i = start;
+        while (i < text.Length)
+        {
+            var c = text[i];
+            if (c == '\\' && quote != '`')
+            {
+                i += 2;
+                continue;
+            }
+
+            if (c == quote)
+            {
+                value = text.Substring(start, i - start);
+                return i + 1;
+            }
+
+            i++;
+        }
+
+        value = null;
         return i;
     }
 
@@ -233,4 +353,7 @@ internal static class PromQlMetricExtractor
 
     private static bool IsIdentifierPart(char c)
         => char.IsAsciiLetterOrDigit(c) || c == '_' || c == ':';
+
+    private static bool IsQuote(char c)
+        => c == '"' || c == '\'' || c == '`';
 }

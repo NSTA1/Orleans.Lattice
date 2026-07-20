@@ -21,7 +21,7 @@ public class ExplorerTopologyServiceCollectionExtensionsTests
     }
 
     [Test]
-    public async Task AddExplorerTopology_ReaderIsSingleton()
+    public async Task AddExplorerTopology_ReaderIsScopedPerCircuit()
     {
         var services = new ServiceCollection();
         services.AddExplorerConfiguration(options => options.FilePath = "C:/tmp/config.json");
@@ -29,7 +29,14 @@ public class ExplorerTopologyServiceCollectionExtensionsTests
         services.AddExplorerTopology();
         await using var provider = services.BuildServiceProvider();
 
-        var reader = provider.GetRequiredService<ITopologyReader>();
-        Assert.That(provider.GetRequiredService<ITopologyReader>(), Is.SameAs(reader));
+        await using var scopeA = provider.CreateAsyncScope();
+        await using var scopeB = provider.CreateAsyncScope();
+        var reader = scopeA.ServiceProvider.GetRequiredService<ITopologyReader>();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scopeA.ServiceProvider.GetRequiredService<ITopologyReader>(), Is.SameAs(reader));
+            Assert.That(scopeB.ServiceProvider.GetRequiredService<ITopologyReader>(), Is.Not.SameAs(reader));
+        });
     }
 }

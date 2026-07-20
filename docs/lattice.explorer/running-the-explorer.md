@@ -97,6 +97,42 @@ If you do choose to co-host the Explorer in a cluster, scope the session affinit
 to the Explorer's `BasePath` alone rather than applying it cluster-wide, so the
 affinity constraint does not spread to unrelated cluster traffic.
 
+## Security posture of the web head
+
+### Per-circuit credential isolation
+
+The Explorer is a Blazor Server app, so each connected browser gets its own
+stateful **circuit**. The per-operator auth session and the cluster (state-API)
+connection are registered **scoped**, so each circuit signs in and drives its
+own connection independently, keyed on its own credential cookie. One operator's
+credential is never shared with another circuit: the console can serve multiple
+operators from the same process without one operator's sign-in flipping the
+connection another operator sees. The credential-bearing gRPC admin clients (the
+Access, Backup, and Schema areas) are likewise scoped per circuit and act under
+the calling circuit's own authentication.
+
+### Security response headers
+
+`MapLatticeExplorer` installs a middleware that emits a baseline set of security
+response headers on **every** explorer response - HTML pages, the `_framework`
+assets, and the SignalR negotiate / hub endpoints alike:
+
+| Header | Value | Purpose |
+|---|---|---|
+| `Content-Security-Policy` | includes `frame-ancestors 'none'` | Anti-clickjacking (CWE-1021): the authenticated admin console cannot be framed by a foreign origin. |
+| `X-Frame-Options` | `DENY` | Denies framing on older browsers that predate CSP `frame-ancestors`. |
+| `X-Content-Type-Options` | `nosniff` | Stops the browser MIME-sniffing a response away from its declared content type. |
+
+The middleware is attached by `MapLatticeExplorer` (via `UseWhen` on the
+console's path prefix), so both the standalone head and any host that mounts the
+console under a subpath inherit it, while a subpath host keeps its own unrelated
+routes free of the explorer's policy. Each header is set only when it is not
+already present, so a value legitimately set elsewhere in the pipeline is
+preserved rather than clobbered; where the interactive Blazor runtime contributes
+its own `frame-ancestors 'self'` Content-Security-Policy, the browser enforces
+the intersection of the policies in force. The header values are cached, so this
+per-response path allocates nothing.
+
 ## See also
 
 - [Connecting to an auth-enabled State API](connecting-to-an-auth-enabled-state-api.md)

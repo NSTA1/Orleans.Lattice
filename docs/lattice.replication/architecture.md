@@ -84,7 +84,10 @@ flowchart LR
    throttle in-band - see [`receiver-flow-control.md`](receiver-flow-control.md).
 
 6. **Receiver apply (`IReplicationApplier`).** Inbound records flow through the
-   public applier seam, which performs per-origin high-water-mark dedup, causal
+   public applier seam, which first gates each entry against this receiver's own
+   per-tree replication enrollment and locally-resolved merge mode - dropping a
+   tree not enrolled here and dead-lettering an entry whose peer-supplied wire
+   merge mode disagrees - then performs per-origin high-water-mark dedup, causal
    dependency parking, shadow-forward de-duplication, and CRDT-aware merges
    before committing through the same core leaf path that local writes use. See
    [`replication-apply.md`](replication-apply.md).

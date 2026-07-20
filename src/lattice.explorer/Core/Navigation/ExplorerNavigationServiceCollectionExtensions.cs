@@ -11,13 +11,14 @@ public static class ExplorerNavigationServiceCollectionExtensions
 {
     /// <summary>
     /// Registers the <see cref="IExplorerCapabilityStore"/> the shell consults to
-    /// enable or disable areas. Idempotent.
+    /// enable or disable areas. Scoped per Blazor circuit so one operator's
+    /// probed capabilities never surface in another circuit. Idempotent.
     /// </summary>
     /// <param name="services">The service collection. Must not be <see langword="null"/>.</param>
     public static IServiceCollection AddExplorerNavigation(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
-        services.TryAddSingleton<IExplorerCapabilityStore, ExplorerCapabilityStore>();
+        services.TryAddScoped<IExplorerCapabilityStore, ExplorerCapabilityStore>();
         return services;
     }
 }

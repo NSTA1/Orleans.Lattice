@@ -10,6 +10,8 @@ With `RequireAuthorization` at its `true` default, `MapLatticeMcp()` applies ASP
 
 Every inbound request passes through an `ILatticeApiMcpAuthorizer` before it reaches a facade. The binding registers `DenyAllMcpAuthorizer` by default (via `TryAdd`), so a host that maps the surface without configuring authorization rejects every call rather than exposing the cluster unauthenticated. A host opts in by registering a permissive or custom authorizer:
 
+The authorizer is consulted at **both** enforcement points through one lock-step gate: tool **advertisement** (`tools/list`, in the per-session discovery configurator) and tool **invocation** (`tools/call`, in the credential-stamping tool). A tool the authorizer denies is therefore never advertised **and** cannot be invoked directly, so there is no discovery-versus-invocation gap. The gate is **fail-closed**: it denies when there is no `HttpContext` to authorize against or no authorizer registered, so the surface stays closed until a host deliberately opts an authorizer in. Only the `lattice_capabilities` meta-tool is exempt from the coarse gate.
+
 ```csharp verify
 public sealed class ReadOnlyStateMcpAuthorizer : ILatticeApiMcpAuthorizer
 {

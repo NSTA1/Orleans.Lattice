@@ -9,14 +9,15 @@ namespace Orleans.Lattice.Explorer.Core.DeadLetter;
 public static class ExplorerDeadLetterServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers the <see cref="IDeadLetterReader"/>. Call after
-    /// <c>AddExplorerCatalog</c>, which exposes the state-API client facet it
-    /// depends on.
+    /// Registers the <see cref="IDeadLetterReader"/>, scoped per Blazor circuit
+    /// so it reads through the calling scope's authenticated connection. Call
+    /// after <c>AddExplorerCatalog</c>, which exposes the state-API client facet
+    /// it depends on.
     /// </summary>
     public static IServiceCollection AddExplorerDeadLetter(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
-        services.TryAddSingleton<IDeadLetterReader, DeadLetterReader>();
+        services.TryAddScoped<IDeadLetterReader, DeadLetterReader>();
         return services;
     }
 }

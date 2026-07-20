@@ -70,10 +70,14 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
   - `documentation` - documentation-only changes
   - `ci` - CI/CD workflow changes
   - `dependencies` - dependency updates
-  - `breaking` - breaking changes
+  - `breaking` - breaking changes. Judge "breaking" by the affected package's **release status**: a behavioural or API change in a package that has never shipped a release tag (verify with `git tag | Select-String <package>`) cannot break an existing consumer and is an `enhancement`/`security` change, not `breaking`. An opt-in change guarded by a default-off flag on a released package is additive, not breaking.
 - Also apply a **package label** (one per `src/<package>/` directory, named exactly after it) for every package the pull request touches. The changed-files -> package mapping and the label-naming rule live in the **pr-labels** skill (`.github/skills/pr-labels/SKILL.md`); the equivalent rule for issues lives in the **issue-labels** skill (`.github/skills/issue-labels/SKILL.md`).
 - Do not commit, push, or create PRs unless explicitly requested.
 
 ## Testing
 
 The testing policy (every public type needs a test; exclude the chaos suite in the dev loop) and the repository hygiene gates live in the **testing** skill (`.github/skills/testing/SKILL.md`). Detailed framework, fixture, and tier conventions remain in `.github/instructions/testing.instructions.md`.
+
+## Security
+
+Load-bearing security invariants for the auth, membership, replication, telemetry, MCP, and Explorer surfaces (fail-closed gates, never trusting peer/wire-supplied classification, enforcing at the single narrowest seam, per-circuit credential isolation, no dead security config) live in `.github/instructions/security.instructions.md`, which auto-attaches when you edit those packages. Read it before changing any authorization, enrollment, allow-list, credential-scoping, or validation seam on those surfaces.

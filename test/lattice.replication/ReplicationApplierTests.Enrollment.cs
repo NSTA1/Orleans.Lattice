@@ -1,0 +1,274 @@
+using Orleans.Lattice.BPlusTree.Grains;
+using Microsoft.Extensions.Options;
+using NSubstitute;
+using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.Primitives;
+using Orleans.Lattice.Replication;
+using Orleans.Lattice.Replication.Grains;
+
+namespace Orleans.Lattice.Replication.Tests;
+
+/// <summary>
+/// Coverage for the receiver-side enrollment / merge-mode admission gate in
+/// <see cref="ReplicationApplier"/> (issue #1267). The inbound apply path must
+/// reject an entry whose <see cref="WalRecord.TreeId"/> is not enrolled for
+/// replication on this receiver - the core <c>ThrowIfSystemTree</c> reserved
+/// prefix guards only the <c>_lattice_</c> trees, not the <c>sys-</c>-prefixed
+/// authorization / identity trees a cluster may keep cluster-local by not
+/// enrolling them - and must re-resolve the merge mode locally rather than
+/// trusting the peer-supplied wire <see cref="WalRecord.Mode"/>.
+/// </summary>
+public partial class ReplicationApplierTests
+{
+    private const string OrdersTree = "orders";
+    private const string SysAuthTree = "sys-auth-policies";
+    private const string SysMembershipTree = "sys-membership-roles";
+
+    /// <summary>
+    /// Dictionary-backed <see cref="ILatticeReplicationContext"/> that reports
+    /// exactly the enrolled trees, mirroring what the production
+    /// <c>ConfiguredLatticeReplicationContext</c> resolves for a cluster that
+    /// enrolled only a subset of its trees.
+    /// </summary>
+    private sealed class MapReplicationContext(IReadOnlyDictionary<string, LatticeMergeMode> modes)
+        : ILatticeReplicationContext
+    {
+        public bool IsReplicationEnabled => true;
+
+        public string LocalReplicaId => LocalCluster;
+
+        public LatticeMergeMode? ResolveMergeMode(string treeId) =>
+            modes.TryGetValue(treeId, out var mode) ? mode : null;
+    }
+
+    private static (
+        ReplicationApplier Applier,
+        IReplicationApplyGrain Apply,
+        IReplicationHighWaterMarkGrain Hwm,
+        IReplicationDeadLetterGrain Dlq)
+        CreateEnrollmentApplier(
+            ILatticeReplicationContext? context = null,
+            IReadOnlyDictionary<string, LatticeMergeMode>? replicatedTrees = null)
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var apply = Substitute.For<IReplicationApplyGrain>();
+        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var dlq = Substitute.For<IReplicationDeadLetterGrain>();
+        factory.GetGrain<IReplicationApplyGrain>(Arg.Any<string>()).Returns(apply);
+        factory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(hwm);
+        factory.GetGrain<IReplicationDeadLetterGrain>(Arg.Any<string>()).Returns(dlq);
+        hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(HybridLogicalClock.Zero);
+        hwm.GetPinnedFloorAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(HybridLogicalClock.Zero);
+        hwm.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+        hwm.GetVectorAsync(Arg.Any<CancellationToken>()).Returns(new VersionVector());
+
+        var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
+        var options = new LatticeReplicationOptions { ClusterId = LocalCluster, ReplicatedTrees = replicatedTrees };
+        monitor.CurrentValue.Returns(options);
+        monitor.Get(Arg.Any<string>()).Returns(options);
+
+        var applier = new ReplicationApplier(factory, monitor, replicationContext: context);
+        return (applier, apply, hwm, dlq);
+    }
+
+    private static WalRecord EnrollmentEntry(
+        string treeId,
+        string key,
+        HybridLogicalClock ts,
+        LatticeMergeMode mode = LatticeMergeMode.LwwRegister,
+        string origin = RemoteCluster) => new()
+        {
+            TreeId = treeId,
+            Op = MutationKind.Set,
+            Key = key,
+            Value = new byte[] { 1 },
+            Timestamp = ts,
+            OriginClusterId = origin,
+            Mode = mode,
+        };
+
+    [Test]
+    public async Task ApplyAsync_rejects_entry_for_tree_not_enrolled_here()
+    {
+        var (applier, apply, hwm, dlq) = CreateEnrollmentApplier(
+            new MapReplicationContext(new Dictionary<string, LatticeMergeMode> { [OrdersTree] = LatticeMergeMode.LwwRegister }));
+
+        var result = await applier.ApplyAsync(EnrollmentEntry(SysAuthTree, "k", Hlc(10)));
+
+        Assert.That(result.Applied, Is.False);
+        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
+        await hwm.DidNotReceiveWithAnyArgs().TryAdvanceAsync(default!, default, default);
+        // A non-enrolled tree id is peer-controlled, so it is dropped rather
+        // than parked (parking would let a peer spawn unbounded DLQ activations).
+        await dlq.DidNotReceiveWithAnyArgs().EnqueueAsync(default, default!, default, default!, default);
+    }
+
+    [Test]
+    public async Task ApplyAsync_rejects_sys_membership_tree_not_enrolled_here()
+    {
+        var (applier, apply, _, _) = CreateEnrollmentApplier(
+            new MapReplicationContext(new Dictionary<string, LatticeMergeMode> { [OrdersTree] = LatticeMergeMode.LwwRegister }));
+
+        var result = await applier.ApplyAsync(EnrollmentEntry(SysMembershipTree, "role-a", Hlc(11)));
+
+        Assert.That(result.Applied, Is.False);
+        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
+    }
+
+    [Test]
+    public async Task ApplyAsync_applies_entry_for_enrolled_tree_with_matching_mode()
+    {
+        var (applier, apply, hwm, dlq) = CreateEnrollmentApplier(
+            new MapReplicationContext(new Dictionary<string, LatticeMergeMode> { [OrdersTree] = LatticeMergeMode.LwwRegister }));
+        var ts = Hlc(20, 1);
+
+        var result = await applier.ApplyAsync(EnrollmentEntry(OrdersTree, "k", ts));
+
+        Assert.That(result.Applied, Is.True);
+        await apply.Received(1).ApplySetAsync("k", Arg.Any<byte[]>(), ts, RemoteCluster, null, 0);
+        await hwm.Received(1).TryAdvanceAsync(RemoteCluster, ts, Arg.Any<CancellationToken>());
+        await dlq.DidNotReceiveWithAnyArgs().EnqueueAsync(default, default!, default, default!, default);
+    }
+
+    [Test]
+    public async Task ApplyAsync_dead_letters_entry_whose_mode_disagrees_with_local_mode()
+    {
+        var (applier, apply, hwm, dlq) = CreateEnrollmentApplier(
+            new MapReplicationContext(new Dictionary<string, LatticeMergeMode> { [OrdersTree] = LatticeMergeMode.LwwRegister }));
+
+        // Enrolled tree, but the peer stamped an OrSet wire mode the receiver
+        // resolves locally to LwwRegister.
+        var result = await applier.ApplyAsync(
+            EnrollmentEntry(OrdersTree, "k", Hlc(30), mode: LatticeMergeMode.OrSet));
+
+        Assert.That(result.Applied, Is.False);
+        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
+        await hwm.DidNotReceiveWithAnyArgs().TryAdvanceAsync(default!, default, default);
+        await dlq.Received(1).EnqueueAsync(
+            Arg.Any<WalRecord>(),
+            Arg.Any<string>(),
+            0,
+            LatticeReplicationMetrics.ReasonModeMismatch,
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ApplyAsync_admits_entry_when_no_enrollment_source_is_configured()
+    {
+        // Neither a replication context nor a ReplicatedTrees map: the applier
+        // has no enrollment signal and stays on the legacy pass-through.
+        var (applier, apply, _, _) = CreateEnrollmentApplier();
+        var ts = Hlc(40);
+
+        var result = await applier.ApplyAsync(EnrollmentEntry(SysAuthTree, "k", ts));
+
+        Assert.That(result.Applied, Is.True);
+        await apply.Received(1).ApplySetAsync("k", Arg.Any<byte[]>(), ts, RemoteCluster, null, 0);
+    }
+
+    [Test]
+    public async Task ApplyAsync_enforces_enrollment_via_replicated_trees_map_when_no_context()
+    {
+        // No context: the ReplicatedTrees map is the enrollment source.
+        var (applier, apply, _, _) = CreateEnrollmentApplier(
+            replicatedTrees: new Dictionary<string, LatticeMergeMode> { [OrdersTree] = LatticeMergeMode.LwwRegister });
+
+        var rejected = await applier.ApplyAsync(EnrollmentEntry(SysAuthTree, "k", Hlc(50)));
+        var admitted = await applier.ApplyAsync(EnrollmentEntry(OrdersTree, "k", Hlc(51)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rejected.Applied, Is.False);
+            Assert.That(admitted.Applied, Is.True);
+        });
+        await apply.Received(1).ApplySetAsync("k", Arg.Any<byte[]>(), Hlc(51), RemoteCluster, null, 0);
+    }
+
+    [Test]
+    public async Task ApplyAsync_rejection_is_idempotent_and_never_mutates_state()
+    {
+        var (applier, apply, hwm, _) = CreateEnrollmentApplier(
+            new MapReplicationContext(new Dictionary<string, LatticeMergeMode> { [OrdersTree] = LatticeMergeMode.LwwRegister }));
+        var entry = EnrollmentEntry(SysAuthTree, "k", Hlc(60));
+
+        var first = await applier.ApplyAsync(entry);
+        var second = await applier.ApplyAsync(entry);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first.Applied, Is.False);
+            Assert.That(second.Applied, Is.False);
+            Assert.That(first.HighWaterMark, Is.EqualTo(HybridLogicalClock.Zero));
+            Assert.That(second.HighWaterMark, Is.EqualTo(HybridLogicalClock.Zero));
+        });
+        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
+        await hwm.DidNotReceiveWithAnyArgs().TryAdvanceAsync(default!, default, default);
+    }
+
+    [Test]
+    public async Task ApplyBatchAsync_rejects_multi_entry_run_for_non_enrolled_tree()
+    {
+        var (applier, apply, hwm, dlq) = CreateEnrollmentApplier(
+            new MapReplicationContext(new Dictionary<string, LatticeMergeMode> { [OrdersTree] = LatticeMergeMode.LwwRegister }));
+
+        var batch = new[]
+        {
+            EnrollmentEntry(SysAuthTree, "a", Hlc(70)),
+            EnrollmentEntry(SysAuthTree, "b", Hlc(71)),
+        };
+
+        var result = await applier.ApplyBatchAsync(batch);
+
+        Assert.That(result.Applied, Is.False);
+        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
+        await apply.DidNotReceiveWithAnyArgs().ApplyMergeManyAsync(default!);
+        await hwm.DidNotReceiveWithAnyArgs().TryAdvanceAsync(default!, default, default);
+        await dlq.DidNotReceiveWithAnyArgs().EnqueueAsync(default, default!, default, default!, default);
+    }
+
+    [Test]
+    public async Task ApplyBatchAsync_dead_letters_multi_entry_run_whose_mode_disagrees()
+    {
+        var (applier, apply, hwm, dlq) = CreateEnrollmentApplier(
+            new MapReplicationContext(new Dictionary<string, LatticeMergeMode> { [OrdersTree] = LatticeMergeMode.LwwRegister }));
+
+        var batch = new[]
+        {
+            EnrollmentEntry(OrdersTree, "a", Hlc(80), mode: LatticeMergeMode.OrSet),
+            EnrollmentEntry(OrdersTree, "b", Hlc(81), mode: LatticeMergeMode.OrSet),
+        };
+
+        var result = await applier.ApplyBatchAsync(batch);
+
+        Assert.That(result.Applied, Is.False);
+        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
+        await hwm.DidNotReceiveWithAnyArgs().TryAdvanceAsync(default!, default, default);
+        // Each mismatched entry is parked (the tree is enrolled and bounded).
+        await dlq.Received(2).EnqueueAsync(
+            Arg.Any<WalRecord>(),
+            Arg.Any<string>(),
+            0,
+            LatticeReplicationMetrics.ReasonModeMismatch,
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ApplyBatchAsync_applies_multi_entry_run_for_enrolled_tree_with_matching_mode()
+    {
+        var (applier, apply, _, dlq) = CreateEnrollmentApplier(
+            new MapReplicationContext(new Dictionary<string, LatticeMergeMode> { [OrdersTree] = LatticeMergeMode.LwwRegister }));
+
+        var batch = new[]
+        {
+            EnrollmentEntry(OrdersTree, "a", Hlc(90)),
+            EnrollmentEntry(OrdersTree, "b", Hlc(91)),
+        };
+
+        var result = await applier.ApplyBatchAsync(batch);
+
+        Assert.That(result.Applied, Is.True);
+        await apply.Received(1).ApplyMergeManyAsync(Arg.Any<IReadOnlyList<ApplyMergeItem>>());
+        await dlq.DidNotReceiveWithAnyArgs().EnqueueAsync(default, default!, default, default!, default);
+    }
+}

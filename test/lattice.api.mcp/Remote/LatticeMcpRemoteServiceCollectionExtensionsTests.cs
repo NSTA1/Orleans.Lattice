@@ -297,7 +297,7 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
             new StubBridge(credential),
             new StubResolver(access),
             toolGroups,
-            new ServiceCollection().BuildServiceProvider(),
+            AuthorizedServices(),
             NullLogger<LatticeApiMcpSessionConfigurator>.Instance,
             endpointSource);
 
@@ -311,10 +311,15 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
             new StubBridge(credential),
             new StubResolver(access),
             toolGroups,
-            new ServiceCollection().BuildServiceProvider(),
+            AuthorizedServices(),
             NullLogger<LatticeApiMcpSessionConfigurator>.Instance,
             endpointSource,
             unsupportedToolSource);
+
+    private static IServiceProvider AuthorizedServices()
+        => new ServiceCollection()
+            .AddSingleton<ILatticeApiMcpAuthorizer, AllowAllMcpAuthorizer>()
+            .BuildServiceProvider();
 
     private static DefaultHttpContext HttpContext()
         => new() { RequestServices = new ServiceCollection().BuildServiceProvider() };

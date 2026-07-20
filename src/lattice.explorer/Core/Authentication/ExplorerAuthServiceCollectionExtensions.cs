@@ -34,7 +34,12 @@ public static class ExplorerAuthServiceCollectionExtensions
         // it (for example with a fake advertisement).
         services.TryAddSingleton<IExplorerAuthSchemeProbe, GrpcExplorerAuthSchemeProbe>();
 
-        services.TryAddSingleton<IExplorerAuthSession, ExplorerAuthSession>();
+        // The auth session is scoped per Blazor circuit so each circuit signs in
+        // (and drives its connection) independently, keyed on its own cookie
+        // credential, rather than inheriting a process-global sign-in. The
+        // credential store, auth methods, and scheme probe are stateless across
+        // circuits and stay singletons.
+        services.TryAddScoped<IExplorerAuthSession, ExplorerAuthSession>();
 
         return services;
     }

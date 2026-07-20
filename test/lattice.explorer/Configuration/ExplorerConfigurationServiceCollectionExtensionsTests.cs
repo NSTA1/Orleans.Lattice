@@ -21,15 +21,28 @@ public class ExplorerConfigurationServiceCollectionExtensionsTests
     }
 
     [Test]
-    public async Task AddExplorerConfiguration_SessionAndConnectionAreSingletons()
+    public async Task AddExplorerConfiguration_SessionAndConnectionAreScopedPerCircuit()
     {
         var services = new ServiceCollection();
         services.AddExplorerConfiguration();
         await using var provider = services.BuildServiceProvider();
 
-        var session = provider.GetRequiredService<IExplorerSession>();
-        Assert.That(provider.GetRequiredService<IExplorerSession>(), Is.SameAs(session));
-        Assert.That(session.Connection, Is.SameAs(provider.GetRequiredService<ILatticeStateConnection>()));
+        await using var scopeA = provider.CreateAsyncScope();
+        await using var scopeB = provider.CreateAsyncScope();
+
+        var sessionA = scopeA.ServiceProvider.GetRequiredService<IExplorerSession>();
+        var sessionB = scopeB.ServiceProvider.GetRequiredService<IExplorerSession>();
+
+        Assert.Multiple(() =>
+        {
+            // Same scope resolves the same session and its own connection.
+            Assert.That(scopeA.ServiceProvider.GetRequiredService<IExplorerSession>(), Is.SameAs(sessionA));
+            Assert.That(sessionA.Connection, Is.SameAs(scopeA.ServiceProvider.GetRequiredService<ILatticeStateConnection>()));
+
+            // A second circuit gets an independent session and connection.
+            Assert.That(sessionB, Is.Not.SameAs(sessionA));
+            Assert.That(sessionB.Connection, Is.Not.SameAs(sessionA.Connection));
+        });
     }
 
     [Test]

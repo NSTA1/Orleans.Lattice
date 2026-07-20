@@ -29,12 +29,12 @@ public readonly record struct ApplyResult
 
 | `ApplyResult` member | Semantics |
 |---|---|
-| `Applied` | `true` when the entry was merged onto the local tree; `false` when the entry was filtered out as a re-delivery (its `Timestamp` was at or below the origin's pinned snapshot floor, or its identity tuple hit the shadow-forward cache) or rejected as inapplicable (its `OriginClusterId` matched the local cluster id and would have looped). For batch calls, `true` if **any** entry in the batch was newly merged. |
-| `HighWaterMark` | For point applies (`Set` / `Delete`) this is the per-origin HWM after the call - equal to `entry.Timestamp` when `entry.Timestamp` advanced the frontier, or the current HWM otherwise (including when `Applied` is `false`). For range deletes and local-origin no-op rejections - neither of which consults the HWM - this is `HybridLogicalClock.Zero`. For batch calls, the pointwise maximum HWM across every distinct origin in the batch. |
+| `Applied` | `true` when the entry was merged onto the local tree; `false` when the entry was filtered out as a re-delivery (its `Timestamp` was at or below the origin's pinned snapshot floor, or its identity tuple hit the shadow-forward cache) or rejected as inapplicable (its `OriginClusterId` matched the local cluster id and would have looped, its tree is not enrolled for replication on this receiver, or its wire merge mode disagreed with the locally-resolved mode). For batch calls, `true` if **any** entry in the batch was newly merged. |
+| `HighWaterMark` | For point applies (`Set` / `Delete`) this is the per-origin HWM after the call - equal to `entry.Timestamp` when `entry.Timestamp` advanced the frontier, or the current HWM otherwise (including when `Applied` is `false`). For range deletes, local-origin no-op rejections, and receiver-side enrollment / merge-mode rejections - none of which consults the HWM - this is `HybridLogicalClock.Zero`. For batch calls, the pointwise maximum HWM across every distinct origin in the batch. |
 
 ## Apply semantics
 
-Three concerns the applier composes for every call:
+The applier composes these concerns for every call:
 
 ### 1. Source-HLC and origin preservation
 
@@ -61,7 +61,18 @@ Range deletes bypass the floor by design. Range applies are naturally idempotent
 
 A `WalRecord` whose `OriginClusterId` matches the local cluster id is rejected as a no-op (`Applied = false`). The outbound ship loop's origin filter already prevents this in steady state, but hand-built apply pipelines and tests can still hand the applier such an entry - surfacing it as an explicit rejection rather than silently merging it into the same cluster's state is the safer default.
 
-### 4. Shadow-forward dedupe cache
+### 4. Receiver-side enrollment and merge-mode gate
+
+Before the concerns above run, the applier gates every inbound entry against this receiver's own per-tree replication configuration, re-resolving the tree's enrollment and merge mode locally instead of trusting the wire. The peer-supplied `OriginClusterId` is unverified and `WalRecord.Mode` is a peer-controlled header field, so neither is taken on faith. The gate yields two rejections:
+
+- **Not enrolled here (dropped).** A tree that is not enrolled for replication on this receiver is dropped: the call returns `Applied = false` with `HighWaterMark = HybridLogicalClock.Zero`, records the apply-duration outcome `rejected-not-replicated`, and is **not** dead-lettered. A non-enrolled tree id is peer-controlled, so parking it in a dead-letter queue would let a hostile peer spawn unbounded dead-letter-queue activations; dropping keeps the rejection cheap and bounded. This closes the gap where a peer that holds the mesh secret could otherwise write a tree the cluster deliberately kept cluster-local by not enrolling it - the reserved-prefix core-tree guard covers only the `_lattice_` core trees, not the `sys-`-prefixed authorization and identity trees.
+- **Enrolled but wire mode mismatched (dead-lettered).** A tree that *is* enrolled but whose peer-supplied wire mode disagrees with the locally resolved merge mode is dead-lettered: the call returns `Applied = false` with `HighWaterMark = HybridLogicalClock.Zero`, the entry is enqueued to the tree's dead-letter queue tagged `mode_mismatch`, and the apply-duration outcome `rejected-mode-mismatch` is recorded. The tree is enrolled and therefore a bounded id, so parking the entry cannot be abused to spawn unbounded activations. Re-resolving the mode locally rather than trusting the wire field stops a peer from overriding the local merge algebra by shipping a different mode.
+
+The merge mode is always re-resolved locally through the receiver's per-tree resolver (`ILatticeReplicationContext.ResolveMergeMode`, falling back to the raw `LatticeReplicationOptions.ReplicatedTrees` map); the wire `Mode` field is only ever compared against that resolution, never adopted. An applier with neither an injected replication context nor a `ReplicatedTrees` map has no enrollment signal and stays on the legacy pass-through - the entry is admitted unchanged. Production registers the replication context, so the gate is always live there.
+
+The batch path applies the same classification once per run. A shipped run is a single `(TreeId, OriginClusterId)` segment carrying one batch-constant wire mode, so the representative first entry classifies the whole run. A rejected run neither merges nor advances the per-origin high-water-mark; every entry still records its matching apply-duration outcome so per-entry receiver observability is preserved, while a single warning is logged per run rather than per entry to avoid a log-flood amplification from a hostile peer.
+
+### 5. Shadow-forward dedupe cache
 
 A structural rewrite (shard split, shard merge, saga compensate) that shadow-forwards a user write into a different shard generates a duplicate-emit pair: one entry from the originating shard's commit, one from the shadow-forwarded shard's commit, both carrying identical `(originClusterId, timestamp, key, op)` identity tuples. Because the pinned-floor gate does not drop above-floor point writes, both deliveries reach the apply path; the identity cache is what collapses the redundant second grain hop before it happens.
 
@@ -69,7 +80,7 @@ The applier holds a per-tree bounded FIFO cache of recently-applied identity tup
 
 The cache is a fast-path optimisation, not the correctness backstop. It suppresses the duplicate-emit pair before the apply grain hop; if an entry it would have caught has been evicted under sustained churn, the duplicate still re-applies to the same state under per-key last-writer-wins idempotence at the leaf, so an eviction can never cause a divergent re-merge - it only costs one redundant grain hop.
 
-### 5. Causal-dependency gate
+### 6. Causal-dependency gate
 
 Entries authored with causal-plus tracking carry a `VectorClock` frontier. Before applying such an entry the receiver fetches its local vector clock and checks that every component of the entry's frontier is dominated-or-equal locally; an entry with an unsatisfied dependency is parked in the per-tree bounded causal-apply buffer and retried each time a later apply advances the local clock. Two frontier components are exempt from the check:
 
