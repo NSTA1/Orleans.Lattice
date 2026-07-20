@@ -12,16 +12,18 @@ public static class ExplorerCatalogServiceCollectionExtensions
     /// <summary>
     /// Registers the catalog reader and the shared selection state. Exposes the
     /// connection's read-only client facet as <see cref="ILatticeStateClient"/>
-    /// so the reader depends only on the narrow query surface. Call after
-    /// <c>AddExplorerConfiguration</c>, which registers the connection.
+    /// so the reader depends only on the narrow query surface. The client facet
+    /// and reader are scoped per Blazor circuit so they read through the calling
+    /// scope's authenticated connection; the selection state stays a singleton.
+    /// Call after <c>AddExplorerConfiguration</c>, which registers the connection.
     /// </summary>
     public static IServiceCollection AddExplorerCatalog(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        services.TryAddSingleton<ILatticeStateClient>(
+        services.TryAddScoped<ILatticeStateClient>(
             static sp => sp.GetRequiredService<ILatticeStateConnection>());
-        services.TryAddSingleton<ICatalogReader, CatalogReader>();
+        services.TryAddScoped<ICatalogReader, CatalogReader>();
         services.TryAddSingleton<IExplorerSelection, ExplorerSelection>();
 
         return services;

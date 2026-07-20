@@ -9,14 +9,15 @@ namespace Orleans.Lattice.Explorer.Core.Metrics;
 public static class ExplorerMetricsServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers the <see cref="IMetricsReader"/>. Call after
+    /// Registers the <see cref="IMetricsReader"/>, scoped per Blazor circuit so
+    /// it reads through the calling scope's authenticated connection. Call after
     /// <c>AddExplorerCatalog</c>, which exposes the state-API client facet the
     /// reader depends on.
     /// </summary>
     public static IServiceCollection AddExplorerMetrics(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
-        services.TryAddSingleton<IMetricsReader, MetricsReader>();
+        services.TryAddScoped<IMetricsReader, MetricsReader>();
         return services;
     }
 }

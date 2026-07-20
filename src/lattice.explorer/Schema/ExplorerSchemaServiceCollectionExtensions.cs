@@ -24,16 +24,18 @@ public static class ExplorerSchemaServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
         services.AddExplorerNavigation();
+        // Scoped per Blazor circuit: the schema control client reads the calling
+        // scope's session and sign-in, so it must not be shared across circuits.
         // GrpcSchemaAdminClient owns its own Orleans serializer provider; it must not
         // be handed the application root provider (which has no AddSerializer), or
         // every schema gRPC call fails resolving its per-message serializers and the
         // Schema area silently greys out. Its single constructor keeps that
         // guarantee, so a plain type registration is safe here.
-        services.TryAddSingleton<ISchemaAdminClient, GrpcSchemaAdminClient>();
-        services.TryAddSingleton<ISchemaPolicyService, SchemaPolicyService>();
-        services.TryAddSingleton<ISchemaVersioningService, SchemaVersioningService>();
-        services.TryAddSingleton<ISchemaComplianceService, SchemaComplianceService>();
-        services.TryAddSingleton<ISchemaAdminCapabilityService, SchemaAdminCapabilityService>();
+        services.TryAddScoped<ISchemaAdminClient, GrpcSchemaAdminClient>();
+        services.TryAddScoped<ISchemaPolicyService, SchemaPolicyService>();
+        services.TryAddScoped<ISchemaVersioningService, SchemaVersioningService>();
+        services.TryAddScoped<ISchemaComplianceService, SchemaComplianceService>();
+        services.TryAddScoped<ISchemaAdminCapabilityService, SchemaAdminCapabilityService>();
         return services;
     }
 }

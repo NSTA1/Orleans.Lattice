@@ -24,15 +24,17 @@ public static class ExplorerAccessServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
         services.AddExplorerNavigation();
+        // Scoped per Blazor circuit: the auth-admin client reads the calling
+        // scope's session and sign-in, so it must not be shared across circuits.
         // GrpcAuthAdminClient owns its own Orleans serializer provider; it must not
         // be handed the application root provider (which has no AddSerializer), or
         // every admin gRPC call fails resolving its per-message serializers and the
         // Access area silently greys out. Its single constructor keeps that
         // guarantee, so a plain type registration is safe here.
-        services.TryAddSingleton<IAuthAdminClient, GrpcAuthAdminClient>();
-        services.TryAddSingleton<IMembershipAdminService, MembershipAdminService>();
-        services.TryAddSingleton<IPolicyAdminService, PolicyAdminService>();
-        services.TryAddSingleton<IAuthAdminCapabilityService, AuthAdminCapabilityService>();
+        services.TryAddScoped<IAuthAdminClient, GrpcAuthAdminClient>();
+        services.TryAddScoped<IMembershipAdminService, MembershipAdminService>();
+        services.TryAddScoped<IPolicyAdminService, PolicyAdminService>();
+        services.TryAddScoped<IAuthAdminCapabilityService, AuthAdminCapabilityService>();
         // The subject picker's search state is per-component and each carries its
         // own single in-flight debounce timer, so both are transient: every picker
         // instance resolves a fresh model over a fresh debounce.
