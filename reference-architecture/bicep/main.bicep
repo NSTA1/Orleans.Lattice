@@ -84,6 +84,10 @@ param replicationKey string = ''
 @description('PUBLIC option ingress allow-list seam: CIDR ranges permitted to reach the region ingress / front door. Empty applies no restriction here. Echoed by the networking module for the AFD sub-issue to apply.')
 param ingressAllowedCidrs array = []
 
+@description('Grafana admin password for the per-region self-hosted Grafana head. Supply via a Key Vault reference or a secure pipeline variable at deploy time (never committed). Stored only as an ACA secret. Required whenever observability is deployed.')
+@secure()
+param grafanaAdminPassword string = ''
+
 // AcrPull built-in role definition id.
 var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
 
@@ -214,6 +218,35 @@ module networking 'modules/networking.bicep' = {
 }
 
 // =============================================================================
+// Observability lane (managed Prometheus + Grafana) - F-191.
+// -----------------------------------------------------------------------------
+// One shared metrics pipeline per region: an Azure Monitor workspace (managed
+// Prometheus) feeding both the silo KEDA scaler and a scale-to-zero Grafana head.
+// Invoked AFTER the compute loop (it consumes each region's environment/identity).
+//
+// TWO-PASS Prometheus endpoint: to keep the compute <-> observability seam
+// one-directional (no compile cycle), compute's `prometheusQueryEndpoint` stays
+// empty in this template, so every silo deploys at its min-replica floor. The
+// deployer sub-issue (#1280) runs a SECOND compute pass that feeds
+// observability[i].outputs.prometheusQueryEndpoint back into compute to activate
+// the silo KEDA scaler. The endpoint is stable across redeploys.
+// =============================================================================
+
+module observability 'modules/observability.bicep' = [for (region, i) in regions: {
+  name: 'observability-${region.regionCode}'
+  params: {
+    location: region.location
+    regionCode: region.regionCode
+    baseName: baseName
+    environmentId: compute[i].outputs.environmentId
+    managedIdentityId: compute[i].outputs.managedIdentityId
+    managedIdentityPrincipalId: compute[i].outputs.managedIdentityPrincipalId
+    managedIdentityClientId: compute[i].outputs.managedIdentityClientId
+    grafanaAdminPassword: grafanaAdminPassword
+  }
+}]
+
+// =============================================================================
 // AcrPull role assignments - least privilege, scoped to the registry
 // -----------------------------------------------------------------------------
 // One assignment per region identity. Scope is the registry resource only (not
@@ -274,3 +307,12 @@ output perRegionReplicationKeyVault array = networking.outputs.perRegionPublic
 
 @description('PRIVATE option per-region VNet / infrastructure-subnet seams. Empty for the public option.')
 output perRegionPrivateNetwork array = deploymentOption == 'private' ? vnet!.outputs.perRegionPrivate : []
+
+@description('Per-region observability seams in region-list order. prometheusQueryEndpoint is the single feed for the silo KEDA scaler (deployer second pass) and the MCP telemetry add-on; grafanaFqdn is the scale-to-zero dashboard head.')
+output perRegionObservability array = [for (region, i) in regions: {
+  regionCode: region.regionCode
+  prometheusQueryEndpoint: observability[i].outputs.prometheusQueryEndpoint
+  azureMonitorWorkspaceId: observability[i].outputs.azureMonitorWorkspaceId
+  dataCollectionRuleId: observability[i].outputs.dataCollectionRuleId
+  grafanaFqdn: observability[i].outputs.grafanaFqdn
+}]
