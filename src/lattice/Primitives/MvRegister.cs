@@ -262,6 +262,9 @@ public sealed class MvRegister : ICrdt<MvRegister>
     private static bool IsObserved(MvRegisterEntry entry, Dictionary<string, long> context) =>
         context.TryGetValue(entry.ReplicaId, out var observed) && entry.Counter <= observed;
 
+    private static bool IsObserved(MvRegisterEntry entry, IReadOnlyDictionary<string, long>? context) =>
+        context is not null && context.TryGetValue(entry.ReplicaId, out var observed) && entry.Counter <= observed;
+
     private static bool ContainsDot(List<MvRegisterEntry> entries, string replicaId, long counter)
     {
         foreach (var entry in entries)
@@ -271,13 +274,26 @@ public sealed class MvRegister : ICrdt<MvRegister>
         return false;
     }
 
+    private static bool ContainsDot(IReadOnlyList<MvRegisterEntry> entries, string replicaId, long counter)
+    {
+        for (var i = 0; i < entries.Count; i++)
+        {
+            var entry = entries[i];
+            if (entry.Counter == counter && entry.ReplicaId == replicaId) return true;
+        }
+        return false;
+    }
+
     /// <summary>
     /// Folds an <see cref="MvRegisterDelta"/> into this register. The
-    /// merge is equivalent to constructing a transient
+    /// result is equivalent to constructing a transient
     /// <see cref="MvRegister"/> with <see cref="MvRegisterDelta.Entries"/>
     /// and <see cref="MvRegisterDelta.Context"/> and calling
-    /// <see cref="MergeFrom(MvRegister)"/>; commutative, associative,
-    /// and idempotent against arrival order and duplicate delivery.
+    /// <see cref="MergeFrom(MvRegister)"/>, but folds the delta's entries
+    /// and context in directly without allocating that intermediate
+    /// register (and its copied entries list and context dictionary).
+    /// Commutative, associative, and idempotent against arrival order and
+    /// duplicate delivery.
     /// </summary>
     /// <param name="delta">
     /// The typed CRDT delta authored by the producing call site. Null
@@ -285,18 +301,60 @@ public sealed class MvRegister : ICrdt<MvRegister>
     /// </param>
     public void MergeDelta(MvRegisterDelta delta)
     {
-        var other = new MvRegister();
-        var entries = delta.Entries;
-        if (entries is { Count: > 0 })
+        var otherEntries = delta.Entries;
+        var otherContext = delta.Context;
+        var hasEntries = otherEntries is { Count: > 0 };
+        var hasContext = otherContext is { Count: > 0 };
+
+        // Nothing to fold: leave the receiver untouched. The prior
+        // build-a-throwaway-register form replaced Entries with an equal
+        // copy in this case; skipping that copy is semantically identical
+        // (the surviving entries and context are unchanged).
+        if (!hasEntries && !hasContext) return;
+
+        // Fold the delta directly into this register rather than
+        // materialising a throwaway MvRegister (plus a copied entries List
+        // and Context Dictionary) and calling MergeFrom. The dominance
+        // semantics are identical to MergeFrom with the delta's entries and
+        // context as the other side; only the intermediate allocations are
+        // removed. MergeDelta is on the CRDT apply / replication hot path,
+        // so those eliminated allocations are paid on every delta applied.
+        var localEntries = Entries;
+        var otherCount = hasEntries ? otherEntries!.Count : 0;
+        var survivors = new List<MvRegisterEntry>(localEntries.Count + otherCount);
+
+        // Keep a local entry iff the delta still carries the same dot (so it
+        // has not been superseded there) or the delta's context has never
+        // observed it.
+        foreach (var entry in localEntries)
         {
-            other.Entries.Capacity = entries.Count;
-            foreach (var entry in entries) other.Entries.Add(entry);
+            if ((hasEntries && ContainsDot(otherEntries!, entry.ReplicaId, entry.Counter))
+                || !IsObserved(entry, otherContext))
+            {
+                survivors.Add(entry);
+            }
         }
-        var context = delta.Context;
-        if (context is { Count: > 0 })
+
+        // Add a delta entry iff we have not already taken its dot from the
+        // local side and the local context has not observed-and-superseded it.
+        for (var i = 0; i < otherCount; i++)
         {
-            foreach (var (replicaId, counter) in context) other.Context[replicaId] = counter;
+            var entry = otherEntries![i];
+            if (ContainsDot(localEntries, entry.ReplicaId, entry.Counter)) continue;
+            if (IsObserved(entry, Context)) continue;
+            survivors.Add(entry);
         }
-        MergeFrom(other);
+
+        // Pointwise-max of the delta context into the local context.
+        if (hasContext)
+        {
+            foreach (var (replicaId, counter) in otherContext!)
+            {
+                ref var slot = ref CollectionsMarshal.GetValueRefOrAddDefault(Context, replicaId, out var existed);
+                if (!existed || counter > slot) slot = counter;
+            }
+        }
+
+        Entries = survivors;
     }
 }
