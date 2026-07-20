@@ -26,13 +26,41 @@ Register membership on the silo **after** the core lattice. It layers cleanly un
 siloBuilder
     .AddLatticeMembership(options =>
     {
-        // How token-asserted groups combine with directory groups.
+        // How token-asserted groups combine with directory groups. Cluster-wide;
+        // see "Group merge mode" below for the three modes and their impact.
         options.GroupMergeMode = SubjectGroupMergeMode.Union;
 
         // How long a resolved subject (id + group closure) is cached.
         options.ResolutionCacheTtl = TimeSpan.FromMinutes(5);
     });
 ```
+
+### Group merge mode
+
+`GroupMergeMode` decides how the two possible sources of a subject's groups - the
+groups a **token asserts** (from a trusted issuer's group claim) and the groups
+the **local membership directory** derives (transitively expanded) - are combined
+into the closure the authorization layer sees. It is a cluster-wide setting with a
+material effect on which rules apply to a caller.
+
+| Mode | Resolved groups | Effect |
+|---|---|---|
+| `Union` (default) | Token-asserted **and** directory-derived groups | Both sources count. Adding a directory group or a token group each just works; nothing is silently dropped. |
+| `TokenOnly` | Token-asserted groups only | The local directory is **ignored for group membership**. The IdP is the sole authority; local group edits (including in the Explorer Access area) are inert. |
+| `DirectoryOnly` | Directory-derived groups only | Token-asserted groups are **ignored**. The local directory is the sole authority; the IdP's group claims are not trusted for membership. |
+
+**Choosing a mode.** Use `Union` when either source may legitimately contribute
+groups. Use `TokenOnly` when the IdP is authoritative and the local directory is
+only a user/display-name registry. Use `DirectoryOnly` when you curate membership
+locally and do not want to trust the IdP's group claims.
+
+**On the default.** `Union` is the least-surprising, additive choice, and its
+breadth is bounded downstream: a wider group closure only elevates privilege if a
+policy grants that group something, and [`Orleans.Lattice.Auth`](../lattice.auth/README.md)
+is deny-by-default - `Union` widens *membership*, not *grants*. It is nonetheless
+the most permissive composition (it trusts token-asserted groups on top of the
+curated directory), so pick `TokenOnly` or `DirectoryOnly` when you want a single
+authoritative source.
 
 ### Registering an authenticator
 

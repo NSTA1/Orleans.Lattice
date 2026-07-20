@@ -53,4 +53,16 @@ public sealed record AccessModelDescriptor
     /// picker.
     /// </summary>
     [Id(4)] public required string DirectoryExplanation { get; init; }
+
+    /// <summary>
+    /// <see langword="true"/> when locally-defined group membership (group records
+    /// and member edges administered through this facade) actually contributes to a
+    /// subject's effective groups at authorization time; <see langword="false"/>
+    /// when the cluster's group-merge policy resolves membership solely from the
+    /// identity-provider token (a <c>TokenOnly</c> merge mode), which makes the
+    /// local "manage groups and members" surface inert. Rules and Explain remain
+    /// meaningful in either case, because a rule that grants a group id still
+    /// matches a token-asserted group.
+    /// </summary>
+    [Id(5)] public bool LocalMembershipEffective { get; init; }
 }

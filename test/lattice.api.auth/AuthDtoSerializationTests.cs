@@ -290,6 +290,7 @@ public sealed class AuthDtoSerializationTests
             DirectoryAvailable = true,
             DirectoryProviderId = "entra",
             DirectoryExplanation = "Enter an Entra object id.",
+            LocalMembershipEffective = true,
         };
 
         Assert.That(RoundTrip(original), Is.EqualTo(original));

@@ -91,6 +91,22 @@ governed and only that administrator can manage it. See:
 - [Managing schema](../../docs/lattice.explorer/managing-schema.md).
 - [Managing backups](../../docs/lattice.explorer/managing-backups.md).
 
+### Group-merge mode (see the merge-mode-aware Access UI)
+
+Whether locally-defined group membership affects authorization depends on the
+cluster's group-merge mode. Set `LATTICE_MEMBERSHIP_MERGE_MODE` to `Union`
+(default), `TokenOnly`, or `DirectoryOnly` before running. Under `TokenOnly`,
+group membership is resolved solely from the identity-provider token, so the
+**Access > Groups** create and member add/remove controls render disabled with an
+explanatory banner while staying read-only viewable; **Policies** and **Explain**
+stay live. `Union` and `DirectoryOnly` leave membership editing enabled. For
+example (PowerShell):
+
+```powershell
+$env:LATTICE_MEMBERSHIP_MERGE_MODE = 'TokenOnly'
+dotnet run
+```
+
 ## Identity directory: static (default) and Entra (opt-in)
 
 The Access area's **subject picker** (the type-ahead that finds users and groups)

@@ -25,11 +25,14 @@ public sealed class LatticeAuthAdminDirectoryTests
         ILatticeIdentityDirectory identityDirectory,
         bool adminAllowed = true,
         bool nullGate = false,
-        IEnumerable<ILatticeCredentialAuthenticator>? authenticators = null)
+        IEnumerable<ILatticeCredentialAuthenticator>? authenticators = null,
+        SubjectGroupMergeMode groupMergeMode = SubjectGroupMergeMode.Union)
     {
         ILatticeAccessGate gate = nullGate ? new NullLatticeAccessGate() : new FakeAccessGate(adminAllowed);
         var authMonitor = Substitute.For<IOptionsMonitor<LatticeAuthOptions>>();
         authMonitor.CurrentValue.Returns(new LatticeAuthOptions());
+        var membershipMonitor = Substitute.For<IOptionsMonitor<LatticeMembershipOptions>>();
+        membershipMonitor.CurrentValue.Returns(new LatticeMembershipOptions { GroupMergeMode = groupMergeMode });
 
         return new LatticeAuthAdmin(
             Substitute.For<ILatticeAuthorizationPolicyStore>(),
@@ -39,7 +42,8 @@ public sealed class LatticeAuthAdminDirectoryTests
             identityDirectory,
             authenticators ?? new ILatticeCredentialAuthenticator[] { new AnonymousCredentialAuthenticator() },
             Options.Create(new LatticeApiAuthOptions()),
-            authMonitor);
+            authMonitor,
+            membershipMonitor);
     }
 
     // ----- SearchDirectoryAsync -----
@@ -322,6 +326,36 @@ public sealed class LatticeAuthAdminDirectoryTests
     }
 
     [Test]
+    public async Task GetAccessModelAsync_reports_local_membership_effective_under_the_union_merge_mode()
+    {
+        var admin = CreateAdmin(new FakeIdentityDirectory(), groupMergeMode: SubjectGroupMergeMode.Union);
+
+        var model = await admin.GetAccessModelAsync();
+
+        Assert.That(model.LocalMembershipEffective, Is.True);
+    }
+
+    [Test]
+    public async Task GetAccessModelAsync_reports_local_membership_effective_under_the_directory_only_merge_mode()
+    {
+        var admin = CreateAdmin(new FakeIdentityDirectory(), groupMergeMode: SubjectGroupMergeMode.DirectoryOnly);
+
+        var model = await admin.GetAccessModelAsync();
+
+        Assert.That(model.LocalMembershipEffective, Is.True);
+    }
+
+    [Test]
+    public async Task GetAccessModelAsync_reports_local_membership_inert_under_the_token_only_merge_mode()
+    {
+        var admin = CreateAdmin(new FakeIdentityDirectory(), groupMergeMode: SubjectGroupMergeMode.TokenOnly);
+
+        var model = await admin.GetAccessModelAsync();
+
+        Assert.That(model.LocalMembershipEffective, Is.False);
+    }
+
+    [Test]
     public async Task GetAccessModelAsync_reports_claims_mode_when_a_real_authenticator_is_registered()
     {
         var admin = CreateAdmin(
@@ -380,13 +414,16 @@ public sealed class LatticeAuthAdminDirectoryTests
         var authenticators = new ILatticeCredentialAuthenticator[] { new AnonymousCredentialAuthenticator() };
         var apiOptions = Options.Create(new LatticeApiAuthOptions());
         var authMonitor = Substitute.For<IOptionsMonitor<LatticeAuthOptions>>();
+        var membershipMonitor = Substitute.For<IOptionsMonitor<LatticeMembershipOptions>>();
 
         Assert.Multiple(() =>
         {
             Assert.Throws<ArgumentNullException>(() => _ = new LatticeAuthAdmin(
-                store, directory, gate, membership, null!, authenticators, apiOptions, authMonitor));
+                store, directory, gate, membership, null!, authenticators, apiOptions, authMonitor, membershipMonitor));
             Assert.Throws<ArgumentNullException>(() => _ = new LatticeAuthAdmin(
-                store, directory, gate, membership, identity, null!, apiOptions, authMonitor));
+                store, directory, gate, membership, identity, null!, apiOptions, authMonitor, membershipMonitor));
+            Assert.Throws<ArgumentNullException>(() => _ = new LatticeAuthAdmin(
+                store, directory, gate, membership, identity, authenticators, apiOptions, authMonitor, null!));
         });
     }
 

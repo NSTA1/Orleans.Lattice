@@ -41,7 +41,8 @@ internal sealed class LatticeAuthAdmin(
     ILatticeIdentityDirectory identityDirectory,
     IEnumerable<ILatticeCredentialAuthenticator> authenticators,
     IOptions<LatticeApiAuthOptions> apiOptions,
-    IOptionsMonitor<LatticeAuthOptions> authOptions) : ILatticeAuthAdmin
+    IOptionsMonitor<LatticeAuthOptions> authOptions,
+    IOptionsMonitor<LatticeMembershipOptions> membershipOptions) : ILatticeAuthAdmin
 {
     private const string RuleKeySeparator = "\u001f";
 
@@ -62,6 +63,7 @@ internal sealed class LatticeAuthAdmin(
     private readonly ILatticeCredentialAuthenticator[] _authenticators = (authenticators ?? throw new ArgumentNullException(nameof(authenticators))).ToArray();
     private readonly LatticeApiAuthOptions _apiOptions = (apiOptions ?? throw new ArgumentNullException(nameof(apiOptions))).Value;
     private readonly IOptionsMonitor<LatticeAuthOptions> _authOptions = authOptions ?? throw new ArgumentNullException(nameof(authOptions));
+    private readonly IOptionsMonitor<LatticeMembershipOptions> _membershipOptions = membershipOptions ?? throw new ArgumentNullException(nameof(membershipOptions));
 
     // ----- Membership administration -----
 
@@ -474,6 +476,10 @@ internal sealed class LatticeAuthAdmin(
             // removed), so surface the group-scoped guidance; the seam stays
             // kind-aware for a future user or combined form.
             DirectoryExplanation = _identityDirectory.DescribeEntry(DirectoryPrincipalKind.Group),
+            // Locally-defined membership is inert when the cluster resolves groups
+            // solely from the identity-provider token (TokenOnly merge mode).
+            LocalMembershipEffective =
+                _membershipOptions.CurrentValue.GroupMergeMode != SubjectGroupMergeMode.TokenOnly,
         };
     }
 

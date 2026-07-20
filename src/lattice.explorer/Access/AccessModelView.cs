@@ -34,6 +34,15 @@ public sealed record AccessModelView
     /// <summary>The operator-facing explanation of what a valid principal id is for this deployment.</summary>
     public string DirectoryExplanation { get; init; } = string.Empty;
 
+    /// <summary>
+    /// <see langword="true"/> when locally-defined group membership contributes to a
+    /// subject's effective groups at authorization time; <see langword="false"/> when
+    /// the cluster resolves group membership solely from the identity-provider token
+    /// (a <c>TokenOnly</c> merge mode), which makes the local group / member editing
+    /// surface inert.
+    /// </summary>
+    public bool LocalMembershipEffective { get; init; }
+
     /// <summary><see langword="true"/> when the read succeeded.</summary>
     public bool IsSuccess => Status == AccessOperationStatus.Succeeded;
 
@@ -50,6 +59,7 @@ public sealed record AccessModelView
             DirectoryAvailable = descriptor.DirectoryAvailable,
             DirectoryProviderId = descriptor.DirectoryProviderId,
             DirectoryExplanation = descriptor.DirectoryExplanation,
+            LocalMembershipEffective = descriptor.LocalMembershipEffective,
         };
     }
 

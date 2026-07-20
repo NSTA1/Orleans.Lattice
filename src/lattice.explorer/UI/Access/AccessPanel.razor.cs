@@ -36,6 +36,12 @@ public partial class AccessPanel : ComponentBase, IDisposable
     // OnInitializedAsync once the injected membership service is available.
     private AccessCreateModel _accessModel = null!;
 
+    // Whether locally-defined group and member editing is meaningful for this
+    // cluster. False only when the access model was read successfully and reports
+    // token-only membership, in which case the editing surface is disabled but stays
+    // read-only viewable. The server remains the enforcement point.
+    private bool _membershipEditable => _accessModel.MembershipEditingEnabled;
+
     // ----- Tree selection (shared by the Policies and Explain tabs) -----
     private const int TreePageSize = 200;
     private readonly List<CatalogItem> _trees = new();
@@ -420,6 +426,11 @@ public partial class AccessPanel : ComponentBase, IDisposable
     // Opens the empty create form (the "New group" call to action).
     private void NewGroup()
     {
+        if (!_membershipEditable)
+        {
+            return;
+        }
+
         ResetGroupForm();
         _groupFormOpen = true;
     }
@@ -489,7 +500,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
 
     private async Task SaveGroupAsync()
     {
-        if (_busy || !_allowed || string.IsNullOrWhiteSpace(_groupIdInput))
+        if (_busy || !_allowed || !_membershipEditable || string.IsNullOrWhiteSpace(_groupIdInput))
         {
             return;
         }
@@ -540,7 +551,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
 
     private async Task DeleteGroupAsync()
     {
-        if (_busy || !_allowed || _selectedGroupId is null)
+        if (_busy || !_allowed || !_membershipEditable || _selectedGroupId is null)
         {
             return;
         }
@@ -567,7 +578,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
 
     private async Task AddMemberAsync()
     {
-        if (_busy || !_allowed || _selectedGroupId is null || string.IsNullOrWhiteSpace(_memberIdInput))
+        if (_busy || !_allowed || !_membershipEditable || _selectedGroupId is null || string.IsNullOrWhiteSpace(_memberIdInput))
         {
             return;
         }
@@ -595,7 +606,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
 
     private async Task RemoveMemberAsync(string memberId)
     {
-        if (_busy || !_allowed || _selectedGroupId is null)
+        if (_busy || !_allowed || !_membershipEditable || _selectedGroupId is null)
         {
             return;
         }
