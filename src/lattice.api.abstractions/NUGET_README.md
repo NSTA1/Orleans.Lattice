@@ -17,8 +17,8 @@ consume those surfaces: the code-first gRPC bindings and the
 This package is the seam between them. It carries:
 
 - **The service interfaces** - `ILatticeStateQuery`, `ILatticeStateObserver`,
-  `ILatticeStateMetricsObserver`, `ILatticeDataApi`, `ILatticeAuthAdmin`, and
-  `ILatticeBackupControl`.
+  `ILatticeStateMetricsObserver`, `ILatticeDataApi`, `ILatticeAuthAdmin`,
+  `ILatticeBackupControl`, and `ILatticeSchemaControl`.
 - **Their request / response models** - the results, pages, records, and
   requests those interfaces exchange, with their stable Orleans serialization
   aliases.

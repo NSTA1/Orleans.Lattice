@@ -44,7 +44,7 @@ await foreach (var entry in admin.ListDeadLettersAsync("orders", cancellationTok
 
 The read-only [cluster State API](../lattice.api.state/README.md) surfaces the same
 queue for dashboards and the Explorer, paginated and subject to the API's tree
-read-visibility gate. Its internal query surface exposes `GetDeadLetterCountAsync`
+read-visibility gate. Its read-only query surface (`ILatticeStateQuery`) exposes `GetDeadLetterCountAsync`
 and a paginated `ListDeadLettersAsync` that takes a `DeadLetterQueueRequest`
 (`TreeId`, `PageSize`, `PageToken`) and returns a `DeadLetterQueuePage` - a list of
 `DeadLetterEntryRecord` plus a `NextPageToken` for the next page. Each record

@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <RootNamespace>Orleans.Lattice.Explorer.Entra</RootNamespace>
     <PackageId>Orleans.Lattice.Explorer.Entra</PackageId>
-    <Version>7.7.1</Version>
+    <Version>8.0.0</Version>
     <Description>Microsoft Entra ID (Azure AD) interactive login provider for the Orleans.Lattice Explorer. Adds an OIDC auth-code + PKCE (or device-code) sign-in that acquires a bearer token for an auth-enabled State API and refreshes it silently and transparently. Keeps the MSAL dependency out of the core explorer.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>

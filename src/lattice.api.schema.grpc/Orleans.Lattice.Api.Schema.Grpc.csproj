@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Api.Schema.Grpc</PackageId>
-    <Version>7.9.1</Version>
+    <Version>8.0.0</Version>
     <Description>Code-first gRPC transport binding and strongly-typed client for Orleans.Lattice.Api.Schema. Exposes the schema-management control facade (policy, versioning, remediation, the read-only compliance audit, and a fail-closed capability probe) over a remote gRPC surface, with a default-deny authorization interceptor and an unauthenticated auth-scheme discovery RPC.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
