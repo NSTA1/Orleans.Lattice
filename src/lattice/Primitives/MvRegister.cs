@@ -238,23 +238,19 @@ public sealed class MvRegister : ICrdt<MvRegister>
     }
 
     /// <summary>Creates a deep copy of this register.</summary>
-    public MvRegister Clone()
-    {
-        var copy = new MvRegister
+    public MvRegister Clone() =>
+        // Bulk-copy both backing stores through their collection copy
+        // constructors (a single Array.Copy each, presized exactly), matching
+        // VersionVector/OrSet/PnCounter.Clone and replacing the previous
+        // presize + entry-by-entry Add loop (N capacity checks + N list-version
+        // bumps). The entry value bytes are treated as immutable by every
+        // production call site, so the shallow per-entry copy is a deep copy;
+        // ReplicaId/Counter are interned strings / value types.
+        new()
         {
-            Entries = new List<MvRegisterEntry>(Entries.Count),
+            Entries = new List<MvRegisterEntry>(Entries),
             Context = new Dictionary<string, long>(Context, StringComparer.Ordinal),
         };
-        foreach (var entry in Entries)
-        {
-            // The value bytes are treated as immutable by every
-            // production call site, so the reference is shared. The
-            // ReplicaId and Counter components are value types or
-            // interned strings.
-            copy.Entries.Add(entry);
-        }
-        return copy;
-    }
 
     private long NextCounter(string replicaId) =>
         Context.TryGetValue(replicaId, out var current) ? current + 1 : 1;

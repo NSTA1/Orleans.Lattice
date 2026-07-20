@@ -154,6 +154,13 @@ public class LatticeMicroBenchmarks
     // Surfaced as microbench_crdt_mvregister_merge_alloc_b.
     private readonly MvRegister _mvRegisterLeft = BuildMvRegister("replica-left", 8);
     private readonly MvRegister _mvRegisterRight = BuildMvRegister("replica-right", 8);
+    // A register carrying many concurrent live entries (plus matching context),
+    // so MvRegister_CloneMulti isolates the entries-copy path: the List copy
+    // constructor's single Array.Copy versus the previous presize + per-entry
+    // Add loop (N capacity checks + N list-version bumps). Sized by
+    // BENCH_MICROBENCH_MVREGISTER_CLONE_ENTRIES (default 128).
+    private readonly MvRegister _mvRegisterCloneTarget =
+        BuildMvRegisterMultiLive("replica-clone", ReadIntEnv("BENCH_MICROBENCH_MVREGISTER_CLONE_ENTRIES", 256));
 
     // ===== CrdtShapeRegistry MvRegister delta-coalescing instrument =====
     // Two identity-stable MvRegisterDeltas with disjoint replica dots, so
@@ -1303,6 +1310,17 @@ public class LatticeMicroBenchmarks
     [Benchmark(Description = "Crdt mvregister merge")]
     public MvRegister CrdtMvRegisterMerge() =>
         MvRegister.Merge(_mvRegisterLeft, _mvRegisterRight);
+
+    /// <summary>
+    /// Deep-copies a many-live-entry <see cref="MvRegister"/> via
+    /// <see cref="MvRegister.Clone"/>. This isolates the entries-copy path the
+    /// List copy constructor replaces the per-entry <c>Add</c> loop on: Clone
+    /// runs on the <see cref="MvRegister.Merge"/> hot path (Merge clones the
+    /// left operand before folding), so it fires on every replicated register
+    /// reconcile. Sized by <c>BENCH_MICROBENCH_MVREGISTER_CLONE_ENTRIES</c>.
+    /// </summary>
+    [Benchmark(Description = "Crdt mvregister clone (multi-entry)")]
+    public MvRegister CrdtMvRegisterCloneMulti() => _mvRegisterCloneTarget.Clone();
 
     /// <summary>
     /// Single <see cref="MvRegister.MergeDelta(MvRegisterDelta)"/> fold of an
