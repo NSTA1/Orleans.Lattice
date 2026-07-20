@@ -88,6 +88,9 @@ param ingressAllowedCidrs array = []
 @secure()
 param grafanaAdminPassword string = ''
 
+@description('Azure Front Door id (GUID) threaded to every client-facing head so it rejects inbound traffic that bypasses the global ingress (X-Azure-FDID origin lock). Empty on the first deploy pass (heads unlocked, Front Door not yet created); the deployer runs a SECOND compute pass supplying the frontdoor module\'s frontDoorId output. Threading frontdoor.outputs.frontDoorId here directly would form a compile cycle because Front Door consumes the head FQDNs compute exports.')
+param frontDoorId string = ''
+
 // AcrPull built-in role definition id.
 var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
 
@@ -156,6 +159,11 @@ module compute 'modules/compute.bicep' = [for (region, i) in regions: {
     siloMinReplicas: siloMinReplicas
     siloMaxReplicas: siloMaxReplicas
     prometheusQueryEndpoint: prometheusQueryEndpoint
+    // Global-ingress origin lock. Empty on pass 1 (Front Door not yet created);
+    // the deployer's second compute pass supplies frontdoor.outputs.frontDoorId.
+    // Threading that output here directly would cycle (Front Door consumes the
+    // head FQDNs compute exports).
+    frontDoorId: frontDoorId
     // Private option: the environment is VNet-integrated and internal-only; the
     // subnet is provisioned by the vnet module above. Public option: empty
     // subnet -> public baseline environment.
@@ -247,6 +255,32 @@ module observability 'modules/observability.bicep' = [for (region, i) in regions
 }]
 
 // =============================================================================
+// Global ingress lane (Azure Front Door Standard) - F-194.
+// -----------------------------------------------------------------------------
+// One global Front Door profile latency-routes users to the nearest healthy
+// region across every client-facing head (Explorer, MCP, State API), failing
+// over on a health-probe failure. Public option only (the private option keeps
+// heads on internal ingress behind the VNet). Consumes the per-region head FQDNs
+// compute exports, so it runs AFTER the compute loop and is strictly
+// one-directional: compute -> frontdoor. The reverse edge (locking origins to
+// the Front Door id) is applied by the deployer's second compute pass via the
+// top-level frontDoorId param, avoiding a compile cycle.
+// =============================================================================
+
+module frontdoor 'modules/frontdoor.bicep' = if (deploymentOption == 'public') {
+  name: 'frontdoor'
+  params: {
+    baseName: baseName
+    origins: [for (region, i) in regions: {
+      regionCode: region.regionCode
+      explorerFqdn: compute[i].outputs.explorerFqdn
+      mcpFqdn: compute[i].outputs.mcpFqdn
+      siloStateApiFqdn: compute[i].outputs.siloStateApiFqdn
+    }]
+  }
+}
+
+// =============================================================================
 // AcrPull role assignments - least privilege, scoped to the registry
 // -----------------------------------------------------------------------------
 // One assignment per region identity. Scope is the registry resource only (not
@@ -316,3 +350,13 @@ output perRegionObservability array = [for (region, i) in regions: {
   dataCollectionRuleId: observability[i].outputs.dataCollectionRuleId
   grafanaFqdn: observability[i].outputs.grafanaFqdn
 }]
+
+@description('PUBLIC option global Front Door id (GUID). The deployer feeds this back into the top-level frontDoorId param on the second compute pass so every head locks its ingress to this Front Door (X-Azure-FDID). Empty for the private option.')
+output frontDoorId string = deploymentOption == 'public' ? frontdoor!.outputs.frontDoorId : ''
+
+@description('PUBLIC option public HTTPS hostnames of the global Front Door endpoints (*.azurefd.net) for Explorer, MCP and State API. Empty for the private option.')
+output frontDoorEndpoints object = deploymentOption == 'public' ? {
+  explorer: frontdoor!.outputs.explorerHostName
+  mcp: frontdoor!.outputs.mcpHostName
+  state: frontdoor!.outputs.stateHostName
+} : {}

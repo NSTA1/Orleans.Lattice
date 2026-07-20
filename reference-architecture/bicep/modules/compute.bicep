@@ -114,6 +114,9 @@ param siloMaxReplicas int = 10
 @description('Managed-Prometheus query endpoint the KEDA scaler scrapes the lattice.scaling signal from. OBSERVABILITY-SUBISSUE SEAM: empty string leaves the silo at its min-replica floor with no external scale rule wired, so this module builds and deploys standalone before observability lands.')
 param prometheusQueryEndpoint string = ''
 
+@description('Azure Front Door id (GUID) the client-facing heads assert on inbound X-Azure-FDID to reject traffic that bypasses the global ingress. FRONT-DOOR-SUBISSUE SEAM: empty string leaves the heads unlocked so this module deploys standalone before Front Door exists; the deployer runs a second compute pass supplying frontdoor.outputs.frontDoorId to activate the origin lock (Front Door consumes the head FQDNs this module outputs, so the value cannot be wired in one static pass without a cycle).')
+param frontDoorId string = ''
+
 @description('PromQL query returning the compute-axis replica-demand scalar (lattice.scaling scaleValue) aggregated across silo replicas.')
 param siloScaleQuery string = 'max(lattice_scaling_scale_value{app="__SILO__"})'
 
@@ -348,6 +351,10 @@ resource siloApp 'Microsoft.App/containerApps@2024-03-01' = {
             // so a draining replica finishes or hands off in-flight shard
             // transfers within the termination grace period below.
             { name: 'LATTICE_SHUTDOWN_DRAIN_SECONDS', value: string(siloTerminationGracePeriodSeconds) }
+            // Global-ingress origin lock: the State API head rejects any request
+            // whose X-Azure-FDID does not match this id, so traffic that bypasses
+            // Front Door is refused. Empty until the deployer's second pass.
+            { name: 'LATTICE_FRONT_DOOR_ID', value: frontDoorId }
           ]
         }
       ]
@@ -432,6 +439,8 @@ resource mcpApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'ORLEANS_SERVICE_ID', value: orleansServiceId }
             { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
             { name: 'ASPNETCORE_URLS', value: 'http://0.0.0.0:8080' }
+            // Global-ingress origin lock (see silo head). Empty until pass 2.
+            { name: 'LATTICE_FRONT_DOOR_ID', value: frontDoorId }
           ]
         }
       ]
@@ -497,6 +506,8 @@ resource explorerApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'ORLEANS_SERVICE_ID', value: orleansServiceId }
             { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
             { name: 'ASPNETCORE_URLS', value: 'http://0.0.0.0:8080' }
+            // Global-ingress origin lock (see silo head). Empty until pass 2.
+            { name: 'LATTICE_FRONT_DOOR_ID', value: frontDoorId }
           ]
         }
       ]
