@@ -42,7 +42,8 @@ internal sealed class LatticeAuthAdmin(
     IEnumerable<ILatticeCredentialAuthenticator> authenticators,
     IOptions<LatticeApiAuthOptions> apiOptions,
     IOptionsMonitor<LatticeAuthOptions> authOptions,
-    IOptionsMonitor<LatticeMembershipOptions> membershipOptions) : ILatticeAuthAdmin
+    IOptionsMonitor<LatticeMembershipOptions> membershipOptions,
+    IOptionsMonitor<LatticeIdentityDirectoryOptions> identityDirectoryOptions) : ILatticeAuthAdmin
 {
     private const string RuleKeySeparator = "\u001f";
 
@@ -64,6 +65,7 @@ internal sealed class LatticeAuthAdmin(
     private readonly LatticeApiAuthOptions _apiOptions = (apiOptions ?? throw new ArgumentNullException(nameof(apiOptions))).Value;
     private readonly IOptionsMonitor<LatticeAuthOptions> _authOptions = authOptions ?? throw new ArgumentNullException(nameof(authOptions));
     private readonly IOptionsMonitor<LatticeMembershipOptions> _membershipOptions = membershipOptions ?? throw new ArgumentNullException(nameof(membershipOptions));
+    private readonly IOptionsMonitor<LatticeIdentityDirectoryOptions> _identityDirectoryOptions = identityDirectoryOptions ?? throw new ArgumentNullException(nameof(identityDirectoryOptions));
 
     // ----- Membership administration -----
 
@@ -73,6 +75,9 @@ internal sealed class LatticeAuthAdmin(
         ArgumentNullException.ThrowIfNull(group);
         ArgumentException.ThrowIfNullOrEmpty(group.GroupId);
         await AuthorizeAdminAsync(cancellationToken).ConfigureAwait(false);
+
+        await ValidateDirectoryPrincipalAsync(
+            group.GroupId, DirectoryPrincipalKind.Group, nameof(group), cancellationToken).ConfigureAwait(false);
 
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
@@ -142,6 +147,9 @@ internal sealed class LatticeAuthAdmin(
         ArgumentException.ThrowIfNullOrEmpty(groupId);
         ArgumentException.ThrowIfNullOrEmpty(memberId);
         await AuthorizeAdminAsync(cancellationToken).ConfigureAwait(false);
+
+        await ValidateDirectoryPrincipalAsync(
+            memberId, ToDirectoryPrincipalKind(memberKind), nameof(memberId), cancellationToken).ConfigureAwait(false);
 
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
@@ -631,6 +639,60 @@ internal sealed class LatticeAuthAdmin(
     /// validation).
     /// </summary>
     private bool DirectoryAvailable => _identityDirectory is not NullIdentityDirectory;
+
+    /// <summary>
+    /// Enforces the fail-closed identity-directory validation contract on a
+    /// membership-reference create path. When
+    /// <see cref="LatticeIdentityDirectoryOptions.ValidationRequired"/> is set and a
+    /// real provider is active (<see cref="DirectoryAvailable"/>), the supplied
+    /// <paramref name="principalId"/> is resolved through
+    /// <see cref="ILatticeIdentityDirectory.ResolveAsync"/> and the create is
+    /// rejected when it resolves to nothing or to a principal whose
+    /// <see cref="DirectoryPrincipal.Kind"/> does not match
+    /// <paramref name="expectedKind"/>. Validation is skipped entirely when
+    /// validation is not required or when the no-op
+    /// <see cref="NullIdentityDirectory"/> is in force, matching the documented
+    /// contract. Runs outside the system-origin write scope: the identity source is
+    /// a separate seam from the membership tree, mirroring
+    /// <see cref="ResolveDirectoryPrincipalAsync"/>.
+    /// </summary>
+    /// <param name="principalId">The candidate principal id being referenced.</param>
+    /// <param name="expectedKind">The kind the id must resolve to.</param>
+    /// <param name="paramName">The offending create-path parameter name for the rejection.</param>
+    /// <param name="cancellationToken">Cancels the resolve.</param>
+    /// <exception cref="LatticeDirectoryValidationException">
+    /// The id does not resolve, or resolves to the wrong <see cref="DirectoryPrincipalKind"/>.
+    /// </exception>
+    private async Task ValidateDirectoryPrincipalAsync(
+        string principalId,
+        DirectoryPrincipalKind expectedKind,
+        string paramName,
+        CancellationToken cancellationToken)
+    {
+        if (!DirectoryAvailable || !_identityDirectoryOptions.CurrentValue.ValidationRequired)
+        {
+            return;
+        }
+
+        var principal = await _identityDirectory.ResolveAsync(principalId, cancellationToken).ConfigureAwait(false);
+        if (principal is null)
+        {
+            throw LatticeDirectoryValidationException.Unresolved(principalId, expectedKind, paramName);
+        }
+
+        if (principal.Kind != expectedKind)
+        {
+            throw LatticeDirectoryValidationException.KindMismatch(principalId, expectedKind, principal.Kind, paramName);
+        }
+    }
+
+    /// <summary>
+    /// Maps a local <see cref="MembershipMemberKind"/> to the upstream-directory
+    /// <see cref="DirectoryPrincipalKind"/> that a member reference of that kind
+    /// must resolve to.
+    /// </summary>
+    private static DirectoryPrincipalKind ToDirectoryPrincipalKind(MembershipMemberKind memberKind) =>
+        memberKind == MembershipMemberKind.Group ? DirectoryPrincipalKind.Group : DirectoryPrincipalKind.User;
 
     /// <summary>
     /// Best-effort authentication mode from the silo's registered credential

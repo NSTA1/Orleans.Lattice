@@ -33,6 +33,8 @@ public sealed class LatticeAuthAdminDirectoryTests
         authMonitor.CurrentValue.Returns(new LatticeAuthOptions());
         var membershipMonitor = Substitute.For<IOptionsMonitor<LatticeMembershipOptions>>();
         membershipMonitor.CurrentValue.Returns(new LatticeMembershipOptions { GroupMergeMode = groupMergeMode });
+        var identityMonitor = Substitute.For<IOptionsMonitor<LatticeIdentityDirectoryOptions>>();
+        identityMonitor.CurrentValue.Returns(new LatticeIdentityDirectoryOptions());
 
         return new LatticeAuthAdmin(
             Substitute.For<ILatticeAuthorizationPolicyStore>(),
@@ -43,7 +45,8 @@ public sealed class LatticeAuthAdminDirectoryTests
             authenticators ?? new ILatticeCredentialAuthenticator[] { new AnonymousCredentialAuthenticator() },
             Options.Create(new LatticeApiAuthOptions()),
             authMonitor,
-            membershipMonitor);
+            membershipMonitor,
+            identityMonitor);
     }
 
     // ----- SearchDirectoryAsync -----
@@ -415,15 +418,18 @@ public sealed class LatticeAuthAdminDirectoryTests
         var apiOptions = Options.Create(new LatticeApiAuthOptions());
         var authMonitor = Substitute.For<IOptionsMonitor<LatticeAuthOptions>>();
         var membershipMonitor = Substitute.For<IOptionsMonitor<LatticeMembershipOptions>>();
+        var identityMonitor = Substitute.For<IOptionsMonitor<LatticeIdentityDirectoryOptions>>();
 
         Assert.Multiple(() =>
         {
             Assert.Throws<ArgumentNullException>(() => _ = new LatticeAuthAdmin(
-                store, directory, gate, membership, null!, authenticators, apiOptions, authMonitor, membershipMonitor));
+                store, directory, gate, membership, null!, authenticators, apiOptions, authMonitor, membershipMonitor, identityMonitor));
             Assert.Throws<ArgumentNullException>(() => _ = new LatticeAuthAdmin(
-                store, directory, gate, membership, identity, null!, apiOptions, authMonitor, membershipMonitor));
+                store, directory, gate, membership, identity, null!, apiOptions, authMonitor, membershipMonitor, identityMonitor));
             Assert.Throws<ArgumentNullException>(() => _ = new LatticeAuthAdmin(
-                store, directory, gate, membership, identity, authenticators, apiOptions, authMonitor, null!));
+                store, directory, gate, membership, identity, authenticators, apiOptions, authMonitor, null!, identityMonitor));
+            Assert.Throws<ArgumentNullException>(() => _ = new LatticeAuthAdmin(
+                store, directory, gate, membership, identity, authenticators, apiOptions, authMonitor, membershipMonitor, null!));
         });
     }
 
