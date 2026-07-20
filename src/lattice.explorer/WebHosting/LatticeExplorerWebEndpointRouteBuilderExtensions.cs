@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -36,6 +37,8 @@ public static class LatticeExplorerWebEndpointRouteBuilderExtensions
             ? endpoints
             : endpoints.MapGroup(options.RoutePrefix);
 
+        UseExplorerSecurityHeaders(endpoints, options.RoutePrefix);
+
         MapStaticAssetsIfAvailable(endpoints, target);
         target.MapExplorerAuthEndpoints(options.BaseHref);
         target.MapRazorComponents<App>()
@@ -43,6 +46,33 @@ public static class LatticeExplorerWebEndpointRouteBuilderExtensions
             .AddAdditionalAssemblies(typeof(Orleans.Lattice.Explorer.UI._Imports).Assembly);
 
         return endpoints;
+    }
+
+    /// <summary>
+    /// Registers the baseline security-response-header middleware on the
+    /// explorer's request branch so every explorer response - pages,
+    /// <c>_framework</c> assets, and the SignalR endpoints - is emitted with the
+    /// anti-clickjacking and anti-sniffing headers (CWE-1021). The middleware is
+    /// scoped to the explorer's path prefix (via <c>UseWhen</c>), so a host that
+    /// mounts the explorer under a subpath keeps its own unrelated routes free of
+    /// the explorer's Content-Security-Policy. At the root the prefix is empty,
+    /// which every request path starts with, so all responses are covered. The
+    /// predicate closure is allocated once at registration, not per request. The
+    /// middleware is only registrable when the endpoint route builder is also the
+    /// application's middleware pipeline (the minimal-hosting
+    /// <see cref="WebApplication"/> that every explorer host uses).
+    /// </summary>
+    private static void UseExplorerSecurityHeaders(IEndpointRouteBuilder endpoints, string routePrefix)
+    {
+        if (endpoints is not IApplicationBuilder app)
+        {
+            return;
+        }
+
+        var prefix = new PathString(routePrefix.Length == 0 ? null : routePrefix);
+        app.UseWhen(
+            context => context.Request.Path.StartsWithSegments(prefix),
+            branch => branch.UseMiddleware<ExplorerSecurityHeadersMiddleware>());
     }
 
     /// <summary>
