@@ -558,7 +558,9 @@ try {
             infrastructureSubnetId     = $subnetId
             # Activated seams.
             prometheusQueryEndpoint    = $prometheus
-            mcpTelemetryBackendAddress = $prometheus
+            # Left empty pending #1286 (MCP telemetry has no azure-workload auth mode for
+            # managed Prometheus); KEDA still consumes $prometheus via prometheusQueryEndpoint.
+            mcpTelemetryBackendAddress = ''
             frontDoorId                = $frontDoorId
             replicationPeers           = $replicationPeers
             replicationTrees           = $ReplicationTrees

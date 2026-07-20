@@ -35,8 +35,10 @@ From one parameter set, across N regions:
 `main.bicep` cannot thread two Azure-assigned values in a single pass without
 forming a Bicep compile cycle, so the script runs them on a second pass:
 
-- **Managed Prometheus query endpoint** - activates the silo KEDA scaler (and the
-  MCP telemetry tool group). Each region has its own endpoint.
+- **Managed Prometheus query endpoint** - activates the silo KEDA scaler. Each
+  region has its own endpoint. The MCP telemetry backend is intentionally left
+  empty pending #1286 (the MCP telemetry client has no azure-workload auth mode
+  for managed Prometheus), so the host skips the telemetry tool group.
 - **Front Door id** - activates the `X-Azure-FDID` origin lock on every
   client-facing head.
 
