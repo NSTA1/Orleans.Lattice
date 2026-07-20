@@ -186,6 +186,41 @@ internal sealed partial class ReplicationApplier(
                     nameof(entry));
             }
 
+            // RECEIVER-SIDE ENROLLMENT / MERGE-MODE GATE (issue #1267). The
+            // inbound apply path must not write a tree this cluster kept
+            // cluster-local by not enrolling it: the core ThrowIfSystemTree
+            // reserved-prefix check covers only the `_lattice_` core trees, not
+            // the `sys-`-prefixed authorization / identity trees, and the
+            // peer-supplied OriginClusterId is unverified. Reject an entry whose
+            // tree is not enrolled here (drop it - a non-enrolled tree id is
+            // peer-controlled, so dead-lettering it would let a peer spawn
+            // unbounded DLQ activations) and dead-letter an entry whose
+            // peer-supplied wire mode disagrees with the locally resolved mode
+            // for an enrolled tree (re-resolving the mode locally rather than
+            // trusting the wire field). Enforced before any grain call so the
+            // rejection is cheap and covers every transport that funnels through
+            // the applier.
+            switch (ClassifyInboundTree(in entry))
+            {
+                case InboundTreeAdmission.RejectNotReplicated:
+                    _logger.LogWarning(
+                        "Rejected inbound replication entry for tree '{Tree}' from origin '{Origin}': "
+                        + "the tree is not enrolled for replication on this receiver.",
+                        entry.TreeId, entry.OriginClusterId);
+                    outcome = LatticeReplicationMetrics.OutcomeRejectedNotReplicated;
+                    return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
+
+                case InboundTreeAdmission.RejectModeMismatch:
+                    var expectedMode = ResolveLocalMergeMode(entry.TreeId, out _)!.Value;
+                    _logger.LogWarning(
+                        "Rejected inbound replication entry for tree '{Tree}' from origin '{Origin}': "
+                        + "wire merge mode '{WireMode}' disagrees with the locally resolved mode '{LocalMode}'.",
+                        entry.TreeId, entry.OriginClusterId, entry.Mode, expectedMode);
+                    await DeadLetterModeMismatchAsync(entry, expectedMode, cancellationToken).ConfigureAwait(false);
+                    outcome = LatticeReplicationMetrics.OutcomeRejectedModeMismatch;
+                    return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
+            }
+
             // DURABLE RECEIVE FENCE (issue #1173). While a cross-cluster restore
             // saga has paused inbound apply for this tree, peer entries must not
             // be admitted: an early-flipping cluster that applied a laggard's
@@ -947,6 +982,122 @@ internal sealed partial class ReplicationApplier(
     private bool IsTreeReplicatedHere(string treeId) =>
         _replicationContext?.ResolveMergeMode(treeId) is not null
         || options.Get(treeId).ReplicatedTrees?.ContainsKey(treeId) == true;
+
+    /// <summary>
+    /// Receiver-side inbound admission outcomes for the enrollment / merge-mode
+    /// gate (issue #1267). The gate is the sole tree-scope authorization the
+    /// data-apply path enforces beyond the core <c>ThrowIfSystemTree</c>
+    /// reserved-prefix check, which does not cover the <c>sys-</c>-prefixed
+    /// authorization / identity trees a cluster may deliberately keep
+    /// cluster-local by not enrolling them.
+    /// </summary>
+    private enum InboundTreeAdmission
+    {
+        /// <summary>The entry's tree is enrolled here and its wire mode matches the local mode; apply it.</summary>
+        Admit,
+
+        /// <summary>The entry's tree is not enrolled for replication on this receiver; drop it.</summary>
+        RejectNotReplicated,
+
+        /// <summary>The entry's tree is enrolled but its peer-supplied wire mode disagrees with the local mode; dead-letter it.</summary>
+        RejectModeMismatch,
+    }
+
+    /// <summary>
+    /// Classifies an inbound entry against the receiver's per-tree replication
+    /// enrollment and merge-mode configuration. The check is the receiver-side
+    /// hardening for issue #1267: a peer holding the mesh secret must not be
+    /// able to write a tree this cluster kept cluster-local by not enrolling it
+    /// (the peer-supplied <see cref="WalRecord.OriginClusterId"/> is
+    /// unverified), nor override the merge algebra by supplying a different
+    /// wire <see cref="WalRecord.Mode"/>.
+    /// <para>
+    /// Enforcement requires an enrollment source. A hand-built applier with
+    /// neither an injected <see cref="ILatticeReplicationContext"/> nor a
+    /// per-tree <see cref="LatticeReplicationOptions.ReplicatedTrees"/> map has
+    /// no enrollment signal and stays on the legacy pass-through
+    /// (<see cref="InboundTreeAdmission.Admit"/>). Production always registers
+    /// <c>ConfiguredLatticeReplicationContext</c>, so the gate is always live
+    /// there. The lookup is a single cached dictionary read (no per-entry
+    /// allocation): <see cref="ILatticeReplicationContext.ResolveMergeMode"/>
+    /// is cache-backed and <see cref="IOptionsMonitor{TOptions}.Get"/> returns
+    /// a cached options instance.
+    /// </para>
+    /// </summary>
+    private InboundTreeAdmission ClassifyInboundTree(in WalRecord entry)
+    {
+        var localMode = ResolveLocalMergeMode(entry.TreeId, out var hasEnrollmentSource);
+        if (!hasEnrollmentSource)
+        {
+            return InboundTreeAdmission.Admit;
+        }
+
+        if (localMode is null)
+        {
+            return InboundTreeAdmission.RejectNotReplicated;
+        }
+
+        return entry.Mode == localMode.Value
+            ? InboundTreeAdmission.Admit
+            : InboundTreeAdmission.RejectModeMismatch;
+    }
+
+    /// <summary>
+    /// Resolves the merge mode this receiver applies to <paramref name="treeId"/>,
+    /// preferring the injected <see cref="ILatticeReplicationContext"/> (the
+    /// same per-tree resolver the shipper, change feed, and bootstrap path
+    /// consult) and falling back to the raw
+    /// <see cref="LatticeReplicationOptions.ReplicatedTrees"/> map when no
+    /// context was injected. <paramref name="hasEnrollmentSource"/> reports
+    /// whether any enrollment configuration was available at all: when both the
+    /// context and the map are absent the applier cannot enforce the gate and
+    /// the caller admits the entry unchanged. Returns <c>null</c> for a tree
+    /// that has an enrollment source but is not enrolled.
+    /// </summary>
+    private LatticeMergeMode? ResolveLocalMergeMode(string treeId, out bool hasEnrollmentSource)
+    {
+        if (_replicationContext is not null)
+        {
+            hasEnrollmentSource = true;
+            return _replicationContext.ResolveMergeMode(treeId);
+        }
+
+        var trees = options.Get(treeId).ReplicatedTrees;
+        if (trees is not null)
+        {
+            hasEnrollmentSource = true;
+            return trees.TryGetValue(treeId, out var mode) ? mode : null;
+        }
+
+        hasEnrollmentSource = false;
+        return null;
+    }
+
+    /// <summary>
+    /// Dead-letters an inbound entry the receiver-side merge-mode gate rejected
+    /// because its peer-supplied <see cref="WalRecord.Mode"/> disagreed with
+    /// the locally resolved mode for its tree. Only reached on the rejection
+    /// path (an enrolled tree shipped a mismatched mode), so the interpolated
+    /// diagnostic string is not on any steady-state hot path. The tree is
+    /// enrolled and therefore bounded, so parking the entry cannot be used to
+    /// spawn unbounded dead-letter-queue activations.
+    /// </summary>
+    private Task DeadLetterModeMismatchAsync(
+        WalRecord entry,
+        LatticeMergeMode expected,
+        CancellationToken cancellationToken)
+    {
+        var dlq = grainFactory.GetGrain<IReplicationDeadLetterGrain>(entry.TreeId);
+        return dlq.EnqueueAsync(
+            entry,
+            failureReason: $"Inbound replication entry for tree '{entry.TreeId}' declared merge mode "
+                + $"'{entry.Mode}' but the receiver resolves this tree to '{expected}'; the entry was "
+                + "rejected so a peer cannot override the local merge algebra via the wire mode field.",
+            retryCount: 0,
+            reasonTag: LatticeReplicationMetrics.ReasonModeMismatch,
+            cancellationToken);
+    }
+
 
     /// <summary>
     /// CAS retry budget for the read-merge-write loop used by typed CRDT

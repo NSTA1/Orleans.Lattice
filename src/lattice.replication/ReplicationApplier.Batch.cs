@@ -1,5 +1,6 @@
 using Orleans.Lattice.BPlusTree.Grains;
 using System.Diagnostics;
+using Microsoft.Extensions.Logging;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication.Grains;
@@ -491,6 +492,21 @@ internal sealed partial class ReplicationApplier
         if (string.IsNullOrEmpty(treeId) || string.IsNullOrEmpty(origin))
         {
             return await ApplyRunPerEntryAsync(entries, startInclusive, endExclusive, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        // RECEIVER-SIDE ENROLLMENT / MERGE-MODE GATE (issue #1267). Mirror the
+        // per-entry gate in ApplyAsync for the batch path. A run is a single
+        // (treeId, originClusterId) segment carrying one batch-constant wire
+        // mode, so the representative first entry classifies the whole run:
+        // reject the run when the tree is not enrolled here, or dead-letter it
+        // when the peer-supplied wire mode disagrees with the locally resolved
+        // mode. Checked before any HWM grain call so a rejected run costs no
+        // round-trip.
+        var admission = ClassifyInboundTree(in first);
+        if (admission != InboundTreeAdmission.Admit)
+        {
+            return await RejectRunAsync(entries, startInclusive, endExclusive, admission, cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -1082,5 +1098,65 @@ internal sealed partial class ReplicationApplier
             }
         }
         return new ApplyResult { Applied = anyApplied, HighWaterMark = highest };
+    }
+
+    /// <summary>
+    /// Terminal handler for a run the receiver-side enrollment / merge-mode
+    /// gate rejected (issue #1267). The whole run shares one (treeId, origin,
+    /// wire mode), so a single classification covers every entry. A
+    /// not-enrolled run is dropped (no dead-letter, since a non-enrolled tree
+    /// id is peer-controlled and parking it would let a peer spawn unbounded
+    /// DLQ activations); a mode-mismatch run dead-letters each entry with
+    /// <see cref="LatticeReplicationMetrics.ReasonModeMismatch"/> because its
+    /// tree is enrolled and therefore bounded. Every entry records the matching
+    /// apply-duration outcome so per-entry receiver observability is preserved,
+    /// and a single warning is logged per run rather than per entry to avoid a
+    /// log-flood amplification from a hostile peer. Returns a non-applied,
+    /// HWM-unchanged result so the run neither merges nor advances the
+    /// per-origin high-water-mark.
+    /// </summary>
+    private async Task<ApplyResult> RejectRunAsync(
+        IReadOnlyList<WalRecord> entries,
+        int startInclusive,
+        int endExclusive,
+        InboundTreeAdmission admission,
+        CancellationToken cancellationToken)
+    {
+        var first = entries[startInclusive];
+        var treeId = first.TreeId;
+        var origin = first.OriginClusterId ?? string.Empty;
+
+        if (admission == InboundTreeAdmission.RejectModeMismatch)
+        {
+            var expectedMode = ResolveLocalMergeMode(treeId, out _)!.Value;
+            _logger.LogWarning(
+                "Rejected inbound replication run of {Count} entries for tree '{Tree}' from origin '{Origin}': "
+                + "wire merge mode '{WireMode}' disagrees with the locally resolved mode '{LocalMode}'.",
+                endExclusive - startInclusive, treeId, origin, first.Mode, expectedMode);
+
+            for (var k = startInclusive; k < endExclusive; k++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var startTs = Stopwatch.GetTimestamp();
+                await DeadLetterModeMismatchAsync(entries[k], expectedMode, cancellationToken).ConfigureAwait(false);
+                RecordApplyDuration(treeId, origin, startTs, LatticeReplicationMetrics.OutcomeRejectedModeMismatch);
+            }
+
+            return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
+        }
+
+        _logger.LogWarning(
+            "Rejected inbound replication run of {Count} entries for tree '{Tree}' from origin '{Origin}': "
+            + "the tree is not enrolled for replication on this receiver.",
+            endExclusive - startInclusive, treeId, origin);
+
+        for (var k = startInclusive; k < endExclusive; k++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var startTs = Stopwatch.GetTimestamp();
+            RecordApplyDuration(treeId, origin, startTs, LatticeReplicationMetrics.OutcomeRejectedNotReplicated);
+        }
+
+        return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
     }
 }
