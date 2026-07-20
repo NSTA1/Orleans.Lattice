@@ -1,0 +1,614 @@
+#Requires -Version 7.0
+<#
+.SYNOPSIS
+    Provisions the active-active, cross-region Orleans.Lattice reference estate on
+    Azure Container Apps, end to end, from a single parameter set.
+
+.DESCRIPTION
+    One idempotent orchestrator for sub-issue F-192 (#1280). Given a region list,
+    a subscription / resource group, a network option and image tags, it converges
+    the whole estate and prints the resulting endpoints. Re-running it converges
+    again - it never duplicates.
+
+    WHAT A REAL RUN DOES (in order):
+
+      1. Selects the subscription and ensures the resource group exists
+         (az group create is idempotent).
+
+      2. Deploys bootstrap.bicep - the shared Azure Container Registry ONLY - so
+         the three host images can be built BEFORE the Container Apps that pull
+         them exist. main.bicep later converges onto this same registry (identical
+         name expression, same resource group).
+
+      3. Builds the three host images server-side with 'az acr build' straight
+         from the in-folder Dockerfiles
+         (hosts/{Silo,Mcp,Explorer}/Dockerfile). No image is ever published to a
+         public registry.
+
+      4. PASS 1: deploys main.bicep across all N regions in the module-ordered
+         sequence it encodes (compute -> storage -> networking -> observability
+         -> Front Door), with the two forward-threaded seams left empty
+         (prometheusQueryEndpoint = '', frontDoorId = '') and Entra OFF. Bicep
+         detects a compile cycle if those Azure-assigned values are threaded in
+         one pass, so they are activated on pass 2.
+
+      5. Deploys entra/entra.bicep (Microsoft Graph extension, GA 2025-07-29):
+         app registrations + service principals + FEDERATED IDENTITY CREDENTIALS
+         (preferred over client secrets) for the silo facades, the MCP endpoint,
+         and the Explorer, plus the app-to-app app-role grants. It then performs
+         the one step the Graph resource model cannot: residual TENANT ADMIN
+         CONSENT for the silo app's Microsoft Graph application permissions.
+
+      6. PASS 2: redeploys each region's compute module DIRECTLY (see DESIGN
+         NOTES) with the Azure-assigned values now known - the per-region managed
+         Prometheus query endpoint (activates the silo KEDA scaler and the MCP
+         telemetry tool group), the global Front Door id (activates the
+         X-Azure-FDID origin lock), and the SYMMETRIC replication topology
+         (reciprocal peer endpoints, the estate-wide wire-merge-mode map, and the
+         per-region Key Vault replication-key secret URI), plus the Entra client
+         id when Entra is enabled.
+
+      7. Prints the resulting endpoints (the global Front Door hostnames and every
+         per-region head FQDN). No secret is ever printed.
+
+    DESIGN NOTES:
+
+      * Symmetric replication. Each region's cluster id is "<baseName>-<regionCode>"
+        and its peer endpoint is "https://<siloStateApiFqdn>". For every region the
+        script builds the peer list from EVERY OTHER region, so enrollment is fully
+        reciprocal across all N regions (asymmetry dead-letters cross-region
+        traffic). The wire-merge-mode map (-ReplicationTrees) is applied identically
+        estate-wide. The replication key is byte-identical across regions (one Key
+        Vault secret per region, same material) and is @secure end to end.
+
+      * Why pass 2 deploys compute DIRECTLY. main.bicep threads a SINGLE
+        prometheusQueryEndpoint to every region and does not thread the per-region
+        replication seams at all, so the per-region activation cannot go through
+        main.bicep. compute.bicep's resource names are pure functions of
+        (baseName, regionCode), so a direct per-region deploy converges onto the
+        exact same Container Apps that pass 1 created - it is not a second estate.
+
+      * RBAC is declarative and idempotent. Managed-identity data-plane RBAC
+        (AcrPull, Storage Table Data Contributor, Key Vault Secrets User) is
+        assigned by the Bicep modules; Entra app-to-app RBAC (the Lattice.Access
+        app role) is assigned by entra.bicep. The script does not imperatively
+        create role assignments, so re-runs never duplicate them.
+
+    SECURITY: -ReplicationKey and -GrafanaAdminPassword are SecureString and are
+    threaded to Azure only as @secure() Bicep parameters (never written to disk,
+    never logged, never emitted as an output). No client secret is created for any
+    Entra app - federated identity credentials replace them.
+
+.NOTES
+    THIS SCRIPT DOES NOT RUN ITSELF DURING AUTHORING. It is validated statically
+    (Bicep 'az bicep build', PowerShell AST parse, PSScriptAnalyzer). Running it
+    for real requires an authenticated 'az' session with rights to create the
+    resources, register Entra apps, and (for admin consent) grant tenant-wide
+    application permissions.
+
+.EXAMPLE
+    $key = Read-Host -AsSecureString 'Replication key'
+    $gpw = Read-Host -AsSecureString 'Grafana admin password'
+    ./Deploy-ReferenceArchitecture.ps1 `
+        -SubscriptionId 00000000-0000-0000-0000-000000000000 `
+        -ResourceGroup rg-lattice `
+        -Location eastus `
+        -BaseName lattice `
+        -Regions @(@{ regionCode = 'use'; location = 'eastus' }, @{ regionCode = 'euw'; location = 'westeurope' }) `
+        -ImageTag 2025.07.29 `
+        -ReplicationTrees 'orders=LwwRegister,inventory=OrSet' `
+        -ReplicationKey $key `
+        -GrafanaAdminPassword $gpw `
+        -EntraEnabled -EntraTenantId 11111111-1111-1111-1111-111111111111
+
+.EXAMPLE
+    # Preview every action without mutating Azure.
+    ./Deploy-ReferenceArchitecture.ps1 -SubscriptionId ... -ResourceGroup rg-lattice `
+        -Location eastus -BaseName lattice -Regions @(@{regionCode='use';location='eastus'}) `
+        -ImageTag dev -GrafanaAdminPassword $gpw -ReplicationKey $key -WhatIf
+#>
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '',
+    Justification = 'This is an interactive operator-facing deployment CLI; Write-Host renders the phase banners and the final endpoint list as intended console UX, not pipeline output.')]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
+param(
+    [Parameter(Mandatory)]
+    [string]$SubscriptionId,
+
+    [Parameter(Mandatory)]
+    [string]$ResourceGroup,
+
+    [Parameter(Mandatory)]
+    [string]$Location,
+
+    [Parameter(Mandatory)]
+    [ValidateLength(3, 16)]
+    [ValidatePattern('^[a-z0-9]+$')]
+    [string]$BaseName,
+
+    # Each item: @{ regionCode = '<3-6 char code>'; location = '<azure region>' }.
+    [Parameter(Mandatory)]
+    [ValidateNotNullOrEmpty()]
+    [object[]]$Regions,
+
+    [Parameter(Mandatory)]
+    [string]$ImageTag,
+
+    [ValidateSet('public', 'private')]
+    [string]$DeploymentOption = 'public',
+
+    [string]$SiloImageRepository = 'lattice-silo',
+    [string]$McpImageRepository = 'lattice-mcp',
+    [string]$ExplorerImageRepository = 'lattice-explorer',
+
+    # regionCode of the single backup-primary region. Defaults to the first region.
+    [string]$BackupPrimaryRegionCode,
+
+    # Estate-wide wire-merge-mode map, for example 'orders=LwwRegister,inventory=OrSet'.
+    [string]$ReplicationTrees = '',
+
+    [string[]]$IngressAllowedCidrs = @(),
+
+    [ValidateRange(1, 100)]
+    [int]$SiloMinReplicas = 1,
+
+    [ValidateRange(1, 100)]
+    [int]$SiloMaxReplicas = 10,
+
+    [ValidateSet('Deny', 'Allow')]
+    [string]$AuthDefaultEffect = 'Deny',
+
+    [bool]$RequireApiAuthorization = $true,
+
+    # PUBLIC option: the per-cluster replication key, matched across every region.
+    # Stable across runs (a re-run with a different key rotates the secret and
+    # dead-letters in-flight cross-region traffic until every region converges).
+    [securestring]$ReplicationKey,
+
+    # Grafana admin password for every per-region self-hosted Grafana head.
+    [Parameter(Mandatory)]
+    [securestring]$GrafanaAdminPassword,
+
+    [switch]$EntraEnabled,
+    [string]$EntraTenantId = '',
+    # Optional pre-existing silo audience app (client) id. When supplied the script
+    # does NOT deploy entra/entra.bicep and uses this id as the estate audience.
+    [string]$EntraClientId = '',
+    [string]$EntraAudiences = '',
+    # Explorer web reply URIs. Defaults are derived from the deployed FQDNs.
+    [string[]]$ExplorerRedirectUris = @(),
+
+    # Skip 'az acr build' (images already present in the registry at -ImageTag).
+    [switch]$SkipImageBuild
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+# Repository-relative anchors. The Dockerfiles COPY paths are rooted at the
+# reference-architecture folder, so that folder is the acr-build context.
+$ScriptRoot = $PSScriptRoot
+$RefArchRoot = Split-Path -Parent $ScriptRoot
+$BicepRoot = Join-Path $RefArchRoot 'bicep'
+$MainTemplate = Join-Path $BicepRoot 'main.bicep'
+$BootstrapTemplate = Join-Path $BicepRoot 'bootstrap.bicep'
+$ComputeTemplate = Join-Path $BicepRoot 'modules/compute.bicep'
+$EntraTemplate = Join-Path $BicepRoot 'entra/entra.bicep'
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+function Write-Phase {
+    param([string]$Message)
+    Write-Host ''
+    Write-Host "==> $Message" -ForegroundColor Cyan
+}
+
+function ConvertFrom-SecureStringPlain {
+    param([securestring]$Secure)
+    if ($null -eq $Secure) { return '' }
+    $ptr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($Secure)
+    try {
+        return [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)
+    }
+    finally {
+        [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)
+    }
+}
+
+function Invoke-Az {
+    <#
+        Runs the Azure CLI, fails hard on a non-zero exit, and returns the parsed
+        JSON payload (when any). Mutating calls flow through ShouldProcess so
+        -WhatIf previews the estate without touching Azure. Secret-bearing args
+        must be passed via -SecretArgs so they are appended but never echoed.
+    #>
+    [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
+    param(
+        [Parameter(Mandatory)][string[]]$Arguments,
+        [string]$Action,
+        [string]$Target,
+        [switch]$Mutating,
+        [string[]]$SecretArgs = @(),
+        [switch]$AllowFailure
+    )
+
+    if ($Mutating) {
+        $desc = if ($Target) { $Target } else { ($Arguments -join ' ') }
+        if (-not $PSCmdlet.ShouldProcess($desc, $Action)) {
+            Write-Host "    [WhatIf] would run: az $($Arguments -join ' ')" -ForegroundColor DarkGray
+            return $null
+        }
+    }
+
+    $allArgs = @($Arguments) + @($SecretArgs)
+    $raw = & az @allArgs 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        if ($AllowFailure) {
+            Write-Warning "az $($Arguments -join ' ') exited $LASTEXITCODE"
+            return $null
+        }
+        # Never surface $SecretArgs; only the non-secret arguments are shown.
+        throw "az $($Arguments -join ' ') failed (exit $LASTEXITCODE): $raw"
+    }
+
+    $text = ($raw | Out-String).Trim()
+    if ([string]::IsNullOrWhiteSpace($text)) { return $null }
+    try { return $text | ConvertFrom-Json } catch { return $text }
+}
+
+function New-ParametersFile {
+    <#
+        Writes an ARM parameters JSON file from a hashtable of NON-SECRET values.
+        Returns the path; the caller deletes it in a finally block. Secrets are
+        NEVER written here - they are passed inline to az as @secure() params.
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+        Justification = 'Writes a throwaway temp parameters file with no secret content; the actual Azure state change flows through Invoke-Az, which supports ShouldProcess.')]
+    [OutputType([string])]
+    param([hashtable]$Values)
+    $params = @{}
+    foreach ($k in $Values.Keys) { $params[$k] = @{ value = $Values[$k] } }
+    $doc = [ordered]@{
+        '$schema'      = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#'
+        contentVersion = '1.0.0.0'
+        parameters     = $params
+    }
+    $path = Join-Path ([System.IO.Path]::GetTempPath()) ("lattice-deploy-{0}.json" -f ([guid]::NewGuid()))
+    $doc | ConvertTo-Json -Depth 30 | Set-Content -Path $path -Encoding utf8
+    return $path
+}
+
+function Get-ByRegionCode {
+    param([object[]]$Items, [string]$RegionCode)
+    foreach ($item in $Items) {
+        if ($item.regionCode -eq $RegionCode) { return $item }
+    }
+    return $null
+}
+
+# ---------------------------------------------------------------------------
+# Preflight
+# ---------------------------------------------------------------------------
+
+if (-not (Get-Command az -ErrorAction SilentlyContinue)) {
+    throw 'The Azure CLI (az) is required but was not found on PATH.'
+}
+
+foreach ($template in @($MainTemplate, $BootstrapTemplate, $ComputeTemplate, $EntraTemplate)) {
+    if (-not (Test-Path $template)) { throw "Required template is missing: $template" }
+}
+
+foreach ($region in $Regions) {
+    if (-not $region.regionCode -or -not $region.location) {
+        throw 'Every -Regions entry must have a regionCode and a location, for example @{ regionCode = "use"; location = "eastus" }.'
+    }
+}
+
+if (-not $BackupPrimaryRegionCode) { $BackupPrimaryRegionCode = $Regions[0].regionCode }
+if (-not (Get-ByRegionCode -Items $Regions -RegionCode $BackupPrimaryRegionCode)) {
+    throw "-BackupPrimaryRegionCode '$BackupPrimaryRegionCode' does not match any -Regions entry."
+}
+
+if ($DeploymentOption -eq 'public' -and $null -eq $ReplicationKey) {
+    throw 'The public deployment option requires -ReplicationKey (a SecureString matched across every region).'
+}
+
+if ($EntraEnabled -and [string]::IsNullOrWhiteSpace($EntraTenantId)) {
+    throw '-EntraEnabled requires -EntraTenantId.'
+}
+
+# Normalise the region list to the shape main.bicep expects.
+$regionParam = @($Regions | ForEach-Object { @{ regionCode = $_.regionCode; location = $_.location } })
+
+$replicationKeyPlain = ConvertFrom-SecureStringPlain $ReplicationKey
+$grafanaPasswordPlain = ConvertFrom-SecureStringPlain $GrafanaAdminPassword
+
+$tempFiles = New-Object System.Collections.Generic.List[string]
+
+try {
+    Write-Phase "Selecting subscription $SubscriptionId"
+    Invoke-Az -Arguments @('account', 'set', '--subscription', $SubscriptionId) `
+        -Mutating -Action 'Select subscription' -Target $SubscriptionId | Out-Null
+
+    Write-Phase "Ensuring resource group $ResourceGroup ($Location)"
+    Invoke-Az -Arguments @('group', 'create', '--name', $ResourceGroup, '--location', $Location, '--output', 'json') `
+        -Mutating -Action 'Create resource group' -Target $ResourceGroup | Out-Null
+
+    # -----------------------------------------------------------------------
+    # 1. Bootstrap the shared registry so images can be built before compute.
+    # -----------------------------------------------------------------------
+    Write-Phase 'Bootstrapping the shared container registry'
+    $bootstrapParams = New-ParametersFile -Values @{
+        baseName         = $BaseName
+        registryLocation = $Regions[0].location
+    }
+    $tempFiles.Add($bootstrapParams)
+    $bootstrap = Invoke-Az -Arguments @(
+        'deployment', 'group', 'create',
+        '--resource-group', $ResourceGroup,
+        '--name', 'lattice-bootstrap',
+        '--template-file', $BootstrapTemplate,
+        '--parameters', "@$bootstrapParams",
+        '--output', 'json'
+    ) -Mutating -Action 'Deploy registry' -Target 'bootstrap.bicep'
+
+    $acrName = if ($bootstrap) { $bootstrap.properties.outputs.acrName.value } else { '<acr-name>' }
+    $acrLoginServer = if ($bootstrap) { $bootstrap.properties.outputs.acrLoginServer.value } else { '<acr-login-server>' }
+    Write-Host "    Registry: $acrLoginServer"
+
+    # -----------------------------------------------------------------------
+    # 2. Build the three host images server-side (no public publishing).
+    # -----------------------------------------------------------------------
+    if ($SkipImageBuild) {
+        Write-Phase 'Skipping image build (-SkipImageBuild)'
+    }
+    else {
+        Write-Phase "Building host images into $acrName at tag $ImageTag"
+        $imageMatrix = @(
+            @{ Repo = $SiloImageRepository; Dockerfile = 'hosts/Silo/Dockerfile' }
+            @{ Repo = $McpImageRepository; Dockerfile = 'hosts/Mcp/Dockerfile' }
+            @{ Repo = $ExplorerImageRepository; Dockerfile = 'hosts/Explorer/Dockerfile' }
+        )
+        foreach ($image in $imageMatrix) {
+            Invoke-Az -Arguments @(
+                'acr', 'build',
+                '--registry', $acrName,
+                '--image', "$($image.Repo):$ImageTag",
+                '--file', $image.Dockerfile,
+                $RefArchRoot
+            ) -Mutating -Action 'Build image' -Target "$($image.Repo):$ImageTag" | Out-Null
+        }
+    }
+
+    # -----------------------------------------------------------------------
+    # 3. PASS 1 - deploy the estate with the forward-threaded seams empty and
+    #    Entra off. Compute -> storage -> networking -> observability -> AFD is
+    #    the module order main.bicep encodes; we drive it in one deployment.
+    # -----------------------------------------------------------------------
+    Write-Phase 'PASS 1: deploying the estate (prometheus + Front Door + Entra seams empty)'
+    $pass1Values = @{
+        baseName                = $BaseName
+        regions                 = $regionParam
+        imageTag                = $ImageTag
+        siloImageRepository     = $SiloImageRepository
+        mcpImageRepository      = $McpImageRepository
+        explorerImageRepository = $ExplorerImageRepository
+        deploymentOption        = $DeploymentOption
+        backupPrimaryRegionCode = $BackupPrimaryRegionCode
+        ingressAllowedCidrs     = $IngressAllowedCidrs
+        siloMinReplicas         = $SiloMinReplicas
+        siloMaxReplicas         = $SiloMaxReplicas
+        authDefaultEffect       = $AuthDefaultEffect
+        requireApiAuthorization = $RequireApiAuthorization
+        # Entra is activated on pass 2 (the app registrations are created between
+        # the passes), so it stays off here.
+        entraEnabled            = $false
+        # Forward-threaded seams are empty on pass 1 (compile-cycle avoidance).
+        prometheusQueryEndpoint = ''
+        frontDoorId             = ''
+    }
+    $pass1File = New-ParametersFile -Values $pass1Values
+    $tempFiles.Add($pass1File)
+
+    # Secrets are appended inline as @secure() params; they never touch the file.
+    $pass1Secrets = @('--parameters', "grafanaAdminPassword=$grafanaPasswordPlain")
+    if ($DeploymentOption -eq 'public') {
+        $pass1Secrets += @('--parameters', "replicationKey=$replicationKeyPlain")
+    }
+
+    $pass1 = Invoke-Az -Arguments @(
+        'deployment', 'group', 'create',
+        '--resource-group', $ResourceGroup,
+        '--name', 'lattice-pass1',
+        '--template-file', $MainTemplate,
+        '--parameters', "@$pass1File",
+        '--output', 'json'
+    ) -SecretArgs $pass1Secrets -Mutating -Action 'Deploy estate (pass 1)' -Target 'main.bicep'
+
+    if (-not $pass1 -and $WhatIfPreference) {
+        Write-Host '    [WhatIf] pass 1 skipped; downstream phases have nothing to converge against.' -ForegroundColor DarkGray
+        return
+    }
+
+    $outputs = $pass1.properties.outputs
+    $perRegion = $outputs.perRegion.value
+    $perRegionStorage = $outputs.perRegionStorage.value
+    $backupBlobEndpoint = $outputs.backupBlobEndpoint.value
+    $perRegionObservability = $outputs.perRegionObservability.value
+    $perRegionKeyVault = if ($outputs.PSObject.Properties.Name -contains 'perRegionReplicationKeyVault') { $outputs.perRegionReplicationKeyVault.value } else { @() }
+    $perRegionPrivate = if ($outputs.PSObject.Properties.Name -contains 'perRegionPrivateNetwork') { $outputs.perRegionPrivateNetwork.value } else { @() }
+    $frontDoorId = $outputs.frontDoorId.value
+    $frontDoorEndpoints = $outputs.frontDoorEndpoints.value
+
+    # -----------------------------------------------------------------------
+    # 4. Entra - app registrations, SPs, federated identity credentials, RBAC.
+    # -----------------------------------------------------------------------
+    $entraClientIdResolved = $EntraClientId
+    $entraAudiencesResolved = $EntraAudiences
+    if ($EntraEnabled -and [string]::IsNullOrWhiteSpace($EntraClientId)) {
+        Write-Phase 'Deploying Entra resources (Microsoft Graph extension)'
+
+        $regionManagedIdentities = @($perRegion | ForEach-Object {
+                @{ regionCode = $_.regionCode; principalId = $_.managedIdentityPrincipalId }
+            })
+
+        # Derive Explorer reply URIs from the deployed hostnames when none given.
+        $redirectUris = $ExplorerRedirectUris
+        if (-not $redirectUris -or $redirectUris.Count -eq 0) {
+            $redirectUris = @()
+            if ($frontDoorEndpoints -and $frontDoorEndpoints.PSObject.Properties.Name -contains 'explorer' -and $frontDoorEndpoints.explorer) {
+                $redirectUris += "https://$($frontDoorEndpoints.explorer)/signin-oidc"
+            }
+            foreach ($r in $perRegion) {
+                if ($r.explorerFqdn) { $redirectUris += "https://$($r.explorerFqdn)/signin-oidc" }
+            }
+        }
+
+        $entraValues = @{
+            baseName                = $BaseName
+            tenantId                = $EntraTenantId
+            regionManagedIdentities = $regionManagedIdentities
+            explorerRedirectUris    = $redirectUris
+        }
+        $entraFile = New-ParametersFile -Values $entraValues
+        $tempFiles.Add($entraFile)
+
+        $entra = Invoke-Az -Arguments @(
+            'deployment', 'group', 'create',
+            '--resource-group', $ResourceGroup,
+            '--name', 'lattice-entra',
+            '--template-file', $EntraTemplate,
+            '--parameters', "@$entraFile",
+            '--output', 'json'
+        ) -Mutating -Action 'Deploy Entra resources' -Target 'entra/entra.bicep'
+
+        if ($entra) {
+            $entraClientIdResolved = $entra.properties.outputs.siloClientId.value
+            if ([string]::IsNullOrWhiteSpace($entraAudiencesResolved)) {
+                $entraAudiencesResolved = $entra.properties.outputs.siloAudience.value
+            }
+
+            # Residual step the Graph resource model cannot express: grant tenant
+            # admin consent for the silo app's Microsoft Graph application
+            # permissions. Idempotent; needs a privileged-role operator.
+            Write-Phase 'Granting tenant admin consent for the silo app (residual manual step)'
+            Invoke-Az -Arguments @('ad', 'app', 'permission', 'admin-consent', '--id', $entraClientIdResolved) `
+                -Mutating -Action 'Admin-consent silo app' -Target $entraClientIdResolved -AllowFailure | Out-Null
+        }
+    }
+    elseif ($EntraEnabled) {
+        Write-Phase "Using supplied Entra client id $EntraClientId (skipping entra.bicep)"
+    }
+
+    # -----------------------------------------------------------------------
+    # 5. PASS 2 - per-region compute activation: prometheus + Front Door +
+    #    SYMMETRIC replication + Entra. Deployed directly per region (see the
+    #    DESIGN NOTES in the header) so each region gets its own values.
+    # -----------------------------------------------------------------------
+    Write-Phase 'PASS 2: activating scaler, Front Door lock, symmetric replication (+ Entra)'
+    for ($i = 0; $i -lt $Regions.Count; $i++) {
+        $region = $Regions[$i]
+        $code = $region.regionCode
+        $clusterId = "$BaseName-$code"
+
+        # Symmetric, reciprocal peer list: every OTHER region, keyed by its
+        # cluster id and dialed at its silo State/replication ingress FQDN.
+        $peerEntries = @()
+        foreach ($other in $perRegion) {
+            if ($other.regionCode -eq $code) { continue }
+            $peerEntries += "$BaseName-$($other.regionCode)=https://$($other.siloStateApiFqdn)"
+        }
+        $replicationPeers = ($peerEntries -join ',')
+
+        $obs = Get-ByRegionCode -Items $perRegionObservability -RegionCode $code
+        $prometheus = if ($obs) { $obs.prometheusQueryEndpoint } else { '' }
+
+        $kv = Get-ByRegionCode -Items $perRegionKeyVault -RegionCode $code
+        $replicationKeySecretUri = if ($kv) { $kv.replicationKeySecretUri } else { '' }
+
+        $storageRegion = Get-ByRegionCode -Items $perRegionStorage -RegionCode $code
+        $walTableEndpoint = if ($storageRegion) { $storageRegion.tableEndpoint } else { '' }
+
+        $subnetId = ''
+        if ($DeploymentOption -eq 'private') {
+            $priv = Get-ByRegionCode -Items $perRegionPrivate -RegionCode $code
+            if ($priv) { $subnetId = $priv.infrastructureSubnetId }
+        }
+
+        $computeValues = @{
+            location                   = $region.location
+            regionCode                 = $code
+            baseName                   = $BaseName
+            acrLoginServer             = $acrLoginServer
+            imageTag                   = $ImageTag
+            siloImageRepository        = $SiloImageRepository
+            mcpImageRepository         = $McpImageRepository
+            explorerImageRepository    = $ExplorerImageRepository
+            orleansClusterId           = $clusterId
+            orleansServiceId           = $BaseName
+            siloMinReplicas            = $SiloMinReplicas
+            siloMaxReplicas            = $SiloMaxReplicas
+            backupIsPrimary            = ($code -eq $BackupPrimaryRegionCode)
+            walTableEndpoint           = $walTableEndpoint
+            backupBlobEndpoint         = $backupBlobEndpoint
+            authDefaultEffect          = $AuthDefaultEffect
+            requireApiAuthorization    = $RequireApiAuthorization
+            internalEnvironment        = ($DeploymentOption -eq 'private')
+            infrastructureSubnetId     = $subnetId
+            # Activated seams.
+            prometheusQueryEndpoint    = $prometheus
+            mcpTelemetryBackendAddress = $prometheus
+            frontDoorId                = $frontDoorId
+            replicationPeers           = $replicationPeers
+            replicationTrees           = $ReplicationTrees
+            replicationKeySecretUri    = $replicationKeySecretUri
+            # Entra.
+            entraEnabled               = [bool]$EntraEnabled
+            entraTenantId              = $EntraTenantId
+            entraClientId              = $entraClientIdResolved
+            entraAudiences             = $entraAudiencesResolved
+        }
+        $computeFile = New-ParametersFile -Values $computeValues
+        $tempFiles.Add($computeFile)
+
+        Write-Host "    Region $code : $($peerEntries.Count) peer(s)"
+        Invoke-Az -Arguments @(
+            'deployment', 'group', 'create',
+            '--resource-group', $ResourceGroup,
+            '--name', "lattice-pass2-$code",
+            '--template-file', $ComputeTemplate,
+            '--parameters', "@$computeFile",
+            '--output', 'json'
+        ) -Mutating -Action "Activate region $code" -Target "compute.bicep ($code)" | Out-Null
+    }
+
+    # -----------------------------------------------------------------------
+    # 6. Endpoints - the only thing this script prints (never a secret).
+    # -----------------------------------------------------------------------
+    Write-Phase 'Estate endpoints'
+    if ($frontDoorEndpoints -and $frontDoorEndpoints.PSObject.Properties.Name.Count -gt 0) {
+        Write-Host '  Global Front Door:'
+        foreach ($name in $frontDoorEndpoints.PSObject.Properties.Name) {
+            Write-Host ("    {0,-10} https://{1}" -f $name, $frontDoorEndpoints.$name)
+        }
+    }
+    Write-Host '  Per-region heads:'
+    foreach ($r in $perRegion) {
+        Write-Host "    [$($r.regionCode)]"
+        Write-Host "      silo      https://$($r.siloStateApiFqdn)"
+        Write-Host "      mcp       https://$($r.mcpFqdn)"
+        Write-Host "      explorer  https://$($r.explorerFqdn)"
+    }
+
+    Write-Phase 'Done. The estate has converged.'
+}
+finally {
+    foreach ($file in $tempFiles) {
+        Remove-Item -Path $file -ErrorAction SilentlyContinue
+    }
+    # Best-effort scrub of the plaintext secret locals.
+    $replicationKeyPlain = $null
+    $grafanaPasswordPlain = $null
+    [System.GC]::Collect()
+}
