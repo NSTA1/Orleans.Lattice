@@ -69,6 +69,11 @@ Convention: package `foo` has code at `src/foo/`, tests at `test/foo/`, docs at
 - Detailed naming, testing, documentation, and long-Markdown-editing rules live
   as skills under `.github/skills/` and instructions under
   `.github/instructions/`. Read the relevant one before large changes.
+- Security invariants for the auth, membership, replication, telemetry, MCP, and
+  Explorer surfaces (fail closed; never trust peer/wire-supplied classification;
+  enforce at the single narrowest seam; isolate credential state per circuit; no
+  dead security config) live in `.github/instructions/security.instructions.md`,
+  which auto-attaches when you edit those packages.
 
 ## Hygiene gates (these fail the build at PR time)
 
