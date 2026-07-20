@@ -57,6 +57,22 @@ param mcpImageRepository string
 @description('Explorer host image repository name within the registry (for example "lattice-explorer").')
 param explorerImageRepository string
 
+// --- Storage seams (the storage sub-issue provisions the accounts; these are
+// deterministic keyless endpoint strings so there is no compute<->storage module
+// dependency cycle). All access is managed-identity + RBAC; no keys/SAS here. ---
+
+@description('STORAGE-SUBISSUE SEAM: keyless table endpoint backing the durable Azure Table WAL. Consumed via AZURE_CLIENT_ID managed identity.')
+param walTableEndpoint string = ''
+
+@description('STORAGE-SUBISSUE SEAM: keyless table endpoint backing Orleans Azure Table clustering (shares the per-region account with the WAL by design).')
+param clusteringTableEndpoint string = ''
+
+@description('STORAGE-SUBISSUE SEAM: keyless blob endpoint of the shared global backup sink consumed by Orleans.Lattice.Backup.AzureBlob.')
+param backupBlobEndpoint string = ''
+
+@description('STORAGE-SUBISSUE SEAM: true only for the single backup-PRIMARY region whose silo runs the scheduled-backup writer; standbys are restore-read only.')
+param backupIsPrimary bool = false
+
 // --- Log Analytics cost controls ---
 
 @description('Daily Log Analytics ingestion cap in GB. Bounds ACA container-log cost; managed-Prometheus metrics are unaffected.')
@@ -322,6 +338,12 @@ resource siloApp 'Microsoft.App/containerApps@2024-03-01' = {
             // sub-issues supply the concrete endpoints via their own env seams.
             { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
             { name: 'ASPNETCORE_URLS', value: 'http://0.0.0.0:${siloStateApiPort}' }
+            // Keyless storage seams (managed identity + RBAC; no keys/SAS). WAL
+            // and Orleans clustering intentionally share the per-region account.
+            { name: 'LATTICE_WAL_TABLE_ENDPOINT', value: walTableEndpoint }
+            { name: 'ORLEANS_CLUSTERING_TABLE_ENDPOINT', value: clusteringTableEndpoint }
+            { name: 'LATTICE_BACKUP_BLOB_ENDPOINT', value: backupBlobEndpoint }
+            { name: 'LATTICE_BACKUP_IS_PRIMARY', value: string(backupIsPrimary) }
             // Graceful scale-in: the host honours LatticeShuttingDownException
             // so a draining replica finishes or hands off in-flight shard
             // transfers within the termination grace period below.

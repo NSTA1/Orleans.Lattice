@@ -67,6 +67,9 @@ param siloMaxReplicas int = 10
 @description('OBSERVABILITY-SUBISSUE SEAM: managed-Prometheus query endpoint the silo KEDA scaler scrapes. Empty leaves every silo at its min-replica floor (the module still deploys).')
 param prometheusQueryEndpoint string = ''
 
+@description('regionCode of the single backup-PRIMARY region whose silo runs the scheduled-backup writer. That region gets Storage Blob Data Contributor on the shared backup sink; every other region is restore-read only. Must equal one regions[].regionCode. Defaults to the first region.')
+param backupPrimaryRegionCode string = regions[0].regionCode
+
 // AcrPull built-in role definition id.
 var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
 
@@ -119,8 +122,38 @@ module compute 'modules/compute.bicep' = [for region in regions: {
     siloMinReplicas: siloMinReplicas
     siloMaxReplicas: siloMaxReplicas
     prometheusQueryEndpoint: prometheusQueryEndpoint
+    // Keyless storage endpoints are DETERMINISTIC functions of
+    // (resourceGroup().id, baseName, regionCode) matching the names the storage
+    // module creates, so compute is fed strings and there is no module cycle.
+    // WAL and Orleans clustering share the per-region account by design.
+    walTableEndpoint: 'https://st${uniqueString(resourceGroup().id, baseName, region.regionCode)}.table.${environment().suffixes.storage}/'
+    clusteringTableEndpoint: 'https://st${uniqueString(resourceGroup().id, baseName, region.regionCode)}.table.${environment().suffixes.storage}/'
+    backupBlobEndpoint: 'https://stbk${uniqueString(resourceGroup().id, baseName)}.blob.${environment().suffixes.storage}/'
+    backupIsPrimary: region.regionCode == backupPrimaryRegionCode
   }
 }]
+
+// =============================================================================
+// Storage lane (durable WAL, Orleans clustering, shared backup sink) - F-189.
+// -----------------------------------------------------------------------------
+// Invoked AFTER the compute loop because it consumes each region identity's
+// principal id for least-privilege data-plane RBAC. The endpoints compute is fed
+// above are the deterministic names this module creates, so the ordering is
+// one-directional (no cycle). Keyless throughout: no keys/SAS/connection strings.
+// =============================================================================
+
+module storage 'modules/storage.bicep' = {
+  name: 'storage'
+  params: {
+    baseName: baseName
+    backupPrimaryRegionCode: backupPrimaryRegionCode
+    regions: [for (region, i) in regions: {
+      regionCode: region.regionCode
+      location: region.location
+      managedIdentityPrincipalId: compute[i].outputs.managedIdentityPrincipalId
+    }]
+  }
+}
 
 // =============================================================================
 // AcrPull role assignments - least privilege, scoped to the registry
@@ -165,3 +198,12 @@ output perRegion array = [for (region, i) in regions: {
   mcpFqdn: compute[i].outputs.mcpFqdn
   explorerFqdn: compute[i].outputs.explorerFqdn
 }]
+
+@description('Per-region storage seams (keyless table endpoint backing the WAL + Orleans clustering) in region-list order.')
+output perRegionStorage array = storage.outputs.perRegionStorage
+
+@description('Keyless blob endpoint of the shared global backup sink (feeds LATTICE_BACKUP_BLOB_ENDPOINT on every silo).')
+output backupBlobEndpoint string = storage.outputs.backupBlobEndpoint
+
+@description('Name of the shared global backup blob account (single source of truth for cold-restore).')
+output backupAccountName string = storage.outputs.backupAccountNameOut
