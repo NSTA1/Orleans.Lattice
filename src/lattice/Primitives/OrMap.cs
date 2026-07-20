@@ -256,6 +256,14 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
         TValue? merged = default;
         if (tombCount == 0)
         {
+            // Steady-state fast path: a key with exactly one live entry and no
+            // tombstones is the dominant case. Return a defensive clone of the
+            // sole value instead of allocating an identity TValue and folding a
+            // full MergeFrom (which, for dictionary-backed value CRDTs, walks
+            // and copies the whole value state). Clone preserves the contract
+            // that the caller receives an instance it may mutate freely.
+            if (entries.Count == 1) return entries[0].Value.Clone();
+
             foreach (var entry in entries)
             {
                 if (merged is null) merged = new TValue();
