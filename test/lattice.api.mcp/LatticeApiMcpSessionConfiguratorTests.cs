@@ -23,12 +23,24 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
         LatticeCredential? credential,
         LatticeApiMcpAccessSet access,
         params ILatticeApiMcpToolGroup[] toolGroups)
-        => new(
+        => CreateConfigurator(credential, access, new AllowAllMcpAuthorizer(), toolGroups);
+
+    private static LatticeApiMcpSessionConfigurator CreateConfigurator(
+        LatticeCredential? credential,
+        LatticeApiMcpAccessSet access,
+        ILatticeApiMcpAuthorizer authorizer,
+        params ILatticeApiMcpToolGroup[] toolGroups)
+    {
+        var services = new ServiceCollection()
+            .AddSingleton(authorizer)
+            .BuildServiceProvider();
+        return new(
             new FakeBridge(credential),
             new FakeResolver(_ => access),
             toolGroups,
-            new ServiceCollection().BuildServiceProvider(),
+            services,
             NullLogger<LatticeApiMcpSessionConfigurator>.Instance);
+    }
 
     private static DefaultHttpContext ContextWith(ILatticeStateQuery? stateQuery = null)
     {
@@ -369,6 +381,66 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
     }
 
     [Test]
+    public async Task Deny_all_authorizer_hides_every_granted_group_tool()
+    {
+        var dataGroup = new FakeToolGroup(LatticeApiMcpGroup.Data, "data_read");
+        var configurator = CreateConfigurator(
+            new LatticeCredential("alice"),
+            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data),
+            new DenyAllMcpAuthorizer(),
+            dataGroup);
+
+        var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
+
+        Assert.That(ToolNames(plan.Tools), Is.EquivalentTo(new[] { "lattice_capabilities" }),
+            "The default-deny authorizer must hide every facade tool, leaving only the ungated meta-tool.");
+    }
+
+    [Test]
+    public async Task Authorizer_scopes_advertised_tools_to_the_permitted_tool_name()
+    {
+        var dataGroup = new FakeToolGroup(LatticeApiMcpGroup.Data, "data_get", "data_set");
+        var configurator = CreateConfigurator(
+            new LatticeCredential("alice"),
+            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data),
+            new FakeAuthorizer(context => context.ToolName == "data_get"),
+            dataGroup);
+
+        var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
+
+        Assert.That(ToolNames(plan.Tools), Is.EquivalentTo(new[] { "lattice_capabilities", "data_get" }),
+            "Only the tool the authorizer permits is advertised; the denied sibling is omitted.");
+    }
+
+    [Test]
+    public async Task Authorizer_receives_the_initiating_http_context_and_tool_name()
+    {
+        var dataGroup = new FakeToolGroup(LatticeApiMcpGroup.Data, "data_read");
+        var seen = new List<(HttpContext Call, string? ToolName)>();
+        var configurator = CreateConfigurator(
+            new LatticeCredential("alice"),
+            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data),
+            new FakeAuthorizer(context =>
+            {
+                seen.Add((context.Call, context.ToolName));
+                return true;
+            }),
+            dataGroup);
+        var httpContext = ContextWith();
+
+        await configurator.BuildSessionPlanAsync(httpContext, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(seen, Has.Count.EqualTo(1), "The authorizer is consulted once per candidate group tool.");
+            Assert.That(seen[0].Call, Is.SameAs(httpContext),
+                "The authorizer must receive the request context that initiated the session.");
+            Assert.That(seen[0].ToolName, Is.EqualTo("data_read"),
+                "The authorization decision must be scoped to the candidate tool's advertised name.");
+        });
+    }
+
+    [Test]
     public void Constructor_rejects_null_dependencies()
     {
         var bridge = new FakeBridge(null);
@@ -399,6 +471,15 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
             LatticeCredential credential,
             CancellationToken cancellationToken)
             => new(map(credential));
+    }
+
+    private sealed class FakeAuthorizer(Func<LatticeApiMcpAuthorizationContext, bool> decide)
+        : ILatticeApiMcpAuthorizer
+    {
+        public Task<bool> IsAuthorizedAsync(
+            LatticeApiMcpAuthorizationContext authorizationContext,
+            CancellationToken cancellationToken)
+            => Task.FromResult(decide(authorizationContext));
     }
 
     private sealed class FakeToolGroup : ILatticeApiMcpToolGroup
