@@ -80,9 +80,6 @@ using (LatticeCredentialContext.Use("root-admin", scheme: Scheme))
     {
         await dir.UpsertGroupAsync(new MembershipGroup("line-operators", "Line operators"));
         await dir.UpsertGroupAsync(new MembershipGroup("auditors", "Auditors"));
-        await dir.UpsertUserAsync(new MembershipUser("alice", "Alice"));
-        await dir.UpsertUserAsync(new MembershipUser("bob", "Bob"));
-        await dir.UpsertUserAsync(new MembershipUser("carol", "Carol"));
         await dir.AddMemberAsync("line-operators", "alice");
         await dir.AddMemberAsync("auditors", "bob");
     }

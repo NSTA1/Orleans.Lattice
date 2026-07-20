@@ -14,10 +14,8 @@ namespace Orleans.Lattice.Explorer.Tests.Access;
 /// </summary>
 internal sealed class FakeAuthAdminClient : IAuthAdminClient
 {
-    public AuthUserPage UsersResult { get; set; } = new();
     public AuthGroupPage GroupsResult { get; set; } = new();
     public AuthRulePage RulesResult { get; set; } = new();
-    public AuthUser? UserResult { get; set; }
     public AuthGroup? GroupResult { get; set; }
     public LatticeAuthorizationRule? RuleResult { get; set; }
     public IReadOnlyList<string> MembersResult { get; set; } = Array.Empty<string>();
@@ -31,16 +29,13 @@ internal sealed class FakeAuthAdminClient : IAuthAdminClient
     public AccessModelDescriptor AccessModelResult { get; set; }
         = new() { DirectoryProviderId = "null", DirectoryExplanation = string.Empty };
 
-    public Exception? ListUsersThrows { get; set; }
     public Exception? MutationThrows { get; set; }
     public Exception? ListThrows { get; set; }
     public Exception? ExplainThrows { get; set; }
     public Exception? DirectoryThrows { get; set; }
     public Exception? AccessModelThrows { get; set; }
 
-    public int ListUsersCallCount { get; private set; }
-    public AuthPageRequest? LastUsersRequest { get; private set; }
-    public AuthUser? LastUpsertedUser { get; private set; }
+    public AuthPageRequest? LastGroupsRequest { get; private set; }
     public AuthGroup? LastUpsertedGroup { get; private set; }
     public string? LastAddedGroupId { get; private set; }
     public string? LastAddedMemberId { get; private set; }
@@ -54,44 +49,9 @@ internal sealed class FakeAuthAdminClient : IAuthAdminClient
     public string? LastResolvedPrincipalId { get; private set; }
     public int GetAccessModelCallCount { get; private set; }
 
-    public Task<AuthUserPage> ListUsersAsync(AuthPageRequest request, CancellationToken cancellationToken = default)
-    {
-        ListUsersCallCount++;
-        LastUsersRequest = request;
-        if (ListUsersThrows is not null)
-        {
-            throw ListUsersThrows;
-        }
-
-        return Task.FromResult(UsersResult);
-    }
-
-    public Task<AuthUser?> GetUserAsync(string userId, CancellationToken cancellationToken = default) =>
-        Task.FromResult(UserResult);
-
-    public Task UpsertUserAsync(AuthUser user, CancellationToken cancellationToken = default)
-    {
-        LastUpsertedUser = user;
-        if (MutationThrows is not null)
-        {
-            throw MutationThrows;
-        }
-
-        return Task.CompletedTask;
-    }
-
-    public Task RemoveUserAsync(string userId, CancellationToken cancellationToken = default)
-    {
-        if (MutationThrows is not null)
-        {
-            throw MutationThrows;
-        }
-
-        return Task.CompletedTask;
-    }
-
     public Task<AuthGroupPage> ListGroupsAsync(AuthPageRequest request, CancellationToken cancellationToken = default)
     {
+        LastGroupsRequest = request;
         if (ListThrows is not null)
         {
             throw ListThrows;

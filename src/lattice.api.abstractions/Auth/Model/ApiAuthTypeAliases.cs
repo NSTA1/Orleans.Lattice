@@ -15,17 +15,11 @@ namespace Orleans.Lattice.Api.Auth;
 /// </remarks>
 public static class ApiAuthTypeAliases
 {
-    /// <summary>Alias for <see cref="AuthUser"/>.</summary>
-    public const string AuthUser = "oli.us";
-
     /// <summary>Alias for <see cref="AuthGroup"/>.</summary>
     public const string AuthGroup = "oli.gr";
 
     /// <summary>Alias for <see cref="AuthPageRequest"/>.</summary>
     public const string AuthPageRequest = "oli.pq";
-
-    /// <summary>Alias for <see cref="AuthUserPage"/>.</summary>
-    public const string AuthUserPage = "oli.up";
 
     /// <summary>Alias for <see cref="AuthGroupPage"/>.</summary>
     public const string AuthGroupPage = "oli.gp";
@@ -60,9 +54,6 @@ public static class ApiAuthTypeAliases
     // live in one place. The constant lives here in the facade package; the type
     // that carries the alias lives in the gRPC assembly.
 
-    /// <summary>Alias for the gRPC single-user reference request (a bare user id).</summary>
-    public const string AuthUserRef = "oli.ur";
-
     /// <summary>Alias for the gRPC single-group reference request (a bare group id).</summary>
     public const string AuthGroupRef = "oli.gd";
 
@@ -89,9 +80,6 @@ public static class ApiAuthTypeAliases
 
     /// <summary>Alias for the gRPC acknowledgement response for a void operation.</summary>
     public const string AuthAck = "oli.ak";
-
-    /// <summary>Alias for the gRPC nullable-user result response.</summary>
-    public const string AuthUserResult = "oli.ut";
 
     /// <summary>Alias for the gRPC nullable-group result response.</summary>
     public const string AuthGroupResult = "oli.gt";

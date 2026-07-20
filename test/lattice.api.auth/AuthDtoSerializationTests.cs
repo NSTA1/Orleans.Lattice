@@ -38,38 +38,6 @@ public sealed class AuthDtoSerializationTests
             LatticeEffect.Allow);
 
     [Test]
-    public void AuthUser_round_trips_with_claims()
-    {
-        var original = new AuthUser
-        {
-            UserId = "u1",
-            DisplayName = "User One",
-            Claims = new Dictionary<string, string> { ["role"] = "ops" },
-        };
-
-        var copy = RoundTrip(original);
-        Assert.Multiple(() =>
-        {
-            Assert.That(copy.UserId, Is.EqualTo("u1"));
-            Assert.That(copy.DisplayName, Is.EqualTo("User One"));
-            Assert.That(copy.Claims, Is.Not.Null);
-            Assert.That(copy.Claims!["role"], Is.EqualTo("ops"));
-        });
-    }
-
-    [Test]
-    public void AuthUser_round_trips_without_optional_fields()
-    {
-        var copy = RoundTrip(new AuthUser { UserId = "u2" });
-        Assert.Multiple(() =>
-        {
-            Assert.That(copy.UserId, Is.EqualTo("u2"));
-            Assert.That(copy.DisplayName, Is.Null);
-            Assert.That(copy.Claims, Is.Null);
-        });
-    }
-
-    [Test]
     public void AuthGroup_round_trips()
     {
         var original = new AuthGroup { GroupId = "g1", DisplayName = "Group One" };
@@ -81,23 +49,6 @@ public sealed class AuthDtoSerializationTests
     {
         var original = new AuthPageRequest { PageSize = 25, PageToken = "cursor-x" };
         Assert.That(RoundTrip(original), Is.EqualTo(original));
-    }
-
-    [Test]
-    public void AuthUserPage_round_trips()
-    {
-        var original = new AuthUserPage
-        {
-            Entries = [new AuthUser { UserId = "u1" }, new AuthUser { UserId = "u2" }],
-            NextPageToken = "u2",
-        };
-
-        var copy = RoundTrip(original);
-        Assert.Multiple(() =>
-        {
-            Assert.That(copy.Entries.Select(e => e.UserId), Is.EqualTo(new[] { "u1", "u2" }));
-            Assert.That(copy.NextPageToken, Is.EqualTo("u2"));
-        });
     }
 
     [Test]

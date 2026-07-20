@@ -25,26 +25,6 @@ public interface IAuthAdminClient
 {
     // ----- Membership administration -----
 
-    /// <summary>Reads one page of the user catalog in ascending user-id order.</summary>
-    /// <param name="request">The paging request. Must not be <see langword="null"/>.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    Task<AuthUserPage> ListUsersAsync(AuthPageRequest request, CancellationToken cancellationToken = default);
-
-    /// <summary>Reads a user record, or <see langword="null"/> when no such user exists.</summary>
-    /// <param name="userId">The user id. Must not be <see langword="null"/> or empty.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    Task<AuthUser?> GetUserAsync(string userId, CancellationToken cancellationToken = default);
-
-    /// <summary>Creates or replaces a user record.</summary>
-    /// <param name="user">The user to upsert. Must not be <see langword="null"/>.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    Task UpsertUserAsync(AuthUser user, CancellationToken cancellationToken = default);
-
-    /// <summary>Removes a user record. A no-op when no such user exists.</summary>
-    /// <param name="userId">The user id. Must not be <see langword="null"/> or empty.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    Task RemoveUserAsync(string userId, CancellationToken cancellationToken = default);
-
     /// <summary>Reads one page of the group catalog in ascending group-id order.</summary>
     /// <param name="request">The paging request. Must not be <see langword="null"/>.</param>
     /// <param name="cancellationToken">Cancellation token.</param>

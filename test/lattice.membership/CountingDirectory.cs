@@ -29,18 +29,6 @@ internal sealed class CountingDirectory(IReadOnlyCollection<string> groups) : IL
     public Task<IReadOnlyCollection<string>> MembersOfAsync(string groupId, CancellationToken cancellationToken = default) =>
         throw new NotSupportedException();
 
-    public Task UpsertUserAsync(MembershipUser user, CancellationToken cancellationToken = default) =>
-        throw new NotSupportedException();
-
-    public Task<MembershipUser?> GetUserAsync(string userId, CancellationToken cancellationToken = default) =>
-        throw new NotSupportedException();
-
-    public IAsyncEnumerable<MembershipUser> ListUsersAsync(CancellationToken cancellationToken = default) =>
-        throw new NotSupportedException();
-
-    public Task RemoveUserAsync(string userId, CancellationToken cancellationToken = default) =>
-        throw new NotSupportedException();
-
     public Task UpsertGroupAsync(MembershipGroup group, CancellationToken cancellationToken = default) =>
         throw new NotSupportedException();
 

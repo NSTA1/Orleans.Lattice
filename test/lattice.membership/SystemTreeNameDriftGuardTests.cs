@@ -21,7 +21,6 @@ public sealed class SystemTreeNameDriftGuardTests
     {
         Assert.Multiple(() =>
         {
-            Assert.That(LatticeSystemTreeNames.MembershipUsers, Is.EqualTo(MembershipConstants.UsersTree));
             Assert.That(LatticeSystemTreeNames.MembershipGroups, Is.EqualTo(MembershipConstants.GroupsTree));
             Assert.That(LatticeSystemTreeNames.MembershipEdges, Is.EqualTo(MembershipConstants.EdgesTree));
         });

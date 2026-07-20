@@ -99,7 +99,7 @@ public sealed class AccessDirectoryFlowEndToEndTests
         await picker.SelectAsync("u-alice");
         Assert.That(selected, Is.EqualTo("u-alice"));
 
-        // The chosen id resolves to a matching user, so the create is allowed and applied.
+        // The chosen id resolves to a matching user, so it may be applied as a group member.
         client.DirectoryPrincipalResult = Principal("u-alice", DirectoryPrincipalKind.User);
         var decision = await create.ValidateAsync(selected!, DirectoryPrincipalKind.User);
         Assert.Multiple(() =>
@@ -109,11 +109,12 @@ public sealed class AccessDirectoryFlowEndToEndTests
             Assert.That(decision.IsUnvalidated, Is.False);
         });
 
-        var upsert = await service.UpsertUserAsync(new AuthUser { UserId = selected! });
+        var applied = await service.AddMemberAsync("g-team", selected!, MembershipMemberKind.User);
         Assert.Multiple(() =>
         {
-            Assert.That(upsert.IsSuccess, Is.True);
-            Assert.That(client.LastUpsertedUser!.UserId, Is.EqualTo("u-alice"));
+            Assert.That(applied.IsSuccess, Is.True);
+            Assert.That(client.LastAddedMemberId, Is.EqualTo("u-alice"));
+            Assert.That(client.LastAddedMemberKind, Is.EqualTo(MembershipMemberKind.User));
         });
     }
 
@@ -143,8 +144,8 @@ public sealed class AccessDirectoryFlowEndToEndTests
             Assert.That(decision.CanSave, Is.False);
             Assert.That(decision.Reason, Is.EqualTo(AccessCreateModel.NoSuchPrincipalReason));
             Assert.That(client.LastResolvedPrincipalId, Is.EqualTo("ghost@contoso.com"));
-            // Fail-closed: the caller must not upsert a blocked principal.
-            Assert.That(client.LastUpsertedUser, Is.Null);
+            // Fail-closed: the caller must not apply a blocked principal.
+            Assert.That(client.LastAddedMemberId, Is.Null);
         });
     }
 
@@ -174,7 +175,7 @@ public sealed class AccessDirectoryFlowEndToEndTests
             Assert.That(decision.IsBlocked, Is.True);
             Assert.That(decision.Reason, Does.Contain("group"));
             Assert.That(decision.Reason, Does.Contain("user"));
-            Assert.That(client.LastUpsertedUser, Is.Null);
+            Assert.That(client.LastAddedMemberId, Is.Null);
         });
     }
 

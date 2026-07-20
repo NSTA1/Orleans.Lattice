@@ -90,8 +90,6 @@ Authorization administration over `ILatticeAuthAdmin`. Registered by `AddAuthToo
 |---|---|---|
 | `lattice_auth_explain` | inspect | Explain an authorization decision. |
 | `lattice_auth_effective_permissions` | inspect | A subject's effective permissions. |
-| `lattice_auth_get_user` | inspect | Get a user. |
-| `lattice_auth_list_users` | inspect | List users. |
 | `lattice_auth_get_group` | inspect | Get a group. |
 | `lattice_auth_list_groups` | inspect | List groups. |
 | `lattice_auth_list_group_members` | inspect | List a group's members. |
@@ -99,8 +97,6 @@ Authorization administration over `ILatticeAuthAdmin`. Registered by `AddAuthToo
 | `lattice_auth_get_rule` | inspect | Get an authorization rule. |
 | `lattice_auth_list_rules` | inspect | List all rules. |
 | `lattice_auth_list_rules_for_tree` | inspect | List rules for a tree. |
-| `lattice_auth_upsert_user` | admin | Create or replace a user. |
-| `lattice_auth_remove_user` | admin | Remove a user. |
 | `lattice_auth_upsert_group` | admin | Create or replace a group. |
 | `lattice_auth_remove_group` | admin | Remove a group. |
 | `lattice_auth_add_member` | admin | Add a group member. |

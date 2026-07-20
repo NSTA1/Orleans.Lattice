@@ -15,7 +15,7 @@ public static partial class LatticeMcpServiceCollectionExtensions
     /// tool module so its introspection tools (policy and membership reads) are
     /// advertised to an <b>administrator</b> caller, and - when
     /// <paramref name="enableAdministration"/> is <see langword="true"/> - the
-    /// mutating administration verbs (user / group / membership / rule
+    /// mutating administration verbs (group / membership / rule
     /// upsert-remove) as well. Idempotent. The host must also have called
     /// <see cref="AddLatticeMcp"/> and registered the auth facade for the tools to
     /// be reachable.

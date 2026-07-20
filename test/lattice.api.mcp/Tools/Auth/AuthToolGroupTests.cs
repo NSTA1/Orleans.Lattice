@@ -24,8 +24,6 @@ public sealed class AuthToolGroupTests
     {
         "lattice_auth_explain",
         "lattice_auth_effective_permissions",
-        "lattice_auth_get_user",
-        "lattice_auth_list_users",
         "lattice_auth_get_group",
         "lattice_auth_list_groups",
         "lattice_auth_list_group_members",
@@ -37,8 +35,6 @@ public sealed class AuthToolGroupTests
 
     private static readonly string[] AdministrationToolNames =
     {
-        "lattice_auth_upsert_user",
-        "lattice_auth_remove_user",
         "lattice_auth_upsert_group",
         "lattice_auth_remove_group",
         "lattice_auth_add_member",
@@ -148,7 +144,7 @@ public sealed class AuthToolGroupTests
             Assert.That(SchemaHasProperty(ServerTool(group, "lattice_auth_explain"), "subjectId"), Is.True);
             Assert.That(SchemaHasProperty(ServerTool(group, "lattice_auth_explain"), "subjectKind"), Is.True);
             Assert.That(SchemaHasProperty(ServerTool(group, "lattice_auth_effective_permissions"), "subjectKind"), Is.True);
-            Assert.That(SchemaHasProperty(ServerTool(group, "lattice_auth_upsert_user"), "userId"), Is.True);
+            Assert.That(SchemaHasProperty(ServerTool(group, "lattice_auth_upsert_group"), "groupId"), Is.True);
             Assert.That(SchemaHasProperty(ServerTool(group, "lattice_auth_put_rule"), "ruleId"), Is.True);
         });
     }

@@ -3,11 +3,10 @@ using System.Runtime.CompilerServices;
 namespace Orleans.Lattice.Membership;
 
 /// <summary>
-/// The default <see cref="ILatticeMembershipDirectory"/>. Dogfoods three
-/// reserved <c>ILattice</c> trees: <c>sys-membership-users</c> and
-/// <c>sys-membership-groups</c> hold JSON records keyed by id, and
-/// <c>sys-membership-edges</c> holds each membership edge twice (a forward row
-/// keyed by member and a reverse row keyed by group) so both
+/// The default <see cref="ILatticeMembershipDirectory"/>. Dogfoods two reserved
+/// <c>ILattice</c> trees: <c>sys-membership-groups</c> holds JSON group records
+/// keyed by id, and <c>sys-membership-edges</c> holds each membership edge twice
+/// (a forward row keyed by member and a reverse row keyed by group) so both
 /// <see cref="GroupsOfAsync"/> and <see cref="MembersOfAsync"/> are prefix
 /// scans. Every mutation runs through the standard write path, so it is
 /// observed by the resolution-cache invalidator and captured by the per-key
@@ -20,58 +19,9 @@ internal sealed class LatticeMembershipDirectory(
     private static readonly byte[] UserMarker = "u"u8.ToArray();
     private static readonly byte[] GroupMarker = "g"u8.ToArray();
 
-    private ILattice Users => grainFactory.GetGrain<ILattice>(MembershipConstants.UsersTree);
-
     private ILattice Groups => grainFactory.GetGrain<ILattice>(MembershipConstants.GroupsTree);
 
     private ILattice Edges => grainFactory.GetGrain<ILattice>(MembershipConstants.EdgesTree);
-
-    /// <inheritdoc />
-    public async Task UpsertUserAsync(MembershipUser user, CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(user);
-        await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
-        using (LatticeAccessGateContext.EnterSystemOrigin())
-        {
-            await Users.SetAsync(user.UserId, user, cancellationToken).ConfigureAwait(false);
-        }
-    }
-
-    /// <inheritdoc />
-    public async Task<MembershipUser?> GetUserAsync(string userId, CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(userId);
-        using (LatticeAccessGateContext.EnterSystemOrigin())
-        {
-            return await Users.GetAsync<MembershipUser>(userId, cancellationToken).ConfigureAwait(false);
-        }
-    }
-
-    /// <inheritdoc />
-    public async IAsyncEnumerable<MembershipUser> ListUsersAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)
-    {
-        using (LatticeAccessGateContext.EnterSystemOrigin())
-        {
-            await foreach (var entry in Users.EntriesAsync<MembershipUser>(cancellationToken: cancellationToken).ConfigureAwait(false))
-            {
-                if (entry.Value is { } user)
-                {
-                    yield return user;
-                }
-            }
-        }
-    }
-
-    /// <inheritdoc />
-    public async Task RemoveUserAsync(string userId, CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(userId);
-        await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
-        using (LatticeAccessGateContext.EnterSystemOrigin())
-        {
-            await Users.DeleteAsync(userId, cancellationToken).ConfigureAwait(false);
-        }
-    }
 
     /// <inheritdoc />
     public async Task UpsertGroupAsync(MembershipGroup group, CancellationToken cancellationToken = default)

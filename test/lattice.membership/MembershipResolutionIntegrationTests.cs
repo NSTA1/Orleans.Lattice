@@ -41,7 +41,6 @@ public sealed class MembershipResolutionIntegrationTests
     public async Task ResolveCurrentAsync_returns_the_subject_with_transitively_expanded_groups()
     {
         var directory = _fixture.Directory;
-        await directory.UpsertUserAsync(new MembershipUser("res-alice", "Alice"));
         await directory.UpsertGroupAsync(new MembershipGroup("res-team"));
         await directory.UpsertGroupAsync(new MembershipGroup("res-org"));
         await directory.AddMemberAsync("res-team", "res-alice", MembershipMemberKind.User);
@@ -88,19 +87,19 @@ public sealed class MembershipResolutionIntegrationTests
     public async Task Membership_state_is_readable_through_the_standard_scan_surface()
     {
         var directory = _fixture.Directory;
-        await directory.UpsertUserAsync(new MembershipUser("scan-user", "Scannable"));
+        await directory.UpsertGroupAsync(new MembershipGroup("scan-group", "Scannable"));
 
-        var usersTree = _fixture.Cluster.GrainFactory.GetGrain<ILattice>(MembershipConstants.UsersTree);
+        var groupsTree = _fixture.Cluster.GrainFactory.GetGrain<ILattice>(MembershipConstants.GroupsTree);
         var seen = new List<string>();
-        await foreach (var entry in usersTree.EntriesAsync<MembershipUser>(cancellationToken: default))
+        await foreach (var entry in groupsTree.EntriesAsync<MembershipGroup>(cancellationToken: default))
         {
-            if (entry.Value is { } user)
+            if (entry.Value is { } group)
             {
-                seen.Add(user.UserId);
+                seen.Add(group.GroupId);
             }
         }
 
-        Assert.That(seen, Does.Contain("scan-user"),
+        Assert.That(seen, Does.Contain("scan-group"),
             "membership records must be introspectable through the ordinary ILattice scan surface");
     }
 
@@ -108,7 +107,6 @@ public sealed class MembershipResolutionIntegrationTests
     public async Task Membership_mutation_is_reflected_after_change_feed_invalidation_without_restart()
     {
         var directory = _fixture.Directory;
-        await directory.UpsertUserAsync(new MembershipUser("inv-user"));
         await directory.UpsertGroupAsync(new MembershipGroup("inv-initial"));
         await directory.AddMemberAsync("inv-initial", "inv-user");
 

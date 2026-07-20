@@ -70,7 +70,7 @@ public sealed class LatticeAuthApiGrpcRegistrationTests
 
         using var provider = services.BuildServiceProvider();
         var methods = provider.GetRequiredService<LatticeAuthApiGrpcMethods>();
-        Assert.That(methods.UpsertUser.ServiceName, Is.EqualTo(LatticeAuthApiGrpcMethods.ServiceName));
+        Assert.That(methods.UpsertGroup.ServiceName, Is.EqualTo(LatticeAuthApiGrpcMethods.ServiceName));
     }
 
     [Test]

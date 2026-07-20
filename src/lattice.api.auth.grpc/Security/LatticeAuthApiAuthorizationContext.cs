@@ -11,18 +11,6 @@ namespace Orleans.Lattice.Api.Auth.Grpc;
 /// </summary>
 public enum LatticeAuthApiOperation
 {
-    /// <summary>The <c>UpsertUser</c> RPC.</summary>
-    UpsertUser,
-
-    /// <summary>The <c>GetUser</c> RPC.</summary>
-    GetUser,
-
-    /// <summary>The <c>RemoveUser</c> RPC.</summary>
-    RemoveUser,
-
-    /// <summary>The <c>ListUsers</c> RPC.</summary>
-    ListUsers,
-
     /// <summary>The <c>UpsertGroup</c> RPC.</summary>
     UpsertGroup,
 

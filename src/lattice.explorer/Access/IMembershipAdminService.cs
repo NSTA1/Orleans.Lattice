@@ -15,27 +15,6 @@ namespace Orleans.Lattice.Explorer.Access;
 /// </summary>
 public interface IMembershipAdminService
 {
-    /// <summary>Lists one page of the user catalog in ascending user-id order.</summary>
-    /// <param name="pageSize">The page size, or <c>0</c> for the facade default.</param>
-    /// <param name="pageToken">The continuation cursor, or <see langword="null"/> to start from the beginning.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    Task<AccessListView<AuthUser>> ListUsersAsync(int pageSize = 0, string? pageToken = null, CancellationToken cancellationToken = default);
-
-    /// <summary>Reads a single user, or <see langword="null"/> when it does not exist or the read is denied / fails.</summary>
-    /// <param name="userId">The user id. Must not be <see langword="null"/> or empty.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    Task<AuthUser?> GetUserAsync(string userId, CancellationToken cancellationToken = default);
-
-    /// <summary>Creates or replaces a user record.</summary>
-    /// <param name="user">The user to upsert. Must not be <see langword="null"/>.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    Task<AccessOperationResult> UpsertUserAsync(AuthUser user, CancellationToken cancellationToken = default);
-
-    /// <summary>Deletes a user record.</summary>
-    /// <param name="userId">The user id. Must not be <see langword="null"/> or empty.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    Task<AccessOperationResult> DeleteUserAsync(string userId, CancellationToken cancellationToken = default);
-
     /// <summary>Lists one page of the group catalog in ascending group-id order.</summary>
     /// <param name="pageSize">The page size, or <c>0</c> for the facade default.</param>
     /// <param name="pageToken">The continuation cursor, or <see langword="null"/> to start from the beginning.</param>

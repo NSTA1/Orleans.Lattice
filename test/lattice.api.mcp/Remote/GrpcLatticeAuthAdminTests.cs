@@ -28,55 +28,6 @@ public sealed class GrpcLatticeAuthAdminTests
         => Assert.That(() => new GrpcLatticeAuthAdmin(null!), Throws.ArgumentNullException);
 
     [Test]
-    public async Task UpsertUserAsync_forwards_user()
-    {
-        var invoker = new FakeCallInvoker(_ => new AuthAck());
-        var user = new AuthUser { UserId = "alice" };
-
-        await Adapter(invoker).UpsertUserAsync(user);
-
-        Assert.That(invoker.LastRequest, Is.SameAs(user));
-    }
-
-    [Test]
-    public async Task GetUserAsync_wraps_id_and_unwraps_user()
-    {
-        var user = new AuthUser { UserId = "alice" };
-        var invoker = new FakeCallInvoker(_ => new AuthUserResult { User = user });
-
-        var result = await Adapter(invoker).GetUserAsync("alice");
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(((AuthUserRef)invoker.LastRequest!).UserId, Is.EqualTo("alice"));
-            Assert.That(result, Is.SameAs(user));
-        });
-    }
-
-    [Test]
-    public async Task GetUserAsync_missing_returns_null()
-    {
-        var result = await Adapter(new FakeCallInvoker(_ => new AuthUserResult { User = null })).GetUserAsync("ghost");
-        Assert.That(result, Is.Null);
-    }
-
-    [Test]
-    public async Task RemoveUserAsync_wraps_id()
-    {
-        var invoker = new FakeCallInvoker(_ => new AuthAck());
-        await Adapter(invoker).RemoveUserAsync("alice");
-        Assert.That(((AuthUserRef)invoker.LastRequest!).UserId, Is.EqualTo("alice"));
-    }
-
-    [Test]
-    public async Task ListUsersAsync_returns_page()
-    {
-        var page = new AuthUserPage { NextPageToken = "n" };
-        var result = await Adapter(new FakeCallInvoker(_ => page)).ListUsersAsync(new AuthPageRequest());
-        Assert.That(result, Is.SameAs(page));
-    }
-
-    [Test]
     public async Task UpsertGroupAsync_forwards_group()
     {
         var invoker = new FakeCallInvoker(_ => new AuthAck());

@@ -21,8 +21,19 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 
+  <!--
+    The docs-snippet compilation base (Docs/DocsSnippetCompilationTestsBase)
+    hosts a Roslyn compiler and locates the ASP.NET shared framework so web-host
+    snippets resolve. These are tool/framework references, not product
+    assemblies, so the library stays product-agnostic.
+  -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="NUnit" Version="4.6.1" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
   </ItemGroup>
 
 </Project>

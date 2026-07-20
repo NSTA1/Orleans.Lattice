@@ -74,10 +74,10 @@ public sealed class LatticeAuthApiGrpcMapRoutingTests
         var invoker = _channel.CreateCallInvoker();
 
         using var call = invoker.AsyncUnaryCall(
-            methods.GetUser,
+            methods.GetGroup,
             host: null,
             new CallOptions(),
-            new AuthUserRef { UserId = "anyone" });
+            new AuthGroupRef { GroupId = "anyone" });
 
         var ex = Assert.ThrowsAsync<RpcException>(async () => await call.ResponseAsync);
 

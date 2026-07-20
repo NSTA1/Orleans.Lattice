@@ -20,18 +20,6 @@ namespace Orleans.Lattice.Api.Auth.Grpc;
 [BindServiceMethod(typeof(LatticeAuthApiGrpcServiceBase), nameof(BindService))]
 internal abstract class LatticeAuthApiGrpcServiceBase
 {
-    /// <summary>Creates or replaces a user. Implemented in <see cref="LatticeAuthApiGrpcService"/>.</summary>
-    public abstract Task<AuthAck> UpsertUser(AuthUser request, ServerCallContext context);
-
-    /// <summary>Reads a user. Implemented in <see cref="LatticeAuthApiGrpcService"/>.</summary>
-    public abstract Task<AuthUserResult> GetUser(AuthUserRef request, ServerCallContext context);
-
-    /// <summary>Removes a user. Implemented in <see cref="LatticeAuthApiGrpcService"/>.</summary>
-    public abstract Task<AuthAck> RemoveUser(AuthUserRef request, ServerCallContext context);
-
-    /// <summary>Lists a page of users. Implemented in <see cref="LatticeAuthApiGrpcService"/>.</summary>
-    public abstract Task<AuthUserPage> ListUsers(AuthPageRequest request, ServerCallContext context);
-
     /// <summary>Creates or replaces a group. Implemented in <see cref="LatticeAuthApiGrpcService"/>.</summary>
     public abstract Task<AuthAck> UpsertGroup(AuthGroup request, ServerCallContext context);
 
@@ -105,10 +93,6 @@ internal abstract class LatticeAuthApiGrpcServiceBase
 
         if (serviceImpl is null)
         {
-            binder.AddMethod(m.UpsertUser, (UnaryServerMethod<AuthUser, AuthAck>?)null);
-            binder.AddMethod(m.GetUser, (UnaryServerMethod<AuthUserRef, AuthUserResult>?)null);
-            binder.AddMethod(m.RemoveUser, (UnaryServerMethod<AuthUserRef, AuthAck>?)null);
-            binder.AddMethod(m.ListUsers, (UnaryServerMethod<AuthPageRequest, AuthUserPage>?)null);
             binder.AddMethod(m.UpsertGroup, (UnaryServerMethod<AuthGroup, AuthAck>?)null);
             binder.AddMethod(m.GetGroup, (UnaryServerMethod<AuthGroupRef, AuthGroupResult>?)null);
             binder.AddMethod(m.RemoveGroup, (UnaryServerMethod<AuthGroupRef, AuthAck>?)null);
@@ -130,10 +114,6 @@ internal abstract class LatticeAuthApiGrpcServiceBase
             return;
         }
 
-        binder.AddMethod(m.UpsertUser, new UnaryServerMethod<AuthUser, AuthAck>(serviceImpl.UpsertUser));
-        binder.AddMethod(m.GetUser, new UnaryServerMethod<AuthUserRef, AuthUserResult>(serviceImpl.GetUser));
-        binder.AddMethod(m.RemoveUser, new UnaryServerMethod<AuthUserRef, AuthAck>(serviceImpl.RemoveUser));
-        binder.AddMethod(m.ListUsers, new UnaryServerMethod<AuthPageRequest, AuthUserPage>(serviceImpl.ListUsers));
         binder.AddMethod(m.UpsertGroup, new UnaryServerMethod<AuthGroup, AuthAck>(serviceImpl.UpsertGroup));
         binder.AddMethod(m.GetGroup, new UnaryServerMethod<AuthGroupRef, AuthGroupResult>(serviceImpl.GetGroup));
         binder.AddMethod(m.RemoveGroup, new UnaryServerMethod<AuthGroupRef, AuthAck>(serviceImpl.RemoveGroup));
@@ -229,34 +209,6 @@ internal sealed class LatticeAuthApiGrpcService : LatticeAuthApiGrpcServiceBase
         var credential = _credentialBridge.Resolve(context);
         return credential is null ? null : LatticeCredentialContext.With(credential);
     }
-
-    /// <inheritdoc />
-    public override Task<AuthAck> UpsertUser(AuthUser request, ServerCallContext context)
-        => InvokeAsync(request, context, static async (admin, req, ct) =>
-        {
-            await admin.UpsertUserAsync(req, ct).ConfigureAwait(false);
-            return new AuthAck();
-        });
-
-    /// <inheritdoc />
-    public override Task<AuthUserResult> GetUser(AuthUserRef request, ServerCallContext context)
-        => InvokeAsync(request, context, static async (admin, req, ct) =>
-        {
-            var user = await admin.GetUserAsync(req.UserId, ct).ConfigureAwait(false);
-            return new AuthUserResult { User = user };
-        });
-
-    /// <inheritdoc />
-    public override Task<AuthAck> RemoveUser(AuthUserRef request, ServerCallContext context)
-        => InvokeAsync(request, context, static async (admin, req, ct) =>
-        {
-            await admin.RemoveUserAsync(req.UserId, ct).ConfigureAwait(false);
-            return new AuthAck();
-        });
-
-    /// <inheritdoc />
-    public override Task<AuthUserPage> ListUsers(AuthPageRequest request, ServerCallContext context)
-        => InvokeAsync(request, context, static (admin, req, ct) => admin.ListUsersAsync(req, ct));
 
     /// <inheritdoc />
     public override Task<AuthAck> UpsertGroup(AuthGroup request, ServerCallContext context)

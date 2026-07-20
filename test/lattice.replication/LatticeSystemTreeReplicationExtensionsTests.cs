@@ -79,8 +79,7 @@ public class LatticeSystemTreeReplicationExtensionsTests
         Assert.That(trees, Is.Not.Null);
         Assert.Multiple(() =>
         {
-            Assert.That(trees![LatticeSystemTreeNames.MembershipUsers], Is.EqualTo(LatticeMergeMode.LwwRegister));
-            Assert.That(trees[LatticeSystemTreeNames.MembershipGroups], Is.EqualTo(LatticeMergeMode.LwwRegister));
+            Assert.That(trees![LatticeSystemTreeNames.MembershipGroups], Is.EqualTo(LatticeMergeMode.LwwRegister));
             Assert.That(trees[LatticeSystemTreeNames.MembershipEdges], Is.EqualTo(LatticeMergeMode.LwwRegister));
             Assert.That(trees[LatticeSystemTreeNames.AuthPolicy], Is.EqualTo(LatticeMergeMode.LwwRegister));
         });

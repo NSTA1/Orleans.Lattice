@@ -142,7 +142,7 @@ Each optional add-on ships as its own NuGet package with its own documentation s
 | `Orleans.Lattice.Api.State` | Read-only cluster state-API facade: query, observe, and subscribe to trees, structure, entries, change feeds, and metrics. | [README](docs/lattice.api.state/README.md) |
 | `Orleans.Lattice.Api.State.Grpc` | The code-first gRPC binding and public client for the read-only state API. | [README](docs/lattice.api.state.grpc/README.md) |
 | `Orleans.Lattice.Storage.AzureTable` | The durable Azure Table Storage write-ahead-log backend. | [README](docs/lattice.storage.azuretable/README.md) |
-| `Orleans.Lattice.Membership` | Identity directory and credential-to-subject resolution: users, groups, transitive membership, and pluggable authenticators. | [README](docs/lattice.membership/README.md) |
+| `Orleans.Lattice.Membership` | Identity directory and credential-to-subject resolution: groups, transitive membership edges, and pluggable authenticators. | [README](docs/lattice.membership/README.md) |
 | `Orleans.Lattice.Membership.Entra` | Microsoft Entra ID (Azure AD) credential authenticator for the membership layer. | [README](docs/lattice.membership.entra/README.md) |
 | `Orleans.Lattice.Membership.Entra.Graph` | Microsoft Graph-backed group-overflow resolver for the Entra authenticator (for subjects whose group claims exceed the token) and the Graph-backed identity directory that the Explorer Access area searches and validates against. | [README](docs/lattice.membership.entra.graph/README.md) |
 | `Orleans.Lattice.Auth` | Authorization and enforcement: durable policy store, decision engine, and the fail-closed access gate the data path consults. | [README](docs/lattice.auth/README.md) |

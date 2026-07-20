@@ -4,9 +4,9 @@ namespace Orleans.Lattice.Membership;
 /// A principal (user or group) as it exists in the configured external identity
 /// source, returned by <see cref="ILatticeIdentityDirectory"/> when browsing,
 /// searching, or resolving an id. This is the upstream directory's view of a
-/// principal, distinct from the locally-persisted <see cref="MembershipUser"/> /
-/// <see cref="MembershipGroup"/> records: it is used to validate that a supplied
-/// id actually exists (and what it is) before an operator grants it access.
+/// principal, distinct from the locally-persisted <see cref="MembershipGroup"/>
+/// records: it is used to validate that a supplied id actually exists (and what
+/// it is) before an operator grants it access.
 /// <para>
 /// A transport-free model: it never crosses a grain or wire boundary in the
 /// server-only identity-directory seam, so it carries no Orleans serialization
@@ -17,9 +17,8 @@ namespace Orleans.Lattice.Membership;
 /// <param name="DisplayName">A human-readable display name for the principal.</param>
 /// <param name="Kind">Whether the principal is a user or a group.</param>
 /// <param name="Claims">
-/// An optional flat claim bag carried from the identity source, mirroring
-/// <see cref="MembershipUser.Claims"/>. <c>null</c> when the provider surfaces no
-/// claims for the principal.
+/// An optional flat claim bag carried from the identity source. <c>null</c> when
+/// the provider surfaces no claims for the principal.
 /// </param>
 public sealed record DirectoryPrincipal(
     string Id,

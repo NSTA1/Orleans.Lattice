@@ -49,11 +49,6 @@ public partial class AccessPanel : ComponentBase, IDisposable
     private string? _treesError;
     private string? _selectedTreeId;
 
-    // ----- Users (list shared with the Groups member picker and the Policies /
-    // Explain subject drop-down; the Explorer has no dedicated Users admin tab) -----
-    private readonly List<AuthUser> _users = new();
-    private string? _usersNextToken;
-
     // ----- Groups -----
     private readonly List<AuthGroup> _groups = new();
     private string? _groupsNextToken;
@@ -260,7 +255,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
 
     /// <summary>
     /// Loads the data the active tab needs. The Policies and Explain tabs also load
-    /// the users and groups so the shared subject drop-down is populated. When
+    /// the groups so the shared subject drop-down is populated. When
     /// <paramref name="force"/> is false the membership lists are only loaded if
     /// still empty, so switching tabs does not clobber data already in view.
     /// </summary>
@@ -292,66 +287,16 @@ public partial class AccessPanel : ComponentBase, IDisposable
     }
 
     /// <summary>
-    /// Loads the users and groups that back the shared subject drop-down on the
+    /// Loads the groups that back the shared subject drop-down on the
     /// Policies and Explain tabs. Uses the guarded loaders, so it is safe to call
     /// when not already busy.
     /// </summary>
     private async Task LoadSubjectListsAsync(bool force)
     {
-        if (force || _users.Count == 0)
-        {
-            await LoadUsersAsync(reset: true);
-        }
-
         if (force || _groups.Count == 0)
         {
             await LoadGroupsAsync(reset: true);
         }
-    }
-
-    // ----- Users -----
-
-    private async Task LoadUsersAsync(bool reset)
-    {
-        if (_busy || !_allowed)
-        {
-            return;
-        }
-
-        _busy = true;
-        try
-        {
-            await LoadUsersCoreAsync(reset);
-        }
-        finally
-        {
-            _busy = false;
-        }
-    }
-
-    // The core list load without the busy guard, so a mutation (which already holds
-    // the busy flag) can repopulate the list before re-selecting the affected item.
-    private async Task LoadUsersCoreAsync(bool reset)
-    {
-        if (!_allowed)
-        {
-            return;
-        }
-
-        var view = await Membership.ListUsersAsync(pageToken: reset ? null : _usersNextToken);
-        if (!view.IsSuccess)
-        {
-            _lastResult = ToResult(view.Status, view.Message);
-            return;
-        }
-
-        if (reset)
-        {
-            _users.Clear();
-        }
-
-        _users.AddRange(view.Entries);
-        _usersNextToken = view.NextPageToken;
     }
 
     // ----- Groups -----
@@ -411,14 +356,6 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _groupCreateError = null;
         _memberIdInput = string.Empty;
         _memberKind = MembershipMemberKind.User;
-
-        // The member picker chooses from users or groups; groups are already loaded
-        // on this tab, so ensure the user list is available too. Use the core loader
-        // so this is safe whether or not the busy flag is already held.
-        if (_users.Count == 0)
-        {
-            await LoadUsersCoreAsync(reset: true);
-        }
 
         await LoadDirectMembersAsync();
     }

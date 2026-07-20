@@ -106,10 +106,6 @@ using (LatticeCredentialContext.Use("root-admin", scheme: Scheme))
     await directory.UpsertGroupAsync(new MembershipGroup("engineering", "Engineering"));
     await directory.UpsertGroupAsync(new MembershipGroup("oncall", "On-call responders"));
 
-    await directory.UpsertUserAsync(new MembershipUser("alice", "Alice"));
-    await directory.UpsertUserAsync(new MembershipUser("bob", "Bob"));
-    await directory.UpsertUserAsync(new MembershipUser("carol", "Carol"));
-
     // engineering is a *member* of staff -> a nested group edge.
     await directory.AddMemberAsync("staff", "engineering", MembershipMemberKind.Group);
 

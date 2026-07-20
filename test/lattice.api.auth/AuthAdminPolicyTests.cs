@@ -330,12 +330,12 @@ public sealed class AuthAdminPolicyTests
         using (As(Intruder))
         {
             Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
-                async () => await _fixture.Admin.UpsertUserAsync(new AuthUser { UserId = "ghost" }));
+                async () => await _fixture.Admin.UpsertGroupAsync(new AuthGroup { GroupId = "ghost" }));
         }
 
         using (AsAdmin())
         {
-            Assert.That(await _fixture.Admin.GetUserAsync("ghost"), Is.Null);
+            Assert.That(await _fixture.Admin.GetGroupAsync("ghost"), Is.Null);
         }
     }
 

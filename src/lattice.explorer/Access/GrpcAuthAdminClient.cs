@@ -58,36 +58,6 @@ public sealed class GrpcAuthAdminClient : IAuthAdminClient, IDisposable
     }
 
     /// <inheritdoc />
-    public Task<AuthUserPage> ListUsersAsync(AuthPageRequest request, CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        return InvokeAsync(client => client.ListUsersAsync(request, cancellationToken));
-    }
-
-    /// <inheritdoc />
-    public async Task<AuthUser?> GetUserAsync(string userId, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(userId);
-        var result = await InvokeAsync(client =>
-            client.GetUserAsync(new AuthUserRef { UserId = userId }, cancellationToken)).ConfigureAwait(false);
-        return result.User;
-    }
-
-    /// <inheritdoc />
-    public Task UpsertUserAsync(AuthUser user, CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(user);
-        return InvokeAsync(client => client.UpsertUserAsync(user, cancellationToken));
-    }
-
-    /// <inheritdoc />
-    public Task RemoveUserAsync(string userId, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(userId);
-        return InvokeAsync(client => client.RemoveUserAsync(new AuthUserRef { UserId = userId }, cancellationToken));
-    }
-
-    /// <inheritdoc />
     public Task<AuthGroupPage> ListGroupsAsync(AuthPageRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);

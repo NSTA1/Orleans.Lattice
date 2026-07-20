@@ -103,7 +103,7 @@ public class MembershipResolutionCacheTests
         var subject = new LatticeSubject("alice");
 
         await cache.ResolveAsync("tok", Resolver(subject, null, () => calls++), default);
-        await cache.OnMutationAsync(new LatticeMutation { TreeId = MembershipConstants.UsersTree }, default);
+        await cache.OnMutationAsync(new LatticeMutation { TreeId = MembershipConstants.EdgesTree }, default);
         await cache.ResolveAsync("tok", Resolver(subject, null, () => calls++), default);
 
         Assert.That(calls, Is.EqualTo(2), "a sys-membership-* mutation must invalidate the cache");

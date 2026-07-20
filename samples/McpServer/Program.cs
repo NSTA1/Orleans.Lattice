@@ -104,19 +104,16 @@ await app.StartAsync();
 
 Console.WriteLine($"Silo + MCP server started on http://localhost:{Port}\n");
 
-var directory = app.Services.GetRequiredService<ILatticeMembershipDirectory>();
 var store = app.Services.GetRequiredService<ILatticeAuthorizationPolicyStore>();
 var grainFactory = app.Services.GetRequiredService<IGrainFactory>();
 var tree = grainFactory.GetGrain<ILattice>(DemoTree);
 
 // -- Seed the agent, its grant, and some data ------------------------------
-// Seeding writes the reserved membership / policy trees, which require Admin, so
-// it runs as the bootstrap administrator (which bypasses the gate).
+// Seeding writes the reserved policy tree, which requires Admin, so it runs as
+// the bootstrap administrator (which bypasses the gate).
 Console.WriteLine("Seeding an 'agent' subject with a full-access grant on the demo tree...");
 using (LatticeCredentialContext.Use("root-admin", scheme: Scheme))
 {
-    await directory.UpsertUserAsync(new MembershipUser(Agent, "Automation agent"));
-
     await store.PutRuleAsync(new LatticeAuthorizationRule(
         "agent-all",
         LatticeSubjectSelector.User(Agent),

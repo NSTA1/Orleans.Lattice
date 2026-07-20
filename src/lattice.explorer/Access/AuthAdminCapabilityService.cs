@@ -53,7 +53,7 @@ public sealed class AuthAdminCapabilityService(
             // empty page) means the control plane accepts the caller as an
             // administrator. It has no side effects, so it is safe to run on mount.
             await _client
-                .ListUsersAsync(new AuthPageRequest { PageSize = 1 }, cancellationToken)
+                .ListGroupsAsync(new AuthPageRequest { PageSize = 1 }, cancellationToken)
                 .ConfigureAwait(false);
             return true;
         }

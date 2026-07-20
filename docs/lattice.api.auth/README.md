@@ -28,10 +28,6 @@ It is the authorization sibling of the read-only [`Orleans.Lattice.Api.State`](.
 
 | Operation | Facade method |
 |---|---|
-| Create / replace a user | `UpsertUserAsync` |
-| Read a user | `GetUserAsync` |
-| Remove a user | `RemoveUserAsync` |
-| List users (paged) | `ListUsersAsync` |
 | Create / replace a group | `UpsertGroupAsync` |
 | Read a group | `GetGroupAsync` |
 | Remove a group | `RemoveGroupAsync` |
@@ -60,7 +56,7 @@ It is the authorization sibling of the read-only [`Orleans.Lattice.Api.State`](.
 
 ## Wire model
 
-Every request / response record is Orleans-serialized with a stable, compact alias (the `oli.` prefix). User and group records are the package's own serializable DTOs (`AuthUser`, `AuthGroup`); rules are surfaced as the durable `LatticeAuthorizationRule` policy model directly, so a binding sees the same rule shape the store persists. List endpoints page with an exclusive continuation-token cursor (`AuthPageRequest` / `Auth*Page`), mirroring the `Orleans.Lattice.Api.State` catalog paging convention.
+Every request / response record is Orleans-serialized with a stable, compact alias (the `oli.` prefix). Group records are the package's own serializable DTOs (`AuthGroup`); rules are surfaced as the durable `LatticeAuthorizationRule` policy model directly, so a binding sees the same rule shape the store persists. List endpoints page with an exclusive continuation-token cursor (`AuthPageRequest` / `Auth*Page`), mirroring the `Orleans.Lattice.Api.State` catalog paging convention.
 
 ## Explicitly deferred
 
