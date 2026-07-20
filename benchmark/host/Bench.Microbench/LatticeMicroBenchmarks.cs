@@ -154,6 +154,13 @@ public class LatticeMicroBenchmarks
     // Surfaced as microbench_crdt_mvregister_merge_alloc_b.
     private readonly MvRegister _mvRegisterLeft = BuildMvRegister("replica-left", 8);
     private readonly MvRegister _mvRegisterRight = BuildMvRegister("replica-right", 8);
+    // A register carrying many concurrent live entries (plus matching context),
+    // so MvRegister_CloneMulti isolates the entries-copy path: the List copy
+    // constructor's single Array.Copy versus the previous presize + per-entry
+    // Add loop (N capacity checks + N list-version bumps). Sized by
+    // BENCH_MICROBENCH_MVREGISTER_CLONE_ENTRIES (default 128).
+    private readonly MvRegister _mvRegisterCloneTarget =
+        BuildMvRegisterMultiLive("replica-clone", ReadIntEnv("BENCH_MICROBENCH_MVREGISTER_CLONE_ENTRIES", 256));
 
     // ===== CrdtShapeRegistry MvRegister delta-coalescing instrument =====
     // Two identity-stable MvRegisterDeltas with disjoint replica dots, so
@@ -1303,6 +1310,17 @@ public class LatticeMicroBenchmarks
     [Benchmark(Description = "Crdt mvregister merge")]
     public MvRegister CrdtMvRegisterMerge() =>
         MvRegister.Merge(_mvRegisterLeft, _mvRegisterRight);
+
+    /// <summary>
+    /// Deep-copies a many-live-entry <see cref="MvRegister"/> via
+    /// <see cref="MvRegister.Clone"/>. This isolates the entries-copy path the
+    /// List copy constructor replaces the per-entry <c>Add</c> loop on: Clone
+    /// runs on the <see cref="MvRegister.Merge"/> hot path (Merge clones the
+    /// left operand before folding), so it fires on every replicated register
+    /// reconcile. Sized by <c>BENCH_MICROBENCH_MVREGISTER_CLONE_ENTRIES</c>.
+    /// </summary>
+    [Benchmark(Description = "Crdt mvregister clone (multi-entry)")]
+    public MvRegister CrdtMvRegisterCloneMulti() => _mvRegisterCloneTarget.Clone();
 
     /// <summary>
     /// Single <see cref="MvRegister.MergeDelta(MvRegisterDelta)"/> fold of an
@@ -3192,6 +3210,12 @@ public class LatticeMicroBenchmarks
     // BENCH_MICROBENCH_ORMAP_KEYS (default 16).
     private OrMap<string, PnCounter> _orMapLeft = null!;
     private OrMap<string, PnCounter> _orMapRight = null!;
+    // Single-key OrMap whose sole live entry carries a multi-replica PnCounter
+    // value (no tombstones). Drives OrMap_GetSingle: the steady-state read where
+    // the single-live-entry fast path bulk-clones the value instead of folding
+    // it entry-by-entry into a fresh identity (which resizes the value's backing
+    // dictionary repeatedly as replica components accumulate).
+    private OrMap<string, PnCounter> _orMapGetTarget = null!;
     private OrSet _orSetLeft = null!;
     private OrSet _orSetRight = null!;
 
@@ -3547,6 +3571,19 @@ public class LatticeMicroBenchmarks
             counter.Increment("replica-right", i + 1);
             _orMapRight.Set($"key-{i:D4}", "replica-right", counter);
         }
+
+        // Single-key target whose sole live value accumulates many replica
+        // components, so the read fold path pays repeated dictionary resizes
+        // while the clone fast path presizes once and bulk-copies.
+        var replicas = ReadIntEnv("BENCH_MICROBENCH_ORMAP_GET_REPLICAS", 32);
+        if (replicas < 1) replicas = 1;
+        var value = new PnCounter();
+        for (var i = 0; i < replicas; i++)
+        {
+            value.Increment($"replica-{i:D3}", i + 1);
+        }
+        _orMapGetTarget = new OrMap<string, PnCounter>();
+        _orMapGetTarget.Set("key-0000", "replica-author", value);
     }
 
     /// <summary>
@@ -3578,6 +3615,16 @@ public class LatticeMicroBenchmarks
     /// </summary>
     [Benchmark(Description = "OrMap clone")]
     public OrMap<string, PnCounter> OrMap_Clone() => _orMapLeft.Clone();
+
+    /// <summary>
+    /// Steady-state read: <see cref="OrMap{TKey, TValue}.Get"/> on a key with a
+    /// single live entry and no tombstones - the dominant case for every
+    /// OR-map-backed value read. The fast path clones the sole entry's value
+    /// instead of allocating an identity <see cref="PnCounter"/> and running a
+    /// full <c>MergeFrom</c> fold, so this isolates that per-read allocation.
+    /// </summary>
+    [Benchmark(Description = "OrMap get (single live entry)")]
+    public PnCounter? OrMap_GetSingle() => _orMapGetTarget.Get("key-0000");
 
     /// <summary>
     /// Builds the two operand OR-sets for the <see cref="OrSet_Merge"/>

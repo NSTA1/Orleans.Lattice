@@ -53,4 +53,15 @@ public interface ICrdt<TSelf> where TSelf : ICrdt<TSelf>
     /// on the surrounding container.
     /// </summary>
     bool IsBottom { get; }
+
+    /// <summary>
+    /// Returns a deep, independent copy of this instance. Mutating the
+    /// returned value must never affect the receiver (and vice versa).
+    /// Composites rely on this to hand callers a defensively-copied value
+    /// - for example the single-live-entry fast path in
+    /// <see cref="OrMap{TKey, TValue}.Get(TKey)"/> - without allocating an
+    /// identity element and folding it through <see cref="MergeFrom(TSelf)"/>.
+    /// </summary>
+    /// <returns>A structurally independent copy of this instance.</returns>
+    TSelf Clone();
 }

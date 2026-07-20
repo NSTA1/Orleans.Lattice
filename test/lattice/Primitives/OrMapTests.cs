@@ -68,6 +68,21 @@ public class OrMapTests
     }
 
     [Test]
+    public void Get_single_live_entry_returns_independent_copy()
+    {
+        var m = new OrMap<string, OrSet>();
+        m.Set("tags", "r1", SetOf("a"));
+
+        var first = m.Get("tags");
+        Assert.That(Elements(first), Is.EquivalentTo(new[] { "a" }));
+
+        // The single-live-entry fast path returns a defensive clone: mutating it
+        // must not change the stored value, and a subsequent Get is unaffected.
+        first!.Add(System.Text.Encoding.UTF8.GetBytes("mutation"), "rogue", 1);
+        Assert.That(Elements(m.Get("tags")), Is.EquivalentTo(new[] { "a" }));
+    }
+
+    [Test]
     public void Get_returns_null_for_absent_key()
     {
         var m = new OrMap<string, OrSet>();
