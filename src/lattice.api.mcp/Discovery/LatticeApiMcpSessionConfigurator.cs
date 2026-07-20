@@ -128,7 +128,8 @@ internal sealed class LatticeApiMcpSessionConfigurator
             // agent can learn what it may (or may not) do; group tools are added
             // only for the groups the caller is granted.
             tools.Add(CreateCapabilitiesTool(capabilities));
-            AddPermittedGroupTools(tools, access);
+            await AddPermittedGroupToolsAsync(tools, access, httpContext, cancellationToken)
+                .ConfigureAwait(false);
         }
 
         return new LatticeApiMcpSessionPlan(capabilities, tools, BuildInstructions(capabilities));
@@ -156,9 +157,11 @@ internal sealed class LatticeApiMcpSessionConfigurator
         }
     }
 
-    private void AddPermittedGroupTools(
+    private async Task AddPermittedGroupToolsAsync(
         McpServerPrimitiveCollection<McpServerTool> tools,
-        LatticeApiMcpAccessSet access)
+        LatticeApiMcpAccessSet access,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
     {
         for (var i = 0; i < _toolGroups.Count; i++)
         {
@@ -172,10 +175,24 @@ internal sealed class LatticeApiMcpSessionConfigurator
             for (var j = 0; j < groupTools.Count; j++)
             {
                 var tool = groupTools[j];
+                var toolName = tool.ProtocolTool.Name;
+
                 // Defer (omit) any tool the topology reports unsupported so a
                 // listed tool is never one that hard-errors on invoke. Under the
                 // in-silo topology no source is registered, so nothing is deferred.
-                if (_unsupportedToolSource?.IsUnsupported(tool.ProtocolTool.Name) == true)
+                if (_unsupportedToolSource?.IsUnsupported(toolName) == true)
+                {
+                    continue;
+                }
+
+                // Coarse transport gate: only advertise a tool the registered
+                // authorizer (default-deny) permits, so a listed tool is never
+                // one the caller would be rejected from invoking. The same gate
+                // runs again per invocation in CredentialStampingTool.
+                var authorized = await McpToolAuthorizationGate
+                    .IsAuthorizedAsync(_services, httpContext, toolName, cancellationToken)
+                    .ConfigureAwait(false);
+                if (!authorized)
                 {
                     continue;
                 }
@@ -184,7 +201,7 @@ internal sealed class LatticeApiMcpSessionConfigurator
                 {
                     _logger.LogWarning(
                         "MCP tool '{ToolName}' from group '{Group}' collides with an existing tool and was skipped.",
-                        tool.ProtocolTool.Name,
+                        toolName,
                         group.Group);
                 }
             }
