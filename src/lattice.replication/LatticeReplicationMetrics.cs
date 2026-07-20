@@ -137,6 +137,33 @@ public static class LatticeReplicationMetrics
     public const string OutcomeShadowForwardDedup = "shadow-forward-dedup";
 
     /// <summary>
+    /// <see cref="TagOutcome"/> value: the inbound entry was rejected by the
+    /// receiver-side enrollment gate because its
+    /// <see cref="WalRecord.TreeId"/> is not enrolled for replication on this
+    /// receiver (the local per-tree resolver returns no merge mode for it).
+    /// The entry is dropped without applying and without dead-lettering - a
+    /// non-enrolled tree id is peer-controlled, so parking it would let a peer
+    /// spawn unbounded dead-letter-queue activations. Guards against a peer
+    /// holding the mesh secret writing a deliberately cluster-local tree (for
+    /// example a <c>sys-auth-*</c> / <c>sys-membership-*</c> authorization or
+    /// identity tree) that this cluster kept out of its replicated set.
+    /// </summary>
+    public const string OutcomeRejectedNotReplicated = "rejected-not-replicated";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value: the inbound entry was rejected by the
+    /// receiver-side merge-mode gate because its peer-supplied
+    /// <see cref="WalRecord.Mode"/> disagrees with the merge mode the receiver
+    /// resolves locally for the entry's <see cref="WalRecord.TreeId"/>. The
+    /// entry is not applied; because the tree is enrolled (and therefore
+    /// bounded) the entry is dead-lettered with
+    /// <see cref="ReasonModeMismatch"/> for operator visibility rather than
+    /// silently dropped. Guards against a peer overriding the algebra the
+    /// receiver applies to a tree by supplying a different wire mode.
+    /// </summary>
+    public const string OutcomeRejectedModeMismatch = "rejected-mode-mismatch";
+
+    /// <summary>
     /// Tag key for the dead-letter enqueue / removal reason. Values are
     /// drawn from <see cref="ReasonDiscarded"/>, <see cref="ReasonReplayed"/>,
     /// <see cref="ReasonEvicted"/>, <see cref="ReasonSchema"/>,
@@ -204,6 +231,17 @@ public static class LatticeReplicationMetrics
     /// the canonical applier in a size-validating decorator.
     /// </summary>
     public const string ReasonOversized = "oversized";
+
+    /// <summary>
+    /// Reason tag value: enqueue cause was an inbound entry whose
+    /// peer-supplied <see cref="WalRecord.Mode"/> disagreed with the merge
+    /// mode the receiver resolves locally for the entry's
+    /// <see cref="WalRecord.TreeId"/>. Raised by the receiver-side merge-mode
+    /// gate in <see cref="ReplicationApplier"/> when an enrolled tree is
+    /// shipped entries whose wire mode does not match the locally configured
+    /// algebra, so the receiver never trusts the wire mode field.
+    /// </summary>
+    public const string ReasonModeMismatch = "mode_mismatch";
 
     /// <summary>
     /// Reason tag value: catch-all bucket for enqueue causes the inbound
