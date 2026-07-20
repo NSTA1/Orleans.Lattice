@@ -170,6 +170,22 @@ public class LatticeMicroBenchmarks
     private readonly MvRegisterDelta _mvDeltaLeft = BuildMvRegisterDelta("dl", 8);
     private readonly MvRegisterDelta _mvDeltaRight = BuildMvRegisterDelta("dr", 8);
 
+    // ===== MvRegister.MergeDelta instrument =====
+    // A register pre-seeded with 8 disjoint-replica live entries plus their
+    // dot-context, and an identity-stable delta carrying those same 8 dots
+    // and context. Applying the delta is idempotent (every dot is already
+    // present structurally and the context pointwise-max is a no-op), so the
+    // register stays at 8 entries across every measurement iteration and the
+    // measured window isolates the fold's steady-state allocation. MergeDelta
+    // previously built a throwaway MvRegister plus a copied entries
+    // List<MvRegisterEntry> and a copied Context Dictionary before folding via
+    // MergeFrom; the direct fold removes those three allocations, leaving only
+    // the unavoidable survivors list. Surfaced as
+    // microbench_crdt_mv_register_merge_delta_alloc_b (primary) and
+    // microbench_crdt_mv_register_merge_delta_mean_ns (secondary).
+    private readonly MvRegister _mvRegisterMergeTarget = BuildMvRegisterMultiLive("replica-live", 8);
+    private readonly MvRegisterDelta _mvMergeDelta = BuildIdempotentMvRegisterDelta("replica-live", 8);
+
     private static MvRegisterDelta BuildMvRegisterDelta(string replicaPrefix, int entries)
     {
         var list = new List<MvRegisterEntry>(entries);
@@ -186,6 +202,41 @@ public class LatticeMicroBenchmarks
             });
         }
         return new MvRegisterDelta { Entries = list, Context = context };
+    }
+
+    // Builds a register with `liveEntries` disjoint-replica live entries
+    // (r-00..r-NN, each dot counter 1) and a context listing every one of
+    // those replicas at counter 1. Used as the MergeDelta fold target so the
+    // idempotent same-dots delta keeps every entry across iterations.
+    private static MvRegister BuildMvRegisterMultiLive(string prefix, int liveEntries)
+    {
+        var register = new MvRegister();
+        for (var i = 0; i < liveEntries; i++)
+        {
+            var replicaId = $"{prefix}-{i:D2}";
+            register.Context[replicaId] = 1;
+            register.Entries.Add(new MvRegisterEntry
+            {
+                ReplicaId = replicaId,
+                Counter = 1,
+                Value = new byte[16],
+            });
+        }
+        return register;
+    }
+
+    // Builds a delta whose entries and context exactly mirror the register
+    // produced by BuildMvRegisterMultiLive(prefix, liveEntries), so applying
+    // it via MergeDelta is idempotent: every dot is already present
+    // structurally on the target and the context pointwise-max is a no-op.
+    private static MvRegisterDelta BuildIdempotentMvRegisterDelta(string prefix, int liveEntries)
+    {
+        var source = BuildMvRegisterMultiLive(prefix, liveEntries);
+        return new MvRegisterDelta
+        {
+            Entries = source.Entries.ToArray(),
+            Context = new Dictionary<string, long>(source.Context, StringComparer.Ordinal),
+        };
     }
 
     // ===== MvRegister.Values() read-path instrument =====
@@ -1252,6 +1303,29 @@ public class LatticeMicroBenchmarks
     [Benchmark(Description = "Crdt mvregister merge")]
     public MvRegister CrdtMvRegisterMerge() =>
         MvRegister.Merge(_mvRegisterLeft, _mvRegisterRight);
+
+    /// <summary>
+    /// Single <see cref="MvRegister.MergeDelta(MvRegisterDelta)"/> fold of an
+    /// identity-stable delta into a register pre-seeded with 8 disjoint-replica
+    /// live entries and their dot-context. The delta carries those same 8 dots
+    /// and context, so the fold is idempotent: every entry survives, the
+    /// context pointwise-max is a no-op, and the register stays at 8 entries
+    /// across every measurement iteration - keeping <c>_alloc_b</c> a clean
+    /// function of the fold's steady-state cost rather than of accumulated
+    /// state. The pre-change fold built a throwaway <see cref="MvRegister"/>
+    /// plus a copied entries <c>List&lt;MvRegisterEntry&gt;</c> and a copied
+    /// <c>Context</c> <c>Dictionary</c> before delegating to <c>MergeFrom</c>;
+    /// the direct fold removes those three allocations, leaving only the
+    /// unavoidable survivors list. Surfaced as
+    /// <c>microbench_crdt_mv_register_merge_delta_alloc_b</c> (primary) and
+    /// <c>microbench_crdt_mv_register_merge_delta_mean_ns</c> (secondary).
+    /// </summary>
+    [Benchmark(Description = "Crdt mvregister merge delta")]
+    public MvRegister CrdtMvRegisterMergeDelta()
+    {
+        _mvRegisterMergeTarget.MergeDelta(_mvMergeDelta);
+        return _mvRegisterMergeTarget;
+    }
 
     /// <summary>
     /// Single <see cref="CrdtShapeRegistry"/> MvRegister delta-coalescing

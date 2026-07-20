@@ -230,4 +230,148 @@ public class MvRegisterTests
         Assert.That(ValuesAsStrings(r), Is.EqualTo(expected));
         Assert.That(ValuesAsStrings(r), Is.EqualTo(new[] { "rA-1", "rA-5", "rB-1", "rB-2" }));
     }
+
+    // ===== MergeDelta =====
+    // MergeDelta folds a typed delta directly into the receiver. It must be
+    // observationally identical to building a transient MvRegister from the
+    // delta's Entries + Context and calling MergeFrom (the form the direct
+    // fold replaced), for every overlap shape.
+
+    private static MvRegisterDelta DeltaFrom(MvRegister source) => new()
+    {
+        Entries = source.Entries.ToArray(),
+        Context = new Dictionary<string, long>(source.Context, StringComparer.Ordinal),
+    };
+
+    private static MvRegister ViaMergeFrom(MvRegister local, MvRegisterDelta delta)
+    {
+        var other = new MvRegister
+        {
+            Entries = delta.Entries?.ToList() ?? [],
+            Context = delta.Context is null
+                ? []
+                : new Dictionary<string, long>(delta.Context, StringComparer.Ordinal),
+        };
+        var copy = local.Clone();
+        copy.MergeFrom(other);
+        return copy;
+    }
+
+    private static void AssertSameState(MvRegister expected, MvRegister actual)
+    {
+        Assert.That(ValuesAsStrings(actual), Is.EqualTo(ValuesAsStrings(expected)));
+        Assert.That(actual.Context, Is.EquivalentTo(expected.Context));
+    }
+
+    [Test]
+    public void MergeDelta_concurrent_delta_keeps_both_values()
+    {
+        var local = new MvRegister();
+        local.Set("r1", B("alpha"));
+        var remote = new MvRegister();
+        remote.Set("r2", B("beta"));
+        var delta = DeltaFrom(remote);
+
+        var expected = ViaMergeFrom(local, delta);
+        local.MergeDelta(delta);
+
+        AssertSameState(expected, local);
+        Assert.That(ValuesAsStrings(local), Is.EquivalentTo(new[] { "alpha", "beta" }));
+    }
+
+    [Test]
+    public void MergeDelta_dominating_context_drops_superseded_local_value()
+    {
+        var local = new MvRegister();
+        local.Set("r1", B("a1"));
+        // A later write on r1 (counter 2) that the local side has not seen.
+        var newer = local.Clone();
+        newer.Set("r1", B("a2"));
+        var delta = DeltaFrom(newer);
+
+        var expected = ViaMergeFrom(local, delta);
+        local.MergeDelta(delta);
+
+        AssertSameState(expected, local);
+        Assert.That(ValuesAsStrings(local), Is.EquivalentTo(new[] { "a2" }));
+    }
+
+    [Test]
+    public void MergeDelta_is_idempotent()
+    {
+        var local = new MvRegister();
+        local.Set("r1", B("alpha"));
+        var remote = new MvRegister();
+        remote.Set("r2", B("beta"));
+        var delta = DeltaFrom(remote);
+
+        local.MergeDelta(delta);
+        var afterOnce = local.Clone();
+        local.MergeDelta(delta);
+
+        AssertSameState(afterOnce, local);
+    }
+
+    [Test]
+    public void MergeDelta_empty_delta_is_noop()
+    {
+        var local = new MvRegister();
+        local.Set("r1", B("alpha"));
+        var before = local.Clone();
+
+        local.MergeDelta(MvRegisterDelta.Empty);
+
+        AssertSameState(before, local);
+    }
+
+    [Test]
+    public void MergeDelta_default_delta_with_null_collections_is_noop()
+    {
+        var local = new MvRegister();
+        local.Set("r1", B("alpha"));
+        var before = local.Clone();
+
+        local.MergeDelta(default);
+
+        AssertSameState(before, local);
+    }
+
+    [Test]
+    public void MergeDelta_context_only_delta_supersedes_without_new_entries()
+    {
+        var local = new MvRegister();
+        local.Set("r1", B("a1"));
+        // Delta carries only a context that has observed r1@1, with no entries:
+        // the local value must be dropped (observed-and-superseded) and no new
+        // value introduced.
+        var delta = new MvRegisterDelta
+        {
+            Entries = System.Array.Empty<MvRegisterEntry>(),
+            Context = new Dictionary<string, long>(StringComparer.Ordinal) { ["r1"] = 1 },
+        };
+
+        var expected = ViaMergeFrom(local, delta);
+        local.MergeDelta(delta);
+
+        AssertSameState(expected, local);
+        Assert.That(local.IsEmpty, Is.True);
+        Assert.That(local.Context["r1"], Is.EqualTo(1));
+    }
+
+    [Test]
+    public void MergeDelta_shared_dot_survives_even_when_context_dominates()
+    {
+        // The delta carries the same dot r1@1 as the local side and a context
+        // that also lists r1@1. Structural presence of the dot must keep the
+        // entry alive (it has not been superseded), matching MergeFrom.
+        var local = new MvRegister();
+        local.Set("r1", B("alpha"));
+        var delta = DeltaFrom(local);
+
+        var expected = ViaMergeFrom(local, delta);
+        local.MergeDelta(delta);
+
+        AssertSameState(expected, local);
+        Assert.That(ValuesAsStrings(local), Is.EquivalentTo(new[] { "alpha" }));
+    }
 }
