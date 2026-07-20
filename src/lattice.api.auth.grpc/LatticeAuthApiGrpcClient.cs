@@ -130,6 +130,18 @@ public sealed class LatticeAuthApiGrpcClient
     public Task<AuthEffectivePermissions> EffectivePermissionsAsync(AuthSubjectRef request, CancellationToken cancellationToken = default)
         => UnaryAsync(_methods.EffectivePermissions, request, cancellationToken);
 
+    /// <summary>Searches or browses the configured identity directory for matching principals.</summary>
+    public Task<DirectorySearchResult> SearchDirectoryAsync(DirectorySearchRequest request, CancellationToken cancellationToken = default)
+        => UnaryAsync(_methods.SearchDirectory, request, cancellationToken);
+
+    /// <summary>Resolves a single directory principal by id; <see cref="AuthDirectoryPrincipalResult.Principal"/> is <see langword="null"/> when none exists.</summary>
+    public Task<AuthDirectoryPrincipalResult> ResolveDirectoryPrincipalAsync(AuthPrincipalRef request, CancellationToken cancellationToken = default)
+        => UnaryAsync(_methods.ResolveDirectoryPrincipal, request, cancellationToken);
+
+    /// <summary>Reads the cluster's best-effort access model.</summary>
+    public Task<AccessModelDescriptor> GetAccessModelAsync(AuthAccessModelQuery request, CancellationToken cancellationToken = default)
+        => UnaryAsync(_methods.GetAccessModel, request, cancellationToken);
+
     private async Task<TResponse> UnaryAsync<TRequest, TResponse>(
         Method<TRequest, TResponse> method,
         TRequest request,

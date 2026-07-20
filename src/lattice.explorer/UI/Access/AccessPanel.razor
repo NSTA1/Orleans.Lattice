@@ -9,10 +9,11 @@
 @inject IPolicyAdminService Policy
 @inject ICatalogReader CatalogReader
 @inject IExplorerCapabilityStore Capabilities
+@inject PrincipalLabelResolver Labels
 
 @*
-    The Access (membership & access-control) management area. Four sub-tabs:
-    Users and Groups administer the membership directory; Policies authors the
+    The Access (membership & access-control) management area. Three sub-tabs:
+    Groups administers the membership directory; Policies authors the
     authorization rules; Explain drives the facade's Explain / EffectivePermissions
     introspection. The coarse AuthAdminAllowed capability gates the whole area (the
     shell greys the top-level tab when it is denied); within the area every action
@@ -101,10 +102,6 @@
     <header class="explorer-backups-header">
         <div class="explorer-tabstrip" role="tablist" aria-label="Access tabs">
             <button type="button" role="tab"
-                    class="explorer-tab @(_tab == AccessTab.Users ? "is-active" : null)"
-                    aria-selected="@(_tab == AccessTab.Users)"
-                    @onclick="@(() => SetTab(AccessTab.Users))">Users</button>
-            <button type="button" role="tab"
                     class="explorer-tab @(_tab == AccessTab.Groups ? "is-active" : null)"
                     aria-selected="@(_tab == AccessTab.Groups)"
                     @onclick="@(() => SetTab(AccessTab.Groups))">Groups</button>
@@ -132,75 +129,20 @@
         <p class="explorer-backups-result @ResultClass(_lastResult.Status)" role="status">@_lastResult.Message</p>
     }
 
-    @if (_tab == AccessTab.Users)
+    @if (_allowed && _accessModel.Model.IsSuccess)
     {
-        <div class="explorer-access-grid">
-            <div class="explorer-access-listcol">
-                <div class="explorer-access-listhead">
-                    <h3 class="explorer-access-title">Users</h3>
-                    <button type="button" class="explorer-btn" disabled="@(_busy || !_allowed)" @onclick="NewUser">New user</button>
-                </div>
-                @if (_users.Count == 0)
-                {
-                    <p class="explorer-backups-empty">No users to show.</p>
-                }
-                else
-                {
-                    <ul class="explorer-nav-list" role="list" aria-label="Users">
-                        @foreach (var user in _users)
-                        {
-                            var id = user.UserId;
-                            <li class="explorer-access-itemrow @(id == _selectedUserId ? "is-selected" : null)"
-                                @onclick="@(() => SelectUser(user))">
-                                <span class="explorer-access-itemlabel">
-                                    <span class="explorer-nav-item-id">@id</span>
-                                    @if (!string.IsNullOrEmpty(user.DisplayName))
-                                    {
-                                        <span class="explorer-access-sub">@user.DisplayName</span>
-                                    }
-                                </span>
-                                <button type="button" class="explorer-btn explorer-access-edit"
-                                        disabled="@(_busy || !_allowed)" @onclick="@(() => EditUser(user))" @onclick:stopPropagation="true">Edit</button>
-                            </li>
-                        }
-                    </ul>
-                    @if (_usersNextToken is not null)
-                    {
-                        <button type="button" class="explorer-btn" disabled="@(_busy || !_allowed)" @onclick="LoadMoreUsersAsync">Load more</button>
-                    }
-                }
-            </div>
-            @if (_userFormOpen)
-            {
-                <div class="explorer-access-formcol">
-                    <h3 class="explorer-access-title">@(_editingExistingUser ? "Edit user" : "New user")</h3>
-                    <label class="explorer-access-field">
-                        <span>User id</span>
-                        <input type="text" value="@_userIdInput" disabled="@(_busy || !_allowed || _editingExistingUser)"
-                               @oninput="e => _userIdInput = e.Value?.ToString() ?? string.Empty" placeholder="user id" />
-                    </label>
-                    <label class="explorer-access-field">
-                        <span>Display name</span>
-                        <input type="text" value="@_userDisplayInput" disabled="@(_busy || !_allowed)"
-                               @oninput="e => _userDisplayInput = e.Value?.ToString() ?? string.Empty" placeholder="optional" />
-                    </label>
-                    <div class="explorer-access-actions">
-                        <button type="button" class="explorer-btn" disabled="@(_busy || !_allowed || string.IsNullOrWhiteSpace(_userIdInput))" @onclick="SaveUserAsync">Save</button>
-                        <button type="button" class="explorer-btn" disabled="@_busy" @onclick="CancelUserForm">Cancel</button>
-                        <button type="button" class="explorer-btn explorer-access-danger"
-                                disabled="@(_busy || !_allowed || !_editingExistingUser)" @onclick="DeleteUserAsync">Delete</button>
-                    </div>
-                </div>
-            }
-            else
-            {
-                <div class="explorer-access-formcol">
-                    <p class="explorer-backups-empty">Select a user to edit, or choose 'New user' to add one.</p>
-                </div>
-            }
-        </div>
+        <p class="explorer-access-authmode" role="status">
+            Authentication mode: <strong>@_accessModel.AuthenticationModeLabel</strong>
+        </p>
+        @if (_accessModel.ShowEnforcementNotice)
+        {
+            <p class="explorer-access-enforcement is-warning" role="status">
+                @AccessCreateModel.EnforcementNoticeText
+            </p>
+        }
     }
-    else if (_tab == AccessTab.Groups)
+
+    @if (_tab == AccessTab.Groups)
     {
         <div class="explorer-access-grid">
             <div class="explorer-access-listcol">
@@ -220,12 +162,8 @@
                             var id = group.GroupId;
                             <li class="explorer-access-itemrow @(id == _selectedGroupId ? "is-selected" : null)"
                                 @onclick="@(() => SelectGroupAsync(group))">
-                                <span class="explorer-access-itemlabel">
-                                    <span class="explorer-nav-item-id">@id</span>
-                                    @if (!string.IsNullOrEmpty(group.DisplayName))
-                                    {
-                                        <span class="explorer-access-sub">@group.DisplayName</span>
-                                    }
+                                <span class="explorer-access-itemlabel" title="@id">
+                                    <span class="explorer-nav-item-id">@(string.IsNullOrWhiteSpace(group.DisplayName) ? id : group.DisplayName)</span>
                                 </span>
                                 <button type="button" class="explorer-btn explorer-access-edit"
                                         disabled="@(_busy || !_allowed)" @onclick="@(() => EditGroupAsync(group))" @onclick:stopPropagation="true">Edit</button>
@@ -242,11 +180,31 @@
             {
                 <div class="explorer-access-formcol">
                     <h3 class="explorer-access-title">@(_editingExistingGroup ? "Edit group" : "New group")</h3>
-                    <label class="explorer-access-field">
-                        <span>Group id</span>
-                        <input type="text" value="@_groupIdInput" disabled="@(_busy || !_allowed || _editingExistingGroup)"
-                               @oninput="e => _groupIdInput = e.Value?.ToString() ?? string.Empty" placeholder="group id" />
-                    </label>
+                    @if (_editingExistingGroup)
+                    {
+                        <label class="explorer-access-field">
+                            <span>Group id</span>
+                            <input type="text" value="@_groupIdInput" disabled="true" placeholder="group id" />
+                        </label>
+                    }
+                    else
+                    {
+                        <label class="explorer-access-field">
+                            <span>Group id</span>
+                            <SubjectPicker Kind="LatticeSubjectSelectorKind.Group" KindLocked="true"
+                                           @bind-SubjectId="_groupIdInput"
+                                           SubjectDisplayNameChanged="OnGroupDisplayNameSuggested"
+                                           Disabled="@(_busy || !_allowed)" />
+                        </label>
+                        @if (!string.IsNullOrEmpty(_accessModel.DirectoryExplanation))
+                        {
+                            <p class="explorer-access-hint">@_accessModel.DirectoryExplanation</p>
+                        }
+                        @if (_groupCreateError is not null)
+                        {
+                            <p class="explorer-backups-result is-failed" role="status">@_groupCreateError</p>
+                        }
+                    }
                     <label class="explorer-access-field">
                         <span>Display name</span>
                         <input type="text" value="@_groupDisplayInput" disabled="@(_busy || !_allowed)"
@@ -261,7 +219,7 @@
 
                     @if (_selectedGroupId is not null)
                     {
-                        <h3 class="explorer-access-title">Direct members of '@_selectedGroupId'</h3>
+                        <h3 class="explorer-access-title" title="@_selectedGroupId">Direct members of '@SelectedGroupLabel'</h3>
                         @if (_directMembers.Count == 0)
                         {
                             <p class="explorer-backups-empty">No direct members.</p>
@@ -275,14 +233,13 @@
                                         <button type="button" class="explorer-btn explorer-btn-icon explorer-access-danger"
                                                 title="Remove member" aria-label="@($"Remove {member}")"
                                                 disabled="@(_busy || !_allowed)" @onclick="@(() => RemoveMemberAsync(member))">x</button>
-                                        <span class="explorer-access-member-id">@member</span>
+                                        <span class="explorer-access-member-id" title="@member">@Labels.Label(member)</span>
                                     </li>
                                 }
                             </ul>
                         }
                         <div class="explorer-access-addmember">
-                            <SubjectPicker Users="_users" Groups="_groups"
-                                           @bind-Kind="MemberPickerKind"
+                            <SubjectPicker @bind-Kind="MemberPickerKind"
                                            @bind-SubjectId="_memberIdInput"
                                            Disabled="@(_busy || !_allowed)" />
                             <button type="button" class="explorer-btn"
@@ -331,7 +288,7 @@
                                 var rule = ranked.Rule;
                                 <tr class="@(ranked.DenyOverrides ? "is-deny" : null)">
                                     <td>@rule.RuleId</td>
-                                    <td>@AccessRuleFormat.SubjectLabel(rule.Subject)</td>
+                                    <td title="@AccessRuleFormat.SubjectLabel(rule.Subject)">@AccessRuleFormat.SubjectDisplayLabel(rule.Subject, Labels)</td>
                                     <td>@AccessRuleFormat.ScopeLabel(rule.Scope)</td>
                                     <td>@AccessRuleFormat.OperationsLabel(rule.Operations)</td>
                                     <td>@rule.Effect</td>
@@ -360,8 +317,7 @@
                 </label>
                 <label class="explorer-access-field">
                     <span>Subject</span>
-                    <SubjectPicker Users="_users" Groups="_groups"
-                                   @bind-Kind="_ruleSubjectKind"
+                    <SubjectPicker @bind-Kind="_ruleSubjectKind"
                                    @bind-SubjectId="_ruleSubjectId"
                                    Disabled="@(_busy || !_allowed)" />
                 </label>
@@ -438,10 +394,15 @@
                 <div class="explorer-access-grid">
                     <div class="explorer-access-formcol">
                         <h3 class="explorer-access-title">Explain a decision</h3>
+                        @if (_accessModel.DirectoryAvailable)
+                        {
+                            <p class="explorer-access-hint">
+                                Explain and Effective compute group membership from the local membership directory, not the connected directory. A caller's live token or directory groups may differ, so a real request can resolve to a different set of groups than shown here.
+                            </p>
+                        }
                 <label class="explorer-access-field">
                     <span>Subject</span>
-                    <SubjectPicker Users="_users" Groups="_groups"
-                                   @bind-Kind="_explainSubjectKind"
+                    <SubjectPicker @bind-Kind="_explainSubjectKind"
                                    @bind-SubjectId="_explainSubjectId"
                                    Disabled="@(_busy || !_allowed)" />
                 </label>
@@ -493,27 +454,49 @@
                     <h3 class="explorer-access-title">Verdict</h3>
                     <p class="explorer-backups-result @(_explanation.Allowed ? "is-success" : "is-denied")" role="status">
                         @(_explanation.Allowed ? (_explanation.Filtered ? "Allowed (filtered - a subset of keys)" : "Allowed") : "Denied")
-                        @if (!string.IsNullOrEmpty(_explanation.Reason))
+                        @{
+                            var friendlyReason = AccessRuleFormat.FriendlyReason(_explanation, Labels);
+                        }
+                        @if (!string.IsNullOrEmpty(friendlyReason))
                         {
-                            <span> - @_explanation.Reason</span>
+                            @if (!string.IsNullOrEmpty(_explanation.SubjectId))
+                            {
+                                <span title="@_explanation.SubjectId"> - @friendlyReason</span>
+                            }
+                            else
+                            {
+                                <span> - @friendlyReason</span>
+                            }
                         }
                     </p>
                     <p class="explorer-access-sub">Default effect when no rule matches: @_explanation.DefaultEffect</p>
                     @if (_explanation.GroupIds.Count > 0)
                     {
-                        <p class="explorer-access-sub">Group closure: @string.Join(", ", _explanation.GroupIds)</p>
+                        <p class="explorer-access-sub">Group closure:
+                            @for (var i = 0; i < _explanation.GroupIds.Count; i++)
+                            {
+                                var gid = _explanation.GroupIds[i];
+                                <span title="@gid">@Labels.Label(gid)</span>@(i < _explanation.GroupIds.Count - 1 ? ", " : string.Empty)
+                            }
+                        </p>
                     }
                     <h3 class="explorer-access-title">Matched rules</h3>
-                    <RankedRuleTable Rules="_explainRankedRules" />
+                    <RankedRuleTable Rules="_explainRankedRules" Labels="Labels" />
                 }
                 @if (_effective is not null)
                 {
-                    <h3 class="explorer-access-title">Effective permissions for '@_effective.SubjectId'</h3>
+                    <h3 class="explorer-access-title">Effective permissions for '<span title="@_effective.SubjectId">@Labels.Label(_effective.SubjectId)</span>'</h3>
                     @if (_effective.GroupIds.Count > 0)
                     {
-                        <p class="explorer-access-sub">Group closure: @string.Join(", ", _effective.GroupIds)</p>
+                        <p class="explorer-access-sub">Group closure:
+                            @for (var i = 0; i < _effective.GroupIds.Count; i++)
+                            {
+                                var gid = _effective.GroupIds[i];
+                                <span title="@gid">@Labels.Label(gid)</span>@(i < _effective.GroupIds.Count - 1 ? ", " : string.Empty)
+                            }
+                        </p>
                     }
-                    <RankedRuleTable Rules="_effectiveRankedRules" />
+                    <RankedRuleTable Rules="_effectiveRankedRules" Labels="Labels" />
                 }
             </div>
         </div>

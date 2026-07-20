@@ -31,6 +31,24 @@ public sealed record ExplorerCapabilities
     public bool AuthAdminAllowed { get; init; }
 
     /// <summary>
+    /// <see langword="true"/> when the cluster reports a searchable identity
+    /// directory (so candidate principal ids can be validated before access is
+    /// granted). Read from the access-model probe; <see langword="false"/> when
+    /// the probe was denied, unreachable, or the cluster has no directory. Advisory
+    /// only - the create forms still handle an unavailable directory at call time.
+    /// </summary>
+    public bool AuthDirectoryAvailable { get; init; }
+
+    /// <summary>
+    /// The cluster's best-effort active authentication mode, read from the
+    /// access-model probe. <see cref="ExplorerAccessAuthenticationMode.Unknown"/>
+    /// when the probe was denied, unreachable, or has not run. Advisory only,
+    /// surfaced so the Access area can render the right create-form guidance.
+    /// </summary>
+    public ExplorerAccessAuthenticationMode AuthAuthenticationMode { get; init; }
+        = ExplorerAccessAuthenticationMode.Unknown;
+
+    /// <summary>
     /// The coarse top-level gate for the Schema area: <see langword="true"/> when the
     /// schema control plane is reachable (a side-effect-free capability probe
     /// completes without a transport fault). The per-tree, per-action grey-out inside

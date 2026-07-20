@@ -35,6 +35,15 @@ public static class LatticeMembershipMetrics
     /// <summary>Canonical name of the <see cref="ResolutionCacheMisses"/> counter.</summary>
     public const string ResolutionCacheMissesName = "orleans.lattice.membership.resolution_cache.misses";
 
+    /// <summary>Canonical name of the <see cref="DirectorySearchDuration"/> histogram.</summary>
+    public const string DirectorySearchDurationName = "orleans.lattice.membership.directory.search.duration";
+
+    /// <summary>Canonical name of the <see cref="DirectorySearchHits"/> counter.</summary>
+    public const string DirectorySearchHitsName = "orleans.lattice.membership.directory.search.hits";
+
+    /// <summary>Canonical name of the <see cref="DirectorySearchMisses"/> counter.</summary>
+    public const string DirectorySearchMissesName = "orleans.lattice.membership.directory.search.misses";
+
     /// <summary>
     /// The meter that owns every membership instrument. Exposed publicly so
     /// integration tests and custom OpenTelemetry exporters can subscribe by
@@ -62,6 +71,33 @@ public static class LatticeMembershipMetrics
             description: "Subject-resolution cache misses that fell through to a fresh resolution.");
 
     /// <summary>
+    /// Histogram of identity-directory search latency in milliseconds, recorded
+    /// through <see cref="RecordDirectorySearch"/> around each provider-backed
+    /// directory query the access-administration facade issues (for example the
+    /// Explorer subject picker's typeahead). Times the provider call only, so it
+    /// isolates directory cost from the facade's mapping and authorization work.
+    /// </summary>
+    public static readonly Histogram<double> DirectorySearchDuration =
+        Meter.CreateHistogram<double>(DirectorySearchDurationName, unit: "ms",
+            description: "Identity-directory search latency in milliseconds.");
+
+    /// <summary>
+    /// Counter of identity-directory searches that returned at least one matching
+    /// principal, recorded through <see cref="RecordDirectorySearch"/>.
+    /// </summary>
+    public static readonly Counter<long> DirectorySearchHits =
+        Meter.CreateCounter<long>(DirectorySearchHitsName, unit: "{search}",
+            description: "Identity-directory searches that returned at least one matching principal.");
+
+    /// <summary>
+    /// Counter of identity-directory searches that returned no matching principal,
+    /// recorded through <see cref="RecordDirectorySearch"/>.
+    /// </summary>
+    public static readonly Counter<long> DirectorySearchMisses =
+        Meter.CreateCounter<long>(DirectorySearchMissesName, unit: "{search}",
+            description: "Identity-directory searches that returned no matching principal.");
+
+    /// <summary>
     /// Records a subject-resolution cache hit on <see cref="ResolutionCacheHits"/>.
     /// Cheap no-op when no listener is attached.
     /// </summary>
@@ -83,6 +119,37 @@ public static class LatticeMembershipMetrics
         if (ResolutionCacheMisses.Enabled)
         {
             ResolutionCacheMisses.Add(1);
+        }
+    }
+
+    /// <summary>
+    /// Records one identity-directory search: its
+    /// <paramref name="elapsedMilliseconds"/> latency on
+    /// <see cref="DirectorySearchDuration"/>, plus a hit on
+    /// <see cref="DirectorySearchHits"/> when <paramref name="matched"/> is
+    /// <see langword="true"/> (the search returned at least one principal) or a
+    /// miss on <see cref="DirectorySearchMisses"/> otherwise. Cheap no-op per
+    /// instrument when no listener is attached.
+    /// </summary>
+    /// <param name="elapsedMilliseconds">The measured search latency in milliseconds.</param>
+    /// <param name="matched"><see langword="true"/> when the search returned at least one principal.</param>
+    public static void RecordDirectorySearch(double elapsedMilliseconds, bool matched)
+    {
+        if (DirectorySearchDuration.Enabled)
+        {
+            DirectorySearchDuration.Record(elapsedMilliseconds);
+        }
+
+        if (matched)
+        {
+            if (DirectorySearchHits.Enabled)
+            {
+                DirectorySearchHits.Add(1);
+            }
+        }
+        else if (DirectorySearchMisses.Enabled)
+        {
+            DirectorySearchMisses.Add(1);
         }
     }
 }

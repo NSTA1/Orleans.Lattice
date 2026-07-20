@@ -16,8 +16,9 @@ share one code path and cannot drift:
 
 - **`AddLatticeExplorerWeb(...)`** on the service collection registers the Razor
   interactive-server components, the shared explorer UI, the state-API connection
-  seam, the configuration backing store, and the Backups, Access, and Schema
-  areas with their capability probes and auth plumbing.
+  seam, the configuration backing store, and the Backups and Access areas (and
+  the Schema area, hidden by default) with their capability probes and auth
+  plumbing.
 - **`MapLatticeExplorer(...)`** on the endpoint route builder maps the Razor
   components, the UI static assets, and the sign-in/sign-out endpoints, under the
   configured base path.
@@ -40,7 +41,8 @@ shared explorer libraries it builds on restore transitively:
 - `Orleans.Lattice.Explorer.Backup` - the Backups management area.
 - `Orleans.Lattice.Explorer.Access` - the Access (membership and access-control)
   management area.
-- `Orleans.Lattice.Explorer.Schema` - the Schema management area.
+- `Orleans.Lattice.Explorer.Schema` - the Schema management area. It ships but is
+  hidden from the switcher by default (see `EnableSchemaArea` below).
 
 ## Configuration
 
@@ -55,6 +57,11 @@ shared explorer libraries it builds on restore transitively:
   deployment can ship its target without an interactive first-run step.
 - **`UseEnvironmentBootstrap`** - default `true`; when set, the host also reads
   connection configuration from the environment at startup.
+- **`EnableSchemaArea`** - default `false`. The schema-management area is withheld
+  from the switcher for now because its versioning UI cannot yet express what
+  differs between schema versions. Set it to `true` to surface the area; the
+  schema control services are registered either way, so this only toggles
+  visibility. See [Managing schema from the Explorer](managing-schema.md).
 
 ### Mounting under a subpath
 
@@ -95,4 +102,4 @@ affinity constraint does not spread to unrelated cluster traffic.
 - [Connecting to an auth-enabled State API](connecting-to-an-auth-enabled-state-api.md)
 - [Managing backups from the Explorer](managing-backups.md)
 - [Managing access control from the Explorer](managing-access.md)
-- [Managing schema from the Explorer](managing-schema.md)
+- [Managing schema from the Explorer](managing-schema.md) (area hidden by default)

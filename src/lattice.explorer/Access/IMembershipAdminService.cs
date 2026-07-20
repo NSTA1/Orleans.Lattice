@@ -83,4 +83,38 @@ public interface IMembershipAdminService
     /// <param name="memberId">The member id (a user or group). Must not be <see langword="null"/> or empty.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task<AccessListView<string>> ListSubjectGroupsAsync(string memberId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Searches or browses the configured identity directory for principals
+    /// matching <paramref name="term"/>. A denial or transport failure folds into a
+    /// non-success <see cref="DirectorySearchView"/>; a cluster with no directory
+    /// configured folds into <see cref="DirectorySearchView.Unavailable"/>.
+    /// </summary>
+    /// <param name="term">The search term, or empty to browse the first page.</param>
+    /// <param name="kind">An optional filter restricting results to users or groups only.</param>
+    /// <param name="pageSize">The requested page size, or <c>0</c> for the provider default.</param>
+    /// <param name="pageToken">The continuation cursor, or <see langword="null"/> to start from the beginning.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<DirectorySearchView> SearchDirectoryAsync(
+        string term,
+        DirectoryPrincipalKind? kind = null,
+        int pageSize = 0,
+        string? pageToken = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Resolves a single directory principal by its exact id, or
+    /// <see langword="null"/> when it does not exist, no directory is configured,
+    /// or the read is denied / fails.
+    /// </summary>
+    /// <param name="principalId">The exact principal id to resolve. Must not be <see langword="null"/> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<DirectoryPrincipalDescriptor?> ResolveDirectoryPrincipalAsync(string principalId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads the cluster's best-effort access model. A denial or transport failure
+    /// folds into <see cref="AccessModelView.Unavailable"/> rather than throwing.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<AccessModelView> GetAccessModelAsync(CancellationToken cancellationToken = default);
 }

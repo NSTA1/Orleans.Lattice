@@ -43,6 +43,25 @@ public class AssembledExplorerHostSmokeTests
         });
     }
 
+    [Test]
+    public async Task Assembled_web_head_hides_the_schema_area_by_default()
+    {
+        await using var provider = BuildAssembledProvider();
+
+        var navOptions = provider.GetRequiredService<ExplorerNavigationOptions>();
+        var visible = AppAreas.Visible(navOptions).Select(a => a.Area).ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(navOptions.EnableSchemaArea, Is.False, "Schema is withheld from the default UI");
+            Assert.That(visible, Is.EqualTo(new[] { AppArea.Explore, AppArea.Backups, AppArea.Access }));
+            Assert.That(AppAreas.IsVisible(AppArea.Schema, navOptions), Is.False);
+
+            // Hidden, not deleted: the schema control service stays registered.
+            Assert.That(provider.GetService<ISchemaAdminCapabilityService>(), Is.Not.Null);
+        });
+    }
+
     // ---- 2. Capability-gating parity across ALL areas at once ----------------
 
     [Test]

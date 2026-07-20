@@ -6,7 +6,7 @@ namespace Orleans.Lattice.Api.Auth.Grpc;
 /// <summary>
 /// Abstract base for the auth-API control gRPC service. Carries the
 /// <see cref="BindServiceMethodAttribute"/> that <c>Grpc.AspNetCore</c> reflects
-/// against to discover and register the nineteen unary admin RPCs.
+/// against to discover and register the unary admin RPCs.
 /// </summary>
 /// <remarks>
 /// The base/derived split mirrors the codegen shape <c>Grpc.Tools</c> produces
@@ -77,6 +77,15 @@ internal abstract class LatticeAuthApiGrpcServiceBase
     /// <summary>Resolves a subject's effective permissions. Implemented in <see cref="LatticeAuthApiGrpcService"/>.</summary>
     public abstract Task<AuthEffectivePermissions> EffectivePermissions(AuthSubjectRef request, ServerCallContext context);
 
+    /// <summary>Searches the identity directory. Implemented in <see cref="LatticeAuthApiGrpcService"/>.</summary>
+    public abstract Task<DirectorySearchResult> SearchDirectory(DirectorySearchRequest request, ServerCallContext context);
+
+    /// <summary>Resolves a single directory principal by id. Implemented in <see cref="LatticeAuthApiGrpcService"/>.</summary>
+    public abstract Task<AuthDirectoryPrincipalResult> ResolveDirectoryPrincipal(AuthPrincipalRef request, ServerCallContext context);
+
+    /// <summary>Reads the cluster access model. Implemented in <see cref="LatticeAuthApiGrpcService"/>.</summary>
+    public abstract Task<AccessModelDescriptor> GetAccessModel(AuthAccessModelQuery request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at
     /// startup with <paramref name="serviceImpl"/> set to <see langword="null"/>
@@ -115,6 +124,9 @@ internal abstract class LatticeAuthApiGrpcServiceBase
             binder.AddMethod(m.ListRulesForTree, (UnaryServerMethod<AuthTreeRulesPage, AuthRulePage>?)null);
             binder.AddMethod(m.Explain, (UnaryServerMethod<AuthExplainQuery, AuthExplanation>?)null);
             binder.AddMethod(m.EffectivePermissions, (UnaryServerMethod<AuthSubjectRef, AuthEffectivePermissions>?)null);
+            binder.AddMethod(m.SearchDirectory, (UnaryServerMethod<DirectorySearchRequest, DirectorySearchResult>?)null);
+            binder.AddMethod(m.ResolveDirectoryPrincipal, (UnaryServerMethod<AuthPrincipalRef, AuthDirectoryPrincipalResult>?)null);
+            binder.AddMethod(m.GetAccessModel, (UnaryServerMethod<AuthAccessModelQuery, AccessModelDescriptor>?)null);
             return;
         }
 
@@ -137,6 +149,9 @@ internal abstract class LatticeAuthApiGrpcServiceBase
         binder.AddMethod(m.ListRulesForTree, new UnaryServerMethod<AuthTreeRulesPage, AuthRulePage>(serviceImpl.ListRulesForTree));
         binder.AddMethod(m.Explain, new UnaryServerMethod<AuthExplainQuery, AuthExplanation>(serviceImpl.Explain));
         binder.AddMethod(m.EffectivePermissions, new UnaryServerMethod<AuthSubjectRef, AuthEffectivePermissions>(serviceImpl.EffectivePermissions));
+        binder.AddMethod(m.SearchDirectory, new UnaryServerMethod<DirectorySearchRequest, DirectorySearchResult>(serviceImpl.SearchDirectory));
+        binder.AddMethod(m.ResolveDirectoryPrincipal, new UnaryServerMethod<AuthPrincipalRef, AuthDirectoryPrincipalResult>(serviceImpl.ResolveDirectoryPrincipal));
+        binder.AddMethod(m.GetAccessModel, new UnaryServerMethod<AuthAccessModelQuery, AccessModelDescriptor>(serviceImpl.GetAccessModel));
     }
 }
 
@@ -342,6 +357,22 @@ internal sealed class LatticeAuthApiGrpcService : LatticeAuthApiGrpcServiceBase
     /// <inheritdoc />
     public override Task<AuthEffectivePermissions> EffectivePermissions(AuthSubjectRef request, ServerCallContext context)
         => InvokeAsync(request, context, static (admin, req, ct) => admin.EffectivePermissionsAsync(req.SubjectId, req.SubjectKind, ct));
+
+    /// <inheritdoc />
+    public override Task<DirectorySearchResult> SearchDirectory(DirectorySearchRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (admin, req, ct) => admin.SearchDirectoryAsync(req, ct));
+
+    /// <inheritdoc />
+    public override Task<AuthDirectoryPrincipalResult> ResolveDirectoryPrincipal(AuthPrincipalRef request, ServerCallContext context)
+        => InvokeAsync(request, context, static async (admin, req, ct) =>
+        {
+            var principal = await admin.ResolveDirectoryPrincipalAsync(req.PrincipalId, ct).ConfigureAwait(false);
+            return new AuthDirectoryPrincipalResult { Principal = principal };
+        });
+
+    /// <inheritdoc />
+    public override Task<AccessModelDescriptor> GetAccessModel(AuthAccessModelQuery request, ServerCallContext context)
+        => InvokeAsync(request, context, static (admin, _, ct) => admin.GetAccessModelAsync(ct));
 
     private async Task<TResponse> InvokeAsync<TRequest, TResponse>(
         TRequest request,

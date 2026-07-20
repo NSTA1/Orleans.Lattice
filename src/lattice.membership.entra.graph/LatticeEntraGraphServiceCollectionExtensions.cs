@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Microsoft.Graph;
 using Microsoft.Identity.Client;
 using Orleans.Hosting;
@@ -14,10 +15,15 @@ public static class LatticeEntraGraphServiceCollectionExtensions
 {
     /// <summary>
     /// Registers the Microsoft Graph-backed <see cref="IEntraGroupResolver"/> that
-    /// the Entra authenticator uses to resolve overflowed group membership. The
-    /// resolver acquires and transparently refreshes its own app-only Graph token
-    /// through the MSAL confidential-client cache, sharing a single in-flight
-    /// acquisition across concurrent lookups.
+    /// the Entra authenticator uses to resolve overflowed group membership, and the
+    /// Graph-backed <see cref="ILatticeIdentityDirectory"/>
+    /// (<see cref="EntraGraphIdentityDirectory"/>) that validates candidate
+    /// principal ids by searching and resolving Entra users and groups. Both share
+    /// a single app-only Graph client whose access token is acquired and
+    /// transparently refreshed through the MSAL confidential-client cache. The
+    /// identity directory overrides the default no-op provider with a last-wins
+    /// registration, so configuring Entra Graph makes directory validation present
+    /// with no extra wiring.
     /// <para>
     /// Must be called <i>after</i>
     /// <see cref="LatticeEntraServiceCollectionExtensions.AddEntraCredentialAuthenticator(ISiloBuilder, Action{LatticeEntraAuthenticatorOptions})"/>:
@@ -44,12 +50,15 @@ public static class LatticeEntraGraphServiceCollectionExtensions
                 "the Entra authenticator (siloBuilder.AddEntraCredentialAuthenticator(...)) before adding the Graph resolver.");
         }
 
-        builder.Services.AddSingleton<IEntraGroupResolver>(sp =>
-        {
-            var options = new LatticeEntraGraphOptions();
-            configure(options);
-            LatticeEntraGraphOptionsValidator.ValidateAndThrow(options);
+        var options = new LatticeEntraGraphOptions();
+        configure(options);
+        LatticeEntraGraphOptionsValidator.ValidateAndThrow(options);
 
+        // A single app-only Graph client shared by the group resolver and the
+        // identity directory, so configuring Entra Graph acquires exactly one token
+        // stream no matter how many Graph-backed seams consume it.
+        builder.Services.AddSingleton<GraphServiceClient>(sp =>
+        {
             var application = ConfidentialClientApplicationBuilder
                 .Create(options.ClientId)
                 .WithClientSecret(options.ClientSecret)
@@ -60,10 +69,26 @@ public static class LatticeEntraGraphServiceCollectionExtensions
             var timeProvider = sp.GetService<TimeProvider>() ?? TimeProvider.System;
             var tokenProvider = new EntraGraphTokenProvider(acquirer, timeProvider, options.TokenRefreshSkew);
 
-            var graphClient = new GraphServiceClient(new EntraGraphTokenAuthenticationProvider(tokenProvider));
-            var membersClient = new GraphMemberGroupsClient(graphClient, options.SecurityEnabledOnly);
+            return new GraphServiceClient(new EntraGraphTokenAuthenticationProvider(tokenProvider));
+        });
 
+        builder.Services.AddSingleton<IEntraGroupResolver>(sp =>
+        {
+            var membersClient = new GraphMemberGroupsClient(
+                sp.GetRequiredService<GraphServiceClient>(),
+                options.SecurityEnabledOnly);
             return new GraphEntraGroupResolver(membersClient);
+        });
+
+        // Overrides the default no-op ILatticeIdentityDirectory with a plain
+        // last-wins AddSingleton, so directory validation is present once Entra
+        // Graph is configured.
+        builder.Services.AddSingleton<ILatticeIdentityDirectory>(sp =>
+        {
+            var directoryOptions = sp.GetService<IOptions<LatticeIdentityDirectoryOptions>>()?.Value
+                ?? new LatticeIdentityDirectoryOptions();
+            var directoryClient = new GraphEntraDirectoryClient(sp.GetRequiredService<GraphServiceClient>());
+            return new EntraGraphIdentityDirectory(directoryClient, directoryOptions, options.DirectorySubjectIdSource);
         });
 
         return builder;

@@ -1,44 +1,88 @@
 @using Orleans.Lattice.Auth
 @using Orleans.Lattice.Api.Auth
+@using Orleans.Lattice.Membership
+@using Orleans.Lattice.Explorer.Access
+@implements IDisposable
+@inject SubjectPickerModel Model
 
 @*
-    Shared subject selector for the Access area. Presents a User/Group kind toggle
-    and a sorted drop-down of the existing users or groups (rather than a free-text
-    id box), so both the Policies rule form and the Explain view pick a real subject
-    the same way. Switching the kind clears the previously chosen id. An already
-    selected id that is not present in the loaded page (for example when editing a
-    rule whose subject is on a later page) is kept visible as a leading option.
+    Shared subject selector for the Access area. A debounced, server-backed
+    typeahead over the identity directory (via IMembershipAdminService): a
+    User/Group kind toggle scopes the search, typing coalesces into a single
+    directory query, matched principals render as a bounded, load-more page, and
+    selecting one raises the chosen id exactly as before (@bind-SubjectId /
+    @bind-Kind), so every call site keeps working. When the directory reports
+    itself unavailable (or a read is denied / fails) the picker degrades to a
+    free-text, explicitly-unvalidated id box rather than enumerating the tenant.
 *@
 
-<span class="explorer-access-inline explorer-access-subjectpicker">
-    <select class="explorer-access-subject-kind" value="@Kind" disabled="@Disabled"
-            @onchange="OnKindChangedAsync">
-        <option value="@nameof(LatticeSubjectSelectorKind.User)">User</option>
-        <option value="@nameof(LatticeSubjectSelectorKind.Group)">Group</option>
-    </select>
-    <select class="explorer-access-subject" value="@SubjectId"
-            disabled="@(Disabled || _options.Count == 0)" @onchange="OnSubjectChangedAsync">
-        <option value="">@(_options.Count == 0 ? EmptyLabel : PlaceholderLabel)</option>
-        @foreach (var option in _options)
+<div class="explorer-access-subjectpicker">
+    <div class="explorer-access-inline">
+        <select class="explorer-access-subject-kind" value="@Kind" disabled="@(Disabled || KindLocked)"
+                @onchange="OnKindChangedAsync">
+            <option value="@nameof(LatticeSubjectSelectorKind.User)">User</option>
+            <option value="@nameof(LatticeSubjectSelectorKind.Group)">Group</option>
+        </select>
+        <input type="text" class="explorer-access-subject-search" value="@Model.SearchTerm"
+               disabled="@Disabled"
+               placeholder="@(Model.DirectoryAvailable ? SearchPlaceholder : FreeTextPlaceholder)"
+               @oninput="OnTermChangedAsync" />
+    </div>
+
+    @if (Model.DirectoryAvailable)
+    {
+        @if (!string.IsNullOrEmpty(Model.SelectedId))
         {
-            <option value="@option.Value">@option.Label</option>
+            <p class="explorer-access-subject-selected">
+                @if (!string.IsNullOrEmpty(Model.SelectedDisplayName))
+                {
+                    <text>Selected: </text><span class="explorer-access-member-id" title="@Model.SelectedId">@Model.SelectedDisplayName</span>
+                }
+                else
+                {
+                    <text>Selected: </text><span class="explorer-access-member-id">@Model.SelectedId</span>
+                }
+            </p>
         }
-    </select>
-</span>
+
+        @if (Model.Results.Count > 0)
+        {
+            <ul class="explorer-access-subject-results">
+                @foreach (var principal in Model.Results)
+                {
+                    <li>
+                        <button type="button"
+                                class="explorer-btn-link explorer-access-subject-result @(string.Equals(principal.Id, Model.SelectedId, StringComparison.Ordinal) ? "is-selected" : null)"
+                                disabled="@Disabled"
+                                title="@principal.Id"
+                                @onclick="@(() => OnResultSelectedAsync(principal.Id))">
+                            @PrincipalLabel(principal)
+                        </button>
+                    </li>
+                }
+            </ul>
+            @if (Model.HasMore)
+            {
+                <button type="button" class="explorer-btn" disabled="@(Disabled || Model.IsSearching)"
+                        @onclick="OnLoadMoreAsync">Load more</button>
+            }
+        }
+        else if (!Model.IsSearching && !string.IsNullOrEmpty(Model.SearchTerm))
+        {
+            <p class="explorer-access-subject-empty">No matching principals.</p>
+        }
+    }
+    else
+    {
+        <p class="explorer-access-subject-unvalidated">
+            Directory unavailable - the entered id is used as-is and is not validated.
+        </p>
+    }
+</div>
 
 @code {
-    private const string PlaceholderLabel = "Select a subject...";
-    private const string EmptyLabel = "No subjects available";
-
-    private readonly List<SubjectOption> _options = new();
-
-    /// <summary>The users available to select when the kind is <see cref="LatticeSubjectSelectorKind.User"/>.</summary>
-    [Parameter]
-    public IReadOnlyList<AuthUser> Users { get; set; } = Array.Empty<AuthUser>();
-
-    /// <summary>The groups available to select when the kind is <see cref="LatticeSubjectSelectorKind.Group"/>.</summary>
-    [Parameter]
-    public IReadOnlyList<AuthGroup> Groups { get; set; } = Array.Empty<AuthGroup>();
+    private const string SearchPlaceholder = "Type to search subjects...";
+    private const string FreeTextPlaceholder = "Enter a subject id";
 
     /// <summary>The selected subject kind (user or group).</summary>
     [Parameter]
@@ -56,85 +100,98 @@
     [Parameter]
     public EventCallback<string> SubjectIdChanged { get; set; }
 
-    /// <summary>Renders the selects disabled when set.</summary>
+    /// <summary>
+    /// The selected subject's directory display name. Optional: call sites that do
+    /// not bind it are unaffected, and it is only pushed when a directory selection
+    /// carries a meaningful display name.
+    /// </summary>
+    [Parameter]
+    public string SubjectDisplayName { get; set; } = string.Empty;
+
+    /// <summary>Raised when the selected subject's display name changes (supports <c>@bind-SubjectDisplayName</c>).</summary>
+    [Parameter]
+    public EventCallback<string> SubjectDisplayNameChanged { get; set; }
+
+    /// <summary>Renders the picker disabled when set.</summary>
     [Parameter]
     public bool Disabled { get; set; }
 
+    /// <summary>
+    /// Locks the user / group kind toggle to the bound <see cref="Kind"/> when set,
+    /// so a create form scoped to a single principal kind cannot switch it.
+    /// </summary>
+    [Parameter]
+    public bool KindLocked { get; set; }
+
+    private bool _initialized;
+
     /// <inheritdoc />
-    protected override void OnParametersSet() => RebuildOptions();
-
-    private void RebuildOptions()
+    protected override async Task OnInitializedAsync()
     {
-        _options.Clear();
-        if (Kind == LatticeSubjectSelectorKind.Group)
+        Model.Changed += OnModelChanged;
+        Model.SubjectSelected += OnModelSubjectSelected;
+        await Model.InitializeAsync(SubjectId, MapKind(Kind));
+        _initialized = true;
+    }
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        if (!_initialized)
         {
-            foreach (var group in Groups)
-            {
-                _options.Add(new SubjectOption(group.GroupId, Label(group.GroupId, group.DisplayName)));
-            }
-        }
-        else
-        {
-            foreach (var user in Users)
-            {
-                _options.Add(new SubjectOption(user.UserId, Label(user.UserId, user.DisplayName)));
-            }
+            return;
         }
 
-        _options.Sort(static (a, b) => string.CompareOrdinal(a.Value, b.Value));
-
-        if (!string.IsNullOrEmpty(SubjectId) && !ContainsValue(SubjectId))
+        // Align quietly to parent-pushed values (for example when a rule being
+        // edited seeds both kind and subject); never re-search or wipe here.
+        var kind = MapKind(Kind);
+        if (kind != Model.Kind || !string.Equals(SubjectId, Model.SelectedId, StringComparison.Ordinal))
         {
-            _options.Insert(0, new SubjectOption(SubjectId, SubjectId));
+            Model.SyncExternalState(kind, SubjectId ?? string.Empty);
         }
     }
 
-    private bool ContainsValue(string value)
-    {
-        foreach (var option in _options)
+    private void OnModelChanged() => InvokeAsync(StateHasChanged);
+
+    private void OnModelSubjectSelected(string id, string displayName) =>
+        InvokeAsync(async () =>
         {
-            if (string.Equals(option.Value, value, StringComparison.Ordinal))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static string Label(string id, string? displayName) =>
-        string.IsNullOrWhiteSpace(displayName) ? id : $"{id} ({displayName})";
+            Kind = MapKind(Model.Kind);
+            await KindChanged.InvokeAsync(Kind);
+            SubjectId = id;
+            await SubjectIdChanged.InvokeAsync(id);
+            SubjectDisplayName = displayName;
+            await SubjectDisplayNameChanged.InvokeAsync(displayName);
+        });
 
     private async Task OnKindChangedAsync(ChangeEventArgs e)
     {
         var kind = Enum.Parse<LatticeSubjectSelectorKind>(e.Value?.ToString() ?? nameof(LatticeSubjectSelectorKind.User));
-        if (kind == Kind)
-        {
-            return;
-        }
-
-        Kind = kind;
-        await KindChanged.InvokeAsync(kind);
-
-        // Switching the kind invalidates the previously chosen id.
-        if (!string.IsNullOrEmpty(SubjectId))
-        {
-            SubjectId = string.Empty;
-            await SubjectIdChanged.InvokeAsync(string.Empty);
-        }
+        await Model.SetKindAsync(MapKind(kind));
     }
 
-    private async Task OnSubjectChangedAsync(ChangeEventArgs e)
+    private Task OnTermChangedAsync(ChangeEventArgs e) =>
+        Model.SetSearchTermAsync(e.Value?.ToString() ?? string.Empty);
+
+    private Task OnResultSelectedAsync(string id) => Model.SelectAsync(id);
+
+    private Task OnLoadMoreAsync() => Model.LoadMoreAsync();
+
+    private static DirectoryPrincipalKind MapKind(LatticeSubjectSelectorKind kind) =>
+        kind == LatticeSubjectSelectorKind.Group ? DirectoryPrincipalKind.Group : DirectoryPrincipalKind.User;
+
+    private static LatticeSubjectSelectorKind MapKind(DirectoryPrincipalKind kind) =>
+        kind == DirectoryPrincipalKind.Group ? LatticeSubjectSelectorKind.Group : LatticeSubjectSelectorKind.User;
+
+    private static string PrincipalLabel(DirectoryPrincipalDescriptor principal) =>
+        string.IsNullOrWhiteSpace(principal.DisplayName) || string.Equals(principal.DisplayName, principal.Id, StringComparison.Ordinal)
+            ? principal.Id
+            : principal.DisplayName;
+
+    /// <inheritdoc />
+    public void Dispose()
     {
-        var id = e.Value?.ToString() ?? string.Empty;
-        if (string.Equals(id, SubjectId, StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        SubjectId = id;
-        await SubjectIdChanged.InvokeAsync(id);
+        Model.Changed -= OnModelChanged;
+        Model.SubjectSelected -= OnModelSubjectSelected;
     }
-
-    private readonly record struct SubjectOption(string Value, string Label);
 }

@@ -2553,6 +2553,51 @@ code, .explorer-mono {
     min-width: 0;
 }
 
+.explorer-access-inline > .explorer-access-subject-search {
+    flex: 1;
+    min-width: 0;
+}
+
+.explorer-access-subjectpicker {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+
+.explorer-access-subject-results {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 12rem;
+    overflow-y: auto;
+}
+
+.explorer-access-subject-result {
+    text-align: left;
+    font-family: var(--font-mono, monospace);
+    font-size: 0.85rem;
+}
+
+.explorer-access-subject-result.is-selected {
+    font-weight: 600;
+}
+
+.explorer-access-subject-selected {
+    margin: 0;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.explorer-access-subject-empty,
+.explorer-access-subject-unvalidated {
+    margin: 0;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
 .explorer-access-actions {
     display: flex;
     gap: 0.4rem;
@@ -2631,6 +2676,16 @@ code, .explorer-mono {
 
 .explorer-access-ruletable tr.is-deny td {
     color: var(--danger, #f85149);
+}
+
+/* Keep the Rule id on a single line and give it a wider minimum so longer ids
+   (e.g. "carol-write-machine-000") stop wrapping to several lines. Auto table
+   layout is preserved, so the other columns - including the Edit button - keep
+   their natural widths and never wrap. */
+.explorer-access-ruletable th:first-child,
+.explorer-access-ruletable td:first-child {
+    white-space: nowrap;
+    min-width: 12rem;
 }
 
 /* The Policies and Explain tabs place the shared tree-selection panel to the left
@@ -2760,16 +2815,29 @@ code, .explorer-mono {
     gap: 2.5rem;
 }
 
-.explorer-access-grid.explorer-schema-narrow > .explorer-access-listcol,
-.explorer-access-grid.explorer-access-narrow > .explorer-access-listcol {
+.explorer-access-grid.explorer-schema-narrow > .explorer-access-listcol {
     flex: 0 1 auto;
     min-width: 16rem;
     max-width: 30rem;
 }
 
-.explorer-access-grid.explorer-schema-narrow > .explorer-access-formcol,
-.explorer-access-grid.explorer-access-narrow > .explorer-access-formcol {
+/* The Access Policies/Explain areas pair the list against the edit form. Split the
+   available width evenly (like the Explain tab's two-column layout) so the rule
+   list gets roughly half the space and its columns stop wrapping; when the form is
+   closed the list simply fills the row. */
+.explorer-access-grid.explorer-access-narrow > .explorer-access-listcol {
+    flex: 1 1 0;
+    min-width: 24rem;
+}
+
+.explorer-access-grid.explorer-schema-narrow > .explorer-access-formcol {
     flex: 0 0 28rem;
+}
+
+/* Match the list column so the Policies edit form takes the other ~half. */
+.explorer-access-grid.explorer-access-narrow > .explorer-access-formcol {
+    flex: 1 1 0;
+    min-width: 26rem;
 }
 
 .explorer-schema-subtitle {
@@ -2801,5 +2869,31 @@ code, .explorer-mono {
     font-size: 0.85rem;
     font-weight: 600;
     color: var(--danger, #f85149);
+}
+
+/* State-first status card leading the Policy and Versions list columns: a bordered
+   panel that states the tree's current schema state in plain words and hosts the
+   primary next-step action, so the user sees "where am I / what next" before any
+   raw admin control. */
+.explorer-schema-statuscard {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm, 6px);
+    padding: 0.7rem 0.8rem;
+    margin: 0.2rem 0;
+}
+
+/* The collapsed-by-default advanced ops revealed under a versioned tree's status
+   card (set config directly, migrate stored values), separated from the primary
+   action by a hairline rule. */
+.explorer-schema-advanced {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    margin-top: 0.4rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--border);
 }
 

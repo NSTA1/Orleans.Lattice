@@ -138,4 +138,27 @@ internal sealed class GrpcLatticeAuthAdmin : ILatticeAuthAdmin
         => _client.EffectivePermissionsAsync(
             new AuthSubjectRef { SubjectId = subjectId, SubjectKind = subjectKind },
             cancellationToken);
+
+    // ----- Identity directory (issues #1248 / #1249) -----
+    // The identity-directory and access-model facade operations ride the gRPC
+    // binding added in #1249: scalar arguments are wrapped in their wire request
+    // records and the nullable-principal response is unwrapped to the facade's
+    // scalar return shape, exactly as the membership and policy members above.
+
+    /// <inheritdoc />
+    public Task<DirectorySearchResult> SearchDirectoryAsync(DirectorySearchRequest request, CancellationToken cancellationToken = default)
+        => _client.SearchDirectoryAsync(request, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<DirectoryPrincipalDescriptor?> ResolveDirectoryPrincipalAsync(string principalId, CancellationToken cancellationToken = default)
+    {
+        var result = await _client
+            .ResolveDirectoryPrincipalAsync(new AuthPrincipalRef { PrincipalId = principalId }, cancellationToken)
+            .ConfigureAwait(false);
+        return result.Principal;
+    }
+
+    /// <inheritdoc />
+    public Task<AccessModelDescriptor> GetAccessModelAsync(CancellationToken cancellationToken = default)
+        => _client.GetAccessModelAsync(new AuthAccessModelQuery(), cancellationToken);
 }

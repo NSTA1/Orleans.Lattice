@@ -41,6 +41,16 @@ public sealed class LatticeExplorerWebOptions
     public bool UseEnvironmentBootstrap { get; set; } = true;
 
     /// <summary>
+    /// When <see langword="true"/>, the schema-management area is surfaced in the
+    /// Explorer's area switcher. When <see langword="false"/> (the default), the
+    /// area is hidden: its tab is not rendered and it cannot be activated, though
+    /// the schema control services stay registered so it can be re-surfaced by
+    /// flipping this flag. The area is withheld by default because its versioning
+    /// UI cannot yet express what differs between schema versions.
+    /// </summary>
+    public bool EnableSchemaArea { get; set; }
+
+    /// <summary>
     /// The normalized route prefix for endpoint mapping: an empty string when
     /// mounted at the root, otherwise the base path with a single leading slash
     /// and no trailing slash (for example <c>/explorer</c>).

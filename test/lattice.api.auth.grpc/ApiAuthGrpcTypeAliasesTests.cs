@@ -37,6 +37,9 @@ public sealed class ApiAuthGrpcTypeAliasesTests
         (typeof(AuthRuleResult), ApiAuthTypeAliases.AuthRuleResult),
         (typeof(AuthStringList), ApiAuthTypeAliases.AuthStringList),
         (typeof(AuthRuleRemoved), ApiAuthTypeAliases.AuthRuleRemoved),
+        (typeof(AuthPrincipalRef), ApiAuthTypeAliases.AuthPrincipalRef),
+        (typeof(AuthDirectoryPrincipalResult), ApiAuthTypeAliases.AuthDirectoryPrincipalResult),
+        (typeof(AuthAccessModelQuery), ApiAuthTypeAliases.AuthAccessModelQuery),
     ];
 
     [Test]

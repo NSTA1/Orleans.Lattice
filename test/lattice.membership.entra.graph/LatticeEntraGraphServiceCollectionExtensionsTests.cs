@@ -73,6 +73,29 @@ public class LatticeEntraGraphServiceCollectionExtensionsTests
     }
 
     [Test]
+    public void AddEntraGraphGroupResolver_registers_identity_directory()
+    {
+        var (builder, services) = CreateBuilder(entraRegistered: true);
+
+        builder.AddEntraGraphGroupResolver(Configure);
+
+        Assert.That(
+            services.Any(d => d.ServiceType == typeof(ILatticeIdentityDirectory)),
+            Is.True);
+    }
+
+    [Test]
+    public void AddEntraGraphGroupResolver_invalid_options_throws()
+    {
+        var (builder, _) = CreateBuilder(entraRegistered: true);
+
+        // TenantId / ClientId / ClientSecret left unset: the validator rejects them.
+        Assert.That(
+            () => builder.AddEntraGraphGroupResolver(_ => { }),
+            Throws.TypeOf<Microsoft.Extensions.Options.OptionsValidationException>());
+    }
+
+    [Test]
     public void Not_registered_leaves_no_graph_footprint()
     {
         var (_, services) = CreateBuilder(entraRegistered: true);

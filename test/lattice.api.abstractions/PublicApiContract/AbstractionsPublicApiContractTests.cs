@@ -73,4 +73,45 @@ public class AbstractionsPublicApiContractTests
             + $"namespaces ({string.Join(", ", ContractNamespaces)}) so existing consumers compile "
             + "unchanged after the move. Offending types: " + string.Join(", ", strays));
     }
+
+    // The identity-directory and access-model surface added by issue #1248: the
+    // three new facade operations and the four public wire types they exchange.
+    private static readonly IReadOnlyList<string> AuthAdminDirectoryMembers = new[]
+    {
+        nameof(ILatticeAuthAdmin.SearchDirectoryAsync),
+        nameof(ILatticeAuthAdmin.ResolveDirectoryPrincipalAsync),
+        nameof(ILatticeAuthAdmin.GetAccessModelAsync),
+    };
+
+    private static readonly IReadOnlyList<Type> AuthAdminDirectoryTypes = new[]
+    {
+        typeof(DirectorySearchRequest),
+        typeof(DirectorySearchResult),
+        typeof(DirectoryPrincipalDescriptor),
+        typeof(AccessModelDescriptor),
+        typeof(AccessAuthenticationMode),
+    };
+
+    [TestCaseSource(nameof(AuthAdminDirectoryMembers))]
+    public void Auth_admin_exposes_the_identity_directory_operation(string memberName)
+    {
+        var method = typeof(ILatticeAuthAdmin).GetMethod(memberName);
+
+        Assert.That(method, Is.Not.Null,
+            $"ILatticeAuthAdmin must declare a public {memberName} operation so bindings can adapt it.");
+    }
+
+    [TestCaseSource(nameof(AuthAdminDirectoryTypes))]
+    public void Auth_admin_directory_type_is_public_in_the_abstractions_assembly(Type type)
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(type.IsPublic, Is.True,
+                $"{type.FullName} must be public so bindings and the MCP server can consume it.");
+            Assert.That(type.Assembly, Is.EqualTo(AbstractionsAssembly),
+                $"{type.FullName} must live in the abstractions assembly.");
+            Assert.That(ContractNamespaces.Contains(type.Namespace), Is.True,
+                $"{type.FullName} must live in a contracted namespace.");
+        });
+    }
 }

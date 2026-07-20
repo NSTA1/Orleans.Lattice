@@ -18,8 +18,10 @@ public static class LatticeMembershipServiceCollectionExtensions
     /// <c>sys-membership-*</c> trees, the default subject mapper and anonymous
     /// authenticator, and the per-silo resolution cache (wired to the core
     /// <see cref="IMutationObserver"/> seam for change-feed invalidation). Also
-    /// ensures the view infrastructure is present so the membership trees get
-    /// durable per-key history out of the box.
+    /// registers the default no-op <see cref="ILatticeIdentityDirectory"/>
+    /// (<see cref="NullIdentityDirectory"/>) so the identity-source seam always
+    /// resolves, and ensures the view infrastructure is present so the membership
+    /// trees get durable per-key history out of the box.
     /// <para>
     /// Must be called <i>after</i>
     /// <see cref="LatticeServiceCollectionExtensions.AddLattice(ISiloBuilder, Action{ISiloBuilder, string})"/>:
@@ -74,6 +76,15 @@ public static class LatticeMembershipServiceCollectionExtensions
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IValidateOptions<LatticeMembershipOptions>, LatticeMembershipOptionsValidator>());
 
+        builder.Services.AddOptions<LatticeIdentityDirectoryOptions>();
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<LatticeIdentityDirectoryOptions>, LatticeIdentityDirectoryOptionsValidator>());
+
+        // The default identity-source seam: no external directory is configured,
+        // so ids are accepted without validation. A real provider (Entra/static)
+        // overrides it with a plain last-wins AddSingleton.
+        builder.Services.TryAddSingleton<ILatticeIdentityDirectory, NullIdentityDirectory>();
+
         // The fallback authenticator: matches nothing, so an unrecognized
         // credential resolves to anonymous rather than throwing.
         builder.Services.TryAddEnumerable(
@@ -122,6 +133,32 @@ public static class LatticeMembershipServiceCollectionExtensions
             return new JwtCredentialAuthenticator(options);
         });
 
+        return builder;
+    }
+
+    /// <summary>
+    /// Registers the <see cref="StaticIdentityDirectory"/> as the active
+    /// <see cref="ILatticeIdentityDirectory"/>, surfacing the roster configured by
+    /// <paramref name="configure"/> (declared users / groups, or the deployed
+    /// Basic user ids discovered via
+    /// <see cref="StaticIdentityDirectoryOptions.AddUsersFromEnvironment(string, IStaticRosterEnvironment?)"/>).
+    /// Uses a plain last-wins <c>AddSingleton</c> so it overrides the default
+    /// no-op <see cref="NullIdentityDirectory"/> registered by
+    /// <see cref="AddLatticeMembership"/>.
+    /// </summary>
+    /// <param name="builder">The silo builder.</param>
+    /// <param name="configure">Delegate that populates the <see cref="StaticIdentityDirectoryOptions"/> roster.</param>
+    /// <returns>The same <paramref name="builder"/> for chaining.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="builder"/> or <paramref name="configure"/> is <c>null</c>.</exception>
+    public static ISiloBuilder AddStaticIdentityDirectory(
+        this ISiloBuilder builder,
+        Action<StaticIdentityDirectoryOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(configure);
+
+        builder.Services.Configure(configure);
+        builder.Services.AddSingleton<ILatticeIdentityDirectory, StaticIdentityDirectory>();
         return builder;
     }
 

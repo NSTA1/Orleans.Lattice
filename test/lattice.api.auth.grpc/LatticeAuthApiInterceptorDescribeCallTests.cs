@@ -292,6 +292,46 @@ public sealed class LatticeAuthApiInterceptorDescribeCallTests
     }
 
     [Test]
+    public void SearchDirectory_has_no_single_target()
+    {
+        var result = Describe(
+            LatticeAuthApiGrpcMethods.SearchDirectoryMethodName,
+            new DirectorySearchRequest { Term = "al" });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Operation, Is.EqualTo(LatticeAuthApiOperation.SearchDirectory));
+            Assert.That(result.TargetId, Is.Null, "a directory search targets no single id");
+        });
+    }
+
+    [Test]
+    public void ResolveDirectoryPrincipal_targets_the_principal_id()
+    {
+        var result = Describe(
+            LatticeAuthApiGrpcMethods.ResolveDirectoryPrincipalMethodName,
+            new AuthPrincipalRef { PrincipalId = "alice@contoso.com" });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Operation, Is.EqualTo(LatticeAuthApiOperation.ResolveDirectoryPrincipal));
+            Assert.That(result.TargetId, Is.EqualTo("alice@contoso.com"));
+        });
+    }
+
+    [Test]
+    public void GetAccessModel_has_no_single_target()
+    {
+        var result = Describe(LatticeAuthApiGrpcMethods.GetAccessModelMethodName, new AuthAccessModelQuery());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Operation, Is.EqualTo(LatticeAuthApiOperation.GetAccessModel));
+            Assert.That(result.TargetId, Is.Null, "an access-model read targets no single id");
+        });
+    }
+
+    [Test]
     public void An_unrecognised_method_maps_to_Unknown()
     {
         var result = Describe("SomeFutureRpc", new AuthUserRef { UserId = "alice" });

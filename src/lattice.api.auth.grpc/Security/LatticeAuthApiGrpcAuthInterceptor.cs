@@ -139,6 +139,9 @@ internal sealed class LatticeAuthApiGrpcAuthInterceptor : Interceptor
             LatticeAuthApiGrpcMethods.ListRulesForTreeMethodName => LatticeAuthApiOperation.ListRulesForTree,
             LatticeAuthApiGrpcMethods.ExplainMethodName => LatticeAuthApiOperation.Explain,
             LatticeAuthApiGrpcMethods.EffectivePermissionsMethodName => LatticeAuthApiOperation.EffectivePermissions,
+            LatticeAuthApiGrpcMethods.SearchDirectoryMethodName => LatticeAuthApiOperation.SearchDirectory,
+            LatticeAuthApiGrpcMethods.ResolveDirectoryPrincipalMethodName => LatticeAuthApiOperation.ResolveDirectoryPrincipal,
+            LatticeAuthApiGrpcMethods.GetAccessModelMethodName => LatticeAuthApiOperation.GetAccessModel,
             _ => LatticeAuthApiOperation.Unknown,
         };
 
@@ -155,7 +158,9 @@ internal sealed class LatticeAuthApiGrpcAuthInterceptor : Interceptor
             AuthTreeRulesPage tp => tp.TreeId,
             AuthExplainQuery xq => xq.SubjectId,
             AuthSubjectRef sr => sr.SubjectId,
-            // The catalog-wide list operations target no single id.
+            AuthPrincipalRef pn => pn.PrincipalId,
+            // The catalog-wide list operations and the directory search / access-model
+            // read target no single id.
             _ => null,
         };
 

@@ -50,6 +50,42 @@ public static class AppAreas
         },
     };
 
+    /// <summary>
+    /// The areas the switcher should surface, in display order, given the head's
+    /// navigation options. This is a strict subset of <see cref="Ordered"/>: opt-in
+    /// areas that the options withhold are filtered out so their tab is never
+    /// rendered. Every area remains registered in <see cref="Ordered"/> regardless.
+    /// </summary>
+    /// <param name="options">The head's navigation options. Must not be <see langword="null"/>.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="options"/> is <see langword="null"/>.</exception>
+    public static IEnumerable<AppAreaDescriptor> Visible(ExplorerNavigationOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        foreach (var descriptor in Ordered)
+        {
+            if (descriptor.Area == AppArea.Schema && !options.EnableSchemaArea)
+            {
+                continue;
+            }
+
+            yield return descriptor;
+        }
+    }
+
+    /// <summary>
+    /// Reports whether <paramref name="area"/> is surfaced by the switcher given
+    /// the head's navigation options. A hidden area cannot be shown or activated
+    /// even when its capability gate would otherwise enable it.
+    /// </summary>
+    /// <param name="area">The area to evaluate.</param>
+    /// <param name="options">The head's navigation options. Must not be <see langword="null"/>.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="options"/> is <see langword="null"/>.</exception>
+    public static bool IsVisible(AppArea area, ExplorerNavigationOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return area != AppArea.Schema || options.EnableSchemaArea;
+    }
+
     /// <summary>The human-readable label for <paramref name="area"/>.</summary>
     /// <param name="area">The area to label.</param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="area"/> is not a registered area.</exception>

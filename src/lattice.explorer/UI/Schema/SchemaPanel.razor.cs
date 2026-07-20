@@ -22,8 +22,20 @@ public partial class SchemaPanel : ComponentBase, IDisposable
     {
         Policy,
         Versions,
-        Compliance,
         DeadLetters,
+    }
+
+    /// <summary>Which contextual editor, if any, is open in the Versions tab form column.</summary>
+    private enum VersionEditor
+    {
+        /// <summary>No editor open; the form column shows a call-to-action hint.</summary>
+        None,
+
+        /// <summary>The set-config editor (used both to enable versioning and to set config directly).</summary>
+        Configure,
+
+        /// <summary>The advance-version editor (advance target, optionally re-stamping).</summary>
+        Advance,
     }
 
     /// <summary>The simplified rule kinds the panel can author (structured-predicate rules are out of scope).</summary>
@@ -71,15 +83,21 @@ public partial class SchemaPanel : ComponentBase, IDisposable
     private string _draftRuleRegex = string.Empty;
     private string _draftRuleMemberPath = string.Empty;
     private string _draftRuleDescription = string.Empty;
+    private bool _ruleBuilderDirty;
+    private bool _showNoRulesDialog;
 
     // ----- Versions -----
     private SchemaReadView<LatticeSchemaVersionConfig>? _versionView;
     private SchemaReadView<LatticeSchemaRemediationReport>? _remediationView;
-    private bool _versionFormOpen;
+    private VersionEditor _versionEditor = VersionEditor.None;
+    private bool _showAdvancedVersions;
     private uint _setSchemaId;
     private uint _setTargetVersion = 1;
     private bool _setStrictIngest;
     private uint _advanceTargetVersion = 1;
+
+    /// <summary>True when the selected tree currently has a versioning config applied (target version &gt; 0).</summary>
+    private bool IsVersioned => _versionView is { IsSuccess: true } view && view.Value.TargetVersion != 0;
 
     // ----- Compliance -----
     private SchemaReadView<LatticeSchemaComplianceReport>? _complianceView;
@@ -190,7 +208,8 @@ public partial class SchemaPanel : ComponentBase, IDisposable
 
         _treeId = treeId;
         _policyFormOpen = false;
-        _versionFormOpen = false;
+        _versionEditor = VersionEditor.None;
+        _showAdvancedVersions = false;
         await LoadAsync();
     }
 
@@ -207,7 +226,8 @@ public partial class SchemaPanel : ComponentBase, IDisposable
         // Leaving a tab closes any open editor so the user returns to the
         // read-first view with an explicit call to action.
         _policyFormOpen = false;
-        _versionFormOpen = false;
+        _versionEditor = VersionEditor.None;
+        _showAdvancedVersions = false;
 
         // A tree is already selected/probed, so load the newly activated tab's
         // views for it immediately - the tab strip is the only navigation now that
@@ -262,9 +282,6 @@ public partial class SchemaPanel : ComponentBase, IDisposable
             case SchemaTab.Versions:
                 await LoadVersionAsync();
                 break;
-            case SchemaTab.Compliance:
-                // Compliance is an explicit scan action, not an auto-load.
-                break;
             case SchemaTab.DeadLetters:
                 // Dead letters load on explicit action.
                 break;
@@ -275,6 +292,11 @@ public partial class SchemaPanel : ComponentBase, IDisposable
 
     private async Task LoadPolicyAsync()
     {
+        // A fresh policy load invalidates any prior compliance audit (it was scanned
+        // against the tree's previous policy state), so clear it to avoid showing a
+        // stale result beneath the reloaded policy.
+        _complianceView = null;
+
         if (!_caps.CanViewPolicy)
         {
             _policyView = null;
@@ -332,6 +354,7 @@ public partial class SchemaPanel : ComponentBase, IDisposable
         _draftRuleMemberPath = string.Empty;
         _draftRuleDescription = string.Empty;
         _draftRuleMaxLength = 0;
+        _ruleBuilderDirty = false;
     }
 
     private void RemoveDraftRule(int index)
@@ -355,6 +378,24 @@ public partial class SchemaPanel : ComponentBase, IDisposable
         _busy = true;
         try
         {
+            // A rule configured in the builder but not yet committed with "Add rule"
+            // would otherwise be silently dropped when the policy is saved. Fold a
+            // valid, user-edited pending rule into the draft first so the common
+            // "configure one rule then Set policy" flow does not lose it.
+            if (_ruleBuilderDirty && CanAddDraftRule())
+            {
+                AddDraftRule();
+            }
+
+            // A policy with no rules accepts every value, which is indistinguishable
+            // from having no policy. Block the save and prompt the user rather than
+            // persisting a meaningless empty policy.
+            if (_draftRules.Count == 0)
+            {
+                _showNoRulesDialog = true;
+                return;
+            }
+
             var policy = new LatticeSchemaPolicy(_draftRules.ToArray(), _draftStrictIngest);
             _lastResult = await PolicyService.SetPolicyAsync(_treeId, policy);
             if (_lastResult.IsSuccess)
@@ -417,13 +458,17 @@ public partial class SchemaPanel : ComponentBase, IDisposable
         _draftRuleRegex = string.Empty;
         _draftRuleMemberPath = string.Empty;
         _draftRuleDescription = string.Empty;
+        _ruleBuilderDirty = false;
         _policyFormOpen = true;
     }
 
     private void CancelPolicyForm()
     {
         _policyFormOpen = false;
+        _ruleBuilderDirty = false;
     }
+
+    private void DismissNoRulesDialog() => _showNoRulesDialog = false;
 
     // ----- Versions -----
 
@@ -451,7 +496,7 @@ public partial class SchemaPanel : ComponentBase, IDisposable
             _lastResult = await VersioningService.SetVersionConfigAsync(_treeId, config);
             if (_lastResult.IsSuccess)
             {
-                _versionFormOpen = false;
+                _versionEditor = VersionEditor.None;
                 await LoadVersionAsync();
             }
         }
@@ -474,7 +519,8 @@ public partial class SchemaPanel : ComponentBase, IDisposable
             _lastResult = await VersioningService.ClearVersionConfigAsync(_treeId);
             if (_lastResult.IsSuccess)
             {
-                _versionFormOpen = false;
+                _versionEditor = VersionEditor.None;
+                _showAdvancedVersions = false;
                 await LoadVersionAsync();
             }
         }
@@ -485,25 +531,47 @@ public partial class SchemaPanel : ComponentBase, IDisposable
     }
 
     /// <summary>
-    /// Opens the version-config editor, seeding the set/advance inputs from the
+    /// Opens the version editor to enable versioning on a currently unversioned tree,
+    /// seeding a fresh schema id and starting version so the first-run form is not empty.
+    /// </summary>
+    private void EnableVersioning()
+    {
+        _setSchemaId = 1;
+        _setTargetVersion = 1;
+        _setStrictIngest = false;
+        _versionEditor = VersionEditor.Configure;
+    }
+
+    /// <summary>
+    /// Opens the advance-version editor, seeding the new target as one past the current
+    /// target so the default action raises the version by a single step.
+    /// </summary>
+    private void BeginAdvance()
+    {
+        uint current = _versionView is { IsSuccess: true } view ? view.Value.TargetVersion : 0;
+        _advanceTargetVersion = current + 1;
+        _versionEditor = VersionEditor.Advance;
+    }
+
+    /// <summary>
+    /// Opens the raw set-config editor (advanced disclosure), seeding the inputs from the
     /// tree's current version config so an edit starts from the applied state.
     /// </summary>
-    private void EditVersionConfig()
+    private void ShowAdvancedSetConfig()
     {
         if (_versionView is { IsSuccess: true } view && view.Value.TargetVersion != 0)
         {
             _setSchemaId = view.Value.SchemaId;
             _setTargetVersion = view.Value.TargetVersion;
             _setStrictIngest = view.Value.StrictIngest;
-            _advanceTargetVersion = view.Value.TargetVersion;
         }
 
-        _versionFormOpen = true;
+        _versionEditor = VersionEditor.Configure;
     }
 
-    private void CancelVersionForm()
+    private void CancelVersionEditor()
     {
-        _versionFormOpen = false;
+        _versionEditor = VersionEditor.None;
     }
 
     private async Task AdvanceTargetVersionAsync()
@@ -519,6 +587,7 @@ public partial class SchemaPanel : ComponentBase, IDisposable
             _lastResult = await VersioningService.AdvanceTargetVersionAsync(_treeId, _advanceTargetVersion);
             if (_lastResult.IsSuccess)
             {
+                _versionEditor = VersionEditor.None;
                 await LoadVersionAsync();
             }
         }
@@ -541,6 +610,7 @@ public partial class SchemaPanel : ComponentBase, IDisposable
             _lastResult = await VersioningService.AdvanceAndMigrateAsync(_treeId, _advanceTargetVersion);
             if (_lastResult.IsSuccess)
             {
+                _versionEditor = VersionEditor.None;
                 await LoadVersionAsync();
             }
         }

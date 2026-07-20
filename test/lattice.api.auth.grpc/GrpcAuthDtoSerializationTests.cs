@@ -257,6 +257,126 @@ public sealed class GrpcAuthDtoSerializationTests
     }
 
     [Test]
+    public void AuthPrincipalRef_round_trips()
+    {
+        var original = new AuthPrincipalRef { PrincipalId = "alice@contoso.com" };
+
+        Assert.That(RoundTrip(original), Is.EqualTo(original));
+    }
+
+    [Test]
+    public void AuthDirectoryPrincipalResult_round_trips_present_and_absent()
+    {
+        var present = RoundTrip(new AuthDirectoryPrincipalResult
+        {
+            Principal = new DirectoryPrincipalDescriptor
+            {
+                Id = "alice@contoso.com",
+                DisplayName = "Alice",
+                Kind = Membership.DirectoryPrincipalKind.User,
+            },
+        });
+        var absent = RoundTrip(new AuthDirectoryPrincipalResult { Principal = null });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(present.Principal!.Id, Is.EqualTo("alice@contoso.com"));
+            Assert.That(present.Principal!.DisplayName, Is.EqualTo("Alice"));
+            Assert.That(absent.Principal, Is.Null);
+        });
+    }
+
+    [Test]
+    public void AuthAccessModelQuery_round_trips()
+    {
+        Assert.That(RoundTrip(new AuthAccessModelQuery()), Is.EqualTo(new AuthAccessModelQuery()));
+    }
+
+    [Test]
+    public void DirectorySearchRequest_round_trips()
+    {
+        var original = new DirectorySearchRequest
+        {
+            Term = "al",
+            Kind = Membership.DirectoryPrincipalKind.Group,
+            PageSize = 25,
+            ContinuationToken = "tok",
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Term, Is.EqualTo("al"));
+            Assert.That(copy.Kind, Is.EqualTo(Membership.DirectoryPrincipalKind.Group));
+            Assert.That(copy.PageSize, Is.EqualTo(25));
+            Assert.That(copy.ContinuationToken, Is.EqualTo("tok"));
+        });
+    }
+
+    [Test]
+    public void DirectorySearchResult_round_trips_a_populated_page()
+    {
+        var original = new DirectorySearchResult
+        {
+            Principals = new[]
+            {
+                new DirectoryPrincipalDescriptor { Id = "alice", DisplayName = "Alice" },
+            },
+            ContinuationToken = "next",
+            Available = true,
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Principals, Has.Count.EqualTo(1));
+            Assert.That(copy.Principals[0].Id, Is.EqualTo("alice"));
+            Assert.That(copy.ContinuationToken, Is.EqualTo("next"));
+            Assert.That(copy.Available, Is.True);
+        });
+    }
+
+    [Test]
+    public void AccessModelDescriptor_round_trips()
+    {
+        var original = new AccessModelDescriptor
+        {
+            AuthenticationMode = AccessAuthenticationMode.Claims,
+            RulesEnforced = true,
+            DirectoryAvailable = true,
+            DirectoryProviderId = "entra",
+            DirectoryExplanation = "Use the object id.",
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.AuthenticationMode, Is.EqualTo(AccessAuthenticationMode.Claims));
+            Assert.That(copy.RulesEnforced, Is.True);
+            Assert.That(copy.DirectoryAvailable, Is.True);
+            Assert.That(copy.DirectoryProviderId, Is.EqualTo("entra"));
+            Assert.That(copy.DirectoryExplanation, Is.EqualTo("Use the object id."));
+        });
+    }
+
+    [Test]
+    public void Marshaller_round_trips_a_directory_search_result_through_the_grpc_contexts()
+    {
+        var original = new DirectorySearchResult
+        {
+            Principals = new[] { new DirectoryPrincipalDescriptor { Id = "g1", DisplayName = "Group 1" } },
+            Available = true,
+        };
+
+        var copy = MarshalRoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Available, Is.True);
+            Assert.That(copy.Principals[0].Id, Is.EqualTo("g1"));
+        });
+    }
+
+    [Test]
     public void Marshaller_round_trips_a_put_rule_through_the_grpc_contexts()
     {
         var original = new AuthPutRule

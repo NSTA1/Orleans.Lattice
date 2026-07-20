@@ -20,16 +20,21 @@ public partial class AccessPanel : ComponentBase, IDisposable
     /// <summary>The active sub-tab of the Access area.</summary>
     private enum AccessTab
     {
-        Users,
         Groups,
         Policies,
         Explain,
     }
 
-    private AccessTab _tab = AccessTab.Users;
+    private AccessTab _tab = AccessTab.Groups;
     private bool _busy;
     private bool _allowed;
     private AccessOperationResult? _lastResult;
+
+    // The extracted create-form / access-state model: directory availability, the
+    // provider explanation, the auth-mode + enforcement banner, and the
+    // resolve-and-block decision for a new principal. Constructed in
+    // OnInitializedAsync once the injected membership service is available.
+    private AccessCreateModel _accessModel = null!;
 
     // ----- Tree selection (shared by the Policies and Explain tabs) -----
     private const int TreePageSize = 200;
@@ -38,14 +43,10 @@ public partial class AccessPanel : ComponentBase, IDisposable
     private string? _treesError;
     private string? _selectedTreeId;
 
-    // ----- Users -----
+    // ----- Users (list shared with the Groups member picker and the Policies /
+    // Explain subject drop-down; the Explorer has no dedicated Users admin tab) -----
     private readonly List<AuthUser> _users = new();
     private string? _usersNextToken;
-    private string? _selectedUserId;
-    private bool _editingExistingUser;
-    private bool _userFormOpen;
-    private string _userIdInput = string.Empty;
-    private string _userDisplayInput = string.Empty;
 
     // ----- Groups -----
     private readonly List<AuthGroup> _groups = new();
@@ -55,9 +56,15 @@ public partial class AccessPanel : ComponentBase, IDisposable
     private bool _groupFormOpen;
     private string _groupIdInput = string.Empty;
     private string _groupDisplayInput = string.Empty;
+    private string? _groupCreateError;
     private readonly List<string> _directMembers = new();
     private string _memberIdInput = string.Empty;
     private MembershipMemberKind _memberKind = MembershipMemberKind.User;
+
+    // The selected group's friendly display name, captured at selection time so the
+    // 'Direct members of X' heading and the client-side add / remove status banner
+    // render the name (falling back to the id) without re-resolving.
+    private string _selectedGroupDisplayName = string.Empty;
 
     // Bridges the shared SubjectPicker (which speaks LatticeSubjectSelectorKind)
     // to the membership member kind. Both enums share User=0/Group=1 semantics.
@@ -99,10 +106,12 @@ public partial class AccessPanel : ComponentBase, IDisposable
     /// <inheritdoc />
     protected override async Task OnInitializedAsync()
     {
+        _accessModel = new AccessCreateModel(Membership);
         _allowed = Capabilities.Current.AuthAdminAllowed;
         Capabilities.Changed += OnCapabilitiesChanged;
         if (_allowed)
         {
+            await LoadAccessModelAsync();
             await LoadTreesAsync();
             await ReloadAsync();
         }
@@ -121,9 +130,11 @@ public partial class AccessPanel : ComponentBase, IDisposable
         {
             // When the gate freshly opens (for example after the connection reaches
             // the cluster or an admin signs in) populate the tree list so the
-            // tree-scoped tabs are usable without a manual refresh.
+            // tree-scoped tabs are usable without a manual refresh, and read the
+            // access model so the create forms and enforcement banner are accurate.
             if (_allowed && _trees.Count == 0)
             {
+                await LoadAccessModelAsync();
                 await LoadTreesAsync();
             }
 
@@ -208,7 +219,6 @@ public partial class AccessPanel : ComponentBase, IDisposable
 
         // Leaving a tab closes any open create/edit form so the user always returns
         // to the list-first view with an explicit call to action.
-        _userFormOpen = false;
         _groupFormOpen = false;
         _ruleFormOpen = false;
 
@@ -221,7 +231,25 @@ public partial class AccessPanel : ComponentBase, IDisposable
     private async Task ReloadAsync()
     {
         _lastResult = null;
+        await LoadAccessModelAsync();
         await LoadForTabAsync(force: true);
+    }
+
+    /// <summary>
+    /// Reads the cluster's best-effort access model into <see cref="_accessModel"/>
+    /// so the create forms know whether to fail closed against a directory, what a
+    /// valid id is for this deployment, and whether the active authorizer actually
+    /// enforces the recorded rules and membership. A denial or transport failure
+    /// folds into the safe unavailable snapshot rather than throwing.
+    /// </summary>
+    private async Task LoadAccessModelAsync()
+    {
+        if (!_allowed)
+        {
+            return;
+        }
+
+        _accessModel.Apply(await Membership.GetAccessModelAsync());
     }
 
     /// <summary>
@@ -234,13 +262,6 @@ public partial class AccessPanel : ComponentBase, IDisposable
     {
         switch (_tab)
         {
-            case AccessTab.Users:
-                if (force || _users.Count == 0)
-                {
-                    await LoadUsersAsync(reset: true);
-                }
-
-                break;
             case AccessTab.Groups:
                 if (force || _groups.Count == 0)
                 {
@@ -327,99 +348,6 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _usersNextToken = view.NextPageToken;
     }
 
-    private Task LoadMoreUsersAsync() => LoadUsersAsync(reset: false);
-
-    private void SelectUser(AuthUser user)
-    {
-        _selectedUserId = user.UserId;
-        _editingExistingUser = true;
-        _userIdInput = user.UserId;
-        _userDisplayInput = user.DisplayName ?? string.Empty;
-    }
-
-    // Opens the empty create form (the "New user" call to action).
-    private void NewUser()
-    {
-        ResetUserForm();
-        _userFormOpen = true;
-    }
-
-    // Opens the form pre-filled to edit an existing user.
-    private void EditUser(AuthUser user)
-    {
-        SelectUser(user);
-        _userFormOpen = true;
-    }
-
-    // Closes the form without saving.
-    private void CancelUserForm()
-    {
-        ResetUserForm();
-        _userFormOpen = false;
-    }
-
-    private void ResetUserForm()
-    {
-        _selectedUserId = null;
-        _editingExistingUser = false;
-        _userIdInput = string.Empty;
-        _userDisplayInput = string.Empty;
-    }
-
-    private async Task SaveUserAsync()
-    {
-        if (_busy || !_allowed || string.IsNullOrWhiteSpace(_userIdInput))
-        {
-            return;
-        }
-
-        _busy = true;
-        try
-        {
-            var user = new AuthUser
-            {
-                UserId = _userIdInput.Trim(),
-                DisplayName = string.IsNullOrWhiteSpace(_userDisplayInput) ? null : _userDisplayInput.Trim(),
-            };
-            _lastResult = await Membership.UpsertUserAsync(user);
-            if (_lastResult.IsSuccess)
-            {
-                // Repopulate the list, then keep the just-saved user selected and
-                // highlighted so the operator sees the result of their action.
-                await LoadUsersCoreAsync(reset: true);
-                SelectUser(user);
-            }
-        }
-        finally
-        {
-            _busy = false;
-        }
-    }
-
-    private async Task DeleteUserAsync()
-    {
-        if (_busy || !_allowed || _selectedUserId is null)
-        {
-            return;
-        }
-
-        _busy = true;
-        try
-        {
-            _lastResult = await Membership.DeleteUserAsync(_selectedUserId);
-            if (_lastResult.IsSuccess)
-            {
-                ResetUserForm();
-                _userFormOpen = false;
-                await LoadUsersCoreAsync(reset: true);
-            }
-        }
-        finally
-        {
-            _busy = false;
-        }
-    }
-
     // ----- Groups -----
 
     private async Task LoadGroupsAsync(bool reset)
@@ -473,6 +401,8 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _editingExistingGroup = true;
         _groupIdInput = group.GroupId;
         _groupDisplayInput = group.DisplayName ?? string.Empty;
+        _selectedGroupDisplayName = group.DisplayName ?? string.Empty;
+        _groupCreateError = null;
         _memberIdInput = string.Empty;
         _memberKind = MembershipMemberKind.User;
 
@@ -514,9 +444,25 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _editingExistingGroup = false;
         _groupIdInput = string.Empty;
         _groupDisplayInput = string.Empty;
+        _selectedGroupDisplayName = string.Empty;
+        _groupCreateError = null;
         _directMembers.Clear();
         _memberIdInput = string.Empty;
         _memberKind = MembershipMemberKind.User;
+    }
+
+    /// <summary>
+    /// Auto-fills the New group display-name field from a directory selection, but
+    /// only when the picker surfaced a meaningful name (the model already yields
+    /// empty for a cleared or free-text selection or one that merely echoes the
+    /// id), so an operator's own edit is never clobbered.
+    /// </summary>
+    private void OnGroupDisplayNameSuggested(string displayName)
+    {
+        if (!string.IsNullOrWhiteSpace(displayName))
+        {
+            _groupDisplayInput = displayName;
+        }
     }
 
     private async Task LoadDirectMembersAsync()
@@ -531,6 +477,9 @@ public partial class AccessPanel : ComponentBase, IDisposable
         if (view.IsSuccess)
         {
             _directMembers.AddRange(view.Entries);
+            // Warm the label cache for every member in view (bounded by the page) so
+            // each row upgrades from its raw id to a friendly display name on render.
+            await Labels.ResolveManyAsync(_directMembers);
         }
         else
         {
@@ -548,6 +497,21 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _busy = true;
         try
         {
+            _groupCreateError = null;
+
+            // Fail closed for a NEW group: when a directory is available the chosen /
+            // entered id must resolve to a real group, otherwise the create is blocked
+            // with an inline reason. The edit path (an existing group) skips this.
+            if (!_editingExistingGroup)
+            {
+                var decision = await _accessModel.ValidateAsync(_groupIdInput, DirectoryPrincipalKind.Group);
+                if (decision.IsBlocked)
+                {
+                    _groupCreateError = decision.Reason;
+                    return;
+                }
+            }
+
             var group = new AuthGroup
             {
                 GroupId = _groupIdInput.Trim(),
@@ -556,6 +520,11 @@ public partial class AccessPanel : ComponentBase, IDisposable
             _lastResult = await Membership.UpsertGroupAsync(group);
             if (_lastResult.IsSuccess)
             {
+                // Replace the server's raw-id success message with a friendly,
+                // display-name status line composed client-side.
+                var label = string.IsNullOrWhiteSpace(group.DisplayName) ? group.GroupId : group.DisplayName;
+                _lastResult = AccessOperationResult.Success($"Saved group '{label}'.");
+
                 // Repopulate the list, then keep the just-saved group selected and
                 // highlighted (and load its direct members) so the operator sees the
                 // result of their action.
@@ -579,9 +548,12 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _busy = true;
         try
         {
+            // Capture a friendly label before the reset clears the form fields.
+            var label = SelectedGroupLabel;
             _lastResult = await Membership.DeleteGroupAsync(_selectedGroupId);
             if (_lastResult.IsSuccess)
             {
+                _lastResult = AccessOperationResult.Success($"Deleted group '{label}'.");
                 ResetGroupForm();
                 _groupFormOpen = false;
                 await LoadGroupsCoreAsync(reset: true);
@@ -603,9 +575,14 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _busy = true;
         try
         {
-            _lastResult = await Membership.AddMemberAsync(_selectedGroupId, _memberIdInput.Trim(), _memberKind);
+            var memberId = _memberIdInput.Trim();
+            _lastResult = await Membership.AddMemberAsync(_selectedGroupId, memberId, _memberKind);
             if (_lastResult.IsSuccess)
             {
+                // Replace the server's raw-id success message with a friendly,
+                // display-name status line resolved client-side.
+                var memberLabel = await Labels.ResolveLabelAsync(memberId);
+                _lastResult = AccessOperationResult.Success($"Added {memberLabel} to {SelectedGroupLabel}.");
                 _memberIdInput = string.Empty;
                 await LoadDirectMembersAsync();
             }
@@ -629,6 +606,10 @@ public partial class AccessPanel : ComponentBase, IDisposable
             _lastResult = await Membership.RemoveMemberAsync(_selectedGroupId, memberId);
             if (_lastResult.IsSuccess)
             {
+                // Replace the server's raw-id success message with a friendly,
+                // display-name status line resolved client-side.
+                var memberLabel = await Labels.ResolveLabelAsync(memberId);
+                _lastResult = AccessOperationResult.Success($"Removed {memberLabel} from {SelectedGroupLabel}.");
                 await LoadDirectMembersAsync();
             }
         }
@@ -682,6 +663,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _rules.AddRange(view.Entries);
         _rulesNextToken = view.NextPageToken;
         _rankedRules = RulePrecedence.Rank(_rules);
+        await ResolveRuleSubjectsAsync(_rankedRules);
     }
 
     private Task LoadMoreRulesAsync() => LoadRulesAsync(reset: false);
@@ -823,6 +805,9 @@ public partial class AccessPanel : ComponentBase, IDisposable
             {
                 _explanation = view.Explanation;
                 _explainRankedRules = RulePrecedence.Rank(view.Explanation.MatchedRules);
+                await ResolveRuleSubjectsAsync(_explainRankedRules);
+                await Labels.ResolveLabelAsync(view.Explanation.SubjectId);
+                await Labels.ResolveManyAsync(view.Explanation.GroupIds);
                 _lastResult = null;
             }
             else
@@ -855,6 +840,9 @@ public partial class AccessPanel : ComponentBase, IDisposable
             {
                 _effective = view.Permissions;
                 _effectiveRankedRules = RulePrecedence.Rank(view.Permissions.Rules);
+                await ResolveRuleSubjectsAsync(_effectiveRankedRules);
+                await Labels.ResolveLabelAsync(view.Permissions.SubjectId);
+                await Labels.ResolveManyAsync(view.Permissions.GroupIds);
                 _lastResult = null;
             }
             else
@@ -871,6 +859,34 @@ public partial class AccessPanel : ComponentBase, IDisposable
     }
 
     // ----- Helpers -----
+
+    /// <summary>
+    /// The friendly label for the currently selected group: its captured display
+    /// name, or the group id when no display name is set.
+    /// </summary>
+    private string SelectedGroupLabel =>
+        string.IsNullOrWhiteSpace(_selectedGroupDisplayName)
+            ? _selectedGroupId ?? string.Empty
+            : _selectedGroupDisplayName;
+
+    // Warms the label cache for the subject id of every ranked rule about to be
+    // rendered, so each subject cell upgrades from its raw id to a friendly name.
+    // Bounded by the loaded rule page and only run on data load, never per render.
+    private async Task ResolveRuleSubjectsAsync(IReadOnlyList<RankedRule> ranked)
+    {
+        if (ranked.Count == 0)
+        {
+            return;
+        }
+
+        var ids = new List<string>(ranked.Count);
+        foreach (var rule in ranked)
+        {
+            ids.Add(rule.Rule.Subject.Id);
+        }
+
+        await Labels.ResolveManyAsync(ids);
+    }
 
     private static LatticeScope BuildScope(LatticeScopeKind kind, string treeId, string keyOrPrefix) => kind switch
     {

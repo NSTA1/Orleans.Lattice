@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Auth;
+using Orleans.Lattice.Membership;
 using Orleans.Serialization;
 
 namespace Orleans.Lattice.Api.Auth.Tests;
@@ -206,5 +207,91 @@ public sealed class AuthDtoSerializationTests
             Assert.That(copied.Scope.Kind, Is.EqualTo(LatticeScopeKind.Tree));
             Assert.That(copied.Operations, Is.EqualTo(LatticeOperation.Telemetry));
         });
+    }
+
+    [Test]
+    public void DirectorySearchRequest_round_trips()
+    {
+        var original = new DirectorySearchRequest
+        {
+            Term = "ali",
+            Kind = DirectoryPrincipalKind.Group,
+            PageSize = 50,
+            ContinuationToken = "cursor-1",
+        };
+
+        Assert.That(RoundTrip(original), Is.EqualTo(original));
+    }
+
+    [Test]
+    public void DirectoryPrincipalDescriptor_round_trips_with_claims()
+    {
+        var original = new DirectoryPrincipalDescriptor
+        {
+            Id = "u-1",
+            DisplayName = "Alice",
+            Kind = DirectoryPrincipalKind.User,
+            Claims = new Dictionary<string, string> { ["team"] = "ops" },
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Id, Is.EqualTo("u-1"));
+            Assert.That(copy.DisplayName, Is.EqualTo("Alice"));
+            Assert.That(copy.Kind, Is.EqualTo(DirectoryPrincipalKind.User));
+            Assert.That(copy.Claims!["team"], Is.EqualTo("ops"));
+        });
+    }
+
+    [Test]
+    public void DirectorySearchResult_round_trips()
+    {
+        var original = new DirectorySearchResult
+        {
+            Principals =
+            [
+                new DirectoryPrincipalDescriptor { Id = "u-1", DisplayName = "Alice", Kind = DirectoryPrincipalKind.User },
+                new DirectoryPrincipalDescriptor { Id = "g-1", DisplayName = "Admins", Kind = DirectoryPrincipalKind.Group },
+            ],
+            ContinuationToken = "cursor-2",
+            Available = true,
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Available, Is.True);
+            Assert.That(copy.ContinuationToken, Is.EqualTo("cursor-2"));
+            Assert.That(copy.Principals.Select(p => p.Id), Is.EqualTo(new[] { "u-1", "g-1" }));
+            Assert.That(copy.Principals[1].Kind, Is.EqualTo(DirectoryPrincipalKind.Group));
+        });
+    }
+
+    [Test]
+    public void DirectorySearchResult_unavailable_round_trips_empty()
+    {
+        var copy = RoundTrip(DirectorySearchResult.Unavailable);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Available, Is.False);
+            Assert.That(copy.Principals, Is.Empty);
+            Assert.That(copy.ContinuationToken, Is.Null);
+        });
+    }
+
+    [Test]
+    public void AccessModelDescriptor_round_trips()
+    {
+        var original = new AccessModelDescriptor
+        {
+            AuthenticationMode = AccessAuthenticationMode.Claims,
+            RulesEnforced = true,
+            DirectoryAvailable = true,
+            DirectoryProviderId = "entra",
+            DirectoryExplanation = "Enter an Entra object id.",
+        };
+
+        Assert.That(RoundTrip(original), Is.EqualTo(original));
     }
 }

@@ -68,6 +68,15 @@ public enum LatticeAuthApiOperation
     /// <summary>The <c>EffectivePermissions</c> introspection RPC.</summary>
     EffectivePermissions,
 
+    /// <summary>The <c>SearchDirectory</c> RPC.</summary>
+    SearchDirectory,
+
+    /// <summary>The <c>ResolveDirectoryPrincipal</c> RPC.</summary>
+    ResolveDirectoryPrincipal,
+
+    /// <summary>The <c>GetAccessModel</c> RPC.</summary>
+    GetAccessModel,
+
     /// <summary>
     /// An auth-API method the interceptor does not recognise (for example a
     /// future RPC added without updating the operation map). Presented to the

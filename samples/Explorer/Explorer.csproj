@@ -28,6 +28,8 @@
     <ProjectReference Include="..\..\src\lattice.api.state\Orleans.Lattice.Api.State.csproj" />
     <ProjectReference Include="..\..\src\lattice.api.state.grpc\Orleans.Lattice.Api.State.Grpc.csproj" />
     <ProjectReference Include="..\..\src\lattice.membership\Orleans.Lattice.Membership.csproj" />
+    <ProjectReference Include="..\..\src\lattice.membership.entra\Orleans.Lattice.Membership.Entra.csproj" />
+    <ProjectReference Include="..\..\src\lattice.membership.entra.graph\Orleans.Lattice.Membership.Entra.Graph.csproj" />
     <ProjectReference Include="..\..\src\lattice.auth\Orleans.Lattice.Auth.csproj" />
     <ProjectReference Include="..\..\src\lattice.api.auth\Orleans.Lattice.Api.Auth.csproj" />
     <ProjectReference Include="..\..\src\lattice.api.auth.grpc\Orleans.Lattice.Api.Auth.Grpc.csproj" />
