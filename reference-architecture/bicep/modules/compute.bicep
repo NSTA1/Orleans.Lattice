@@ -298,6 +298,12 @@ resource siloApp 'Microsoft.App/containerApps@2024-03-01' = {
       }
     }
     template: {
+      // Platform-enforced graceful drain: ACA waits this many seconds after
+      // SIGTERM before force-terminating a scaled-in replica (default is 30s).
+      // Set to the shard-transfer drain budget so the host's
+      // LatticeShuttingDownException path completes or hands off in-flight
+      // transfers before the platform SIGKILLs the replica.
+      terminationGracePeriodSeconds: siloTerminationGracePeriodSeconds
       containers: [
         {
           name: 'silo'
