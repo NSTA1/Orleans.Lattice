@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Scaling</PackageId>
-    <Version>7.9.1</Version>
+    <Version>8.0.0</Version>
     <Description>Opt-in autoscaling signal for Orleans.Lattice - a read-only, two-axis (compute and storage) cluster-aggregate pressure snapshot that external autoscalers can scrape to size the silo pool.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
