@@ -21,7 +21,7 @@ public class ExplorerMetricsServiceCollectionExtensionsTests
     }
 
     [Test]
-    public async Task AddExplorerMetrics_ReaderIsSingleton()
+    public async Task AddExplorerMetrics_ReaderIsScopedPerCircuit()
     {
         var services = new ServiceCollection();
         services.AddExplorerConfiguration(options => options.FilePath = "C:/tmp/config.json");
@@ -29,7 +29,14 @@ public class ExplorerMetricsServiceCollectionExtensionsTests
         services.AddExplorerMetrics();
         await using var provider = services.BuildServiceProvider();
 
-        var reader = provider.GetRequiredService<IMetricsReader>();
-        Assert.That(provider.GetRequiredService<IMetricsReader>(), Is.SameAs(reader));
+        await using var scopeA = provider.CreateAsyncScope();
+        await using var scopeB = provider.CreateAsyncScope();
+        var readerA = scopeA.ServiceProvider.GetRequiredService<IMetricsReader>();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scopeA.ServiceProvider.GetRequiredService<IMetricsReader>(), Is.SameAs(readerA));
+            Assert.That(scopeB.ServiceProvider.GetRequiredService<IMetricsReader>(), Is.Not.SameAs(readerA));
+        });
     }
 }

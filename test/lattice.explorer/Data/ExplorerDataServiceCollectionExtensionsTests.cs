@@ -21,7 +21,7 @@ public class ExplorerDataServiceCollectionExtensionsTests
     }
 
     [Test]
-    public async Task AddExplorerData_ReaderIsSingleton()
+    public async Task AddExplorerData_ReaderIsScopedPerCircuit()
     {
         var services = new ServiceCollection();
         services.AddExplorerConfiguration(options => options.FilePath = "C:/tmp/config.json");
@@ -29,8 +29,15 @@ public class ExplorerDataServiceCollectionExtensionsTests
         services.AddExplorerData();
         await using var provider = services.BuildServiceProvider();
 
-        var reader = provider.GetRequiredService<IDataReader>();
-        Assert.That(provider.GetRequiredService<IDataReader>(), Is.SameAs(reader));
+        await using var scopeA = provider.CreateAsyncScope();
+        await using var scopeB = provider.CreateAsyncScope();
+        var reader = scopeA.ServiceProvider.GetRequiredService<IDataReader>();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scopeA.ServiceProvider.GetRequiredService<IDataReader>(), Is.SameAs(reader));
+            Assert.That(scopeB.ServiceProvider.GetRequiredService<IDataReader>(), Is.Not.SameAs(reader));
+        });
     }
 
     [Test]
@@ -46,7 +53,7 @@ public class ExplorerDataServiceCollectionExtensionsTests
     }
 
     [Test]
-    public async Task AddExplorerData_LiveFollowerIsSingleton()
+    public async Task AddExplorerData_LiveFollowerIsScopedPerCircuit()
     {
         var services = new ServiceCollection();
         services.AddExplorerConfiguration(options => options.FilePath = "C:/tmp/config.json");
@@ -54,7 +61,14 @@ public class ExplorerDataServiceCollectionExtensionsTests
         services.AddExplorerData();
         await using var provider = services.BuildServiceProvider();
 
-        var follower = provider.GetRequiredService<IEntryLiveFollower>();
-        Assert.That(provider.GetRequiredService<IEntryLiveFollower>(), Is.SameAs(follower));
+        await using var scopeA = provider.CreateAsyncScope();
+        await using var scopeB = provider.CreateAsyncScope();
+        var follower = scopeA.ServiceProvider.GetRequiredService<IEntryLiveFollower>();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scopeA.ServiceProvider.GetRequiredService<IEntryLiveFollower>(), Is.SameAs(follower));
+            Assert.That(scopeB.ServiceProvider.GetRequiredService<IEntryLiveFollower>(), Is.Not.SameAs(follower));
+        });
     }
 }

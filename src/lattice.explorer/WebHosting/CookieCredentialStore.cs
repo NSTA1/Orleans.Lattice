@@ -16,10 +16,11 @@ namespace Orleans.Lattice.Explorer.Web;
 /// </summary>
 /// <remarks>
 /// Cookie reads and writes require an active <see cref="HttpContext"/>, which is
-/// present on the auth endpoints but not on a SignalR circuit. The auth session
-/// is a process singleton, so the in-memory credential established at sign-in
-/// remains effective for the life of the process; the encrypted cookie provides
-/// at-rest persistence for the credential rather than circuit-time retrieval.
+/// present on the auth endpoints but not on a SignalR circuit. The credential is
+/// written and cleared on the server-side <c>/auth/login</c> and
+/// <c>/auth/logout</c> endpoints; the encrypted cookie is the per-browser
+/// at-rest store each circuit's scoped auth session reads its own credential
+/// from, so no circuit inherits another operator's sign-in.
 /// </remarks>
 public sealed class CookieCredentialStore : ICredentialStore
 {

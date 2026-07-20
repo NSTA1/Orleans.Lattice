@@ -10,14 +10,16 @@ public static class ExplorerHistoryServiceCollectionExtensions
 {
     /// <summary>
     /// Registers the <see cref="IHistoryReader"/> and the
-    /// <see cref="IHistoryLiveFollower"/>. Call after <c>AddExplorerCatalog</c>,
-    /// which exposes the state-API client facet they depend on.
+    /// <see cref="IHistoryLiveFollower"/>, scoped per Blazor circuit so they read
+    /// through the calling scope's authenticated connection. Call after
+    /// <c>AddExplorerCatalog</c>, which exposes the state-API client facet they
+    /// depend on.
     /// </summary>
     public static IServiceCollection AddExplorerHistory(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
-        services.TryAddSingleton<IHistoryReader, HistoryReader>();
-        services.TryAddSingleton<IHistoryLiveFollower, HistoryLiveFollower>();
+        services.TryAddScoped<IHistoryReader, HistoryReader>();
+        services.TryAddScoped<IHistoryLiveFollower, HistoryLiveFollower>();
         return services;
     }
 }

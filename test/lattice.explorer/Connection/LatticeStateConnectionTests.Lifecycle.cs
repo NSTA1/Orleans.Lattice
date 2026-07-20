@@ -79,16 +79,22 @@ public partial class LatticeStateConnectionTests
     }
 
     [Test]
-    public async Task AddLatticeStateConnection_RegistersSingleton()
+    public async Task AddLatticeStateConnection_RegistersScopedPerCircuit()
     {
         var services = new ServiceCollection();
         services.AddLatticeStateConnection();
         await using var provider = services.BuildServiceProvider();
 
-        var first = provider.GetRequiredService<ILatticeStateConnection>();
-        var second = provider.GetRequiredService<ILatticeStateConnection>();
+        await using var scopeA = provider.CreateAsyncScope();
+        await using var scopeB = provider.CreateAsyncScope();
+        var first = scopeA.ServiceProvider.GetRequiredService<ILatticeStateConnection>();
+        var second = scopeB.ServiceProvider.GetRequiredService<ILatticeStateConnection>();
 
-        Assert.That(first, Is.SameAs(second));
-        Assert.That(first, Is.InstanceOf<LatticeStateConnection>());
+        Assert.Multiple(() =>
+        {
+            Assert.That(scopeA.ServiceProvider.GetRequiredService<ILatticeStateConnection>(), Is.SameAs(first));
+            Assert.That(second, Is.Not.SameAs(first));
+            Assert.That(first, Is.InstanceOf<LatticeStateConnection>());
+        });
     }
 }

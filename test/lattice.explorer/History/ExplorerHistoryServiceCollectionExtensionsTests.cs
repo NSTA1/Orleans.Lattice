@@ -33,7 +33,7 @@ public class ExplorerHistoryServiceCollectionExtensionsTests
     }
 
     [Test]
-    public async Task AddExplorerHistory_ReaderIsSingleton()
+    public async Task AddExplorerHistory_ReaderIsScopedPerCircuit()
     {
         var services = new ServiceCollection();
         services.AddExplorerConfiguration(options => options.FilePath = "C:/tmp/config.json");
@@ -41,7 +41,14 @@ public class ExplorerHistoryServiceCollectionExtensionsTests
         services.AddExplorerHistory();
         await using var provider = services.BuildServiceProvider();
 
-        var reader = provider.GetRequiredService<IHistoryReader>();
-        Assert.That(provider.GetRequiredService<IHistoryReader>(), Is.SameAs(reader));
+        await using var scopeA = provider.CreateAsyncScope();
+        await using var scopeB = provider.CreateAsyncScope();
+        var reader = scopeA.ServiceProvider.GetRequiredService<IHistoryReader>();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scopeA.ServiceProvider.GetRequiredService<IHistoryReader>(), Is.SameAs(reader));
+            Assert.That(scopeB.ServiceProvider.GetRequiredService<IHistoryReader>(), Is.Not.SameAs(reader));
+        });
     }
 }
