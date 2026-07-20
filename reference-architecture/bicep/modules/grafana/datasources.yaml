@@ -1,0 +1,26 @@
+# Grafana datasource provisioning for the self-hosted, scale-to-zero Grafana head.
+#
+# This file is loaded verbatim by observability.bicep (loadTextContent) and the
+# placeholder below is substituted at deploy time with a runtime value:
+#   __PROM_QUERY_ENDPOINT__  -> the Azure Monitor workspace Prometheus query endpoint
+#
+# Authentication is Azure Monitor managed identity (authType: msi). The region
+# user-assigned managed identity is granted Monitoring Data Reader on the Azure
+# Monitor workspace; Grafana acquires an AAD token for it via the
+# GF_AZURE_MANAGED_IDENTITY_* settings on the container. No API keys, no bearer
+# secrets, and the datasource is not editable from the Grafana UI.
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    uid: prometheus
+    url: __PROM_QUERY_ENDPOINT__
+    isDefault: true
+    editable: false
+    jsonData:
+      httpMethod: POST
+      prometheusType: Prometheus
+      timeInterval: 30s
+      azureCredentials:
+        authType: msi
