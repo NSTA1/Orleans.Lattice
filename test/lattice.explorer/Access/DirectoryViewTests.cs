@@ -50,6 +50,7 @@ public sealed class DirectoryViewTests
             DirectoryAvailable = true,
             DirectoryProviderId = "static",
             DirectoryExplanation = "Pick from the roster.",
+            LocalMembershipEffective = true,
         });
 
         Assert.Multiple(() =>
@@ -60,6 +61,7 @@ public sealed class DirectoryViewTests
             Assert.That(view.DirectoryAvailable, Is.True);
             Assert.That(view.DirectoryProviderId, Is.EqualTo("static"));
             Assert.That(view.DirectoryExplanation, Is.EqualTo("Pick from the roster."));
+            Assert.That(view.LocalMembershipEffective, Is.True);
         });
     }
 

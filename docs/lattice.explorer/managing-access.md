@@ -97,6 +97,26 @@ enforcement posture, read from the server, so an operator is never guessing:
   them - so an operator does not mistake an advisory rule set for a live gate. A
   failed or denied read is never rendered as "unenforced".
 
+## Merge-mode-aware membership editing
+
+Whether locally-defined group membership actually affects authorization depends
+on the cluster's global group-merge policy
+([`LatticeMembershipOptions.GroupMergeMode`](../lattice.membership/README.md)).
+Under `Union` (the default) and `DirectoryOnly`, the local membership directory
+contributes to a subject's effective groups, so creating groups and editing
+members is meaningful. Under `TokenOnly`, group membership is resolved solely
+from the identity-provider token, so locally-defined groups and members are inert
+at authorization time.
+
+The Access-state banner reports this, read from the server. When the cluster is
+in `TokenOnly` mode the area shows a notice that locally-defined membership has no
+effect on access, and the group-create and member add/remove controls are
+**disabled but still read-only viewable** - existing groups and their members
+stay visible (legacy edges, or to preview what a mode change would do). The
+**Policies** and **Explain** tabs remain fully live in every mode, because a rule
+that grants a group id still matches a token-asserted group. As with the
+capability grey-out, this is advisory: the server remains the enforcement point.
+
 ## Capability-aware, grey-out not hide
 
 The whole area is gated by a single coarse capability, **AuthAdminAllowed**. It

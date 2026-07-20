@@ -140,6 +140,12 @@
                 @AccessCreateModel.EnforcementNoticeText
             </p>
         }
+        @if (_accessModel.ShowMembershipInertNotice)
+        {
+            <p class="explorer-access-enforcement is-warning" role="status">
+                @AccessCreateModel.MembershipInertNoticeText
+            </p>
+        }
     }
 
     @if (_tab == AccessTab.Groups)
@@ -148,7 +154,7 @@
             <div class="explorer-access-listcol">
                 <div class="explorer-access-listhead">
                     <h3 class="explorer-access-title">Groups</h3>
-                    <button type="button" class="explorer-btn" disabled="@(_busy || !_allowed)" @onclick="NewGroup">New group</button>
+                    <button type="button" class="explorer-btn" disabled="@(_busy || !_allowed || !_membershipEditable)" @onclick="NewGroup">New group</button>
                 </div>
                 @if (_groups.Count == 0)
                 {
@@ -194,7 +200,7 @@
                             <SubjectPicker Kind="LatticeSubjectSelectorKind.Group" KindLocked="true"
                                            @bind-SubjectId="_groupIdInput"
                                            SubjectDisplayNameChanged="OnGroupDisplayNameSuggested"
-                                           Disabled="@(_busy || !_allowed)" />
+                                           Disabled="@(_busy || !_allowed || !_membershipEditable)" />
                         </label>
                         @if (!string.IsNullOrEmpty(_accessModel.DirectoryExplanation))
                         {
@@ -207,14 +213,14 @@
                     }
                     <label class="explorer-access-field">
                         <span>Display name</span>
-                        <input type="text" value="@_groupDisplayInput" disabled="@(_busy || !_allowed)"
+                        <input type="text" value="@_groupDisplayInput" disabled="@(_busy || !_allowed || !_membershipEditable)"
                                @oninput="e => _groupDisplayInput = e.Value?.ToString() ?? string.Empty" placeholder="optional" />
                     </label>
                     <div class="explorer-access-actions">
-                        <button type="button" class="explorer-btn" disabled="@(_busy || !_allowed || string.IsNullOrWhiteSpace(_groupIdInput))" @onclick="SaveGroupAsync">Save</button>
+                        <button type="button" class="explorer-btn" disabled="@(_busy || !_allowed || !_membershipEditable || string.IsNullOrWhiteSpace(_groupIdInput))" @onclick="SaveGroupAsync">Save</button>
                         <button type="button" class="explorer-btn" disabled="@_busy" @onclick="CancelGroupForm">Cancel</button>
                         <button type="button" class="explorer-btn explorer-access-danger"
-                                disabled="@(_busy || !_allowed || !_editingExistingGroup)" @onclick="DeleteGroupAsync">Delete</button>
+                                disabled="@(_busy || !_allowed || !_membershipEditable || !_editingExistingGroup)" @onclick="DeleteGroupAsync">Delete</button>
                     </div>
 
                     @if (_selectedGroupId is not null)
@@ -232,7 +238,7 @@
                                     <li>
                                         <button type="button" class="explorer-btn explorer-btn-icon explorer-access-danger"
                                                 title="Remove member" aria-label="@($"Remove {member}")"
-                                                disabled="@(_busy || !_allowed)" @onclick="@(() => RemoveMemberAsync(member))">x</button>
+                                                disabled="@(_busy || !_allowed || !_membershipEditable)" @onclick="@(() => RemoveMemberAsync(member))">x</button>
                                         <span class="explorer-access-member-id" title="@member">@Labels.Label(member)</span>
                                     </li>
                                 }
@@ -241,9 +247,9 @@
                         <div class="explorer-access-addmember">
                             <SubjectPicker @bind-Kind="MemberPickerKind"
                                            @bind-SubjectId="_memberIdInput"
-                                           Disabled="@(_busy || !_allowed)" />
+                                           Disabled="@(_busy || !_allowed || !_membershipEditable)" />
                             <button type="button" class="explorer-btn"
-                                    disabled="@(_busy || !_allowed || string.IsNullOrWhiteSpace(_memberIdInput))" @onclick="AddMemberAsync">Add member</button>
+                                    disabled="@(_busy || !_allowed || !_membershipEditable || string.IsNullOrWhiteSpace(_memberIdInput))" @onclick="AddMemberAsync">Add member</button>
                         </div>
                     }
                 </div>

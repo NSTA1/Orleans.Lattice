@@ -23,6 +23,15 @@ public sealed class AccessCreateModel
     public const string EnforcementNoticeText =
         "Rules and membership are recorded but not enforced by the active authorizer.";
 
+    /// <summary>
+    /// The banner shown when the cluster resolves group membership solely from the
+    /// identity-provider token, so locally-defined groups and members have no effect
+    /// on access. Group and member editing is disabled but stays read-only viewable.
+    /// </summary>
+    public const string MembershipInertNoticeText =
+        "This cluster resolves group membership from the identity-provider token; " +
+        "locally-defined membership has no effect on access. Manage groups in your identity provider.";
+
     private readonly IMembershipAdminService _membership;
 
     /// <summary>Creates a model over the membership admin service the resolve runs over.</summary>
@@ -56,6 +65,25 @@ public sealed class AccessCreateModel
     /// presented as an unenforced one.
     /// </summary>
     public bool ShowEnforcementNotice => Model.IsSuccess && !Model.RulesEnforced;
+
+    /// <summary>
+    /// <see langword="true"/> when the access model was read successfully and the
+    /// cluster resolves group membership solely from the identity-provider token, so
+    /// locally-defined groups and members are inert for authorization. A failed /
+    /// denied read never reports inert membership - an unknown model must not gate the
+    /// editing surface.
+    /// </summary>
+    public bool ShowMembershipInertNotice => Model.IsSuccess && !Model.LocalMembershipEffective;
+
+    /// <summary>
+    /// <see langword="true"/> when locally-defined group and member editing is
+    /// meaningful and should stay enabled; <see langword="false"/> only when the
+    /// access model was read successfully and reports token-only membership, in which
+    /// case editing is disabled (but groups and members remain read-only viewable).
+    /// An unread / failed model leaves editing enabled, matching the capability-aware
+    /// gate the view already applies.
+    /// </summary>
+    public bool MembershipEditingEnabled => !ShowMembershipInertNotice;
 
     /// <summary>Applies a freshly read access-model snapshot.</summary>
     /// <param name="model">The snapshot to apply. Must not be <see langword="null"/>.</param>

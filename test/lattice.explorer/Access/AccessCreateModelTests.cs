@@ -21,7 +21,8 @@ public sealed class AccessCreateModelTests
         AccessAuthenticationMode mode = AccessAuthenticationMode.Claims,
         bool rulesEnforced = true,
         bool directoryAvailable = true,
-        string explanation = "") =>
+        string explanation = "",
+        bool localMembershipEffective = true) =>
         AccessModelView.FromDescriptor(new AccessModelDescriptor
         {
             AuthenticationMode = mode,
@@ -29,6 +30,7 @@ public sealed class AccessCreateModelTests
             DirectoryAvailable = directoryAvailable,
             DirectoryProviderId = "provider",
             DirectoryExplanation = explanation,
+            LocalMembershipEffective = localMembershipEffective,
         });
 
     private static DirectoryPrincipalDescriptor Principal(string id, DirectoryPrincipalKind kind) =>
@@ -98,6 +100,62 @@ public sealed class AccessCreateModelTests
         model.Apply(AccessModelView.Unavailable);
 
         Assert.That(model.ShowEnforcementNotice, Is.False);
+    }
+
+    // ----- GroupMergeMode-aware membership gating -----
+
+    [Test]
+    public void Membership_editing_enabled_by_default_before_a_model_is_read()
+    {
+        var model = Create(new FakeDirectory());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(model.MembershipEditingEnabled, Is.True);
+            Assert.That(model.ShowMembershipInertNotice, Is.False);
+        });
+    }
+
+    [Test]
+    public void Membership_editing_enabled_when_local_membership_is_effective()
+    {
+        var model = Create(new FakeDirectory());
+        model.Apply(Model(localMembershipEffective: true));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(model.MembershipEditingEnabled, Is.True);
+            Assert.That(model.ShowMembershipInertNotice, Is.False);
+        });
+    }
+
+    [Test]
+    public void Membership_editing_disabled_when_read_succeeds_and_membership_is_inert()
+    {
+        var model = Create(new FakeDirectory());
+        model.Apply(Model(localMembershipEffective: false));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(model.ShowMembershipInertNotice, Is.True);
+            Assert.That(model.MembershipEditingEnabled, Is.False);
+        });
+    }
+
+    [Test]
+    public void Membership_editing_enabled_when_the_read_failed_even_though_inert_is_the_default()
+    {
+        var model = Create(new FakeDirectory());
+
+        // The unavailable snapshot has LocalMembershipEffective == false but is not a
+        // success: an unknown model must not gate the editing surface.
+        model.Apply(AccessModelView.Unavailable);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(model.ShowMembershipInertNotice, Is.False);
+            Assert.That(model.MembershipEditingEnabled, Is.True);
+        });
     }
 
     [Test]

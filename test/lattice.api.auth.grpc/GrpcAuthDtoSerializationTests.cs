@@ -346,6 +346,7 @@ public sealed class GrpcAuthDtoSerializationTests
             DirectoryAvailable = true,
             DirectoryProviderId = "entra",
             DirectoryExplanation = "Use the object id.",
+            LocalMembershipEffective = true,
         };
 
         var copy = RoundTrip(original);
@@ -356,6 +357,7 @@ public sealed class GrpcAuthDtoSerializationTests
             Assert.That(copy.DirectoryAvailable, Is.True);
             Assert.That(copy.DirectoryProviderId, Is.EqualTo("entra"));
             Assert.That(copy.DirectoryExplanation, Is.EqualTo("Use the object id."));
+            Assert.That(copy.LocalMembershipEffective, Is.True);
         });
     }
 
