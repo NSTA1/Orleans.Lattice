@@ -645,6 +645,7 @@ try {
             regionCode                 = $code
             baseName                   = $BaseName
             acrLoginServer             = $acrLoginServer
+            acrName                    = $acrName
             imageTag                   = $ImageTag
             siloImageRepository        = $SiloImageRepository
             mcpImageRepository         = $McpImageRepository
