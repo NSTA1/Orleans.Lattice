@@ -229,7 +229,7 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
         }
 
         var advertisement = await _probe
-            .ProbeAsync(configuration.Endpoint, configuration.AllowUnencryptedHttp2, cancellationToken)
+            .ProbeAsync(configuration.Endpoint, configuration.AllowUnencryptedHttp2, configuration.TransportHeaders, cancellationToken)
             .ConfigureAwait(false);
 
         _advertisement = advertisement;
