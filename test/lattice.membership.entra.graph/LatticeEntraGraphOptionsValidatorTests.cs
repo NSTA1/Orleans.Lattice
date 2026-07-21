@@ -1,8 +1,9 @@
 namespace Orleans.Lattice.Membership.Entra.Graph.Tests;
 
 /// <summary>
-/// Unit tests for <see cref="LatticeEntraGraphOptionsValidator"/>: the required
-/// credential fields, at-least-one-scope, and non-negative refresh skew rules.
+/// Unit tests for <see cref="LatticeEntraGraphOptionsValidator"/>: the mutually
+/// exclusive authentication modes (secret-less credential vs. the confidential-
+/// client triple), at-least-one-scope, and non-negative refresh skew rules.
 /// </summary>
 public class LatticeEntraGraphOptionsValidatorTests
 {
@@ -21,6 +22,37 @@ public class LatticeEntraGraphOptionsValidatorTests
         var result = Validator().Validate(null, Valid());
 
         Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void Validate_credential_without_secret_succeeds()
+    {
+        var options = new LatticeEntraGraphOptions { Credential = new FakeTokenCredential() };
+
+        var result = Validator().Validate(null, options);
+
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void Validate_neither_credential_nor_secret_fails()
+    {
+        var options = new LatticeEntraGraphOptions();
+
+        var result = Validator().Validate(null, options);
+
+        Assert.That(result.Failed, Is.True);
+    }
+
+    [Test]
+    public void Validate_both_credential_and_secret_fails()
+    {
+        var options = Valid();
+        options.Credential = new FakeTokenCredential();
+
+        var result = Validator().Validate(null, options);
+
+        Assert.That(result.Failed, Is.True);
     }
 
     [Test]

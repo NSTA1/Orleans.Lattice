@@ -20,6 +20,12 @@ The resolver authenticates to Graph with its own application-only token acquired
 
 The underlying MSAL confidential-client cache serves and renews the token, and the resolver layers a single-flight guard over it so the whole path stays allocation-light and free of duplicate network calls under load.
 
+## Secret-less (managed-identity) authentication
+
+For deployments that want no client secret to store, rotate, or leak, set `LatticeEntraGraphOptions.Credential` to any `Azure.Core` `TokenCredential` (for example `DefaultAzureCredential` or a `ManagedIdentityCredential` bound to a user-assigned managed identity with a federated credential on the app registration). When a credential is supplied, the shared app-only Graph client is built directly from it and no client secret is used; the tenant id, client id, and client secret are ignored.
+
+The two modes are mutually exclusive and validated fail-closed: exactly one must be configured. Supplying neither a credential nor the full tenant/client/secret triple, or supplying both a credential and a client secret, is rejected at registration.
+
 ## Identity directory
 
 The same registration also installs a Microsoft Graph-backed

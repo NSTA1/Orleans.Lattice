@@ -34,6 +34,9 @@ public class LatticeEntraGraphServiceCollectionExtensionsTests
         options.ClientSecret = "secret";
     }
 
+    private static void ConfigureCredential(LatticeEntraGraphOptions options)
+        => options.Credential = new FakeTokenCredential();
+
     [Test]
     public void AddEntraGraphGroupResolver_null_builder_throws()
     {
@@ -82,6 +85,43 @@ public class LatticeEntraGraphServiceCollectionExtensionsTests
         Assert.That(
             services.Any(d => d.ServiceType == typeof(ILatticeIdentityDirectory)),
             Is.True);
+    }
+
+    [Test]
+    public void AddEntraGraphGroupResolver_with_credential_registers_resolver()
+    {
+        var (builder, services) = CreateBuilder(entraRegistered: true);
+
+        builder.AddEntraGraphGroupResolver(ConfigureCredential);
+
+        Assert.That(
+            services.Any(d => d.ServiceType == typeof(IEntraGroupResolver)),
+            Is.True);
+    }
+
+    [Test]
+    public void AddEntraGraphGroupResolver_with_credential_registers_identity_directory()
+    {
+        var (builder, services) = CreateBuilder(entraRegistered: true);
+
+        builder.AddEntraGraphGroupResolver(ConfigureCredential);
+
+        Assert.That(
+            services.Any(d => d.ServiceType == typeof(ILatticeIdentityDirectory)),
+            Is.True);
+    }
+
+    [Test]
+    public void AddEntraGraphGroupResolver_with_credential_builds_graph_client()
+    {
+        var (builder, services) = CreateBuilder(entraRegistered: true);
+
+        builder.AddEntraGraphGroupResolver(ConfigureCredential);
+
+        // Resolving the resolver forces the shared GraphServiceClient factory to
+        // run the secret-less branch (built directly from the TokenCredential).
+        using var provider = services.BuildServiceProvider();
+        Assert.That(provider.GetService<IEntraGroupResolver>(), Is.Not.Null);
     }
 
     [Test]
