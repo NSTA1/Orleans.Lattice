@@ -77,6 +77,9 @@ param backupPrimaryRegionCode string = regions[0].regionCode
 ])
 param deploymentOption string = 'public'
 
+@description('When true, each region managed environment is zone-redundant (replicas spread across availability zones). Zone redundancy requires a VNet-injected environment, so it takes effect only under the "private" deploymentOption; the "public" baseline is always single-zone. Defaults to true so private estates are zone-redundant out of the box.')
+param zoneRedundant bool = true
+
 @description('PUBLIC option: the per-cluster Lattice replication key, matched across EVERY region. The deployer generates it once and passes it at deploy time (never committed). Written only into each region Key Vault secret by the networking module; never emitted as an output.')
 @secure()
 param replicationKey string = ''
@@ -204,6 +207,8 @@ module compute 'modules/compute.bicep' = [for (region, i) in regions: {
     // subnet -> public baseline environment.
     infrastructureSubnetId: deploymentOption == 'private' ? vnet!.outputs.perRegionPrivate[i].infrastructureSubnetId : ''
     internalEnvironment: deploymentOption == 'private'
+    // Zone-redundant compute (private option only; ACA requires VNet injection).
+    zoneRedundant: zoneRedundant
     // Keyless storage endpoints are DETERMINISTIC functions of
     // (resourceGroup().id, baseName, regionCode) matching the names the storage
     // module creates, so compute is fed strings and there is no module cycle.

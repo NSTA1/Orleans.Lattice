@@ -78,6 +78,7 @@ guarantees) are documented in [`deploy/README.md`](deploy/README.md).
 | `-Regions` | yes | Array of `@{ regionCode = '...'; location = '...' }`. One or many. |
 | `-ImageTag` | yes | Tag applied to all three built images. |
 | `-DeploymentOption` | no | `public` (default) or `private`. See below. |
+| `-ZoneRedundant` | no | `$true` (default) or `$false`. Zone-redundant compute; effective only under `private`. |
 | `-ReplicationTrees` | no | Estate-wide `treeName=MergeMode,...` map. |
 | `-BackupPrimaryRegionCode` | no | Defaults to the first region. |
 | `-IngressAllowedCidrs` | no | Ingress allow-list (public option). |
@@ -105,6 +106,7 @@ through the script) are:
 | `regions` | (required) | Array of `{ regionCode, location }`. |
 | `imageTag` | (required) | Host image tag. |
 | `deploymentOption` | `public` | `public` or `private`. |
+| `zoneRedundant` | `true` | Zone-redundant compute (replicas spread across availability zones). Honoured only under `private` (ACA requires VNet injection); the `public` baseline is always single-zone. |
 | `siloMinReplicas` / `siloMaxReplicas` | 1 / 10 | Silo autoscale bounds. |
 | `backupPrimaryRegionCode` | first region | The single backup-primary region. |
 | `replicationKey` | `''` | `@secure()`; the per-cluster replication key (public option). |
@@ -150,6 +152,14 @@ platform-managed resource group once each environment exists, so this link is a
 manual post-deploy step (the private-option network foundation and its full-mesh
 peering live in `bicep/modules/vnet.bicep`); it is the one part of the private
 option that is not expressible before the environments are provisioned.
+
+Under the private option each region's managed environment is **zone-redundant**
+by default (`zoneRedundant`, default `true`), so once the silo autoscales beyond a
+single replica those replicas are spread across availability zones - matching the
+zone-redundant durability of the WAL storage tier. Azure Container Apps only
+supports zone redundancy on a VNet-injected environment, so the flag has no effect
+under the public baseline (which is always single-zone); set `zoneRedundant` to
+`false` to opt a private estate back out.
 
 ### Verify
 

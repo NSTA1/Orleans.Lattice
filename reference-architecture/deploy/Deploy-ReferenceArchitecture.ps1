@@ -137,6 +137,8 @@ param(
     [ValidateSet('public', 'private')]
     [string]$DeploymentOption = 'public',
 
+    [bool]$ZoneRedundant = $true,
+
     [string]$SiloImageRepository = 'lattice-silo',
     [string]$McpImageRepository = 'lattice-mcp',
     [string]$ExplorerImageRepository = 'lattice-explorer',
@@ -396,6 +398,7 @@ try {
         mcpImageRepository      = $McpImageRepository
         explorerImageRepository = $ExplorerImageRepository
         deploymentOption        = $DeploymentOption
+        zoneRedundant           = $ZoneRedundant
         backupPrimaryRegionCode = $BackupPrimaryRegionCode
         ingressAllowedCidrs     = $IngressAllowedCidrs
         siloMinReplicas         = $SiloMinReplicas
@@ -565,6 +568,8 @@ try {
             requireApiAuthorization    = $RequireApiAuthorization
             internalEnvironment        = ($DeploymentOption -eq 'private')
             infrastructureSubnetId     = $subnetId
+            # Zone-redundant compute; honoured only when VNet-injected (private).
+            zoneRedundant              = $ZoneRedundant
             # Activated seams.
             prometheusQueryEndpoint    = $prometheus
             # MCP cluster-telemetry tools query the managed Prometheus workspace
