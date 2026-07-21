@@ -121,6 +121,7 @@ Membership produces subjects; [`Orleans.Lattice.Auth`](../lattice.auth/README.md
 
 ## See also
 
+- [Configuration](configuration.md) - every public options property, its type, and its default.
 - [Identity-directory providers](identity-directory-providers.md) - the provider-agnostic identity source (static, Entra Graph, or custom) that backs subject search and fail-closed validation in the Explorer Access area.
 - [Observability](observability.md) - the `orleans.lattice.membership` meter and the subject-resolution cache hit / miss counters.
 - [`Orleans.Lattice.Auth`](../lattice.auth/README.md) - the policy store, decision engine, and enforcing access gate that consume the subjects this package resolves.

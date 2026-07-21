@@ -135,6 +135,8 @@ per-response path allocates nothing.
 
 ## See also
 
+- [Explorer overview](README.md)
+- [Configuration](configuration.md) - every public options property, its type, and its default.
 - [Connecting to an auth-enabled State API](connecting-to-an-auth-enabled-state-api.md)
 - [Managing backups from the Explorer](managing-backups.md)
 - [Managing access control from the Explorer](managing-access.md)

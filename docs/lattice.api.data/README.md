@@ -107,6 +107,7 @@ This is a write-capable external surface, so its default posture is closed:
 
 ## Reference
 
+- [Configuration](configuration.md) - every public options property, its type, and its default.
 - Facade registration: `AddLatticeDataApi()` on the silo builder, configured with `LatticeApiDataOptions`.
 - gRPC registration: `AddLatticeDataApiGrpc()` and `MapLatticeDataApiGrpc()`, configured with `LatticeDataApiGrpcOptions`.
 - Public client: `LatticeDataApiGrpcClient` (`Set`, `Delete`, `SetManyAtomic`, `SetManyAtomicCrossTree`, `Get`, `ReadRange`).

@@ -94,6 +94,7 @@ For a complete, runnable journey - silo + gRPC host, discovery, structure, snaps
 For day-to-day use:
 
 - [Setup](setup.md) - registering the facade, the gRPC binding, and mapping the endpoint routes.
+- [Configuration](configuration.md) - every public options property, its type, and its default.
 - [gRPC Contract](grpc-contract.md) - the code-first service, its RPCs, the wire records, and the public client.
 - [Surfaces](surfaces.md) - discovery, structure, entry inspection, change history, change observation, metrics, and cluster info, request by request.
 - [Security](security.md) - the fail-closed authorization seam, the default-deny posture, and the transport story.

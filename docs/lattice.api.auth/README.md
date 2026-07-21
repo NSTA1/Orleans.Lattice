@@ -65,6 +65,10 @@ The following are **not** in v1 and are deliberately left out so a caller cannot
 - **A condition / attribute predicate language.** Rules carry an opaque, reserved condition string that is not evaluated in this version, matching the policy model the store persists.
 - **Bulk import / export of policy or membership.** Administration is per-record; a caller composes bulk workflows over the CRUD surface.
 
+## Reference
+
+- [Configuration](configuration.md) - every public options property, its type, and its default.
+
 ## See also
 
 - [`Orleans.Lattice.Auth`](../lattice.auth/README.md) - the membership directory, policy store, and enforcing access gate this facade administers.
