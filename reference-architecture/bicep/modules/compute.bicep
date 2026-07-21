@@ -43,6 +43,9 @@ param baseName string
 @description('Login server of the shared Azure Container Registry (for example "latticeacr.azurecr.io").')
 param acrLoginServer string
 
+@description('Name of the shared Azure Container Registry. Used to scope the AcrPull role assignment for this region identity to the registry resource so image pulls are authorized before the revisions are provisioned.')
+param acrName string
+
 // --- Image seams: each head references its image by repository + shared tag ---
 
 @description('Shared image tag applied to all three built images (for example a build number or git sha).')
@@ -260,6 +263,34 @@ resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' 
 }
 
 // =============================================================================
+// AcrPull role assignment - least privilege, scoped to the shared registry
+// -----------------------------------------------------------------------------
+// Assigned INSIDE this module (before the container apps below) so the region
+// identity already holds AcrPull when each revision is first provisioned.
+// Declaring it in the parent keyed off a compute output would order it AFTER the
+// apps, so the very first revision would fail to pull the image ("unable to pull
+// image using Managed identity"). The assignment name is a deterministic guid()
+// over the registry id + identity id + role id, so re-runs are idempotent. Each
+// container app takes an explicit dependsOn to make the ordering deterministic.
+// =============================================================================
+
+var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
+
+resource acrRef 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' existing = {
+  name: acrName
+}
+
+resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(acrRef.id, identity.id, acrPullRoleId)
+  scope: acrRef
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', acrPullRoleId)
+    principalId: identity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// =============================================================================
 // Log Analytics workspace (ACA container logs, capped at 1 GB/day)
 // =============================================================================
 
@@ -339,6 +370,10 @@ resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
 resource siloApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: siloAppName
   location: location
+  // AcrPull must be effective before the first revision is provisioned.
+  dependsOn: [
+    acrPull
+  ]
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: {
@@ -521,6 +556,10 @@ resource siloApp 'Microsoft.App/containerApps@2024-03-01' = {
 resource mcpApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: mcpAppName
   location: location
+  // AcrPull must be effective before the first revision is provisioned.
+  dependsOn: [
+    acrPull
+  ]
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: {
@@ -615,6 +654,10 @@ resource mcpApp 'Microsoft.App/containerApps@2024-03-01' = {
 resource explorerApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: explorerAppName
   location: location
+  // AcrPull must be effective before the first revision is provisioned.
+  dependsOn: [
+    acrPull
+  ]
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: {

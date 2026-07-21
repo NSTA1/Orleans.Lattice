@@ -121,9 +121,6 @@ param entraClientId string = ''
 @description('Comma-separated additional Entra token audiences accepted by the silo facades. Empty lets the host derive {clientId, api://{clientId}}.')
 param entraAudiences string = ''
 
-// AcrPull built-in role definition id.
-var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
-
 // ACR names are globally unique DNS labels, so a uniqueString suffix keeps the
 // registry name collision-free across subscriptions/estates and guarantees the
 // 5-50 char length constraint.
@@ -180,6 +177,7 @@ module compute 'modules/compute.bicep' = [for (region, i) in regions: {
     regionCode: region.regionCode
     baseName: baseName
     acrLoginServer: registry.properties.loginServer
+    acrName: registry.name
     imageTag: imageTag
     siloImageRepository: siloImageRepository
     mcpImageRepository: mcpImageRepository
@@ -332,22 +330,14 @@ module frontdoor 'modules/frontdoor.bicep' = if (deploymentOption == 'public') {
 }
 
 // =============================================================================
-// AcrPull role assignments - least privilege, scoped to the registry
+// AcrPull role assignments
 // -----------------------------------------------------------------------------
-// One assignment per region identity. Scope is the registry resource only (not
-// the resource group or subscription), so each identity can pull images and do
-// nothing else on the registry.
+// Each region identity's AcrPull assignment is declared INSIDE compute.bicep
+// (scoped to this shared registry, passed in by name) so the role is effective
+// before that region's container-app revisions are provisioned. Declaring it
+// here keyed off a compute output would order it after the apps and the first
+// revision would fail to pull its image.
 // =============================================================================
-
-resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for (region, i) in regions: {
-  name: guid(registry.id, region.regionCode, acrPullRoleId)
-  scope: registry
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', acrPullRoleId)
-    principalId: compute[i].outputs.managedIdentityPrincipalId
-    principalType: 'ServicePrincipal'
-  }
-}]
 
 // =============================================================================
 // Outputs - estate-wide seams for storage / networking / observability / AFD
