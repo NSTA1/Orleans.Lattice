@@ -261,21 +261,34 @@ function Invoke-Az {
         }
     }
 
-    if ($StdinInput) {
-        # Secret-bearing parameters ride stdin (--parameters @-); they are never
-        # placed in $Arguments, so nothing secret reaches the process command line.
-        $raw = $StdinInput | & az @Arguments 2>&1
+    # Capture stdout (the JSON payload) and stderr (warnings such as the Bicep
+    # upgrade notice, RP hints) SEPARATELY. Merging them with 2>&1 lets a benign
+    # az warning bleed into the JSON stream so ConvertFrom-Json fails and the
+    # caller receives a raw string instead of the deployment object. stderr is
+    # redirected to a temp file and only surfaced on a non-zero exit.
+    $errPath = [System.IO.Path]::GetTempFileName()
+    try {
+        if ($StdinInput) {
+            # Secret-bearing parameters ride stdin (--parameters @-); they are never
+            # placed in $Arguments, so nothing secret reaches the process command line.
+            $raw = $StdinInput | & az @Arguments 2>$errPath
+        }
+        else {
+            $raw = & az @Arguments 2>$errPath
+        }
+        $exit = $LASTEXITCODE
+        $errText = (Get-Content -Path $errPath -Raw -ErrorAction SilentlyContinue)
     }
-    else {
-        $raw = & az @Arguments 2>&1
+    finally {
+        Remove-Item -Path $errPath -Force -ErrorAction SilentlyContinue
     }
-    if ($LASTEXITCODE -ne 0) {
+    if ($exit -ne 0) {
         if ($AllowFailure) {
-            Write-Warning "az $($Arguments -join ' ') exited $LASTEXITCODE"
+            Write-Warning "az $($Arguments -join ' ') exited $exit"
             return $null
         }
         # Only the non-secret arguments are shown; stdin is never echoed.
-        throw "az $($Arguments -join ' ') failed (exit $LASTEXITCODE): $raw"
+        throw "az $($Arguments -join ' ') failed (exit $exit): $errText"
     }
 
     $text = ($raw | Out-String).Trim()
@@ -425,14 +438,25 @@ try {
             @{ Repo = $McpImageRepository; Dockerfile = 'hosts/Mcp/Dockerfile' }
             @{ Repo = $ExplorerImageRepository; Dockerfile = 'hosts/Explorer/Dockerfile' }
         )
-        foreach ($image in $imageMatrix) {
-            Invoke-Az -Arguments @(
-                'acr', 'build',
-                '--registry', $acrName,
-                '--image', "$($image.Repo):$ImageTag",
-                '--file', $image.Dockerfile,
-                $RefArchRoot
-            ) -Mutating -Action 'Build image' -Target "$($image.Repo):$ImageTag" | Out-Null
+        # az acr build resolves --file relative to the current working directory,
+        # not the source-location argument, so pin the CWD to the acr-build context
+        # (the reference-architecture root) and pass '.' as the source location.
+        # This keeps the Dockerfile lookup correct regardless of where the operator
+        # invoked the script from.
+        Push-Location $RefArchRoot
+        try {
+            foreach ($image in $imageMatrix) {
+                Invoke-Az -Arguments @(
+                    'acr', 'build',
+                    '--registry', $acrName,
+                    '--image', "$($image.Repo):$ImageTag",
+                    '--file', $image.Dockerfile,
+                    '.'
+                ) -Mutating -Action 'Build image' -Target "$($image.Repo):$ImageTag" | Out-Null
+            }
+        }
+        finally {
+            Pop-Location
         }
     }
 
