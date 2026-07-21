@@ -291,11 +291,18 @@ pipeline, not two.
 
 ## Network options
 
-A single **deployment-option parameter** selects the replication transport and
-provisions only the corresponding resources.
+Both deployment options are **VNet-injected** (each region gets a per-region VNet
+with a delegated `/23` ACA infrastructure subnet) and therefore **zone-redundant
+by default** (`zoneRedundant`, default `true`). The **deployment-option
+parameter** does not decide whether a VNet is provisioned; it selects the
+region's **ingress visibility** and whether the regions are peered, and the
+replication transport rides whichever path that yields.
 
-**Public option** - cross-region replication over public ingress:
+**Public option** (default) - external ingress, replication over the public
+ingress FQDN:
 
+- Each region keeps an **external** ACA ingress; no cross-region VNet peering is
+  created.
 - Transport security is **server TLS via the ACA-managed ingress FQDN
   certificate**. There is no custom client-certificate or mTLS lifecycle to issue,
   rotate, or expire.
@@ -305,27 +312,30 @@ provisions only the corresponding resources.
 - Ingress is locked down (allow-listing parameterised); the global front door
   fronts the client-facing heads.
 
-**Private option** - no public exposure of the replication transport:
+**Private option** - internal-only ingress, replication over private address
+space:
 
-- VNet-integrated ACA environments with private connectivity between regions
-  (VNet peering or Private Link as appropriate).
-- The replication transport is never publicly reachable; there is no global Front
-  Door (AFD Standard has no Private Link to origins), so private deployments route
-  clients through their own private connectivity to the regional internal ingress.
+- Each region's ACA environment is switched to an **internal-only** ingress and
+  the per-region VNets are joined by **full-mesh global VNet peering**, so
+  cross-region replication travels private address space and is never publicly
+  reachable.
+- There is no global Front Door (AFD Standard has no Private Link to origins), so
+  private deployments route clients through their own private connectivity to the
+  regional internal ingress.
 
 ```mermaid
 flowchart TB
-    subgraph Public["Public option"]
-        PA["Region A ingress<br/>ACA FQDN cert (server TLS)"]
-        PB["Region B ingress<br/>ACA FQDN cert (server TLS)"]
-        PA <-->|"replication key auth"| PB
+    subgraph Public["Public option (VNet-injected, external ingress)"]
+        PA["Region A VNet<br/>external ingress, ACA FQDN cert (server TLS)"]
+        PB["Region B VNet<br/>external ingress, ACA FQDN cert (server TLS)"]
+        PA <-->|"replication key auth (public ingress)"| PB
         PKV["Key Vault: replication key<br/>(managed identity)"]
         PA --- PKV
     end
-    subgraph Private["Private option"]
-        VA["Region A (VNet)"]
-        VB["Region B (VNet)"]
-        VA <-->|"Private Link / peering<br/>no public transport"| VB
+    subgraph Private["Private option (VNet-injected, internal ingress)"]
+        VA["Region A VNet<br/>internal-only ingress"]
+        VB["Region B VNet<br/>internal-only ingress"]
+        VA <-->|"full-mesh VNet peering<br/>no public transport"| VB
     end
 ```
 

@@ -2,9 +2,11 @@
 
 Three minimal, production-shaped reference host projects for the active-active,
 cross-region Orleans.Lattice estate described in the root `reference-architecture.md`.
-Each project references the **published Orleans.Lattice v8.0.0 NuGet packages**
-(from nuget.org), not project references into `src/`, so it consumes the released
-library exactly as a real deployment would.
+Each project references the **published Orleans.Lattice v8.0.x NuGet packages**
+(from nuget.org - the 8.0.0 line, with `Orleans.Lattice.Membership.Entra.Graph`
+at 8.0.1 for the secret-less managed-identity Graph resolver), not project
+references into `src/`, so it consumes the released library exactly as a real
+deployment would.
 
 | Host | Project | Role |
 |------|---------|------|
