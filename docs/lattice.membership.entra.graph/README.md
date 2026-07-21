@@ -22,9 +22,31 @@ The underlying MSAL confidential-client cache serves and renews the token, and t
 
 ## Secret-less (managed-identity) authentication
 
-For deployments that want no client secret to store, rotate, or leak, set `LatticeEntraGraphOptions.Credential` to any `Azure.Core` `TokenCredential` (for example `DefaultAzureCredential` or a `ManagedIdentityCredential` bound to a user-assigned managed identity with a federated credential on the app registration). When a credential is supplied, the shared app-only Graph client is built directly from it and no client secret is used; the tenant id, client id, and client secret are ignored.
+The resolver supports two mutually exclusive authentication modes, configured on `LatticeEntraGraphOptions`.
 
-The two modes are mutually exclusive and validated fail-closed: exactly one must be configured. Supplying neither a credential nor the full tenant/client/secret triple, or supplying both a credential and a client secret, is rejected at registration.
+**Client-secret (confidential-client) path** - the default. Configure the tenant id, client id, and client secret; the app-only token is acquired and refreshed through the MSAL confidential-client cache described above:
+
+```
+siloBuilder.AddEntraGraphGroupResolver(options =>
+{
+    options.TenantId = tenantId;
+    options.ClientId = clientId;
+    options.ClientSecret = clientSecret; // e.g. injected from Key Vault
+});
+```
+
+**Secret-less path** - for deployments that want no client secret to store, rotate, or leak. Set `LatticeEntraGraphOptions.Credential` to any `Azure.Core` `TokenCredential` (for example `DefaultAzureCredential` or a `ManagedIdentityCredential` bound to a user-assigned managed identity that carries a federated credential on the app registration). The shared app-only Graph client is then built directly from that credential and the configured scopes, and no client secret is acquired, cached, or refreshed; `TenantId`, `ClientId`, and `ClientSecret` are ignored:
+
+```
+siloBuilder.AddEntraGraphGroupResolver(options =>
+{
+    options.Credential = new DefaultAzureCredential();
+});
+```
+
+`Microsoft.Graph` already provides `Azure.Core` transitively, so selecting the secret-less path adds no new package dependency (use `Azure.Identity` for a concrete credential such as `DefaultAzureCredential`).
+
+The two modes are validated fail-closed at registration: exactly one must be configured. Supplying **neither** a credential nor the full tenant/client/secret triple is rejected, and supplying **both** a `Credential` and a `ClientSecret` is rejected as ambiguous rather than silently picking one.
 
 ## Identity directory
 
