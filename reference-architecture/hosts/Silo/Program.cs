@@ -1,4 +1,5 @@
 using System.Net;
+using Azure.Identity;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using OpenTelemetry.Metrics;
 using Orleans.Configuration;
@@ -226,8 +227,14 @@ builder.Host.UseOrleans(silo =>
         });
 
         // App-only Microsoft Graph directory backing (subject / group resolution)
-        // is opt-in and needs its own client secret, injected from Key Vault.
+        // is opt-in. Preferred path in Azure: a secret-less managed identity - the
+        // region's user-assigned MI (resolved by DefaultAzureCredential via
+        // AZURE_CLIENT_ID) authenticates app-only through a federated credential on
+        // the silo app registration, so no client secret is stored or rotated.
+        // A client secret (injected from Key Vault) is still accepted as a
+        // dev / back-compat override and takes precedence when supplied.
         var graphSecret = config["Entra:Graph:ClientSecret"];
+        var graphUseManagedIdentity = config.GetValue("Entra:Graph:UseManagedIdentity", false);
         if (!string.IsNullOrWhiteSpace(graphSecret))
         {
             silo.AddEntraGraphGroupResolver(options =>
@@ -235,6 +242,13 @@ builder.Host.UseOrleans(silo =>
                 options.TenantId = tenantId;
                 options.ClientId = clientId;
                 options.ClientSecret = graphSecret;
+            });
+        }
+        else if (graphUseManagedIdentity)
+        {
+            silo.AddEntraGraphGroupResolver(options =>
+            {
+                options.Credential = new DefaultAzureCredential();
             });
         }
     }

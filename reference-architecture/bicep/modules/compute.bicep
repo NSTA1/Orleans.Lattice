@@ -447,6 +447,11 @@ resource siloApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'Entra__TenantId', value: entraTenantId }
             { name: 'Entra__ClientId', value: entraClientId }
             { name: 'Entra__Audiences', value: entraAudiences }
+            // Secret-less app-only Microsoft Graph group resolver: when Entra is on,
+            // the silo authenticates to Graph with its region user-assigned managed
+            // identity (federated credential on the app registration) instead of a
+            // client secret. DefaultAzureCredential resolves the MI via AZURE_CLIENT_ID.
+            { name: 'Entra__Graph__UseManagedIdentity', value: string(entraEnabled) }
             // Global-ingress origin lock: the head asserts inbound X-Azure-FDID
             // matches this id (deployer's second pass supplies it). Empty = off.
             { name: 'LATTICE_FRONT_DOOR_ID', value: frontDoorId }

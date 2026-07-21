@@ -54,7 +54,8 @@ underscore separator, case-insensitive).
 | `Auth:BootstrapAdministrators` | - | Comma-separated subject ids seeded as administrators. |
 | `Entra:Enabled` | `false` | Enable Entra-backed authentication for the exposed facades. |
 | `Entra:TenantId` / `Entra:ClientId` / `Entra:Authority` / `Entra:Audiences` | - | Entra authenticator configuration. |
-| `Entra:Graph:ClientSecret` | - | Enables the app-only Microsoft Graph group resolver (injected from Key Vault). |
+| `Entra:Graph:UseManagedIdentity` | `false` | Enables the app-only Microsoft Graph group resolver via a secret-less managed identity (`DefaultAzureCredential`). Compute sets this `true` on the silo when Entra is on. Ignored when `Entra:Graph:ClientSecret` is supplied. |
+| `Entra:Graph:ClientSecret` | - | Dev / back-compat override: enables the app-only Microsoft Graph group resolver with a client secret (injected from Key Vault). Takes precedence over managed identity when set. |
 
 ### Mcp
 

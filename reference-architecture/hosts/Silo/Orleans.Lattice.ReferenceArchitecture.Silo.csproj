@@ -50,7 +50,7 @@
     <PackageReference Include="Orleans.Lattice.Auth" Version="8.0.0" />
     <PackageReference Include="Orleans.Lattice.Membership" Version="8.0.0" />
     <PackageReference Include="Orleans.Lattice.Membership.Entra" Version="8.0.0" />
-    <PackageReference Include="Orleans.Lattice.Membership.Entra.Graph" Version="8.0.0" />
+    <PackageReference Include="Orleans.Lattice.Membership.Entra.Graph" Version="8.0.1" />
     <PackageReference Include="Orleans.Lattice.Scaling" Version="8.0.0" />
   </ItemGroup>
 
