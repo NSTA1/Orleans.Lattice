@@ -349,23 +349,23 @@ When enabled, the commit-time nudge rings the log-tailing shipper's doorbell so 
 
 ### `FramingCompression`
 
-Compression algorithm for the replication framing tail. Default `Zstd`; set `None` to send uncompressed frames. See [core compression](../lattice/compression.md).
+Algorithm tag stamped into the framing header. Default `Zstd` (dict-less Zstandard); set `None` to send uncompressed frames. See [core compression](../lattice/compression.md) for the seam, the tag-space partitioning, and the shared-dictionary opt-in.
 
 ### `FramingCompressionLevel`
 
-Compression level for framing compression.
+Zstd compression level. Validated to `[1, 22]` when the algorithm is `Zstd` or `ZstdDictionary`; ignored otherwise. Default `3`.
 
 ### `MaxInboundDecompressedBytes`
 
-Receiver safety cap for decompressed inbound frames.
+Hard ceiling on the **decompressed** size of an inbound compressed framing batch. The framing decoder rejects (with `ArgumentException`) any frame whose declared uncompressed length exceeds this *before* it allocates the inflate buffer, bounding the decompression-bomb amplification a hostile or corrupt sender can drive from a tiny request. This is reachable pre-auth on the gRPC transport - framing is decoded before the shared-secret interceptor body runs. Defaults to 16x the 4 MB `WalMaxBatchBytes` ceiling (64 MiB); raise it in step if you legitimately ship larger batches. Must be `>= 1`.
 
 ### `FramingCompressionMinBatchBytes`
 
-Minimum batch size before compression is attempted.
+Uncompressed-tail threshold below which the shipper stamps `Compression = None` for the batch, so heartbeats and small-bursty traffic skip the per-batch fixed overhead. Default `512`; `0` disables the threshold.
 
 ### `FramingCompressionDictionaryId`
 
-Operator-supplied dictionary id for dictionary compression modes. `0` means no shared dictionary id.
+Stable id of the shared dictionary the shipper requests when `FramingCompression` is `ZstdDictionary`. `0` means "no dictionary" and is the default; required to be non-zero when the algorithm is `ZstdDictionary`.
 
 ### `DictionaryNegotiationEnabled`
 

@@ -1,6 +1,6 @@
 # Configuration
 
-> **Compression options** (replication framing tail, future WAL/storage payloads) are documented separately - see [`compression.md`](compression.md) for the seam, the registration helpers, the tag-space partitioning, and the relevant option keys. The compression **algorithm and Zstd level are safe to change after data already exists**: stored payloads are self-describing and read back by their own per-row tag, so a level/algorithm change applies only to newly written data while existing rows decode unchanged.
+> **Compression** has no core `LatticeOptions` knobs. The seam itself - the `ILatticeCompressor` contract, the registration helpers, the tag-space partitioning, and the shared-dictionary opt-in - is documented in [`compression.md`](compression.md). The per-consumer option keys live in their owning project's configuration doc: replication framing-tail compression in [Orleans.Lattice.Replication configuration](../lattice.replication/configuration.md#efficiency-bundle-dedup-and-compression), and stored WAL payload compression in [Orleans.Lattice.Storage.AzureTable configuration](../lattice.storage.azuretable/configuration.md#compression-options). The compression **algorithm and Zstd level are safe to change after data already exists**: stored payloads are self-describing and read back by their own per-row tag, so a level/algorithm change applies only to newly written data while existing rows decode unchanged.
 
 ## Registering Lattice
 

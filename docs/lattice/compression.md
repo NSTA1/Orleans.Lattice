@@ -132,10 +132,12 @@ siloBuilder.AddLatticeReplication(o =>
 | Option | Type | Default | Meaning |
 |---|---|---|---|
 | `FramingCompression` | `LatticeCompression` | `Zstd` | Algorithm tag stamped into the framing header. Defaults to dict-less Zstd; set to `None` to opt out. |
-| `FramingCompressionLevel` | `int` | `3` | Zstd compression level. Validated to `[1, 22]` when the algorithm is `Zstd` or `ZstdDictionary`; ignored otherwise. |
-| `FramingCompressionMinBatchBytes` | `int` | `512` | Uncompressed-tail threshold below which the shipper stamps `Compression = None` for the batch (heartbeats / small-bursty traffic skip the per-batch fixed overhead). `0` disables the threshold. |
-| `FramingCompressionDictionaryId` | `uint` | `0` | Stable id of the shared dictionary the shipper requests when `FramingCompression` is `ZstdDictionary`. `0` means "no dictionary"; required to be non-zero when the algorithm is `ZstdDictionary`. |
-| `MaxInboundDecompressedBytes` | `long` | `64 MiB` | Hard ceiling on the **decompressed** size of an inbound compressed framing batch. The framing decoder rejects (with `ArgumentException`) any frame whose declared uncompressed length exceeds this *before* it allocates the inflate buffer, bounding the decompression-bomb amplification a hostile or corrupt sender can drive from a tiny request. This is reachable pre-auth on the gRPC transport - framing is decoded before the shared-secret interceptor body runs. Defaults to 16x the 4 MB `WalMaxBatchBytes` ceiling; raise it in step if you legitimately ship larger batches. Must be `>= 1`. |
+| `FramingCompressionLevel` | `int` | `3` | Zstd compression level, validated to `[1, 22]`. |
+| `FramingCompressionMinBatchBytes` | `int` | `512` | Uncompressed-tail threshold below which the batch ships uncompressed. |
+| `FramingCompressionDictionaryId` | `uint` | `0` | Shared-dictionary id requested when the algorithm is `ZstdDictionary`. |
+| `MaxInboundDecompressedBytes` | `long` | `64 MiB` | Receiver ceiling on the decompressed size of an inbound framing batch. |
+
+These are `LatticeReplicationOptions` knobs; the per-option validation rules, the decompression-bomb bound on `MaxInboundDecompressedBytes`, and the pre-auth reachability note are the source-of-truth in [Orleans.Lattice.Replication configuration](../lattice.replication/configuration.md#efficiency-bundle-dedup-and-compression).
 
 Compression is invisible to the apply pipeline - `ReceiverFlowControlContext`, mutation observers, and the WAL replay path see the same plaintext entries regardless of the on-wire tag.
 
