@@ -210,6 +210,26 @@ func originProps(fqdn string) object => {
   enforceCertificateNameCheck: true
 }
 
+// The Explorer is a stateful Blazor Server web head: each user's UI lives in a
+// SignalR circuit pinned to one replica in one region, so it CANNOT be load
+// balanced active-active. With equal priority across regions Front Door sprays a
+// single circuit's negotiate, WebSocket and long-poll requests across regions and
+// the circuit never establishes ("No Connection with that ID"). Instead the first
+// region is the sole active origin (priority 1) and the rest are warm standbys
+// (priority 2), so all users pin to one region while it is healthy and only fail
+// over (to a fresh circuit) if it goes down. Session affinity on the group is the
+// belt-and-braces that keeps a client on one origin during any transient state.
+func explorerOriginProps(fqdn string, regionIndex int) object => {
+  hostName: fqdn
+  originHostHeader: fqdn
+  httpPort: 80
+  httpsPort: 443
+  priority: regionIndex == 0 ? 1 : 2
+  weight: 1000
+  enabledState: 'Enabled'
+  enforceCertificateNameCheck: true
+}
+
 // =============================================================================
 // Front Door Standard profile (ONE global profile for the whole estate)
 // =============================================================================
@@ -270,7 +290,9 @@ resource originGroupExplorer 'Microsoft.Cdn/profiles/originGroups@2024-02-01' = 
   properties: {
     loadBalancingSettings: loadBalancingSettings
     healthProbeSettings: healthProbeSettings
-    sessionAffinityState: 'Disabled'
+    // Enabled (unlike the stateless MCP/State groups): the Explorer's Blazor
+    // Server circuit must stay pinned to one origin. See explorerOriginProps.
+    sessionAffinityState: 'Enabled'
   }
 }
 
@@ -301,7 +323,7 @@ resource originGroupState 'Microsoft.Cdn/profiles/originGroups@2024-02-01' = {
 resource originsExplorer 'Microsoft.Cdn/profiles/originGroups/origins@2024-02-01' = [for (o, i) in origins: {
   parent: originGroupExplorer
   name: 'origin-explorer-${o.regionCode}'
-  properties: originProps(o.explorerFqdn)
+  properties: explorerOriginProps(o.explorerFqdn, i)
 }]
 
 resource originsMcp 'Microsoft.Cdn/profiles/originGroups/origins@2024-02-01' = [for (o, i) in origins: {
