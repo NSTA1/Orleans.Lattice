@@ -12,7 +12,7 @@ Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.
 
 ### Security
 
-- **Orleans.Lattice.Explorer.Web: the console now emits a `Referrer-Policy: no-referrer` response header.** The Explorer web head's baseline security-header middleware previously omitted `Referrer-Policy`, a member of the documented hardening set. Without it, a browser navigating from an authenticated console page to a foreign origin could leak the full request URL - which can carry tree, key, or subject context in its path or query - in the `Referer` header. The middleware now sets `Referrer-Policy: no-referrer` (behind the same "do not clobber an existing value" guard as the other headers) on every response on the Explorer branch, at the root and under a base path. No public API change.
+- **Orleans.Lattice.Explorer.Web: the console now emits a `Referrer-Policy: no-referrer` response header.** The Explorer web head's baseline security-header middleware previously omitted `Referrer-Policy`, a member of the documented hardening set. This is a defense-in-depth change - the current console never places tree, key, or subject context in a URL path or query string (that context flows over the SignalR circuit, gRPC request bodies, and in-memory component state), so no existing navigation path leaks it via the `Referer` header. The header keeps that guarantee true for any future route that might embed context in a URL and completes the required hardening set. The middleware now sets `Referrer-Policy: no-referrer` (behind the same "do not clobber an existing value" guard as the other headers) on every response on the Explorer branch, at the root and under a base path. No public API change.
 
 ## [8.0.0] - 2026-07-20
 
