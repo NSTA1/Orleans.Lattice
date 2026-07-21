@@ -39,4 +39,21 @@ public enum LatticeTelemetryBackendAuthMode
     /// backend connection. No <c>Authorization</c> header is stamped.
     /// </summary>
     MutualTls,
+
+    /// <summary>
+    /// Dynamic bearer-token authentication. Instead of a static token from
+    /// <see cref="LatticeTelemetryBackendCredential"/>, the proxy acquires a fresh
+    /// bearer token per request from a registered
+    /// <see cref="ITelemetryBackendTokenProvider"/> and stamps it as
+    /// <c>Authorization: Bearer &lt;token&gt;</c>. This mode suits backends fronted
+    /// by a rotating, short-lived credential - for example an Entra (Azure AD)
+    /// access token for a managed-Prometheus query endpoint, minted from a
+    /// workload or managed identity. The provider owns token acquisition, caching,
+    /// and refresh; the core package stays free of any cloud-identity dependency.
+    /// A host selecting this mode must register an
+    /// <see cref="ITelemetryBackendTokenProvider"/> (for Azure managed Prometheus,
+    /// the <c>Orleans.Lattice.Api.Mcp.Telemetry.Azure</c> companion package
+    /// supplies one).
+    /// </summary>
+    DynamicBearer,
 }

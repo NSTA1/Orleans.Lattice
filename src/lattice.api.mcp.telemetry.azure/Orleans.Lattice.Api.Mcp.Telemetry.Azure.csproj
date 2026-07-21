@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>Orleans.Lattice.Api.Mcp.Telemetry.Azure</PackageId>
+    <Version>8.0.0</Version>
+    <Description>Azure managed-identity backend-token provider for Orleans.Lattice.Api.Mcp.Telemetry. Supplies a rotating Entra (Azure AD) access token to the telemetry proxy's DynamicBearer auth mode so the MCP cluster-telemetry tools can query an Azure Monitor managed-Prometheus endpoint, acquiring and caching the token from a caller-supplied Azure.Core TokenCredential and refreshing it before expiry with a single shared in-flight acquisition. Keeps the Azure identity dependency out of the core telemetry package.</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Mcp.Telemetry.Azure.Tests" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\lattice.api.mcp.telemetry\Orleans.Lattice.Api.Mcp.Telemetry.csproj" />
+    <PackageReference Include="Azure.Core" Version="1.44.1" />
+  </ItemGroup>
+
+</Project>

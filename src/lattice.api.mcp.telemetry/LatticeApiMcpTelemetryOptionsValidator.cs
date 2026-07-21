@@ -102,6 +102,12 @@ internal sealed class LatticeApiMcpTelemetryOptionsValidator
                 }
 
                 break;
+            case LatticeTelemetryBackendAuthMode.DynamicBearer:
+                // No static credential material: the bearer token is acquired at
+                // request time from a registered ITelemetryBackendTokenProvider,
+                // which is a DI service rather than an options value, so its
+                // presence is enforced by the proxy at first use, not here.
+                break;
         }
     }
 }

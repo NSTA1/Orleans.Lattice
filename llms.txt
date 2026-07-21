@@ -46,6 +46,7 @@ This file is the entry point for AI agents and LLM tooling. Documentation lives 
 - [Explorer web console](docs/lattice.explorer/running-the-explorer.md): Opt-in, auth-aware web console for a running cluster - tree browser plus Backups and Access admin areas over the gRPC APIs, and a Schema area that ships but is hidden by default (`Orleans.Lattice.Explorer.Web`).
 - [MCP server](docs/lattice.api.mcp/README.md): Model Context Protocol server exposing the state, data, backup, and auth facades as fail-closed, permission-scoped tools an AI agent can discover and call over streamable HTTP (`Orleans.Lattice.Api.Mcp`).
 - [MCP telemetry tools](docs/lattice.api.mcp.telemetry/README.md): Opt-in companion exposing read-only cluster OpenTelemetry metrics over MCP behind a distinct `Telemetry` grant and a Prometheus/PromQL proxy (`Orleans.Lattice.Api.Mcp.Telemetry`).
+- [MCP telemetry Azure token auth](docs/lattice.api.mcp.telemetry.azure/README.md): Azure managed-identity backend-token provider that lets the telemetry proxy query an Azure Monitor managed-Prometheus workspace with a rotating Entra token (`Orleans.Lattice.Api.Mcp.Telemetry.Azure`).
 
 ## Working on this repository
 
