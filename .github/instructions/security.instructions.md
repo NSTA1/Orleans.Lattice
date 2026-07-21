@@ -102,12 +102,12 @@ seam named here, re-read the invariant before changing it.
 ## Release-status note for security fixes
 
 When labelling or writing changelog/PR prose for a change on these surfaces, judge
-"breaking" by the affected package's **release status**, not by the change's
-surface area. A behavioural or API change in a package that has **never shipped a
-release tag** (currently `lattice.api.mcp`, `lattice.api.mcp.telemetry`, and the
-`lattice.explorer` app, which is not a published package) cannot break an existing
-consumer and is **not** breaking - it is an `enhancement`/`security` change. Reserve
-the `breaking` label for a behavioural or API change to an **already-released**
-package (verify with `git tag | Select-String <package>`) that alters previously
-shipped behaviour. An opt-in change on a released package (guarded by a default-off
-flag, like `ValidationRequired`) is additive, not breaking.
+"breaking" by whether the change alters **previously shipped behaviour**, not by the
+change's surface area. Every package in the family has now shipped a release tag (the
+`8.0.0` wave), so verify a package's shipped versions with
+`git tag | Select-String <package>` and reserve the `breaking` label for a behavioural
+or API change that alters behaviour a released version already exposed. An opt-in
+change (guarded by a default-off flag, like `ValidationRequired`) is additive, not
+breaking, and an additive hardening change (a new response header, a new fail-closed
+gate that no prior version promised to leave open) is an `enhancement`/`security`
+change, not breaking.
