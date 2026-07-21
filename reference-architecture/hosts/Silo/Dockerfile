@@ -28,10 +28,13 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
-# Restore against the pinned project first for layer caching.
+# Restore against the pinned project first for layer caching. The shared hosting
+# helper library is a project reference, so its csproj must be present to restore.
+COPY hosts/Common/Orleans.Lattice.ReferenceArchitecture.Hosting.csproj hosts/Common/
 COPY hosts/Silo/Orleans.Lattice.ReferenceArchitecture.Silo.csproj hosts/Silo/
 RUN dotnet restore hosts/Silo/Orleans.Lattice.ReferenceArchitecture.Silo.csproj
 
+COPY hosts/Common/ hosts/Common/
 COPY hosts/Silo/ hosts/Silo/
 RUN dotnet publish hosts/Silo/Orleans.Lattice.ReferenceArchitecture.Silo.csproj \
     -c Release -o /app --no-restore

@@ -28,4 +28,9 @@
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
   </ItemGroup>
 
+  <!-- Shared reference-architecture hosting helpers (Front Door origin lock). -->
+  <ItemGroup>
+    <ProjectReference Include="..\Common\Orleans.Lattice.ReferenceArchitecture.Hosting.csproj" />
+  </ItemGroup>
+
 </Project>

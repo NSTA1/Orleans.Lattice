@@ -1,5 +1,6 @@
 using Orleans.Lattice.Explorer.Entra;
 using Orleans.Lattice.Explorer.Web;
+using Orleans.Lattice.ReferenceArchitecture.Hosting;
 
 // ---------------------------------------------------------------------------
 // Reference-architecture Explorer head.
@@ -30,6 +31,13 @@ var config = builder.Configuration;
 builder.WebHost.UseStaticWebAssets();
 
 var entraEnabled = config.GetValue("Entra:Enabled", false);
+
+// Global-ingress origin lock: when set, every request other than /health must
+// carry an X-Azure-FDID header matching this id. Empty (dev/compose, and the
+// first deploy pass before Front Door exists) leaves the head unlocked. The
+// browser reaches the console through Front Door, so its asset and SignalR
+// requests carry the header; only the platform /health probe is exempt.
+var frontDoorId = config["LATTICE_FRONT_DOOR_ID"];
 
 // Persist the explorer's JSON config to a writable location. The chiseled,
 // non-root container has no writable per-user app-data directory, so default the
@@ -64,6 +72,10 @@ if (entraEnabled)
 }
 
 var app = builder.Build();
+
+// Enforce the Front Door origin lock before any request processing; /health
+// (the platform liveness probe, reached directly) is exempt.
+app.UseFrontDoorOriginLock(frontDoorId);
 
 // TLS is terminated at the platform ingress (ACA / the compose front); the
 // container itself serves plain HTTP so health probes and the SignalR circuit do

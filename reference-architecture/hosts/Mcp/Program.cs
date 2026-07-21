@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Orleans.Lattice;
 using Orleans.Lattice.Api.Mcp;
 using Orleans.Lattice.Api.Mcp.Telemetry;
+using Orleans.Lattice.ReferenceArchitecture.Hosting;
 
 // ---------------------------------------------------------------------------
 // Reference-architecture MCP head.
@@ -38,6 +39,11 @@ var requireAuthorization = config.GetValue("Mcp:RequireAuthorization", entraEnab
 var enableAuthAdministration = config.GetValue("Mcp:EnableAuthAdministration", false);
 var enableDataWrites = config.GetValue("Mcp:EnableDataWrites", false);
 var enableBackupControl = config.GetValue("Mcp:EnableBackupControl", false);
+
+// Global-ingress origin lock: when set, every request other than /health must
+// carry an X-Azure-FDID header matching this id. Empty (dev/compose, and the
+// first deploy pass before Front Door exists) leaves the head unlocked.
+var frontDoorId = config["LATTICE_FRONT_DOOR_ID"];
 
 // The service credential the discovery core uses for the trusted, read-only
 // permission introspection it performs on each non-administrator caller's
@@ -112,6 +118,10 @@ if (entraEnabled)
 }
 
 var app = builder.Build();
+
+// Enforce the Front Door origin lock before authentication and endpoint routing;
+// /health (the platform liveness probe, reached directly) is exempt.
+app.UseFrontDoorOriginLock(frontDoorId);
 
 if (entraEnabled)
 {

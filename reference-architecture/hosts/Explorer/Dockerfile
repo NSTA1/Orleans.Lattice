@@ -22,9 +22,11 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
+COPY hosts/Common/Orleans.Lattice.ReferenceArchitecture.Hosting.csproj hosts/Common/
 COPY hosts/Explorer/Orleans.Lattice.ReferenceArchitecture.Explorer.csproj hosts/Explorer/
 RUN dotnet restore hosts/Explorer/Orleans.Lattice.ReferenceArchitecture.Explorer.csproj
 
+COPY hosts/Common/ hosts/Common/
 COPY hosts/Explorer/ hosts/Explorer/
 RUN dotnet publish hosts/Explorer/Orleans.Lattice.ReferenceArchitecture.Explorer.csproj \
     -c Release -o /app --no-restore

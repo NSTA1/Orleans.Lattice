@@ -80,6 +80,19 @@ underscore separator, case-insensitive).
 | `LATTICE_EXPLORER_INSECURE_DEV` | - | `true` to allow the local h2c dev transport. |
 | `LATTICE_EXPLORER_USERNAME` / `LATTICE_EXPLORER_PASSWORD` | - | Optional first-run auto-sign-in (local dev). |
 
+### Front Door origin lock (all hosts)
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `LATTICE_FRONT_DOOR_ID` | - | The Azure Front Door profile id (a GUID). When set, every host rejects (HTTP 403) any request whose `X-Azure-FDID` header is absent, duplicated, or does not match this id (compared case-insensitively) - so only traffic that actually traversed the estate's Front Door instance is served. When empty or unset the lock is disabled (local dev / docker-compose, and deploy pass 1 before the Front Door exists). |
+
+The lock always exempts the platform health probe path (`/health`), which ACA
+calls on the container directly, bypassing Front Door. The **Silo** host also
+exempts `/metrics` (the OpenTelemetry scrape) and `/lattice/scale` (the KEDA
+compute-axis signal), which are served on the internal-only HTTP port and are
+likewise probed directly. Exemptions match on whole path segments, so a
+lookalike such as `/healthz` remains locked.
+
 ## Container images
 
 Each host has a multi-stage Dockerfile:

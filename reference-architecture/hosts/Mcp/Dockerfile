@@ -20,9 +20,11 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
+COPY hosts/Common/Orleans.Lattice.ReferenceArchitecture.Hosting.csproj hosts/Common/
 COPY hosts/Mcp/Orleans.Lattice.ReferenceArchitecture.Mcp.csproj hosts/Mcp/
 RUN dotnet restore hosts/Mcp/Orleans.Lattice.ReferenceArchitecture.Mcp.csproj
 
+COPY hosts/Common/ hosts/Common/
 COPY hosts/Mcp/ hosts/Mcp/
 RUN dotnet publish hosts/Mcp/Orleans.Lattice.ReferenceArchitecture.Mcp.csproj \
     -c Release -o /app --no-restore

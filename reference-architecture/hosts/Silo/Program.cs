@@ -13,6 +13,7 @@ using Orleans.Lattice.Backup.AzureBlob;
 using Orleans.Lattice.Membership;
 using Orleans.Lattice.Membership.Entra;
 using Orleans.Lattice.Membership.Entra.Graph;
+using Orleans.Lattice.ReferenceArchitecture.Hosting;
 using Orleans.Lattice.ReferenceArchitecture.Silo;
 using Orleans.Lattice.Replication;
 using Orleans.Lattice.Replication.Grpc;
@@ -61,6 +62,12 @@ var advertisedIp = config["Silo:AdvertisedIp"];
 var backupPrimary = config.GetValue("Backup:Primary", false);
 var entraEnabled = config.GetValue("Entra:Enabled", false);
 var requireApiAuthorization = config.GetValue("StateApi:RequireAuthorization", false);
+
+// Global-ingress origin lock: when set, every client-facing request on the
+// external gRPC port must carry an X-Azure-FDID header matching this id. Empty
+// (dev/compose, and the first deploy pass before Front Door exists) leaves the
+// head unlocked. Threaded from the compute Bicep as LATTICE_FRONT_DOOR_ID.
+var frontDoorId = config["LATTICE_FRONT_DOOR_ID"];
 
 var replicationPeers = ReplicationTopology.ParsePeers(config);
 var replicatedTrees = ReplicationTopology.ParseTrees(config);
@@ -257,6 +264,13 @@ builder.Services.AddOpenTelemetry()
         .AddPrometheusExporter());
 
 var app = builder.Build();
+
+// Enforce the Front Door origin lock before any endpoint runs. The internal
+// HTTP/1 port serves /health (platform liveness probe), /metrics (Prometheus
+// scrape), and the /lattice/scale signal (KEDA) - all reached directly on the
+// internal network without transiting Front Door, so they are exempt. Every
+// client-facing gRPC request on the external port is locked.
+app.UseFrontDoorOriginLock(frontDoorId, "/metrics", "/lattice/scale");
 
 app.MapLatticeStateApiGrpc();
 app.MapLatticeAuthApiGrpc();
