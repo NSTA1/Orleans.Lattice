@@ -52,6 +52,7 @@ underscore separator, case-insensitive).
 | `Backup:FullIntervalHours` / `Backup:IncrementalIntervalMinutes` / `Backup:RetentionKeepLast` | `24` / `60` / `7` | Schedule tuning (primary only). |
 | `Scaling:MinReplicas` | `1` | Floor for the compute-axis scaling signal. |
 | `StateApi:RequireAuthorization` | `false` | When `true`, the state gRPC surface is gated by the turnkey env-var credential authorizer and the auth surface requires authorization. Local dev leaves it `false` (a documented bypass); a deployment sets it `true` behind the Entra front door. |
+| `DataApi:Enabled` | `true` | Exposes the read-write Data API gRPC binding, co-hosted on the silo gRPC port (same origin as the State API). Enabled by default; every mutation is still subject-checked by the deny-by-default access gate. Set `false` to withhold the write surface entirely. |
 | `Auth:DefaultEffect` | `Deny` | `Deny` (secure default) or `Allow` (fully-open local dev cluster). |
 | `Auth:BootstrapAdministrators` | - | Comma-separated subject ids seeded as administrators. |
 | `Entra:Enabled` | `false` | Enable Entra-backed authentication for the exposed facades. |
@@ -65,9 +66,9 @@ underscore separator, case-insensitive).
 |-----|---------|---------|
 | `Mcp:StateEndpoint` | (required) | The silo's State gRPC endpoint. |
 | `Mcp:AuthEndpoint` | `Mcp:StateEndpoint` | The silo's Auth gRPC endpoint (needed for permission-scoped discovery). |
-| `Mcp:DataEndpoint` / `Mcp:BackupEndpoint` | - | Optional data / backup gRPC endpoints (only if the silo exposes them). |
+| `Mcp:DataEndpoint` / `Mcp:BackupEndpoint` | - | Data / backup gRPC endpoints. Compute sets `Mcp:DataEndpoint` to the silo gRPC FQDN by default (the write facade rides that endpoint); backup only if the silo exposes it. |
 | `Mcp:RequireAuthorization` | `Entra:Enabled` | Fail-closed toggle on the MCP HTTP endpoint. |
-| `Mcp:EnableDataWrites` / `Mcp:EnableBackupControl` / `Mcp:EnableAuthAdministration` | `false` | Advertise the mutating tool verbs of each group. |
+| `Mcp:EnableDataWrites` / `Mcp:EnableBackupControl` / `Mcp:EnableAuthAdministration` | `EnableDataWrites` on by default in a deployment (compute binds it to the Data API); the others `false` | Advertise the mutating tool verbs of each group. |
 | `Mcp:AdministratorToken` / `Mcp:AdministratorScheme` | - / `Bearer` | Service credential for discovery-time permission introspection of non-administrator callers. |
 | `Mcp:Telemetry:BackendAddress` | - | PromQL backend for the telemetry tool module (only wired when set). |
 | `Mcp:Telemetry:AuthMode` | `None` | Backend auth mode. `None` for an unauthenticated backend (local compose Prometheus). `DynamicBearer` makes the head mint a rotating managed-identity Entra token per query for an Azure Monitor managed-Prometheus endpoint (no static secret); the workload identity needs Monitoring Data Reader on the workspace. |

@@ -89,6 +89,11 @@ services:
       # Front the silo's gRPC State + Auth facades over h2c by service name.
       Mcp__StateEndpoint: "http://silo:8081"
       Mcp__AuthEndpoint: "http://silo:8081"
+      # The read-write Data API rides the same silo gRPC endpoint (enabled by
+      # default). Point the head at it and advertise the write tools so the local
+      # smoke test can exercise the write path.
+      Mcp__DataEndpoint: "http://silo:8081"
+      Mcp__EnableDataWrites: "true"
       # Cluster telemetry tools proxy the local Prometheus.
       Mcp__Telemetry__BackendAddress: "http://prometheus:9090"
       # Dev bypass: open MCP endpoint, no Entra.

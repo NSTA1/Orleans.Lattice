@@ -85,6 +85,7 @@ guarantees) are documented in [`deploy/README.md`](deploy/README.md).
 | `-SiloMinReplicas` / `-SiloMaxReplicas` | no | Silo scale floor (default 1) and ceiling (default 10). The floor is never zero. |
 | `-AuthDefaultEffect` | no | `Deny` (default, secure) or `Allow` (throwaway dev only). |
 | `-RequireApiAuthorization` | no | Default `$true`. |
+| `-EnableDataApi` | no | Default `$true`. Exposes the read-write Data API (write surface); set `-EnableDataApi:$false` to withhold it. |
 | `-ReplicationKey` | public option | `SecureString`, byte-identical across every run and region. |
 | `-GrafanaAdminPassword` | yes | `SecureString`. |
 | `-EntraEnabled` / `-EntraTenantId` | Entra | Enable Entra and target the tenant. |
@@ -114,6 +115,7 @@ through the script) are:
 | `ingressAllowedCidrs` | `[]` | Ingress allow-list (public option). |
 | `authDefaultEffect` | `Deny` | Authorization default effect estate-wide. |
 | `requireApiAuthorization` | `true` | Whether the facades and MCP require authorization. |
+| `dataApiEnabled` | `true` | Whether the read-write Data API is exposed (co-hosted on the silo gRPC port; the MCP head advertises its write tools). Every mutation is still subject-gated. |
 | `entraEnabled` / `entraTenantId` / `entraClientId` / `entraAudiences` | off / `''` | Entra authentication. |
 | `prometheusQueryEndpoint` / `frontDoorId` | `''` | Forward-threaded seams; empty on pass 1, activated on pass 2 (compile-cycle avoidance). Managed by the script. |
 

@@ -6,6 +6,8 @@ using Orleans.Configuration;
 using Orleans.Lattice;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Api.Auth.Grpc;
+using Orleans.Lattice.Api.Data;
+using Orleans.Lattice.Api.Data.Grpc;
 using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Api.State.Grpc;
 using Orleans.Lattice.Auth;
@@ -34,7 +36,8 @@ using Orleans.Lattice.Storage.AzureTable;
 //     wire merge mode (Replication:Trees), set symmetrically per region.
 //   * The Azure Blob backup sink, with a Backup:Primary flag selecting whether
 //     this region runs the scheduler (primary) or is DR standby (scheduler off).
-//   * The read-only State API and the auth-admin control plane over gRPC.
+//   * The read-only State API, the read-write Data API and the auth-admin
+//     control plane over gRPC.
 //   * The lattice.scaling compute-axis signal endpoint for KEDA.
 //   * Entra-backed authentication for its exposed facades.
 //
@@ -63,6 +66,16 @@ var advertisedIp = config["Silo:AdvertisedIp"];
 var backupPrimary = config.GetValue("Backup:Primary", false);
 var entraEnabled = config.GetValue("Entra:Enabled", false);
 var requireApiAuthorization = config.GetValue("StateApi:RequireAuthorization", false);
+
+// Read-write Data API surface. Enabled by default: the write-capable
+// Orleans.Lattice.Api.Data gRPC binding is co-hosted on the same silo gRPC port
+// as the read-only State API, so writes ride the same Entra-authenticated,
+// origin-locked front-door endpoint. It is safe on by default because the real
+// enforcement is the deny-by-default per-tree/per-key access gate keyed on the
+// caller's Entra-resolved subject; the coarse transport gate is opened with the
+// AllowAllDataApiAuthorizer. Set DataApi:Enabled=false to withhold the write
+// surface entirely (the binding is not mapped and the facade is not exposed).
+var dataApiEnabled = config.GetValue("DataApi:Enabled", true);
 
 // Global-ingress origin lock: when set, every client-facing request on the
 // external gRPC port must carry an X-Azure-FDID header matching this id. Empty
@@ -185,6 +198,12 @@ builder.Host.UseOrleans(silo =>
 
     // -- State API + membership + authorization + auth-admin API ----------
     silo.AddLatticeStateApi();
+    if (dataApiEnabled)
+    {
+        // Co-host the write-capable data-API facade so its gRPC binding (mapped
+        // below) can serve mutations from the same silo gRPC endpoint.
+        silo.AddLatticeDataApi();
+    }
     silo.AddLatticeMembership();
     silo.AddLatticeAuth(options =>
     {
@@ -268,6 +287,21 @@ if (requireApiAuthorization)
 
 builder.Services.AddLatticeAuthApiGrpc(options => options.RequireAuthorization = requireApiAuthorization);
 
+// The write-capable data-API gRPC binding, co-hosted on the same silo gRPC port.
+// The coarse transport gate is opened (AllowAllDataApiAuthorizer) because the
+// real enforcement is the deny-by-default per-tree/per-key access gate applied
+// afterwards on the gated ILattice surface using the caller's Entra-resolved
+// subject. RequireAuthorization still fails the binding closed when enforcement
+// is on and no authorizer is registered; the local compose harness runs it open.
+if (dataApiEnabled)
+{
+    builder.Services.AddLatticeDataApiGrpc(options => options.RequireAuthorization = requireApiAuthorization);
+    if (requireApiAuthorization)
+    {
+        builder.Services.AddSingleton<ILatticeDataApiAuthorizer, AllowAllDataApiAuthorizer>();
+    }
+}
+
 // Export the orleans.lattice meter over Prometheus at /metrics so a scraper
 // (the local compose Prometheus, or Azure Managed Prometheus) can collect the
 // cluster telemetry that backs the bundled Grafana dashboards and the MCP
@@ -288,6 +322,10 @@ app.UseFrontDoorOriginLock(frontDoorId, "/metrics", "/lattice/scale");
 
 app.MapLatticeStateApiGrpc();
 app.MapLatticeAuthApiGrpc();
+if (dataApiEnabled)
+{
+    app.MapLatticeDataApiGrpc();
+}
 app.MapLatticeReplicationGrpc();
 
 // Compute-axis scaling signal for the KEDA Prometheus scaler (default route

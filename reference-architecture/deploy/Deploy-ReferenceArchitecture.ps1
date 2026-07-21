@@ -162,6 +162,12 @@ param(
 
     [bool]$RequireApiAuthorization = $true,
 
+    # The read-write Data API (write surface). Enabled by default: the write
+    # facade is co-hosted on the silo gRPC endpoint and the MCP head advertises
+    # its write tools. Set -EnableDataApi:$false to withhold the write surface;
+    # enforcement is otherwise the deny-by-default per-subject access gate.
+    [bool]$EnableDataApi = $true,
+
     # The per-cluster replication key, matched across every region and required by
     # BOTH options (public authenticates replication over public ingress with it;
     # private layers it on the VNet transport as defense in depth). Stable across
@@ -593,6 +599,7 @@ try {
             backupBlobEndpoint         = $backupBlobEndpoint
             authDefaultEffect          = $AuthDefaultEffect
             requireApiAuthorization    = $RequireApiAuthorization
+            dataApiEnabled             = $EnableDataApi
             internalEnvironment        = ($DeploymentOption -eq 'private')
             infrastructureSubnetId     = $subnetId
             # Zone-redundant compute; honoured only when VNet-injected (private).

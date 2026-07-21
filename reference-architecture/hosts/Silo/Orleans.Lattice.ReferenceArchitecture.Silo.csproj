@@ -45,6 +45,8 @@
     <PackageReference Include="Orleans.Lattice.Backup.AzureBlob" Version="8.0.0" />
     <PackageReference Include="Orleans.Lattice.Api.State" Version="8.0.0" />
     <PackageReference Include="Orleans.Lattice.Api.State.Grpc" Version="8.0.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Data" Version="8.0.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Data.Grpc" Version="8.0.0" />
     <PackageReference Include="Orleans.Lattice.Api.Auth" Version="8.0.0" />
     <PackageReference Include="Orleans.Lattice.Api.Auth.Grpc" Version="8.0.0" />
     <PackageReference Include="Orleans.Lattice.Auth" Version="8.0.0" />

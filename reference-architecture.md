@@ -364,10 +364,15 @@ The baseline exposes three client-facing surfaces per region:
   the telemetry module.
 - **Explorer** - the web operator console.
 
-The read-write **Data API** (`Orleans.Lattice.Api.Data`) is **opt-in and default
-off**: it is a public write surface, so it is not exposed in the baseline. Enabling
-it is a deployment parameter, and when on it is an additional locked-down origin
-behind the same Entra auth.
+The read-write **Data API** (`Orleans.Lattice.Api.Data`) is **enabled by
+default**. Its write-capable gRPC binding is co-hosted on the same silo gRPC
+endpoint as the read-only State API, so writes ride the same Entra-authenticated,
+origin-locked front-door path; the MCP head advertises the matching write tools.
+It is safe on by default because the real enforcement is the deny-by-default
+per-tree/per-key access gate keyed on the caller's Entra-resolved subject - the
+coarse transport gate is opened but every mutation is still subject-checked. Set
+the `DataApi:Enabled` host key (deployer `-EnableDataApi:$false`) to withhold the
+write surface entirely.
 
 ## Global ingress: Azure Front Door Standard
 
@@ -379,8 +384,9 @@ every region:
   required** and nearest-region routing is safe.
 - **Automatic failover**: on a regional health-probe failure, traffic moves to the
   next-nearest healthy region.
-- **One origin group per client-facing endpoint** (Explorer, MCP, State API; Data
-  API only when opted in).
+- **One origin group per client-facing endpoint** (Explorer, MCP, State API). The
+  read-write Data API shares the State API's silo gRPC origin, so it needs no
+  separate origin.
 - **Custom domain(s) with AFD-managed TLS.**
 - **Origins locked to the front door**: each origin accepts traffic only via the
   Front Door (AFD id header / access restriction), so no one bypasses the global
@@ -511,8 +517,10 @@ Security is a first-class property of this architecture, not an afterthought:
   replication key (private option).
 - **Fail-closed authorization.** The data plane is deny-by-default where auth is
   enabled, and the read-visibility filter only surfaces trees the caller may read.
-- **Public write surface is opt-in.** The read-write Data API is off unless a
-  deployment explicitly enables it.
+- **Write surface is subject-gated.** The read-write Data API is enabled by
+  default but rides the same deny-by-default access gate: every mutation is
+  authorized against the caller's resolved subject, and the surface can be
+  withheld entirely with `DataApi:Enabled=false`.
 
 ## Container images
 

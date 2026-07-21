@@ -159,6 +159,9 @@ param authDefaultEffect string = 'Deny'
 @description('Whether the State/auth gRPC surfaces require authorization. Secure default true; the local compose harness sets false. Bound to the host StateApi:RequireAuthorization and the MCP Mcp:RequireAuthorization.')
 param requireApiAuthorization bool = true
 
+@description('Whether the read-write Data API surface is exposed. Enabled by default: the write-capable data-API gRPC binding is co-hosted on the silo gRPC endpoint (same origin as the read-only State API) and the MCP head advertises its write tools. Real enforcement is the deny-by-default per-tree/per-key access gate keyed on the caller subject. Set false to withhold the write surface. Bound to the host DataApi:Enabled and the MCP Mcp:EnableDataWrites.')
+param dataApiEnabled bool = true
+
 @description('Whether Entra authentication is enabled on the exposed facades and heads. Bound to the host Entra:Enabled on all three heads.')
 param entraEnabled bool = false
 
@@ -439,6 +442,9 @@ resource siloApp 'Microsoft.App/containerApps@2024-03-01' = {
             // an authorization-required State/auth API; TLS-only replication.
             { name: 'Auth__DefaultEffect', value: authDefaultEffect }
             { name: 'StateApi__RequireAuthorization', value: string(requireApiAuthorization) }
+            // Read-write Data API surface, co-hosted on the silo gRPC endpoint.
+            // Enabled by default; withheld when dataApiEnabled is false.
+            { name: 'DataApi__Enabled', value: string(dataApiEnabled) }
             { name: 'Replication__AllowPlaintext', value: 'false' }
             // Symmetric cross-region replication topology (deployer supplies the
             // peer/tree maps post-provision; empty here so the module deploys
@@ -547,6 +553,12 @@ resource mcpApp 'Microsoft.App/containerApps@2024-03-01' = {
             // internal ACA FQDN. One endpoint serves both surfaces.
             { name: 'Mcp__StateEndpoint', value: 'https://${siloApp.properties.configuration.ingress.fqdn}' }
             { name: 'Mcp__AuthEndpoint', value: 'https://${siloApp.properties.configuration.ingress.fqdn}' }
+            // Read-write Data API: the write facade rides the same silo gRPC
+            // endpoint as State/auth. When enabled, point the head at it and
+            // advertise the mutating tool verbs; the silo re-validates the
+            // forwarded Entra JWT and the access gate enforces per-subject.
+            { name: 'Mcp__DataEndpoint', value: dataApiEnabled ? 'https://${siloApp.properties.configuration.ingress.fqdn}' : '' }
+            { name: 'Mcp__EnableDataWrites', value: string(dataApiEnabled) }
             // Cluster-telemetry MCP tools proxy a PromQL backend. Empty leaves the
             // group off (the host skips it) - the deployer wires the managed
             // Prometheus query endpoint (and the DynamicBearer auth mode) once the
