@@ -49,6 +49,13 @@ internal sealed class GrpcLatticeStateClient : ILatticeStateClient, IDisposable
         var channel = GrpcChannel.ForAddress(settings.Address, channelOptions);
 
         CallInvoker invoker = channel.CreateCallInvoker();
+
+        // Transport headers accompany every call regardless of the auth mode (for
+        // example an origin-routing header a fronting proxy requires), so apply
+        // them before, and independently of, the authentication interceptor - the
+        // sign-in swap replaces settings.Authentication but never TransportHeaders.
+        invoker = ApplyTransportHeaders(invoker, settings.TransportHeaders);
+
         if (auth is { HasCredentialProvider: true, CredentialProvider: { } provider })
         {
             // CallCredentials.FromInterceptor is invoked per RPC and may await, so
@@ -83,6 +90,28 @@ internal sealed class GrpcLatticeStateClient : ILatticeStateClient, IDisposable
 
         var client = LatticeStateApiGrpcClient.Create(invoker, serializerProvider);
         return new GrpcLatticeStateClient(channel, client);
+    }
+
+    /// <summary>
+    /// Applies the sign-in-independent transport headers (if any) to every call on
+    /// <paramref name="invoker"/>, returning it unchanged when there are none.
+    /// </summary>
+    private static CallInvoker ApplyTransportHeaders(CallInvoker invoker, IReadOnlyDictionary<string, string>? transportHeaders)
+    {
+        if (transportHeaders is not { Count: > 0 } headers)
+        {
+            return invoker;
+        }
+
+        return invoker.Intercept(metadata =>
+        {
+            foreach (var (key, value) in headers)
+            {
+                metadata.Add(key, value);
+            }
+
+            return metadata;
+        });
     }
 
     /// <summary>

@@ -44,6 +44,18 @@ public sealed record ExplorerConfiguration
     /// </summary>
     public IReadOnlyDictionary<string, string>? Headers { get; init; }
 
+    /// <summary>
+    /// Optional non-secret transport headers attached to every call regardless of
+    /// the sign-in state, for example an origin-routing header a fronting proxy
+    /// requires (<c>X-Azure-FDID</c> for an Azure Front Door origin lock). Unlike
+    /// <see cref="Headers"/>, these map to
+    /// <see cref="LatticeConnectionSettings.TransportHeaders"/> rather than the
+    /// authentication seam, so an interactive sign-in that replaces the credential
+    /// does not drop them. Never a secret: the live credential comes from the
+    /// per-user credential store, never from here.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? TransportHeaders { get; init; }
+
     /// <summary>Maps this configuration to live connection settings.</summary>
     public LatticeConnectionSettings ToConnectionSettings() => new()
     {
@@ -52,5 +64,6 @@ public sealed record ExplorerConfiguration
         Authentication = Headers is { Count: > 0 }
             ? new LatticeCallAuthentication { Headers = Headers }
             : null,
+        TransportHeaders = TransportHeaders is { Count: > 0 } ? TransportHeaders : null,
     };
 }

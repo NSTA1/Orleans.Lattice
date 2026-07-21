@@ -27,6 +27,20 @@ public sealed record LatticeConnectionSettings
     public LatticeCallAuthentication? Authentication { get; init; }
 
     /// <summary>
+    /// Non-secret transport headers attached to every call regardless of the
+    /// authentication mode, for example an origin-routing header a fronting proxy
+    /// requires (<c>X-Azure-FDID</c> for an Azure Front Door origin lock). Unlike
+    /// <see cref="LatticeCallAuthentication.Headers"/>, these live on the endpoint
+    /// settings, not on the per-sign-in <see cref="Authentication"/> seam, so they
+    /// survive a sign-in that replaces the authentication (for example an
+    /// interactive bearer flow) and continue to accompany every call. They are
+    /// never a credential: the live authentication credential flows through
+    /// <see cref="Authentication"/> only. <see langword="null"/> (the default)
+    /// attaches nothing.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? TransportHeaders { get; init; }
+
+    /// <summary>
     /// How long a previously healthy connection may stay in
     /// <see cref="LatticeConnectionState.Reconnecting"/> before degrading to
     /// <see cref="LatticeConnectionState.Faulted"/> (the visual disconnected
