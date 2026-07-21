@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Orleans.Lattice.Caching.AzureBlob</RootNamespace>
+    <PackageId>Orleans.Lattice.Caching.AzureBlob</PackageId>
+    <Version>8.0.0</Version>
+    <Description>Azure Blob Storage IDistributedCache for Orleans.Lattice. Backs the ASP.NET Core distributed-cache abstraction with an Azure Storage account (one block blob per entry, expiry tracked in blob metadata, sliding-window support), so a multi-replica web head - for example a hosted Explorer console using Microsoft.Identity.Web token caches - has a shared, off-cluster cache without needing Redis or SQL. Selectable purely by DI.</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Caching.AzureBlob.Tests" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Azure.Storage.Blobs" Version="12.29.1" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Abstractions" Version="10.0.5" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.5" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.5" />
+  </ItemGroup>
+
+</Project>

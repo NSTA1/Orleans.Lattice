@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Orleans.Lattice.Explorer.Entra.Web</RootNamespace>
+    <PackageId>Orleans.Lattice.Explorer.Entra.Web</PackageId>
+    <Version>8.0.0</Version>
+    <Description>Microsoft Entra ID hosted-web (OpenID Connect) sign-in provider for the Orleans.Lattice Explorer web console. Wires ASP.NET Core OIDC (auth-code + PKCE) and a cookie session via Microsoft.Identity.Web, then acquires and silently refreshes a bearer token for an auth-enabled State API on behalf of the signed-in browser user - the flow the interactive desktop provider (Orleans.Lattice.Explorer.Entra) cannot serve because a remote Blazor Server circuit has no local browser. Keeps the Microsoft.Identity.Web dependency out of the core explorer.</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Explorer.Entra.Web.Tests" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\lattice.explorer\Core\Orleans.Lattice.Explorer.Core.csproj" />
+    <PackageReference Include="Microsoft.Identity.Web" Version="3.14.1" />
+  </ItemGroup>
+
+</Project>

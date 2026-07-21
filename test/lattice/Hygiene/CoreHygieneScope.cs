@@ -29,10 +29,12 @@ internal static class CoreHygieneScope
         "src/lattice.api.state.grpc", "test/lattice.api.state.grpc",
         "src/lattice.dashboards", "test/lattice.dashboards",
         "src/lattice.explorer", "test/lattice.explorer",
+        "src/lattice.explorer.entra.web", "test/lattice.explorer.entra.web",
         "src/lattice.replication", "test/lattice.replication",
         "src/lattice.replication.grpc", "test/lattice.replication.grpc",
         "src/lattice.storage.azuretable", "test/lattice.storage.azuretable",
         "src/lattice.backup.azureblob", "test/lattice.backup.azureblob",
+        "src/lattice.caching.azureblob", "test/lattice.caching.azureblob",
         "src/lattice.scaling", "test/lattice.scaling",
         "test/microbench",
     };

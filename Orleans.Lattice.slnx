@@ -31,6 +31,8 @@
   <Project Path="src/lattice.explorer/Access/Orleans.Lattice.Explorer.Access.csproj" />
   <Project Path="src/lattice.explorer/Schema/Orleans.Lattice.Explorer.Schema.csproj" />
   <Project Path="src/lattice.explorer.entra/Orleans.Lattice.Explorer.Entra.csproj" />
+  <Project Path="src/lattice.explorer.entra.web/Orleans.Lattice.Explorer.Entra.Web.csproj" />
+  <Project Path="src/lattice.caching.azureblob/Orleans.Lattice.Caching.AzureBlob.csproj" />
   <Project Path="src/lattice.explorer/UI/Orleans.Lattice.Explorer.UI.csproj" />
   <Project Path="src/lattice.explorer/WebHosting/Orleans.Lattice.Explorer.Web.csproj" />
   <Project Path="src/lattice.explorer/Web/Orleans.Lattice.Explorer.WebHost.csproj" />
@@ -65,5 +67,7 @@
   <Project Path="test/lattice.backup.azureblob/Orleans.Lattice.Backup.AzureBlob.Tests.csproj" />
   <Project Path="test/lattice.explorer/Orleans.Lattice.Explorer.Tests.csproj" />
   <Project Path="test/lattice.explorer.entra/Orleans.Lattice.Explorer.Entra.Tests.csproj" />
+  <Project Path="test/lattice.explorer.entra.web/Orleans.Lattice.Explorer.Entra.Web.Tests.csproj" />
+  <Project Path="test/lattice.caching.azureblob/Orleans.Lattice.Caching.AzureBlob.Tests.csproj" />
   <Project Path="test/microbench/Orleans.Lattice.Benchmark.Microbench.Tests.csproj" />
 </Solution>
