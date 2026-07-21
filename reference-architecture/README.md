@@ -78,7 +78,7 @@ guarantees) are documented in [`deploy/README.md`](deploy/README.md).
 | `-Regions` | yes | Array of `@{ regionCode = '...'; location = '...' }`. One or many. |
 | `-ImageTag` | yes | Tag applied to all three built images. |
 | `-DeploymentOption` | no | `public` (default) or `private`. See below. |
-| `-ZoneRedundant` | no | `$true` (default) or `$false`. Zone-redundant compute; effective only under `private`. |
+| `-ZoneRedundant` | no | `$true` (default) or `$false`. Zone-redundant compute; applies to both options (both are VNet-injected). |
 | `-ReplicationTrees` | no | Estate-wide `treeName=MergeMode,...` map. |
 | `-BackupPrimaryRegionCode` | no | Defaults to the first region. |
 | `-IngressAllowedCidrs` | no | Ingress allow-list (public option). |
@@ -106,7 +106,7 @@ through the script) are:
 | `regions` | (required) | Array of `{ regionCode, location }`. |
 | `imageTag` | (required) | Host image tag. |
 | `deploymentOption` | `public` | `public` or `private`. |
-| `zoneRedundant` | `true` | Zone-redundant compute (replicas spread across availability zones). Honoured only under `private` (ACA requires VNet injection); the `public` baseline is always single-zone. |
+| `zoneRedundant` | `true` | Zone-redundant compute (replicas spread across availability zones). Applies to both options - both are VNet-injected. |
 | `siloMinReplicas` / `siloMaxReplicas` | 1 / 10 | Silo autoscale bounds. |
 | `backupPrimaryRegionCode` | first region | The single backup-primary region. |
 | `replicationKey` | `''` | `@secure()`; the per-cluster replication key (public option). |
@@ -128,14 +128,20 @@ own inputs and outputs.
 The public option exposes each head over ACA external ingress (server TLS,
 HTTP/2) fronted by a single global Azure Front Door Standard profile, and stores
 the per-cluster replication key in a per-region Key Vault. Deploy it with the
-Quick start command above (`-DeploymentOption public`, the default).
+Quick start command above (`-DeploymentOption public`, the default). The
+environment is still VNet-injected (each region gets a per-region VNet with a
+delegated ACA infrastructure subnet) so it is zone-redundant; it simply keeps an
+external ingress and no cross-region VNet peering. Each region therefore consumes
+a `/23` infrastructure subnet from a non-overlapping per-region address plan.
 
 ### Private option
 
 The private option puts every regional ACA environment on an internal-only,
 VNet-integrated ingress with full-mesh global VNet peering, so cross-region
 replication travels private address space. Select it with
-`-DeploymentOption private`.
+`-DeploymentOption private`. (Both options are VNet-injected; the private option
+adds internal-only ingress plus the peering, on top of the per-region VNets the
+public option already provisions.)
 
 ```powershell
 ./deploy/Deploy-ReferenceArchitecture.ps1 `
@@ -153,13 +159,12 @@ manual post-deploy step (the private-option network foundation and its full-mesh
 peering live in `bicep/modules/vnet.bicep`); it is the one part of the private
 option that is not expressible before the environments are provisioned.
 
-Under the private option each region's managed environment is **zone-redundant**
-by default (`zoneRedundant`, default `true`), so once the silo autoscales beyond a
-single replica those replicas are spread across availability zones - matching the
-zone-redundant durability of the WAL storage tier. Azure Container Apps only
-supports zone redundancy on a VNet-injected environment, so the flag has no effect
-under the public baseline (which is always single-zone); set `zoneRedundant` to
-`false` to opt a private estate back out.
+Every managed environment is **zone-redundant** by default (`zoneRedundant`,
+default `true`) under both options, because both are VNet-injected. Once the silo
+autoscales beyond a single replica those replicas are spread across availability
+zones - matching the zone-redundant durability of the WAL storage tier. Set
+`zoneRedundant` to `false` to opt an estate back out (for example a single-zone
+dev estate).
 
 ### Verify
 

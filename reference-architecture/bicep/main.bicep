@@ -70,14 +70,14 @@ param prometheusQueryEndpoint string = ''
 @description('regionCode of the single backup-PRIMARY region whose silo runs the scheduled-backup writer. That region gets Storage Blob Data Contributor on the shared backup sink; every other region is restore-read only. Must equal one regions[].regionCode. Defaults to the first region.')
 param backupPrimaryRegionCode string = regions[0].regionCode
 
-@description('Cross-region replication transport option. "public" (default, cost-optimized) rides the ACA-managed ingress FQDN over server TLS, authenticated by a replication key held in a per-region Key Vault. "private" provisions per-region VNets with delegated ACA infrastructure subnets and full-mesh peering so the transport is never publicly reachable. Private is default-OFF (opt-in).')
+@description('Deployment option controlling ingress visibility and the cross-region replication transport. Both options provision per-region VNets (so every managed environment is VNet-injected and zone-redundancy capable). "public" (default, cost-optimized) keeps an EXTERNAL environment ingress and rides the ACA-managed FQDN over server TLS for replication, authenticated by a per-region Key Vault replication key. "private" (opt-in) makes the ingress INTERNAL-only and adds full-mesh VNet peering so the replication transport is never publicly reachable.')
 @allowed([
   'public'
   'private'
 ])
 param deploymentOption string = 'public'
 
-@description('When true, each region managed environment is zone-redundant (replicas spread across availability zones). Zone redundancy requires a VNet-injected environment, so it takes effect only under the "private" deploymentOption; the "public" baseline is always single-zone. Defaults to true so private estates are zone-redundant out of the box.')
+@description('When true, each region managed environment is zone-redundant (replicas spread across availability zones). Every deployment option is VNet-injected, so this applies to both public and private estates. Defaults to true so estates are zone-redundant out of the box; set false to opt out (for example single-zone dev estates).')
 param zoneRedundant bool = true
 
 @description('PUBLIC option: the per-cluster Lattice replication key, matched across EVERY region. The deployer generates it once and passes it at deploy time (never committed). Written only into each region Key Vault secret by the networking module; never emitted as an output.')
@@ -149,18 +149,22 @@ resource registry 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' = 
 }
 
 // =============================================================================
-// Private-option network foundation (VNets + full-mesh peering) - F-190.
+// Per-region network foundation (VNets + optional full-mesh peering) - F-190.
 // -----------------------------------------------------------------------------
-// Provisioned BEFORE compute (and only for the private option) so the ACA
-// environment can consume its delegated infrastructure subnet. Keeping the VNet
-// foundation ahead of compute - and the public Key Vault after compute - makes
-// the compute <-> networking ordering one-directional (no compile-time cycle).
+// Provisioned BEFORE compute (for EVERY option) so the ACA environment can consume
+// its delegated infrastructure subnet and be VNet-injected (a prerequisite for
+// zone redundancy). Full-mesh peering is enabled only for the private option (its
+// internal replication transport rides private space); the public option gets the
+// same per-region VNets with external ingress and no peering. Keeping the VNet
+// foundation ahead of compute - and the public Key Vault after compute - makes the
+// compute <-> networking ordering one-directional (no compile-time cycle).
 // =============================================================================
 
-module vnet 'modules/vnet.bicep' = if (deploymentOption == 'private') {
+module vnet 'modules/vnet.bicep' = {
   name: 'vnet'
   params: {
     regions: regions
+    enablePeering: deploymentOption == 'private'
   }
 }
 
@@ -202,12 +206,12 @@ module compute 'modules/compute.bicep' = [for (region, i) in regions: {
     entraTenantId: entraTenantId
     entraClientId: entraClientId
     entraAudiences: entraAudiences
-    // Private option: the environment is VNet-integrated and internal-only; the
-    // subnet is provisioned by the vnet module above. Public option: empty
-    // subnet -> public baseline environment.
-    infrastructureSubnetId: deploymentOption == 'private' ? vnet!.outputs.perRegionPrivate[i].infrastructureSubnetId : ''
+    // Every option is VNet-injected (the subnet exists for both) so the
+    // environment can be zone-redundant. Public keeps external ingress; private
+    // is internal-only.
+    infrastructureSubnetId: vnet.outputs.perRegionNetwork[i].infrastructureSubnetId
     internalEnvironment: deploymentOption == 'private'
-    // Zone-redundant compute (private option only; ACA requires VNet injection).
+    // Zone-redundant compute (both options are VNet-injected).
     zoneRedundant: zoneRedundant
     // Keyless storage endpoints are DETERMINISTIC functions of
     // (resourceGroup().id, baseName, regionCode) matching the names the storage
@@ -379,8 +383,8 @@ output deploymentOption string = deploymentOption
 @description('PUBLIC option per-region Key Vault seams (keyless secret URIs, no secret material) for the deployer to wire the silo replication-key secret reference. Empty for the private option.')
 output perRegionReplicationKeyVault array = networking.outputs.perRegionPublic
 
-@description('PRIVATE option per-region VNet / infrastructure-subnet seams. Empty for the public option.')
-output perRegionPrivateNetwork array = deploymentOption == 'private' ? vnet!.outputs.perRegionPrivate : []
+@description('Per-region VNet / infrastructure-subnet seams (every option is VNet-injected).')
+output perRegionNetwork array = vnet.outputs.perRegionNetwork
 
 @description('Per-region observability seams in region-list order. prometheusQueryEndpoint is the single feed for the silo KEDA scaler (deployer second pass) and the MCP telemetry add-on; grafanaFqdn is the scale-to-zero dashboard head.')
 output perRegionObservability array = [for (region, i) in regions: {

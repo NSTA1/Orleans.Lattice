@@ -214,7 +214,7 @@ param infrastructureSubnetId string = ''
 @description('When true and an infrastructure subnet is supplied, the environment ingress is internal-only (private option).')
 param internalEnvironment bool = false
 
-@description('When true, the managed environment spreads replicas across availability zones (zone-redundant compute). Azure Container Apps only supports zone redundancy on a VNet-injected environment, so this flag is honoured ONLY when an infrastructureSubnetId is supplied; a public (non-VNet) environment is always single-zone regardless. Defaults to true so the private option is zone-redundant out of the box.')
+@description('When true, the managed environment spreads replicas across availability zones (zone-redundant compute). Azure Container Apps only supports zone redundancy on a VNet-injected environment, so this flag is honoured ONLY when an infrastructureSubnetId is supplied; without a subnet the environment is single-zone regardless. Defaults to true.')
 param zoneRedundant bool = true
 
 // =============================================================================

@@ -1,7 +1,7 @@
 // =============================================================================
-// vnet.bicep - private-option network foundation (per-region VNets + peering)
+// vnet.bicep - per-region network foundation (per-region VNets + optional peering)
 // -----------------------------------------------------------------------------
-// Sub-issue F-190 (Reference Architecture epic): the PRIVATE-option network
+// Sub-issue F-190 (Reference Architecture epic): the per-region network
 // foundation, split out of networking.bicep so it can be provisioned BEFORE the
 // compute module.
 //
@@ -15,13 +15,20 @@
 //
 //     vnet.bicep  ->  compute.bicep  ->  networking.bicep (public Key Vault)
 //
-// This module is invoked ONLY for the private option; for the public option it is
-// not deployed and compute receives an empty infrastructure subnet (public env).
+// This module is invoked for EVERY deployment option: every region gets a VNet
+// with a delegated ACA infrastructure subnet so its managed environment is
+// VNet-injected and therefore zone-redundancy capable, regardless of ingress
+// visibility. Full-mesh peering is OPTIONAL (`enablePeering`) and is enabled only
+// for the private option, where the internal replication transport must reach its
+// peers over private address space. The public option provisions the same
+// per-region VNets (for zone redundancy) but no peering, and its environment keeps
+// an external ingress.
 //
 // It creates a per-region VNet with a single infrastructure subnet delegated to
-// Microsoft.App/environments, plus full-mesh (global) VNet peering between every
-// region so the internal replication transport reaches its peers over private
-// address space only. It creates NO container apps and NO Key Vaults.
+// Microsoft.App/environments, plus (when `enablePeering` is true) full-mesh
+// (global) VNet peering between every region so the internal replication transport
+// reaches its peers over private address space only. It creates NO container apps
+// and NO Key Vaults.
 // =============================================================================
 
 targetScope = 'resourceGroup'
@@ -29,6 +36,9 @@ targetScope = 'resourceGroup'
 @description('Region list, in the SAME order as compute.bicep\'s region list. Each item: { location, regionCode }. One entry or many, from the same parameter set.')
 @minLength(1)
 param regions array
+
+@description('When true, provisions full-mesh (global) VNet peering between every region so the private option\'s internal replication transport rides private address space. The public option sets this false: it still gets per-region VNets (for zone redundancy) but no peering. Defaults to true.')
+param enablePeering bool = true
 
 @description('The second octet from which each region\'s non-overlapping VNet space is carved by region index. Region i gets 10.{base+i}.0.0/16 by default. Override `regionVnetAddressPrefixes` for explicit control.')
 param privateVnetSupernetSecondOctetBase int = 10
@@ -94,7 +104,7 @@ resource vnet 'Microsoft.Network/virtualNetworks@2023-11-01' = [for (region, i) 
 // Global full-mesh peering: every region VNet peers with every other so the
 // internal replication transport reaches its peers over private address space
 // only. i == j is skipped; both directions of each pair are created.
-resource peering 'Microsoft.Network/virtualNetworks/virtualNetworkPeerings@2023-11-01' = [for pair in peeringPairs: if (pair.fromIndex != pair.toIndex) {
+resource peering 'Microsoft.Network/virtualNetworks/virtualNetworkPeerings@2023-11-01' = [for pair in peeringPairs: if (enablePeering && pair.fromIndex != pair.toIndex) {
   parent: vnet[pair.fromIndex]
   name: 'peer-${regions[pair.fromIndex].regionCode}-to-${regions[pair.toIndex].regionCode}'
   properties: {
@@ -110,11 +120,12 @@ resource peering 'Microsoft.Network/virtualNetworks/virtualNetworkPeerings@2023-
 
 // =============================================================================
 // Outputs - the infrastructure subnet per region feeds compute.bicep's
-// `infrastructureSubnetId` seam (which makes the environment internal-only).
+// `infrastructureSubnetId` seam (VNet-injecting the environment; internal ingress
+// is a separate compute switch driven by the deployment option).
 // =============================================================================
 
-@description('Per-region private network seams, in region-list order. Feed `infrastructureSubnetId` into compute.bicep\'s VNet-integration seam per region.')
-output perRegionPrivate array = [for (region, i) in regions: {
+@description('Per-region network seams, in region-list order. Feed `infrastructureSubnetId` into compute.bicep\'s VNet-integration seam per region.')
+output perRegionNetwork array = [for (region, i) in regions: {
   regionCode: region.regionCode
   location: region.location
   vnetId: vnet[i].id

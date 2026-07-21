@@ -441,7 +441,7 @@ try {
     $backupBlobEndpoint = $outputs.backupBlobEndpoint.value
     $perRegionObservability = $outputs.perRegionObservability.value
     $perRegionKeyVault = if ($outputs.PSObject.Properties.Name -contains 'perRegionReplicationKeyVault') { $outputs.perRegionReplicationKeyVault.value } else { @() }
-    $perRegionPrivate = if ($outputs.PSObject.Properties.Name -contains 'perRegionPrivateNetwork') { $outputs.perRegionPrivateNetwork.value } else { @() }
+    $perRegionNetwork = if ($outputs.PSObject.Properties.Name -contains 'perRegionNetwork') { $outputs.perRegionNetwork.value } else { @() }
     $frontDoorId = $outputs.frontDoorId.value
     $frontDoorEndpoints = $outputs.frontDoorEndpoints.value
 
@@ -542,11 +542,11 @@ try {
         $storageRegion = Get-ByRegionCode -Items $perRegionStorage -RegionCode $code
         $walTableEndpoint = if ($storageRegion) { $storageRegion.tableEndpoint } else { '' }
 
+        # Every option is VNet-injected (the environment must be VNet-integrated
+        # to be zone-redundant); the subnet exists for both public and private.
         $subnetId = ''
-        if ($DeploymentOption -eq 'private') {
-            $priv = Get-ByRegionCode -Items $perRegionPrivate -RegionCode $code
-            if ($priv) { $subnetId = $priv.infrastructureSubnetId }
-        }
+        $net = Get-ByRegionCode -Items $perRegionNetwork -RegionCode $code
+        if ($net) { $subnetId = $net.infrastructureSubnetId }
 
         $computeValues = @{
             location                   = $region.location

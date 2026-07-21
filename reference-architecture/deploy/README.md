@@ -113,7 +113,8 @@ host then consumes it. Until then the group resolver remains opt-in via
 | `-BaseName` | yes | 3-16 lowercase alphanumerics, shared estate-wide. |
 | `-Regions` | yes | Array of `@{ regionCode = '...'; location = '...' }`. One or many. |
 | `-ImageTag` | yes | Tag applied to all three built images. |
-| `-DeploymentOption` | no | `public` (default, ingress + mTLS key) or `private` (VNets). |
+| `-DeploymentOption` | no | `public` (default, external ingress + replication key) or `private` (internal ingress + VNet peering). Both are VNet-injected + zone-redundant. |
+| `-ZoneRedundant` | no | `$true` (default) or `$false`. Zone-redundant compute for both options. |
 | `-ReplicationTrees` | no | Estate-wide `treeName=MergeMode,...` map. |
 | `-BackupPrimaryRegionCode` | no | Defaults to the first region. |
 | `-IngressAllowedCidrs` | no | Ingress allow-list (public option). |
