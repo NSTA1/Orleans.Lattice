@@ -338,6 +338,19 @@ view name. See [Materialised views](materialised-views.md).
 | `orleans.lattice.view.lag_budget_eviction` | `Counter<long>` | `{eviction}` | Views force-evicted (WAL unpinned and rebuilt) for exceeding their `MaxLagBudget`. |
 | `orleans.lattice.view.source_backpressure` | `Counter<long>` | `{pass}` | Background drain passes that throttled themselves (scaled-down batch + deferred next tick) because the source tree was under WAL saturation back-pressure. Tagged `view` and `state` (the observed source regime, `throttled` / `saturated`); never recorded on a healthy source or when `ObeySourceBackpressure` is disabled. |
 
+### Tag index reconciliation
+
+Background tag-index reconciliation publishes on the core `orleans.lattice` meter,
+each instrument tagged with the `index` name. See [Tag indexes](api.md#tag-indexes).
+
+| Name | Kind | Unit | Description |
+|---|---|---|---|
+| `orleans.lattice.tag_index.reconcile.sweeps` | `Counter<long>` | `{sweep}` | Background tag-index reconciliation sweeps, tagged by outcome (`clean`, `repaired`, `probe_only`). |
+| `orleans.lattice.tag_index.reconcile.trees.probed` | `Counter<long>` | `{tree}` | Covered trees whose digest fingerprint a reconciliation sweep probed. |
+| `orleans.lattice.tag_index.reconcile.trees.mismatched` | `Counter<long>` | `{tree}` | Covered trees a reconciliation sweep found divergent from their digest baseline. |
+| `orleans.lattice.tag_index.reconcile.orphan_rows.removed` | `Counter<long>` | `{row}` | Orphan membership rows removed by background tag-index reconciliation. |
+| `orleans.lattice.tag_index.reconcile.duration` | `Histogram<double>` | `ms` | Wall-clock duration of a background tag-index reconciliation sweep. |
+
 ## Replication meter
 
 The replication package (`Orleans.Lattice.Replication`) publishes its own

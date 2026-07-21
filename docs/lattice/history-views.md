@@ -66,6 +66,8 @@ rebuilds existing rows.
 CRDT revisions are always stored as their delta regardless of mode - the delta
 *is* the compact history.
 
+Under `Hybrid` the "short window" is set by `LatticeViewOptions.HistoryHybridFullValueWindow` (default 5 minutes): a revision keeps its full value bytes only while its apply-time age is within this window, and older revisions are shaped to metadata.
+
 An optional **age bound** (a non-zero retention window) stamps each revision row
 with an absolute expiry of `now + window`; the normal entry-expiry path reaps old
 rows, so no separate reaper is needed. A window of `TimeSpan.Zero` means revisions
