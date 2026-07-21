@@ -72,6 +72,13 @@ Development environment. When you run under a non-Development environment, call
 `builder.WebHost.UseStaticWebAssets()` so those assets are mapped and the console
 is styled.
 
+> **Containerized isolated hosts:** the web-asset contribution is resolved during
+> restore, so a Dockerfile that restores from the `.csproj` alone and then runs
+> `dotnet publish --no-restore` can silently drop `blazor.web.js` - the console
+> then renders but its circuit never starts (Sign in does nothing). Let publish
+> restore (drop `--no-restore`), and optionally add an empty `_Imports.razor` to
+> the host as a belt-and-braces Blazor-host trigger. See the deployment guide.
+
 ## Deployment note: session affinity
 
 The web head is Blazor Server, so scaling it beyond a single instance requires

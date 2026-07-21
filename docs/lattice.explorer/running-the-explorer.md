@@ -97,6 +97,38 @@ If you do choose to co-host the Explorer in a cluster, scope the session affinit
 to the Explorer's `BasePath` alone rather than applying it cluster-wide, so the
 affinity constraint does not spread to unrelated cluster traffic.
 
+### Shipping the Blazor client asset from an isolated host
+
+An isolated head is typically a thin project that references
+`Orleans.Lattice.Explorer.Web` and calls `AddLatticeExplorerWeb` /
+`MapLatticeExplorer`, with **no Razor content of its own** - every component ships
+inside the referenced razor class library (RCL). That is the intended shape. The
+`Orleans.Lattice.Explorer.Web` package contributes an MSBuild props file that sets
+`RequiresAspNetWebAssets` for you, so a normal `dotnet publish` composes the
+framework's `_framework/blazor.web.js` client script into the head even though the
+host has no Razor content itself.
+
+The sharp edge is a **container build that restores and publishes in separate
+steps**. Blazor-host detection and the web-asset contribution are resolved during
+**restore**, so a Dockerfile that restores from the `.csproj` alone and then runs
+`dotnet publish --no-restore` can silently drop `blazor.web.js`. The console then
+renders server-side but its interactive circuit never starts: **Sign in does
+nothing, tabs stay greyed, and the console reports "Access to the state API was
+denied"** even though the endpoint is reachable.
+
+To keep the asset in a containerized isolated host:
+
+- **Do not publish with `--no-restore`.** Let `dotnet publish` restore, or copy
+  the full host source into the build stage and restore with it present, so the
+  web-asset contribution is resolved before publish.
+- **Add a trivial piece of Razor content as a belt-and-braces trigger** - an
+  empty `_Imports.razor` next to `Program.cs` is enough. It contributes nothing at
+  runtime but makes the SDK's Blazor-host detection robust to the build shape.
+
+To confirm the asset shipped, request `<BasePath>/_framework/blazor.web.js` from
+the running head (or through your front end) and check for a `200` with a
+non-trivial body; a `404` means the circuit script was not published.
+
 ## Security posture of the web head
 
 ### Per-circuit credential isolation
