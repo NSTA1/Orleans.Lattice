@@ -175,12 +175,18 @@ resource mcpSp 'Microsoft.Graph/servicePrincipals@v1.0' = {
   appId: mcpApp.appId
 }
 
+// A managed identity used as a federated-credential SUBJECT can back a credential
+// on several apps, but Microsoft Graph rejects concurrent creates that share a
+// subject with a spurious "Request contains a property with duplicate values".
+// Chain the per-app FIC collections (silo -> mcp -> explorer) so a given region
+// identity is only ever written as a subject on one app at a time.
 resource mcpFic 'Microsoft.Graph/applications/federatedIdentityCredentials@v1.0' = [for mi in regionManagedIdentities: {
   name: '${mcpApp.uniqueName}/mcp-${mi.regionCode}'
   description: 'Workload-identity federation for the ${mi.regionCode} MCP managed identity (secret-less token acquisition).'
   audiences: ficAudiences
   issuer: ficIssuer
   subject: mi.principalId
+  dependsOn: [ siloFic ]
 }]
 
 // Grant the MCP service principal the silo Lattice.Access app role (app-to-app).
@@ -230,6 +236,9 @@ resource explorerFic 'Microsoft.Graph/applications/federatedIdentityCredentials@
   audiences: ficAudiences
   issuer: ficIssuer
   subject: mi.principalId
+  // Serialize after the MCP FICs (see the mcpFic note) so no region identity is
+  // written as a subject on two apps at once.
+  dependsOn: [ mcpFic ]
 }]
 
 // Grant the Explorer service principal the silo Lattice.Access app role.
