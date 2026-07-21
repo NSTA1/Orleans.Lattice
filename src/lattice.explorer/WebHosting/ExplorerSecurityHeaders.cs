@@ -56,6 +56,16 @@ internal static class ExplorerSecurityHeaders
     /// </summary>
     internal const string ReferrerPolicyValue = "no-referrer";
 
+    /// <summary>
+    /// The <c>Permissions-Policy</c> value. The admin console uses none of the
+    /// powerful browser features named here, so each is disabled for every
+    /// origin (empty allow-list). This narrows what an injected or compromised
+    /// script - already constrained by the CSP - could request. <c>interest-cohort</c>
+    /// additionally opts the console out of Topics/FLoC cohort computation.
+    /// </summary>
+    internal const string PermissionsPolicyValue =
+        "camera=(), microphone=(), geolocation=(), interest-cohort=()";
+
     /// <summary>The cached <c>Content-Security-Policy</c> header value.</summary>
     internal static readonly StringValues ContentSecurityPolicy = ContentSecurityPolicyValue;
 
@@ -67,4 +77,7 @@ internal static class ExplorerSecurityHeaders
 
     /// <summary>The cached <c>Referrer-Policy</c> header value.</summary>
     internal static readonly StringValues ReferrerPolicy = ReferrerPolicyValue;
+
+    /// <summary>The cached <c>Permissions-Policy</c> header value.</summary>
+    internal static readonly StringValues PermissionsPolicy = PermissionsPolicyValue;
 }

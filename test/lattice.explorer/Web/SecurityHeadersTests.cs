@@ -57,6 +57,7 @@ public class SecurityHeadersTests
                 "the page must deny framing on legacy browsers");
             Assert.That(Single(response, "X-Content-Type-Options"), Is.EqualTo(ExplorerSecurityHeaders.ContentTypeOptionsValue));
             Assert.That(Single(response, "Referrer-Policy"), Is.EqualTo(ExplorerSecurityHeaders.ReferrerPolicyValue));
+            Assert.That(Single(response, "Permissions-Policy"), Is.EqualTo(ExplorerSecurityHeaders.PermissionsPolicyValue));
         });
     }
 
@@ -93,6 +94,7 @@ public class SecurityHeadersTests
             Assert.That(AnyContains(response, "X-Frame-Options", "DENY"), Is.True);
             Assert.That(AnyContains(response, "X-Content-Type-Options", "nosniff"), Is.True);
             Assert.That(AnyContains(response, "Referrer-Policy", "no-referrer"), Is.True);
+            Assert.That(AnyContains(response, "Permissions-Policy", "camera=()"), Is.True);
         });
     }
 
@@ -148,6 +150,7 @@ public class SecurityHeadersTests
             Assert.That(Single(response, "X-Frame-Options"), Is.EqualTo(ExplorerSecurityHeaders.FrameOptionsValue));
             Assert.That(Single(response, "X-Content-Type-Options"), Is.EqualTo(ExplorerSecurityHeaders.ContentTypeOptionsValue));
             Assert.That(Single(response, "Referrer-Policy"), Is.EqualTo(ExplorerSecurityHeaders.ReferrerPolicyValue));
+            Assert.That(Single(response, "Permissions-Policy"), Is.EqualTo(ExplorerSecurityHeaders.PermissionsPolicyValue));
         });
     }
 
