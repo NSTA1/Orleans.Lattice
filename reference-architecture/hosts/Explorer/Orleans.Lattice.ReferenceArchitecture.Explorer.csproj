@@ -21,13 +21,21 @@
   </PropertyGroup>
 
   <!--
-    Published Orleans.Lattice v8.0.0 NuGet packages (nuget.org), NOT project
-    references into src/. Orleans.Lattice.Explorer.Web brings the shared UI, Core,
-    Access, Backup, and Schema explorer libraries transitively; the Entra package
-    adds the interactive Entra sign-in provider.
+    Published Orleans.Lattice NuGet packages (nuget.org), NOT project references
+    into src/. Orleans.Lattice.Explorer.Web brings the shared UI, Core, Access,
+    Backup, and Schema explorer libraries transitively; the Entra package adds
+    the interactive Entra sign-in provider.
+
+    The four shared libraries carrying the transport-header origin-lock fix
+    (Core / Access / Backup / Schema 8.0.1) are referenced explicitly so the
+    fixed versions win over the versions Explorer.Web pulls transitively.
   -->
   <ItemGroup>
-    <PackageReference Include="Orleans.Lattice.Explorer.Web" Version="8.0.0" />
+    <PackageReference Include="Orleans.Lattice.Explorer.Web" Version="8.0.1" />
+    <PackageReference Include="Orleans.Lattice.Explorer.Core" Version="8.0.1" />
+    <PackageReference Include="Orleans.Lattice.Explorer.Access" Version="8.0.1" />
+    <PackageReference Include="Orleans.Lattice.Explorer.Backup" Version="8.0.1" />
+    <PackageReference Include="Orleans.Lattice.Explorer.Schema" Version="8.0.1" />
     <PackageReference Include="Orleans.Lattice.Explorer.Entra" Version="8.0.0" />
   </ItemGroup>
 

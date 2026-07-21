@@ -703,7 +703,7 @@ resource explorerApp 'Microsoft.App/containerApps@2024-03-01' = {
             cpu: json(headCpu)
             memory: headMemory
           }
-          env: [
+          env: concat([
             // Remote silo State + auth gRPC endpoint the console dials (as a
             // gRPC / gRPC-web client) over server TLS. Seeds the console's
             // first-run connection via the Explorer env bootstrap.
@@ -717,7 +717,13 @@ resource explorerApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'ASPNETCORE_URLS', value: 'http://0.0.0.0:8080' }
             // Global-ingress origin lock (see silo head). Empty until pass 2.
             { name: 'LATTICE_FRONT_DOOR_ID', value: frontDoorId }
-          ]
+          ], empty(frontDoorId) ? [] : [
+            // The console dials the silo origin FQDN directly over native gRPC,
+            // which Front Door cannot proxy, so it must present the origin-lock
+            // header itself to pass the silo's X-Azure-FDID assertion. Seeds the
+            // Explorer transport-header seam (sign-in-independent, non-secret).
+            { name: 'LATTICE_EXPLORER_TRANSPORT_HEADERS', value: 'X-Azure-FDID=${frontDoorId}' }
+          ])
         }
       ]
       scale: {
