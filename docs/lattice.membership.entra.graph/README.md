@@ -69,5 +69,6 @@ The Graph resolver is registered on the silo builder after the Entra authenticat
 
 ## Reference
 
+- [Configuration](configuration.md) - every public options property, its type, and its default.
 - [Entra authenticator](../lattice.membership.entra/README.md) - the authenticator that consumes this resolver.
 - [Membership documentation](../lattice.membership/README.md) - the base identity and authorization add-on.

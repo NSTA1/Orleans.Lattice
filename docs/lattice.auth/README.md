@@ -126,6 +126,7 @@ Every authorization decision, the decision latency, and the compiled-snapshot ep
 
 ## Reference
 
+- [Configuration](configuration.md) - every public options property, its type, and its default.
 - [Security posture](security-posture.md) - threat model, attack surface, fail-closed guarantees, the internal-grain trust boundary, TLS expectations, the security-review findings with their resolutions, and the measured enforcement cost per operation.
 - [Observability](observability.md) - the `orleans.lattice.auth` meter and the audit sink.
 
