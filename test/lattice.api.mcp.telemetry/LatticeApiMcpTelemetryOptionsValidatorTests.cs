@@ -111,6 +111,14 @@ public sealed class LatticeApiMcpTelemetryOptionsValidatorTests
     }
 
     [Test]
+    public void Dynamic_bearer_mode_needs_no_static_credential_to_validate()
+    {
+        var options = Valid();
+        options.AuthMode = LatticeTelemetryBackendAuthMode.DynamicBearer;
+        Assert.That(IsValid(options), Is.True);
+    }
+
+    [Test]
     public void Deny_all_without_an_allow_list_is_rejected()
     {
         var options = Valid();

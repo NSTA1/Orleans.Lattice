@@ -19,21 +19,35 @@ internal sealed class PrometheusQueryClient : IPrometheusQueryClient
 {
     private readonly HttpClient _http;
     private readonly IOptions<LatticeApiMcpTelemetryOptions> _options;
+    private readonly ITelemetryBackendTokenProvider? _tokenProvider;
 
     /// <summary>
     /// Creates the client over a preconfigured <paramref name="http"/> (whose base
     /// address and timeout the registration wires from the options) and the
     /// telemetry <paramref name="options"/> the per-request backend credential is
-    /// read from.
+    /// read from. The optional <paramref name="tokenProvider"/> supplies the
+    /// rotating backend token when
+    /// <see cref="LatticeApiMcpTelemetryOptions.AuthMode"/> is
+    /// <see cref="LatticeTelemetryBackendAuthMode.DynamicBearer"/>; it is a backend
+    /// credential seam and can never carry a Lattice caller credential.
     /// </summary>
     /// <param name="http">The HTTP client pointed at the backend base address.</param>
     /// <param name="options">The telemetry options carrying the backend credential.</param>
-    public PrometheusQueryClient(HttpClient http, IOptions<LatticeApiMcpTelemetryOptions> options)
+    /// <param name="tokenProvider">
+    /// The dynamic backend-token source consulted only in
+    /// <see cref="LatticeTelemetryBackendAuthMode.DynamicBearer"/> mode. Left
+    /// <see langword="null"/> for every static auth mode.
+    /// </param>
+    public PrometheusQueryClient(
+        HttpClient http,
+        IOptions<LatticeApiMcpTelemetryOptions> options,
+        ITelemetryBackendTokenProvider? tokenProvider = null)
     {
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(options);
         _http = http;
         _options = options;
+        _tokenProvider = tokenProvider;
     }
 
     /// <inheritdoc />
@@ -115,7 +129,7 @@ internal sealed class PrometheusQueryClient : IPrometheusQueryClient
     private async Task<JsonDocument> SendAsync(string relativeUri, CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, relativeUri);
-        StampBackendCredential(request);
+        await StampBackendCredentialAsync(request, cancellationToken).ConfigureAwait(false);
 
         using var response = await _http
             .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
@@ -128,7 +142,9 @@ internal sealed class PrometheusQueryClient : IPrometheusQueryClient
             .ConfigureAwait(false);
     }
 
-    private void StampBackendCredential(HttpRequestMessage request)
+    private async Task StampBackendCredentialAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
     {
         var options = _options.Value;
         switch (options.AuthMode)
@@ -148,6 +164,31 @@ internal sealed class PrometheusQueryClient : IPrometheusQueryClient
                     var token = Convert.ToBase64String(Encoding.UTF8.GetBytes(raw));
                     request.Headers.Authorization = new AuthenticationHeaderValue("Basic", token);
                 }
+
+                break;
+            case LatticeTelemetryBackendAuthMode.DynamicBearer:
+                if (_tokenProvider is null)
+                {
+                    throw new InvalidOperationException(
+                        $"{nameof(LatticeTelemetryBackendAuthMode.DynamicBearer)} requires an "
+                        + $"{nameof(ITelemetryBackendTokenProvider)} to be registered, but none was "
+                        + "resolved. Register one (for Azure managed Prometheus, call "
+                        + "AddAzureTelemetryBackendToken from the "
+                        + "Orleans.Lattice.Api.Mcp.Telemetry.Azure package).");
+                }
+
+                var dynamicToken = await _tokenProvider
+                    .GetAccessTokenAsync(cancellationToken).ConfigureAwait(false);
+                if (string.IsNullOrEmpty(dynamicToken))
+                {
+                    throw new InvalidOperationException(
+                        $"The registered {nameof(ITelemetryBackendTokenProvider)} returned an empty "
+                        + $"backend token in {nameof(LatticeTelemetryBackendAuthMode.DynamicBearer)} mode. "
+                        + "A telemetry query must not be sent to the backend without the bearer token it "
+                        + "requires, so the request is failed closed rather than sent unauthenticated.");
+                }
+
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", dynamicToken);
 
                 break;
             case LatticeTelemetryBackendAuthMode.None:

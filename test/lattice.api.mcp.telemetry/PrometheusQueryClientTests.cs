@@ -166,7 +166,67 @@ public sealed class PrometheusQueryClientTests
     }
 
     [Test]
-    public void The_client_depends_only_on_an_http_client_and_its_own_options()
+    public async Task DynamicBearer_mode_stamps_a_bearer_token_from_the_provider()
+    {
+        var options = new LatticeApiMcpTelemetryOptions
+        {
+            AuthMode = LatticeTelemetryBackendAuthMode.DynamicBearer,
+        };
+        var handler = new CapturingHttpMessageHandler();
+        var http = new HttpClient(handler) { BaseAddress = new Uri(BackendBase) };
+        var provider = new StubTokenProvider("rotating-token");
+        var client = new PrometheusQueryClient(http, Options.Create(options), provider);
+
+        await client.InstantQueryAsync("up", time: null, CancellationToken.None);
+
+        var auth = handler.LastRequest!.Headers.Authorization;
+        Assert.Multiple(() =>
+        {
+            Assert.That(auth!.Scheme, Is.EqualTo("Bearer"));
+            Assert.That(auth.Parameter, Is.EqualTo("rotating-token"));
+            Assert.That(provider.CallCount, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void DynamicBearer_mode_without_a_provider_fails_fast()
+    {
+        var options = new LatticeApiMcpTelemetryOptions
+        {
+            AuthMode = LatticeTelemetryBackendAuthMode.DynamicBearer,
+        };
+        var client = CreateClient(options, out _);
+
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(
+            () => client.InstantQueryAsync("up", time: null, CancellationToken.None));
+        Assert.That(ex!.Message, Does.Contain(nameof(ITelemetryBackendTokenProvider)));
+    }
+
+    [Test]
+    public void DynamicBearer_mode_fails_closed_when_the_provider_returns_an_empty_token()
+    {
+        var options = new LatticeApiMcpTelemetryOptions
+        {
+            AuthMode = LatticeTelemetryBackendAuthMode.DynamicBearer,
+        };
+        var handler = new CapturingHttpMessageHandler();
+        var http = new HttpClient(handler) { BaseAddress = new Uri(BackendBase) };
+        var provider = new StubTokenProvider(string.Empty);
+        var client = new PrometheusQueryClient(http, Options.Create(options), provider);
+
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(
+            () => client.InstantQueryAsync("up", time: null, CancellationToken.None));
+
+        Assert.Multiple(() =>
+        {
+            // Failed closed: no unauthenticated request ever reached the backend.
+            Assert.That(handler.LastRequest, Is.Null);
+            Assert.That(ex!.Message, Does.Contain(nameof(LatticeTelemetryBackendAuthMode.DynamicBearer)));
+        });
+    }
+
+    [Test]
+    public void The_client_depends_only_on_an_http_client_its_options_and_the_backend_token_seam()
     {
         var parameters = typeof(PrometheusQueryClient)
             .GetConstructors(BindingFlags.Public | BindingFlags.Instance)
@@ -177,7 +237,24 @@ public sealed class PrometheusQueryClientTests
 
         Assert.That(
             parameters,
-            Is.EqualTo(new[] { typeof(HttpClient), typeof(IOptions<LatticeApiMcpTelemetryOptions>) }),
-            "The backend client must have no seam through which a caller's Lattice credential could reach the backend.");
+            Is.EqualTo(new[]
+            {
+                typeof(HttpClient),
+                typeof(IOptions<LatticeApiMcpTelemetryOptions>),
+                typeof(ITelemetryBackendTokenProvider),
+            }),
+            "The backend client may take only its HTTP client, its own options, and the "
+            + "backend-token seam - none of which can forward a caller's Lattice credential to the backend.");
+    }
+
+    private sealed class StubTokenProvider(string token) : ITelemetryBackendTokenProvider
+    {
+        public int CallCount { get; private set; }
+
+        public ValueTask<string> GetAccessTokenAsync(CancellationToken cancellationToken)
+        {
+            CallCount++;
+            return ValueTask.FromResult(token);
+        }
     }
 }

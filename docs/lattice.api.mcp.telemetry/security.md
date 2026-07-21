@@ -12,7 +12,7 @@ flowchart LR
 ```
 
 1. **MCP-side authorization.** A caller sees and can invoke the `lattice_telemetry_*` tools only if its effective authorization includes a cluster-wide `LatticeOperation.Telemetry` grant. This runs through the same permission-scoped discovery the rest of the MCP surface uses - an ungranted caller never sees the group.
-2. **Backend credential.** The proxy stamps the configured *backend* credential (bearer, basic, or mutual-TLS) on every backend request. This credential is supplied by the host in `LatticeApiMcpTelemetryOptions.Credential` and is entirely separate from any caller identity.
+2. **Backend credential.** The proxy stamps the configured *backend* credential (bearer, basic, mutual-TLS, or a rotating dynamic bearer token) on every backend request. Static credentials are supplied by the host in `LatticeApiMcpTelemetryOptions.Credential`; the dynamic-bearer mode instead resolves a token per request from a registered `ITelemetryBackendTokenProvider`. Either way the backend credential is entirely separate from any caller identity.
 
 **The caller's Lattice credential is never forwarded to the backend.** The backend client's only collaborators are an `HttpClient` and the telemetry options; it holds no reference to any Lattice credential source, so there is no path by which the caller's identity could reach the backend. Conversely, the backend credential is never exposed to the caller.
 

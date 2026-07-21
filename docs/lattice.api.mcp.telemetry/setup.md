@@ -37,7 +37,7 @@ services.AddTelemetryTools(o =>
 | Option | Type | Default | Purpose |
 |---|---|---|---|
 | `BackendAddress` | `Uri?` | none | The absolute base address of the read-only Prometheus / PromQL-compatible backend. A host that opts telemetry in must supply one. |
-| `AuthMode` | `LatticeTelemetryBackendAuthMode` | `None` | How the proxy authenticates to the backend: `None`, `Bearer`, `Basic`, or `MutualTls`. Any non-`None` mode requires the matching `Credential` member. |
+| `AuthMode` | `LatticeTelemetryBackendAuthMode` | `None` | How the proxy authenticates to the backend: `None`, `Bearer`, `Basic`, `MutualTls`, or `DynamicBearer`. The static modes require the matching `Credential` member; `DynamicBearer` instead requires a registered `ITelemetryBackendTokenProvider`. |
 | `Credential` | `LatticeTelemetryBackendCredential?` | `null` | The backend credential secret, consulted per `AuthMode`. Carries the backend credential only - never the caller's Lattice credential. |
 | `RequestTimeout` | `TimeSpan` | 30s | The per-request timeout for a backend call. Must be strictly positive. |
 | `MaxRange` | `TimeSpan` | 24h | The largest window (`end - start`) a single range query may span. Must be strictly positive. |
@@ -45,7 +45,7 @@ services.AddTelemetryTools(o =>
 | `MetricAccess` | `LatticeTelemetryMetricAccessMode` | `ReadAll` | `ReadAll` exposes every backend metric; `DenyAllExceptAllowed` restricts the surface to `AllowedMetrics`. |
 | `AllowedMetrics` | `IList<string>` | empty | Exact names and/or `*`-wildcard patterns permitted under `DenyAllExceptAllowed`. Ignored under `ReadAll`. |
 
-The options are validated at startup: the backend address must be an absolute URI, the timeouts and range guardrails must be strictly positive, a non-`None` auth mode must carry its matching credential member, and `DenyAllExceptAllowed` must list at least one allowed metric.
+The options are validated at startup: the backend address must be an absolute URI, the timeouts and range guardrails must be strictly positive, each static non-`None` auth mode must carry its matching credential member (`DynamicBearer` carries no static credential and instead resolves a token provider at request time), and `DenyAllExceptAllowed` must list at least one allowed metric.
 
 ## Backend authentication
 
@@ -74,6 +74,7 @@ services.AddTelemetryTools(o =>
 - `Basic` stamps `Authorization: Basic <base64(user:password)>` from `Credential.BasicUsername` / `Credential.BasicPassword`.
 - `MutualTls` presents `Credential.ClientCertificate` on the transport handler (no `Authorization` header).
 - `None` sends no credential.
+- `DynamicBearer` stamps a rotating `Authorization: Bearer` token fetched per request from a registered `ITelemetryBackendTokenProvider`, instead of a static `Credential`. Use it when the backend needs a short-lived token that rotates (for example an Entra token for Azure Monitor managed Prometheus). Register a provider that implements the seam - the [`Orleans.Lattice.Api.Mcp.Telemetry.Azure`](../lattice.api.mcp.telemetry.azure/README.md) companion supplies an Azure managed-identity one. The proxy fails closed if `DynamicBearer` is selected with no provider registered, or if the provider returns an empty token - it never sends an unauthenticated backend query.
 
 ## Restrict the metric surface
 
