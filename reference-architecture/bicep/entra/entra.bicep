@@ -23,10 +23,14 @@
 //
 // Microsoft Graph directory permissions the silo group resolver needs
 // (GroupMember.Read.All, application permission) are DECLARED here as
-// requiredResourceAccess, but application permissions require TENANT ADMIN
-// CONSENT, which the Graph resource model cannot grant from a template. That one
-// residual step is performed by the deployer script (idempotent
-// `az ad app permission admin-consent`) and documented in the deploy README.
+// requiredResourceAccess AND granted (tenant admin consent) declaratively via a
+// Microsoft.Graph/appRoleAssignedTo assignment from the silo service principal to
+// the Microsoft Graph service principal's app role - so no imperative
+// `az ad app permission admin-consent` step is required. The deploying identity
+// still needs a privileged directory role (for example Privileged Role
+// Administrator, or the AppRoleAssignment.ReadWrite.All + Application.ReadWrite.All
+// application permissions) to create that assignment; that is the sole directory
+// privilege the deployer requires and is documented in the deploy README.
 //
 // NO SECRETS: no passwordCredentials are authored, nothing secret is emitted as
 // an output. The app (client) ids emitted below are public identifiers.
@@ -107,6 +111,25 @@ resource siloApp 'Microsoft.Graph/applications@v1.0' = {
 
 resource siloSp 'Microsoft.Graph/servicePrincipals@v1.0' = {
   appId: siloApp.appId
+}
+
+// The Microsoft Graph service principal in this tenant (the resource that owns
+// the GroupMember.Read.All app role). Referenced as existing so we can grant its
+// app role to the silo SP.
+resource graphServicePrincipal 'Microsoft.Graph/servicePrincipals@v1.0' existing = {
+  appId: graphAppId
+}
+
+// Tenant admin consent, expressed declaratively: grant the silo service principal
+// the Microsoft Graph GroupMember.Read.All APPLICATION permission. An
+// appRoleAssignedTo to the Graph SP is exactly what `az ad app permission
+// admin-consent` creates for an application permission, so no imperative consent
+// step is needed. Idempotent (keyed by the fixed principal/resource/role triple),
+// so re-runs never duplicate the grant.
+resource siloGraphGroupMemberConsent 'Microsoft.Graph/appRoleAssignedTo@v1.0' = {
+  appRoleId: groupMemberReadAllRoleId
+  principalId: siloSp.id
+  resourceId: graphServicePrincipal.id
 }
 
 // One federated identity credential per region managed identity: the silo app

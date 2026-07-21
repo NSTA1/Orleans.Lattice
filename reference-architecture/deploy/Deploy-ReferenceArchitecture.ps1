@@ -35,9 +35,10 @@
       5. Deploys entra/entra.bicep (Microsoft Graph extension, GA 2025-07-29):
          app registrations + service principals + FEDERATED IDENTITY CREDENTIALS
          (preferred over client secrets) for the silo facades, the MCP endpoint,
-         and the Explorer, plus the app-to-app app-role grants. It then performs
-         the one step the Graph resource model cannot: residual TENANT ADMIN
-         CONSENT for the silo app's Microsoft Graph application permissions.
+         and the Explorer, the app-to-app app-role grants, AND the silo app's
+         Microsoft Graph application-permission consent - all declarative, so no
+         imperative admin-consent step runs (the deploying identity must hold a
+         privileged directory role for the Graph grant to succeed).
 
       6. PASS 2: redeploys each region's compute module DIRECTLY (see DESIGN
          NOTES) with the Azure-assigned values now known - the per-region managed
@@ -489,12 +490,12 @@ try {
                 $entraAudiencesResolved = $entra.properties.outputs.siloAudience.value
             }
 
-            # Residual step the Graph resource model cannot express: grant tenant
-            # admin consent for the silo app's Microsoft Graph application
-            # permissions. Idempotent; needs a privileged-role operator.
-            Write-Phase 'Granting tenant admin consent for the silo app (residual manual step)'
-            Invoke-Az -Arguments @('ad', 'app', 'permission', 'admin-consent', '--id', $entraClientIdResolved) `
-                -Mutating -Action 'Admin-consent silo app' -Target $entraClientIdResolved -AllowFailure | Out-Null
+            # Tenant admin consent for the silo app's Microsoft Graph application
+            # permission is granted declaratively by entra.bicep (an
+            # appRoleAssignedTo to the Microsoft Graph service principal), so there
+            # is no imperative admin-consent step here. The deploying identity must
+            # hold a privileged directory role for that grant to succeed (see the
+            # deploy README).
         }
     }
     elseif ($EntraEnabled) {
@@ -523,6 +524,14 @@ try {
 
         $obs = Get-ByRegionCode -Items $perRegionObservability -RegionCode $code
         $prometheus = if ($obs) { $obs.prometheusQueryEndpoint } else { '' }
+        # The MCP cluster-telemetry tools query the same managed Prometheus
+        # workspace as the KEDA scaler, authenticating with a rotating
+        # managed-identity Entra token (DynamicBearer) - the azure-workload auth
+        # mode shipped by #1286. The region managed identity already holds
+        # Monitoring Data Reader on the workspace (observability module). When the
+        # observability lane is absent the backend is empty and the host leaves
+        # the telemetry tool group off.
+        $mcpTelemetryAuthMode = if ($prometheus) { 'DynamicBearer' } else { '' }
 
         $kv = Get-ByRegionCode -Items $perRegionKeyVault -RegionCode $code
         $replicationKeySecretUri = if ($kv) { $kv.replicationKeySecretUri } else { '' }
@@ -558,9 +567,11 @@ try {
             infrastructureSubnetId     = $subnetId
             # Activated seams.
             prometheusQueryEndpoint    = $prometheus
-            # Left empty pending #1286 (MCP telemetry has no azure-workload auth mode for
-            # managed Prometheus); KEDA still consumes $prometheus via prometheusQueryEndpoint.
-            mcpTelemetryBackendAddress = ''
+            # MCP cluster-telemetry tools query the managed Prometheus workspace
+            # with a rotating managed-identity token (DynamicBearer, #1286). Empty
+            # backend leaves the telemetry tool group off.
+            mcpTelemetryBackendAddress = $prometheus
+            mcpTelemetryAuthMode       = $mcpTelemetryAuthMode
             frontDoorId                = $frontDoorId
             replicationPeers           = $replicationPeers
             replicationTrees           = $ReplicationTrees

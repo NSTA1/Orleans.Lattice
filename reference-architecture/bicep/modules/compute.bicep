@@ -183,6 +183,14 @@ param replicationKeySecretUri string = ''
 @description('DEPLOYER SEAM: PromQL backend address the MCP cluster-telemetry tools proxy (the managed Prometheus query endpoint). Empty leaves the telemetry tool group off (the host skips it when unset). Bound to the host Mcp:Telemetry:BackendAddress.')
 param mcpTelemetryBackendAddress string = ''
 
+@description('DEPLOYER SEAM: backend auth mode for the MCP telemetry proxy. Empty/None leaves the backend unauthenticated (local dev Prometheus). Set to DynamicBearer for an Azure Monitor managed-Prometheus endpoint, which the MCP head then queries with a rotating managed-identity Entra token (no secret). Bound to the host Mcp:Telemetry:AuthMode.')
+@allowed([
+  ''
+  'None'
+  'DynamicBearer'
+])
+param mcpTelemetryAuthMode string = ''
+
 
 // --- Container sizing ---
 
@@ -527,8 +535,12 @@ resource mcpApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'Mcp__AuthEndpoint', value: 'https://${siloApp.properties.configuration.ingress.fqdn}' }
             // Cluster-telemetry MCP tools proxy a PromQL backend. Empty leaves the
             // group off (the host skips it) - the deployer wires the managed
-            // Prometheus query endpoint once its telemetry auth shim exists.
+            // Prometheus query endpoint (and the DynamicBearer auth mode) once the
+            // observability lane is active.
             { name: 'Mcp__Telemetry__BackendAddress', value: mcpTelemetryBackendAddress }
+            // Backend auth mode: DynamicBearer makes the head mint a rotating
+            // managed-identity Entra token for the managed-Prometheus scope.
+            { name: 'Mcp__Telemetry__AuthMode', value: mcpTelemetryAuthMode }
             // Secure-by-default: the MCP endpoint requires authorization and
             // validates the inbound Entra JWT (forwarded to the silo for re-check).
             { name: 'Mcp__RequireAuthorization', value: string(requireApiAuthorization) }

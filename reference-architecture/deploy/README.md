@@ -35,10 +35,12 @@ From one parameter set, across N regions:
 `main.bicep` cannot thread two Azure-assigned values in a single pass without
 forming a Bicep compile cycle, so the script runs them on a second pass:
 
-- **Managed Prometheus query endpoint** - activates the silo KEDA scaler. Each
-  region has its own endpoint. The MCP telemetry backend is intentionally left
-  empty pending #1286 (the MCP telemetry client has no azure-workload auth mode
-  for managed Prometheus), so the host skips the telemetry tool group.
+- **Managed Prometheus query endpoint** - activates the silo KEDA scaler and the
+  MCP cluster-telemetry tools. Each region has its own endpoint. The MCP head
+  queries it with a rotating managed-identity Entra token (the `DynamicBearer`
+  auth mode shipped by #1286); the region managed identity already holds
+  Monitoring Data Reader on the workspace. When the observability lane is absent
+  the backend is empty and the host leaves the telemetry tool group off.
 - **Front Door id** - activates the `X-Azure-FDID` origin lock on every
   client-facing head.
 
@@ -77,11 +79,14 @@ managed identity with no secret to store, rotate, or leak.
   authorization edge) - least privilege, a single purpose-named role assigned to
   exactly the two callers.
 - The silo app declares the Microsoft Graph `GroupMember.Read.All` **application**
-  permission its optional group resolver needs. Application permissions require
-  tenant admin consent, which the Graph resource model cannot grant from a
-  template. The script performs that one residual step
-  (`az ad app permission admin-consent`); it is idempotent and needs a
-  privileged-role operator.
+  permission its optional group resolver needs, and `entra.bicep` grants tenant
+  admin consent for it **declaratively** - an `appRoleAssignedTo` from the silo
+  service principal to the Microsoft Graph service principal's app role, which is
+  exactly what `az ad app permission admin-consent` creates. There is therefore
+  no imperative consent step. The grant is idempotent, and the deploying identity
+  must hold a privileged directory role (for example Privileged Role
+  Administrator, or the `AppRoleAssignment.ReadWrite.All` +
+  `Application.ReadWrite.All` application permissions) for it to succeed.
 
 No `passwordCredentials` are authored and nothing secret is emitted as an output.
 The app (client) ids the module outputs are public identifiers.

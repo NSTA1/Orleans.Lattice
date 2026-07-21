@@ -1,7 +1,9 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Azure.Identity;
 using Orleans.Lattice;
 using Orleans.Lattice.Api.Mcp;
 using Orleans.Lattice.Api.Mcp.Telemetry;
+using Orleans.Lattice.Api.Mcp.Telemetry.Azure;
 using Orleans.Lattice.ReferenceArchitecture.Hosting;
 
 // ---------------------------------------------------------------------------
@@ -90,13 +92,41 @@ builder.Services.AddLatticeMcpRemote(options =>
 builder.Services.AddLatticeMcp(options => options.RequireAuthorization = requireAuthorization);
 
 // Optional cluster telemetry tools: proxy a read-only PromQL backend (the local
-// compose Prometheus, or Azure Managed Prometheus) as MCP tools. Only wired when
-// a backend address is configured, so an unset backend leaves the group off
-// rather than failing options validation.
+// compose Prometheus, or Azure Monitor managed Prometheus) as MCP tools. Only
+// wired when a backend address is configured, so an unset backend leaves the
+// group off rather than failing options validation.
 var telemetryBackend = config["Mcp:Telemetry:BackendAddress"];
 if (!string.IsNullOrWhiteSpace(telemetryBackend))
 {
-    builder.Services.AddTelemetryTools(options => options.BackendAddress = new Uri(telemetryBackend));
+    // Backend auth mode. The local compose Prometheus is unauthenticated (None,
+    // the default); Azure Monitor managed Prometheus requires a rotating Entra
+    // access token (DynamicBearer), minted from the workload's managed identity
+    // by the Azure companion provider - no static secret is stored or forwarded.
+    var telemetryAuthMode = config.GetValue("Mcp:Telemetry:AuthMode", LatticeTelemetryBackendAuthMode.None);
+
+    builder.Services.AddTelemetryTools(options =>
+    {
+        options.BackendAddress = new Uri(telemetryBackend);
+        options.AuthMode = telemetryAuthMode;
+    });
+
+    if (telemetryAuthMode == LatticeTelemetryBackendAuthMode.DynamicBearer)
+    {
+        // DefaultAzureCredential resolves the region's user-assigned managed
+        // identity in ACA via AZURE_CLIENT_ID. The credential never leaves this
+        // provider; the core telemetry package only ever sees the bearer token it
+        // mints for the managed-Prometheus scope. An override scope is honoured
+        // for a non-default Azure Monitor audience.
+        builder.Services.AddAzureTelemetryBackendToken(options =>
+        {
+            options.Credential = new DefaultAzureCredential();
+            var scope = config["Mcp:Telemetry:Scope"];
+            if (!string.IsNullOrWhiteSpace(scope))
+            {
+                options.Scope = scope;
+            }
+        });
+    }
 }
 
 // Entra JWT validation on the front door (defense in depth; the forwarded token

@@ -67,6 +67,8 @@ underscore separator, case-insensitive).
 | `Mcp:EnableDataWrites` / `Mcp:EnableBackupControl` / `Mcp:EnableAuthAdministration` | `false` | Advertise the mutating tool verbs of each group. |
 | `Mcp:AdministratorToken` / `Mcp:AdministratorScheme` | - / `Bearer` | Service credential for discovery-time permission introspection of non-administrator callers. |
 | `Mcp:Telemetry:BackendAddress` | - | PromQL backend for the telemetry tool module (only wired when set). |
+| `Mcp:Telemetry:AuthMode` | `None` | Backend auth mode. `None` for an unauthenticated backend (local compose Prometheus). `DynamicBearer` makes the head mint a rotating managed-identity Entra token per query for an Azure Monitor managed-Prometheus endpoint (no static secret); the workload identity needs Monitoring Data Reader on the workspace. |
+| `Mcp:Telemetry:Scope` | `https://prometheus.monitor.azure.com/.default` | Access-token scope for `DynamicBearer` mode; override only for a non-default Azure Monitor audience. |
 | `Entra:Enabled` / `Entra:TenantId` / `Entra:Authority` / `Entra:Audience` / `Entra:ClientId` | - | Entra JWT validation on the front door; the token is forwarded to and re-validated by the silo. |
 
 ### Explorer
