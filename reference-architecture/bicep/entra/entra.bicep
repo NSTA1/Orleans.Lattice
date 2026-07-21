@@ -81,7 +81,11 @@ resource siloApp 'Microsoft.Graph/applications@v1.0' = {
   displayName: '${baseName} Lattice silo facade'
   // Single-tenant: only identities from the estate tenant are accepted.
   signInAudience: 'AzureADMyOrg'
-  identifierUris: [ 'api://${baseName}-silo' ]
+  // The identifier URI embeds the tenant id: many tenants enforce a policy
+  // (InvalidUniqueTenantIdentifierAsPerAppPolicy) that every identifier URI must
+  // contain a tenant-verified domain, the tenant id, or the app id. The bare
+  // api://{name} form is rejected under that default policy.
+  identifierUris: [ 'api://${tenantId}/${baseName}-silo' ]
   // The custom application role the MCP and Explorer service principals are
   // granted for app-to-app access to the silo facade.
   appRoles: [
@@ -151,7 +155,8 @@ resource mcpApp 'Microsoft.Graph/applications@v1.0' = {
   uniqueName: '${baseName}-mcp'
   displayName: '${baseName} Lattice MCP endpoint'
   signInAudience: 'AzureADMyOrg'
-  identifierUris: [ 'api://${baseName}-mcp' ]
+  // Tenant-id-scoped identifier URI (see the silo app note on the tenant policy).
+  identifierUris: [ 'api://${tenantId}/${baseName}-mcp' ]
   // The MCP endpoint calls the silo facade; declare the silo app role it needs.
   requiredResourceAccess: [
     {
@@ -251,4 +256,4 @@ output mcpClientId string = mcpApp.appId
 output explorerClientId string = explorerApp.appId
 
 @description('The api:// audience the silo facades accept (feeds entraAudiences when a non-default audience is required).')
-output siloAudience string = 'api://${baseName}-silo'
+output siloAudience string = 'api://${tenantId}/${baseName}-silo'
