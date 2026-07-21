@@ -22,14 +22,19 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
-COPY hosts/Common/Orleans.Lattice.ReferenceArchitecture.Hosting.csproj hosts/Common/
-COPY hosts/Explorer/Orleans.Lattice.ReferenceArchitecture.Explorer.csproj hosts/Explorer/
-RUN dotnet restore hosts/Explorer/Orleans.Lattice.ReferenceArchitecture.Explorer.csproj
-
+# Unlike the silo/mcp images, the restore MUST observe the full host source, not
+# just the csproj. This host carries Razor content (_Imports.razor) so the .NET
+# SDK detects it as a Blazor host and contributes the framework's
+# _framework/blazor.web.js static web asset. That contribution is decided during
+# restore / framework-reference resolution, so a csproj-only restore followed by
+# 'dotnet publish --no-restore' silently drops blazor.web.js - the console then
+# renders server-side but its interactive Blazor circuit never starts (Sign in
+# does nothing, tabs stay greyed, "Access to the state API was denied"). Copy the
+# source before restoring and let publish restore so the asset is resolved.
 COPY hosts/Common/ hosts/Common/
 COPY hosts/Explorer/ hosts/Explorer/
 RUN dotnet publish hosts/Explorer/Orleans.Lattice.ReferenceArchitecture.Explorer.csproj \
-    -c Release -o /app --no-restore
+    -c Release -o /app
 
 # ---------------------------------------------------------------------------
 FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled AS final
