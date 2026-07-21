@@ -91,12 +91,17 @@ managed identity with no secret to store, rotate, or leak.
 No `passwordCredentials` are authored and nothing secret is emitted as an output.
 The app (client) ids the module outputs are public identifiers.
 
-### Residual, out-of-scope follow-up
+### Residual follow-up (tracked: #1291)
 
 The federated credentials are provisioned and ready. Wiring the silo host to
 acquire its app-only Microsoft Graph token via the federated managed identity
-(rather than the `Entra:Graph:ClientSecret` it reads today) is a host-code change
-outside this deployment sub-issue.
+(rather than the `Entra:Graph:ClientSecret` it reads today) needs a secret-less
+`TokenCredential` authentication path in the core
+`Orleans.Lattice.Membership.Entra.Graph` package, which today supports only
+client-secret auth. That core feature is tracked in #1291 and ships as a
+released package first (the same release-first pattern used for #1286); the silo
+host then consumes it. Until then the group resolver remains opt-in via
+`Entra:Graph:ClientSecret`.
 
 ## Parameters
 
