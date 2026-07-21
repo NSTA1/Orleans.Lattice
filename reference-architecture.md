@@ -477,6 +477,15 @@ Security is a first-class property of this architecture, not an afterthought:
 - **Least privilege.** Each role assignment is the narrowest that works (for
   example Storage Table Data Contributor scoped to one account; a reader role on
   the sink for standby regions).
+- **Key Vault data-plane firewall (public option).** The per-region replication
+  Key Vault denies network access by default (`networkAcls.defaultAction: Deny`)
+  and trusts **only** the region's ACA infrastructure subnet, via a
+  `Microsoft.KeyVault` service endpoint on that subnet plus a matching
+  `virtualNetworkRule`. `bypass: AzureServices` keeps the Key Vault resource
+  provider's trusted-service path so the secret is still written at deploy time.
+  This service-endpoint boundary is the isolation seam for the public option;
+  private endpoints (e.g. for storage or the registry) are **not implemented** in
+  this reference architecture and would be a separate hardening effort.
 - **Non-root distroless runtime.** Every built image runs as a non-root user on a
   chiseled (shell-less) base, shrinking the attack surface and blocking
   shell-based exploitation.
