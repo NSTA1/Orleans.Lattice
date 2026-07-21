@@ -174,6 +174,9 @@ param entraClientId string = ''
 @description('Comma-separated additional Entra token audiences accepted by the silo facades. When empty the host derives {clientId, api://{clientId}}.')
 param entraAudiences string = ''
 
+@description('Comma-separated Entra object ids (oid claim) seeded as the estate administrators - the root of trust the deny-by-default access gate honours. The deployer sets this to the single security administrator (the deploying user by default); every other caller is refused until this administrator grants access at runtime through the Explorer Access tab. Bound to the host Auth:BootstrapAdministrators.')
+param bootstrapAdministrators string = ''
+
 @description('DEPLOYER SEAM: comma-separated clusterId=endpoint replication peers for THIS region (every OTHER region), applied symmetrically. Empty until the deployer resolves the peer FQDNs post-provision. Bound to the host Replication:Peers.')
 param replicationPeers string = ''
 
@@ -441,6 +444,10 @@ resource siloApp 'Microsoft.App/containerApps@2024-03-01' = {
             // Secure-by-default control plane: deny-by-default authorization and
             // an authorization-required State/auth API; TLS-only replication.
             { name: 'Auth__DefaultEffect', value: authDefaultEffect }
+            // Sole seeded administrator (root of trust) - the single security
+            // admin the deployer supplies. Deny-by-default refuses everyone else
+            // until this admin grants access via the Explorer Access tab.
+            { name: 'Auth__BootstrapAdministrators', value: bootstrapAdministrators }
             { name: 'StateApi__RequireAuthorization', value: string(requireApiAuthorization) }
             // Read-write Data API surface, co-hosted on the silo gRPC endpoint.
             // Enabled by default; withheld when dataApiEnabled is false.

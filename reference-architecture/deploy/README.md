@@ -104,6 +104,18 @@ silo whenever Entra is on. The secret-less `TokenCredential` path in the core
 `Entra:Graph:ClientSecret` is still accepted as a dev / back-compat override and
 takes precedence when supplied.
 
+## Initial access: the single security administrator
+
+When Entra is enabled the estate is deny-by-default: no caller can read or write
+until a subject is authorized. The deployer seeds exactly one root-of-trust
+administrator - the `-SecurityAdmin` (an Entra object id or UPN / email resolved
+to its object id), defaulting to the currently signed-in deploying user. That
+object id is threaded to every region's silo as `Auth:BootstrapAdministrators`,
+matched on the Entra `oid` claim. Only that administrator can reach the estate
+after the first deploy; they then grant further operators access at runtime
+through the Explorer Access tab, which is itself administrator-gated (every
+membership / policy write requires an `Admin` verdict on the authorization tree).
+
 ## Parameters
 
 | Parameter | Required | Notes |
@@ -123,6 +135,8 @@ takes precedence when supplied.
 | `-GrafanaAdminPassword` | yes | `SecureString`. |
 | `-EntraEnabled` / `-EntraTenantId` | Entra | Enable and target tenant. |
 | `-EntraClientId` | no | Use a pre-existing audience app instead of deploying `entra.bicep`. |
+| `-SecurityAdmin` | no | The single Entra security administrator seeded as the sole initial-access principal (root of trust). Object id (GUID) or UPN / email (resolved to an object id). Defaults to the deploying user when Entra is enabled; add further administrators at runtime via the Explorer Access tab. |
+| `-EnableDataApi` | no | `$true` (default) exposes the read-write Data API; `-EnableDataApi:$false` withholds the write surface. |
 | `-ExplorerRedirectUris` | no | Defaults derived from the deployed FQDNs. |
 | `-SkipImageBuild` | no | Reuse images already present at `-ImageTag`. |
 | `-WhatIf` | no | Preview every action without mutating Azure. |

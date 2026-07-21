@@ -185,6 +185,13 @@ param(
     # does NOT deploy entra/entra.bicep and uses this id as the estate audience.
     [string]$EntraClientId = '',
     [string]$EntraAudiences = '',
+    # The single Entra security administrator seeded as the sole initial-access
+    # principal (the root of trust). Accepts an Entra user object id (GUID) or a
+    # UPN / email, which is resolved to its object id. When Entra is enabled and
+    # this is left empty, the deploying (currently signed-in) user is used, so
+    # only that operator can reach the estate after the first deploy; further
+    # administrators are then granted at runtime through the Explorer Access tab.
+    [string]$SecurityAdmin = '',
     # Explorer web reply URIs. Defaults are derived from the deployed FQDNs.
     [string[]]$ExplorerRedirectUris = @(),
 
@@ -336,6 +343,34 @@ if ($null -eq $ReplicationKey) {
 
 if ($EntraEnabled -and [string]::IsNullOrWhiteSpace($EntraTenantId)) {
     throw '-EntraEnabled requires -EntraTenantId.'
+}
+
+# Resolve the single security administrator to an Entra object id (the subject
+# the silo matches against Auth:BootstrapAdministrators - the oid claim, ordinal).
+# When Entra is enabled the estate is deny-by-default with this principal as the
+# only seeded administrator; every other caller is refused until this admin grants
+# them access through the Explorer Access tab. Empty means "the deploying user".
+$securityAdminObjectId = ''
+if ($EntraEnabled) {
+    $guidRef = [ref]([guid]::Empty)
+    if ([string]::IsNullOrWhiteSpace($SecurityAdmin)) {
+        Write-Phase 'Resolving the deploying user as the estate security administrator'
+        $securityAdminObjectId = az ad signed-in-user show --query id -o tsv
+        if ([string]::IsNullOrWhiteSpace($securityAdminObjectId)) {
+            throw 'Could not resolve the signed-in user object id; pass -SecurityAdmin explicitly.'
+        }
+    }
+    elseif ([guid]::TryParse($SecurityAdmin, $guidRef)) {
+        $securityAdminObjectId = $SecurityAdmin
+    }
+    else {
+        Write-Phase "Resolving security administrator '$SecurityAdmin' to an object id"
+        $securityAdminObjectId = az ad user show --id $SecurityAdmin --query id -o tsv
+        if ([string]::IsNullOrWhiteSpace($securityAdminObjectId)) {
+            throw "Could not resolve -SecurityAdmin '$SecurityAdmin' to an Entra object id."
+        }
+    }
+    Write-Host "  Security administrator object id: $securityAdminObjectId"
 }
 
 # Normalise the region list to the shape main.bicep expects.
@@ -620,6 +655,8 @@ try {
             entraTenantId              = $EntraTenantId
             entraClientId              = $entraClientIdResolved
             entraAudiences             = $entraAudiencesResolved
+            # Sole seeded administrator (root of trust); empty when Entra is off.
+            bootstrapAdministrators    = $securityAdminObjectId
         }
         $computeFile = New-ParametersFile -Values $computeValues
         $tempFiles.Add($computeFile)

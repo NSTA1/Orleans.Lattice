@@ -91,6 +91,7 @@ guarantees) are documented in [`deploy/README.md`](deploy/README.md).
 | `-EntraEnabled` / `-EntraTenantId` | Entra | Enable Entra and target the tenant. |
 | `-EntraClientId` | no | Use a pre-existing audience app instead of deploying `entra/entra.bicep`. |
 | `-EntraAudiences` | no | Extra accepted token audiences. |
+| `-SecurityAdmin` | no | The single Entra security administrator seeded as the sole initial-access principal (root of trust). An object id (GUID) or a UPN / email (resolved to its object id). Defaults to the deploying user when Entra is enabled. Further administrators are granted at runtime via the Explorer Access tab. |
 | `-ExplorerRedirectUris` | no | Defaults derived from the deployed FQDNs. |
 | `-SkipImageBuild` | no | Reuse images already present at `-ImageTag`. |
 | `-WhatIf` | no | Preview every action without mutating Azure. |

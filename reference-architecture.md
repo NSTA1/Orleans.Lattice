@@ -517,6 +517,12 @@ Security is a first-class property of this architecture, not an afterthought:
   replication key (private option).
 - **Fail-closed authorization.** The data plane is deny-by-default where auth is
   enabled, and the read-visibility filter only surfaces trees the caller may read.
+- **Single seeded administrator.** The deployer seeds exactly one Entra security
+  administrator (the deploying user by default, or an explicit `-SecurityAdmin`)
+  as the root of trust. Under deny-by-default every other caller - operator or
+  service - is refused until this administrator grants access at runtime through
+  the Explorer Access tab (itself administrator-gated). The seeded subject is
+  matched on the Entra object id (`oid`) claim.
 - **Write surface is subject-gated.** The read-write Data API is enabled by
   default but rides the same deny-by-default access gate: every mutation is
   authorized against the caller's resolved subject, and the surface can be
