@@ -244,6 +244,11 @@ public sealed class GrpcBackupControlClient : IBackupControlClient, IDisposable
         var channel = GrpcChannel.ForAddress(settings.Address, channelOptions);
         invoker = channel.CreateCallInvoker();
 
+        // Transport headers accompany every call regardless of the auth mode (for
+        // example an origin-routing header a fronting proxy requires), independent
+        // of the sign-in that replaces settings.Authentication.
+        invoker = ApplyTransportHeaders(invoker, settings.TransportHeaders);
+
         if (auth is { HasCredentialProvider: true, CredentialProvider: { } provider })
         {
             var callCredentials = CallCredentials.FromInterceptor(async (context, metadata) =>
@@ -277,6 +282,28 @@ public sealed class GrpcBackupControlClient : IBackupControlClient, IDisposable
     private static bool IsHttpsAddress(string? address) =>
         Uri.TryCreate(address, UriKind.Absolute, out var uri)
         && string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Applies the sign-in-independent transport headers (if any) to every call on
+    /// <paramref name="invoker"/>, returning it unchanged when there are none.
+    /// </summary>
+    private static CallInvoker ApplyTransportHeaders(CallInvoker invoker, IReadOnlyDictionary<string, string>? transportHeaders)
+    {
+        if (transportHeaders is not { Count: > 0 } headers)
+        {
+            return invoker;
+        }
+
+        return invoker.Intercept(metadata =>
+        {
+            foreach (var (key, value) in headers)
+            {
+                metadata.Add(key, value);
+            }
+
+            return metadata;
+        });
+    }
 
     /// <inheritdoc />
     public void Dispose()

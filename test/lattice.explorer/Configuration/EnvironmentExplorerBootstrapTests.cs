@@ -129,6 +129,97 @@ public class EnvironmentExplorerBootstrapTests
     }
 
     [Test]
+    public void TrySeed_config_withNoTransportHeaders_leavesThemNull()
+    {
+        var env = new FakeEnvironment().Set(EnvironmentExplorerBootstrap.EndpointVariable, "https://cluster:443");
+
+        var config = ConfigSeed(env).TrySeed();
+
+        Assert.That(config!.TransportHeaders, Is.Null);
+    }
+
+    [Test]
+    public void TrySeed_config_parsesTransportHeaders()
+    {
+        var env = new FakeEnvironment()
+            .Set(EnvironmentExplorerBootstrap.EndpointVariable, "https://cluster:443")
+            .Set(EnvironmentExplorerBootstrap.TransportHeadersVariable, "X-Azure-FDID=front-door-id; X-Extra=two");
+
+        var config = ConfigSeed(env).TrySeed();
+
+        Assert.That(config!.TransportHeaders, Is.Not.Null);
+        Assert.That(config.TransportHeaders!["X-Azure-FDID"], Is.EqualTo("front-door-id"));
+        Assert.That(config.TransportHeaders["X-Extra"], Is.EqualTo("two"));
+    }
+
+    [Test]
+    public void TrySeed_config_transportHeadersAreCaseInsensitive()
+    {
+        var env = new FakeEnvironment()
+            .Set(EnvironmentExplorerBootstrap.EndpointVariable, "https://cluster:443")
+            .Set(EnvironmentExplorerBootstrap.TransportHeadersVariable, "X-Azure-FDID=front-door-id");
+
+        var config = ConfigSeed(env).TrySeed();
+
+        Assert.That(config!.TransportHeaders!["x-azure-fdid"], Is.EqualTo("front-door-id"));
+    }
+
+    [Test]
+    public void TrySeed_config_transportHeaderValueMayContainEquals()
+    {
+        var env = new FakeEnvironment()
+            .Set(EnvironmentExplorerBootstrap.EndpointVariable, "https://cluster:443")
+            .Set(EnvironmentExplorerBootstrap.TransportHeadersVariable, "X-Token=a=b=c");
+
+        var config = ConfigSeed(env).TrySeed();
+
+        Assert.That(config!.TransportHeaders!["X-Token"], Is.EqualTo("a=b=c"));
+    }
+
+    [Test]
+    public void TrySeed_config_transportHeaderValueMayBeEmpty()
+    {
+        var env = new FakeEnvironment()
+            .Set(EnvironmentExplorerBootstrap.EndpointVariable, "https://cluster:443")
+            .Set(EnvironmentExplorerBootstrap.TransportHeadersVariable, "X-Empty=");
+
+        var config = ConfigSeed(env).TrySeed();
+
+        Assert.That(config!.TransportHeaders!["X-Empty"], Is.EqualTo(string.Empty));
+    }
+
+    [Test]
+    [TestCase("=only-value")]
+    [TestCase("no-separator")]
+    [TestCase("   ")]
+    [TestCase(";;")]
+    public void TrySeed_config_ignoresMalformedTransportHeaderEntries(string raw)
+    {
+        var env = new FakeEnvironment()
+            .Set(EnvironmentExplorerBootstrap.EndpointVariable, "https://cluster:443")
+            .Set(EnvironmentExplorerBootstrap.TransportHeadersVariable, raw);
+
+        var config = ConfigSeed(env).TrySeed();
+
+        Assert.That(config!.TransportHeaders, Is.Null);
+    }
+
+    [Test]
+    public void TrySeed_config_skipsMalformedEntriesButKeepsValidOnes()
+    {
+        var env = new FakeEnvironment()
+            .Set(EnvironmentExplorerBootstrap.EndpointVariable, "https://cluster:443")
+            .Set(EnvironmentExplorerBootstrap.TransportHeadersVariable, "=bad; X-Good=ok; alsobad");
+
+        var config = ConfigSeed(env).TrySeed();
+
+        Assert.That(config!.TransportHeaders, Is.Not.Null);
+        Assert.That(config.TransportHeaders, Has.Count.EqualTo(1));
+        Assert.That(config.TransportHeaders!["X-Good"], Is.EqualTo("ok"));
+    }
+
+
+    [Test]
     public void TrySeed_credential_withBothSet_seedsCredential()
     {
         var env = new FakeEnvironment()

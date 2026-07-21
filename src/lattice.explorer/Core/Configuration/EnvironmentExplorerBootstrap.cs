@@ -28,6 +28,13 @@ namespace Orleans.Lattice.Explorer.Core.Configuration;
 /// <see cref="PasswordVariable"/> (<c>LATTICE_EXPLORER_PASSWORD</c>) - an
 /// optional sign-in credential applied in memory for the current process.
 /// </description></item>
+/// <item><description>
+/// <see cref="TransportHeadersVariable"/>
+/// (<c>LATTICE_EXPLORER_TRANSPORT_HEADERS</c>) - an optional semicolon-separated
+/// list of <c>Name=Value</c> non-secret transport headers attached to every
+/// call (for example an origin-lock routing header). Seeded into the endpoint
+/// configuration, never into the credential surface.
+/// </description></item>
 /// </list>
 /// <para>
 /// The configuration seed never carries the credential: the username/password
@@ -46,6 +53,14 @@ public sealed class EnvironmentExplorerBootstrap : IExplorerConfigurationSeed, I
 
     /// <summary>The optional config-file-path override variable name.</summary>
     public const string ConfigPathVariable = "LATTICE_EXPLORER_CONFIG";
+
+    /// <summary>
+    /// The optional transport-headers variable name. A semicolon-separated list of
+    /// <c>Name=Value</c> pairs attached to every call as non-secret transport
+    /// metadata (for example <c>X-Azure-FDID=&lt;id&gt;</c> to satisfy an Azure
+    /// Front Door origin lock when the console dials the silo origin directly).
+    /// </summary>
+    public const string TransportHeadersVariable = "LATTICE_EXPLORER_TRANSPORT_HEADERS";
 
     /// <summary>The optional sign-in username variable name.</summary>
     public const string UsernameVariable = "LATTICE_EXPLORER_USERNAME";
@@ -81,10 +96,14 @@ public sealed class EnvironmentExplorerBootstrap : IExplorerConfigurationSeed, I
                 ? ExplorerTransportMode.InsecureLoopbackDev
                 : ExplorerTransportMode.Secure,
             AllowUnencryptedHttp2 = insecureDev,
-            // Never seed a credential or metadata header here: the persisted
-            // config store must never hold a secret. Sign-in is seeded
-            // separately through IExplorerCredentialSeed.
+            // Never seed a credential or auth header here: the persisted config
+            // store must never hold a secret. Sign-in is seeded separately through
+            // IExplorerCredentialSeed.
             Headers = null,
+            // Transport headers are non-secret routing metadata (e.g. an origin
+            // lock header), not a credential, so they are safe to seed and must
+            // accompany every call independently of the sign-in state.
+            TransportHeaders = ParseTransportHeaders(_environment.GetVariable(TransportHeadersVariable)),
         };
     }
 
@@ -113,5 +132,39 @@ public sealed class EnvironmentExplorerBootstrap : IExplorerConfigurationSeed, I
             "1" or "true" or "yes" or "on" => true,
             _ => false,
         };
+    }
+
+    /// <summary>
+    /// Parses a semicolon-separated list of <c>Name=Value</c> transport headers.
+    /// Blank entries and entries with an empty name are skipped; the value may be
+    /// empty and may itself contain <c>=</c>. Returns <see langword="null"/> when
+    /// nothing valid is present so the seed attaches no transport metadata.
+    /// </summary>
+    private static IReadOnlyDictionary<string, string>? ParseTransportHeaders(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in value.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var separator = entry.IndexOf('=');
+            if (separator <= 0)
+            {
+                continue;
+            }
+
+            var name = entry[..separator].Trim();
+            if (name.Length == 0)
+            {
+                continue;
+            }
+
+            headers[name] = entry[(separator + 1)..].Trim();
+        }
+
+        return headers.Count > 0 ? headers : null;
     }
 }

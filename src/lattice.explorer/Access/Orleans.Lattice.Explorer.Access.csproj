@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <RootNamespace>Orleans.Lattice.Explorer.Access</RootNamespace>
     <PackageId>Orleans.Lattice.Explorer.Access</PackageId>
-    <Version>8.0.0</Version>
+    <Version>8.0.1</Version>
     <Description>Access (membership and access-control) management area for the Orleans.Lattice Explorer: bridges the auth-admin control-API gRPC client to the explorer's navigation and capability model, and gates the Access area behind a capability probe. Companion to Orleans.Lattice.Explorer.Core.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>

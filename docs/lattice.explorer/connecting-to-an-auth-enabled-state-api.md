@@ -106,6 +106,55 @@ Explorer may persist to its injected credential store; a token is never
 persisted by the core Explorer. Persistence of refresh material is a
 provider-owned, opt-in concern.
 
+## Reaching an endpoint behind an origin-locked proxy
+
+Some deployments front the State API with a proxy that only accepts requests
+carrying a specific routing header, and reject anything else at the origin. Azure
+Front Door with an origin lock is the common case: the silo origin refuses any
+request that does not carry the `X-Azure-FDID` header identifying the expected
+Front Door instance.
+
+The Explorer dials the State API over native gRPC (HTTP/2), which such a proxy
+usually cannot forward, so the Explorer connects to the origin directly and must
+present the routing header itself. That header is **not** a credential, so it
+does not belong on the authentication seam: an interactive sign-in replaces the
+whole authentication object, which would drop any header carried there. Instead
+it rides on `LatticeConnectionSettings.TransportHeaders`, applied to every call
+independently of the sign-in state.
+
+Set it through `ExplorerConfiguration.TransportHeaders`, which maps straight onto
+the connection settings:
+
+```csharp
+using System.Collections.Generic;
+using Orleans.Lattice.Explorer.Core.Configuration;
+using Orleans.Lattice.Explorer.Core.Connection;
+
+var configuration = new ExplorerConfiguration
+{
+    Endpoint = "https://silo-origin.example:443",
+    TransportHeaders = new Dictionary<string, string>
+    {
+        ["X-Azure-FDID"] = "<front-door-id>",
+    },
+};
+
+LatticeConnectionSettings settings = configuration.ToConnectionSettings();
+```
+
+A deployment that uses the environment bootstrap can seed the same header without
+code through the `LATTICE_EXPLORER_TRANSPORT_HEADERS` variable, a semicolon-
+separated list of `Name=Value` pairs (a value may itself contain `=` or be
+empty):
+
+```
+LATTICE_EXPLORER_TRANSPORT_HEADERS=X-Azure-FDID=<front-door-id>
+```
+
+These headers are non-secret routing metadata, so they are safe to persist in the
+Explorer's configuration store and to pass through the environment. The live
+authentication credential never flows through this seam.
+
 ## Reference
 
 - `IExplorerAuthMethod` - the login-method seam (`SchemeId`, `CanHandle`,
@@ -113,4 +162,7 @@ provider-owned, opt-in concern.
 - `IExplorerAuthSession` - the session that discovers schemes and drives sign-in
   (`DiscoverAsync`, `LoginAsync`, `LoginWithMethodAsync`, `CurrentScheme`).
 - `ExplorerAccessTokenSource` - the proactive, single-flight token-refresh engine.
+- `LatticeConnectionSettings.TransportHeaders` - non-secret headers attached to
+  every call regardless of the sign-in state (for example an origin-lock routing
+  header), seedable via `LATTICE_EXPLORER_TRANSPORT_HEADERS`.
 - [Adding a custom auth method](adding-a-custom-auth-method.md)
