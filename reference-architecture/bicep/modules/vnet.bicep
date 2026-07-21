@@ -93,6 +93,15 @@ resource vnet 'Microsoft.Network/virtualNetworks@2023-11-01' = [for (region, i) 
               }
             }
           ]
+          // Service endpoint so the workload's egress from this subnet is a
+          // trusted source for the public-option replication Key Vault firewall
+          // (networking.bicep adds the matching virtualNetworkRule + Deny). Benign
+          // when the private option provisions no Key Vault.
+          serviceEndpoints: [
+            {
+              service: 'Microsoft.KeyVault'
+            }
+          ]
           privateEndpointNetworkPolicies: 'Enabled'
           privateLinkServiceNetworkPolicies: 'Enabled'
         }

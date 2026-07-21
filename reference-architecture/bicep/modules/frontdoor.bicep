@@ -33,6 +33,17 @@
 //     RECIPE). Front Door stamps `X-Azure-FDID: <frontDoorId>` on every forwarded
 //     request; the origin rejects any request whose header does not match, so no
 //     one can bypass the global ingress by hitting the ACA FQDN directly.
+//     LIMITATION (be explicit): this is a HEADER assertion, not a network lock.
+//     ACA ingress `ipSecurityRestrictions` accepts only IPv4 CIDR ranges - it
+//     CANNOT filter by the `AzureFrontDoor.Backend` service tag, and hardcoding
+//     Front Door's published backend CIDRs is fragile (they rotate) and
+//     Microsoft-discouraged. A determined caller who learns both the ACA FQDN and
+//     the (non-secret) frontDoorId could therefore still forge the header. The
+//     X-Azure-FDID check is the recommended origin lock for AFD *Standard* and
+//     raises the bar materially, but the only NON-SPOOFABLE lock is AFD *Premium*
+//     + Private Link to an internal (VNet-injected, internal-ingress) environment,
+//     which removes the public ACA FQDN entirely. That is the private deployment
+//     option's upgrade path; see reference-architecture.md ("Origin lock").
 //   - No secrets. This template takes and emits no secret material.
 //
 // -----------------------------------------------------------------------------

@@ -29,8 +29,8 @@ param baseName string
 @minLength(1)
 param regions array
 
-@description('Location for the single global registry. Defaults to the first region location.')
-param registryLocation string = regions[0].location
+@description('Location for the single global registry. Defaults to the resource group location, matching bootstrap.bicep so a raw-Bicep deploy (without the deploy script) converges both templates onto the same immutable registry resource. The deploy script pins this to the first region location on both passes.')
+param registryLocation string = resourceGroup().location
 
 @description('Shared image tag applied to all three built images across every region.')
 param imageTag string
@@ -87,9 +87,10 @@ param replicationKey string = ''
 @description('PUBLIC option ingress allow-list seam: CIDR ranges permitted to reach the region ingress / front door. Empty applies no restriction here. Echoed by the networking module for the AFD sub-issue to apply.')
 param ingressAllowedCidrs array = []
 
-@description('Grafana admin password for the per-region self-hosted Grafana head. Supply via a Key Vault reference or a secure pipeline variable at deploy time (never committed). Stored only as an ACA secret. Required whenever observability is deployed.')
+@description('Grafana admin password for the per-region self-hosted Grafana head. Supply via a Key Vault reference or a secure pipeline variable at deploy time (never committed). Stored only as an ACA secret. Required (no default) so a deploy cannot silently stand up an internet-facing Grafana with a blank admin password; the minimum length rejects an empty value.')
 @secure()
-param grafanaAdminPassword string = ''
+@minLength(1)
+param grafanaAdminPassword string
 
 @description('Azure Front Door id (GUID) threaded to every client-facing head so it rejects inbound traffic that bypasses the global ingress (X-Azure-FDID origin lock). Empty on the first deploy pass (heads unlocked, Front Door not yet created); the deployer runs a SECOND compute pass supplying the frontdoor module\'s frontDoorId output. Threading frontdoor.outputs.frontDoorId here directly would form a compile cycle because Front Door consumes the head FQDNs compute exports.')
 param frontDoorId string = ''
@@ -264,6 +265,10 @@ module networking 'modules/networking.bicep' = {
     deploymentOption: deploymentOption
     regions: regions
     regionManagedIdentityPrincipalIds: [for (region, i) in regions: compute[i].outputs.managedIdentityPrincipalId]
+    // Per-region ACA infrastructure subnet ids (Key Vault service endpoint enabled
+    // in vnet.bicep) so the public-option Key Vault firewall trusts only the
+    // region workload's subnet egress (defaultAction Deny + virtualNetworkRule).
+    infrastructureSubnetIds: [for (region, i) in regions: vnet.outputs.perRegionNetwork[i].infrastructureSubnetId]
     replicationKey: replicationKey
     ingressAllowedCidrs: ingressAllowedCidrs
   }

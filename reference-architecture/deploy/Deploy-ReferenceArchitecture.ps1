@@ -223,8 +223,10 @@ function Invoke-Az {
     <#
         Runs the Azure CLI, fails hard on a non-zero exit, and returns the parsed
         JSON payload (when any). Mutating calls flow through ShouldProcess so
-        -WhatIf previews the estate without touching Azure. Secret-bearing args
-        must be passed via -SecretArgs so they are appended but never echoed.
+        -WhatIf previews the estate without touching Azure. Secret-bearing
+        parameters must be delivered via -StdinInput (an ARM parameters JSON piped
+        to `az ... --parameters @-`) so they never appear in the process argument
+        list, the shell history, or on disk.
     #>
     [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
     param(
@@ -232,7 +234,7 @@ function Invoke-Az {
         [string]$Action,
         [string]$Target,
         [switch]$Mutating,
-        [string[]]$SecretArgs = @(),
+        [string]$StdinInput,
         [switch]$AllowFailure
     )
 
@@ -244,14 +246,20 @@ function Invoke-Az {
         }
     }
 
-    $allArgs = @($Arguments) + @($SecretArgs)
-    $raw = & az @allArgs 2>&1
+    if ($StdinInput) {
+        # Secret-bearing parameters ride stdin (--parameters @-); they are never
+        # placed in $Arguments, so nothing secret reaches the process command line.
+        $raw = $StdinInput | & az @Arguments 2>&1
+    }
+    else {
+        $raw = & az @Arguments 2>&1
+    }
     if ($LASTEXITCODE -ne 0) {
         if ($AllowFailure) {
             Write-Warning "az $($Arguments -join ' ') exited $LASTEXITCODE"
             return $null
         }
-        # Never surface $SecretArgs; only the non-secret arguments are shown.
+        # Only the non-secret arguments are shown; stdin is never echoed.
         throw "az $($Arguments -join ' ') failed (exit $LASTEXITCODE): $raw"
     }
 
@@ -264,7 +272,8 @@ function New-ParametersFile {
     <#
         Writes an ARM parameters JSON file from a hashtable of NON-SECRET values.
         Returns the path; the caller deletes it in a finally block. Secrets are
-        NEVER written here - they are passed inline to az as @secure() params.
+        NEVER written here - they are piped to az via stdin (--parameters @-) as
+        @secure() params.
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
         Justification = 'Writes a throwaway temp parameters file with no secret content; the actual Azure state change flows through Invoke-Az, which supports ShouldProcess.')]
@@ -411,15 +420,28 @@ try {
         # Forward-threaded seams are empty on pass 1 (compile-cycle avoidance).
         prometheusQueryEndpoint = ''
         frontDoorId             = ''
+        # Pin the registry location to match bootstrap.bicep (same region), so the
+        # registry resource main.bicep declares converges onto the bootstrapped one
+        # instead of attempting an immutable-location change.
+        registryLocation        = $Regions[0].location
     }
     $pass1File = New-ParametersFile -Values $pass1Values
     $tempFiles.Add($pass1File)
 
-    # Secrets are appended inline as @secure() params; they never touch the file.
-    $pass1Secrets = @('--parameters', "grafanaAdminPassword=$grafanaPasswordPlain")
+    # Secret-bearing @secure() params (Grafana admin password, and the public
+    # option replication key) are delivered to az through STDIN as an ARM
+    # parameters JSON piped via `--parameters @-`. They never appear in the
+    # process argument list, the shell history, or on disk (the non-secret temp
+    # file above holds only non-secret values).
+    $secretParams = [ordered]@{ grafanaAdminPassword = @{ value = $grafanaPasswordPlain } }
     if ($DeploymentOption -eq 'public') {
-        $pass1Secrets += @('--parameters', "replicationKey=$replicationKeyPlain")
+        $secretParams['replicationKey'] = @{ value = $replicationKeyPlain }
     }
+    $pass1SecretsJson = [ordered]@{
+        '$schema'      = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#'
+        contentVersion = '1.0.0.0'
+        parameters     = $secretParams
+    } | ConvertTo-Json -Depth 30
 
     $pass1 = Invoke-Az -Arguments @(
         'deployment', 'group', 'create',
@@ -427,8 +449,9 @@ try {
         '--name', 'lattice-pass1',
         '--template-file', $MainTemplate,
         '--parameters', "@$pass1File",
+        '--parameters', '@-',
         '--output', 'json'
-    ) -SecretArgs $pass1Secrets -Mutating -Action 'Deploy estate (pass 1)' -Target 'main.bicep'
+    ) -StdinInput $pass1SecretsJson -Mutating -Action 'Deploy estate (pass 1)' -Target 'main.bicep'
 
     if (-not $pass1 -and $WhatIfPreference) {
         Write-Host '    [WhatIf] pass 1 skipped; downstream phases have nothing to converge against.' -ForegroundColor DarkGray
@@ -628,5 +651,6 @@ finally {
     # Best-effort scrub of the plaintext secret locals.
     $replicationKeyPlain = $null
     $grafanaPasswordPlain = $null
+    $pass1SecretsJson = $null
     [System.GC]::Collect()
 }

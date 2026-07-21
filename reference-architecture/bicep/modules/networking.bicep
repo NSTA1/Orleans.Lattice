@@ -57,6 +57,9 @@ param regions array
 @description('Per-region workload-identity principalIds, index-aligned with `regions`. In main.bicep map this from compute: [for (r, i) in regions: compute[i].outputs.managedIdentityPrincipalId]. Used to grant least-privilege Key Vault access in the public option; ignored by the private option.')
 param regionManagedIdentityPrincipalIds array = []
 
+@description('Per-region ACA infrastructure subnet ids, index-aligned with `regions` (from vnet.bicep, which enables the Microsoft.KeyVault service endpoint on each). Added to the public option Key Vault firewall as a virtualNetworkRule so the vault data plane trusts ONLY the region workload subnet (with defaultAction Deny). Ignored by the private option.')
+param infrastructureSubnetIds array = []
+
 // --- Public option: replication key + Key Vault ------------------------------
 
 @description('The per-cluster Lattice replication key/secret, matched across EVERY region. The deployer generates it once and passes it here. Written verbatim into each region\'s Key Vault secret; never emitted as an output. Used only by the public option.')
@@ -108,16 +111,24 @@ resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = [for (region, i) in regi
     softDeleteRetentionInDays: 90
     enablePurgeProtection: true
     // Key Vault enforces TLS 1.2 as its floor; deployment/template access is
-    // disabled. Managed-identity reads from ACA arrive over the public endpoint
-    // (ACA egress IPs are dynamic), so publicNetworkAccess stays Enabled but the
-    // network ACL trusts only Azure services by default.
+    // disabled. Managed-identity reads arrive from the region's ACA workload over
+    // the aca-infra subnet's Microsoft.KeyVault service endpoint, so the firewall
+    // denies by default and trusts ONLY that subnet (virtualNetworkRule below).
+    // bypass: AzureServices lets the Key Vault resource provider write the secret
+    // during template deployment (a trusted service) without opening the data
+    // plane to arbitrary networks.
     publicNetworkAccess: 'Enabled'
     enabledForDeployment: false
     enabledForTemplateDeployment: false
     enabledForDiskEncryption: false
     networkAcls: {
       bypass: 'AzureServices'
-      defaultAction: 'Allow'
+      defaultAction: 'Deny'
+      virtualNetworkRules: [
+        {
+          id: infrastructureSubnetIds[i]
+        }
+      ]
     }
   }
 }]

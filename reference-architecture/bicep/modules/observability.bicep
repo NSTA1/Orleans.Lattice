@@ -129,8 +129,9 @@ param grafanaImage string = 'docker.io/grafana/grafana-oss:11.3.1'
 @description('Grafana admin username.')
 param grafanaAdminUser string = 'admin'
 
-@description('Grafana admin password. Never plain text at rest: supply via a Key Vault reference or a secure pipeline variable. Stored only as an ACA secret and surfaced to Grafana via GF_SECURITY_ADMIN_PASSWORD.')
+@description('Grafana admin password. Never plain text at rest: supply via a Key Vault reference or a secure pipeline variable. Stored only as an ACA secret and surfaced to Grafana via GF_SECURITY_ADMIN_PASSWORD. Must be non-empty (an empty value would leave the internet-facing Grafana head with a blank admin password).')
 @secure()
+@minLength(1)
 param grafanaAdminPassword string
 
 @description('Grafana head max replicas (scale ceiling). Min is fixed at 0 (scale to zero); 1 is sufficient for a stateless visualization head.')

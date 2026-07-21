@@ -369,7 +369,8 @@ every region:
 - **Custom domain(s) with AFD-managed TLS.**
 - **Origins locked to the front door**: each origin accepts traffic only via the
   Front Door (AFD id header / access restriction), so no one bypasses the global
-  ingress.
+  ingress. See **Origin lock and its limits** below for exactly how strong this
+  guarantee is.
 
 ```mermaid
 flowchart TB
@@ -390,7 +391,21 @@ scale-to-zero intent (the heads still scale in the rest of their replicas). The
 deploy/config docs record the probe interval and the alternative of a cheaper TCP
 probe.
 
-**Optional hardening / upgrade path** (documented, not deployed): attach a Front
+**Origin lock and its limits.** The origin lock is a **header assertion, not a
+network lock**. Front Door stamps `X-Azure-FDID: <frontDoorId>` on every forwarded
+request and each region's ACA ingress is configured to reject any request whose
+header does not carry this estate's Front Door id. This is the **recommended origin
+lock for AFD Standard** and stops casual direct hits on the ACA FQDN. It is not,
+however, unspoofable: ACA ingress `ipSecurityRestrictions` accepts only IPv4 CIDR
+ranges - it **cannot filter by the `AzureFrontDoor.Backend` service tag**, and
+pinning Front Door's published backend CIDRs is fragile (they rotate) and
+Microsoft-discouraged. A caller who learns both the ACA FQDN and the (non-secret)
+Front Door id could therefore still forge the header. The only **non-spoofable**
+origin lock is **AFD Premium + Private Link** to an internal (VNet-injected,
+internal-ingress) environment, which removes the public ACA FQDN entirely - the
+**private** deployment option's upgrade path.
+
+
 Door WAF custom-rule policy to the Standard profile, and/or upgrade to AFD Premium
 for Private Link private origins, managed WAF rule sets, and bot protection - with
 the cost trade-offs and private-option implications spelled out in

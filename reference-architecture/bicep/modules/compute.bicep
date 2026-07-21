@@ -208,10 +208,10 @@ param headMemory string = '1Gi'
 
 // --- Networking seam (private option; the networking sub-issue owns the VNet) ---
 
-@description('NETWORKING-SUBISSUE SEAM: resource id of the ACA infrastructure subnet for VNet-integrated (private) environments. Empty string provisions a public managed environment (the baseline public option).')
+@description('ACA infrastructure subnet resource id for the VNet-injected managed environment. In the reference architecture main.bicep supplies this for EVERY deployment option (each region has a per-region VNet), so the environment is VNet-injected and zone-redundancy capable regardless of ingress visibility. An empty string is still honoured (module stays usable standalone) and yields a non-VNet, single-zone environment.')
 param infrastructureSubnetId string = ''
 
-@description('When true and an infrastructure subnet is supplied, the environment ingress is internal-only (private option).')
+@description('When true, the environment ingress is internal-only (private option); when false, external (public option). Only meaningful together with an infrastructureSubnetId.')
 param internalEnvironment bool = false
 
 @description('When true, the managed environment spreads replicas across availability zones (zone-redundant compute). Azure Container Apps only supports zone redundancy on a VNet-injected environment, so this flag is honoured ONLY when an infrastructureSubnetId is supplied; without a subnet the environment is single-zone regardless. Defaults to true.')
@@ -280,9 +280,11 @@ resource law 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
 // ACA managed environment
 // -----------------------------------------------------------------------------
 // The Log Analytics shared key is read at deploy time via listKeys(); it is
-// never a parameter and never stored in the template. VNet integration is a
-// networking-sub-issue seam: absent an infrastructure subnet the environment is
-// the public baseline.
+// never a parameter and never stored in the template. VNet integration is driven
+// by the infrastructureSubnetId seam: the reference architecture supplies a
+// subnet for every option, so the environment is VNet-injected and can be
+// zone-redundant; absent a subnet the module falls back to a non-VNet, single-
+// zone environment.
 // =============================================================================
 
 resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
@@ -300,9 +302,10 @@ resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
       infrastructureSubnetId: infrastructureSubnetId
       internal: internalEnvironment
     }
-    // Zone redundancy requires a VNet-injected environment, so it is forced off
-    // for the public (no-subnet) baseline and honoured only under the private
-    // option. Spreads replicas across availability zones once scaled > 1.
+    // Zone redundancy requires a VNet-injected environment, so it is honoured only
+    // when a subnet is supplied (the reference architecture supplies one for both
+    // options) and forced off for the fallback no-subnet case. Spreads replicas
+    // across availability zones once scaled > 1.
     zoneRedundant: empty(infrastructureSubnetId) ? false : zoneRedundant
   }
 }
