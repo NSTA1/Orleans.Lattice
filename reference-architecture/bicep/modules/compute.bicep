@@ -619,6 +619,13 @@ resource mcpApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'Entra__Enabled', value: string(entraEnabled) }
             { name: 'Entra__TenantId', value: entraTenantId }
             { name: 'Entra__ClientId', value: entraClientId }
+            // Validate the SAME token audience the silo facades accept, so the
+            // JWT the MCP head validates and forwards is re-accepted downstream.
+            // The MCP head validates a single audience (Entra:Audience); when this
+            // is empty it falls back to the client id, matching the silo's own
+            // {clientId, api://clientId} default. In the reference architecture this
+            // carries the tenant-scoped facade identifier URI.
+            { name: 'Entra__Audience', value: entraAudiences }
             { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
             { name: 'ASPNETCORE_URLS', value: 'http://0.0.0.0:8080' }
             // Global-ingress origin lock (see silo head). Empty until pass 2.

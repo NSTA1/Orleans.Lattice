@@ -65,6 +65,15 @@ var graphAppId = '00000003-0000-0000-c000-000000000000'
 var groupMemberReadAllRoleId = '98830695-27a2-44f7-8c18-0c3ebc9698f6'
 // Stable id for the custom application role the MCP + Explorer SPs are granted.
 var latticeAccessRoleId = guid(baseName, 'Lattice.Access')
+// Stable id for the delegated (user) scope that lets an interactive operator (and
+// admin tooling such as the Azure CLI) obtain a silo-audience access token on
+// their own behalf. Authorization is still decided by the silo's deny-by-default
+// access gate; this scope only lets a user MINT a token for the facade audience.
+var userImpersonationScopeId = guid(baseName, 'Lattice.user_impersonation')
+// First-party Microsoft Azure CLI public client. Pre-authorized for the delegated
+// scope so an operator can acquire a facade token with `az account get-access-token`
+// (and so admin tooling works) without a separate interactive consent prompt.
+var azureCliAppId = '04b07795-8ddb-461a-bbee-02f9e1bf7b46'
 
 // Federated-credential trust anchors. The subject is each managed identity's
 // object id; the issuer is this tenant's login authority; the audience is the
@@ -86,6 +95,35 @@ resource siloApp 'Microsoft.Graph/applications@v1.0' = {
   // contain a tenant-verified domain, the tenant id, or the app id. The bare
   // api://{name} form is rejected under that default policy.
   identifierUris: [ 'api://${tenantId}/${baseName}-silo' ]
+  // Facade token surface. requestedAccessTokenVersion 2 makes the API issue v2.0
+  // access tokens (iss .../v2.0), matching the /v2.0 authority every head uses to
+  // validate them. A single delegated scope lets interactive operators and the
+  // Azure CLI acquire a facade-audience token on their own behalf; the app-only
+  // callers (MCP, Explorer service principals) use the Lattice.Access app role
+  // above instead. The Azure CLI is pre-authorized for the delegated scope so no
+  // separate consent prompt is needed - authorization is still gated deny-by-default
+  // at the silo, so a token by itself grants nothing.
+  api: {
+    requestedAccessTokenVersion: 2
+    oauth2PermissionScopes: [
+      {
+        id: userImpersonationScopeId
+        adminConsentDisplayName: 'Access the Lattice silo facades'
+        adminConsentDescription: 'Allows the signed-in user to access the Lattice silo State, auth-admin and data facades on their behalf. Access is still authorized by the silo deny-by-default access gate.'
+        userConsentDisplayName: 'Access the Lattice silo facades on your behalf'
+        userConsentDescription: 'Allows the app to access the Lattice silo facades on your behalf. Access is still authorized by the silo deny-by-default access gate.'
+        value: 'user_impersonation'
+        type: 'User'
+        isEnabled: true
+      }
+    ]
+    preAuthorizedApplications: [
+      {
+        appId: azureCliAppId
+        delegatedPermissionIds: [ userImpersonationScopeId ]
+      }
+    ]
+  }
   // The custom application role the MCP and Explorer service principals are
   // granted for app-to-app access to the silo facade.
   appRoles: [
