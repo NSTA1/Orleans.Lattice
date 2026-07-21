@@ -293,5 +293,5 @@ output mcpClientId string = mcpApp.appId
 @description('Application (client) id of the Explorer console app.')
 output explorerClientId string = explorerApp.appId
 
-@description('The api:// audience the silo facades accept (feeds entraAudiences when a non-default audience is required).')
-output siloAudience string = 'api://${tenantId}/${baseName}-silo'
+@description('The token audience the silo facades accept, fed to entraAudiences. With requestedAccessTokenVersion 2 the facade issues v2.0 access tokens whose aud claim is the application (client) id - NOT the api:// identifier URI, which only names the scope callers request. So the audience the heads validate is the silo client id.')
+output siloAudience string = siloApp.appId
