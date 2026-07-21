@@ -43,6 +43,11 @@ internal sealed class ExplorerSecurityHeadersMiddleware(RequestDelegate next)
             headers.XContentTypeOptions = ExplorerSecurityHeaders.ContentTypeOptions;
         }
 
+        if (StringValues.IsNullOrEmpty(headers["Referrer-Policy"]))
+        {
+            headers["Referrer-Policy"] = ExplorerSecurityHeaders.ReferrerPolicy;
+        }
+
         return next(context);
     }
 }

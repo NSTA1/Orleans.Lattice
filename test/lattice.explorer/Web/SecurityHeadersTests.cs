@@ -56,6 +56,7 @@ public class SecurityHeadersTests
                 Is.True,
                 "the page must deny framing on legacy browsers");
             Assert.That(Single(response, "X-Content-Type-Options"), Is.EqualTo(ExplorerSecurityHeaders.ContentTypeOptionsValue));
+            Assert.That(Single(response, "Referrer-Policy"), Is.EqualTo(ExplorerSecurityHeaders.ReferrerPolicyValue));
         });
     }
 
@@ -91,6 +92,7 @@ public class SecurityHeadersTests
                 "the SignalR negotiate endpoint must carry the middleware CSP");
             Assert.That(AnyContains(response, "X-Frame-Options", "DENY"), Is.True);
             Assert.That(AnyContains(response, "X-Content-Type-Options", "nosniff"), Is.True);
+            Assert.That(AnyContains(response, "Referrer-Policy", "no-referrer"), Is.True);
         });
     }
 
@@ -145,6 +147,7 @@ public class SecurityHeadersTests
             Assert.That(Single(response, "Content-Security-Policy"), Is.EqualTo(ExplorerSecurityHeaders.ContentSecurityPolicyValue));
             Assert.That(Single(response, "X-Frame-Options"), Is.EqualTo(ExplorerSecurityHeaders.FrameOptionsValue));
             Assert.That(Single(response, "X-Content-Type-Options"), Is.EqualTo(ExplorerSecurityHeaders.ContentTypeOptionsValue));
+            Assert.That(Single(response, "Referrer-Policy"), Is.EqualTo(ExplorerSecurityHeaders.ReferrerPolicyValue));
         });
     }
 
