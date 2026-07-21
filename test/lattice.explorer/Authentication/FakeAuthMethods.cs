@@ -40,12 +40,23 @@ internal sealed class FakeSchemeProbe : IExplorerAuthSchemeProbe
 
     public int ProbeCount { get; private set; }
 
+    /// <summary>The transport headers supplied to the most recent probe call.</summary>
+    public IReadOnlyDictionary<string, string>? LastTransportHeaders { get; private set; }
+
     public Task<ExplorerAuthSchemeAdvertisement> ProbeAsync(
         string address,
         bool allowUnencryptedHttp2 = false,
         CancellationToken cancellationToken = default)
+        => ProbeAsync(address, allowUnencryptedHttp2, transportHeaders: null, cancellationToken);
+
+    public Task<ExplorerAuthSchemeAdvertisement> ProbeAsync(
+        string address,
+        bool allowUnencryptedHttp2,
+        IReadOnlyDictionary<string, string>? transportHeaders,
+        CancellationToken cancellationToken = default)
     {
         ProbeCount++;
+        LastTransportHeaders = transportHeaders;
         return Task.FromResult(Result);
     }
 }

@@ -11,7 +11,7 @@ public class ExplorerAuthSessionMethodTests
     private const string CustomScheme = "custom";
 
     private static (ExplorerAuthSession session, List<LatticeConnectionSettings> applied, InMemoryCredentialStore store, FakeSchemeProbe probe, FakeTokenAuthMethod custom)
-        CreateSession()
+        CreateSession(IReadOnlyDictionary<string, string>? transportHeaders = null)
     {
         var connection = Substitute.For<ILatticeStateConnection>();
         var applied = new List<LatticeConnectionSettings>();
@@ -25,6 +25,7 @@ public class ExplorerAuthSessionMethodTests
         {
             Endpoint = "https://cluster.internal:443",
             AllowUnencryptedHttp2 = false,
+            TransportHeaders = transportHeaders,
         });
 
         var store = new InMemoryCredentialStore();
@@ -168,5 +169,30 @@ public class ExplorerAuthSessionMethodTests
 
         Assert.That(session.CurrentScheme, Is.EqualTo(CustomScheme));
         Assert.That(applied[^1].Authentication!.HasCredentialProvider, Is.True);
+    }
+
+    [Test]
+    public async Task DiscoverAsync_passesConfiguredTransportHeaders_toProbe()
+    {
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["X-Azure-FDID"] = "ebe77622-4e04-4a58-a914-db561e750fe0",
+        };
+        var (session, _, _, probe, _) = CreateSession(headers);
+
+        await session.DiscoverAsync();
+
+        Assert.That(probe.LastTransportHeaders, Is.SameAs(headers),
+            "the scheme probe must carry the same routing headers as the state client, or an origin-locked endpoint rejects the unauthenticated probe and discovery wrongly degrades to Basic");
+    }
+
+    [Test]
+    public async Task DiscoverAsync_withoutTransportHeaders_passesNullToProbe()
+    {
+        var (session, _, _, probe, _) = CreateSession();
+
+        await session.DiscoverAsync();
+
+        Assert.That(probe.LastTransportHeaders, Is.Null);
     }
 }
