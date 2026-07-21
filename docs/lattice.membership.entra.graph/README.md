@@ -20,6 +20,34 @@ The resolver authenticates to Graph with its own application-only token acquired
 
 The underlying MSAL confidential-client cache serves and renews the token, and the resolver layers a single-flight guard over it so the whole path stays allocation-light and free of duplicate network calls under load.
 
+## Secret-less (managed-identity) authentication
+
+The resolver supports two mutually exclusive authentication modes, configured on `LatticeEntraGraphOptions`.
+
+**Client-secret (confidential-client) path** - the default. Configure the tenant id, client id, and client secret; the app-only token is acquired and refreshed through the MSAL confidential-client cache described above:
+
+```
+siloBuilder.AddEntraGraphGroupResolver(options =>
+{
+    options.TenantId = tenantId;
+    options.ClientId = clientId;
+    options.ClientSecret = clientSecret; // e.g. injected from Key Vault
+});
+```
+
+**Secret-less path** - for deployments that want no client secret to store, rotate, or leak. Set `LatticeEntraGraphOptions.Credential` to any `Azure.Core` `TokenCredential` (for example `DefaultAzureCredential` or a `ManagedIdentityCredential` bound to a user-assigned managed identity that carries a federated credential on the app registration). The shared app-only Graph client is then built directly from that credential and the configured scopes, and no client secret is acquired, cached, or refreshed; `TenantId`, `ClientId`, and `ClientSecret` are ignored:
+
+```
+siloBuilder.AddEntraGraphGroupResolver(options =>
+{
+    options.Credential = new DefaultAzureCredential();
+});
+```
+
+`Microsoft.Graph` already provides `Azure.Core` transitively, so selecting the secret-less path adds no new package dependency (use `Azure.Identity` for a concrete credential such as `DefaultAzureCredential`).
+
+The two modes are validated fail-closed at registration: exactly one must be configured. Supplying **neither** a credential nor the full tenant/client/secret triple is rejected, and supplying **both** a `Credential` and a `ClientSecret` is rejected as ambiguous rather than silently picking one.
+
 ## Identity directory
 
 The same registration also installs a Microsoft Graph-backed

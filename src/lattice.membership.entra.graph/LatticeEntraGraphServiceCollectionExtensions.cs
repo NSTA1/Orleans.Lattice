@@ -25,6 +25,14 @@ public static class LatticeEntraGraphServiceCollectionExtensions
     /// registration, so configuring Entra Graph makes directory validation present
     /// with no extra wiring.
     /// <para>
+    /// Two authentication modes are supported (see <see cref="LatticeEntraGraphOptions"/>).
+    /// By default the shared Graph client uses the confidential-client path built
+    /// from the tenant id, client id, and client secret. Alternatively, setting
+    /// <see cref="LatticeEntraGraphOptions.Credential"/> selects the secret-less
+    /// path: the shared Graph client is built directly from that token credential
+    /// (for example a federated managed identity) and no client secret is used.
+    /// </para>
+    /// <para>
     /// Must be called <i>after</i>
     /// <see cref="LatticeEntraServiceCollectionExtensions.AddEntraCredentialAuthenticator(ISiloBuilder, Action{LatticeEntraAuthenticatorOptions})"/>:
     /// the resolver only has an effect once an Entra authenticator is registered to
@@ -59,6 +67,14 @@ public static class LatticeEntraGraphServiceCollectionExtensions
         // stream no matter how many Graph-backed seams consume it.
         builder.Services.AddSingleton<GraphServiceClient>(sp =>
         {
+            // Secret-less path: build the shared Graph client directly from the
+            // supplied token credential (e.g. a federated managed identity). No
+            // client secret is acquired, cached, or refreshed.
+            if (options.Credential is not null)
+            {
+                return new GraphServiceClient(options.Credential, options.Scopes.ToArray());
+            }
+
             var application = ConfidentialClientApplicationBuilder
                 .Create(options.ClientId)
                 .WithClientSecret(options.ClientSecret)

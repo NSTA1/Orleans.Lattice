@@ -1,3 +1,5 @@
+using Azure.Core;
+
 namespace Orleans.Lattice.Membership.Entra.Graph;
 
 /// <summary>
@@ -6,6 +8,14 @@ namespace Orleans.Lattice.Membership.Entra.Graph;
 /// scopes it requests, and how it shapes the transitive-group query. The app-only
 /// access token is acquired and refreshed transparently through the MSAL
 /// confidential-client cache; operators never manage a Graph token directly.
+/// <para>
+/// Two mutually exclusive authentication modes are supported. By default the
+/// resolver uses the confidential-client path, authenticating app-only with the
+/// <see cref="TenantId"/>, <see cref="ClientId"/>, and <see cref="ClientSecret"/>
+/// triple. Alternatively, supplying a <see cref="Credential"/> selects a
+/// secret-less path where the resolver authenticates app-only with that token
+/// credential (e.g. a federated managed identity) and no client secret is used.
+/// </para>
 /// </summary>
 public sealed class LatticeEntraGraphOptions
 {
@@ -15,14 +25,36 @@ public sealed class LatticeEntraGraphOptions
     /// <summary>The default Graph scope for app-only access.</summary>
     public const string DefaultScope = "https://graph.microsoft.com/.default";
 
-    /// <summary>The tenant id the app-only Graph token is issued for. Must be set.</summary>
+    /// <summary>
+    /// The tenant id the app-only Graph token is issued for. Required for the
+    /// confidential-client (client-secret) path; ignored when <see cref="Credential"/> is set.
+    /// </summary>
     public string TenantId { get; set; } = string.Empty;
 
-    /// <summary>The Entra application (client) id used to acquire the Graph token. Must be set.</summary>
+    /// <summary>
+    /// The Entra application (client) id used to acquire the Graph token. Required for the
+    /// confidential-client (client-secret) path; ignored when <see cref="Credential"/> is set.
+    /// </summary>
     public string ClientId { get; set; } = string.Empty;
 
-    /// <summary>The Entra application client secret used to acquire the Graph token. Must be set.</summary>
+    /// <summary>
+    /// The Entra application client secret used to acquire the Graph token. Required for the
+    /// confidential-client path; must be left unset when <see cref="Credential"/> is used.
+    /// </summary>
     public string ClientSecret { get; set; } = string.Empty;
+
+    /// <summary>
+    /// An optional Azure token credential that selects the secret-less
+    /// authentication path. When set, the resolver authenticates app-only with
+    /// this credential (for example <c>DefaultAzureCredential</c> or a
+    /// <c>ManagedIdentityCredential</c> bound to a user-assigned managed identity)
+    /// and no <see cref="ClientSecret"/> is used - the shared Graph client is built
+    /// directly from this credential and the configured <see cref="Scopes"/>. This
+    /// mode is mutually exclusive with the client-secret path: supplying both a
+    /// <see cref="Credential"/> and a <see cref="ClientSecret"/> is rejected as
+    /// ambiguous. Defaults to <c>null</c> (the confidential-client path).
+    /// </summary>
+    public TokenCredential? Credential { get; set; }
 
     /// <summary>
     /// The Entra login host. Combined with <see cref="TenantId"/> to form the MSAL
