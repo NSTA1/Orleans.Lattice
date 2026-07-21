@@ -109,8 +109,8 @@ through the script) are:
 | `zoneRedundant` | `true` | Zone-redundant compute (replicas spread across availability zones). Applies to both options - both are VNet-injected. |
 | `siloMinReplicas` / `siloMaxReplicas` | 1 / 10 | Silo autoscale bounds. |
 | `backupPrimaryRegionCode` | first region | The single backup-primary region. |
-| `replicationKey` | `''` | `@secure()`; the per-cluster replication key (public option). |
-| `grafanaAdminPassword` | `''` | `@secure()`; per-region Grafana admin password. |
+| `replicationKey` | `''` | `@secure()`; the per-cluster replication key (both options - authenticates replication over public ingress, or over the private VNet mesh as defense in depth). |
+| `grafanaAdminPassword` | required | `@secure()`; per-region Grafana admin password (no default; must be non-empty). |
 | `ingressAllowedCidrs` | `[]` | Ingress allow-list (public option). |
 | `authDefaultEffect` | `Deny` | Authorization default effect estate-wide. |
 | `requireApiAuthorization` | `true` | Whether the facades and MCP require authorization. |
@@ -141,7 +141,18 @@ VNet-integrated ingress with full-mesh global VNet peering, so cross-region
 replication travels private address space. Select it with
 `-DeploymentOption private`. (Both options are VNet-injected; the private option
 adds internal-only ingress plus the peering, on top of the per-region VNets the
-public option already provisions.)
+public option already provisions.) Replication is **still authenticated by the
+per-cluster replication key** - held in a per-region Key Vault and read via
+managed identity, exactly as in the public option - layered on top of the private
+transport as defense in depth, so `-ReplicationKey` is required here too.
+
+> **Scope of "private".** This closes the *ingress* and the *inter-region
+> replication path*, not the entire data plane. Silos still reach Azure Storage
+> (WAL tables, backup blob) and the container registry over public PaaS endpoints
+> (managed-identity authenticated), and the replication Key Vault keeps
+> `publicNetworkAccess` enabled but firewalled to the region workload subnet.
+> Private endpoints for Storage, ACR, and Key Vault are a documented
+> further-hardening step this reference architecture does not yet implement.
 
 ```powershell
 ./deploy/Deploy-ReferenceArchitecture.ps1 `
@@ -271,6 +282,24 @@ Private Link private origins. Upgrading:
   client-facing path.
 - Carries a higher base monthly cost than Standard plus managed-rule request
   charges. Weigh it against the estate's exposure and compliance requirements.
+
+### Close the remaining public data-plane surfaces (private endpoints)
+
+Even under the **private** network option, "private" today means private *ingress*
+and a private *inter-region replication path* - not a fully private data plane.
+Two public PaaS surfaces remain, both authenticated by managed identity:
+
+- The silos reach **Azure Storage** (WAL tables, backup blob) and the **container
+  registry** over their public service endpoints.
+- The replication **Key Vault** keeps `publicNetworkAccess` enabled (firewalled to
+  the region workload subnet via a service endpoint), rather than
+  `publicNetworkAccess: Disabled` behind a private endpoint.
+
+To reach a zero-public-surface posture, add **private endpoints** for Storage, the
+registry, and Key Vault (with `publicNetworkAccess: Disabled` and private DNS zone
+links per region), and switch the Key Vault firewall from a service-endpoint
+`virtualNetworkRule` to a private endpoint. This is a deliberate, separate
+hardening effort and is **not implemented** in the baseline.
 
 ## Local development
 

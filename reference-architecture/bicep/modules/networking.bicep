@@ -1,29 +1,35 @@
 // =============================================================================
-// networking.bicep - public-option replication endpoint security (Key Vault)
+// networking.bicep - replication endpoint security (Key Vault) for BOTH options
 // -----------------------------------------------------------------------------
-// Sub-issue F-190 (Reference Architecture epic): the PUBLIC-option half of the
-// NETWORKING lane. The private-option network foundation (per-region VNets +
-// full-mesh peering) lives in the sibling module vnet.bicep, which is provisioned
-// BEFORE compute; this module holds the public option's Key Vault and is
-// provisioned AFTER compute (it consumes each region's workload-identity
-// principalId). See vnet.bicep's header for why the two concerns are split (it
-// keeps the compute <-> networking module ordering one-directional and avoids a
-// compile-time dependency cycle).
+// Sub-issue F-190 (Reference Architecture epic): the replication-key half of the
+// NETWORKING lane. The per-region VNet foundation (VNets + full-mesh peering)
+// lives in the sibling module vnet.bicep, which is provisioned BEFORE compute;
+// this module holds the per-region Key Vault and is provisioned AFTER compute (it
+// consumes each region's workload-identity principalId). See vnet.bicep's header
+// for why the two concerns are split (it keeps the compute <-> networking module
+// ordering one-directional and avoids a compile-time dependency cycle).
+//
+// Both deployment options now authenticate cross-region replication with the
+// per-cluster replication key held in a per-region Key Vault (RBAC-authorized,
+// soft-delete + purge-protection ON, data-plane firewall denying all but the
+// region workload subnet). The options differ only in the transport the key
+// authenticates over:
 //
 //   'public'  - replication rides the ACA-managed ingress FQDN (server TLS, no
-//               custom certificate lifecycle). The endpoint is AUTHENTICATED by
-//               Lattice's per-cluster replication key, held in a per-region Key
-//               Vault (RBAC-authorized, soft-delete + purge-protection ON) and
-//               read by the region's workload identity via least-privilege
-//               "Key Vault Secrets User". An ingress allow-list seam is exposed
-//               for the coordinator to wire into the ACA ingress / front door.
+//               custom certificate lifecycle), AUTHENTICATED by the replication
+//               key. An ingress allow-list seam is exposed for the coordinator to
+//               wire into the ACA ingress / front door.
 //
-//   'private' - see vnet.bicep. This module deploys nothing for the private
-//               option (its resources are gated on the public option); private
-//               replication is isolated by the VNet transport, not a Key Vault.
+//   'private' - replication rides private address space (full-mesh VNet peering,
+//               see vnet.bicep). The replication key is layered ON TOP of that
+//               network isolation as defense in depth, so a caller that reaches
+//               the internal ingress still cannot forge replication traffic. The
+//               Key Vault stays public-network-access Enabled but firewalled to
+//               the region subnet; a Key Vault PRIVATE ENDPOINT is the documented
+//               further-hardening step (not yet implemented).
 //
-// This module owns the public Key Vault only. It creates NO container apps and
-// NO managed environments (compute.bicep owns those) - it feeds compute via the
+// This module owns the Key Vault only. It creates NO container apps and NO
+// managed environments (compute.bicep owns those) - it feeds compute via the
 // named outputs at the bottom and is fed the per-region workload-identity
 // principalIds via the parameters at the top.
 //
@@ -40,7 +46,7 @@ targetScope = 'resourceGroup'
 
 // --- Deployment option -------------------------------------------------------
 
-@description('Selects the cross-region replication transport. "public" provisions per-region Key Vaults for replication-key auth over server-TLS public ingress. "private" provisions nothing here (the VNet transport in vnet.bicep is the isolation boundary). Only the public option\'s resources are provisioned by this module.')
+@description('Selects the cross-region replication transport. Both options provision per-region Key Vaults for replication-key auth; "public" authenticates over server-TLS public ingress, "private" layers the key on top of the VNet transport (vnet.bicep) as defense in depth. Echoed as an output and drives the ingress allow-list seam.')
 @allowed([
   'public'
   'private'
@@ -54,15 +60,15 @@ param deploymentOption string
 @minLength(1)
 param regions array
 
-@description('Per-region workload-identity principalIds, index-aligned with `regions`. In main.bicep map this from compute: [for (r, i) in regions: compute[i].outputs.managedIdentityPrincipalId]. Used to grant least-privilege Key Vault access in the public option; ignored by the private option.')
+@description('Per-region workload-identity principalIds, index-aligned with `regions`. In main.bicep map this from compute: [for (r, i) in regions: compute[i].outputs.managedIdentityPrincipalId]. Used to grant least-privilege Key Vault access (both options).')
 param regionManagedIdentityPrincipalIds array = []
 
-@description('Per-region ACA infrastructure subnet ids, index-aligned with `regions` (from vnet.bicep, which enables the Microsoft.KeyVault service endpoint on each). Added to the public option Key Vault firewall as a virtualNetworkRule so the vault data plane trusts ONLY the region workload subnet (with defaultAction Deny). Ignored by the private option.')
+@description('Per-region ACA infrastructure subnet ids, index-aligned with `regions` (from vnet.bicep, which enables the Microsoft.KeyVault service endpoint on each). Added to the Key Vault firewall as a virtualNetworkRule so the vault data plane trusts ONLY the region workload subnet (with defaultAction Deny). Applies to both options.')
 param infrastructureSubnetIds array = []
 
-// --- Public option: replication key + Key Vault ------------------------------
+// --- Replication key + Key Vault ---------------------------------------------
 
-@description('The per-cluster Lattice replication key/secret, matched across EVERY region. The deployer generates it once and passes it here. Written verbatim into each region\'s Key Vault secret; never emitted as an output. Used only by the public option.')
+@description('The per-cluster Lattice replication key/secret, matched across EVERY region. The deployer generates it once and passes it here. Written verbatim into each region\'s Key Vault secret; never emitted as an output. Used by both options.')
 @secure()
 param replicationKey string = ''
 
@@ -78,8 +84,6 @@ param ingressAllowedCidrs array = []
 // Derived values
 // =============================================================================
 
-var isPublic = deploymentOption == 'public'
-
 // Built-in "Key Vault Secrets User" role - read secret contents only.
 var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
 
@@ -87,15 +91,11 @@ var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
 // suffix keeps them collision-free across estates while staying in bounds.
 var vaultNames = [for (region, i) in regions: take(toLower('${replace(region.regionCode, '-', '')}kv${uniqueString(resourceGroup().id, region.regionCode)}'), 24)]
 
-// Option-scoped region list keeps the output for-loop empty (and its
-// conditional-resource dereferences unreached) when the public option is inactive.
-var publicRegions = isPublic ? regions : []
-
 // =============================================================================
-// PUBLIC OPTION - per-region Key Vault holding the replication key
+// Per-region Key Vault holding the replication key (BOTH options)
 // =============================================================================
 
-resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = [for (region, i) in regions: if (isPublic) {
+resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = [for (region, i) in regions: {
   name: vaultNames[i]
   location: region.location
   properties: {
@@ -134,7 +134,7 @@ resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = [for (region, i) in regi
 }]
 
 // The replication key secret - the ONLY place the @secure() key is materialised.
-resource replicationKeySecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = [for (region, i) in regions: if (isPublic) {
+resource replicationKeySecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = [for (region, i) in regions: {
   parent: vault[i]
   name: replicationKeySecretName
   properties: {
@@ -144,7 +144,7 @@ resource replicationKeySecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = [
 
 // Least-privilege grant: the region workload identity may READ secrets from its
 // own vault and nothing else. Scoped to the individual vault resource.
-resource kvSecretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for (region, i) in regions: if (isPublic) {
+resource kvSecretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for (region, i) in regions: {
   name: guid(vault[i].id, regionManagedIdentityPrincipalIds[i], keyVaultSecretsUserRoleId)
   scope: vault[i]
   properties: {
@@ -161,16 +161,16 @@ resource kvSecretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = [f
 @description('The selected deployment option, echoed for downstream conditionals.')
 output deploymentOption string = deploymentOption
 
-@description('PUBLIC option per-region Key Vault seams, in region-list order. Wire `replicationKeySecretUri` (+ the region managed identity) into the silo\'s Key Vault secret reference. Contains NO secret material - only the resolvable URI of the secret. Empty for the private option.')
-output perRegionPublic array = [for (region, i) in publicRegions: {
+@description('Per-region Key Vault seams, in region-list order (BOTH options). Wire `replicationKeySecretUri` (+ the region managed identity) into the silo\'s Key Vault secret reference. Contains NO secret material - only the resolvable URI of the secret.')
+output perRegionPublic array = [for (region, i) in regions: {
   regionCode: region.regionCode
   location: region.location
-  keyVaultName: vault[i]!.name
-  keyVaultUri: vault[i]!.properties.vaultUri
+  keyVaultName: vault[i].name
+  keyVaultUri: vault[i].properties.vaultUri
   replicationKeySecretName: replicationKeySecretName
-  replicationKeySecretUri: '${vault[i]!.properties.vaultUri}secrets/${replicationKeySecretName}'
+  replicationKeySecretUri: '${vault[i].properties.vaultUri}secrets/${replicationKeySecretName}'
 }]
 
-@description('PUBLIC option ingress allow-list, echoed for the coordinator to apply to the ACA ingress ipSecurityRestrictions / front-door WAF. This module provisions no container ingress itself.')
+@description('Ingress allow-list, echoed for the coordinator to apply to the ACA ingress ipSecurityRestrictions / front-door WAF (public option). This module provisions no container ingress itself.')
 output ingressAllowedCidrs array = ingressAllowedCidrs
 

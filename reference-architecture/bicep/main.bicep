@@ -80,7 +80,7 @@ param deploymentOption string = 'public'
 @description('When true, each region managed environment is zone-redundant (replicas spread across availability zones). Every deployment option is VNet-injected, so this applies to both public and private estates. Defaults to true so estates are zone-redundant out of the box; set false to opt out (for example single-zone dev estates).')
 param zoneRedundant bool = true
 
-@description('PUBLIC option: the per-cluster Lattice replication key, matched across EVERY region. The deployer generates it once and passes it at deploy time (never committed). Written only into each region Key Vault secret by the networking module; never emitted as an output.')
+@description('The per-cluster Lattice replication key, matched across EVERY region and used by BOTH options (public authenticates over public ingress; private layers it on the VNet transport as defense in depth). The deployer generates it once and passes it at deploy time (never committed). Written only into each region Key Vault secret by the networking module; never emitted as an output.')
 @secure()
 param replicationKey string = ''
 
@@ -248,15 +248,17 @@ module storage 'modules/storage.bicep' = {
 }
 
 // =============================================================================
-// Public-option replication endpoint security (per-region Key Vault) - F-190.
+// Replication endpoint security (per-region Key Vault) - F-190.
 // -----------------------------------------------------------------------------
 // Invoked AFTER the compute loop because it grants Key Vault Secrets User to each
 // region's workload identity (compute owns the identities). The silo consumes the
 // replication key via its Key Vault secret reference; that cross-region silo env
 // wiring (peer list, wire merge mode, receiver enrollment, and the KV secret ref)
 // is applied symmetrically by the deployer sub-issue, which computes the per-region
-// peer FQDN set. For the private option this module provisions nothing (the VNet
-// transport is the isolation boundary).
+// peer FQDN set. BOTH options provision the Key Vault: the public option
+// authenticates replication over server-TLS public ingress with the key, and the
+// private option layers the same key on top of the VNet transport as defense in
+// depth.
 // =============================================================================
 
 module networking 'modules/networking.bicep' = {
@@ -266,8 +268,8 @@ module networking 'modules/networking.bicep' = {
     regions: regions
     regionManagedIdentityPrincipalIds: [for (region, i) in regions: compute[i].outputs.managedIdentityPrincipalId]
     // Per-region ACA infrastructure subnet ids (Key Vault service endpoint enabled
-    // in vnet.bicep) so the public-option Key Vault firewall trusts only the
-    // region workload's subnet egress (defaultAction Deny + virtualNetworkRule).
+    // in vnet.bicep) so the Key Vault firewall trusts only the region workload's
+    // subnet egress (defaultAction Deny + virtualNetworkRule), for both options.
     infrastructureSubnetIds: [for (region, i) in regions: vnet.outputs.perRegionNetwork[i].infrastructureSubnetId]
     replicationKey: replicationKey
     ingressAllowedCidrs: ingressAllowedCidrs
@@ -385,7 +387,7 @@ output backupAccountName string = storage.outputs.backupAccountNameOut
 @description('Selected cross-region replication transport option ("public" or "private").')
 output deploymentOption string = deploymentOption
 
-@description('PUBLIC option per-region Key Vault seams (keyless secret URIs, no secret material) for the deployer to wire the silo replication-key secret reference. Empty for the private option.')
+@description('Per-region Key Vault seams (keyless secret URIs, no secret material) for the deployer to wire the silo replication-key secret reference. Populated for BOTH options.')
 output perRegionReplicationKeyVault array = networking.outputs.perRegionPublic
 
 @description('Per-region VNet / infrastructure-subnet seams (every option is VNet-injected).')

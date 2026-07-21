@@ -114,12 +114,12 @@ takes precedence when supplied.
 | `-BaseName` | yes | 3-16 lowercase alphanumerics, shared estate-wide. |
 | `-Regions` | yes | Array of `@{ regionCode = '...'; location = '...' }`. One or many. |
 | `-ImageTag` | yes | Tag applied to all three built images. |
-| `-DeploymentOption` | no | `public` (default, external ingress + replication key) or `private` (internal ingress + VNet peering). Both are VNet-injected + zone-redundant. |
+| `-DeploymentOption` | no | `public` (default, external ingress + replication key over public ingress) or `private` (internal ingress + VNet peering, replication key layered on as defense in depth). Both are VNet-injected + zone-redundant, and both provision the per-region replication Key Vault. |
 | `-ZoneRedundant` | no | `$true` (default) or `$false`. Zone-redundant compute for both options. |
 | `-ReplicationTrees` | no | Estate-wide `treeName=MergeMode,...` map. |
 | `-BackupPrimaryRegionCode` | no | Defaults to the first region. |
 | `-IngressAllowedCidrs` | no | Ingress allow-list (public option). |
-| `-ReplicationKey` | public option | `SecureString`, stable across runs. |
+| `-ReplicationKey` | yes | `SecureString`, stable across runs. Required by both options. |
 | `-GrafanaAdminPassword` | yes | `SecureString`. |
 | `-EntraEnabled` / `-EntraTenantId` | Entra | Enable and target tenant. |
 | `-EntraClientId` | no | Use a pre-existing audience app instead of deploying `entra.bicep`. |

@@ -162,9 +162,11 @@ param(
 
     [bool]$RequireApiAuthorization = $true,
 
-    # PUBLIC option: the per-cluster replication key, matched across every region.
-    # Stable across runs (a re-run with a different key rotates the secret and
-    # dead-letters in-flight cross-region traffic until every region converges).
+    # The per-cluster replication key, matched across every region and required by
+    # BOTH options (public authenticates replication over public ingress with it;
+    # private layers it on the VNet transport as defense in depth). Stable across
+    # runs (a re-run with a different key rotates the secret and dead-letters
+    # in-flight cross-region traffic until every region converges).
     [securestring]$ReplicationKey,
 
     # Grafana admin password for every per-region self-hosted Grafana head.
@@ -322,8 +324,8 @@ if (-not (Get-ByRegionCode -Items $Regions -RegionCode $BackupPrimaryRegionCode)
     throw "-BackupPrimaryRegionCode '$BackupPrimaryRegionCode' does not match any -Regions entry."
 }
 
-if ($DeploymentOption -eq 'public' -and $null -eq $ReplicationKey) {
-    throw 'The public deployment option requires -ReplicationKey (a SecureString matched across every region).'
+if ($null -eq $ReplicationKey) {
+    throw 'Both deployment options require -ReplicationKey (a SecureString matched across every region). The public option authenticates replication over public ingress with it; the private option layers it on the VNet transport as defense in depth.'
 }
 
 if ($EntraEnabled -and [string]::IsNullOrWhiteSpace($EntraTenantId)) {
@@ -428,14 +430,16 @@ try {
     $pass1File = New-ParametersFile -Values $pass1Values
     $tempFiles.Add($pass1File)
 
-    # Secret-bearing @secure() params (Grafana admin password, and the public
-    # option replication key) are delivered to az through STDIN as an ARM
-    # parameters JSON piped via `--parameters @-`. They never appear in the
-    # process argument list, the shell history, or on disk (the non-secret temp
-    # file above holds only non-secret values).
-    $secretParams = [ordered]@{ grafanaAdminPassword = @{ value = $grafanaPasswordPlain } }
-    if ($DeploymentOption -eq 'public') {
-        $secretParams['replicationKey'] = @{ value = $replicationKeyPlain }
+    # Secret-bearing @secure() params (Grafana admin password and the replication
+    # key) are delivered to az through STDIN as an ARM parameters JSON piped via
+    # `--parameters @-`. They never appear in the process argument list, the shell
+    # history, or on disk (the non-secret temp file above holds only non-secret
+    # values). The replication key is written to a per-region Key Vault for BOTH
+    # options (public authenticates over public ingress; private layers it on the
+    # VNet transport as defense in depth).
+    $secretParams = [ordered]@{
+        grafanaAdminPassword = @{ value = $grafanaPasswordPlain }
+        replicationKey       = @{ value = $replicationKeyPlain }
     }
     $pass1SecretsJson = [ordered]@{
         '$schema'      = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#'

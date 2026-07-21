@@ -319,9 +319,22 @@ space:
   the per-region VNets are joined by **full-mesh global VNet peering**, so
   cross-region replication travels private address space and is never publicly
   reachable.
+- Replication is **still authenticated by the per-cluster replication key** (held
+  in each region's Key Vault, read via managed identity), layered on top of the
+  private transport as **defense in depth** - so a caller that reaches the
+  internal ingress still cannot forge replication traffic.
 - There is no global Front Door (AFD Standard has no Private Link to origins), so
   private deployments route clients through their own private connectivity to the
   regional internal ingress.
+- **Not a zero-public-surface deployment (yet).** "Private" here means private
+  *ingress* and a private *inter-region replication path* - it is **not** a fully
+  private data plane. The silos still reach Azure Storage (WAL tables, backup
+  blob) and the container registry over **public PaaS endpoints** (authenticated
+  by managed identity), and the replication Key Vault keeps `publicNetworkAccess`
+  enabled but firewalled to the region workload subnet. Closing those remaining
+  public surfaces (private endpoints for Storage / ACR / Key Vault) is a documented
+  **further-hardening** step that this reference architecture does not yet
+  implement.
 
 ```mermaid
 flowchart TB
@@ -335,7 +348,9 @@ flowchart TB
     subgraph Private["Private option (VNet-injected, internal ingress)"]
         VA["Region A VNet<br/>internal-only ingress"]
         VB["Region B VNet<br/>internal-only ingress"]
-        VA <-->|"full-mesh VNet peering<br/>no public transport"| VB
+        VA <-->|"full-mesh VNet peering<br/>+ replication key auth"| VB
+        VKV["Key Vault: replication key<br/>(managed identity, subnet-firewalled)"]
+        VA --- VKV
     end
 ```
 
@@ -477,21 +492,23 @@ Security is a first-class property of this architecture, not an afterthought:
 - **Least privilege.** Each role assignment is the narrowest that works (for
   example Storage Table Data Contributor scoped to one account; a reader role on
   the sink for standby regions).
-- **Key Vault data-plane firewall (public option).** The per-region replication
+- **Key Vault data-plane firewall (both options).** Every region's replication
   Key Vault denies network access by default (`networkAcls.defaultAction: Deny`)
   and trusts **only** the region's ACA infrastructure subnet, via a
   `Microsoft.KeyVault` service endpoint on that subnet plus a matching
   `virtualNetworkRule`. `bypass: AzureServices` keeps the Key Vault resource
   provider's trusted-service path so the secret is still written at deploy time.
-  This service-endpoint boundary is the isolation seam for the public option;
-  private endpoints (e.g. for storage or the registry) are **not implemented** in
-  this reference architecture and would be a separate hardening effort.
+  This service-endpoint boundary applies to public and private alike; a Key Vault
+  **private endpoint** (`publicNetworkAccess: Disabled`) is the documented
+  further-hardening step and is **not implemented** yet, as are private endpoints
+  for storage and the registry.
 - **Non-root distroless runtime.** Every built image runs as a non-root user on a
   chiseled (shell-less) base, shrinking the attack surface and blocking
   shell-based exploitation.
 - **Locked ingress.** Client origins accept traffic only from the global front
-  door; the replication transport is either server-TLS + replication-key
-  (public option) or entirely private (private option).
+  door; the replication transport is server-TLS + replication-key over public
+  ingress (public option) or the private VNet mesh **also** authenticated by the
+  replication key (private option).
 - **Fail-closed authorization.** The data plane is deny-by-default where auth is
   enabled, and the read-visibility filter only surfaces trees the caller may read.
 - **Public write surface is opt-in.** The read-write Data API is off unless a
