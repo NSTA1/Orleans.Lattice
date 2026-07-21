@@ -276,16 +276,86 @@ builder.Host.UseOrleans(silo =>
 // The gRPC bindings over the facades. RequireAuthorization is off for the local
 // compose harness (a clearly-labelled dev bypass); a deployment sets
 // StateApi:RequireAuthorization=true, behind the Entra-authenticated front door.
-// When enforcement is on, the turnkey env-var credential authorizer secures the
-// state surface; the auth-admin surface stays fail-closed until an operator
-// wires its authorizer.
-builder.Services.AddLatticeStateApiGrpc(options => options.RequireAuthorization = requireApiAuthorization);
+//
+// When enforcement is on the coarse transport gate is wired to match the sign-in
+// model:
+//
+//   * Entra deployment (Entra:Enabled=true): the State and auth-admin coarse
+//     gates are OPENED (AllowAll...Authorizer), exactly like the Data API below,
+//     because the real enforcement is the deny-by-default per-subject gate applied
+//     afterwards on the gated surface using the caller's Entra-resolved subject
+//     (the State API's read-visibility filter; the auth-admin facade's bootstrap-
+//     administrator check). The State API additionally ADVERTISES the Entra scheme
+//     from its unauthenticated GetAuthScheme RPC, so a connecting Explorer offers
+//     an interactive Entra sign-in instead of silently falling back to Basic. The
+//     advertisement carries only public parameters (authority, tenant, audience);
+//     the audience is the silo facade's own client id, which v2 access tokens
+//     carry as their aud claim, so the Explorer requests a facade-audience token.
+//
+//   * Basic-only deployment (no Entra): the turnkey env-var credential authorizer
+//     secures the state surface with a shared username/password and advertises the
+//     Basic scheme; the auth-admin surface stays fail-closed (no subject resolver
+//     to gate on) until an operator wires its authorizer.
+builder.Services.AddLatticeStateApiGrpc(options =>
+{
+    options.RequireAuthorization = requireApiAuthorization;
+    if (!requireApiAuthorization)
+    {
+        return;
+    }
+
+    if (entraEnabled)
+    {
+        var tenantId = config["Entra:TenantId"] ?? string.Empty;
+        var authority = config["Entra:Authority"] ?? $"https://login.microsoftonline.com/{tenantId}/v2.0";
+        options.AdvertisedAuthSchemes.Add(new AuthSchemeDescriptor
+        {
+            // Well-known parameter keys the Explorer's Entra login method reads
+            // (Orleans.Lattice.Explorer.Core.Authentication.ExplorerAuthSchemes):
+            // "authority", "tenantId", "audience". The client (application) id is
+            // deliberately NOT advertised - the interactive Explorer console uses
+            // its own configured public-client id, not the silo facade's.
+            SchemeId = "entra",
+            DisplayName = "Microsoft Entra ID",
+            Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["authority"] = authority,
+                ["tenantId"] = tenantId,
+                ["audience"] = config["Entra:ClientId"] ?? string.Empty,
+            },
+        });
+    }
+    else
+    {
+        options.AdvertisedAuthSchemes.Add(new AuthSchemeDescriptor
+        {
+            SchemeId = "basic",
+            DisplayName = "Username / password",
+        });
+    }
+});
 if (requireApiAuthorization)
 {
-    builder.Services.AddEnvVarCredentialAuthorizer();
+    if (entraEnabled)
+    {
+        // Coarse gate opened; the per-subject read-visibility filter on the gated
+        // ILattice surface is the real enforcement (keyed on the Entra subject).
+        builder.Services.AddSingleton<ILatticeStateApiAuthorizer, AllowAllStateApiAuthorizer>();
+    }
+    else
+    {
+        builder.Services.AddEnvVarCredentialAuthorizer();
+    }
 }
 
 builder.Services.AddLatticeAuthApiGrpc(options => options.RequireAuthorization = requireApiAuthorization);
+if (requireApiAuthorization && entraEnabled)
+{
+    // Coarse auth-admin gate opened; the facade default-denies internally on the
+    // Entra-resolved subject unless it is a bootstrap administrator, so only the
+    // designated security admin(s) can read or mutate the access model.
+    builder.Services.AddSingleton<ILatticeAuthApiAuthorizer, AllowAllAuthApiAuthorizer>();
+}
 
 // The write-capable data-API gRPC binding, co-hosted on the same silo gRPC port.
 // The coarse transport gate is opened (AllowAllDataApiAuthorizer) because the
