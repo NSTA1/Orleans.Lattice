@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.AspNetCore.Components.Server.Circuits;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Explorer.Core.Authentication;
+using Orleans.Lattice.Explorer.Core.Configuration;
 
 namespace Orleans.Lattice.Explorer.Entra.Web;
 
@@ -16,18 +17,22 @@ namespace Orleans.Lattice.Explorer.Entra.Web;
 /// </summary>
 internal sealed class ExplorerEntraWebAutoSignInCircuitHandler : CircuitHandler
 {
+    private readonly IExplorerSession _explorerSession;
     private readonly IExplorerAuthSession _session;
     private readonly AuthenticationStateProvider _authenticationStateProvider;
     private readonly ILogger<ExplorerEntraWebAutoSignInCircuitHandler> _logger;
 
     public ExplorerEntraWebAutoSignInCircuitHandler(
+        IExplorerSession explorerSession,
         IExplorerAuthSession session,
         AuthenticationStateProvider authenticationStateProvider,
         ILogger<ExplorerEntraWebAutoSignInCircuitHandler> logger)
     {
+        ArgumentNullException.ThrowIfNull(explorerSession);
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(authenticationStateProvider);
         ArgumentNullException.ThrowIfNull(logger);
+        _explorerSession = explorerSession;
         _session = session;
         _authenticationStateProvider = authenticationStateProvider;
         _logger = logger;
@@ -60,8 +65,15 @@ internal sealed class ExplorerEntraWebAutoSignInCircuitHandler : CircuitHandler
                 return;
             }
 
-            // Ensure any stored credential is loaded and the endpoint's advertised
-            // scheme is known before driving the challenge; both are idempotent.
+            // Ensure the endpoint configuration is loaded (so the connection is
+            // established and its advertised scheme is discoverable) and any stored
+            // credential is applied before driving the challenge. The auto-sign-in
+            // handler runs on OnConnectionUpAsync, which fires before the
+            // ConfigurationGate component renders and initializes the session, so
+            // without this the endpoint's Current configuration is still null and
+            // discovery wrongly reports no advertised scheme. Both calls are
+            // idempotent, so the later ConfigurationGate initialization is a no-op.
+            await _explorerSession.InitializeAsync(cancellationToken).ConfigureAwait(false);
             await _session.InitializeAsync(cancellationToken).ConfigureAwait(false);
             if (_session.IsAuthenticated)
             {

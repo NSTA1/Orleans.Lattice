@@ -15,12 +15,15 @@ namespace Orleans.Lattice.Explorer.Web;
 /// where an <see cref="HttpContext"/> is available.
 /// </summary>
 /// <remarks>
-/// Cookie reads and writes require an active <see cref="HttpContext"/>, which is
-/// present on the auth endpoints but not on a SignalR circuit. The credential is
-/// written and cleared on the server-side <c>/auth/login</c> and
-/// <c>/auth/logout</c> endpoints; the encrypted cookie is the per-browser
-/// at-rest store each circuit's scoped auth session reads its own credential
-/// from, so no circuit inherits another operator's sign-in.
+/// Cookie writes require a response whose headers are still unsent, which holds on
+/// the auth endpoints but not on a Blazor Server circuit: there the
+/// <see cref="IHttpContextAccessor"/> resolves the long-lived SignalR request whose
+/// response has already started, so <see cref="SetAsync"/> and <see cref="ClearAsync"/>
+/// skip the write (guarding on <see cref="HttpResponse.HasStarted"/>) instead of
+/// throwing. The credential is written and cleared on the server-side
+/// <c>/auth/login</c> and <c>/auth/logout</c> endpoints; the encrypted cookie is the
+/// per-browser at-rest store each circuit's scoped auth session reads its own
+/// credential from, so no circuit inherits another operator's sign-in.
 /// </remarks>
 public sealed class CookieCredentialStore : ICredentialStore
 {
@@ -73,6 +76,16 @@ public sealed class CookieCredentialStore : ICredentialStore
             ?? throw new InvalidOperationException(
                 "Setting the credential cookie requires an active HttpContext; sign in through the /auth/login endpoint.");
 
+        // The accessor also returns a context whose response has already started -
+        // for example the long-lived SignalR request behind a Blazor circuit, where
+        // the auto-sign-in handler runs. Cookie headers cannot be written once the
+        // response has started; persisting the credential is best-effort at-rest
+        // state, so skip the write and let the next /auth/login request reconcile it.
+        if (context.Response.HasStarted)
+        {
+            return Task.CompletedTask;
+        }
+
         var payload = _protector.Protect(JsonSerializer.Serialize(credential));
         context.Response.Cookies.Append(CookieName, payload, new CookieOptions
         {
@@ -89,7 +102,18 @@ public sealed class CookieCredentialStore : ICredentialStore
     public Task ClearAsync(CancellationToken cancellationToken = default)
     {
         var context = _httpContextAccessor.HttpContext;
-        context?.Response.Cookies.Delete(CookieName);
+
+        // Guard on HasStarted: on a Blazor circuit the accessor returns the
+        // long-lived SignalR request whose response headers are already sent (this
+        // is the path the Entra auto-sign-in handler clears a stale credential
+        // from), and deleting the cookie there throws "Headers are read-only,
+        // response has already started". The credential is best-effort at-rest
+        // state, so skip the write when the response cannot carry it.
+        if (context is not null && !context.Response.HasStarted)
+        {
+            context.Response.Cookies.Delete(CookieName);
+        }
+
         return Task.CompletedTask;
     }
 }

@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Orleans.Lattice.Explorer.Core.Authentication;
+using Orleans.Lattice.Explorer.Core.Configuration;
 
 namespace Orleans.Lattice.Explorer.Entra.Web.Tests;
 
@@ -24,13 +25,15 @@ public sealed class ExplorerEntraWebAutoSignInCircuitHandlerTests
     private static ExplorerEntraWebAutoSignInCircuitHandler CreateHandler(
         IExplorerAuthSession session,
         ClaimsPrincipalKind user,
-        ILogger<ExplorerEntraWebAutoSignInCircuitHandler>? logger = null)
+        ILogger<ExplorerEntraWebAutoSignInCircuitHandler>? logger = null,
+        IExplorerSession? explorerSession = null)
     {
         var principal = user == ClaimsPrincipalKind.Authenticated
             ? FakeAuthenticationStateProvider.Authenticated("alice")
             : FakeAuthenticationStateProvider.Anonymous();
 
         return new ExplorerEntraWebAutoSignInCircuitHandler(
+            explorerSession ?? Substitute.For<IExplorerSession>(),
             session,
             new FakeAuthenticationStateProvider(principal),
             logger ?? NullLogger<ExplorerEntraWebAutoSignInCircuitHandler>.Instance);
@@ -59,6 +62,28 @@ public sealed class ExplorerEntraWebAutoSignInCircuitHandlerTests
             ExplorerAuthSchemes.Entra,
             Arg.Any<IReadOnlyDictionary<string, string?>?>(),
             Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task Initializes_the_explorer_session_before_discovering_the_scheme()
+    {
+        // Regression: the endpoint configuration (IExplorerSession.Current) is
+        // seeded by IExplorerSession.InitializeAsync, which the ConfigurationGate
+        // component only runs on render - after OnConnectionUpAsync. The handler
+        // must initialize the explorer session itself, otherwise DiscoverAsync sees
+        // a null Current and wrongly reports no advertised scheme, leaving the
+        // console anonymous.
+        var explorerSession = Substitute.For<IExplorerSession>();
+        var session = CreateSession(isAuthenticated: false, EntraAdvertisement());
+        var handler = CreateHandler(session, ClaimsPrincipalKind.Authenticated, explorerSession: explorerSession);
+
+        await handler.OnConnectionUpAsync(null!, CancellationToken.None);
+
+        Received.InOrder(() =>
+        {
+            explorerSession.InitializeAsync(Arg.Any<CancellationToken>());
+            session.DiscoverAsync(Arg.Any<CancellationToken>());
+        });
     }
 
     [Test]
