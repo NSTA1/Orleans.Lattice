@@ -31,6 +31,19 @@ public sealed record ExplorerCapabilities
     public bool AuthAdminAllowed { get; init; }
 
     /// <summary>
+    /// <see langword="true"/> when the coarse Access probe failed specifically
+    /// because the cluster connection is <em>unauthenticated</em> - the caller
+    /// carried no accepted credential (a gRPC <c>Unauthenticated</c> status, or a
+    /// denial while no sign-in is applied) - rather than an authenticated caller
+    /// being denied administrator access. This distinguishes a recoverable
+    /// "sign-in required" connection state from an advisory "not permitted"
+    /// grey-out, so the shell can prompt a (re-)sign-in instead of collapsing both
+    /// into the same silent deny. Never <see langword="true"/> together with
+    /// <see cref="AuthAdminAllowed"/>.
+    /// </summary>
+    public bool AuthAdminAuthenticationRequired { get; init; }
+
+    /// <summary>
     /// <see langword="true"/> when the cluster reports a searchable identity
     /// directory (so candidate principal ids can be validated before access is
     /// granted). Read from the access-model probe; <see langword="false"/> when

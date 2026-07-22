@@ -43,6 +43,14 @@ public static class ExplorerEntraWebServiceCollectionExtensions
         services.Configure(configure);
         services.AddOptions<ExplorerEntraWebOptions>();
 
+        // Feed the authenticated user captured from HttpContext.User during the
+        // initial render into the Blazor Server circuit's AuthenticationStateProvider.
+        // Without this, an interactive-server circuit reports the OIDC-authenticated
+        // browser user as anonymous for the life of the circuit, so the auto-sign-in
+        // handler and the token acquirer (both registered below) short-circuit on the
+        // anonymous principal and every downstream cluster call is made anonymously.
+        services.AddCascadingAuthenticationState();
+
         var initialScopes = options.Scopes.Count > 0 ? options.Scopes.ToArray() : null;
 
         var appBuilder = services

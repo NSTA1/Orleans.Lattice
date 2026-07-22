@@ -52,6 +52,7 @@ public class ExplorerAccessServiceCollectionExtensionsTests
         var services = new ServiceCollection();
         services.AddExplorerAccess();
         services.AddSingleton<IAuthAdminClient, FakeAuthAdminClient>();
+        services.AddSingleton(Substitute.For<IExplorerAuthSession>());
         await using var provider = services.BuildServiceProvider();
 
         Assert.Multiple(() =>

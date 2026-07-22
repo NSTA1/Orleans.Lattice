@@ -28,6 +28,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
     private AccessTab _tab = AccessTab.Groups;
     private bool _busy;
     private bool _allowed;
+    private bool _authenticationRequired;
     private AccessOperationResult? _lastResult;
 
     // The extracted create-form / access-state model: directory availability, the
@@ -109,6 +110,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
     {
         _accessModel = new AccessCreateModel(Membership);
         _allowed = Capabilities.Current.AuthAdminAllowed;
+        _authenticationRequired = Capabilities.Current.AuthAdminAuthenticationRequired;
         Capabilities.Changed += OnCapabilitiesChanged;
         if (_allowed)
         {
@@ -121,12 +123,14 @@ public partial class AccessPanel : ComponentBase, IDisposable
     private void OnCapabilitiesChanged()
     {
         var allowed = Capabilities.Current.AuthAdminAllowed;
-        if (allowed == _allowed)
+        var authenticationRequired = Capabilities.Current.AuthAdminAuthenticationRequired;
+        if (allowed == _allowed && authenticationRequired == _authenticationRequired)
         {
             return;
         }
 
         _allowed = allowed;
+        _authenticationRequired = authenticationRequired;
         InvokeAsync(async () =>
         {
             // When the gate freshly opens (for example after the connection reaches

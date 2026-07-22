@@ -10,6 +10,11 @@ This changelog covers the **package family**: `Orleans.Lattice`, `Orleans.Lattic
 
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), labelled `lattice` or `lattice.replication`. See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
 
+### Fixed
+
+- **Orleans.Lattice.Explorer.Entra.Web: the hosted-web Explorer circuit now sees the signed-in Entra user instead of an anonymous principal (`Orleans.Lattice.Explorer.Entra.Web`).** `AddLatticeExplorerEntraWebAuth` now calls `AddCascadingAuthenticationState()`, so the Blazor Server circuit's `AuthenticationStateProvider` reports the OIDC-authenticated browser user rather than an anonymous one. Previously the web host authenticated the browser at the HTTP layer (cookie issued, pages rendered) yet the circuit still observed an anonymous user, so the auto-sign-in handler acquired no State API token and every cluster call was made anonymously - the State area listed zero trees and the Access area was disabled, with nothing logged.
+- **Orleans.Lattice.Explorer: an unauthenticated connection is now distinguished from an empty or forbidden one, in the UI and in logs (`Orleans.Lattice.Explorer.Access` / `.UI` / `.Core` and `Orleans.Lattice.Explorer.Entra.Web`).** The auto-sign-in circuit handler now logs a warning when it runs on an anonymous circuit and an informational line when it completes sign-in, so a silent auto-sign-in failure is visible to operators. The Access area's capability probe now separates authentication failures (an unauthenticated rejection, or a denial while not signed in) from genuine authorization denials, and the disabled Access panel shows a distinct "not signed in to the cluster" banner with a sign-in prompt instead of the generic "not permitted" state.
+
 ## [8.0.3] - 2026-07-22
 
 New-package wave - there is no coordinated family `v8.0.3` tag. This wave ships the first release of two **new** packages, each at **8.0.0**, with their own tags (`lattice.explorer.entra.web-v8.0.0` and `lattice.caching.azureblob-v8.0.0`); every existing package in the family remains at its current version. Both packages are additive and opt-in - no existing package changes, so nothing in an existing consumer breaks.

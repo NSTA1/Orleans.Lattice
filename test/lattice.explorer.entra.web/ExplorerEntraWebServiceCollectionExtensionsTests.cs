@@ -93,6 +93,30 @@ public sealed class ExplorerEntraWebServiceCollectionExtensionsTests
     }
 
     [Test]
+    public void Registers_cascading_authentication_state_so_the_circuit_sees_the_signed_in_user()
+    {
+        // Regression for the anonymous-circuit defect: without
+        // AddCascadingAuthenticationState the Blazor Server circuit's
+        // AuthenticationStateProvider reports the OIDC-authenticated user as
+        // anonymous, so the auto-sign-in handler and token acquirer short-circuit
+        // and every cluster call is made anonymously. Assert every service
+        // AddCascadingAuthenticationState registers is present after the call, so
+        // the check survives internal type renames in the framework.
+        var expected = new ServiceCollection()
+            .AddCascadingAuthenticationState()
+            .Select(d => d.ServiceType)
+            .ToHashSet();
+
+        var actual = new ServiceCollection()
+            .AddLatticeExplorerEntraWebAuth(ConfigureValid)
+            .Select(d => d.ServiceType)
+            .ToHashSet();
+
+        Assert.That(expected, Is.Not.Empty);
+        Assert.That(expected.IsSubsetOf(actual), Is.True);
+    }
+
+    [Test]
     public void Returns_the_same_service_collection()
     {
         var services = new ServiceCollection();

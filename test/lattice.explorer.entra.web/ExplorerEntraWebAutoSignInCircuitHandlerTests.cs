@@ -1,4 +1,6 @@
+using System.Collections.Concurrent;
 using Microsoft.AspNetCore.Components.Server.Circuits;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Orleans.Lattice.Explorer.Core.Authentication;
@@ -21,7 +23,8 @@ public sealed class ExplorerEntraWebAutoSignInCircuitHandlerTests
 
     private static ExplorerEntraWebAutoSignInCircuitHandler CreateHandler(
         IExplorerAuthSession session,
-        ClaimsPrincipalKind user)
+        ClaimsPrincipalKind user,
+        ILogger<ExplorerEntraWebAutoSignInCircuitHandler>? logger = null)
     {
         var principal = user == ClaimsPrincipalKind.Authenticated
             ? FakeAuthenticationStateProvider.Authenticated("alice")
@@ -30,7 +33,7 @@ public sealed class ExplorerEntraWebAutoSignInCircuitHandlerTests
         return new ExplorerEntraWebAutoSignInCircuitHandler(
             session,
             new FakeAuthenticationStateProvider(principal),
-            NullLogger<ExplorerEntraWebAutoSignInCircuitHandler>.Instance);
+            logger ?? NullLogger<ExplorerEntraWebAutoSignInCircuitHandler>.Instance);
     }
 
     private static IExplorerAuthSession CreateSession(bool isAuthenticated, ExplorerAuthSchemeAdvertisement advertisement)
@@ -107,9 +110,82 @@ public sealed class ExplorerEntraWebAutoSignInCircuitHandlerTests
         Assert.DoesNotThrowAsync(() => handler.OnConnectionUpAsync(null!, CancellationToken.None));
     }
 
+    [Test]
+    public async Task Logs_a_warning_when_the_circuit_is_anonymous()
+    {
+        var session = CreateSession(isAuthenticated: false, EntraAdvertisement());
+        var logger = new CapturingLogger();
+        var handler = CreateHandler(session, ClaimsPrincipalKind.Anonymous, logger);
+
+        await handler.OnConnectionUpAsync(null!, CancellationToken.None);
+
+        Assert.That(
+            logger.Entries.Any(e => e.Level == LogLevel.Warning && e.Message.Contains("anonymous", StringComparison.OrdinalIgnoreCase)),
+            Is.True,
+            "the silent anonymous-circuit early-return must be surfaced in the log");
+    }
+
+    [Test]
+    public async Task Logs_information_on_a_successful_automatic_sign_in()
+    {
+        var session = CreateSession(isAuthenticated: false, EntraAdvertisement());
+        var logger = new CapturingLogger();
+        var handler = CreateHandler(session, ClaimsPrincipalKind.Authenticated, logger);
+
+        await handler.OnConnectionUpAsync(null!, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(logger.Entries.Any(e => e.Level == LogLevel.Information), Is.True);
+            Assert.That(logger.Entries.Any(e => e.Level == LogLevel.Warning), Is.False);
+        });
+    }
+
+    [Test]
+    public async Task Logs_a_warning_when_the_sign_in_fails()
+    {
+        var session = CreateSession(isAuthenticated: false, EntraAdvertisement());
+        session.LoginWithMethodAsync(Arg.Any<string>(), Arg.Any<IReadOnlyDictionary<string, string?>?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new InvalidOperationException("boom")));
+        var logger = new CapturingLogger();
+        var handler = CreateHandler(session, ClaimsPrincipalKind.Authenticated, logger);
+
+        await handler.OnConnectionUpAsync(null!, CancellationToken.None);
+
+        Assert.That(
+            logger.Entries.Any(e => e.Level == LogLevel.Warning && e.Exception is InvalidOperationException),
+            Is.True);
+    }
+
     internal enum ClaimsPrincipalKind
     {
         Anonymous,
         Authenticated,
+    }
+
+    private sealed class CapturingLogger : ILogger<ExplorerEntraWebAutoSignInCircuitHandler>
+    {
+        public ConcurrentQueue<(LogLevel Level, string Message, Exception? Exception)> Entries { get; } = new();
+
+        public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            => Entries.Enqueue((logLevel, formatter(state, exception), exception));
+
+        private sealed class NullScope : IDisposable
+        {
+            public static readonly NullScope Instance = new();
+
+            public void Dispose()
+            {
+            }
+        }
     }
 }
