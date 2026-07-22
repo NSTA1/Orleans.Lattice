@@ -9,8 +9,11 @@ namespace Orleans.Lattice.Api.Mcp;
 /// authenticated ASP.NET Core principal onto a <see cref="LatticeCredential"/>.
 /// The bridge is fail-closed: an unauthenticated request yields
 /// <see langword="null"/> (an anonymous caller the access gate denies). For an
-/// authenticated request it resolves the caller's principal id from the standard
-/// name claims and reads the opaque token from the header named by
+/// authenticated request it resolves the caller's principal id from the durable
+/// object-id (<c>oid</c>) claim first - falling back to <c>sub</c> and then the
+/// identity name - so the subject discovery introspects on matches the subject
+/// the silo auth model enforces on, and reads the opaque token from the header
+/// named by
 /// <see cref="LatticeApiMcpOptions.CredentialHeaderName"/> (default
 /// <c>authorization</c>), stripping a leading
 /// <see cref="LatticeApiMcpOptions.CredentialScheme"/> prefix (default
@@ -27,6 +30,27 @@ namespace Orleans.Lattice.Api.Mcp;
 /// </remarks>
 internal sealed class HttpContextLatticeApiMcpCredentialBridge : ILatticeApiMcpCredentialBridge
 {
+    // The durable Entra object-id claim, keyed on first. A delegated (user)
+    // access token's `sub` is a pairwise (user, client-app) identifier, so keying
+    // discovery on `sub` mis-identifies the caller relative to the silo auth model
+    // (which keys on `oid`). Both the raw claim name (default JWT mapping disabled)
+    // and the WS-* schema URI (default JWT inbound claim mapping enabled) are
+    // accepted. Cached to keep the resolution path allocation-free.
+    private static readonly string[] ObjectIdClaimTypes =
+    {
+        "oid",
+        "http://schemas.microsoft.com/identity/claims/objectidentifier",
+    };
+
+    // The subject fallback used when no `oid` is present (an authenticator that
+    // carries no object id). `ClaimTypes.NameIdentifier` is the mapped form of
+    // `sub` under the default JWT inbound claim mapping.
+    private static readonly string[] SubjectClaimTypes =
+    {
+        "sub",
+        ClaimTypes.NameIdentifier,
+    };
+
     private readonly IOptions<LatticeApiMcpOptions> _options;
 
     /// <summary>
@@ -73,8 +97,23 @@ internal sealed class HttpContextLatticeApiMcpCredentialBridge : ILatticeApiMcpC
     }
 
     private static string? ResolvePrincipalId(ClaimsPrincipal user)
-        => user.FindFirst(ClaimTypes.NameIdentifier)?.Value
+        => FirstNonEmptyClaim(user, ObjectIdClaimTypes)
+            ?? FirstNonEmptyClaim(user, SubjectClaimTypes)
             ?? (string.IsNullOrEmpty(user.Identity?.Name) ? null : user.Identity!.Name);
+
+    private static string? FirstNonEmptyClaim(ClaimsPrincipal user, string[] claimTypes)
+    {
+        foreach (var claimType in claimTypes)
+        {
+            var value = user.FindFirst(claimType)?.Value;
+            if (!string.IsNullOrEmpty(value))
+            {
+                return value;
+            }
+        }
+
+        return null;
+    }
 
     private static string? ResolveHeaderToken(HttpContext context, string? headerName, string? scheme)
     {

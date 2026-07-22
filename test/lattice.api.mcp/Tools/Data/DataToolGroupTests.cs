@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ModelContextProtocol.Server;
 
 namespace Orleans.Lattice.Api.Mcp.Tests;
@@ -96,5 +97,77 @@ public sealed class DataToolGroupTests
                 Assert.That(annotations?.ReadOnlyHint, Is.False, $"{name} must not be read-only.");
             }
         });
+    }
+
+    [Test]
+    public void Read_range_marks_only_the_tree_id_required()
+    {
+        var group = new DataToolGroup(enableWrites: false);
+
+        var required = RequiredPropertyNames(Tool(group, "lattice_data_read_range"));
+
+        Assert.That(required, Is.EquivalentTo(new[] { "treeId" }),
+            "The optional range bounds, page size, and continuation token must not be schema-required.");
+    }
+
+    [Test]
+    public void Read_range_still_advertises_all_input_properties()
+    {
+        var group = new DataToolGroup(enableWrites: false);
+
+        var properties = PropertyNames(Tool(group, "lattice_data_read_range"));
+
+        Assert.That(
+            properties,
+            Is.SupersetOf(new[] { "treeId", "startInclusive", "endExclusive", "pageSize", "continuationToken" }),
+            "Making the bounds optional must not drop them from the advertised schema.");
+    }
+
+    [Test]
+    public void Data_get_still_requires_its_key_inputs()
+    {
+        var group = new DataToolGroup(enableWrites: false);
+
+        var required = RequiredPropertyNames(Tool(group, "lattice_data_get"));
+
+        Assert.That(required, Is.EquivalentTo(new[] { "treeId", "key" }),
+            "The genuinely-required point-read inputs must stay required.");
+    }
+
+    private static HashSet<string> RequiredPropertyNames(McpServerTool tool)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        var schema = tool.ProtocolTool.InputSchema;
+        if (schema.ValueKind == JsonValueKind.Object
+            && schema.TryGetProperty("required", out var required)
+            && required.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var entry in required.EnumerateArray())
+            {
+                if (entry.ValueKind == JsonValueKind.String)
+                {
+                    names.Add(entry.GetString()!);
+                }
+            }
+        }
+
+        return names;
+    }
+
+    private static HashSet<string> PropertyNames(McpServerTool tool)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        var schema = tool.ProtocolTool.InputSchema;
+        if (schema.ValueKind == JsonValueKind.Object
+            && schema.TryGetProperty("properties", out var props)
+            && props.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in props.EnumerateObject())
+            {
+                names.Add(property.Name);
+            }
+        }
+
+        return names;
     }
 }

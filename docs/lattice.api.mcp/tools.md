@@ -59,7 +59,7 @@ Read/write access over `ILatticeDataApi`. Registered by `AddDataTools(enableWrit
 | Tool | Kind | Purpose |
 |---|---|---|
 | `lattice_data_get` | read | Fetch a single key. |
-| `lattice_data_read_range` | read | Read a key range. |
+| `lattice_data_read_range` | read | Read a key range. Only `treeId` is required; the range bounds, page size, and continuation token are optional (omit them for a full, unbounded first page). |
 | `lattice_data_set` | write | Set a single key. |
 | `lattice_data_delete` | write | Delete a single key. |
 | `lattice_data_set_many_atomic` | write | Atomic single-tree batch. |

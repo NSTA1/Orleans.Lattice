@@ -31,6 +31,7 @@
     <ProjectReference Include="..\lattice.api.backup.grpc\Orleans.Lattice.Api.Backup.Grpc.csproj" />
     <PackageReference Include="ModelContextProtocol" Version="1.4.1" />
     <PackageReference Include="ModelContextProtocol.AspNetCore" Version="1.4.1" />
+    <PackageReference Include="Azure.Core" Version="1.44.1" />
   </ItemGroup>
 
 </Project>
