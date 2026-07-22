@@ -41,6 +41,7 @@ The package family ships from this repository:
 | `Orleans.Lattice.Explorer.Schema` | `src/lattice.explorer/Schema/Orleans.Lattice.Explorer.Schema.csproj` |
 | `Orleans.Lattice.Explorer.Web` | `src/lattice.explorer/WebHosting/Orleans.Lattice.Explorer.Web.csproj` |
 | `Orleans.Lattice.Explorer.Entra` | `src/lattice.explorer.entra/Orleans.Lattice.Explorer.Entra.csproj` |
+| `Orleans.Lattice.Explorer.Entra.Web` | `src/lattice.explorer.entra.web/Orleans.Lattice.Explorer.Entra.Web.csproj` |
 | `Orleans.Lattice.Scaling` | `src/lattice.scaling/Orleans.Lattice.Scaling.csproj` | across the family. Patch digits may advance independently per package.
 
 ## Tag shape
@@ -82,6 +83,7 @@ The publish workflow's per-tag trigger globs match these tag shapes:
 | `Orleans.Lattice.Explorer.Schema` | `lattice.explorer.schema-v<X.Y.Z>` |
 | `Orleans.Lattice.Explorer.Web` | `lattice.explorer.web-v<X.Y.Z>` |
 | `Orleans.Lattice.Explorer.Entra` | `lattice.explorer.entra-v<X.Y.Z>` |
+| `Orleans.Lattice.Explorer.Entra.Web` | `lattice.explorer.entra.web-v<X.Y.Z>` |
 | `Orleans.Lattice.Scaling` | `lattice.scaling-v<X.Y.Z>` |
 
 For historical compatibility, the `v<X.Y.Z>` family tag (e.g. `v3.2.0`) is reserved for "the whole family at this version". When the family moves in lockstep, push **both** the family tag *and* each per-package tag - the publish workflow keys off the per-package tags.
