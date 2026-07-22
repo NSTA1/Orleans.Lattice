@@ -45,8 +45,18 @@ internal sealed class ExplorerEntraWebAutoSignInCircuitHandler : CircuitHandler
             var state = await _authenticationStateProvider.GetAuthenticationStateAsync().ConfigureAwait(false);
             if (state.User?.Identity is not { IsAuthenticated: true })
             {
-                // Anonymous circuit: the fallback authorization policy will have
-                // redirected a real page request, so there is nothing to do here.
+                // Anonymous circuit. When a fallback authorization policy is in
+                // force it will already have redirected a real page request, so an
+                // anonymous circuit here usually means the browser is genuinely not
+                // signed in. But it is also the exact symptom of a miswired host
+                // (no AddCascadingAuthenticationState, so the circuit never sees the
+                // OIDC-authenticated user): the console renders, yet every cluster
+                // call is anonymous with no other trace. Log it so that failure mode
+                // is diagnosable instead of silent.
+                _logger.LogWarning(
+                    "Blazor Server circuit is anonymous on connection up; skipping automatic Entra State API sign-in. " +
+                    "The console will make cluster calls anonymously. If the browser is signed in, verify the host wires " +
+                    "AddCascadingAuthenticationState() so the circuit sees the authenticated user.");
                 return;
             }
 
@@ -61,10 +71,14 @@ internal sealed class ExplorerEntraWebAutoSignInCircuitHandler : CircuitHandler
             var advertisement = await _session.DiscoverAsync(cancellationToken).ConfigureAwait(false);
             if (!advertisement.Schemes.Any(s => string.Equals(s.SchemeId, ExplorerAuthSchemes.Entra, StringComparison.OrdinalIgnoreCase)))
             {
+                _logger.LogDebug(
+                    "State API endpoint does not advertise the '{Scheme}' scheme; leaving the connection anonymous.",
+                    ExplorerAuthSchemes.Entra);
                 return;
             }
 
             await _session.LoginWithMethodAsync(ExplorerAuthSchemes.Entra, cancellationToken: cancellationToken).ConfigureAwait(false);
+            _logger.LogInformation("Automatic Entra State API sign-in completed for the authenticated browser user.");
         }
         catch (Exception ex)
         {

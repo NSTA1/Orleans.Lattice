@@ -1,6 +1,8 @@
 using Grpc.Core;
+using NSubstitute;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Explorer.Access;
+using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Navigation;
 
 namespace Orleans.Lattice.Explorer.Tests.Access;
@@ -8,22 +10,45 @@ namespace Orleans.Lattice.Explorer.Tests.Access;
 [TestFixture]
 public class AuthAdminCapabilityServiceTests
 {
-    private static (AuthAdminCapabilityService Service, ExplorerCapabilityStore Store) Create(FakeAuthAdminClient client)
+    private static (AuthAdminCapabilityService Service, ExplorerCapabilityStore Store) Create(
+        FakeAuthAdminClient client,
+        bool signedIn = true)
     {
         var store = new ExplorerCapabilityStore();
-        return (new AuthAdminCapabilityService(client, store), store);
+        var session = Substitute.For<IExplorerAuthSession>();
+        session.IsAuthenticated.Returns(signedIn);
+        return (new AuthAdminCapabilityService(client, store, session), store);
+    }
+
+    private static IExplorerAuthSession SignedIn(bool value)
+    {
+        var session = Substitute.For<IExplorerAuthSession>();
+        session.IsAuthenticated.Returns(value);
+        return session;
     }
 
     [Test]
     public void Constructor_null_client_throws()
     {
-        Assert.That(() => new AuthAdminCapabilityService(null!, new ExplorerCapabilityStore()), Throws.ArgumentNullException);
+        Assert.That(
+            () => new AuthAdminCapabilityService(null!, new ExplorerCapabilityStore(), SignedIn(true)),
+            Throws.ArgumentNullException);
     }
 
     [Test]
     public void Constructor_null_store_throws()
     {
-        Assert.That(() => new AuthAdminCapabilityService(new FakeAuthAdminClient(), null!), Throws.ArgumentNullException);
+        Assert.That(
+            () => new AuthAdminCapabilityService(new FakeAuthAdminClient(), null!, SignedIn(true)),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void Constructor_null_session_throws()
+    {
+        Assert.That(
+            () => new AuthAdminCapabilityService(new FakeAuthAdminClient(), new ExplorerCapabilityStore(), null!),
+            Throws.ArgumentNullException);
     }
 
     [Test]
@@ -52,7 +77,107 @@ public class AuthAdminCapabilityServiceTests
 
         await service.RefreshAsync();
 
-        Assert.That(store.Current.AuthAdminAllowed, Is.False);
+        Assert.Multiple(() =>
+        {
+            Assert.That(store.Current.AuthAdminAllowed, Is.False);
+            Assert.That(
+                store.Current.AuthAdminAuthenticationRequired,
+                Is.False,
+                "an authenticated caller denied admin must stay an advisory deny, not a sign-in prompt");
+        });
+    }
+
+    [Test]
+    public async Task RefreshAsync_denied_while_signed_out_maps_to_authentication_required()
+    {
+        var client = new FakeAuthAdminClient
+        {
+            ListThrows = new LatticeAuthorizationDeniedException("denied"),
+        };
+        var (service, store) = Create(client, signedIn: false);
+
+        await service.RefreshAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(store.Current.AuthAdminAllowed, Is.False);
+            Assert.That(
+                store.Current.AuthAdminAuthenticationRequired,
+                Is.True,
+                "a denial while no sign-in is applied means the connection is anonymous, so a sign-in is required");
+        });
+    }
+
+    [Test]
+    public async Task RefreshAsync_unauthenticated_status_maps_to_authentication_required()
+    {
+        var client = new FakeAuthAdminClient
+        {
+            ListThrows = new RpcException(new Status(StatusCode.Unauthenticated, "no token")),
+        };
+        var (service, store) = Create(client, signedIn: true);
+
+        await service.RefreshAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(store.Current.AuthAdminAllowed, Is.False);
+            Assert.That(
+                store.Current.AuthAdminAuthenticationRequired,
+                Is.True,
+                "gRPC Unauthenticated is an unambiguous unauthenticated-connection signal");
+        });
+    }
+
+    [Test]
+    public async Task RefreshAsync_permission_denied_while_signed_out_maps_to_authentication_required()
+    {
+        var client = new FakeAuthAdminClient
+        {
+            ListThrows = new RpcException(new Status(StatusCode.PermissionDenied, "access denied")),
+        };
+        var (service, store) = Create(client, signedIn: false);
+
+        await service.RefreshAsync();
+
+        Assert.That(store.Current.AuthAdminAuthenticationRequired, Is.True);
+    }
+
+    [Test]
+    public async Task RefreshAsync_permission_denied_while_signed_in_stays_advisory_deny()
+    {
+        var client = new FakeAuthAdminClient
+        {
+            ListThrows = new RpcException(new Status(StatusCode.PermissionDenied, "access denied")),
+        };
+        var (service, store) = Create(client, signedIn: true);
+
+        await service.RefreshAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(store.Current.AuthAdminAllowed, Is.False);
+            Assert.That(store.Current.AuthAdminAuthenticationRequired, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task RefreshAsync_reachable_clears_authentication_required()
+    {
+        var store = new ExplorerCapabilityStore();
+        store.Set(ExplorerCapabilities.Empty with { AuthAdminAuthenticationRequired = true });
+        var session = Substitute.For<IExplorerAuthSession>();
+        session.IsAuthenticated.Returns(true);
+        var service = new AuthAdminCapabilityService(
+            new FakeAuthAdminClient { GroupsResult = new AuthGroupPage() }, store, session);
+
+        await service.RefreshAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(store.Current.AuthAdminAllowed, Is.True);
+            Assert.That(store.Current.AuthAdminAuthenticationRequired, Is.False);
+        });
     }
 
     [Test]
@@ -66,7 +191,14 @@ public class AuthAdminCapabilityServiceTests
 
         await service.RefreshAsync();
 
-        Assert.That(store.Current.AuthAdminAllowed, Is.False);
+        Assert.Multiple(() =>
+        {
+            Assert.That(store.Current.AuthAdminAllowed, Is.False);
+            Assert.That(
+                store.Current.AuthAdminAuthenticationRequired,
+                Is.False,
+                "a transport failure is not an authentication signal");
+        });
     }
 
     [Test]
@@ -89,7 +221,7 @@ public class AuthAdminCapabilityServiceTests
         var client = new FakeAuthAdminClient();
         var store = new ExplorerCapabilityStore();
         store.Set(ExplorerCapabilities.Empty with { BackupListAllowed = true });
-        var service = new AuthAdminCapabilityService(client, store);
+        var service = new AuthAdminCapabilityService(client, store, SignedIn(true));
 
         await service.RefreshAsync();
 

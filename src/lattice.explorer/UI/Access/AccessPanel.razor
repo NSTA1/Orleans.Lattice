@@ -119,9 +119,19 @@
 
     @if (!_allowed)
     {
-        <p class="explorer-backups-result is-denied" role="status">
-            Access administration is not permitted for your account, or the cluster has no auth-admin endpoint configured.
-        </p>
+        @if (_authenticationRequired)
+        {
+            <p class="explorer-backups-result is-denied" role="alert">
+                You are not signed in to the cluster, so access administration is unavailable.
+                The connection is unauthenticated - sign in to administer access.
+            </p>
+        }
+        else
+        {
+            <p class="explorer-backups-result is-denied" role="status">
+                Access administration is not permitted for your account, or the cluster has no auth-admin endpoint configured.
+            </p>
+        }
     }
 
     @if (_lastResult is not null)

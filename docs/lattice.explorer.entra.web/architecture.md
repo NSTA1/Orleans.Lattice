@@ -32,6 +32,8 @@ A remote Blazor Server circuit runs over SignalR and has **no ambient `HttpConte
 
 The acquirer and the auth method are registered **scoped**, so each circuit acquires and holds only its own user's token - no cross-user credential bleed.
 
+For the scoped `AuthenticationStateProvider` to report the signed-in browser user (rather than an anonymous principal) inside the circuit, the Blazor Server host must register the cascading authentication state. `AddLatticeExplorerEntraWebAuth` calls `AddCascadingAuthenticationState()` on your behalf, so the circuit sees the OIDC identity without any extra host wiring. Without it the circuit would authenticate the browser at the HTTP layer yet still observe an anonymous circuit, and every downstream State API call would be made anonymously.
+
 ## Scope resolution
 
 `EntraWebExplorerAuthMethod` resolves the State API scope in priority order: the configured `Scopes` if any, otherwise the audience the State API advertises in its auth-scheme descriptor, appending `/.default` when that advertised value is a bare resource id. This lets a deployment omit `Scopes` and let the cluster declare its own resource.
@@ -45,10 +47,10 @@ The method wires the core `ExplorerAccessTokenSource` with a renewal delegate th
 When `AutoSignIn` is enabled (the default), `ExplorerEntraWebAutoSignInCircuitHandler` (internal) runs on `OnConnectionUpAsync`:
 
 1. If the session is already authenticated, do nothing.
-2. If the browser principal is anonymous, do nothing (the fallback policy already handled the page request).
-3. Otherwise initialize the session, discover the endpoint's advertised schemes, and - only if `entra` is advertised - drive `LoginWithMethodAsync("entra")`.
+2. If the browser principal is anonymous, log a warning and return - the circuit is unauthenticated even though the page rendered, which is the signal that the cascading authentication state is missing or the cookie session did not flow into the circuit.
+3. Otherwise initialize the session, discover the endpoint's advertised schemes, and - only if `entra` is advertised - drive `LoginWithMethodAsync("entra")`, logging an informational line on success.
 
-Every step is wrapped in a `try`/`catch` that logs a warning and swallows the failure, so a discovery or token error **never breaks the page**; the user simply falls back to clicking the interactive sign-in dialog. The handler is best-effort convenience, not a correctness dependency.
+Every step is wrapped in a `try`/`catch` that logs a warning (with the exception) and swallows the failure, so a discovery or token error **never breaks the page**; the user simply falls back to clicking the interactive sign-in dialog. The handler is best-effort convenience, not a correctness dependency - but its log lines make an otherwise silent auto-sign-in failure visible to operators.
 
 ## Token cache and multi-replica hosting
 

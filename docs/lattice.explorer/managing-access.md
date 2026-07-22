@@ -128,6 +128,24 @@ removing a member - is likewise shown disabled, not hidden, whenever the
 capability is absent or an action is already in flight. Nothing is silently
 dropped from the UI.
 
+### Distinguishing "not signed in" from "not permitted"
+
+A greyed-out area has two very different causes, and the Explorer tells them
+apart. The probe classifies its own failure:
+
+- If the server rejects the probe as **unauthenticated** (no valid token
+  attached), or the probe is denied while the Explorer is **not signed in** to
+  the cluster, the area reports **authentication required** and the disabled
+  panel shows a distinct "You are not signed in to the cluster" banner with a
+  prompt to sign in - not the generic "not permitted" state.
+- If the probe is denied while the Explorer **is** signed in, that is a genuine
+  authorization denial and the area stays in the ordinary advisory grey-out.
+
+This distinction exists so the anonymous-circuit failure mode - where the
+browser is authenticated at the HTTP layer but the Blazor Server circuit carries
+no cluster token - surfaces as an actionable "sign in" prompt instead of masquerading
+as a permission problem or an empty cluster.
+
 ## Advisory, not a security boundary
 
 The grey-out is a usability affordance only. The **server remains the

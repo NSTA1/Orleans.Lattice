@@ -60,16 +60,20 @@ public partial class LatticeStateConnectionTests
     }
 
     [Test]
-    public async Task AuthFailure_WithoutTokenProvider_DoesNotRefresh_AndFaults()
+    public async Task AuthFailure_WhenProviderYieldsNullHeaderAndCannotRefresh_SurfacesConnectionAuthError()
     {
-        // A static Basic credential (or anonymous) has no live provider, so the
-        // connection must fault immediately on an auth failure exactly as before -
-        // the silent-refresh path is token-only and must not change Basic behaviour.
+        // Seam (1) from #1305: ExplorerAccessTokenSource returns a null header once
+        // it latches into its revoked state (renewal no longer possible). A null
+        // header means the call goes out anonymously and the server rejects it; the
+        // connection layer must then surface a first-class auth-error state
+        // (RequiresAuthentication) rather than silently leaving the console
+        // "connected" while every call is anonymous.
         var client = new FakeStateClient();
+        var provider = new FakeCredentialProvider { Header = null, RefreshResult = false };
         var (connection, _) = NewConnection(_ => client);
         await connection.ConfigureAsync(Settings() with
         {
-            Authentication = LatticeCallAuthentication.Basic("alice", "Password1"),
+            Authentication = LatticeCallAuthentication.Bearer(provider),
         });
         client.ListTreesHandler = _ => throw Permanent();
 
@@ -84,7 +88,11 @@ public partial class LatticeStateConnectionTests
         }
 
         Assert.That(captured, Is.Not.Null);
-        Assert.That(captured!.RequiresAuthentication, Is.True);
-        Assert.That(connection.Status.State, Is.EqualTo(LatticeConnectionState.Faulted));
+        Assert.Multiple(() =>
+        {
+            Assert.That(captured!.RequiresAuthentication, Is.True);
+            Assert.That(connection.Status.RequiresAuthentication, Is.True, "the connection status surfaces the auth error to the UI");
+            Assert.That(connection.Status.State, Is.EqualTo(LatticeConnectionState.Faulted));
+        });
     }
 }
