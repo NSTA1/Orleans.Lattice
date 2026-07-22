@@ -38,13 +38,13 @@
     token survives replica scale/restart and is shared across warm replicas.
   -->
   <ItemGroup>
-    <PackageReference Include="Orleans.Lattice.Explorer.Web" Version="8.0.1" />
+    <PackageReference Include="Orleans.Lattice.Explorer.Web" Version="8.0.2" />
     <PackageReference Include="Orleans.Lattice.Explorer.Core" Version="8.0.3" />
     <PackageReference Include="Orleans.Lattice.Explorer.Access" Version="8.0.2" />
     <PackageReference Include="Orleans.Lattice.Explorer.UI" Version="8.0.1" />
     <PackageReference Include="Orleans.Lattice.Explorer.Backup" Version="8.0.1" />
     <PackageReference Include="Orleans.Lattice.Explorer.Schema" Version="8.0.1" />
-    <PackageReference Include="Orleans.Lattice.Explorer.Entra.Web" Version="8.0.1" />
+    <PackageReference Include="Orleans.Lattice.Explorer.Entra.Web" Version="8.0.2" />
     <PackageReference Include="Orleans.Lattice.Caching.AzureBlob" Version="8.0.0" />
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
   </ItemGroup>
