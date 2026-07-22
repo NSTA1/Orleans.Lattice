@@ -1,5 +1,4 @@
 using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Options;
 
 namespace Orleans.Lattice.Api.Mcp;
 
@@ -39,29 +38,31 @@ internal sealed class LatticeApiMcpRemoteCredentialSource : ILatticeApiMcpRemote
 {
     private readonly IHttpContextAccessor _httpContextAccessor;
     private readonly ILatticeApiMcpCredentialBridge _credentialBridge;
-    private readonly IOptionsMonitor<LatticeApiMcpRemoteOptions> _options;
+    private readonly ILatticeApiMcpAdministratorCredentialSource _administratorSource;
 
-    /// <summary>Initialises the credential source from the ambient HTTP accessor, bridge, and options.</summary>
+    /// <summary>Initialises the credential source from the ambient HTTP accessor, bridge, and administrator source.</summary>
     public LatticeApiMcpRemoteCredentialSource(
         IHttpContextAccessor httpContextAccessor,
         ILatticeApiMcpCredentialBridge credentialBridge,
-        IOptionsMonitor<LatticeApiMcpRemoteOptions> options)
+        ILatticeApiMcpAdministratorCredentialSource administratorSource)
     {
         _httpContextAccessor = httpContextAccessor ?? throw new ArgumentNullException(nameof(httpContextAccessor));
         _credentialBridge = credentialBridge ?? throw new ArgumentNullException(nameof(credentialBridge));
-        _options = options ?? throw new ArgumentNullException(nameof(options));
+        _administratorSource = administratorSource ?? throw new ArgumentNullException(nameof(administratorSource));
     }
 
     /// <inheritdoc />
     public LatticeCredential? ResolveOutbound()
     {
-        // Trusted permission introspection: forward the configured administrator
-        // service credential so the remote auth gate admits the read. Falls
-        // through to the caller-credential path when no service credential is
-        // configured, so an administrator caller can still introspect itself.
+        // Trusted permission introspection: forward the resolved administrator
+        // service credential so the remote auth gate admits the read. The
+        // administrator source owns the credential's lifetime (a static value or a
+        // self-refreshing managed-identity token) and fails closed (returns null)
+        // when none is configured or acquisition fails, so an administrator caller
+        // can still introspect itself via the caller-credential path below.
         if (LatticeSystemOrigin.IsActive)
         {
-            var administrator = _options.CurrentValue.AdministratorCredential;
+            var administrator = _administratorSource.Resolve();
             if (administrator is not null)
             {
                 return administrator;

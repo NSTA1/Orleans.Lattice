@@ -20,22 +20,22 @@ public sealed class LatticeApiMcpRemoteCredentialSourceTests
         => new(
             new StubHttpContextAccessor(withHttpContext ? new DefaultHttpContext() : null),
             new StubBridge(bridgeCredential),
-            RemoteTestSupport.OptionsMonitor(configure ?? (_ => { })));
+            new StaticAdministratorCredentialSource(RemoteTestSupport.OptionsMonitor(configure ?? (_ => { }))));
 
     [Test]
     public void Constructor_null_accessor_throws()
         => Assert.That(
-            () => new LatticeApiMcpRemoteCredentialSource(null!, new StubBridge(null), RemoteTestSupport.OptionsMonitor(_ => { })),
+            () => new LatticeApiMcpRemoteCredentialSource(null!, new StubBridge(null), new StubAdministratorSource(null)),
             Throws.ArgumentNullException);
 
     [Test]
     public void Constructor_null_bridge_throws()
         => Assert.That(
-            () => new LatticeApiMcpRemoteCredentialSource(new StubHttpContextAccessor(null), null!, RemoteTestSupport.OptionsMonitor(_ => { })),
+            () => new LatticeApiMcpRemoteCredentialSource(new StubHttpContextAccessor(null), null!, new StubAdministratorSource(null)),
             Throws.ArgumentNullException);
 
     [Test]
-    public void Constructor_null_options_throws()
+    public void Constructor_null_administrator_source_throws()
         => Assert.That(
             () => new LatticeApiMcpRemoteCredentialSource(new StubHttpContextAccessor(null), new StubBridge(null), null!),
             Throws.ArgumentNullException);
@@ -108,5 +108,10 @@ public sealed class LatticeApiMcpRemoteCredentialSourceTests
     private sealed class StubBridge(LatticeCredential? credential) : ILatticeApiMcpCredentialBridge
     {
         public LatticeCredential? Resolve(HttpContext context) => credential;
+    }
+
+    private sealed class StubAdministratorSource(LatticeCredential? credential) : ILatticeApiMcpAdministratorCredentialSource
+    {
+        public LatticeCredential? Resolve() => credential;
     }
 }

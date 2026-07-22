@@ -36,7 +36,7 @@ Each `LatticeApiMcpRemoteEndpoint` names the served `Endpoint` (surfaced verbati
 | `State` / `Data` / `Auth` / `Backup` | The per-group remote endpoint, or `null` to not serve that group. |
 | `CredentialHeaderName` | Header the resolved caller credential is stamped onto for the outbound call. Defaults to `authorization`. |
 | `CredentialScheme` | Scheme prefix prepended to the outbound token (`"{scheme} {token}"`). Defaults to `Bearer`; empty sends the bare token. |
-| `AdministratorCredential` | The admin service credential used for trusted, read-only permission introspection of each caller. See [discovery](#discovery-requires-the-auth-endpoint) below. |
+| `AdministratorCredential` | The **static** admin service credential used for trusted, read-only permission introspection of each caller. See [discovery](#discovery-requires-the-auth-endpoint) below. For a long-lived server prefer a self-refreshing managed-identity token (see [Refreshing administrator token](#refreshing-the-administrator-token)). |
 | `EnableDataWrites` / `EnableBackupControl` / `EnableAuthAdministration` | Forward the destructive-verb opt-in to the corresponding tool module. Ignored when that group's endpoint is unset. |
 
 ## Credential flow over the wire
@@ -46,6 +46,29 @@ The remote binding's credential-forwarding interceptor stamps the resolved calle
 ## Discovery requires the auth endpoint
 
 The in-silo permission-scoped discovery relies on a **system-origin bypass** to introspect a caller's effective permissions. That bypass does not cross the wire. Remotely, the discovery core must authenticate as an administrator to introspect a non-administrator caller, so serving any group's tools to non-administrator callers requires both the `Auth` endpoint and an `AdministratorCredential` to be configured. Without them, only an administrator caller can enumerate tools remotely.
+
+## Refreshing the administrator token
+
+`AdministratorCredential` is a **static** token. When acquired from Entra it typically carries a ~1h lifetime, so a long-lived remote MCP head silently loses its introspection capability once it expires (discovery then advertises no tools to non-administrator callers until the process is restarted or the value is rotated by hand). For an always-on server, register the managed-identity administrator source instead: it acquires the silo-audience token from an `Azure.Core` `TokenCredential`, caches it, and refreshes it a configurable skew before expiry.
+
+```csharp
+using Azure.Identity;
+
+services.AddLatticeMcpRemote(o =>
+{
+    o.Auth = new LatticeApiMcpRemoteEndpoint { Endpoint = "https://cluster.internal:5001" };
+    // No static o.AdministratorCredential needed.
+});
+
+services.AddLatticeMcpManagedIdentityAdministrator(o =>
+{
+    o.Credential = new ManagedIdentityCredential();      // or DefaultAzureCredential()
+    o.Scope = "api://<silo-app-id>/.default";            // the remote silo audience
+    o.RefreshSkew = TimeSpan.FromMinutes(5);             // optional; defaults to 5 minutes
+});
+```
+
+The managed-identity source takes precedence over `AdministratorCredential` regardless of registration order. It is **fail-closed**: if token acquisition fails it forwards no administrator credential (the introspection call is anonymous and the remote cluster denies it), self-healing on the next successful acquisition rather than forwarding a stale token.
 
 ## Deferred tools
 

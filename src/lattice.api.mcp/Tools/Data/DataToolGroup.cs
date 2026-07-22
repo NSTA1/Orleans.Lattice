@@ -176,14 +176,14 @@ internal sealed class DataToolGroup : ILatticeApiMcpToolGroup
         RequestContext<CallToolRequestParams> context,
         [Description("Logical tree identifier.")] string treeId,
         [Description("Inclusive lower key bound, or null to start from the first key. Ignored when continuationToken is set.")]
-        string? startInclusive,
+        string? startInclusive = null,
         [Description("Exclusive upper key bound, or null to read to the last key. Ignored when continuationToken is set.")]
-        string? endExclusive,
+        string? endExclusive = null,
         [Description("Maximum entries on this page. Non-positive falls back to the configured default; larger values are clamped.")]
-        int pageSize,
+        int pageSize = 0,
         [Description("Continuation token from a prior page, or null to open a fresh scan. When set, the range bounds are ignored.")]
-        string? continuationToken,
-        CancellationToken cancellationToken)
+        string? continuationToken = null,
+        CancellationToken cancellationToken = default)
         => DataToolCore.ReadRangeAsync(
             ResolveApi(context), treeId, startInclusive, endExclusive, pageSize, continuationToken, cancellationToken);
 

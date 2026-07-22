@@ -68,8 +68,12 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
         services.AddSerializer();
 
         // Caller-credential forwarding: the source resolves the credential per call
-        // and the interceptor stamps it onto every outbound gRPC request.
+        // and the interceptor stamps it onto every outbound gRPC request. The
+        // default administrator source returns the static AdministratorCredential;
+        // AddLatticeMcpManagedIdentityAdministrator replaces it with a
+        // self-refreshing managed-identity token.
         services.AddHttpContextAccessor();
+        services.TryAddSingleton<ILatticeApiMcpAdministratorCredentialSource, StaticAdministratorCredentialSource>();
         services.TryAddSingleton<ILatticeApiMcpRemoteCredentialSource, LatticeApiMcpRemoteCredentialSource>();
         services.TryAddSingleton<LatticeApiMcpCredentialForwardingInterceptor>();
 

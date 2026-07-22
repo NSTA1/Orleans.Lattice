@@ -223,6 +223,69 @@ public sealed class HttpContextLatticeApiMcpCredentialBridgeTests
     }
 
     [Test]
+    public void Resolve_prefers_oid_over_sub_for_the_principal_id()
+    {
+        // A delegated Entra token: `sub` is a pairwise (user, client-app) id that
+        // differs from the durable `oid`. Discovery must key on `oid` so it
+        // introspects the same subject the silo enforces on.
+        var bridge = CreateBridge();
+        var context = AuthenticatedContextWithClaims(
+            new Claim("oid", "object-id-123"),
+            new Claim(ClaimTypes.NameIdentifier, "pairwise-sub-456"));
+
+        var credential = bridge.Resolve(context);
+
+        Assert.That(credential!.Value.PrincipalId, Is.EqualTo("object-id-123"),
+            "The durable oid must be preferred over the pairwise sub.");
+    }
+
+    [Test]
+    public void Resolve_prefers_the_mapped_oid_schema_uri_over_sub()
+    {
+        // With the default JWT inbound claim mapping enabled, `oid` surfaces as the
+        // WS-* object-identifier schema URI. It must still be preferred over `sub`.
+        var bridge = CreateBridge();
+        var context = AuthenticatedContextWithClaims(
+            new Claim("http://schemas.microsoft.com/identity/claims/objectidentifier", "object-id-789"),
+            new Claim(ClaimTypes.NameIdentifier, "pairwise-sub-000"));
+
+        var credential = bridge.Resolve(context);
+
+        Assert.That(credential!.Value.PrincipalId, Is.EqualTo("object-id-789"));
+    }
+
+    [Test]
+    public void Resolve_falls_back_to_sub_when_no_oid_claim()
+    {
+        // An authenticator that carries no object id: the `sub` fallback stands.
+        var bridge = CreateBridge();
+        var context = AuthenticatedContextWithClaims(
+            new Claim(ClaimTypes.NameIdentifier, "sub-only"));
+
+        var credential = bridge.Resolve(context);
+
+        Assert.That(credential!.Value.PrincipalId, Is.EqualTo("sub-only"));
+    }
+
+    [Test]
+    public void Resolve_reads_the_raw_sub_claim_when_present()
+    {
+        // With claim mapping disabled the subject surfaces as the raw `sub` name.
+        var bridge = CreateBridge();
+        var context = AuthenticatedContextWithClaims(new Claim("sub", "raw-sub-1"));
+
+        var credential = bridge.Resolve(context);
+
+        Assert.That(credential!.Value.PrincipalId, Is.EqualTo("raw-sub-1"));
+    }
+
+    private static DefaultHttpContext AuthenticatedContextWithClaims(params Claim[] claims)
+        => new()
+        {
+            User = new ClaimsPrincipal(new ClaimsIdentity(claims, "TestAuth", ClaimTypes.Name, ClaimTypes.Role)),
+        };
+
+    [Test]
     public void Resolved_credential_stamps_onto_the_ambient_credential_context()
     {
         var bridge = CreateBridge();

@@ -36,6 +36,8 @@ The coarse gate decides only whether a request may reach a facade; it does not d
 
 The `CredentialHeaderName` and `CredentialScheme` options control which inbound header the token is read from and which scheme prefix is stripped before the remaining token is used as the credential.
 
+The bridge resolves the caller's principal id from the durable object-id (`oid`) claim first, falling back to `sub` and then the identity name. For an Entra delegated (user) token `sub` is a pairwise (user, client-app) identifier that differs from the stable `oid` the silo auth model keys subjects on, so keying discovery on `oid` ensures the subject the tool list is filtered for is the same subject the access gate enforces on - grants authored once by `oid` apply consistently across every client app.
+
 ## Permission-scoped discovery
 
 Because the bridge resolves the caller's subject, the per-session discovery configurator can filter the advertised tool list to the caller's **effective permissions** before it is returned. A caller sees and can invoke only the tools its grants allow; an ungranted tool is never listed, so there is no "list then deny" gap. The `lattice_capabilities` meta-tool reports the same permission-scoped view.

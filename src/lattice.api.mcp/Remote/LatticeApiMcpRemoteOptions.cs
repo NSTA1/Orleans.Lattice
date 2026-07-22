@@ -80,7 +80,11 @@ public sealed class LatticeApiMcpRemoteOptions
     /// Required for a non-administrator caller's tools to be discovered against a
     /// remote cluster (the in-silo system-origin gate bypass does not cross the
     /// wire). <see langword="null"/> when unset, in which case only an
-    /// administrator caller can enumerate tools remotely.
+    /// administrator caller can enumerate tools remotely. This is a <b>static</b>
+    /// token; for a long-lived server prefer a self-refreshing managed-identity
+    /// token via
+    /// <see cref="LatticeMcpManagedIdentityAdministratorServiceCollectionExtensions.AddLatticeMcpManagedIdentityAdministrator"/>,
+    /// which takes precedence over this value.
     /// </summary>
     public LatticeCredential? AdministratorCredential { get; set; }
 
