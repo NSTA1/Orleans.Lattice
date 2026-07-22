@@ -27,11 +27,14 @@ public class LatticeReplicationMergeModeStartupValidatorTests
         return ctx;
     }
 
+    private static ILatticeReplicationPreconditionValidator Precondition(string localReplicaId) =>
+        new LatticeReplicationPreconditionValidator(Context(localReplicaId));
+
     [Test]
     public void Start_throws_when_flag_tree_has_no_replica_id()
     {
         var validator = new LatticeReplicationMergeModeStartupValidator(
-            Context(string.Empty),
+            Precondition(string.Empty),
             Monitor(new LatticeReplicationOptions
             {
                 ReplicatedTrees = new Dictionary<string, LatticeMergeMode>
@@ -47,7 +50,7 @@ public class LatticeReplicationMergeModeStartupValidatorTests
     public void Start_throws_for_rw_flag_mode_too()
     {
         var validator = new LatticeReplicationMergeModeStartupValidator(
-            Context(string.Empty),
+            Precondition(string.Empty),
             Monitor(new LatticeReplicationOptions
             {
                 ReplicatedTrees = new Dictionary<string, LatticeMergeMode>
@@ -63,7 +66,7 @@ public class LatticeReplicationMergeModeStartupValidatorTests
     public void Start_succeeds_when_flag_tree_has_a_replica_id()
     {
         var validator = new LatticeReplicationMergeModeStartupValidator(
-            Context("site-a"),
+            Precondition("site-a"),
             Monitor(new LatticeReplicationOptions
             {
                 ReplicatedTrees = new Dictionary<string, LatticeMergeMode>
@@ -79,7 +82,7 @@ public class LatticeReplicationMergeModeStartupValidatorTests
     public void Start_succeeds_for_non_flag_trees_without_replica_id()
     {
         var validator = new LatticeReplicationMergeModeStartupValidator(
-            Context(string.Empty),
+            Precondition(string.Empty),
             Monitor(new LatticeReplicationOptions
             {
                 ReplicatedTrees = new Dictionary<string, LatticeMergeMode>
@@ -95,7 +98,7 @@ public class LatticeReplicationMergeModeStartupValidatorTests
     public void Start_succeeds_when_no_replicated_trees_are_declared()
     {
         var validator = new LatticeReplicationMergeModeStartupValidator(
-            Context(string.Empty),
+            Precondition(string.Empty),
             Monitor(new LatticeReplicationOptions { ReplicatedTrees = null }));
 
         Assert.That(() => validator.StartAsync(CancellationToken.None), Throws.Nothing);
@@ -105,7 +108,7 @@ public class LatticeReplicationMergeModeStartupValidatorTests
     public void Stop_is_a_no_op()
     {
         var validator = new LatticeReplicationMergeModeStartupValidator(
-            Context("site-a"),
+            Precondition("site-a"),
             Monitor(new LatticeReplicationOptions()));
 
         Assert.That(() => validator.StopAsync(CancellationToken.None), Throws.Nothing);

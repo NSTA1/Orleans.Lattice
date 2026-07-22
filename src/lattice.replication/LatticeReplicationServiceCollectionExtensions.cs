@@ -136,6 +136,12 @@ public static partial class LatticeReplicationServiceCollectionExtensions
                 builder.Services.RemoveAt(i);
             }
         }
+        // Register the options-backed resolver both as the concrete type (so the
+        // dynamic snapshot resolver installed by ReplicateLatticeReplicationConfig
+        // can inject it as its static seed/fallback) and as the active
+        // ILatticeMergeModeResolver. A user who registered their own resolver
+        // before this call is left untouched (both TryAdds are no-ops).
+        builder.Services.TryAddSingleton<ConfiguredLatticeMergeModeResolver>();
         builder.Services.TryAddSingleton<ILatticeMergeModeResolver, ConfiguredLatticeMergeModeResolver>();
 
         // Same swap protocol for the per-tree origin-cluster-id resolver:
@@ -171,6 +177,13 @@ public static partial class LatticeReplicationServiceCollectionExtensions
             }
         }
         builder.Services.TryAddSingleton<ILatticeReplicationContext, ConfiguredLatticeReplicationContext>();
+
+        // The reusable runtime precondition validator. Shared by the boot-time
+        // startup guard below (over statically declared trees) and the later
+        // runtime enable path, so a flag-mode tree declared or enabled without a
+        // local replica id is rejected cleanly rather than faulting on first
+        // write.
+        builder.Services.TryAddSingleton<ILatticeReplicationPreconditionValidator, LatticeReplicationPreconditionValidator>();
 
         // Fail fast at silo start when a flag-mode tree is declared without a
         // configured replica id, rather than faulting on the first flag-CRDT
