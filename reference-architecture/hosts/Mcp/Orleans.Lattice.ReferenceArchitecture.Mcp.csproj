@@ -23,7 +23,7 @@
     server transport and the four facade gRPC client packages transitively.
   -->
   <ItemGroup>
-    <PackageReference Include="Orleans.Lattice.Api.Mcp" Version="8.0.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Mcp" Version="8.0.1" />
     <PackageReference Include="Orleans.Lattice.Api.Mcp.Telemetry" Version="8.0.1" />
     <PackageReference Include="Orleans.Lattice.Api.Mcp.Telemetry.Azure" Version="8.0.0" />
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
