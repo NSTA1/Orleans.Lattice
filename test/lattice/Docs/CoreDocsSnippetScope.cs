@@ -42,6 +42,8 @@ internal static class CoreDocsSnippetScope
         "docs/lattice.auth",
         "docs/lattice.backup",
         "docs/lattice.backup.azureblob",
+        "docs/lattice.caching.azureblob",
+        "docs/lattice.explorer.entra.web",
         "docs/lattice.membership",
         "docs/lattice.replication.grpc",
         "docs/lattice.scaling",
