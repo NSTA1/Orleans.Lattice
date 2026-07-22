@@ -34,6 +34,12 @@ using Orleans.Lattice.ReferenceArchitecture.Hosting;
 var builder = WebApplication.CreateBuilder(args);
 var config = builder.Configuration;
 
+// Drop the informational framework request-log spam produced by the platform
+// /health probe (Front Door + Container Apps probe it several times a second per
+// replica). Real requests keep full logging; warnings/errors on the health path
+// still surface.
+builder.Logging.SuppressHealthProbeRequestLogs();
+
 // Serve the Explorer UI's packaged static web assets in every environment (the
 // framework only auto-maps these in Development).
 builder.WebHost.UseStaticWebAssets();
@@ -195,6 +201,10 @@ if (entraEnabled)
 }
 
 // The platform liveness probe must bypass the fallback authenticated-user policy.
-app.MapGet("/health", () => Results.Ok("healthy")).AllowAnonymous();
+// Front Door health probes issue HEAD (Container Apps uses GET), so both verbs are
+// mapped: a HEAD that only matched a GET endpoint would fall through to the
+// authenticated-user fallback and be redirected (302) to sign-in, which both fails
+// the "expect 200" probe contract and floods the log with auth-challenge noise.
+app.MapMethods("/health", ["GET", "HEAD"], () => Results.Ok("healthy")).AllowAnonymous();
 
 app.Run();
