@@ -56,5 +56,17 @@ internal static class ReplicationConfigSnapshotTestHelpers
     {
         public Task<IReadOnlyDictionary<string, LatticeReplicationConfigEntry>> ReadEntriesAsync(
             CancellationToken cancellationToken = default) => Task.FromResult(entries);
+
+        public Task<LatticeReplicationConfigEntry?> ReadEntryAsync(
+            string treeId,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(entries.TryGetValue(treeId, out var entry) ? entry : null);
+
+        public Task WriteEntryAsync(
+            string treeId,
+            string replicaId,
+            LatticeReplicationConfigEntry entry,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException("The static config store is read-only.");
     }
 }

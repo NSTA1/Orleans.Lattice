@@ -246,4 +246,10 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for <see cref="LatticeReplicationConfigEntry"/>.</summary>
     internal const string LatticeReplicationConfigEntry = "olr.rc";
 
+    /// <summary>Alias for <see cref="LatticeReplicationPreconditionFailedException"/>.</summary>
+    internal const string LatticeReplicationPreconditionFailedException = "olr.rp";
+
+    /// <summary>Alias for <see cref="LatticeReplicationModeChangeRejectedException"/>.</summary>
+    internal const string LatticeReplicationModeChangeRejectedException = "olr.rj";
+
 }

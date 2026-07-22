@@ -242,5 +242,20 @@ public sealed class CompiledReplicationConfigSnapshotMaintainerTests
             var copy = new Dictionary<string, LatticeReplicationConfigEntry>(Entries, StringComparer.Ordinal);
             return Task.FromResult<IReadOnlyDictionary<string, LatticeReplicationConfigEntry>>(copy);
         }
+
+        public Task<LatticeReplicationConfigEntry?> ReadEntryAsync(
+            string treeId,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(Entries.TryGetValue(treeId, out var entry) ? entry : null);
+
+        public Task WriteEntryAsync(
+            string treeId,
+            string replicaId,
+            LatticeReplicationConfigEntry entry,
+            CancellationToken cancellationToken = default)
+        {
+            Entries[treeId] = entry;
+            return Task.CompletedTask;
+        }
     }
 }
