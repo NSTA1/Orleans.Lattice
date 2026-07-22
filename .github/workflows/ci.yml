@@ -31,8 +31,15 @@ jobs:
       #
       # Outputs:
       #   code       - at least one non-doc, non-benchmark file changed
-      #                (any *.md / docs/** / benchmark/** only => false).
+      #                (any *.md / *.txt / docs/** / benchmark/** /
+      #                 .github/workflows/** only => false).
       #   nonSample  - at least one non-doc, non-benchmark, non-sample file changed.
+      #
+      # *.txt is treated as documentation (the only tracked .txt files are the
+      # root llms.txt index and a MAUI Raw resource that the ubuntu lane never
+      # compiles), and .github/workflows/** is excluded because a CI/publish
+      # workflow edit has no compileable surface for the library test matrix -
+      # gating a full build/test on either would just burn runner minutes.
       #
       # Derived: samples-only == (code == 'true' && nonSample == 'false').
       #
@@ -57,12 +64,16 @@ jobs:
           filters: |
             code:
               - '!**/*.md'
+              - '!**/*.txt'
               - '!docs/**'
               - '!benchmark/**'
+              - '!.github/workflows/**'
             nonSample:
               - '!**/*.md'
+              - '!**/*.txt'
               - '!docs/**'
               - '!benchmark/**'
+              - '!.github/workflows/**'
               - '!samples/**'
 
       # Auto-discover packages by convention: each subdirectory of `src/`
@@ -128,6 +139,14 @@ jobs:
           if [ ${#matched[@]} -eq 0 ]; then
             matched=("${packages[@]}")
             echo "No package-scoped changes detected; testing all packages."
+            # A shared/root change (e.g. Orleans.Lattice.slnx or
+            # Directory.Packages.props) fans out to every package. Signal the
+            # Build step to compile the whole solution in one invocation rather
+            # than looping project-by-project - a single solution build is
+            # faster than N separate builds when the fan-out is total.
+            echo "build_all=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build_all=false" >> "$GITHUB_OUTPUT"
           fi
 
           # Always test lattice.dashboards. The bundled Grafana dashboards chart
@@ -292,9 +311,41 @@ jobs:
         if: steps.filter.outputs.nonSample == 'true'
         run: dotnet restore
 
-      - name: Build
-        if: steps.filter.outputs.nonSample == 'true'
+      # Whole-solution build, used only when a shared/root change fanned the
+      # test matrix out to every package (build_all=true). One solution build
+      # is faster than looping every project separately.
+      - name: Build (all packages - shared/root change)
+        if: steps.filter.outputs.nonSample == 'true' && steps.discover.outputs.build_all == 'true'
         run: dotnet build --no-restore --configuration Release
+
+      # Selective build: compile only the in-scope packages. Building each
+      # package's test project transitively compiles its src project (and its
+      # dependency graph) in Release, which is exactly what the downstream
+      # `dotnet test --no-build` steps consume. Packages with no test project
+      # fall back to building the src csproj directly so a src-only change is
+      # still compile-checked. This mirrors the per-package test scoping - a PR
+      # that touches one package no longer pays to rebuild the whole solution.
+      - name: Build changed packages
+        if: steps.filter.outputs.nonSample == 'true' && steps.discover.outputs.build_all != 'true'
+        run: |
+          set -euo pipefail
+          for name in ${{ steps.discover.outputs.to_test }}; do
+            testProj=$(ls "test/${name}"/*.Tests.csproj 2>/dev/null | head -n 1 || true)
+            if [ -n "$testProj" ]; then
+              echo "::group::Build ${name} (test project -> transitively builds src)"
+              dotnet build "$testProj" --no-restore --configuration Release
+              echo "::endgroup::"
+              continue
+            fi
+            srcProj=$(ls "src/${name}"/*.csproj 2>/dev/null | head -n 1 || true)
+            if [ -n "$srcProj" ]; then
+              echo "::group::Build ${name} (src project - no test project)"
+              dotnet build "$srcProj" --no-restore --configuration Release
+              echo "::endgroup::"
+            else
+              echo "::notice::No csproj found for ${name} - nothing to build."
+            fi
+          done
 
       # Per-package test execution. Two separate top-level steps preserve the
       # chaos-first / deterministic split from the previous static layout: all
