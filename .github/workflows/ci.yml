@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # Need full history so the package-scope discovery step can
           # `git diff` against the PR base SHA. Shallow clone (the default)
@@ -58,7 +58,7 @@ jobs:
       # 'docs/lattice/observability.md', defeating the docs-only skip.
       - name: Check for non-markdown changes
         id: filter
-        uses: dorny/paths-filter@v3
+        uses: dorny/paths-filter@v4
         with:
           predicate-quantifier: every
           filters: |
@@ -174,14 +174,14 @@ jobs:
 
       - name: Setup .NET
         if: steps.filter.outputs.code == 'true'
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
       # Cache ~/.nuget/packages between runs.
       - name: Cache NuGet packages
         if: steps.filter.outputs.code == 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.nuget/packages
           key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Packages.props') }}
@@ -418,7 +418,7 @@ jobs:
       # also captured.
       - name: Upload test results
         if: always() && steps.filter.outputs.code == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: test-results
           # Include blame-hang crash dumps (*.dmp) and the sequence file

@@ -26,10 +26,10 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
@@ -37,7 +37,7 @@ jobs:
         run: dotnet workload install maui-windows
 
       - name: Cache NuGet packages
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.nuget/packages
           key: nuget-explorer-${{ runner.os }}-${{ hashFiles('src/lattice.explorer/**/*.csproj', 'test/lattice.explorer/**/*.csproj') }}
@@ -53,7 +53,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: explorer-test-results
           path: '**/*.trx'
