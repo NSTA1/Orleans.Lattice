@@ -10,6 +10,10 @@ This changelog covers the **package family**: `Orleans.Lattice`, `Orleans.Lattic
 
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), labelled `lattice` or `lattice.replication`. See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
 
+## [8.0.4] - 2026-07-22
+
+Per-package patch wave - there is no coordinated family `v8.0.4` tag. This wave ships **`Orleans.Lattice.Explorer.Core` 8.0.3** (`lattice.explorer.core-v8.0.3`), **`Orleans.Lattice.Explorer.Access` 8.0.2** (`lattice.explorer.access-v8.0.2`), **`Orleans.Lattice.Explorer.UI` 8.0.1** (`lattice.explorer.ui-v8.0.1`), **`Orleans.Lattice.Explorer.Entra.Web` 8.0.1** (`lattice.explorer.entra.web-v8.0.1`), and **`Orleans.Lattice.Api.Mcp` 8.0.1** (`lattice.api.mcp-v8.0.1`); every other package in the family remains at its current version. The four Explorer packages ship together because the Access panel and UI changes consume the new `AuthAdminAuthenticationRequired` capability added to `Orleans.Lattice.Explorer.Core`, and the circuit sign-in fix lands in `Orleans.Lattice.Explorer.Entra.Web`; `Orleans.Lattice.Api.Mcp` ships in the same wave with unrelated MCP client-DX fixes.
+
 ### Fixed
 
 - **Orleans.Lattice.Explorer.Entra.Web: the hosted-web Explorer circuit now sees the signed-in Entra user instead of an anonymous principal (`Orleans.Lattice.Explorer.Entra.Web`).** `AddLatticeExplorerEntraWebAuth` now calls `AddCascadingAuthenticationState()`, so the Blazor Server circuit's `AuthenticationStateProvider` reports the OIDC-authenticated browser user rather than an anonymous one. Previously the web host authenticated the browser at the HTTP layer (cookie issued, pages rendered) yet the circuit still observed an anonymous user, so the auto-sign-in handler acquired no State API token and every cluster call was made anonymously - the State area listed zero trees and the Access area was disabled, with nothing logged.
