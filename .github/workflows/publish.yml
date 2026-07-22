@@ -39,6 +39,8 @@ on:
       #   lattice.explorer.schema-v7.9.1
       #   lattice.explorer.web-v7.9.1
       #   lattice.explorer.entra-v7.7.1
+      #   lattice.explorer.entra.web-v8.0.0
+      #   lattice.caching.azureblob-v8.0.0
       # The tag prefix is the literal folder name under src/, dots and all.
       # Packages that live in a shared app folder's sub-directory (the
       # explorer's Core/UI/Web/... hosting libraries) have no folder of their
@@ -78,6 +80,8 @@ on:
       - 'lattice.explorer.schema-v*'
       - 'lattice.explorer.web-v*'
       - 'lattice.explorer.entra-v*'
+      - 'lattice.explorer.entra.web-v*'
+      - 'lattice.caching.azureblob-v*'
 
 jobs:
   publish:
@@ -180,8 +184,21 @@ jobs:
       # the csproj <Version> drives the assembly and package version so that
       # ProjectReference dependency floors resolve to each referenced package's
       # real version, not the tag version.
+      #
+      # Build only the package being released rather than the whole solution.
+      # When a test project exists, building it transitively compiles the src
+      # csproj (and its dependency graph) in Release - exactly what the Test
+      # (--no-build) and Pack (--no-build) steps consume. With no test project,
+      # build the src csproj directly. A single-package release has no reason to
+      # compile every other project in the solution.
       - name: Build
-        run: dotnet build --no-restore --configuration Release
+        run: |
+          set -euo pipefail
+          if [ -n "${{ steps.parse.outputs.TEST_PROJECT }}" ]; then
+            dotnet build "${{ steps.parse.outputs.TEST_PROJECT }}" --no-restore --configuration Release
+          else
+            dotnet build "${{ steps.parse.outputs.CSPROJ }}" --no-restore --configuration Release
+          fi
 
       - name: Test (chaos first - isolate flaky-prone surface)
         if: steps.parse.outputs.TEST_PROJECT != ''
