@@ -461,8 +461,15 @@ sequenceDiagram
 
 - The **silo** validates Entra bearer tokens for its exposed facades and applies
   the fail-closed read-visibility filter, so a caller only sees trees it may read.
-- The **MCP** and **Explorer** heads authenticate users against Entra and call the
-  silo with a federated workload identity, not a stored secret.
+- The **MCP** head authenticates users against Entra and calls the silo app-only
+  with its federated workload identity, not a stored secret.
+- The **Explorer** head signs operators in with a hosted-web OpenID Connect flow
+  (auth-code + PKCE) and calls the silo *on-behalf-of* the signed-in operator (a
+  delegated token carrying the user's identity), using its federated workload
+  identity only to authenticate the confidential client for the token exchange -
+  no client secret. Its Microsoft.Identity.Web token cache is a distributed cache
+  over the region storage account, so tokens are shared across warm replicas and
+  survive restart.
 - Managed identity, not secrets, is used for every Azure-to-Azure hop (ACR pull,
   storage, Key Vault, blob sink).
 

@@ -6,6 +6,8 @@ using Orleans.Configuration;
 using Orleans.Lattice;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Api.Auth.Grpc;
+using Orleans.Lattice.Api.Backup;
+using Orleans.Lattice.Api.Backup.Grpc;
 using Orleans.Lattice.Api.Data;
 using Orleans.Lattice.Api.Data.Grpc;
 using Orleans.Lattice.Api.State;
@@ -36,8 +38,8 @@ using Orleans.Lattice.Storage.AzureTable;
 //     wire merge mode (Replication:Trees), set symmetrically per region.
 //   * The Azure Blob backup sink, with a Backup:Primary flag selecting whether
 //     this region runs the scheduler (primary) or is DR standby (scheduler off).
-//   * The read-only State API, the read-write Data API and the auth-admin
-//     control plane over gRPC.
+//   * The read-only State API, the read-write Data API, the auth-admin control
+//     plane and the backup control plane over gRPC.
 //   * The lattice.scaling compute-axis signal endpoint for KEDA.
 //   * Entra-backed authentication for its exposed facades.
 //
@@ -176,6 +178,12 @@ builder.Host.UseOrleans(silo =>
     silo.AddLatticeBackupAzureBlob(options =>
         storage.ConfigureBackupSink(options, config["Backup:ContainerName"] ?? LatticeBackupAzureBlobOptions.DefaultContainerName));
 
+    // The backup control facade over the engine: the read/capture/restore/delete
+    // control plane the Explorer's Backups area (and the MCP backup tools) drive.
+    // Must be registered after AddLatticeBackup(); its gRPC binding is mapped and
+    // coarse-gated below exactly like State / Data / Auth.
+    silo.AddLatticeBackupApi();
+
     // Exactly one region is the designated backup-primary and owns the schedule;
     // every other region is DR standby with the scheduler off, so there are no
     // competing backup chains writing the shared sink.
@@ -308,7 +316,7 @@ builder.Services.AddLatticeStateApiGrpc(options =>
     {
         var tenantId = config["Entra:TenantId"] ?? string.Empty;
         var authority = config["Entra:Authority"] ?? $"https://login.microsoftonline.com/{tenantId}/v2.0";
-        options.AdvertisedAuthSchemes.Add(new AuthSchemeDescriptor
+        options.AdvertisedAuthSchemes.Add(new Orleans.Lattice.Api.State.Grpc.AuthSchemeDescriptor
         {
             // Well-known parameter keys the Explorer's Entra login method reads
             // (Orleans.Lattice.Explorer.Core.Authentication.ExplorerAuthSchemes):
@@ -327,7 +335,7 @@ builder.Services.AddLatticeStateApiGrpc(options =>
     }
     else
     {
-        options.AdvertisedAuthSchemes.Add(new AuthSchemeDescriptor
+        options.AdvertisedAuthSchemes.Add(new Orleans.Lattice.Api.State.Grpc.AuthSchemeDescriptor
         {
             SchemeId = "basic",
             DisplayName = "Username / password",
@@ -372,6 +380,20 @@ if (dataApiEnabled)
     }
 }
 
+// The backup control-API gRPC binding, co-hosted on the same silo gRPC port. The
+// coarse transport gate is opened (AllowAllBackupApiAuthorizer) because the real
+// enforcement is the deny-by-default per-scope backup access gate applied
+// afterwards on the caller's Entra-resolved subject (bootstrap administrators and
+// backup-scoped rules). RequireAuthorization still fails the binding closed when
+// enforcement is on and no authorizer is registered; the local compose harness
+// runs it open. Exposing it lights up the Explorer Backups area, whose capability
+// probe otherwise reads the facade as unimplemented and disables the area.
+builder.Services.AddLatticeBackupApiGrpc(options => options.RequireAuthorization = requireApiAuthorization);
+if (requireApiAuthorization)
+{
+    builder.Services.AddSingleton<ILatticeBackupApiAuthorizer, AllowAllBackupApiAuthorizer>();
+}
+
 // Export the orleans.lattice meter over Prometheus at /metrics so a scraper
 // (the local compose Prometheus, or Azure Managed Prometheus) can collect the
 // cluster telemetry that backs the bundled Grafana dashboards and the MCP
@@ -396,6 +418,7 @@ if (dataApiEnabled)
 {
     app.MapLatticeDataApiGrpc();
 }
+app.MapLatticeBackupApiGrpc();
 app.MapLatticeReplicationGrpc();
 
 // Compute-axis scaling signal for the KEDA Prometheus scaler (default route

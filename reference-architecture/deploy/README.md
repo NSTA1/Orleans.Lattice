@@ -74,10 +74,13 @@ Explorer - each with a service principal. Instead of client secrets it authors
 MCP, and Explorer apps. A workload therefore obtains an app token from its own
 managed identity with no secret to store, rotate, or leak.
 
-- The silo facade app declares an application app role, `Lattice.Access`. The MCP
-  and Explorer service principals are granted that role (the app-to-app
-  authorization edge) - least privilege, a single purpose-named role assigned to
-  exactly the two callers.
+- The silo facade app declares an application app role, `Lattice.Access`, granted
+  to the MCP service principal - the app-to-app (client-credentials) authorization
+  edge. The silo app also declares a delegated `user_impersonation` scope; the
+  Explorer console signs operators in (OpenID Connect) and calls the facade
+  on-behalf-of them, so it is granted that delegated scope (admin-consented
+  declaratively via an `oauth2PermissionGrant`) rather than the app role. Least
+  privilege either way: a single purpose-named grant per caller.
 - The silo app declares the Microsoft Graph `GroupMember.Read.All` **application**
   permission its optional group resolver needs, and `entra.bicep` grants tenant
   admin consent for it **declaratively** - an `appRoleAssignedTo` from the silo

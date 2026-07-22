@@ -90,6 +90,7 @@ guarantees) are documented in [`deploy/README.md`](deploy/README.md).
 | `-GrafanaAdminPassword` | yes | `SecureString`. |
 | `-EntraEnabled` / `-EntraTenantId` | Entra | Enable Entra and target the tenant. |
 | `-EntraClientId` | no | Use a pre-existing audience app instead of deploying `entra/entra.bicep`. |
+| `-ExplorerWebClientId` | no | Explorer console web-app (client) id, used only with `-EntraClientId` (when `entra/entra.bicep` is skipped); otherwise read from its `explorerClientId` output. |
 | `-EntraAudiences` | no | Extra accepted token audiences. |
 | `-SecurityAdmin` | no | The single Entra security administrator seeded as the sole initial-access principal (root of trust). An object id (GUID) or a UPN / email (resolved to its object id). Defaults to the deploying user when Entra is enabled. Further administrators are granted at runtime via the Explorer Access tab. |
 | `-ExplorerRedirectUris` | no | Defaults derived from the deployed FQDNs. |
@@ -118,6 +119,7 @@ through the script) are:
 | `requireApiAuthorization` | `true` | Whether the facades and MCP require authorization. |
 | `dataApiEnabled` | `true` | Whether the read-write Data API is exposed (co-hosted on the silo gRPC port; the MCP head advertises its write tools). Every mutation is still subject-gated. |
 | `entraEnabled` / `entraTenantId` / `entraClientId` / `entraAudiences` | off / `''` | Entra authentication. |
+| `explorerWebClientId` / `explorerAuthScope` | `''` | Explorer hosted-web OIDC: its own web-app client id and the delegated silo scope it requests on-behalf-of the operator. Threaded from the entra deployment on a later pass. |
 | `prometheusQueryEndpoint` / `frontDoorId` | `''` | Forward-threaded seams; empty on pass 1, activated on pass 2 (compile-cycle avoidance). Managed by the script. |
 
 The per-region module parameters (`bicep/modules/*.bicep`) are internal seams the
@@ -254,6 +256,85 @@ immediately under the same names.
   dashboards. Reach Grafana at its per-region ingress; sign in with the
   `-GrafanaAdminPassword` you supplied (Prometheus is queried through the
   region's managed identity, no scraped secret).
+
+### Connect an MCP client
+
+The MCP head exposes the Lattice control surface (state, data, auth-admin, and
+telemetry tool groups) as a Model Context Protocol server over streamable HTTP. It
+runs stateless behind Front Door, is authenticated with a Microsoft Entra bearer
+token, and is origin-locked: Front Door injects the `X-Azure-FDID` header on the
+client's behalf, so a client that reaches the head through the Front Door hostname
+supplies **only** an `Authorization` header. (A client that bypasses Front Door and
+dials a region's container-app FQDN directly must add the matching
+`X-Azure-FDID` header itself.)
+
+**1. Mint an access token for the silo facade.** The MCP tools call through to the
+region silo, so the token's audience is the silo facade app, not the MCP head. For
+an interactive operator, the Azure CLI mints one against the silo App ID URI:
+
+```powershell
+$token = az account get-access-token `
+  --resource "api://<tenantId>/<BaseName>-silo" `
+  --query accessToken -o tsv
+```
+
+For unattended automation, register a service principal, assign it the silo app
+role, and use the client-credentials grant instead. Either way the silo resolves
+the caller's subject from the token's stable `oid` claim and enforces the
+deny-by-default per-tree access model against it, so the principal must be granted
+the rules (or bootstrap-administrator status) for the trees and groups it will use.
+
+**2. Point an MCP client at the Front Door MCP hostname.** For GitHub Copilot CLI,
+add an `http` server to `~/.copilot/mcp-config.json`:
+
+```json
+{
+  "mcpServers": {
+    "lattice-ra": {
+      "type": "http",
+      "url": "https://<mcp-front-door-hostname>/",
+      "headers": { "Authorization": "Bearer <token>" },
+      "tools": ["*"]
+    }
+  }
+}
+```
+
+The same two inputs (the Front Door URL and the `Authorization: Bearer <token>`
+header) drive any MCP client that speaks streamable HTTP.
+
+**3. Smoke-test the endpoint.** A raw JSON-RPC `initialize` + `tools/list` confirms
+discovery without a full client:
+
+```powershell
+$url = "https://<mcp-front-door-hostname>/"
+$h = @{
+  Authorization  = "Bearer $token"
+  "Content-Type" = "application/json"
+  Accept         = "application/json, text/event-stream"
+}
+$init = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"probe","version":"1"}}}'
+Invoke-WebRequest -Method Post -Uri $url -Headers $h -Body $init -UseBasicParsing | Out-Null
+$list = '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+(Invoke-WebRequest -Method Post -Uri $url -Headers $h -Body $list -UseBasicParsing).Content
+```
+
+Notes and gotchas:
+
+- **Tool arguments use `treeId`.** The data and state tools name their tree
+  parameter `treeId` (not `treeName`); the read-range tool's optional bounds
+  (`startInclusive`, `endExclusive`, `continuationToken`) are declared in the tool
+  schema, so a hand-written call must send them (as `null`). A schema-driven client
+  fills them in automatically.
+- **Token lifetime.** An Entra access token expires in about an hour. Re-mint and
+  refresh the `Authorization` header before it lapses (automation should acquire a
+  fresh token per session).
+- **Region round-robin.** Front Door load-balances each request across the regional
+  origins with no affinity. The config-plane grants and telemetry are symmetric
+  across regions, but a data-plane tree written in one region is not visible to a
+  read routed to the other until replication converges it. For a deterministic
+  single-region check, call that region's MCP container-app FQDN directly and add
+  the `X-Azure-FDID` header.
 
 ## Optional hardening and upgrade path
 

@@ -16,10 +16,11 @@
 //     example the silo's Microsoft Graph group resolver) WITHOUT a client secret
 //     - the identity is federated, so there is no secret to store, rotate, or
 //     leak. Client secrets are deliberately NOT created.
-//   * An application app role ("Lattice.Access") on the silo facade app, and
-//     app-role assignments granting the MCP and Explorer service principals that
-//     role - the app-to-app authorization edge (least privilege: a single,
-//     purpose-named role, assigned only to the two SPs that call the silo).
+//   * An application app role ("Lattice.Access") on the silo facade app, and an
+//     app-role assignment granting the MCP service principal that role - the
+//     app-to-app (client-credentials) authorization edge. The Explorer console
+//     instead uses the silo's DELEGATED user_impersonation scope (it signs the
+//     operator in and calls the facade on-behalf-of them), admin-consented below.
 //
 // Microsoft Graph directory permissions the silo group resolver needs
 // (GroupMember.Read.All, application permission) are DECLARED here as
@@ -168,6 +169,10 @@ resource siloGraphGroupMemberConsent 'Microsoft.Graph/appRoleAssignedTo@v1.0' = 
 // One federated identity credential per region managed identity: the silo app
 // trusts tokens the region's workload identity presents, so the silo obtains
 // app-only Graph tokens with NO client secret.
+// @batchSize(1): Graph rejects CONCURRENT federatedIdentityCredential creates
+// under one application with a spurious "Request contains a property with
+// duplicate values", so the per-region elements must be written serially.
+@batchSize(1)
 resource siloFic 'Microsoft.Graph/applications/federatedIdentityCredentials@v1.0' = [for mi in regionManagedIdentities: {
   name: '${siloApp.uniqueName}/silo-${mi.regionCode}'
   description: 'Workload-identity federation for the ${mi.regionCode} silo managed identity (secret-less app-only access).'
@@ -207,8 +212,11 @@ resource mcpSp 'Microsoft.Graph/servicePrincipals@v1.0' = {
 // A managed identity used as a federated-credential SUBJECT can back a credential
 // on several apps, but Microsoft Graph rejects concurrent creates that share a
 // subject with a spurious "Request contains a property with duplicate values".
-// Chain the per-app FIC collections (silo -> mcp -> explorer) so a given region
-// identity is only ever written as a subject on one app at a time.
+// Two serialization guards defeat this: @batchSize(1) writes each collection's
+// per-region elements one at a time, and chaining the per-app FIC collections
+// (silo -> mcp -> explorer) so a given region identity is only ever written as a
+// subject on one app at a time.
+@batchSize(1)
 resource mcpFic 'Microsoft.Graph/applications/federatedIdentityCredentials@v1.0' = [for mi in regionManagedIdentities: {
   name: '${mcpApp.uniqueName}/mcp-${mi.regionCode}'
   description: 'Workload-identity federation for the ${mi.regionCode} MCP managed identity (secret-less token acquisition).'
@@ -247,8 +255,12 @@ resource explorerApp 'Microsoft.Graph/applications@v1.0' = {
       resourceAppId: siloApp.appId
       resourceAccess: [
         {
-          id: latticeAccessRoleId
-          type: 'Role'
+          // DELEGATED scope: the console signs the operator in (OpenID Connect)
+          // and acquires a silo-audience token ON THE USER'S BEHALF (OBO), so it
+          // requests the delegated user_impersonation scope - NOT the app role,
+          // which is the app-only (client-credentials) edge the MCP head uses.
+          id: userImpersonationScopeId
+          type: 'Scope'
         }
       ]
     }
@@ -259,6 +271,7 @@ resource explorerSp 'Microsoft.Graph/servicePrincipals@v1.0' = {
   appId: explorerApp.appId
 }
 
+@batchSize(1)
 resource explorerFic 'Microsoft.Graph/applications/federatedIdentityCredentials@v1.0' = [for mi in regionManagedIdentities: {
   name: '${explorerApp.uniqueName}/explorer-${mi.regionCode}'
   description: 'Workload-identity federation for the ${mi.regionCode} Explorer managed identity (secret-less token acquisition).'
@@ -270,11 +283,18 @@ resource explorerFic 'Microsoft.Graph/applications/federatedIdentityCredentials@
   dependsOn: [ mcpFic ]
 }]
 
-// Grant the Explorer service principal the silo Lattice.Access app role.
-resource explorerToSiloRole 'Microsoft.Graph/appRoleAssignedTo@v1.0' = {
-  appRoleId: latticeAccessRoleId
-  principalId: explorerSp.id
+// Admin-consent the delegated user_impersonation scope for the Explorer console,
+// declaratively (the delegated equivalent of the app-role assignments above). This
+// is what `az ad app permission admin-consent` would create: an oauth2 permission
+// grant from the Explorer SP (the client) to the silo SP (the resource) for all
+// principals, so no interactive consent prompt is needed at first sign-in and the
+// on-behalf-of token exchange succeeds. Authorization is still gated
+// deny-by-default at the silo, so the grant alone confers no access.
+resource explorerToSiloScope 'Microsoft.Graph/oauth2PermissionGrants@v1.0' = {
+  clientId: explorerSp.id
   resourceId: siloSp.id
+  consentType: 'AllPrincipals'
+  scope: 'user_impersonation'
 }
 
 // =============================================================================

@@ -184,6 +184,10 @@ param(
     # Optional pre-existing silo audience app (client) id. When supplied the script
     # does NOT deploy entra/entra.bicep and uses this id as the estate audience.
     [string]$EntraClientId = '',
+    # Optional pre-existing Explorer console web-app (client) id. Used only when
+    # -EntraClientId is also supplied (entra.bicep is skipped); when entra.bicep is
+    # deployed the value is read from its explorerClientId output instead.
+    [string]$ExplorerWebClientId = '',
     [string]$EntraAudiences = '',
     # The single Entra security administrator seeded as the sole initial-access
     # principal (the root of trust). Accepts an Entra user object id (GUID) or a
@@ -542,6 +546,13 @@ try {
     # -----------------------------------------------------------------------
     $entraClientIdResolved = $EntraClientId
     $entraAudiencesResolved = $EntraAudiences
+    # The Explorer console signs operators in against its OWN web-app registration
+    # (explorerClientId) and requests the silo's delegated user_impersonation scope
+    # on-behalf-of them. The scope is a pure function of tenant + base name; the
+    # web client id comes from the entra deployment (or the -ExplorerWebClientId
+    # param when entra.bicep is skipped).
+    $explorerWebClientIdResolved = $ExplorerWebClientId
+    $explorerAuthScopeResolved = if ($EntraEnabled) { "api://$EntraTenantId/$BaseName-silo/user_impersonation" } else { '' }
     if ($EntraEnabled -and [string]::IsNullOrWhiteSpace($EntraClientId)) {
         Write-Phase 'Deploying Entra resources (Microsoft Graph extension)'
 
@@ -581,6 +592,7 @@ try {
 
         if ($entra) {
             $entraClientIdResolved = $entra.properties.outputs.siloClientId.value
+            $explorerWebClientIdResolved = $entra.properties.outputs.explorerClientId.value
             if ([string]::IsNullOrWhiteSpace($entraAudiencesResolved)) {
                 $entraAudiencesResolved = $entra.properties.outputs.siloAudience.value
             }
@@ -633,6 +645,10 @@ try {
 
         $storageRegion = Get-ByRegionCode -Items $perRegionStorage -RegionCode $code
         $walTableEndpoint = if ($storageRegion) { $storageRegion.tableEndpoint } else { '' }
+        # Explorer distributed token-cache blob seam (same per-region account as the
+        # WAL table, separate blob container + container-scoped RBAC).
+        $tokenCacheBlobEndpoint = if ($storageRegion) { $storageRegion.blobEndpoint } else { '' }
+        $tokenCacheContainerName = if ($storageRegion) { $storageRegion.tokenCacheContainer } else { 'explorer-token-cache' }
 
         # Every option is VNet-injected (the environment must be VNet-integrated
         # to be zone-redundant); the subnet exists for both public and private.
@@ -680,6 +696,19 @@ try {
             entraTenantId              = $EntraTenantId
             entraClientId              = $entraClientIdResolved
             entraAudiences             = $entraAudiencesResolved
+            # Explorer hosted-web OIDC: the console's own web-app client id and the
+            # delegated silo scope it requests on-behalf-of the signed-in operator.
+            explorerWebClientId        = $explorerWebClientIdResolved
+            explorerAuthScope          = $explorerAuthScopeResolved
+            # Explorer distributed token cache: keyless blob endpoint + container on
+            # the per-region account so operator tokens are shared across warm
+            # replicas and survive restart (in-memory fallback when empty).
+            tokenCacheBlobEndpoint     = $tokenCacheBlobEndpoint
+            tokenCacheContainerName    = $tokenCacheContainerName
+            # Public origin operators reach the console at (the global Front Door
+            # endpoint) so OIDC sign-in redirect URIs target the public host, not
+            # the Front-Door-locked Container Apps origin.
+            explorerPublicOrigin       = if ($frontDoorEndpoints -and $frontDoorEndpoints.explorer) { "https://$($frontDoorEndpoints.explorer)" } else { '' }
             # Sole seeded administrator (root of trust); empty when Entra is off.
             bootstrapAdministrators    = $securityAdminObjectId
         }

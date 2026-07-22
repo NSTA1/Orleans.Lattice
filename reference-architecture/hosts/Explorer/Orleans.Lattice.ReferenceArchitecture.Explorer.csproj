@@ -23,12 +23,19 @@
   <!--
     Published Orleans.Lattice NuGet packages (nuget.org), NOT project references
     into src/. Orleans.Lattice.Explorer.Web brings the shared UI, Core, Access,
-    Backup, and Schema explorer libraries transitively; the Entra package adds
-    the interactive Entra sign-in provider.
+    Backup, and Schema explorer libraries transitively; the Entra.Web package adds
+    the hosted-web (OpenID Connect, auth-code + PKCE) Entra sign-in provider that
+    replaces the desktop/device-code flow - the console is a multi-replica Blazor
+    Server web head, so the browser signs in via a server-side confidential client
+    rather than an interactive desktop broker.
 
     The four shared libraries carrying the transport-header origin-lock fix
     (Core / Access / Backup / Schema 8.0.1) are referenced explicitly so the
     fixed versions win over the versions Explorer.Web pulls transitively.
+
+    Orleans.Lattice.Caching.AzureBlob backs the Microsoft.Identity.Web distributed
+    token cache with the per-region storage account, so a signed-in operator's
+    token survives replica scale/restart and is shared across warm replicas.
   -->
   <ItemGroup>
     <PackageReference Include="Orleans.Lattice.Explorer.Web" Version="8.0.1" />
@@ -36,7 +43,9 @@
     <PackageReference Include="Orleans.Lattice.Explorer.Access" Version="8.0.1" />
     <PackageReference Include="Orleans.Lattice.Explorer.Backup" Version="8.0.1" />
     <PackageReference Include="Orleans.Lattice.Explorer.Schema" Version="8.0.1" />
-    <PackageReference Include="Orleans.Lattice.Explorer.Entra" Version="8.0.0" />
+    <PackageReference Include="Orleans.Lattice.Explorer.Entra.Web" Version="8.0.0" />
+    <PackageReference Include="Orleans.Lattice.Caching.AzureBlob" Version="8.0.0" />
+    <PackageReference Include="Azure.Identity" Version="1.21.0" />
   </ItemGroup>
 
   <!-- Shared reference-architecture hosting helpers (Front Door origin lock). -->

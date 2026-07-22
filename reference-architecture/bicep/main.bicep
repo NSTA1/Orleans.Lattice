@@ -121,6 +121,15 @@ param entraClientId string = ''
 @description('Comma-separated additional Entra token audiences accepted by the silo facades. Empty lets the host derive {clientId, api://{clientId}}.')
 param entraAudiences string = ''
 
+@description('Application (client) id of the Explorer console\'s OWN confidential web-app registration (the entra.bicep explorerClientId output) - the app that holds the OIDC redirect URIs. Distinct from entraClientId (the silo facade audience). Fed to the Explorer head Entra:WebClientId; the deployer supplies it after the entra deployment reports the output. Empty leaves the Explorer head without web sign-in.')
+param explorerWebClientId string = ''
+
+@description('Downstream State API scope the Explorer console requests on the signed-in operator\'s behalf (on-behalf-of), for example api://{tenantId}/{baseName}-silo/user_impersonation. Fed to the Explorer head Entra:Scopes. Empty lets the console resolve the scope at sign-in from the audience the State API advertises.')
+param explorerAuthScope string = ''
+
+@description('Externally visible public origin (scheme + host) operators reach the Explorer console at - the global Front Door endpoint (frontDoorEndpoints.explorer). Fed to the Explorer head Explorer:PublicOrigin so OpenID Connect builds sign-in redirect URIs against the public host, not the Front-Door-locked Container Apps origin. Azure-assigned, so the deployer threads it on a later pass. Empty leaves request scheme/host untouched.')
+param explorerPublicOrigin string = ''
+
 // ACR names are globally unique DNS labels, so a uniqueString suffix keeps the
 // registry name collision-free across subscriptions/estates and guarantees the
 // 5-50 char length constraint.
@@ -205,6 +214,14 @@ module compute 'modules/compute.bicep' = [for (region, i) in regions: {
     entraTenantId: entraTenantId
     entraClientId: entraClientId
     entraAudiences: entraAudiences
+    // Explorer hosted-web OIDC sign-in: the console's own confidential web-app
+    // client id and the downstream State API scope it requests on-behalf-of the
+    // signed-in operator. Both are empty until the entra deployment reports the
+    // explorerClientId (the deployer threads them on a later pass, exactly like
+    // the head client ids / redirect URIs).
+    explorerWebClientId: explorerWebClientId
+    explorerAuthScope: explorerAuthScope
+    explorerPublicOrigin: explorerPublicOrigin
     // Every option is VNet-injected (the subnet exists for both) so the
     // environment can be zone-redundant. Public keeps external ingress; private
     // is internal-only.
@@ -219,6 +236,9 @@ module compute 'modules/compute.bicep' = [for (region, i) in regions: {
     // reminders; the shared global blob account backs backup.
     walTableEndpoint: 'https://st${uniqueString(resourceGroup().id, baseName, region.regionCode)}.table.${environment().suffixes.storage}/'
     backupBlobEndpoint: 'https://stbk${uniqueString(resourceGroup().id, baseName)}.blob.${environment().suffixes.storage}/'
+    // Blob endpoint of the SAME per-region account (deterministic, matching the
+    // storage module's account name) backing the Explorer head token cache.
+    tokenCacheBlobEndpoint: 'https://st${uniqueString(resourceGroup().id, baseName, region.regionCode)}.blob.${environment().suffixes.storage}/'
     backupIsPrimary: region.regionCode == backupPrimaryRegionCode
   }
 }]

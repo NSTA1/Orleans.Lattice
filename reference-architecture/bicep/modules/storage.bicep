@@ -135,6 +135,9 @@ param backupLocation string = regions[0].location
 @description('Blob container name for the backup chains (full + incremental). One shared container is the single source of truth for cold-restore.')
 param backupContainerName string = 'lattice-backups'
 
+@description('Blob container (on each per-region account) backing the Explorer head\'s Microsoft.Identity.Web distributed token cache. A dedicated container on the blob service keeps operator-token material isolated from the WAL/clustering tables in the same account.')
+param tokenCacheContainerName string = 'explorer-token-cache'
+
 // --- Built-in Azure RBAC role definition ids (data-plane, least privilege) ---
 // Storage Table Data Contributor: read/write the WAL + Orleans clustering tables.
 var tableDataContributorRoleId = '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3'
@@ -185,6 +188,42 @@ resource regionTableRbac 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
   scope: regionStorage[i]
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', tableDataContributorRoleId)
+    principalId: region.managedIdentityPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}]
+
+// -----------------------------------------------------------------------------
+// Explorer token-cache container (per-region, on the SAME account as the WAL)
+// -----------------------------------------------------------------------------
+// The Explorer head persists Microsoft.Identity.Web's distributed token cache to
+// a dedicated blob container on the region account. Blob and Table are separate
+// services on one StorageV2 account, so the token-cache blobs cannot collide with
+// the WAL/clustering tables. The container carries its own least-privilege RBAC
+// (Storage Blob Data Contributor scoped to the CONTAINER, not the account) granted
+// only to the region identity the Explorer runs as - isolated from the
+// table-scoped WAL grant above.
+// -----------------------------------------------------------------------------
+
+resource regionBlobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = [for (region, i) in regions: {
+  parent: regionStorage[i]
+  name: 'default'
+}]
+
+resource tokenCacheContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = [for (region, i) in regions: {
+  parent: regionBlobService[i]
+  name: tokenCacheContainerName
+  properties: {
+    // Operator-token material: RBAC-authenticated managed identity only.
+    publicAccess: 'None'
+  }
+}]
+
+resource tokenCacheBlobRbac 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for (region, i) in regions: {
+  name: guid(tokenCacheContainer[i].id, region.managedIdentityPrincipalId, blobDataContributorRoleId)
+  scope: tokenCacheContainer[i]
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobDataContributorRoleId)
     principalId: region.managedIdentityPrincipalId
     principalType: 'ServicePrincipal'
   }
@@ -249,11 +288,13 @@ resource backupBlobRbac 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
 // Endpoint outputs are keyless URIs only; no keys/SAS are ever emitted.
 // =============================================================================
 
-@description('Per-region storage seams in region-list order. Each item: { regionCode, storageAccountName, tableEndpoint }. tableEndpoint backs BOTH the durable WAL and Orleans clustering.')
+@description('Per-region storage seams in region-list order. Each item: { regionCode, storageAccountName, tableEndpoint, blobEndpoint, tokenCacheContainer }. tableEndpoint backs BOTH the durable WAL and Orleans clustering; blobEndpoint + tokenCacheContainer back the Explorer head distributed token cache.')
 output perRegionStorage array = [for (region, i) in regions: {
   regionCode: region.regionCode
   storageAccountName: regionStorage[i].name
   tableEndpoint: regionStorage[i].properties.primaryEndpoints.table
+  blobEndpoint: regionStorage[i].properties.primaryEndpoints.blob
+  tokenCacheContainer: tokenCacheContainerName
 }]
 
 @description('Name of the shared global backup blob account (single source of truth for restore).')

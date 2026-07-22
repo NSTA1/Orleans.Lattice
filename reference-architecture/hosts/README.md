@@ -4,7 +4,9 @@ Three minimal, production-shaped reference host projects for the active-active,
 cross-region Orleans.Lattice estate described in the root `reference-architecture.md`.
 Each project references the **published Orleans.Lattice v8.0.x NuGet packages**
 (from nuget.org - the 8.0.0 line, with `Orleans.Lattice.Membership.Entra.Graph`
-at 8.0.1 for the secret-less managed-identity Graph resolver), not project
+at 8.0.1 for the secret-less managed-identity Graph resolver, and the Explorer
+head adding `Orleans.Lattice.Explorer.Entra.Web` + `Orleans.Lattice.Caching.AzureBlob`
+for hosted-web OIDC sign-in and its distributed token cache), not project
 references into `src/`, so it consumes the released library exactly as a real
 deployment would.
 
@@ -12,7 +14,7 @@ deployment would.
 |------|---------|------|
 | Silo | `Silo/Orleans.Lattice.ReferenceArchitecture.Silo.csproj` | The always-on Orleans silo: Azure Table clustering + durable Azure Table WAL, cross-region replication (shipper + receiver), the Azure Blob backup sink (primary/standby), the read-only State API + auth-admin control plane over gRPC, the `lattice.scaling` compute-axis signal, OpenTelemetry `/metrics`, and Entra auth. |
 | Mcp | `Mcp/Orleans.Lattice.ReferenceArchitecture.Mcp.csproj` | A stateless remote MCP server (`AddLatticeMcpRemote` over gRPC) fronting the silo, with the telemetry tool module and Entra auth. |
-| Explorer | `Explorer/Orleans.Lattice.ReferenceArchitecture.Explorer.csproj` | A standalone Explorer web console (Blazor Server) that connects, as a gRPC/gRPC-web client, to the silo's State + Auth gRPC endpoint, with an interactive Entra sign-in. |
+| Explorer | `Explorer/Orleans.Lattice.ReferenceArchitecture.Explorer.csproj` | A standalone Explorer web console (Blazor Server) that connects, as a gRPC/gRPC-web client, to the silo's State + Auth gRPC endpoint, with a hosted-web Entra (OpenID Connect) sign-in and a distributed token cache over the region storage account. |
 
 All external inputs (connection targets, tenant / client ids, the replication key,
 the peer list, merge modes, the backup-primary flag) come from environment
@@ -81,7 +83,13 @@ underscore separator, case-insensitive).
 |-----|---------|---------|
 | `Explorer:ConfigFilePath` | `%TEMP%/lattice-explorer/config.json` | Writable JSON config backing store (the chiseled non-root image has no writable app-data dir). |
 | `Explorer:EnableSchemaArea` | `false` | Surface the schema-management area. |
-| `Entra:Enabled` / `Entra:TenantId` / `Entra:ClientId` / `Entra:Authority` / `Entra:UseDeviceCode` | - | Interactive Entra sign-in provider. |
+| `Entra:Enabled` | `false` | Enable the hosted-web Microsoft Entra (OpenID Connect, auth-code + PKCE) sign-in provider. |
+| `Entra:TenantId` | - | Directory (tenant) the console signs operators in against. |
+| `Entra:WebClientId` | - | The Explorer console's OWN confidential web-app registration (holds the OIDC redirect URIs); NOT the silo facade audience. |
+| `Entra:Scopes` | - | Comma-separated downstream State API scope requested on-behalf-of the operator (for example `api://{tenantId}/{base}-silo/user_impersonation`). Empty resolves the scope from the advertised audience. |
+| `Entra:ClientSecret` | - | Optional confidential-client secret. Left unset in Azure: the container authenticates secret-lessly via a federated managed-identity assertion (`AZURE_CLIENT_ID`). |
+| `Entra:TokenCache:BlobServiceUri` | - | Blob endpoint of the per-region account backing the Microsoft.Identity.Web distributed token cache, so tokens are shared across warm replicas and survive restart. Empty falls back to an in-memory cache. Consumed via the `AZURE_CLIENT_ID` managed identity. |
+| `Entra:TokenCache:ContainerName` | `explorer-token-cache` | Container (on the per-region account) that stores the token cache. |
 | `LATTICE_EXPLORER_ENDPOINT` | - | The remote State/Auth gRPC endpoint the console connects to (read by the explorer's own environment bootstrap). |
 | `LATTICE_EXPLORER_INSECURE_DEV` | - | `true` to allow the local h2c dev transport. |
 | `LATTICE_EXPLORER_USERNAME` / `LATTICE_EXPLORER_PASSWORD` | - | Optional first-run auto-sign-in (local dev). |

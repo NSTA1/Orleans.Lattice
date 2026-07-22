@@ -171,6 +171,9 @@ param probeIntervalSeconds int = 240
 @description('Path the AFD health probe requests against each origin. A lightweight HEAD is issued against this path.')
 param probePath string = '/'
 
+@description('Health-probe path for the Explorer origin group. The Explorer console protects `/` behind a require-authenticated-user policy (it 302-redirects anonymous probes to sign-in, which AFD scores unhealthy), so it is probed at its dedicated anonymous `/health` endpoint instead of the shared `/`.')
+param explorerProbePath string = '/health'
+
 // --- WAF seam (DEFAULT OFF - provisions nothing when false) -------------------
 
 @description('DEFAULT-OFF WAF seam. WAF is descoped from the baseline for cost; leaving this false provisions no WAF policy or security policy. See the module header for the exact Premium + managed-WAF enablement path. Surfaced as the `wafEnabled` output so the coordinator can branch on it.')
@@ -191,6 +194,16 @@ var loadBalancingSettings = {
 
 var healthProbeSettings = {
   probePath: probePath
+  probeRequestType: 'HEAD'
+  probeProtocol: 'Https'
+  probeIntervalInSeconds: probeIntervalSeconds
+}
+
+// The Explorer console 302-redirects anonymous `/` to sign-in, so it is probed at
+// its anonymous `/health` endpoint (see explorerProbePath) instead of the shared
+// path used by the stateless MCP/State heads.
+var explorerHealthProbeSettings = {
+  probePath: explorerProbePath
   probeRequestType: 'HEAD'
   probeProtocol: 'Https'
   probeIntervalInSeconds: probeIntervalSeconds
@@ -289,7 +302,7 @@ resource originGroupExplorer 'Microsoft.Cdn/profiles/originGroups@2024-02-01' = 
   name: 'og-explorer'
   properties: {
     loadBalancingSettings: loadBalancingSettings
-    healthProbeSettings: healthProbeSettings
+    healthProbeSettings: explorerHealthProbeSettings
     // Enabled (unlike the stateless MCP/State groups): the Explorer's Blazor
     // Server circuit must stay pinned to one origin. See explorerOriginProps.
     sessionAffinityState: 'Enabled'

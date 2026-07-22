@@ -1,5 +1,8 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Azure.Identity;
+using Grpc.Core;
+using Grpc.Core.Interceptors;
+using Grpc.Net.Client;
 using Orleans.Lattice;
 using Orleans.Lattice.Api.Mcp;
 using Orleans.Lattice.Api.Mcp.Telemetry;
@@ -42,6 +45,18 @@ var enableAuthAdministration = config.GetValue("Mcp:EnableAuthAdministration", f
 var enableDataWrites = config.GetValue("Mcp:EnableDataWrites", false);
 var enableBackupControl = config.GetValue("Mcp:EnableBackupControl", false);
 
+// Streamable-HTTP session mode. This head is documented and deployed as a
+// STATELESS MCP server (see the file header): it fronts an active-active Front
+// Door origin group with no session affinity, so a follow-up request can land on
+// any region or replica. A stateful, in-memory session would then break with
+// "Session not found" the moment routing moved. Stateless mode makes every HTTP
+// request self-contained; the per-request ConfigureSessionOptions hook still
+// runs (see HttpServerTransportOptions), so the permission-scoped tool discovery
+// is applied on every call from the caller's own token rather than being lost.
+// Defaults on for this multi-region host; the single-instance compose harness
+// may set Mcp:Stateless=false to exercise the stateful path.
+var stateless = config.GetValue("Mcp:Stateless", true);
+
 // Global-ingress origin lock: when set, every request other than /health must
 // carry an X-Azure-FDID header matching this id. Empty (dev/compose, and the
 // first deploy pass before Front Door exists) leaves the head unlocked.
@@ -64,18 +79,52 @@ if (new[] { stateEndpoint, authEndpoint, dataEndpoint, backupEndpoint }
     AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
 }
 
+// The silo enforces a Front Door origin lock on its external gRPC port: every
+// request other than /health must carry an X-Azure-FDID header matching the
+// front-door id, or it is rejected 403 before authentication. The MCP head dials
+// the silo over its internal ACA FQDN (not through Front Door), so it must stamp
+// that header itself on every outbound gRPC call - the introspection the
+// discovery core performs AND the forwarded tool calls - or all silo calls 403
+// and every facade group reports unavailable. Build one origin-lock call invoker
+// per distinct silo address (state/auth/data share one FQDN) and hand it to the
+// remote binding, which layers the caller-credential-forwarding interceptor on
+// top. When no front-door id is configured (the local compose harness, whose
+// silo is unlocked) the endpoints fall back to the binding's address-derived
+// channel with no header.
+var siloInvokerCache = new Dictionary<string, CallInvoker>(StringComparer.OrdinalIgnoreCase);
+CallInvoker? OriginLockInvoker(string? endpoint)
+{
+    if (string.IsNullOrWhiteSpace(endpoint) || string.IsNullOrEmpty(frontDoorId))
+    {
+        return null;
+    }
+
+    if (!siloInvokerCache.TryGetValue(endpoint, out var invoker))
+    {
+        invoker = GrpcChannel.ForAddress(endpoint).CreateCallInvoker()
+            .Intercept(metadata =>
+            {
+                metadata.Add("X-Azure-FDID", frontDoorId);
+                return metadata;
+            });
+        siloInvokerCache[endpoint] = invoker;
+    }
+
+    return invoker;
+}
+
 builder.Services.AddLatticeMcpRemote(options =>
 {
-    options.State = new LatticeApiMcpRemoteEndpoint { Endpoint = stateEndpoint };
-    options.Auth = new LatticeApiMcpRemoteEndpoint { Endpoint = authEndpoint };
+    options.State = new LatticeApiMcpRemoteEndpoint { Endpoint = stateEndpoint, CallInvoker = OriginLockInvoker(stateEndpoint) };
+    options.Auth = new LatticeApiMcpRemoteEndpoint { Endpoint = authEndpoint, CallInvoker = OriginLockInvoker(authEndpoint) };
     if (!string.IsNullOrWhiteSpace(dataEndpoint))
     {
-        options.Data = new LatticeApiMcpRemoteEndpoint { Endpoint = dataEndpoint };
+        options.Data = new LatticeApiMcpRemoteEndpoint { Endpoint = dataEndpoint, CallInvoker = OriginLockInvoker(dataEndpoint) };
     }
 
     if (!string.IsNullOrWhiteSpace(backupEndpoint))
     {
-        options.Backup = new LatticeApiMcpRemoteEndpoint { Endpoint = backupEndpoint };
+        options.Backup = new LatticeApiMcpRemoteEndpoint { Endpoint = backupEndpoint, CallInvoker = OriginLockInvoker(backupEndpoint) };
     }
 
     options.EnableDataWrites = enableDataWrites;
@@ -89,7 +138,22 @@ builder.Services.AddLatticeMcpRemote(options =>
 
 // The base MCP endpoint's fail-closed toggle. Mounted at the root of the HTTP
 // transport (the SDK default); the liveness probe lives at /health.
-builder.Services.AddLatticeMcp(options => options.RequireAuthorization = requireAuthorization);
+builder.Services.AddLatticeMcp(options =>
+{
+    options.RequireAuthorization = requireAuthorization;
+    options.Stateless = stateless;
+});
+
+// Coarse transport authorizer. AddLatticeMcp installs a fail-closed
+// DenyAllMcpAuthorizer that rejects every tool until a host opts in, so without
+// this registration only the lattice_capabilities meta-tool is ever advertised.
+// Opt into the permissive coarse gate: the real, subject-scoped enforcement is
+// layered underneath - the endpoint still requires an authenticated Entra
+// principal (RequireAuthorization), discovery only advertises the groups the
+// caller holds authored grants for, and every forwarded call is re-authorized
+// against the silo facade's own default-deny per-subject rules. The coarse gate
+// is therefore the transport allow; the silo remains the source of truth.
+builder.Services.AddSingleton<ILatticeApiMcpAuthorizer, AllowAllMcpAuthorizer>();
 
 // Optional cluster telemetry tools: proxy a read-only PromQL backend (the local
 // compose Prometheus, or Azure Monitor managed Prometheus) as MCP tools. Only

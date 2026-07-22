@@ -177,6 +177,21 @@ param entraClientId string = ''
 @description('Comma-separated additional Entra token audiences accepted by the silo facades. When empty the host derives {clientId, api://{clientId}}.')
 param entraAudiences string = ''
 
+@description('EXPLORER WEB-OIDC SEAM: application (client) id of the Explorer console\'s own confidential web-app registration (the app holding the OIDC redirect URIs). Bound to the Explorer head Entra:WebClientId. Distinct from entraClientId (the silo facade audience). Empty leaves the Explorer head without hosted-web Entra sign-in.')
+param explorerWebClientId string = ''
+
+@description('EXPLORER WEB-OIDC SEAM: downstream State API scope the Explorer console requests on-behalf-of the signed-in operator (for example api://{tenantId}/{baseName}-silo/user_impersonation). Bound to the Explorer head Entra:Scopes. Empty lets the console resolve the scope at sign-in from the advertised audience.')
+param explorerAuthScope string = ''
+
+@description('EXPLORER WEB-OIDC SEAM: keyless blob endpoint of the per-region storage account backing the Explorer Microsoft.Identity.Web distributed token cache. Bound to the Explorer head Entra:TokenCache:BlobServiceUri; consumed via the AZURE_CLIENT_ID managed identity (container-scoped Storage Blob Data Contributor). Empty falls back to an in-memory token cache.')
+param tokenCacheBlobEndpoint string = ''
+
+@description('EXPLORER WEB-OIDC SEAM: blob container on the per-region account backing the Explorer token cache. Bound to the Explorer head Entra:TokenCache:ContainerName. Must match the storage module tokenCacheContainerName.')
+param tokenCacheContainerName string = 'explorer-token-cache'
+
+@description('EXPLORER WEB-OIDC SEAM: externally visible public origin (scheme + host) operators reach the Explorer console at - the global Front Door endpoint, for example https://{base}-explorer-{hash}.z01.azurefd.net. Bound to the Explorer head Explorer:PublicOrigin so OpenID Connect builds sign-in redirect URIs against the public host rather than the internal Container Apps origin (which is Front-Door-locked). Empty leaves request scheme/host untouched (dev/compose).')
+param explorerPublicOrigin string = ''
+
 @description('Comma-separated Entra object ids (oid claim) seeded as the estate administrators - the root of trust the deny-by-default access gate honours. The deployer sets this to the single security administrator (the deploying user by default); every other caller is refused until this administrator grants access at runtime through the Explorer Access tab. Bound to the host Auth:BootstrapAdministrators.')
 param bootstrapAdministrators string = ''
 
@@ -616,6 +631,13 @@ resource mcpApp 'Microsoft.App/containerApps@2024-03-01' = {
             // Secure-by-default: the MCP endpoint requires authorization and
             // validates the inbound Entra JWT (forwarded to the silo for re-check).
             { name: 'Mcp__RequireAuthorization', value: string(requireApiAuthorization) }
+            // Stateless streamable-HTTP transport: this head sits behind an
+            // active-active Front Door origin group with no session affinity, so
+            // a stateful in-memory session would break ("Session not found") the
+            // moment a follow-up request is routed to another region or replica.
+            // Stateless makes every request self-contained while preserving the
+            // per-request permission-scoped tool discovery. See hosts/Mcp/Program.cs.
+            { name: 'Mcp__Stateless', value: 'true' }
             { name: 'Entra__Enabled', value: string(entraEnabled) }
             { name: 'Entra__TenantId', value: entraTenantId }
             { name: 'Entra__ClientId', value: entraClientId }
@@ -708,11 +730,24 @@ resource explorerApp 'Microsoft.App/containerApps@2024-03-01' = {
             // gRPC / gRPC-web client) over server TLS. Seeds the console's
             // first-run connection via the Explorer env bootstrap.
             { name: 'LATTICE_EXPLORER_ENDPOINT', value: 'https://${siloApp.properties.configuration.ingress.fqdn}' }
-            // Interactive Entra sign-in when enabled; the acquired token is
-            // attached to calls and re-validated by the silo authenticator.
+            // Hosted-web Entra (OpenID Connect) sign-in when enabled. The browser
+            // signs in against the console's OWN confidential web-app registration
+            // (Entra__WebClientId), a downstream State API token is acquired
+            // on-behalf-of the operator for Entra__Scopes, and the silo
+            // authenticator re-validates it. The token cache is a distributed blob
+            // cache over the per-region account so tokens are shared across warm
+            // replicas and survive restart.
             { name: 'Entra__Enabled', value: string(entraEnabled) }
             { name: 'Entra__TenantId', value: entraTenantId }
-            { name: 'Entra__ClientId', value: entraClientId }
+            { name: 'Entra__WebClientId', value: explorerWebClientId }
+            { name: 'Entra__Scopes', value: explorerAuthScope }
+            { name: 'Entra__TokenCache__BlobServiceUri', value: tokenCacheBlobEndpoint }
+            { name: 'Entra__TokenCache__ContainerName', value: tokenCacheContainerName }
+            // Public origin operators reach the console at (the global Front Door
+            // endpoint) so OpenID Connect builds sign-in redirect URIs against the
+            // public host, not the Front-Door-locked Container Apps origin. Empty
+            // until pass 2 (the Front Door hostname is Azure-assigned).
+            { name: 'Explorer__PublicOrigin', value: explorerPublicOrigin }
             { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
             { name: 'ASPNETCORE_URLS', value: 'http://0.0.0.0:8080' }
             // Global-ingress origin lock (see silo head). Empty until pass 2.
