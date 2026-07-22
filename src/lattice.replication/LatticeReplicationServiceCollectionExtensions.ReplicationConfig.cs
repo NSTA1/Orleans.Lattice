@@ -134,6 +134,14 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         builder.Services.AddSingleton<IMutationObserver>(
             sp => sp.GetRequiredService<CompiledReplicationConfigSnapshotMaintainer>());
 
+        // The runtime enable/disable authoring seam (and its tree-content probe)
+        // the API facade depends on to author per-tree enablement into the config
+        // OR-Map. Registered here because it composes the config store, the
+        // precondition validator, the replication context, and the bootstrap
+        // admin seam that AddLatticeReplication already installed.
+        builder.Services.TryAddSingleton<ILatticeTreeContentProbe, GrainFactoryTreeContentProbe>();
+        builder.Services.TryAddSingleton<ILatticeReplicationConfigAuthority, LatticeReplicationConfigAuthority>();
+
         // Swap the options-only merge-mode resolver for the snapshot-backed one
         // (snapshot first, fail-closed on ambiguity, static options as fallback).
         // Only replace the default ConfiguredLatticeMergeModeResolver so a

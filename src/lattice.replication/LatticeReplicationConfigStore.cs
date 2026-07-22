@@ -47,4 +47,38 @@ internal sealed class LatticeReplicationConfigStore(IGrainFactory grainFactory)
             return result;
         }
     }
+
+    /// <inheritdoc />
+    public async Task<LatticeReplicationConfigEntry?> ReadEntryAsync(
+        string treeId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        var accessor = ConfigTree.OrMap<string, LatticeReplicationConfigEntry>(
+            LatticeSystemTreeNames.ReplicationConfigMapKey);
+
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            return await accessor.GetValueAsync(treeId, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task WriteEntryAsync(
+        string treeId,
+        string replicaId,
+        LatticeReplicationConfigEntry entry,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentException.ThrowIfNullOrEmpty(replicaId);
+        ArgumentNullException.ThrowIfNull(entry);
+        var accessor = ConfigTree.OrMap<string, LatticeReplicationConfigEntry>(
+            LatticeSystemTreeNames.ReplicationConfigMapKey);
+
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            await accessor.SetAsync(treeId, replicaId, entry, cancellationToken).ConfigureAwait(false);
+        }
+    }
 }
