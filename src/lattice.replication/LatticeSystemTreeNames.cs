@@ -72,6 +72,21 @@ public static class LatticeSystemTreeNames
     public const string ReplicationConfig = "sys-replication-config";
 
     /// <summary>
+    /// The single well-known key under which the
+    /// <see cref="ReplicationConfig"/> tree stores its whole per-tree
+    /// configuration map. The value at this key is one
+    /// <see cref="Orleans.Lattice.OrMap{TKey, TValue}"/> keyed by target tree
+    /// id whose value is a <see cref="LatticeReplicationConfigEntry"/>, so every
+    /// tree's enablement flag and declared merge mode live in a single
+    /// converged OR-Map rather than one leaf key per tree. Readers and authors
+    /// both address the map through
+    /// <c>lattice.OrMap&lt;string, LatticeReplicationConfigEntry&gt;(<see cref="ReplicationConfigMapKey"/>)</c>.
+    /// Changing this string is an on-disk-key break and must never be done
+    /// casually.
+    /// </summary>
+    public const string ReplicationConfigMapKey = "config";
+
+    /// <summary>
     /// Builds the fixed single-entry enrolment map for the self-referential
     /// <see cref="ReplicationConfig"/> tree. The tree always replicates under
     /// <see cref="LatticeMergeMode.OrMap"/> - the merge mode is not configurable

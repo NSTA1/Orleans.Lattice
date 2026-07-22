@@ -1,4 +1,3 @@
-using Orleans.Lattice.BPlusTree.Grains;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 
@@ -7,21 +6,24 @@ namespace Orleans.Lattice.Replication;
 /// <summary>
 /// Startup guard that fails fast when the replication configuration is internally
 /// inconsistent in a way that would otherwise only surface as a runtime fault on
-/// the first write. Today it asserts the flag-CRDT membership invariant: a tree
+/// the first write. It asserts the flag-CRDT membership invariant for every
+/// statically declared tree by routing each <c>(treeId, mode)</c> pair through
+/// the reusable <see cref="ILatticeReplicationPreconditionValidator"/>: a tree
 /// declared under a flag merge mode (<see cref="LatticeMergeMode.OrFlag"/> or
 /// <see cref="LatticeMergeMode.RwFlag"/>) needs a non-empty
 /// <see cref="ILatticeReplicationContext.LocalReplicaId"/> to author its dots, so
 /// declaring such a tree without a configured
 /// <see cref="LatticeReplicationOptions.ClusterId"/> is rejected at silo start
-/// rather than when a feature (for example a flag-membership tag index) first
-/// tries to write to it.
+/// rather than when a feature first tries to write to it.
 /// <para>
-/// The guard runs against the replication-configuration seam, so it validates
-/// exactly the view features consume - not a parallel copy of the options.
+/// The guard validates the same static options seam features consume, and shares
+/// its precondition logic with the runtime enable path (which calls the same
+/// validator on a per-request basis), so a statically declared tree and a
+/// runtime-enabled tree are held to an identical safety bar.
 /// </para>
 /// </summary>
 internal sealed class LatticeReplicationMergeModeStartupValidator(
-    ILatticeReplicationContext replicationContext,
+    ILatticeReplicationPreconditionValidator preconditionValidator,
     IOptionsMonitor<LatticeReplicationOptions> options) : IHostedService
 {
     /// <inheritdoc />
@@ -35,18 +37,10 @@ internal sealed class LatticeReplicationMergeModeStartupValidator(
 
         foreach (var kvp in trees)
         {
-            var isFlagMode = kvp.Value is LatticeMergeMode.OrFlag or LatticeMergeMode.RwFlag;
-            if (isFlagMode && string.IsNullOrEmpty(replicationContext.LocalReplicaId))
+            var result = preconditionValidator.Validate(kvp.Key, kvp.Value);
+            if (!result.IsSatisfied)
             {
-                throw new InvalidOperationException(
-                    $"Tree '{kvp.Key}' is declared with the flag merge mode '{kvp.Value}' in "
-                    + $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.ReplicatedTrees)}, "
-                    + "but no local replica id is configured. Flag-CRDT membership authors its "
-                    + "enable/disable dots with the local replica id, so "
-                    + $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.ClusterId)} "
-                    + "must be set to a non-empty, globally-unique cluster identifier. Set it, or "
-                    + "remove the flag merge mode for this tree if it does not need multi-writer "
-                    + "convergence.");
+                throw new InvalidOperationException(result.FailureReason);
             }
         }
 

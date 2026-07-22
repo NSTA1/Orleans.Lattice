@@ -1,6 +1,10 @@
 using System.Linq;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Options;
 using Orleans.Hosting;
+using Orleans.Lattice.Backup;
+using Orleans.Lattice.BPlusTree.Grains;
 
 namespace Orleans.Lattice.Replication;
 
@@ -103,7 +107,68 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         // records carried by the config tree.
         builder.AddOrMapShape<string, LatticeReplicationConfigEntry>(LatticeSystemTreeNames.ReplicationConfig);
 
+        WireDynamicSeams(builder);
+
         return builder;
+    }
+
+    /// <summary>
+    /// Installs the compiled-snapshot maintainer and swaps the options-backed
+    /// <see cref="ILatticeMergeModeResolver"/> and
+    /// <see cref="IReplicatedTreeMembership"/> seams for their dynamic,
+    /// snapshot-backed counterparts, keeping the static
+    /// <see cref="LatticeReplicationOptions.ReplicatedTrees"/> map as
+    /// seed/fallback. Only the default options-backed registrations installed by
+    /// <see cref="AddLatticeReplication(ISiloBuilder, Action{LatticeReplicationOptions})"/>
+    /// are replaced; a host-supplied custom resolver or membership is left
+    /// untouched.
+    /// </summary>
+    private static void WireDynamicSeams(ISiloBuilder builder)
+    {
+        // The snapshot store + compiled-snapshot maintainer. The maintainer is a
+        // per-silo singleton registered once as the concrete type and once as an
+        // IMutationObserver routed at that same instance, so a sys-replication-config
+        // write refreshes the exact snapshot the dynamic seams read.
+        builder.Services.TryAddSingleton<ILatticeReplicationConfigStore, LatticeReplicationConfigStore>();
+        builder.Services.TryAddSingleton<CompiledReplicationConfigSnapshotMaintainer>();
+        builder.Services.AddSingleton<IMutationObserver>(
+            sp => sp.GetRequiredService<CompiledReplicationConfigSnapshotMaintainer>());
+
+        // Swap the options-only merge-mode resolver for the snapshot-backed one
+        // (snapshot first, fail-closed on ambiguity, static options as fallback).
+        // Only replace the default ConfiguredLatticeMergeModeResolver so a
+        // host-supplied custom resolver is respected.
+        for (var i = builder.Services.Count - 1; i >= 0; i--)
+        {
+            var d = builder.Services[i];
+            if (d.ServiceType == typeof(ILatticeMergeModeResolver)
+                && d.ImplementationType == typeof(ConfiguredLatticeMergeModeResolver))
+            {
+                builder.Services[i] = ServiceDescriptor.Singleton<ILatticeMergeModeResolver>(
+                    sp => new SnapshotLatticeMergeModeResolver(
+                        sp.GetRequiredService<CompiledReplicationConfigSnapshotMaintainer>(),
+                        sp.GetRequiredService<ConfiguredLatticeMergeModeResolver>()));
+                break;
+            }
+        }
+
+        // Swap the options-only replicated-tree membership for the snapshot-backed
+        // union (snapshot-enabled OR statically declared). Only replace the
+        // default OptionsReplicatedTreeMembership so a host-supplied custom
+        // membership is respected.
+        for (var i = builder.Services.Count - 1; i >= 0; i--)
+        {
+            var d = builder.Services[i];
+            if (d.ServiceType == typeof(IReplicatedTreeMembership)
+                && d.ImplementationType == typeof(OptionsReplicatedTreeMembership))
+            {
+                builder.Services[i] = ServiceDescriptor.Singleton<IReplicatedTreeMembership>(
+                    sp => new SnapshotReplicatedTreeMembership(
+                        sp.GetRequiredService<CompiledReplicationConfigSnapshotMaintainer>(),
+                        sp.GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>()));
+                break;
+            }
+        }
     }
 
     /// <summary>
