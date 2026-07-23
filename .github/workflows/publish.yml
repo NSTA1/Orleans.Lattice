@@ -25,6 +25,8 @@ on:
       #   lattice.backup.azureblob-v7.9.0
       #   lattice.api.backup-v7.9.0
       #   lattice.api.backup.grpc-v7.9.0
+      #   lattice.api.replication-v7.9.0
+      #   lattice.api.replication.grpc-v7.9.0
       #   lattice.api.mcp-v7.9.1
       #   lattice.api.mcp.telemetry-v7.9.1
       #   lattice.api.mcp.telemetry.azure-v8.0.0
@@ -66,6 +68,8 @@ on:
       - 'lattice.backup.azureblob-v*'
       - 'lattice.api.backup-v*'
       - 'lattice.api.backup.grpc-v*'
+      - 'lattice.api.replication-v*'
+      - 'lattice.api.replication.grpc-v*'
       - 'lattice.api.mcp-v*'
       - 'lattice.api.mcp.telemetry-v*'
       - 'lattice.api.mcp.telemetry.azure-v*'

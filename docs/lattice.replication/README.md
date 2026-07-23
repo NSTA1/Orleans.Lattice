@@ -56,6 +56,7 @@ Behaviour is validated end-to-end by active-active convergence chaos tests acros
 | **Per-tree opt-in + per-key filter** | Declare which trees replicate and (optionally) which keys within a tree. Granular enough to ship operator-visible labels while keeping per-shift counters local. | [Replication Modes](replication-modes.md) |
 | **Pluggable transport** | `IReplicationTransport` is the public seam. gRPC is the canonical implementation; in-process and custom transports plug into the same contract. | [Transport](transport.md) |
 | **Receiver-side flow control** | The receiver stamps optional `SuggestedBatchSize` / `PauseForMs` hints onto every ack; the sender clamps its per-tick batch cap and pauses on request. A struggling receiver throttles in-band without timing out RPCs; a recovered receiver re-accelerates by lifting the hints. | [Receiver Flow Control](receiver-flow-control.md) |
+| **Runtime per-tree replication config** | Enable or disable replication for a tree at runtime under a fixed merge mode, distributed as the converging `sys-replication-config` system tree. Flip it once on any cluster and every peer converges; concurrent divergent modes fail closed instead of silently overwriting. | [Runtime Replication Config](runtime-config.md) |
 | **Snapshot bootstrap** | New or re-seeded peers receive a point-in-time snapshot, then switch to incremental shipping at the snapshot's HLC. | [Snapshot Bootstrap](snapshot-bootstrap.md) |
 | **System-tree replication** | Enrol the reserved membership + auth-policy trees so identity and authorization converge across sites. Replication-applied writes bypass the access gate under a system-origin scope; an optional strict policy-epoch fence closes the revoke window per tree. | [System-Tree Replication](system-tree-replication.md) |
 | **Typed CRDT deltas** | The wire carries typed deltas for LWW-Register, OR-Set, PN-Counter, VersionVector, MV-Register, and OR-Map. Receivers merge by mode, not by opaque-byte LWW. | [Deltas](deltas.md) |
@@ -141,6 +142,7 @@ For day-to-day use and operations:
 - [Auto-Bootstrap](auto-bootstrap.md) - fall-off-the-log detection and automatic re-seed.
 - [Automatic drift remediation](automatic-drift-remediation.md) - operator playbook for the opt-in anti-entropy stack: default-off posture, opt-in path, metrics surface, and the version-skew / WAL-trimmed / circuit-breaker failure-mode matrix.
 - [Transport Security](transport-security.md) - shared-secret authentication, HTTPS-by-default, custom secret sources, env-var convention.
+- [Runtime Replication Config](runtime-config.md) - runtime per-tree enable / disable distributed as the `sys-replication-config` tree: the static anchor, the compiled snapshot, the dynamic membership / merge-mode seams, and fail-closed ambiguity resolution.
 
 For internals (the "how"):
 

@@ -10,7 +10,7 @@ It is built from four parts:
 
 - **A front door.** `AddLatticeMcp(...)` registers the MCP server, the streamable-HTTP transport, a fail-closed authorizer seam, and the credential bridge; `MapLatticeMcp()` maps the endpoint. The server starts with **no** tools - each tool module is opt-in.
 - **Permission-scoped discovery.** A per-session configurator computes the tool list from the authenticated caller's effective permissions and adds a `lattice_capabilities` meta-tool. A caller sees and can invoke only the tools its grants allow; an ungranted tool is never listed.
-- **Four tool modules.** `AddStateTools()`, `AddDataTools()`, `AddBackupTools()`, and `AddAuthTools()` each register a group of thin adapters over the matching facade, named `lattice_<group>_<verb>`. Destructive verbs (writes, backup control, auth administration) are opt-in.
+- **Five tool modules.** `AddStateTools()`, `AddDataTools()`, `AddBackupTools()`, `AddAuthTools()`, and `AddReplicationTools()` each register a group of thin adapters over the matching facade, named `lattice_<group>_<verb>`. Destructive verbs (writes, backup control, auth administration, replication control) are opt-in. The replication module is served in-silo only.
 - **In-silo or remote hosting.** Co-host the server on a silo that exposes the facades in-process, or run it out-of-silo with `AddLatticeMcpRemote(...)`, which binds the same tool modules over the `Orleans.Lattice.Api.*.Grpc` clients to front a cluster it is not co-located with.
 
 ## Core properties
@@ -56,7 +56,7 @@ For a complete, runnable co-hosted silo that serves the MCP endpoint, see the [`
 ## Reference
 
 - [Setup](setup.md) - registering the front door, the options, and mapping the endpoint.
-- [Tools](tools.md) - the four tool modules, their opt-in flags, and the full tool catalogue.
+- [Tools](tools.md) - the five tool modules, their opt-in flags, and the full tool catalogue.
 - [Security](security.md) - the fail-closed posture, the authorizer seam, the credential bridge, and permission-scoped discovery.
 - [Remote hosting](remote.md) - running the server out-of-silo over the gRPC clients with `AddLatticeMcpRemote(...)`.
 
@@ -66,3 +66,4 @@ For a complete, runnable co-hosted silo that serves the MCP endpoint, see the [`
 - [`Orleans.Lattice.Api.Data`](../lattice.api.data/README.md) - the read/write data facade the data tools adapt.
 - [`Orleans.Lattice.Api.Backup`](../lattice.api.backup/README.md) - the backup control facade the backup tools adapt.
 - [`Orleans.Lattice.Api.Auth`](../lattice.api.auth/README.md) - the authorization admin facade the auth tools adapt.
+- [`Orleans.Lattice.Api.Replication`](../lattice.api.replication/README.md) - the replication control facade the replication tools adapt.

@@ -28,6 +28,8 @@ The package family ships from this repository:
 | `Orleans.Lattice.Backup.AzureBlob` | `src/lattice.backup.azureblob/Orleans.Lattice.Backup.AzureBlob.csproj` |
 | `Orleans.Lattice.Api.Backup` | `src/lattice.api.backup/Orleans.Lattice.Api.Backup.csproj` |
 | `Orleans.Lattice.Api.Backup.Grpc` | `src/lattice.api.backup.grpc/Orleans.Lattice.Api.Backup.Grpc.csproj` |
+| `Orleans.Lattice.Api.Replication` | `src/lattice.api.replication/Orleans.Lattice.Api.Replication.csproj` |
+| `Orleans.Lattice.Api.Replication.Grpc` | `src/lattice.api.replication.grpc/Orleans.Lattice.Api.Replication.Grpc.csproj` |
 | `Orleans.Lattice.Api.Mcp` | `src/lattice.api.mcp/Orleans.Lattice.Api.Mcp.csproj` |
 | `Orleans.Lattice.Api.Mcp.Telemetry` | `src/lattice.api.mcp.telemetry/Orleans.Lattice.Api.Mcp.Telemetry.csproj` |
 | `Orleans.Lattice.Api.Mcp.Telemetry.Azure` | `src/lattice.api.mcp.telemetry.azure/Orleans.Lattice.Api.Mcp.Telemetry.Azure.csproj` |
@@ -70,6 +72,8 @@ The publish workflow's per-tag trigger globs match these tag shapes:
 | `Orleans.Lattice.Backup.AzureBlob` | `lattice.backup.azureblob-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.Backup` | `lattice.api.backup-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.Backup.Grpc` | `lattice.api.backup.grpc-v<X.Y.Z>` |
+| `Orleans.Lattice.Api.Replication` | `lattice.api.replication-v<X.Y.Z>` |
+| `Orleans.Lattice.Api.Replication.Grpc` | `lattice.api.replication.grpc-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.Mcp` | `lattice.api.mcp-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.Mcp.Telemetry` | `lattice.api.mcp.telemetry-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.Mcp.Telemetry.Azure` | `lattice.api.mcp.telemetry.azure-v<X.Y.Z>` |

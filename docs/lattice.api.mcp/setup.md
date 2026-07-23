@@ -10,6 +10,7 @@ The MCP server binds the `Orleans.Lattice.Api.*` facades, so the facades a tool 
 - Data tools need `AddLatticeDataApi()`.
 - Backup tools need `AddLatticeBackupApi()` (which itself follows `AddLatticeBackup(...)`).
 - Auth tools need `AddLatticeAuthApi()` (which itself follows `AddLatticeAuth(...)`).
+- Replication tools need `AddLatticeReplicationApi()` (which itself follows `AddLatticeReplication(...).ReplicateLatticeReplicationConfig()`).
 
 Only register the facades whose tool modules you intend to expose.
 
@@ -52,7 +53,7 @@ app.MapLatticeMcp();
 | `Stateless` | `bool` | `false` | Whether the HTTP transport runs stateless. The permission-scoped per-session tool collections rely on the stateful (default) mode; enable only for a horizontally-scaled deployment with a fixed tool set. |
 | `CredentialHeaderName` | `string` | `authorization` | The inbound header carrying the caller's credential token, bridged onto the ambient Lattice credential. |
 | `CredentialScheme` | `string` | `Bearer` | The scheme stamped on the bridged credential; a case-insensitive scheme prefix (for example `"Bearer "`) is stripped from the header value before the remaining token is used. |
-| `EnableStateTools` / `EnableDataTools` / `EnableBackupTools` / `EnableBackupControlTools` / `EnableAuthTools` / `EnableAuthAdministration` | `bool` | `false` | Per-module enable flags. Set by the `AddXTools(...)` extensions; a host normally toggles them through those calls rather than directly. |
+| `EnableStateTools` / `EnableDataTools` / `EnableBackupTools` / `EnableBackupControlTools` / `EnableAuthTools` / `EnableAuthAdministration` / `EnableReplicationTools` / `EnableReplicationControlTools` | `bool` | `false` | Per-module enable flags. Set by the `AddXTools(...)` extensions; a host normally toggles them through those calls rather than directly. |
 
 ## Add the tool modules
 
@@ -60,6 +61,6 @@ The server exposes no tools until a module is added. See [Tools](tools.md) for t
 
 ## Next
 
-- [Tools](tools.md) - the four modules and every tool they expose.
+- [Tools](tools.md) - the five modules and every tool they expose.
 - [Security](security.md) - the fail-closed posture and the credential bridge.
 - [Remote hosting](remote.md) - serving the surface out-of-silo over gRPC.
