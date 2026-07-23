@@ -109,6 +109,9 @@ param authDefaultEffect string = 'Deny'
 @description('Whether the State/auth gRPC surfaces and the MCP endpoint require authorization. Secure default true.')
 param requireApiAuthorization bool = true
 
+@description('Runtime per-tree replication control plane, estate-wide. Secure default OFF: no sys-replication-config tree, no silo replication control gRPC binding, no MCP lattice_replication_* tools. When true the control plane is co-hosted but stays fail-closed behind the deny-by-default LatticeOperation.Replication gate (an explicit grant is required to enable/disable; not even Admin confers it).')
+param enableReplicationControl bool = false
+
 @description('Whether Entra authentication is enabled on the exposed facades and heads across the estate.')
 param entraEnabled bool = false
 
@@ -210,6 +213,8 @@ module compute 'modules/compute.bicep' = [for (region, i) in regions: {
     // and an authorization-required API; Entra opt-in.
     authDefaultEffect: authDefaultEffect
     requireApiAuthorization: requireApiAuthorization
+    // Runtime replication control plane, secure default off (fail-closed when on).
+    enableReplicationControl: enableReplicationControl
     entraEnabled: entraEnabled
     entraTenantId: entraTenantId
     entraClientId: entraClientId

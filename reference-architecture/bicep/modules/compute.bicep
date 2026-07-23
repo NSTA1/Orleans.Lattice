@@ -204,6 +204,9 @@ param replicationTrees string = ''
 @description('DEPLOYER SEAM: Key Vault secret URI holding the per-cluster replication key. When non-empty a managed-identity-backed ACA secret is created and surfaced to the silo as LATTICE_REPLICATION_SECRET; empty leaves it unset so the module deploys standalone before the Key Vault secret exists. Never a plaintext key.')
 param replicationKeySecretUri string = ''
 
+@description('Runtime per-tree replication control plane. Secure default OFF: leaves the sys-replication-config CRDT tree un-enrolled, the silo ILatticeReplicationControl gRPC binding un-hosted, and the MCP lattice_replication_* tools unadvertised, so a deployed estate carries no replication control surface until an operator opts in. When true the control plane is co-hosted but stays FAIL-CLOSED behind the deny-by-default LatticeOperation.Replication gate - which no other capability, not even Admin, confers - so enabling/disabling replication still requires an explicitly authored Replication grant. Bound to the silo Replication:EnableRuntimeConfig and the MCP Mcp:ReplicationEndpoint + Mcp:EnableReplicationControl.')
+param enableReplicationControl bool = false
+
 @description('DEPLOYER SEAM: PromQL backend address the MCP cluster-telemetry tools proxy (the managed Prometheus query endpoint). Empty leaves the telemetry tool group off (the host skips it when unset). Bound to the host Mcp:Telemetry:BackendAddress.')
 param mcpTelemetryBackendAddress string = ''
 
@@ -508,6 +511,12 @@ resource siloApp 'Microsoft.App/containerApps@2024-03-01' = {
             // standalone before the peer FQDNs are known).
             { name: 'Replication__Peers', value: replicationPeers }
             { name: 'Replication__Trees', value: replicationTrees }
+            // Runtime per-tree replication control plane (sys-replication-config
+            // CRDT tree + ILatticeReplicationControl facade + its gRPC binding).
+            // Secure default off; when on it is fail-closed behind the deny-by-
+            // default LatticeOperation.Replication gate (an explicit grant is
+            // required to enable/disable - not even Admin confers it).
+            { name: 'Replication__EnableRuntimeConfig', value: string(enableReplicationControl) }
             // Entra authentication for the exposed facades.
             { name: 'Entra__Enabled', value: string(entraEnabled) }
             { name: 'Entra__TenantId', value: entraTenantId }
@@ -620,6 +629,14 @@ resource mcpApp 'Microsoft.App/containerApps@2024-03-01' = {
             // forwarded Entra JWT and the access gate enforces per-subject.
             { name: 'Mcp__DataEndpoint', value: dataApiEnabled ? 'https://${siloApp.properties.configuration.ingress.fqdn}' : '' }
             { name: 'Mcp__EnableDataWrites', value: string(dataApiEnabled) }
+            // Replication control plane: the ILatticeReplicationControl facade rides
+            // the same silo gRPC endpoint. Secure default off (endpoint empty, tools
+            // unadvertised); when opted in, point the head at it and advertise the
+            // mutating enable/disable tools. The silo re-validates the forwarded
+            // Entra JWT and the deny-by-default Replication gate enforces per-subject
+            // (an explicit Replication grant is required - not even Admin confers it).
+            { name: 'Mcp__ReplicationEndpoint', value: enableReplicationControl ? 'https://${siloApp.properties.configuration.ingress.fqdn}' : '' }
+            { name: 'Mcp__EnableReplicationControl', value: string(enableReplicationControl) }
             // Cluster-telemetry MCP tools proxy a PromQL backend. Empty leaves the
             // group off (the host skips it) - the deployer wires the managed
             // Prometheus query endpoint (and the DynamicBearer auth mode) once the

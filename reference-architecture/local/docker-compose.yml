@@ -69,6 +69,16 @@ services:
       Entra__Enabled: "false"
       # Single-region: no replication peers; plaintext allowed for h2c.
       Replication__AllowPlaintext: "true"
+      # Runtime per-tree replication config (8.0.6): enrol the sys-replication-config
+      # CRDT tree and co-host the ILatticeReplicationControl facade + its gRPC
+      # binding, so the MCP head's lattice_replication_* tools can enable/disable a
+      # tree's replication at runtime. On here to smoke-test the plumbing end to end.
+      # NOTE: like every plane in this harness it is UNAUTHORIZED - the harness has
+      # no identity plane (Entra off), so every caller is anonymous and the open
+      # gate admits it. That is fine for a local throwaway (single-region, so an
+      # enabled tree has no peer to ship to); the AUTHORIZED replication path (an
+      # explicit LatticeOperation.Replication grant) is a deployed-estate concern.
+      Replication__EnableRuntimeConfig: "true"
       LATTICE_REPLICATION_SECRET: "${LATTICE_REPLICATION_SECRET}"
       # This lone silo owns the backup schedule (primary).
       Backup__Primary: "true"
@@ -94,6 +104,13 @@ services:
       # smoke test can exercise the write path.
       Mcp__DataEndpoint: "http://silo:8081"
       Mcp__EnableDataWrites: "true"
+      # The replication control facade rides the same silo gRPC endpoint. Point the
+      # head at it and advertise the mutating enable/disable tools so the local
+      # smoke test can exercise the lattice_replication_* plumbing end to end. As
+      # with every plane here it is UNAUTHORIZED (no identity plane in this harness);
+      # the authorized path is demonstrated on a deployed Entra-enabled estate.
+      Mcp__ReplicationEndpoint: "http://silo:8081"
+      Mcp__EnableReplicationControl: "true"
       # Cluster telemetry tools proxy the local Prometheus.
       Mcp__Telemetry__BackendAddress: "http://prometheus:9090"
       # Dev bypass: open MCP endpoint, no Entra.

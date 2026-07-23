@@ -162,6 +162,16 @@ param(
 
     [bool]$RequireApiAuthorization = $true,
 
+    # Runtime per-tree replication control plane. The reference estate ships it ON
+    # (this switch defaults true): the sys-replication-config tree, the silo
+    # replication control gRPC binding, and the MCP lattice_replication_* tools are
+    # co-hosted so an operator can manage a tree's replication at runtime. This is
+    # SAFE ON by default because the surface is FAIL-CLOSED behind the deny-by-
+    # default LatticeOperation.Replication gate - enabling/disabling a tree still
+    # requires an explicitly authored Replication grant (not even Admin confers it).
+    # Pass -EnableReplicationControl:$false to withhold the surface entirely.
+    [bool]$EnableReplicationControl = $true,
+
     # The read-write Data API (write surface). Enabled by default: the write
     # facade is co-hosted on the silo gRPC endpoint and the MCP head advertises
     # its write tools. Set -EnableDataApi:$false to withhold the write surface;
@@ -485,6 +495,7 @@ try {
         siloMaxReplicas         = $SiloMaxReplicas
         authDefaultEffect       = $AuthDefaultEffect
         requireApiAuthorization = $RequireApiAuthorization
+        enableReplicationControl = $EnableReplicationControl
         # Entra is activated on pass 2 (the app registrations are created between
         # the passes), so it stays off here.
         entraEnabled            = $false
@@ -675,6 +686,7 @@ try {
             backupBlobEndpoint         = $backupBlobEndpoint
             authDefaultEffect          = $AuthDefaultEffect
             requireApiAuthorization    = $RequireApiAuthorization
+            enableReplicationControl   = $EnableReplicationControl
             dataApiEnabled             = $EnableDataApi
             internalEnvironment        = ($DeploymentOption -eq 'private')
             infrastructureSubnetId     = $subnetId

@@ -10,6 +10,8 @@ using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Api.Backup.Grpc;
 using Orleans.Lattice.Api.Data;
 using Orleans.Lattice.Api.Data.Grpc;
+using Orleans.Lattice.Api.Replication;
+using Orleans.Lattice.Api.Replication.Grpc;
 using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Api.State.Grpc;
 using Orleans.Lattice.Auth;
@@ -89,6 +91,19 @@ var replicationPeers = ReplicationTopology.ParsePeers(config);
 var replicatedTrees = ReplicationTopology.ParseTrees(config);
 var allowPlaintextReplication = config.GetValue("Replication:AllowPlaintext", false);
 
+// Runtime per-tree replication configuration (the 8.0.6 control plane). When on,
+// the silo enrols the reserved sys-replication-config CRDT tree, installs the
+// dynamic snapshot-backed replicated-tree membership / merge-mode resolver seeded
+// by the static Replication:Trees map, and co-hosts the ILatticeReplicationControl
+// facade so an operator can enable/disable a tree's replication at runtime (via
+// the replication control-API gRPC binding and the MCP lattice_replication_* tool
+// group) without a redeploy. Secure default OFF: a bare host carries no
+// replication control surface; the deployed estate opts in via
+// enableReplicationControl (still fail-closed behind the deny-by-default
+// LatticeOperation.Replication gate). Set Replication:EnableRuntimeConfig=true to
+// enable it (the local compose harness does).
+var enableRuntimeReplicationConfig = config.GetValue("Replication:EnableRuntimeConfig", false);
+
 // Kestrel exposes two ports: an HTTP/1 port for health probes and the scaling
 // signal (both plain REST, so ACA can TCP/HTTP-probe without a shell), and an
 // HTTP/2 port for the gRPC surfaces (state, auth, replication).
@@ -156,7 +171,16 @@ builder.Host.UseOrleans(silo =>
         {
             options.ReplicationPeers = replicationPeers.Keys.ToArray();
         }
-    });
+    }, enableRuntimeConfig: enableRuntimeReplicationConfig);
+
+    // Single administrative plane across sites: enrol the reserved Membership and
+    // Auth policy system trees into replication so an authorization grant (or a
+    // membership edit) authored on ANY cluster converges to every peer over the
+    // same engine. Without this, the auth policy tree lives only in the cluster it
+    // was written to, so an operator would have to re-author every grant on each
+    // site. Enrolment is LWW with eventual (divergence-window) convergence; it is
+    // a no-op when no ReplicationPeers are configured (single-region deployment).
+    silo.ReplicateLatticeSystemTrees();
 
     // The gRPC replication transport dials the enrolled peer endpoints. The
     // per-cluster replication key is read from the environment by the default
@@ -172,6 +196,16 @@ builder.Host.UseOrleans(silo =>
             grpc.Peers[peerClusterId] = endpoint;
         }
     });
+
+    // The replication control facade (ILatticeReplicationControl) over the runtime
+    // config authority: the enable / disable / status control plane the MCP
+    // lattice_replication_* tools drive. Registered only when the runtime config
+    // authority exists (enableRuntimeConfig above); its gRPC binding is mapped and
+    // coarse-gated below exactly like State / Data / Auth / Backup.
+    if (enableRuntimeReplicationConfig)
+    {
+        silo.AddLatticeReplicationApi();
+    }
 
     // -- Backup sink + primary/standby scheduler --------------------------
     silo.AddLatticeBackup();
@@ -394,6 +428,23 @@ if (requireApiAuthorization)
     builder.Services.AddSingleton<ILatticeBackupApiAuthorizer, AllowAllBackupApiAuthorizer>();
 }
 
+// The replication control-API gRPC binding, co-hosted on the same silo gRPC port.
+// The coarse transport gate is opened (AllowAllReplicationApiAuthorizer) because
+// the real enforcement is the deny-by-default LatticeOperation.Replication access
+// gate the facade applies afterwards on the caller's Entra-resolved subject (only
+// a subject holding an authored Replication grant may enable / disable / inspect).
+// RequireAuthorization still fails the binding closed when enforcement is on and
+// no authorizer is registered; the local compose harness runs it open. Exposing it
+// lets the MCP head's remote replication group reach the facade over gRPC.
+if (enableRuntimeReplicationConfig)
+{
+    builder.Services.AddLatticeReplicationApiGrpc(options => options.RequireAuthorization = requireApiAuthorization);
+    if (requireApiAuthorization)
+    {
+        builder.Services.AddSingleton<ILatticeReplicationApiAuthorizer, AllowAllReplicationApiAuthorizer>();
+    }
+}
+
 // Export the orleans.lattice meter over Prometheus at /metrics so a scraper
 // (the local compose Prometheus, or Azure Managed Prometheus) can collect the
 // cluster telemetry that backs the bundled Grafana dashboards and the MCP
@@ -410,7 +461,29 @@ var app = builder.Build();
 // scrape), and the /lattice/scale signal (KEDA) - all reached directly on the
 // internal network without transiting Front Door, so they are exempt. Every
 // client-facing gRPC request on the external port is locked.
-app.UseFrontDoorOriginLock(frontDoorId, "/metrics", "/lattice/scale");
+//
+// The replication ENGINE transport services (the live push/probe transport, the
+// cross-cluster snapshot transport, and the saga control channel - all under the
+// orleans.lattice.replication.Lattice* gRPC service ids) are additionally exempt.
+// Cross-cluster peer traffic is silo-to-silo: a peer dials this region's external
+// ACA ingress FQDN directly, never transiting Front Door, so it cannot carry the
+// X-Azure-FDID header and would be refused with 403 - blocking all cross-cluster
+// convergence (config, membership, and auth policy). The core replication push
+// transport is infrastructure-agnostic and has no seam to stamp a Front Door
+// header. Exempting these paths is safe because the engine transport authenticates
+// every inbound RPC with the shared replication secret (LATTICE_REPLICATION_SECRET,
+// enforced by the receiver-side interceptor), which is the real gate here - the
+// origin lock is redundant defence for an already strongly-authenticated surface.
+// The replication CONTROL-API endpoint (orleans.lattice.api.replication, mapped
+// below) is deliberately NOT exempt: the MCP head stamps the Front Door header when
+// dialling it, so it stays behind the lock.
+app.UseFrontDoorOriginLock(
+    frontDoorId,
+    "/metrics",
+    "/lattice/scale",
+    "/orleans.lattice.replication.LatticeReplication",
+    "/orleans.lattice.replication.LatticeRemoteSnapshot",
+    "/orleans.lattice.replication.LatticeSaga");
 
 app.MapLatticeStateApiGrpc();
 app.MapLatticeAuthApiGrpc();
@@ -420,6 +493,13 @@ if (dataApiEnabled)
 }
 app.MapLatticeBackupApiGrpc();
 app.MapLatticeReplicationGrpc();
+if (enableRuntimeReplicationConfig)
+{
+    // The replication control-API gRPC endpoint the MCP head's remote replication
+    // group dials. Distinct from MapLatticeReplicationGrpc above, which maps the
+    // engine's shipper/receiver transport.
+    app.MapLatticeReplicationApiGrpc();
+}
 
 // Compute-axis scaling signal for the KEDA Prometheus scaler (default route
 // /lattice/scale) and a liveness probe. Both are plain HTTP so ACA can probe

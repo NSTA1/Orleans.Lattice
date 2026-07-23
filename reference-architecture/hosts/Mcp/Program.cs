@@ -38,12 +38,20 @@ var stateEndpoint = config["Mcp:StateEndpoint"]
 var authEndpoint = config["Mcp:AuthEndpoint"] ?? stateEndpoint;
 var dataEndpoint = config["Mcp:DataEndpoint"];
 var backupEndpoint = config["Mcp:BackupEndpoint"];
+var replicationEndpoint = config["Mcp:ReplicationEndpoint"];
 
 var entraEnabled = config.GetValue("Entra:Enabled", false);
 var requireAuthorization = config.GetValue("Mcp:RequireAuthorization", entraEnabled);
 var enableAuthAdministration = config.GetValue("Mcp:EnableAuthAdministration", false);
 var enableDataWrites = config.GetValue("Mcp:EnableDataWrites", false);
 var enableBackupControl = config.GetValue("Mcp:EnableBackupControl", false);
+
+// The replication control tool group (lattice_replication_*). The inspect tool
+// (get_config) is contributed whenever the replication endpoint is wired;
+// EnableReplicationControl additionally advertises the mutating enable / disable
+// tools. Both default off so an unset replication endpoint leaves the group
+// absent rather than surfacing an unreachable control plane.
+var enableReplicationControl = config.GetValue("Mcp:EnableReplicationControl", false);
 
 // Streamable-HTTP session mode. This head is documented and deployed as a
 // STATELESS MCP server (see the file header): it fronts an active-active Front
@@ -73,7 +81,7 @@ var administratorScheme = config["Mcp:AdministratorScheme"] ?? "Bearer";
 // Allow HTTP/2 without TLS (h2c) only when a plaintext http:// gRPC endpoint is
 // configured - the local compose harness dials the silo over h2c. Production
 // endpoints are https:// and never trip this switch.
-if (new[] { stateEndpoint, authEndpoint, dataEndpoint, backupEndpoint }
+if (new[] { stateEndpoint, authEndpoint, dataEndpoint, backupEndpoint, replicationEndpoint }
         .Any(e => e is not null && e.StartsWith("http://", StringComparison.OrdinalIgnoreCase)))
 {
     AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
@@ -127,8 +135,14 @@ builder.Services.AddLatticeMcpRemote(options =>
         options.Backup = new LatticeApiMcpRemoteEndpoint { Endpoint = backupEndpoint, CallInvoker = OriginLockInvoker(backupEndpoint) };
     }
 
+    if (!string.IsNullOrWhiteSpace(replicationEndpoint))
+    {
+        options.Replication = new LatticeApiMcpRemoteEndpoint { Endpoint = replicationEndpoint, CallInvoker = OriginLockInvoker(replicationEndpoint) };
+    }
+
     options.EnableDataWrites = enableDataWrites;
     options.EnableBackupControl = enableBackupControl;
+    options.EnableReplicationControl = enableReplicationControl;
     options.EnableAuthAdministration = enableAuthAdministration;
     if (!string.IsNullOrWhiteSpace(administratorToken))
     {
