@@ -38,7 +38,7 @@ are denied by default.
   enrolment, so authorization gates the authoring cluster only.
 - **Opt-in and absent by default.** Nothing is registered unless the host calls
   `AddLatticeReplicationApi()`.
-- **Must be registered after `AddLatticeReplication(...).ReplicateLatticeReplicationConfig()`.**
+- **Must be registered after `AddLatticeReplication(..., enableRuntimeConfig: true)`.**
   The call fails fast with an actionable message otherwise.
 
 ## Usage
@@ -46,8 +46,7 @@ are denied by default.
 ```csharp
 siloBuilder
     .AddLattice(/* ... */)
-    .AddLatticeReplication(/* ... */)
-    .ReplicateLatticeReplicationConfig()
+    .AddLatticeReplication(/* ... */, enableRuntimeConfig: true)
     .AddLatticeReplicationApi();
 ```
 

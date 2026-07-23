@@ -40,16 +40,16 @@ using var host = Host.CreateDefaultBuilder(args)
         // this single-silo sample exercises the local authoring and reporting
         // path, not cross-cluster shipping. ClusterId stamps this cluster's
         // origin and satisfies the runtime preconditions for enablement.
-        silo.AddLatticeReplication(opts =>
-        {
-            opts.ClusterId = "site-a";
-        });
-
-        // Statically anchor the sys-replication-config tree so runtime
-        // enablement decisions are themselves a replicated CRDT. This is the
-        // one static enrolment the runtime-config model requires; every other
-        // tree is enabled dynamically through the facade below.
-        silo.ReplicateLatticeReplicationConfig();
+        // enableRuntimeConfig: true enrols the sys-replication-config tree so
+        // runtime enablement decisions are themselves a replicated CRDT - the one
+        // static enrolment the runtime-config model requires; every other tree is
+        // enabled dynamically through the facade below.
+        silo.AddLatticeReplication(
+            opts =>
+            {
+                opts.ClusterId = "site-a";
+            },
+            enableRuntimeConfig: true);
 
         // Register the runtime replication control API. This binds
         // ILatticeReplicationControl over the config authority.

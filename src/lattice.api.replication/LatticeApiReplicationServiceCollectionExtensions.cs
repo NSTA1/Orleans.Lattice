@@ -21,7 +21,7 @@ public static class LatticeApiReplicationServiceCollectionExtensions
     /// transport behaviour of its own.
     /// <para>
     /// Must be called <i>after</i> the replication config authority is registered
-    /// (<c>AddLatticeReplication(...).ReplicateLatticeReplicationConfig()</c>):
+    /// (<c>AddLatticeReplication(..., enableRuntimeConfig: true)</c>):
     /// that seam is the source of truth for the enable / disable / status
     /// operations this facade drives. Calling it first fails fast with a clear
     /// message, mirroring how the sibling control-API add-ons guard their ordering
@@ -45,15 +45,15 @@ public static class LatticeApiReplicationServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(builder);
 
         // Ordering guard: the config authority is registered by
-        // ReplicateLatticeReplicationConfig() (which itself requires
-        // AddLatticeReplication). Its absence means the facade would have no engine
-        // seam to drive, so fail fast at registration with an actionable message
-        // rather than failing obscurely at silo start.
+        // AddLatticeReplication(..., enableRuntimeConfig: true). Its absence means
+        // the facade would have no engine seam to drive, so fail fast at
+        // registration with an actionable message rather than failing obscurely
+        // at silo start.
         if (!builder.Services.Any(d => d.ServiceType == typeof(ILatticeReplicationConfigAuthority)))
         {
             throw new InvalidOperationException(
                 "AddLatticeReplicationApi() must be called after the replication config authority is " +
-                "registered. Call siloBuilder.AddLatticeReplication(...).ReplicateLatticeReplicationConfig() " +
+                "registered. Call siloBuilder.AddLatticeReplication(..., enableRuntimeConfig: true) " +
                 "before adding the replication control API.");
         }
 

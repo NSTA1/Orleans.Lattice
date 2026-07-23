@@ -8,14 +8,14 @@ using Orleans.Lattice.BPlusTree.Grains;
 namespace Orleans.Lattice.Replication.Tests;
 
 /// <summary>
-/// Coverage for
-/// <see cref="LatticeReplicationServiceCollectionExtensions.ReplicateLatticeReplicationConfig"/>
-/// and the config-tree enrolment on <see cref="LatticeSystemTreeNames"/>: the
-/// self-referential <c>sys-replication-config</c> tree is enrolled under the
-/// fixed <see cref="LatticeMergeMode.OrMap"/> mode, the OR-Map shape for the
-/// per-tree config record is registered, host-declared trees are preserved, the
-/// add-on is idempotent, and the guardrail rejects enrolment when the
-/// replication add-on is not registered.
+/// Coverage for the runtime replication-config anchor applied by
+/// <see cref="LatticeReplicationServiceCollectionExtensions.AddLatticeReplication(ISiloBuilder, System.Action{LatticeReplicationOptions}, bool)"/>
+/// when <c>enableRuntimeConfig</c> is set, and the config-tree enrolment on
+/// <see cref="LatticeSystemTreeNames"/>: the self-referential
+/// <c>sys-replication-config</c> tree is enrolled under the fixed
+/// <see cref="LatticeMergeMode.OrMap"/> mode, the OR-Map shape for the per-tree
+/// config record is registered, host-declared trees are preserved, and the
+/// anchor is idempotent.
 /// </summary>
 [TestFixture]
 public class LatticeReplicationConfigAnchorTests
@@ -27,53 +27,38 @@ public class LatticeReplicationConfigAnchorTests
         return builder;
     }
 
-    private static IServiceCollection ReplicationServices()
+    private static IServiceCollection RuntimeConfigServices(Action<LatticeReplicationOptions>? extra = null)
     {
         var services = new ServiceCollection();
         services.AddSingleton(Substitute.For<IGrainFactory>());
         services.AddLogging();
-        BuilderWith(services).AddLatticeReplication(o => o.ClusterId = "site-a");
+        BuilderWith(services).AddLatticeReplication(
+            o =>
+            {
+                o.ClusterId = "site-a";
+                extra?.Invoke(o);
+            },
+            enableRuntimeConfig: true);
         return services;
     }
 
     [Test]
-    public void ReplicateLatticeReplicationConfig_throws_when_builder_is_null()
+    public void AddLatticeReplication_returns_builder_for_fluent_chaining()
     {
-        ISiloBuilder builder = null!;
-
-        Assert.That(
-            () => builder.ReplicateLatticeReplicationConfig(),
-            Throws.ArgumentNullException);
-    }
-
-    [Test]
-    public void ReplicateLatticeReplicationConfig_returns_builder_for_fluent_chaining()
-    {
-        var services = ReplicationServices();
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IGrainFactory>());
+        services.AddLogging();
         var builder = BuilderWith(services);
 
-        var result = builder.ReplicateLatticeReplicationConfig();
+        var result = builder.AddLatticeReplication(o => o.ClusterId = "site-a", enableRuntimeConfig: true);
 
         Assert.That(result, Is.SameAs(builder));
     }
 
     [Test]
-    public void ReplicateLatticeReplicationConfig_throws_when_replication_not_registered()
+    public void EnableRuntimeConfig_enrols_config_tree_as_or_map()
     {
-        var services = new ServiceCollection();
-        var builder = BuilderWith(services);
-
-        Assert.That(
-            () => builder.ReplicateLatticeReplicationConfig(),
-            Throws.InvalidOperationException
-                .With.Message.Contains("AddLatticeReplication"));
-    }
-
-    [Test]
-    public void ReplicateLatticeReplicationConfig_enrols_config_tree_as_or_map()
-    {
-        var services = ReplicationServices();
-        BuilderWith(services).ReplicateLatticeReplicationConfig();
+        var services = RuntimeConfigServices();
 
         var provider = services.BuildServiceProvider();
         var trees = provider.GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>()
@@ -87,21 +72,15 @@ public class LatticeReplicationConfigAnchorTests
     }
 
     [Test]
-    public void ReplicateLatticeReplicationConfig_preserves_host_declared_trees()
+    public void EnableRuntimeConfig_preserves_host_declared_trees()
     {
-        var services = new ServiceCollection();
-        services.AddSingleton(Substitute.For<IGrainFactory>());
-        services.AddLogging();
-        BuilderWith(services).AddLatticeReplication(o =>
+        var services = RuntimeConfigServices(o =>
         {
-            o.ClusterId = "site-a";
             o.ReplicatedTrees = new Dictionary<string, LatticeMergeMode>(StringComparer.Ordinal)
             {
                 ["app-tree"] = LatticeMergeMode.PnCounter,
             };
         });
-
-        BuilderWith(services).ReplicateLatticeReplicationConfig();
 
         var provider = services.BuildServiceProvider();
         var trees = provider.GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>()
@@ -115,14 +94,10 @@ public class LatticeReplicationConfigAnchorTests
     }
 
     [Test]
-    public void ReplicateLatticeReplicationConfig_forces_or_map_mode_over_host_declaration()
+    public void EnableRuntimeConfig_forces_or_map_mode_over_host_declaration()
     {
-        var services = new ServiceCollection();
-        services.AddSingleton(Substitute.For<IGrainFactory>());
-        services.AddLogging();
-        BuilderWith(services).AddLatticeReplication(o =>
+        var services = RuntimeConfigServices(o =>
         {
-            o.ClusterId = "site-a";
             // Host mis-declares the config tree under a different mode; the
             // reserved enrolment must overwrite it with the fixed OrMap mode.
             o.ReplicatedTrees = new Dictionary<string, LatticeMergeMode>(StringComparer.Ordinal)
@@ -130,8 +105,6 @@ public class LatticeReplicationConfigAnchorTests
                 [LatticeSystemTreeNames.ReplicationConfig] = LatticeMergeMode.LwwRegister,
             };
         });
-
-        BuilderWith(services).ReplicateLatticeReplicationConfig();
 
         var provider = services.BuildServiceProvider();
         var trees = provider.GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>()
@@ -141,10 +114,9 @@ public class LatticeReplicationConfigAnchorTests
     }
 
     [Test]
-    public async Task ReplicateLatticeReplicationConfig_registers_the_config_tree_or_map_shape()
+    public async Task EnableRuntimeConfig_registers_the_config_tree_or_map_shape()
     {
-        var services = ReplicationServices();
-        BuilderWith(services).ReplicateLatticeReplicationConfig();
+        var services = RuntimeConfigServices();
 
         var provider = services.BuildServiceProvider();
         var registry = provider.GetRequiredService<CrdtShapeRegistry>();
@@ -168,19 +140,21 @@ public class LatticeReplicationConfigAnchorTests
     }
 
     [Test]
-    public void ReplicateLatticeReplicationConfig_is_idempotent()
+    public void EnableRuntimeConfig_is_idempotent()
     {
-        var services = ReplicationServices();
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IGrainFactory>());
+        services.AddLogging();
         var builder = BuilderWith(services);
 
-        builder.ReplicateLatticeReplicationConfig();
-        builder.ReplicateLatticeReplicationConfig();
+        builder.AddLatticeReplication(o => o.ClusterId = "site-a", enableRuntimeConfig: true);
+        builder.AddLatticeReplication(o => o.ClusterId = "site-a", enableRuntimeConfig: true);
 
         var markerCount = services.Count(d =>
             d.ServiceType == typeof(LatticeReplicationServiceCollectionExtensions.ReplicationConfigAnchorMarker));
 
-        // The second call is a no-op: exactly one marker, and the enrolment is
-        // still correct.
+        // The second application of the anchor is a no-op: exactly one marker,
+        // and the enrolment is still correct.
         var provider = services.BuildServiceProvider();
         var trees = provider.GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>()
             .Get("any-tree").ReplicatedTrees;
@@ -189,6 +163,31 @@ public class LatticeReplicationConfigAnchorTests
         {
             Assert.That(markerCount, Is.EqualTo(1));
             Assert.That(trees![LatticeSystemTreeNames.ReplicationConfig], Is.EqualTo(LatticeMergeMode.OrMap));
+        });
+    }
+
+    [Test]
+    public void DisabledRuntimeConfig_does_not_enrol_config_tree_or_install_anchor()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IGrainFactory>());
+        services.AddLogging();
+        BuilderWith(services).AddLatticeReplication(o => o.ClusterId = "site-a");
+
+        var markerCount = services.Count(d =>
+            d.ServiceType == typeof(LatticeReplicationServiceCollectionExtensions.ReplicationConfigAnchorMarker));
+
+        var provider = services.BuildServiceProvider();
+        var trees = provider.GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>()
+            .Get("any-tree").ReplicatedTrees;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(markerCount, Is.EqualTo(0));
+            Assert.That(
+                trees is null || !trees.ContainsKey(LatticeSystemTreeNames.ReplicationConfig),
+                Is.True,
+                "sys-replication-config must not be enrolled when enableRuntimeConfig is false");
         });
     }
 

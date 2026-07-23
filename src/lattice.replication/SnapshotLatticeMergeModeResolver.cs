@@ -5,7 +5,7 @@ namespace Orleans.Lattice.Replication;
 /// <summary>
 /// The dynamic <see cref="ILatticeMergeModeResolver"/> for a host that opted into
 /// runtime replication configuration via
-/// <see cref="LatticeReplicationServiceCollectionExtensions.ReplicateLatticeReplicationConfig(Orleans.Hosting.ISiloBuilder)"/>.
+/// <see cref="LatticeReplicationServiceCollectionExtensions.AddLatticeReplication(Orleans.Hosting.ISiloBuilder, System.Action{LatticeReplicationOptions}, bool)"/>.
 /// It reads the compiled <see cref="CompiledReplicationConfig"/> snapshot first
 /// and falls back to the static
 /// <see cref="LatticeReplicationOptions.ReplicatedTrees"/>-backed

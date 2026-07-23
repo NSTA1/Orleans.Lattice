@@ -6,7 +6,7 @@ namespace Orleans.Lattice.Replication;
 /// <summary>
 /// The dynamic <see cref="IReplicatedTreeMembership"/> for a host that opted into
 /// runtime replication configuration via
-/// <see cref="LatticeReplicationServiceCollectionExtensions.ReplicateLatticeReplicationConfig(Orleans.Hosting.ISiloBuilder)"/>.
+/// <see cref="LatticeReplicationServiceCollectionExtensions.AddLatticeReplication(Orleans.Hosting.ISiloBuilder, System.Action{LatticeReplicationOptions}, bool)"/>.
 /// A tree is replicated when it is enabled in the compiled
 /// <see cref="CompiledReplicationConfig"/> snapshot <b>or</b> present in the
 /// static <see cref="LatticeReplicationOptions.ReplicatedTrees"/> seed map, so the

@@ -63,8 +63,8 @@ public static class LatticeSystemTreeNames
     /// holds the per-tree map that decides which user trees replicate and under
     /// which <see cref="LatticeMergeMode"/>, so it must itself replicate under a
     /// fixed mode enrolled statically on every cluster (via
-    /// <c>ReplicateLatticeReplicationConfig</c>) rather than being configured
-    /// through its own content. Its value shape is an
+    /// <c>AddLatticeReplication(..., enableRuntimeConfig: true)</c>) rather than
+    /// being configured through its own content. Its value shape is an
     /// <see cref="Orleans.Lattice.OrMap{TKey, TValue}"/> keyed by target tree id
     /// whose value is a <see cref="LatticeReplicationConfigEntry"/> composite
     /// CRDT, so it always enrols under <see cref="LatticeMergeMode.OrMap"/>.

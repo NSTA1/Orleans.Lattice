@@ -51,7 +51,7 @@ app.MapLatticeReplicationApiGrpc();
 app.Run();
 ```
 
-The host must expose the control facade in the same service provider - typically by co-hosting Orleans with `AddLatticeReplication(...).ReplicateLatticeReplicationConfig().AddLatticeReplicationApi()` on the same host.
+The host must expose the control facade in the same service provider - typically by co-hosting Orleans with `AddLatticeReplication(..., enableRuntimeConfig: true).AddLatticeReplicationApi()` on the same host.
 
 ## Client
 

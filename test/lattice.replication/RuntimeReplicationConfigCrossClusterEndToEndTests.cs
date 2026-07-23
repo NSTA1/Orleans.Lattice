@@ -38,7 +38,7 @@ public sealed class RuntimeReplicationConfigCrossClusterEndToEndTests
         // The fixture's stub merge-mode resolver defaults every tree to
         // LwwRegister; declare the dogfooded config tree under its real OrMap
         // mode so the OR-Map config writes below are permitted, exactly as the
-        // ReplicateLatticeReplicationConfig() anchor enrols it on a real silo.
+        // enableRuntimeConfig anchor enrols it on a real silo.
         TwoSiteClusterFixture.TreeModeOverrides[LatticeSystemTreeNames.ReplicationConfig] =
             LatticeMergeMode.OrMap;
 

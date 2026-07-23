@@ -161,7 +161,7 @@ internal sealed class TwoSiteClusterFixture
 
         // Register the OR-Map shape for the dogfooded sys-replication-config tree
         // so a real config-store OR-Map write is (de)serialisable on these silos,
-        // exactly as the ReplicateLatticeReplicationConfig() anchor does on a real
+        // exactly as the enableRuntimeConfig anchor does on a real
         // silo. Harmless to tests that never touch the config tree.
         siloBuilder.AddOrMapShape<string, LatticeReplicationConfigEntry>(
             LatticeSystemTreeNames.ReplicationConfig);

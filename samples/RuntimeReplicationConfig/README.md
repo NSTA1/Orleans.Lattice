@@ -59,14 +59,13 @@ Done.
 
 ## Wiring
 
-The silo opts in with three calls:
+The silo opts in with two calls:
 
-- `AddLatticeReplication(...)` enables the replication engine and sets this
-  cluster's `ClusterId`.
-- `ReplicateLatticeReplicationConfig()` statically anchors the
-  `sys-replication-config` tree. This is the one static enrolment the
-  runtime-config model requires; every other tree is enabled dynamically
-  through the facade.
+- `AddLatticeReplication(..., enableRuntimeConfig: true)` enables the replication
+  engine, sets this cluster's `ClusterId`, and statically anchors the
+  `sys-replication-config` tree. That anchor is the one static enrolment the
+  runtime-config model requires; every other tree is enabled dynamically through
+  the facade.
 - `AddLatticeReplicationApi()` binds `ILatticeReplicationControl` over the
   config authority.
 

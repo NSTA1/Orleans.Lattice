@@ -13,9 +13,13 @@ public static partial class LatticeReplicationServiceCollectionExtensions
     /// <summary>
     /// Statically enrols the self-referential
     /// <see cref="LatticeSystemTreeNames.ReplicationConfig"/> tree into
-    /// replication under its fixed <see cref="LatticeMergeMode.OrMap"/> mode and
+    /// replication under its fixed <see cref="LatticeMergeMode.OrMap"/> mode,
     /// registers the OR-Map shape for its
-    /// <see cref="LatticeReplicationConfigEntry"/> value, so a runtime
+    /// <see cref="LatticeReplicationConfigEntry"/> value, and swaps the static
+    /// merge-mode and membership seams for their dynamic, snapshot-backed
+    /// counterparts. Invoked by
+    /// <see cref="AddLatticeReplication(ISiloBuilder, Action{LatticeReplicationOptions}, bool)"/>
+    /// when its <c>enableRuntimeConfig</c> argument is set, so a runtime
     /// replication-configuration change authored on any cluster converges across
     /// every enrolled peer over the existing engine.
     /// </summary>
@@ -37,39 +41,15 @@ public static partial class LatticeReplicationServiceCollectionExtensions
     /// forced even if a host had declared the id under a different mode.
     /// </para>
     /// <para>
-    /// <b>Guardrail.</b> Enrolling the config tree requires
-    /// <c>Orleans.Lattice.Replication</c> to be registered first (via
-    /// <see cref="AddLatticeReplication(ISiloBuilder, Action{LatticeReplicationOptions})"/>);
-    /// calling this before that add-on fails fast with an actionable message
-    /// rather than silently declaring a tree that never ships.
-    /// </para>
-    /// <para>
-    /// <b>Idempotency.</b> Calling this more than once is a no-op after the
-    /// first call - the enrolment and the OR-Map shape registration are applied
-    /// exactly once, so it is safe for a composed host and a library add-on to
-    /// both request it.
+    /// <b>Idempotency.</b> Applying the anchor more than once is a no-op after
+    /// the first application - the enrolment and the OR-Map shape registration
+    /// are applied exactly once, so a host that requests <c>enableRuntimeConfig</c>
+    /// on more than one call is safe.
     /// </para>
     /// </remarks>
-    /// <param name="builder">The silo builder. Must not be <see langword="null"/>.</param>
-    /// <returns>The same <paramref name="builder"/> for chaining.</returns>
-    /// <exception cref="ArgumentNullException"><paramref name="builder"/> is <see langword="null"/>.</exception>
-    /// <exception cref="InvalidOperationException"><see cref="AddLatticeReplication(ISiloBuilder, Action{LatticeReplicationOptions})"/> was not called first.</exception>
-    public static ISiloBuilder ReplicateLatticeReplicationConfig(this ISiloBuilder builder)
+    /// <param name="builder">The silo builder.</param>
+    private static void ApplyReplicationConfigAnchor(ISiloBuilder builder)
     {
-        ArgumentNullException.ThrowIfNull(builder);
-
-        // Guardrail: the receiver-side applier registered by AddLatticeReplication
-        // is the concrete replication-only marker. Its absence means the
-        // pipeline is not wired, so enrolling the config tree would declare a
-        // tree that nothing ships or applies. Fail fast, mirroring the other
-        // system-tree add-ons.
-        if (!builder.Services.Any(d => d.ServiceType == typeof(ReplicationApplier)))
-        {
-            throw new InvalidOperationException(
-                "ReplicateLatticeReplicationConfig() requires Orleans.Lattice.Replication to be registered first. "
-                + "Call siloBuilder.AddLatticeReplication(...) before enrolling the sys-replication-config tree for replication.");
-        }
-
         // Idempotency: a marker singleton records that the anchor has already
         // been applied so a second call adds neither a duplicate PostConfigure
         // nor a duplicate OR-Map shape registration (the latter would fault the
@@ -77,7 +57,7 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         // instance for the same (tree, mode) slot).
         if (builder.Services.Any(d => d.ServiceType == typeof(ReplicationConfigAnchorMarker)))
         {
-            return builder;
+            return;
         }
 
         builder.Services.AddSingleton<ReplicationConfigAnchorMarker>();
@@ -108,8 +88,6 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         builder.AddOrMapShape<string, LatticeReplicationConfigEntry>(LatticeSystemTreeNames.ReplicationConfig);
 
         WireDynamicSeams(builder);
-
-        return builder;
     }
 
     /// <summary>
@@ -181,7 +159,7 @@ public static partial class LatticeReplicationServiceCollectionExtensions
 
     /// <summary>
     /// Internal marker singleton used by
-    /// <see cref="ReplicateLatticeReplicationConfig(ISiloBuilder)"/> to make the
+    /// <see cref="ApplyReplicationConfigAnchor(ISiloBuilder)"/> to make the
     /// static config-tree anchor idempotent.
     /// </summary>
     internal sealed class ReplicationConfigAnchorMarker

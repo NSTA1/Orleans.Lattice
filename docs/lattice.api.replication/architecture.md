@@ -26,7 +26,7 @@ The merge mode is stored in an `MvRegister`, so two clusters that concurrently e
 
 ## Ordering guard
 
-`AddLatticeReplicationApi()` resolves `ILatticeReplicationConfigAuthority` at registration and throws with an actionable message if it is absent, so a host that forgot `ReplicateLatticeReplicationConfig()` fails fast rather than at first call.
+`AddLatticeReplicationApi()` resolves `ILatticeReplicationConfigAuthority` at registration and throws with an actionable message if it is absent, so a host that forgot `enableRuntimeConfig: true` on `AddLatticeReplication(...)` fails fast rather than at first call.
 
 ## See also
 

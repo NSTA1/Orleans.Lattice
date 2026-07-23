@@ -10,7 +10,7 @@ The MCP server binds the `Orleans.Lattice.Api.*` facades, so the facades a tool 
 - Data tools need `AddLatticeDataApi()`.
 - Backup tools need `AddLatticeBackupApi()` (which itself follows `AddLatticeBackup(...)`).
 - Auth tools need `AddLatticeAuthApi()` (which itself follows `AddLatticeAuth(...)`).
-- Replication tools need `AddLatticeReplicationApi()` (which itself follows `AddLatticeReplication(...).ReplicateLatticeReplicationConfig()`).
+- Replication tools need `AddLatticeReplicationApi()` (which itself follows `AddLatticeReplication(..., enableRuntimeConfig: true)`).
 
 Only register the facades whose tool modules you intend to expose.
 

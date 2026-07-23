@@ -6,7 +6,7 @@ The package exposes one registration entry point, one public options type, and a
 
 | Member | Signature | Purpose |
 |---|---|---|
-| `AddLatticeReplicationApi` | `ISiloBuilder AddLatticeReplicationApi(this ISiloBuilder builder, Action<LatticeApiReplicationOptions>? configure = null)` | Registers the replication control facade on the silo. Must be called after `ReplicateLatticeReplicationConfig()`; calling it first throws at registration with an actionable message. |
+| `AddLatticeReplicationApi` | `ISiloBuilder AddLatticeReplicationApi(this ISiloBuilder builder, Action<LatticeApiReplicationOptions>? configure = null)` | Registers the replication control facade on the silo. Must be called after `AddLatticeReplication(..., enableRuntimeConfig: true)`; calling it first throws at registration with an actionable message. |
 
 ## Facade
 

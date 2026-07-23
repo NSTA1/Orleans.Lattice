@@ -30,7 +30,7 @@ For the engine-side mechanics - the static anchor, the compiled snapshot, and th
 
 ## Ordering
 
-`AddLatticeReplicationApi()` must be called **after** the engine add-on `ReplicateLatticeReplicationConfig()` (which itself follows `AddLatticeReplication(...)`): the dynamic config authority is the source of truth this facade drives. Calling it first fails fast at registration with an actionable message.
+`AddLatticeReplicationApi()` must be called **after** `AddLatticeReplication(..., enableRuntimeConfig: true)` (which installs the dynamic config authority): that authority is the source of truth this facade drives. Calling it first fails fast at registration with an actionable message.
 
 ## Surface
 

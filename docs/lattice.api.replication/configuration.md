@@ -8,8 +8,7 @@ The facade currently exposes no tunable knobs. The type is the stable registrati
 
 ```csharp
 siloBuilder
-    .AddLatticeReplication(/* ... */)
-    .ReplicateLatticeReplicationConfig()
+    .AddLatticeReplication(/* ... */, enableRuntimeConfig: true)
     .AddLatticeReplicationApi();
 ```
 

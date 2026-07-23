@@ -15,12 +15,11 @@ Because the configuration is a converging tree, an operator flips a tree on once
 
 ## The static anchor
 
-The config tree must itself replicate before it can carry anything, so it is statically enrolled under a fixed merge mode on every cluster by the opt-in add-on `ReplicateLatticeReplicationConfig()`, mirroring the sibling `ReplicateLatticeSystemTrees()`. This is the one static anchor the runtime path rests on. A host wires it after the engine:
+The config tree must itself replicate before it can carry anything, so it is statically enrolled under a fixed merge mode on every cluster by the opt-in `enableRuntimeConfig` flag on `AddLatticeReplication(...)`, mirroring the sibling `ReplicateLatticeSystemTrees()`. This is the one static anchor the runtime path rests on. A host opts in on the engine call:
 
 ```csharp
 siloBuilder
-    .AddLatticeReplication(/* ... */)
-    .ReplicateLatticeReplicationConfig();
+    .AddLatticeReplication(/* ... */, enableRuntimeConfig: true);
 ```
 
 The existing static replicated-tree options map (`LatticeReplicationOptions.ReplicatedTrees`) stays as a **seed and fallback**, so a deployment that configures its replicated set statically is unaffected: static entries still apply, and the runtime tree layers on top.
@@ -44,7 +43,7 @@ This is the load-bearing safety property of the whole feature: a divergent multi
 
 ## Enable, disable, and mode changes
 
-The engine authoring seam is `ILatticeReplicationConfigAuthority`, installed only when `ReplicateLatticeReplicationConfig()` is called:
+The engine authoring seam is `ILatticeReplicationConfigAuthority`, installed only when `AddLatticeReplication(..., enableRuntimeConfig: true)` is called:
 
 - **Enable** fixes the merge mode at enable time. Enabling an already-enabled tree under the same mode is idempotent; under a **different** mode it is rejected (`LatticeReplicationModeChangeRejectedException`), because a mode change would reinterpret every already-shipped value under a new merge algebra. The sanctioned way to change a mode is to disable then re-enable, which re-bootstraps the tree cleanly.
 - **Enable on a non-empty tree** composes the existing snapshot bootstrap: when a bootstrap source cluster is named and the tree already holds rows, a receiver-driven snapshot is requested (through `ILatticeBootstrapCoordinator` / `ILatticeReplicationAdmin.RequestSnapshotAsync`) so the peer converges on the pre-existing rows the change feed will not carry.
