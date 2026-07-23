@@ -134,26 +134,14 @@ If any 6b gate is red, **do not run 6c**.
 
 #### 6c - Test suite (changed project, non-chaos)
 
-Only after 6a and 6b are green, run the **non-chaos suite scoped to the test project(s) that cover the source project you changed**, not the whole solution. CI runs the full cross-solution suite on every PR - re-running every unrelated test on every iteration of the inner dev loop wastes wall-clock time without buying additional signal.
-
-Map source project to test project:
-
-| Source project changed | Test project(s) to run |
-|---|---|
-| `src/lattice/` (core library) | `test/lattice/Orleans.Lattice.Tests.csproj` |
-| `src/lattice.replication/` | `test/lattice.replication/Orleans.Lattice.Replication.Tests.csproj` |
-| `src/lattice.replication.grpc/` | `test/lattice.replication.grpc/Orleans.Lattice.Replication.Grpc.Tests.csproj` |
-
-If the change touches the core library, run the core test project. If it touches a downstream package, run that package's test project. If it genuinely touches both (e.g. a public-API rename in the core that ripples through replication), run both - but that is the rare case, not the default.
+Only after 6a and 6b are green, run the non-chaos test suite. **The scope rule, the source-to-test-project mapping, the pre-PR run policy, and the "full cross-solution sweep is CI's job" rationale all live in the master, [`.github/instructions/testing.instructions.md`](../instructions/testing.instructions.md) (Tiers 2-4) - follow it; do not restate it here.** In short: run only the test project(s) covering the source project you changed (core library -> `test/lattice/Orleans.Lattice.Tests.csproj`; a downstream package -> that package's own test project; both only for a public-API change in the core that ripples into a downstream project). Exclude chaos, wrap with a two-minute hang blame, and report the `Failed:` / `Passed:` / `Total:` summary line in the chat reply.
 
 ```powershell
 # Example: a change scoped to src/lattice/
 dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "TestCategory!=Chaos" --nologo --blame-hang-timeout 2m --blame-hang-dump-type none
 ```
 
-Chaos tests (`[Category("Chaos")]`) are reserved for CI and pre-PR runs. Report the `Failed:` / `Passed:` / `Total:` summary line in the chat reply.
-
-A full cross-solution `dotnet test --filter "TestCategory!=Chaos"` (no project arg) is reserved for the **final** verify pass right before Phase 8 deliver - once the user has explicitly asked for commit/push/PR - so the local agent confirms the cross-solution surface is green before pushing. During iterative development inside Phase 6, scope to the changed project.
+Before Phase 8 deliver - once the user has explicitly asked for commit/push/PR - repeat that scoped run across **every** package the PR touches (again per the master's mapping; for a PR that touches only repo-level files such as `docs/` or `CHANGELOG.md` with no `src/lattice/` code, the master's targeted hygiene-gate filter suffices instead of the whole core suite). A full cross-solution `dotnet test` (no project arg) is **not** a required local step - CI runs the full cross-solution non-chaos suite on every PR, so cross-project breakage in projects you did not touch is caught there.
 
 ### Phase 7 - Review
 
@@ -170,7 +158,7 @@ Before telling the user the work is done, self-review. Each numbered item must b
 
 3. **Test coverage**: Verify every public method and overload has at least one test. Check for missing edge cases (null serializers, empty lists, value types returning `default`, cancellation, disposal idempotency).
 
-4. **Doc accuracy**: Verify parameter nullability in docs matches the actual signatures. Check that code examples compile (or are correctly fenced as `text` if they reference host-level types outside the snippet harness's ambient context). Ensure doc tables include all new types.
+4. **Doc accuracy**: Verify parameter nullability in docs matches the actual signatures. Check that code examples compile (or are correctly fenced as `text` if they reference host-level types outside the snippet harness's ambient context). Ensure doc tables include all new types. **No PR may introduce a broken cross-reference.** If you added or edited any XML doc comment carrying a `<see cref>` / `<seealso cref>` / `<paramref>` / `<typeparamref>`, run the documentation skill's cref check (`.github/skills/documentation/SKILL.md`) - build each affected packable project with the cref-warning family re-exposed and confirm zero `CS1574` / `CS1580` / `CS1584` warnings and no `cref="!:` markers in the generated XML - and, if you edited Markdown under `docs/`, confirm the relative links you touched resolve to real files/anchors. Report the counts checked and that they are clean; do not restate the cref rules here, follow the skill.
 
 5. **Convention compliance**: Verify naming, attributes, XML docs, file placement, and namespace conventions all match the rules in `.github/copilot-instructions.md`.
 
@@ -180,7 +168,7 @@ Before telling the user the work is done, self-review. Each numbered item must b
 
 Only when the user explicitly asks:
 
-1. **Final cross-solution verify.** Before the commit, run `dotnet test --filter "TestCategory!=Chaos" --blame-hang-timeout 2m --blame-hang-dump-type none` once at the solution root and confirm `Failed: 0` across every test project. This is the only place in the workflow where the full cross-solution suite is mandatory; Phase 6c is deliberately scoped to the changed project to keep the inner dev loop fast.
+1. **Final pre-PR verify.** Before the commit, run the non-chaos suite for **every** test project covering a package the PR touches (per the master, `.github/instructions/testing.instructions.md`), and the core project's targeted hygiene gates when the PR touches repo-level files - confirm `Failed: 0`. The full cross-solution non-chaos suite is **CI's job** on every PR, not a required local step; keep the local run scoped as Phase 6c and the master describe.
 2. **Update `CHANGELOG.md`'s `## [Unreleased]` section** with a one-line entry for the feature (or fix / docs change) about to be committed. Add under the appropriate subsection (`### Added`, `### Changed`, `### Fixed`, `### Deprecated`, `### Removed`, `### Security`); create the subsection if it does not yet exist under `[Unreleased]`. Phrase the entry from the user's perspective (what they can now do, or what changed for them), not from the implementation perspective. Do **not** stamp a version number or release date here - that is Phase 9's job. The entry stays under `[Unreleased]` until the next release is cut.
 3. **Commit** with a conventional commit message: `feat: <description>` for features, `fix: <description>` for fixes, `docs: <description>` for doc-only changes. The changelog update is part of this same commit.
 4. **Push** the branch.
@@ -253,14 +241,14 @@ When the user explicitly asks to release one or more packages by tagging `main`:
 
 1. **Run the docs agent protocol** (`.github/agents/docs.agent.md`) end-to-end across the markdown corpus. The release must not ship documentation drift introduced since the last cut. Apply every fix the docs agent surfaces, in its own commit(s) on a separate docs branch / PR if the corrections are non-trivial, before proceeding to step 2. Do not skip this step on the grounds that "the last feature PR already updated the docs" - the docs agent verifies the whole corpus against the current code, not just the diff of the most recent feature.
 
-2. **Update `CHANGELOG.md` for the release.** Open `CHANGELOG.md`, take every entry currently under `## [Unreleased]`, and move them into a new release section stamped with the target version and **today's date**, in the form `## [X.Y.Z] - YYYY-MM-DD` (use the repo's existing date format - the existing `## [6.0.0] - 2026-05-22` heading is the template). The new section sits **above** the previous most-recent release section and **below** `## [Unreleased]`. After the move, `## [Unreleased]` must be left empty of entries (keep the heading itself in place, ready for the next cycle). Verify with `git diff CHANGELOG.md` that no entry was lost in transit and that subsection headings (`### Added` / `### Changed` / `### Fixed` / etc.) were preserved under the new release section.
+2. **Update `CHANGELOG.md` for the release.** Fold every entry currently under `## [Unreleased]` into today's dated section, following the convention in [`docs/RELEASING.md`](../../docs/RELEASING.md) (the "Updating `CHANGELOG.md`" section) - that document is the single source of truth for the header format, same-day consolidation, and compare-link rules. After the move, `## [Unreleased]` must be left empty of entries (keep the heading itself in place, ready for the next cycle). Verify with `git diff CHANGELOG.md` that no entry was lost in transit and that the subsection headings (`### Added` / `### Changed` / `### Fixed` / etc.) were preserved.
 
 3. **Raise a chore release PR.** This PR contains the changelog stamp from step 2 **and** the package-version bumps to `X.Y.Z` across every `.csproj` / `Directory.Packages.props` / version-stamping file that participates in the release. Workflow:
    - Branch name: `chore/vX.X.X_release` (literal underscore before `release`, matching the user's specified format).
    - Commit message: `chore: cut vX.X.X release`.
    - **Verification scope: hygiene gates only.** Run Phase 6a (build clean) and Phase 6b (every hygiene gate) - do **not** run the Phase 6c unit-test suite or the Phase 8 cross-solution sweep. The feature PRs that fed `[Unreleased]` already ran the full suite at their own merge; the release PR is a metadata-only change (changelog text + version strings) and re-running the full suite buys no signal at the cost of CI wall-clock.
    - PR title: `chore: cut vX.X.X release`. PR label: `dependencies` (closest existing label for a version-bump-only change) plus any release-tracking label the repo uses.
-   - PR body: list each package being bumped and its old/new version, and link the `[X.Y.Z]` changelog section as the source of truth for what's in the release.
+   - PR body: list each package being bumped and its old/new version, and link the `[YYYY-MM-DD]` changelog section as the source of truth for what's in the release.
    - **Do not proceed to step 4 until this PR is merged into `main`.** Tagging before the chore PR merges will publish packages whose `CHANGELOG.md` says `Unreleased` and whose assembly versions don't match the tag - the worst of both worlds.
 
 4. **Confirm the PR has merged before tagging.** Check out `main` and pull (`git checkout main && git pull origin main`) so the tag points at the squash-merge commit on `main`, never at the feature branch.
@@ -283,7 +271,7 @@ When the user explicitly asks to release one or more packages by tagging `main`:
 - **When a tracked item ships, close its GitHub issue as part of delivery.** Dependency / sequencing information lives in the issue threads, not in markdown annotations.
 - **Always use `--body-file` with a tracked `.scratch/` file for PR descriptions** to avoid shell escaping issues with backticks and special characters. **Never** use `New-TemporaryFile` for the body - it has produced silent failures with non-ASCII content.
 - **`gh pr create` and `gh pr edit` silently no-op on malformed body files.** Always verify the live body via `gh pr view <num> --json body` immediately after the call. The PR URL printed by `gh` is not proof the body applied - it is printed in the failure case too.
-- **Phase 6c is project-scoped, not solution-wide.** Run `dotnet test` against the test project(s) covering the source project you changed, with `--filter "TestCategory!=Chaos"`. The full cross-solution sweep is reserved for the Phase 8 final verify (immediately before commit/push) - running it on every iteration of the inner dev loop wastes wall-clock time without buying additional signal, because CI runs the full suite on every PR.
+- **Phase 6c is project-scoped, not solution-wide.** Run `dotnet test` against the test project(s) covering the source project you changed, with `--filter "TestCategory!=Chaos"` - never the whole solution on every inner-loop iteration. The scope rule and its rationale are owned by the master, `.github/instructions/testing.instructions.md`; the full cross-solution non-chaos sweep is CI's job, run on every PR.
 - **Always run tests in the foreground with failure output immediately visible.** Never launch `dotnet test` as a background command (`run_command_in_terminal` with `background=true`) and never redirect or suppress its output stream - failure messages, assertion diffs, and stack traces must land in the chat transcript on the first run. Re-running a test suite purely to capture the failure output you already had but discarded is a protocol violation: it doubles wall-clock cost and, on flaky or environment-sensitive tests, can mask the original failure entirely. If a `dotnet test` invocation reports `Failed: N > 0`, the very next thing in the chat reply must be the offending test name(s) and their stack trace, quoted verbatim from the run that produced them.
 - **Always wrap dotnet test with a two-minute hang blame.**
 - **Build must be clean** - zero errors, zero warnings - before declaring work complete.

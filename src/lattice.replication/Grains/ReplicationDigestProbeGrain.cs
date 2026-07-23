@@ -397,8 +397,9 @@ internal sealed class ReplicationDigestProbeGrain(
     /// (<see cref="LatticeReplicationOptions.AutoRemediateOnDigestMismatch"/>),
     /// the per-(tree, peer) circuit breaker, and the per-(tree, peer) traffic
     /// budget; only when all three permit does it run the targeted leaf
-    /// re-replay (and, on a WAL-trimmed skip, the scoped bootstrap-snapshot
-    /// fallback). A pass that throws or whose re-ship sink reports zero entries
+    /// re-replay (and, when re-replay cannot reach the localised divergence -
+    /// a WAL-trimmed or below-cursor empty selection - the scoped
+    /// bootstrap-snapshot fallback). A pass that throws or whose re-ship sink reports zero entries
     /// shipped despite candidates having been selected counts as a circuit
     /// breaker failure; any other outcome resets the breaker. Each skip records
     /// the <see cref="LatticeReplicationMetrics.DigestRemediationSkipped"/>
@@ -453,11 +454,25 @@ internal sealed class ReplicationDigestProbeGrain(
             // failure (the sink rejected the repair traffic).
             failed = reReplay.Attempted && reReplay.EntriesReReplayed == 0;
 
-            // GC'd-divergence fallback: when the targeted re-replay could not
-            // reach the divergence point because the local WAL was trimmed past
-            // it, fall back to a scoped bootstrap-snapshot of just the divergent
-            // leaf range.
-            if (reReplay.SkipReason == LeafReReplaySkipReason.WalTrimmed)
+            // Escalate to the scoped bootstrap-snapshot fallback whenever the
+            // cursor-bounded WAL re-replay could not reach the divergence the
+            // Merkle walk localised. Two skip reasons signal that:
+            //   - WalTrimmed: the retained WAL was garbage-collected past the
+            //     divergence point, so the missing entries are gone from the log.
+            //   - RangeEmpty: the walk localised genuinely divergent leaf ranges
+            //     (this method is only reached with a non-empty range set) yet
+            //     re-replay selected no eligible entries. That is the below-
+            //     cursor blind spot - a later write already advanced the peer's
+            //     high-water-mark past an older gap of never-shipped entries, so
+            //     the `Timestamp > peerCursor` selection filtered them all out.
+            // The fallback re-derives the committed projection of just the
+            // divergent ranges from the live tree, which is immune to both the
+            // WAL trim and the cursor filter, so it ships those orphans; the
+            // receiver applies them because its only drop threshold is the
+            // snapshot-pinned causal floor, never the incremental per-origin
+            // diagonal.
+            if (reReplay.SkipReason is LeafReReplaySkipReason.WalTrimmed
+                or LeafReReplaySkipReason.RangeEmpty)
             {
                 var fallback = await TryBootstrapFallbackAsync(options, peer, ranges).ConfigureAwait(true);
                 entriesShipped += fallback.EntriesShipped;
@@ -535,9 +550,11 @@ internal sealed class ReplicationDigestProbeGrain(
     /// <param name="ranges">The localised diverging leaf covering ranges.</param>
     /// <returns>
     /// The re-replay outcome. A <see cref="LeafReReplaySkipReason.WalTrimmed"/>
-    /// skip reason signals the caller to consider the bootstrap-snapshot
-    /// fallback; a logged-and-swallowed failure returns
-    /// <see cref="LeafReReplayOutcome.NotAttempted"/>.
+    /// or <see cref="LeafReReplaySkipReason.RangeEmpty"/> skip reason signals
+    /// the caller to consider the bootstrap-snapshot fallback (the WAL was
+    /// trimmed past the divergence, or the divergence sits at or below the
+    /// peer cursor so no WAL entry was eligible); a logged-and-swallowed
+    /// failure returns <see cref="LeafReReplayOutcome.NotAttempted"/>.
     /// </returns>
     private async Task<LeafReReplayOutcome> TryReReplayLeavesAsync(
         LatticeReplicationOptions options,
@@ -592,14 +609,17 @@ internal sealed class ReplicationDigestProbeGrain(
     /// <summary>
     /// Falls back to a scoped bootstrap-snapshot repair of the localised
     /// divergent leaf ranges when the targeted leaf re-replay could not reach
-    /// the divergence point because the local write-ahead-log was trimmed past
-    /// it. When the fallback stage is disabled the pass records a single
+    /// the divergence point - either because the local write-ahead-log was
+    /// trimmed past it, or because the divergence sits at or below the peer's
+    /// high-water-mark cursor so no WAL entry was eligible for re-replay. When
+    /// the fallback stage is disabled the pass records a single
     /// skipped-with-reason-disabled signal and returns without reading the
     /// snapshot; otherwise it re-derives the committed projection of just the
-    /// divergent ranges from the live tree (immune to WAL trimming) and
-    /// re-ships those committed entries to the diverged peer through the
-    /// ordinary replication transport. Best-effort: a failure is logged and
-    /// swallowed so the detect/localise cadence is never disturbed.
+    /// divergent ranges from the live tree (immune to WAL trimming and to the
+    /// peer-cursor filter) and re-ships those committed entries to the diverged
+    /// peer through the ordinary replication transport. Best-effort: a failure
+    /// is logged and swallowed so the detect/localise cadence is never
+    /// disturbed.
     /// </summary>
     /// <param name="options">The resolved per-tree replication options.</param>
     /// <param name="peer">The diverged peer cluster id.</param>

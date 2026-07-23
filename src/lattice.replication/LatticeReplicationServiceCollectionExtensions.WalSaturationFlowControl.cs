@@ -10,14 +10,14 @@ public static partial class LatticeReplicationServiceCollectionExtensions
     /// <see cref="WalSaturationReceiverFlowControlPolicy"/> is the active
     /// <see cref="IReceiverFlowControlPolicy"/>. The policy is already the
     /// default installed by
-    /// <see cref="AddLatticeReplication(Orleans.Hosting.ISiloBuilder, System.Action{LatticeReplicationOptions})"/>;
+    /// <see cref="AddLatticeReplication(Orleans.Hosting.ISiloBuilder, System.Action{LatticeReplicationOptions}, bool)"/>;
     /// call this method when you want to tune the throttled / saturated
     /// batch-size and pause mapping, or to force the policy back on after a
     /// host has replaced it (for example, after pre-registering
     /// <see cref="NoOpReceiverFlowControlPolicy"/>).
     /// <para>
     /// Safe to call before or after
-    /// <see cref="AddLatticeReplication(Orleans.Hosting.ISiloBuilder, System.Action{LatticeReplicationOptions})"/>:
+    /// <see cref="AddLatticeReplication(Orleans.Hosting.ISiloBuilder, System.Action{LatticeReplicationOptions}, bool)"/>:
     /// this method removes any prior <see cref="IReceiverFlowControlPolicy"/>
     /// registration and installs the saturation policy, so the result is
     /// deterministic regardless of composition order. A host that wants a

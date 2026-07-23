@@ -40,7 +40,7 @@ public static partial class LatticeReplicationServiceCollectionExtensions
     /// <b>Guardrail.</b> Enrolling these trees requires
     /// <c>Orleans.Lattice.Replication</c> to be registered first - the receiver
     /// apply seam and the merge-mode resolver that make replication actually run
-    /// come from <see cref="AddLatticeReplication(ISiloBuilder, Action{LatticeReplicationOptions})"/>.
+    /// come from <see cref="AddLatticeReplication(ISiloBuilder, Action{LatticeReplicationOptions}, bool)"/>.
     /// Calling this before that add-on fails fast with a clear message rather than
     /// silently declaring trees that never ship.
     /// </para>
@@ -49,7 +49,7 @@ public static partial class LatticeReplicationServiceCollectionExtensions
     /// <param name="includeAudit">Whether to also enrol the append-only audit tree. Defaults to <c>false</c>.</param>
     /// <returns>The same <paramref name="builder"/> for chaining.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="builder"/> is <c>null</c>.</exception>
-    /// <exception cref="InvalidOperationException"><see cref="AddLatticeReplication(ISiloBuilder, Action{LatticeReplicationOptions})"/> was not called first.</exception>
+    /// <exception cref="InvalidOperationException"><see cref="AddLatticeReplication(ISiloBuilder, Action{LatticeReplicationOptions}, bool)"/> was not called first.</exception>
     public static ISiloBuilder ReplicateLatticeSystemTrees(
         this ISiloBuilder builder,
         bool includeAudit = false)

@@ -97,7 +97,7 @@ public static partial class LatticeReplicationServiceCollectionExtensions
     /// snapshot-backed counterparts, keeping the static
     /// <see cref="LatticeReplicationOptions.ReplicatedTrees"/> map as
     /// seed/fallback. Only the default options-backed registrations installed by
-    /// <see cref="AddLatticeReplication(ISiloBuilder, Action{LatticeReplicationOptions})"/>
+    /// <see cref="AddLatticeReplication(ISiloBuilder, Action{LatticeReplicationOptions}, bool)"/>
     /// are replaced; a host-supplied custom resolver or membership is left
     /// untouched.
     /// </summary>

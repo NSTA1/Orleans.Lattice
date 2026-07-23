@@ -498,7 +498,7 @@ public static partial class LatticeReplicationServiceCollectionExtensions
     /// provisioning; the default build (this method not called) is byte-for-byte
     /// unchanged and ships no new RPC traffic.
     /// <para>
-    /// Must be called after <see cref="AddLatticeReplication(ISiloBuilder, Action{LatticeReplicationOptions})"/>.
+    /// Must be called after <see cref="AddLatticeReplication(ISiloBuilder, Action{LatticeReplicationOptions}, bool)"/>.
     /// Because it is an explicit opt-in, it installs the auto-training provider
     /// as the active <see cref="ILatticeCompressionDictionaryProvider"/>,
     /// overriding the framework-default operator-supplied provider; a host that
