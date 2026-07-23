@@ -4,6 +4,7 @@ using Microsoft.Extensions.Options;
 using Orleans.Lattice.Api.Auth.Grpc;
 using Orleans.Lattice.Api.Backup.Grpc;
 using Orleans.Lattice.Api.Data.Grpc;
+using Orleans.Lattice.Api.Replication.Grpc;
 using Orleans.Lattice.Api.State.Grpc;
 using Orleans.Serialization;
 
@@ -51,4 +52,8 @@ internal static class RemoteTestSupport
     /// <summary>Builds a backup-API client over <paramref name="invoker"/>.</summary>
     public static LatticeBackupApiGrpcClient BackupClient(CallInvoker invoker)
         => LatticeBackupApiGrpcClient.Create(invoker, Serializer);
+
+    /// <summary>Builds a replication-API client over <paramref name="invoker"/>.</summary>
+    public static LatticeReplicationApiGrpcClient ReplicationClient(CallInvoker invoker)
+        => LatticeReplicationApiGrpcClient.Create(invoker, Serializer);
 }

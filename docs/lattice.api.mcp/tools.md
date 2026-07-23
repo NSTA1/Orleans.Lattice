@@ -23,7 +23,7 @@ Each module registration is idempotent, and within a module the destructive verb
 | Data | `AddDataTools(enableWrites)` | always | writes, gated by `enableWrites` |
 | Backup | `AddBackupTools(enableControl)` | always | capture / restore / delete, gated by `enableControl` |
 | Auth | `AddAuthTools(enableAdministration)` | always | user / group / rule mutation, gated by `enableAdministration` |
-| Replication | `AddReplicationTools(enableControl)` | always | enable / disable replication, gated by `enableControl` (in-silo only) |
+| Replication | `AddReplicationTools(enableControl)` | always | enable / disable replication, gated by `enableControl` |
 
 Read tools carry `readOnlyHint = true`; destructive tools carry `destructiveHint = true` and `readOnlyHint = false`, so a well-behaved MCP client can surface the distinction to the operator. Enabling a destructive verb only advertises it - it stays subject to the same fail-closed access gate the facade enforces (see [Security](security.md)).
 
@@ -110,7 +110,7 @@ Authorization administration over `ILatticeAuthAdmin`. Registered by `AddAuthToo
 
 ## Replication tools (`lattice_replication_*`)
 
-Runtime per-tree cross-cluster replication control over `ILatticeReplicationControl`. Registered by `AddReplicationTools(enableControl)`. The inspect tool is always exposed; the mutating control tools require `enableControl: true`, and remain subject to the facade's fail-closed replication access gate regardless. This module is served **in-silo only**; it is not exposed by the out-of-silo remote host.
+Runtime per-tree cross-cluster replication control over `ILatticeReplicationControl`. Registered by `AddReplicationTools(enableControl)`. The inspect tool is always exposed; the mutating control tools require `enableControl: true`, and remain subject to the facade's fail-closed replication access gate regardless. The module is served under both topologies: in-silo, and out-of-silo via `AddLatticeMcpRemote(o => { o.Replication = ...; o.EnableReplicationControl = ...; })` over the replication-API gRPC client (see [Remote hosting](remote.md)).
 
 | Tool | Kind | Purpose |
 |---|---|---|
