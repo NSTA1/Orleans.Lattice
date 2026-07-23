@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Orleans.Lattice.Backup;
 using Orleans.Lattice.Replication.Grains;
 
 namespace Orleans.Lattice.Replication;
@@ -20,16 +21,33 @@ namespace Orleans.Lattice.Replication;
 /// keeps the activation alive even after the activating silo shuts
 /// down.
 /// <para>
+/// The replicated-tree set is sourced from
+/// <see cref="IReplicatedTreeMembership"/> rather than read directly
+/// from <see cref="LatticeReplicationOptions.ReplicatedTrees"/>: on a
+/// host that opted into runtime replication configuration that seam is
+/// the snapshot-backed union of the static options map <b>and</b> the
+/// trees enabled at runtime through the config CRDT, so a tree enabled
+/// via <c>lattice_replication_enable</c> is enrolled here too. When the
+/// runtime config snapshot maintainer is wired, a lightweight poll keyed
+/// on <see cref="CompiledReplicationConfigSnapshotMaintainer.CurrentEpoch"/>
+/// enrols the shipper, maintenance, and (opt-in) digest-probe grains for
+/// any tree enabled after startup, without restarting the silo. Enrolment
+/// is additive only: disabling a tree at runtime does not tear the grains
+/// down (the shipper stops shipping on its own because the merge-mode
+/// resolver returns null once the tree is disabled), mirroring the
+/// peer-removed policy below.
+/// </para>
+/// <para>
 /// Peer membership is sourced from <see cref="IReplicationTopology"/>
 /// rather than read once from
 /// <see cref="LatticeReplicationOptions.ReplicationPeers"/>: the
 /// initial snapshot drives the startup activation pass, and a
 /// long-lived <see cref="IReplicationTopology.Subscribe"/> subscription
-/// activates one shipper per replicated tree for every peer added at
-/// runtime. <see cref="PeerChangeKind.Removed"/> events do not trigger
-/// any teardown - the shipper grain stays activated to drain its
-/// remaining backlog, and the producer-side doorbell ring stops firing
-/// for the removed peer automatically because
+/// activates one shipper per <b>currently enrolled</b> replicated tree
+/// for every peer added at runtime. <see cref="PeerChangeKind.Removed"/>
+/// events do not trigger any teardown - the shipper grain stays
+/// activated to drain its remaining backlog, and the producer-side
+/// doorbell ring stops firing for the removed peer automatically because
 /// <c>ShardedReplogSink</c> reads
 /// <see cref="LatticeReplicationOptions.ReplicationPeers"/> per WAL
 /// append.
@@ -70,7 +88,12 @@ internal sealed class ReplicationDriverActivationService : BackgroundService
     private readonly IGrainFactory _grainFactory;
     private readonly IOptionsMonitor<LatticeReplicationOptions> _optionsMonitor;
     private readonly IReplicationTopology _topology;
+    private readonly IReplicatedTreeMembership _membership;
+    private readonly CompiledReplicationConfigSnapshotMaintainer? _configMaintainer;
+    private readonly TimeSpan _runtimeConfigPollInterval;
     private readonly ILogger<ReplicationDriverActivationService> _logger;
+    private readonly object _gate = new();
+    private readonly HashSet<string> _enrolledTrees = new(StringComparer.Ordinal);
     private IDisposable? _topologySubscription;
 
     /// <summary>
@@ -86,17 +109,43 @@ internal sealed class ReplicationDriverActivationService : BackgroundService
     /// Resolving the parameter (even though we never read it inside this
     /// class) wires the gauge registration into the silo's first scrape.
     /// </summary>
+    /// <param name="grainFactory">The grain factory used to resolve driver grains.</param>
+    /// <param name="optionsMonitor">The replication options monitor (per-tree digest-probe gate).</param>
+    /// <param name="topology">The peer-membership topology.</param>
+    /// <param name="logger">The logger.</param>
+    /// <param name="peerStats">Resolved purely to force eager gauge registration; not stored.</param>
+    /// <param name="membership">
+    /// The replicated-tree membership seam - the union of the static
+    /// options map and (when runtime config is wired) the trees enabled at
+    /// runtime through the config CRDT.
+    /// </param>
+    /// <param name="configMaintainer">
+    /// The runtime replication-config snapshot maintainer, present only
+    /// when the host opted into runtime configuration. When supplied, its
+    /// monotonic epoch drives the live enrolment poll; when null, the
+    /// service behaves exactly as a static-only host (no poll loop).
+    /// </param>
+    /// <param name="runtimeConfigPollInterval">
+    /// Optional override for the live-enrolment poll interval. Defaults to
+    /// <see cref="DefaultRuntimeConfigPollInterval"/>; exposed for tests.
+    /// </param>
     public ReplicationDriverActivationService(
         IGrainFactory grainFactory,
         IOptionsMonitor<LatticeReplicationOptions> optionsMonitor,
         IReplicationTopology topology,
         ILogger<ReplicationDriverActivationService> logger,
-        ReplicationPeerStats peerStats)
+        ReplicationPeerStats peerStats,
+        IReplicatedTreeMembership membership,
+        CompiledReplicationConfigSnapshotMaintainer? configMaintainer = null,
+        TimeSpan? runtimeConfigPollInterval = null)
     {
         _grainFactory = grainFactory ?? throw new ArgumentNullException(nameof(grainFactory));
         _optionsMonitor = optionsMonitor ?? throw new ArgumentNullException(nameof(optionsMonitor));
         _topology = topology ?? throw new ArgumentNullException(nameof(topology));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _membership = membership ?? throw new ArgumentNullException(nameof(membership));
+        _configMaintainer = configMaintainer;
+        _runtimeConfigPollInterval = runtimeConfigPollInterval ?? DefaultRuntimeConfigPollInterval;
         ArgumentNullException.ThrowIfNull(peerStats);
         // peerStats is intentionally not stored: the DI container roots
         // the singleton; resolving it here is sufficient to trigger the
@@ -114,76 +163,81 @@ internal sealed class ReplicationDriverActivationService : BackgroundService
     /// <summary>Upper bound on the per-pass retry delay.</summary>
     private static readonly TimeSpan MaxRetryDelay = TimeSpan.FromSeconds(30);
 
+    /// <summary>
+    /// Default interval for the runtime-config live-enrolment poll. Runtime
+    /// enable is a low-frequency admin action, so a few seconds of latency
+    /// before a newly-enabled tree starts shipping is acceptable; the poll
+    /// only does real work when the snapshot epoch advances.
+    /// </summary>
+    internal static readonly TimeSpan DefaultRuntimeConfigPollInterval = TimeSpan.FromSeconds(2);
+
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        // Resolve the unnamed (default) options instance. Per-tree
-        // overrides apply when each grain calls IOptionsMonitor.Get;
-        // the activation service only needs the replicated-tree
-        // membership (peer membership now flows through
-        // IReplicationTopology).
-        var options = _optionsMonitor.CurrentValue;
+        // The tree set is the replicated-tree membership union (static
+        // options + runtime-enabled trees), not the raw options map, so a
+        // tree enabled purely at runtime is enrolled here too. Peer
+        // membership flows through IReplicationTopology.
+        var runtimeConfigured = _configMaintainer is not null;
+        var initialTrees = Materialize(_membership.ReplicatedTrees);
 
-        if (options.ReplicatedTrees is not { } trees || trees.Count == 0)
+        if (!runtimeConfigured && initialTrees.Count == 0)
         {
             _logger.LogInformation("No replicated trees configured; skipping replication driver activation.");
             return;
         }
 
-        // Subscribe to the topology BEFORE snapshotting the initial
-        // peer set so a peer added between the snapshot read and the
-        // subscribe call is not lost. The subscription stays alive
-        // for the lifetime of this service so runtime-added peers
-        // get their shippers activated without restarting the silo;
-        // it is disposed in Dispose() below.
-        var stableTrees = trees;
-        _topologySubscription = _topology.Subscribe(change =>
-        {
-            if (change.Kind != PeerChangeKind.Added)
-            {
-                // Removed events do not trigger any teardown - the
-                // shipper grain stays activated to drain its
-                // remaining backlog, and the doorbell ring on
-                // ShardedReplogSink already keys off the live
-                // ReplicationPeers snapshot.
-                return;
-            }
-
-            // Fire-and-forget activation per (tree, newly-added peer).
-            // Bounded by stoppingToken so a host shutdown cancels
-            // pending retries cleanly.
-            foreach (var (treeName, _) in stableTrees)
-            {
-                if (string.IsNullOrEmpty(treeName))
-                {
-                    continue;
-                }
-                var capturedTree = treeName;
-                var capturedPeer = change.PeerClusterId;
-                _ = Task.Run(
-                    () => ActivateWithRetryAsync(
-                        kind: "shipper",
-                        label: $"({capturedTree}, {capturedPeer})",
-                        activate: ct => _grainFactory
-                            .GetGrain<IReplicationShipperGrain>($"{capturedTree}/{capturedPeer}")
-                            .EnsureActiveAsync(ct),
-                        stoppingToken),
-                    stoppingToken);
-            }
-        });
+        // Subscribe to the topology BEFORE snapshotting the initial peer
+        // set so a peer added between the snapshot read and the subscribe
+        // call is not lost. The subscription stays alive for the lifetime
+        // of this service so runtime-added peers get their shippers
+        // activated (for every currently enrolled tree) without restarting
+        // the silo; it is disposed in Dispose() below.
+        _topologySubscription = _topology.Subscribe(change => OnPeerChange(change, stoppingToken));
 
         var initialPeers = _topology.CurrentPeers;
 
-        // Build the pending work list once. Each work item carries a
-        // closure that performs the activation call, plus a
-        // human-readable label for diagnostics. The closure captures
-        // the IGrainFactory and the grain key - re-issuing it after
-        // the silo finishes startup is safe because Orleans grain
-        // proxies are cheap and the second EnsureActiveAsync after a
-        // first success is a no-op (RegisterOrUpdateReminder is
-        // idempotent, the phase-timer guard short-circuits, etc.).
-        var pending = new List<ActivationWorkItem>();
-        foreach (var (treeName, _) in trees)
+        // Startup enrolment pass over the initial membership. Records each
+        // tree in the enrolled set (so the topology callback covers it) and
+        // builds the maintenance / digest-probe / shipper activations.
+        var pending = BuildActivationsForNewTrees(initialTrees, initialPeers);
+        if (pending.Count > 0)
+        {
+            await DrainPendingAsync(pending, stoppingToken).ConfigureAwait(false);
+        }
+
+        // When runtime config is wired, keep watching the snapshot for
+        // trees enabled after startup and enrol them live. A static-only
+        // host has no runtime config seam, so it simply returns here.
+        if (runtimeConfigured)
+        {
+            await PollRuntimeEnrolmentsAsync(stoppingToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Fire-and-forget activation of one shipper per currently enrolled
+    /// tree for a newly-added peer. Invoked off the topology subscription
+    /// callback so the subscriber stays non-blocking.
+    /// </summary>
+    private void OnPeerChange(PeerChanged change, CancellationToken stoppingToken)
+    {
+        if (change.Kind != PeerChangeKind.Added)
+        {
+            // Removed events do not trigger any teardown - the shipper
+            // grain stays activated to drain its remaining backlog, and
+            // the doorbell ring on ShardedReplogSink already keys off the
+            // live ReplicationPeers snapshot.
+            return;
+        }
+
+        string[] trees;
+        lock (_gate)
+        {
+            trees = [.. _enrolledTrees];
+        }
+
+        foreach (var treeName in trees)
         {
             if (string.IsNullOrEmpty(treeName))
             {
@@ -191,56 +245,147 @@ internal sealed class ReplicationDriverActivationService : BackgroundService
             }
 
             var capturedTree = treeName;
-            pending.Add(new ActivationWorkItem(
-                Kind: "maintenance",
-                Label: $"tree '{capturedTree}'",
-                Activate: ct => _grainFactory
-                    .GetGrain<IReplicationMaintenanceGrain>(capturedTree)
-                    .EnsureActiveAsync(ct)));
+            var capturedPeer = change.PeerClusterId;
+            _ = Task.Run(
+                () => ActivateWithRetryAsync(
+                    kind: "shipper",
+                    label: $"({capturedTree}, {capturedPeer})",
+                    activate: ct => _grainFactory
+                        .GetGrain<IReplicationShipperGrain>($"{capturedTree}/{capturedPeer}")
+                        .EnsureActiveAsync(ct),
+                    stoppingToken),
+                stoppingToken);
+        }
+    }
 
-            // Anti-entropy digest-probe scheduler, one per replicated
-            // tree. Activated only when the host has opted into the
-            // detection feature; default-off so an un-opted host never
-            // pays the activation. The per-tree options resolution uses
-            // the default instance here for the activation gate; the
-            // grain itself re-resolves per-tree on each phase tick.
-            if (_optionsMonitor.Get(capturedTree).DigestProbeEnabled)
-            {
-                pending.Add(new ActivationWorkItem(
-                    Kind: "digest-probe",
-                    Label: $"tree '{capturedTree}'",
-                    Activate: ct => _grainFactory
-                        .GetGrain<IReplicationDigestProbeGrain>(capturedTree)
-                        .EnsureActiveAsync(ct)));
-            }
+    /// <summary>
+    /// Polls the runtime replication-config snapshot for trees enabled
+    /// after startup and enrols their driver grains. Keyed on the
+    /// maintainer's monotonic epoch so a poll tick does real work only when
+    /// the snapshot actually rebuilt; the membership diff and grain
+    /// activations are otherwise skipped. Runs until
+    /// <paramref name="stoppingToken"/> is cancelled.
+    /// </summary>
+    private async Task PollRuntimeEnrolmentsAsync(CancellationToken stoppingToken)
+    {
+        // Sentinel forces the first tick to diff regardless of the current
+        // epoch, closing the race where a tree is enabled between the
+        // startup membership read and the first poll.
+        var lastEpoch = -1L;
 
-            foreach (var peer in initialPeers)
+        // PeriodicTimer over Task.Delay: this loop runs for the life of the
+        // silo, so the steady-state (no config change) tick must not
+        // allocate. PeriodicTimer reuses its internal state across ticks,
+        // whereas Task.Delay allocates a fresh Timer + Task every interval.
+        using var timer = new PeriodicTimer(_runtimeConfigPollInterval);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
             {
-                if (string.IsNullOrEmpty(peer))
+                var epoch = _configMaintainer!.CurrentEpoch;
+                if (epoch == lastEpoch)
                 {
                     continue;
                 }
-                var capturedPeer = peer;
+
+                lastEpoch = epoch;
+
+                var pending = BuildActivationsForNewTrees(_membership.ReplicatedTrees, _topology.CurrentPeers);
+                if (pending.Count == 0)
+                {
+                    continue;
+                }
+
+                await DrainPendingAsync(pending, stoppingToken).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+        }
+    }
+
+    /// <summary>
+    /// Records every not-yet-enrolled tree in <paramref name="candidateTrees"/>
+    /// into the enrolled set and builds its activation work items
+    /// (maintenance, opt-in digest-probe, and one shipper per peer). A tree
+    /// already enrolled by a prior pass is skipped, so the returned list
+    /// only covers genuinely new enrolments.
+    /// </summary>
+    private List<ActivationWorkItem> BuildActivationsForNewTrees(
+        IReadOnlyCollection<string> candidateTrees,
+        IReadOnlyCollection<string> peers)
+    {
+        var pending = new List<ActivationWorkItem>();
+        lock (_gate)
+        {
+            foreach (var treeName in candidateTrees)
+            {
+                if (string.IsNullOrEmpty(treeName))
+                {
+                    continue;
+                }
+
+                if (!_enrolledTrees.Add(treeName))
+                {
+                    // Already enrolled on a prior pass.
+                    continue;
+                }
+
+                var capturedTree = treeName;
                 pending.Add(new ActivationWorkItem(
-                    Kind: "shipper",
-                    Label: $"({capturedTree}, {capturedPeer})",
+                    Kind: "maintenance",
+                    Label: $"tree '{capturedTree}'",
                     Activate: ct => _grainFactory
-                        .GetGrain<IReplicationShipperGrain>($"{capturedTree}/{capturedPeer}")
+                        .GetGrain<IReplicationMaintenanceGrain>(capturedTree)
                         .EnsureActiveAsync(ct)));
+
+                // Anti-entropy digest-probe scheduler, one per replicated
+                // tree. Activated only when the host has opted into the
+                // detection feature; default-off so an un-opted host never
+                // pays the activation. The per-tree options resolution uses
+                // the default instance here for the activation gate; the
+                // grain itself re-resolves per-tree on each phase tick.
+                if (_optionsMonitor.Get(capturedTree).DigestProbeEnabled)
+                {
+                    pending.Add(new ActivationWorkItem(
+                        Kind: "digest-probe",
+                        Label: $"tree '{capturedTree}'",
+                        Activate: ct => _grainFactory
+                            .GetGrain<IReplicationDigestProbeGrain>(capturedTree)
+                            .EnsureActiveAsync(ct)));
+                }
+
+                foreach (var peer in peers)
+                {
+                    if (string.IsNullOrEmpty(peer))
+                    {
+                        continue;
+                    }
+
+                    var capturedPeer = peer;
+                    pending.Add(new ActivationWorkItem(
+                        Kind: "shipper",
+                        Label: $"({capturedTree}, {capturedPeer})",
+                        Activate: ct => _grainFactory
+                            .GetGrain<IReplicationShipperGrain>($"{capturedTree}/{capturedPeer}")
+                            .EnsureActiveAsync(ct)));
+                }
             }
         }
 
-        if (pending.Count == 0)
-        {
-            return;
-        }
+        return pending;
+    }
 
-        // Retry-with-backoff outer loop. The loop body tries every
-        // pending item once; successful items are removed in-place
-        // and any per-item success resets the inter-pass delay back
-        // to the initial value (a transient failure followed by a
-        // success means the cluster has finished coming up - start
-        // the next failure from a fresh budget).
+    /// <summary>
+    /// Runs the retry-with-backoff drain over <paramref name="pending"/>.
+    /// Each pass tries every remaining item once; successful items are
+    /// removed in-place and any per-item success resets the inter-pass
+    /// delay back to the initial value. Returns when the pending set is
+    /// empty; throws <see cref="OperationCanceledException"/> on host
+    /// shutdown.
+    /// </summary>
+    private async Task DrainPendingAsync(List<ActivationWorkItem> pending, CancellationToken stoppingToken)
+    {
         var delay = InitialRetryDelay;
         var pass = 0;
         while (pending.Count > 0)
@@ -301,6 +446,13 @@ internal sealed class ReplicationDriverActivationService : BackgroundService
             delay = TimeSpan.FromTicks(nextTicks);
         }
     }
+
+    /// <summary>
+    /// Materialises a membership snapshot into a stable list so the
+    /// downstream passes iterate a fixed set (the seam may recompute its
+    /// backing collection on every read).
+    /// </summary>
+    private static List<string> Materialize(IReadOnlyCollection<string> trees) => [.. trees];
 
     /// <summary>
     /// Runs <paramref name="activate"/> with the same retry-with-backoff
