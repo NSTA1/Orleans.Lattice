@@ -17,6 +17,8 @@ Naming rules for every layer of Orleans.Lattice, plus the canonical registry of 
 | Replication test namespace | `Orleans.Lattice.Replication.Tests.{Area}` | `Orleans.Lattice.Replication.Tests` |
 | gRPC transport public API namespace | `Orleans.Lattice.Replication.Grpc` | `LatticeReplicationGrpcOptions`, `LatticeReplicationGrpcServiceCollectionExtensions` |
 | gRPC transport test namespace | `Orleans.Lattice.Replication.Grpc.Tests` | `Orleans.Lattice.Replication.Grpc.Tests` |
+| Replication control-API public API namespace | `Orleans.Lattice.Api.Replication` | `ILatticeReplicationControl`, `ReplicationConfigReport`, `ReplicationTreeConfigEntry`, `ReplicationEnableResult`, `ReplicationDisableResult`, `ApiReplicationTypeAliases`, `LatticeApiReplicationOptions`, `LatticeApiReplicationServiceCollectionExtensions` |
+| Replication control-API test namespace | `Orleans.Lattice.Api.Replication.Tests` | `Orleans.Lattice.Api.Replication.Tests` |
 | Azure Table WAL public API namespace | `Orleans.Lattice.Storage.AzureTable` | `AzureTableWalStorageOptions`, `AzureTableWalStorageProvider`, `LatticeAzureTableServiceCollectionExtensions` |
 | Azure Table WAL test namespace | `Orleans.Lattice.Storage.AzureTable.Tests` | `Orleans.Lattice.Storage.AzureTable.Tests` |
 | Scaling public API namespace | `Orleans.Lattice.Scaling` | `ILatticeScalingSignal`, `ScalingSignal`, `ComputePressure`, `StoragePressure`, `WalAccountPressure`, `WalRebalanceRecommendation`, `WalPressureClassification`, `LatticeScalingSignalOptions`, `LatticeScalingServiceCollectionExtensions`, `LatticeScalingEndpointRouteBuilderExtensions`, `LatticeScalingHealthCheckOptions`, `LatticeScalingMetrics`, `ScalingTypeAliases` |

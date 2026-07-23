@@ -106,4 +106,22 @@ public enum LatticeOperation
     /// silently exposes data. It must be granted explicitly and on its own.
     /// </summary>
     Telemetry = 4096,
+
+    /// <summary>
+    /// Configure a tree's cross-cluster <b>replication</b> at runtime: the
+    /// replication control plane, as distinct from an ordinary data-plane
+    /// mutation. Holding it authorizes the replication-management verbs -
+    /// enabling replication for a tree (fixing its wire merge mode), disabling
+    /// it, and inspecting the runtime replicated-tree set - over the requested
+    /// scope. It is a high-privilege capability that is deliberately
+    /// <b>distinct</b> from <see cref="Admin"/>: holding <see cref="Admin"/>
+    /// does not confer it, and holding it does not confer <see cref="Admin"/>,
+    /// <see cref="Backup"/>, <see cref="SchemaAdmin"/>, or any data-plane
+    /// capability. Enabling replication egresses a tree's data to another
+    /// cluster, so it must be granted explicitly and on its own; no other
+    /// operation - not even <see cref="Admin"/> - confers it, and it is never
+    /// part of the data-plane <c>All</c> aggregate. Granting it grants
+    /// <b>nothing else</b>.
+    /// </summary>
+    Replication = 8192,
 }
