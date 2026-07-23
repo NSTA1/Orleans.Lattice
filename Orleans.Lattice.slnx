@@ -10,6 +10,7 @@
   <Project Path="src/lattice.api.backup/Orleans.Lattice.Api.Backup.csproj" />
   <Project Path="src/lattice.api.backup.grpc/Orleans.Lattice.Api.Backup.Grpc.csproj" />
   <Project Path="src/lattice.api.replication/Orleans.Lattice.Api.Replication.csproj" />
+  <Project Path="src/lattice.api.replication.grpc/Orleans.Lattice.Api.Replication.Grpc.csproj" />
   <Project Path="src/lattice.api.schema/Orleans.Lattice.Api.Schema.csproj" />
   <Project Path="src/lattice.api.schema.grpc/Orleans.Lattice.Api.Schema.Grpc.csproj" />
   <Project Path="src/lattice.api.mcp/Orleans.Lattice.Api.Mcp.csproj" />
@@ -50,6 +51,7 @@
   <Project Path="test/lattice.api.backup/Orleans.Lattice.Api.Backup.Tests.csproj" />
   <Project Path="test/lattice.api.backup.grpc/Orleans.Lattice.Api.Backup.Grpc.Tests.csproj" />
   <Project Path="test/lattice.api.replication/Orleans.Lattice.Api.Replication.Tests.csproj" />
+  <Project Path="test/lattice.api.replication.grpc/Orleans.Lattice.Api.Replication.Grpc.Tests.csproj" />
   <Project Path="test/lattice.api.schema/Orleans.Lattice.Api.Schema.Tests.csproj" />
   <Project Path="test/lattice.api.schema.grpc/Orleans.Lattice.Api.Schema.Grpc.Tests.csproj" />
   <Project Path="test/lattice.api.mcp/Orleans.Lattice.Api.Mcp.Tests.csproj" />
