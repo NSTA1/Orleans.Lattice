@@ -98,7 +98,7 @@ Only after **every** sub-issue is integrated and the integration branch builds c
    - every 6b hygiene gate from `feature-dev.agent.md` (type-alias, logger-category, docs-snippet, em-dash, mojibake, integration-category) across every test project the epic touched;
    - the **full non-chaos suite** (which includes every `TestCategory=Integration` fixture), cross-solution, with blame-hang:
      ```powershell
-     dotnet test --filter "TestCategory!=Chaos" --blame-hang --blame-hang-timeout 3m
+     dotnet test --filter "TestCategory!=Chaos&TestCategory!=AzureTableEmulator" --blame-hang --blame-hang-timeout 3m
      ```
    Paste the `Failed:`/`Passed:`/`Total:` summary. Any red means stop, fix (or send the owning sub-issue back), re-integrate, and re-run from the top of this step.
 2. **Author the epic documentation yourself.** Write/refresh the topic docs under the relevant `docs/<package>/` for every capability the epic shipped (following the `documentation` skill and the docs layout), update `docs/**/api.md`, `configuration.md`, `architecture.md` as affected, update `.github/copilot-instructions.md`'s tables, and add any new package's `README.md`. Use the byte-level markdown-editing technique for long files.

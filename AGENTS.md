@@ -48,12 +48,13 @@ Convention: package `foo` has code at `src/foo/`, tests at `test/foo/`, docs at
   with blame-hang enabled and no output filtering:
 
   ```powershell
-  dotnet test --filter "TestCategory!=Chaos" --blame-hang --blame-hang-timeout 3m
+  dotnet test --filter "TestCategory!=Chaos&TestCategory!=AzureTableEmulator" --blame-hang --blame-hang-timeout 3m
   ```
 
   Chaos tests (`[Category("Chaos")]`) are CI-only. The Azure Table emulator
-  suite (`[Category("AzureTableEmulator")]`) only runs when Azurite is started
-  locally.
+  suite (`[Category("AzureTableEmulator")]`) is excluded above because it only
+  runs when Azurite is started locally (CI runs it separately); include it by
+  dropping the `TestCategory!=AzureTableEmulator` clause once Azurite is up.
 
 ## Conventions that matter
 

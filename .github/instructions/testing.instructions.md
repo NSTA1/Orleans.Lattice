@@ -132,10 +132,10 @@ You can skip Tier 3 and go straight from Tier 2 to Tier 4 if you're about to do 
 ### Tier 4 - before opening a PR (full suite)
 
 ```powershell
-dotnet test --filter "TestCategory!=Chaos&TestCategory!=AzureTableEmulator"
+dotnet test --filter "TestCategory!=Chaos&TestCategory!=AzureTableEmulator" --blame-hang --blame-hang-timeout 3m
 ```
 
-This is the only step that exercises tests in projects you *didn't* touch, so it's the gate that catches cross-project breakage (e.g. an `Orleans.Lattice` change that broke `Orleans.Lattice.Replication.Tests`). Keep `AzureTableEmulator` excluded unless Azurite is running locally - CI runs the Azure Table suite separately against an emulator that's spun up as part of the pipeline.
+This is the only step that exercises tests in projects you *didn't* touch, so it's the gate that catches cross-project breakage (e.g. an `Orleans.Lattice` change that broke `Orleans.Lattice.Replication.Tests`). Run it with blame-hang (a 3-minute per-test timeout names and aborts a hanging test rather than stalling) and do not filter the failure output. Keep `AzureTableEmulator` excluded unless Azurite is running locally - CI runs the Azure Table suite separately against an emulator that's spun up as part of the pipeline.
 
 Chaos remains CI-only. CI runs Tier 4 plus the `Chaos` and `AzureTableEmulator` suites.
 
