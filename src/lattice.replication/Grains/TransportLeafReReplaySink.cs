@@ -33,12 +33,35 @@ internal sealed class TransportLeafReReplaySink(
             return 0;
         }
 
+        // Re-stamp every entry's TreeId from the batch tree name before
+        // framing. This egress ships a per-tree batch through the typed
+        // ReplicationBatchEnvelope, which the receiver decodes verbatim -
+        // unlike the ordinary shipper's framing path, which strips the
+        // batch-constant TreeId at encode time and re-stamps it from the
+        // framing tail's tree name on decode. WAL-sourced re-replay entries
+        // (WalGrainReReplaySource) arrive here with an empty TreeId: the
+        // durable WAL codec strips that redundant slot on encode and the
+        // LatticeMutation read-back does not restore it. An entry that
+        // reaches the receiver with an empty TreeId is rejected by the
+        // applier ("WalRecord.TreeId must be non-empty") and cannot even be
+        // quarantined (the per-tree dead-letter/high-water-mark grains
+        // cannot be keyed on an empty id), so a single such entry wedges the
+        // peer in an unbounded re-ship loop and blocks convergence. Stamping
+        // from the batch tree name here mirrors the framing receiver's
+        // re-stamp exactly and is correct because the envelope is strictly
+        // per-tree: every entry in the batch belongs to treeName.
+        var stamped = new WalRecord[entries.Count];
+        for (var i = 0; i < entries.Count; i++)
+        {
+            stamped[i] = entries[i] with { TreeId = treeName };
+        }
+
         var envelope = new ReplicationBatchEnvelope
         {
             WireVersion = 0,
             TreeName = treeName,
             OriginClusterId = originClusterId,
-            Entries = entries,
+            Entries = stamped,
         };
 
         var writer = new ArrayBufferWriter<byte>();

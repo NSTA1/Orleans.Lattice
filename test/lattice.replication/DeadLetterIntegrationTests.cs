@@ -1,4 +1,5 @@
 using Orleans.Lattice.BPlusTree.Grains;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Hosting;
@@ -102,7 +103,7 @@ public class DeadLetterIntegrationTests
     }
 
     private DeadLetterTrackingReplicationApplier BuildDecorator(IReplicationApplier inner)
-        => new(inner, _cluster.GrainFactory, _optionsMonitor);
+        => new(inner, _cluster.GrainFactory, _optionsMonitor, NullLogger<DeadLetterTrackingReplicationApplier>.Instance);
 
     [Test]
     public async Task Apply_failure_exceeds_threshold_and_parks_entry_on_dlq_grain()
