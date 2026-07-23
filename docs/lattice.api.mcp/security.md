@@ -46,6 +46,10 @@ Because the bridge resolves the caller's subject, the per-session discovery conf
 
 The server ships no tools. Each module is added explicitly, and within a module the destructive verbs (data writes, backup control, auth administration) stay hidden unless the host enables them. A minimal deployment exposes only the read tools it needs; a control deployment opts each destructive verb in deliberately.
 
+## OAuth discovery is anonymous by design
+
+When a host opts into OAuth 2.0 Protected Resource Metadata ([RFC 9728](https://www.rfc-editor.org/rfc/rfc9728)) by setting `ProtectedResourceMetadata` (see [Setup](setup.md#oauth-discovery-rfc-9728)), the metadata document at `/.well-known/oauth-protected-resource` is mapped with `AllowAnonymous()`, so it is served even when `RequireAuthorization` is `true` and the host installs a fail-closed fallback authorization policy. This does not weaken the posture: the document carries only public information a client needs to begin signing in - the resource identifier, the authorization server URLs, and the scopes to request - and never a token, a grant, or any cluster state. It must be anonymous because a client fetches it precisely because it was rejected with a `401`. The MCP transport itself stays default-denied; the only change to a `401` is an added `resource_metadata` hint pointing at that public document.
+
 ## Next
 
 - [Tools](tools.md) - the modules, their opt-in flags, and the full catalogue.

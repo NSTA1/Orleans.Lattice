@@ -54,10 +54,31 @@ app.MapLatticeMcp();
 | `CredentialHeaderName` | `string` | `authorization` | The inbound header carrying the caller's credential token, bridged onto the ambient Lattice credential. |
 | `CredentialScheme` | `string` | `Bearer` | The scheme stamped on the bridged credential; a case-insensitive scheme prefix (for example `"Bearer "`) is stripped from the header value before the remaining token is used. |
 | `EnableStateTools` / `EnableDataTools` / `EnableBackupTools` / `EnableBackupControlTools` / `EnableAuthTools` / `EnableAuthAdministration` / `EnableReplicationTools` / `EnableReplicationControlTools` | `bool` | `false` | Per-module enable flags. Set by the `AddXTools(...)` extensions; a host normally toggles them through those calls rather than directly. |
+| `ProtectedResourceMetadata` | `LatticeApiMcpProtectedResourceMetadata?` | `null` | Opt into OAuth 2.0 Protected Resource Metadata (RFC 9728). When set, an anonymous metadata document is served at `/.well-known/oauth-protected-resource` and the `401` bearer challenge carries a `resource_metadata` hint. See [OAuth discovery](#oauth-discovery-rfc-9728). |
 
 ## Add the tool modules
 
 The server exposes no tools until a module is added. See [Tools](tools.md) for the module opt-in flags and the full catalogue. A minimal read-only server adds just `AddStateTools()`; a full-control server adds every module with its destructive flag set.
+
+## OAuth discovery (RFC 9728)
+
+By default the server is a plain bearer-token resource: a caller must already hold a token. Set `ProtectedResourceMetadata` to opt into OAuth 2.0 Protected Resource Metadata ([RFC 9728](https://www.rfc-editor.org/rfc/rfc9728)) so a spec-compliant MCP client can discover the authorization server and run the sign-in flow itself. `MapLatticeMcp` then serves an anonymous metadata document at `/.well-known/oauth-protected-resource`, and the binding appends a `resource_metadata` hint to the `401` bearer challenge on the transport path. The feature is scheme-agnostic - it augments whatever bearer challenge the host's authentication handler emits - so it needs no dependency on a specific auth library. `Resource` is this server's public, canonical URL as clients reach it (for example the CDN or ingress edge).
+
+```csharp verify
+var builder = WebApplication.CreateBuilder();
+
+builder.Services.AddLatticeMcp(o =>
+{
+    o.RequireAuthorization = true;
+    o.TransportPattern = "/mcp";
+    o.ProtectedResourceMetadata = new LatticeApiMcpProtectedResourceMetadata
+    {
+        Resource = new Uri("https://mcp.example.com"),
+        AuthorizationServers = { new Uri("https://login.microsoftonline.com/<tenant>/v2.0") },
+        ScopesSupported = { "api://<server-app-id>/.default" },
+    };
+});
+```
 
 ## Next
 
