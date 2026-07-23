@@ -192,6 +192,12 @@ param tokenCacheContainerName string = 'explorer-token-cache'
 @description('EXPLORER WEB-OIDC SEAM: externally visible public origin (scheme + host) operators reach the Explorer console at - the global Front Door endpoint, for example https://{base}-explorer-{hash}.z01.azurefd.net. Bound to the Explorer head Explorer:PublicOrigin so OpenID Connect builds sign-in redirect URIs against the public host rather than the internal Container Apps origin (which is Front-Door-locked). Empty leaves request scheme/host untouched (dev/compose).')
 param explorerPublicOrigin string = ''
 
+@description('MCP OAUTH-DISCOVERY SEAM: externally visible public URL (the resource identifier) clients reach the MCP endpoint at - the global Front Door endpoint, for example https://{base}-mcp-{hash}.z01.azurefd.net. Bound to the MCP head Mcp:PublicUrl. When set (with Entra on) the head serves an OAuth 2.0 Protected Resource Metadata document (RFC 9728) at /.well-known/oauth-protected-resource and hints it on 401 challenges, so a standard MCP client discovers the Entra authorization server and signs in itself instead of needing a pre-pasted token. Empty (dev/compose, or before the Front Door hostname is known) advertises nothing.')
+param mcpPublicUrl string = ''
+
+@description('MCP OAUTH-DISCOVERY SEAM: the delegated silo scope a client should request so the token it obtains carries the audience the MCP head validates and forwards (for example api://{tenantId}/{baseName}-silo/user_impersonation - the same scope the Explorer console requests). Bound to the MCP head Mcp:Oauth:Scopes and emitted as the metadata document scopes_supported. Empty omits scopes_supported.')
+param mcpAuthScope string = ''
+
 @description('Comma-separated Entra object ids (oid claim) seeded as the estate administrators - the root of trust the deny-by-default access gate honours. The deployer sets this to the single security administrator (the deploying user by default); every other caller is refused until this administrator grants access at runtime through the Explorer Access tab. Bound to the host Auth:BootstrapAdministrators.')
 param bootstrapAdministrators string = ''
 
@@ -665,6 +671,14 @@ resource mcpApp 'Microsoft.App/containerApps@2024-03-01' = {
             // {clientId, api://clientId} default. In the reference architecture this
             // carries the tenant-scoped facade identifier URI.
             { name: 'Entra__Audience', value: entraAudiences }
+            // OAuth 2.0 Protected Resource Metadata (RFC 9728) discovery. When the
+            // head's own public URL is set (and Entra is on), it advertises an
+            // anonymous /.well-known/oauth-protected-resource document pointing at
+            // the Entra authorization server and requests the silo scope, and hints
+            // it on 401 challenges, so a standard MCP client (VS Code, Visual
+            // Studio, Copilot) can sign in itself. Empty advertises nothing.
+            { name: 'Mcp__PublicUrl', value: mcpPublicUrl }
+            { name: 'Mcp__Oauth__Scopes', value: mcpAuthScope }
             { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
             { name: 'ASPNETCORE_URLS', value: 'http://0.0.0.0:8080' }
             // Global-ingress origin lock (see silo head). Empty until pass 2.

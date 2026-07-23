@@ -26,12 +26,26 @@ using Orleans.Lattice.ReferenceArchitecture.Hosting;
 // leaves the endpoint open, relying on the silo's fail-closed discovery
 // underneath.
 //
+// OAuth discovery: when Entra is on and the head's public URL (Mcp:PublicUrl) is
+// configured, the endpoint serves an OAuth 2.0 Protected Resource Metadata
+// document (RFC 9728) at /.well-known/oauth-protected-resource and hints it on
+// 401 challenges, pointing a standard MCP client at the Entra authorization
+// server and the silo scope so it can sign in itself (no pre-pasted token). The
+// silo API pre-authorizes the well-known first-party MCP clients (VS Code, Visual
+// Studio, Copilot) for that scope, so the sign-in needs no per-user consent.
+//
 // Every endpoint and credential comes from environment variables /
 // IConfiguration; no secret is hardcoded.
 // ---------------------------------------------------------------------------
 
 var builder = WebApplication.CreateBuilder(args);
 var config = builder.Configuration;
+
+// Azure Front Door probes this head's /health endpoint (HEAD) continuously per
+// edge PoP. Real MCP requests keep full logging; the framework "Request
+// starting"/"Request finished" chatter on the probe path is dropped so it does
+// not dominate log storage. Warnings/errors on /health still surface.
+builder.Logging.SuppressHealthProbeRequestLogs();
 
 var stateEndpoint = config["Mcp:StateEndpoint"]
     ?? throw new InvalidOperationException("Mcp:StateEndpoint (the silo gRPC endpoint) is required.");
@@ -221,8 +235,78 @@ if (entraEnabled)
         {
             options.Authority = authority;
             options.Audience = audience;
+
+            // Log the identity behind every accepted (and rejected) token so an
+            // operator can wire up a new MCP client without guesswork. The client
+            // id (azp on v2.0 tokens, appid on v1.0) is exactly what goes into the
+            // Bicep preAuthorizedMcpClientIds list to pre-consent a new client
+            // (for example the GitHub Copilot app, whose first-party id is not
+            // otherwise easy to obtain); the subject oid is what an admin grants
+            // MCP access to via the Explorer Access tab.
+            options.Events = new JwtBearerEvents
+            {
+                OnTokenValidated = context =>
+                {
+                    var principal = context.Principal;
+                    var clientId = principal?.FindFirst("azp")?.Value
+                        ?? principal?.FindFirst("appid")?.Value
+                        ?? "(none)";
+                    var appName = principal?.FindFirst("app_displayname")?.Value ?? "(none)";
+                    var subjectOid = principal?.FindFirst("oid")?.Value
+                        ?? principal?.FindFirst("http://schemas.microsoft.com/identity/claims/objectidentifier")?.Value
+                        ?? "(none)";
+                    context.HttpContext.RequestServices
+                        .GetRequiredService<ILoggerFactory>()
+                        .CreateLogger("Mcp.Auth")
+                        .LogInformation(
+                            "MCP token accepted: clientId={ClientId} appName={AppName} subjectOid={SubjectOid}",
+                            clientId, appName, subjectOid);
+                    return Task.CompletedTask;
+                },
+                OnAuthenticationFailed = context =>
+                {
+                    context.HttpContext.RequestServices
+                        .GetRequiredService<ILoggerFactory>()
+                        .CreateLogger("Mcp.Auth")
+                        .LogWarning(context.Exception, "MCP token rejected: {Reason}", context.Exception.Message);
+                    return Task.CompletedTask;
+                },
+            };
         });
     builder.Services.AddAuthorization();
+
+    // OAuth 2.0 Protected Resource Metadata (RFC 9728) discovery. When this head's
+    // own public URL is configured, advertise an anonymous metadata document at
+    // /.well-known/oauth-protected-resource and append a resource_metadata hint to
+    // the endpoint's 401 bearer challenge, so a spec-compliant MCP client can
+    // discover the Entra authorization server and run the sign-in flow itself
+    // instead of needing a pre-acquired token pasted into the client. This is only
+    // meaningful when Entra is on (there is an authorization server to point at);
+    // the open local compose harness advertises nothing. Layered as a follow-up
+    // AddLatticeMcp so it composes with the base registration above; MapLatticeMcp
+    // reads the options at map time and serves the well-known document.
+    var mcpPublicUrl = config["Mcp:PublicUrl"];
+    if (!string.IsNullOrWhiteSpace(mcpPublicUrl))
+    {
+        var metadata = new LatticeApiMcpProtectedResourceMetadata
+        {
+            Resource = new Uri(mcpPublicUrl, UriKind.Absolute),
+        };
+        metadata.AuthorizationServers.Add(new Uri(authority, UriKind.Absolute));
+
+        // The scopes a client should request so the resulting access token's
+        // audience matches what this head validates and forwards to the silo. In
+        // the reference architecture this is the silo facade's delegated scope
+        // (api://{tenant}/{base}-silo/user_impersonation). Space- or
+        // comma-separated; omitted from the document when empty.
+        foreach (var scope in (config["Mcp:Oauth:Scopes"] ?? string.Empty)
+                     .Split(new[] { ' ', ',' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            metadata.ScopesSupported.Add(scope);
+        }
+
+        builder.Services.AddLatticeMcp(mcp => mcp.ProtectedResourceMetadata = metadata);
+    }
 }
 
 var app = builder.Build();
@@ -238,6 +322,11 @@ if (entraEnabled)
 }
 
 app.MapLatticeMcp();
-app.MapGet("/health", () => Results.Ok("healthy"));
+
+// Front Door health-probes this path with HEAD (see frontdoor.bicep mcpProbePath);
+// map both verbs so the probe gets 200 rather than falling through to the MCP
+// transport at `/` and being answered 405. Anonymous: the MCP host installs no
+// fallback authorization policy, and the origin lock exempts /health.
+app.MapMethods("/health", ["GET", "HEAD"], () => Results.Ok("healthy"));
 
 app.Run();

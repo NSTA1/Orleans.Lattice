@@ -133,6 +133,12 @@ param explorerAuthScope string = ''
 @description('Externally visible public origin (scheme + host) operators reach the Explorer console at - the global Front Door endpoint (frontDoorEndpoints.explorer). Fed to the Explorer head Explorer:PublicOrigin so OpenID Connect builds sign-in redirect URIs against the public host, not the Front-Door-locked Container Apps origin. Azure-assigned, so the deployer threads it on a later pass. Empty leaves request scheme/host untouched.')
 param explorerPublicOrigin string = ''
 
+@description('Externally visible public URL (the resource identifier) MCP clients reach the MCP endpoint at - the global Front Door endpoint (frontDoorEndpoints.mcp). Fed to the MCP head Mcp:PublicUrl so it serves OAuth 2.0 Protected Resource Metadata (RFC 9728) discovery pointing at the Entra authorization server. Azure-assigned, so the deployer threads it on a later pass. Empty advertises no discovery document.')
+param mcpPublicUrl string = ''
+
+@description('The delegated silo scope an MCP client should request (api://{tenantId}/{baseName}-silo/user_impersonation - the same scope the Explorer console requests). Fed to the MCP head Mcp:Oauth:Scopes and emitted as the discovery document scopes_supported. Empty omits scopes_supported.')
+param mcpAuthScope string = ''
+
 // ACR names are globally unique DNS labels, so a uniqueString suffix keeps the
 // registry name collision-free across subscriptions/estates and guarantees the
 // 5-50 char length constraint.
@@ -227,6 +233,12 @@ module compute 'modules/compute.bicep' = [for (region, i) in regions: {
     explorerWebClientId: explorerWebClientId
     explorerAuthScope: explorerAuthScope
     explorerPublicOrigin: explorerPublicOrigin
+    // MCP OAuth 2.0 Protected Resource Metadata (RFC 9728) discovery: the head's
+    // public resource URL (the Front Door MCP endpoint) and the silo scope a
+    // client should request. Both empty until the Front Door hostname is known
+    // (the deployer threads them on a later pass, like explorerPublicOrigin).
+    mcpPublicUrl: mcpPublicUrl
+    mcpAuthScope: mcpAuthScope
     // Every option is VNet-injected (the subnet exists for both) so the
     // environment can be zone-redundant. Public keeps external ingress; private
     // is internal-only.

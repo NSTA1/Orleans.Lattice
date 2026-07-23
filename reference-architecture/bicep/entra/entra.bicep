@@ -60,6 +60,13 @@ param regionManagedIdentities array
 @description('Reply (redirect) URIs for the Explorer console web app (the per-region Explorer FQDNs and/or the global Front Door Explorer hostname), each as a full https URL ending in the sign-in callback path. Empty leaves the Explorer app with no web reply URIs (add them on a later pass once the FQDNs are known).')
 param explorerRedirectUris array = []
 
+@description('First-party OAuth client ids pre-authorized (admin pre-consented) for the silo user_impersonation delegated scope. A standard MCP client that brings its OWN Entra registration (Visual Studio Code, Visual Studio, and the GitHub Copilot family, which use the WAM broker) can then complete OAuth 2.0 Protected Resource Metadata (RFC 9728) discovery and obtain a silo-audience token with no per-user consent prompt, no dynamic client registration, and no redirect-URI management on this estate. The Azure CLI is included so operators can mint a facade-audience token for testing without the out-of-band oauth2PermissionGrant workaround. Pre-authorizing a client only removes the consent step for OBTAINING a token; the silo deny-by-default access gate still grants nothing until a subject is explicitly granted. Defaults to the well-known Visual Studio Code, Visual Studio, and Azure CLI public client ids; extend to authorize additional clients (for example a specific GitHub Copilot app id captured from a real sign-in). Empty pre-authorizes none.')
+param preAuthorizedMcpClientIds array = [
+  'aebc6443-996d-45c2-90f0-388ff96faa56' // Visual Studio Code
+  '04f0c124-f2bc-4f59-8241-bf6df9866bbd' // Visual Studio
+  '04b07795-8ddb-461a-bbee-02f9e1bf7b46' // Azure CLI
+]
+
 // Microsoft Graph (the resource whose permissions the silo group resolver needs).
 var graphAppId = '00000003-0000-0000-c000-000000000000'
 // GroupMember.Read.All (application permission) - read group memberships app-only.
@@ -99,8 +106,11 @@ resource siloApp 'Microsoft.Graph/applications@v1.0' = {
   // in against this app and requests this scope); the app-only callers (MCP,
   // Explorer service principals) use the Lattice.Access app role above instead.
   // Authorization is still gated deny-by-default at the silo, so a token by itself
-  // grants nothing. Per-deployment operator clients (an MCP gateway, the Azure CLI)
-  // are consented to this scope out of band; the template pre-authorizes none.
+  // grants nothing. Standard MCP clients that bring their own Entra registration
+  // (Visual Studio Code, Visual Studio, GitHub Copilot) and the Azure CLI are pre-
+  // authorized for the delegated scope below (preAuthorizedApplications), so OAuth
+  // discovery (and CLI token-minting for testing) signs a caller in with no per-
+  // user consent prompt.
   api: {
     requestedAccessTokenVersion: 2
     oauth2PermissionScopes: [
@@ -113,6 +123,17 @@ resource siloApp 'Microsoft.Graph/applications@v1.0' = {
         value: 'user_impersonation'
         type: 'User'
         isEnabled: true
+      }
+    ]
+    // Pre-consent the well-known first-party MCP client registrations for the
+    // delegated scope (the "Authorized client applications" of Expose an API), so
+    // a standard MCP client discovering this resource via RFC 9728 obtains a
+    // silo-audience token without an interactive consent step. Empty list pre-
+    // authorizes none.
+    preAuthorizedApplications: [
+      for clientId in preAuthorizedMcpClientIds: {
+        appId: clientId
+        delegatedPermissionIds: [ userImpersonationScopeId ]
       }
     ]
   }

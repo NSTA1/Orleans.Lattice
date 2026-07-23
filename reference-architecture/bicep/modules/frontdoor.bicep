@@ -174,6 +174,9 @@ param probePath string = '/'
 @description('Health-probe path for the Explorer origin group. The Explorer console protects `/` behind a require-authenticated-user policy (it 302-redirects anonymous probes to sign-in, which AFD scores unhealthy), so it is probed at its dedicated anonymous `/health` endpoint instead of the shared `/`.')
 param explorerProbePath string = '/health'
 
+@description('Health-probe path for the MCP origin group. The MCP head serves its Streamable-HTTP transport at `/` (POST/GET only), so a probe HEAD against the shared `/` is answered 405 and emits a request-log pair on every probe. It is probed at its dedicated anonymous `/health` endpoint instead, which returns 200 and whose probe request logs the host suppresses.')
+param mcpProbePath string = '/health'
+
 // --- WAF seam (DEFAULT OFF - provisions nothing when false) -------------------
 
 @description('DEFAULT-OFF WAF seam. WAF is descoped from the baseline for cost; leaving this false provisions no WAF policy or security policy. See the module header for the exact Premium + managed-WAF enablement path. Surfaced as the `wafEnabled` output so the coordinator can branch on it.')
@@ -204,6 +207,19 @@ var healthProbeSettings = {
 // path used by the stateless MCP/State heads.
 var explorerHealthProbeSettings = {
   probePath: explorerProbePath
+  probeRequestType: 'HEAD'
+  probeProtocol: 'Https'
+  probeIntervalInSeconds: probeIntervalSeconds
+}
+
+// The MCP head serves the Streamable-HTTP transport at `/` (POST/GET only), so a
+// HEAD probe against the shared `/` is answered 405 and logs a request pair on
+// every probe. It is probed at its anonymous `/health` endpoint (see mcpProbePath)
+// instead, which returns 200 and whose request logs the host suppresses. State
+// still uses the shared `/` because og-state fronts the silo's HTTP/2 gRPC port,
+// which has no `/health`.
+var mcpHealthProbeSettings = {
+  probePath: mcpProbePath
   probeRequestType: 'HEAD'
   probeProtocol: 'Https'
   probeIntervalInSeconds: probeIntervalSeconds
@@ -314,7 +330,7 @@ resource originGroupMcp 'Microsoft.Cdn/profiles/originGroups@2024-02-01' = {
   name: 'og-mcp'
   properties: {
     loadBalancingSettings: loadBalancingSettings
-    healthProbeSettings: healthProbeSettings
+    healthProbeSettings: mcpHealthProbeSettings
     sessionAffinityState: 'Disabled'
   }
 }

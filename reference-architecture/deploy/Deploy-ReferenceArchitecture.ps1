@@ -721,6 +721,14 @@ try {
             # endpoint) so OIDC sign-in redirect URIs target the public host, not
             # the Front-Door-locked Container Apps origin.
             explorerPublicOrigin       = if ($frontDoorEndpoints -and $frontDoorEndpoints.explorer) { "https://$($frontDoorEndpoints.explorer)" } else { '' }
+            # MCP OAuth 2.0 Protected Resource Metadata (RFC 9728) discovery: the
+            # head's public resource URL (the global Front Door MCP endpoint) and
+            # the silo delegated scope a client should request. The scope is the
+            # same silo user_impersonation scope the Explorer console requests. Both
+            # empty until the Front Door hostname is known (threaded on pass 2), and
+            # discovery is only served when Entra is on.
+            mcpPublicUrl               = if ($frontDoorEndpoints -and $frontDoorEndpoints.mcp) { "https://$($frontDoorEndpoints.mcp)" } else { '' }
+            mcpAuthScope               = $explorerAuthScopeResolved
             # Sole seeded administrator (root of trust); empty when Entra is off.
             bootstrapAdministrators    = $securityAdminObjectId
         }
@@ -754,6 +762,38 @@ try {
         Write-Host "      silo      https://$($r.siloStateApiFqdn)"
         Write-Host "      mcp       https://$($r.mcpFqdn)"
         Write-Host "      explorer  https://$($r.explorerFqdn)"
+    }
+
+    # -----------------------------------------------------------------------
+    # 7. MCP details - what an operator needs to connect an MCP client and how
+    #    to grant a subject access. Never prints a secret. Only meaningful when
+    #    Entra is on (OAuth discovery has an authorization server to point at).
+    # -----------------------------------------------------------------------
+    if ($EntraEnabled) {
+        $mcpUrl = if ($frontDoorEndpoints -and $frontDoorEndpoints.mcp) { "https://$($frontDoorEndpoints.mcp)" }
+        elseif ($perRegion.Count -gt 0) { "https://$($perRegion[0].mcpFqdn)" }
+        else { '<mcp-endpoint>' }
+        $explorerUrl = if ($frontDoorEndpoints -and $frontDoorEndpoints.explorer) { "https://$($frontDoorEndpoints.explorer)" }
+        elseif ($perRegion.Count -gt 0) { "https://$($perRegion[0].explorerFqdn)" }
+        else { '<explorer-console>' }
+
+        Write-Phase 'MCP details'
+        Write-Host '  Connect an MCP client (OAuth 2.0 Protected Resource Metadata discovery, RFC 9728):'
+        Write-Host "    URL        $mcpUrl"
+        Write-Host '    Auth       Microsoft Entra ID (discovered automatically from the endpoint on first 401)'
+        Write-Host "    Scope      $explorerAuthScopeResolved"
+        Write-Host '    Client id  Not required for Visual Studio Code, Visual Studio, or GitHub Copilot: they'
+        Write-Host '               sign in with their own pre-authorized first-party Entra client. A client that'
+        Write-Host '               prompts for one can use the Visual Studio Code id:'
+        Write-Host '               aebc6443-996d-45c2-90f0-388ff96faa56'
+        Write-Host ''
+        Write-Host '  Grant a subject MCP access (deny-by-default: a signed-in caller sees no tools until granted):'
+        Write-Host "    1. Sign in to the Explorer console at $explorerUrl as the security administrator"
+        Write-Host "       (object id $securityAdminObjectId)."
+        Write-Host '    2. Open the Access tab and grant the subject - identified by their Entra object id (oid) -'
+        Write-Host '       the access they need (State read, plus Data / Backup / Replication as applicable).'
+        Write-Host '    3. The subject connects from their MCP client; discovery advertises only the tool groups'
+        Write-Host '       they hold grants for, and every forwarded call is re-authorized at the silo.'
     }
 
     Write-Phase 'Done. The estate has converged.'
