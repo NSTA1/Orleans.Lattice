@@ -9,7 +9,7 @@ Each stage has its own reference page; this playbook links them rather than repe
 - [Anti-entropy digest probe](anti-entropy-digest-probe.md) - detection.
 - [Anti-entropy Merkle-walk drift localisation](anti-entropy-merkle-walk.md) - localisation.
 - [Anti-entropy targeted leaf re-replay](anti-entropy-leaf-rereplay.md) - repair from the WAL.
-- [Anti-entropy bootstrap-snapshot fallback](anti-entropy-bootstrap-fallback.md) - repair when the WAL has been trimmed.
+- [Anti-entropy bootstrap-snapshot fallback](anti-entropy-bootstrap-fallback.md) - repair when re-replay cannot reach the divergence.
 - [Anti-entropy remediation guards](anti-entropy-remediation-guards.md) - opt-in gate, rate cap, circuit breaker.
 
 ## Default-off posture
@@ -24,14 +24,14 @@ Every stage ships **dark**. With defaults unchanged, a host runs ordinary replic
 | Bootstrap-snapshot fallback (repair) | `BootstrapFallbackEnabled` | `false` |
 | Automatic repair master gate | `AutoRemediateOnDigestMismatch` | `false` |
 
-The flags are layered AND-gates. Localisation only runs on a detected mismatch; repair only runs on a localised leaf; the bootstrap fallback only runs when leaf re-replay reports a trimmed WAL; and `AutoRemediateOnDigestMismatch` is an additional master gate in front of *both* repair stages. Detection and localisation are never gated by the repair controls, so you can observe drift without sending any repair traffic.
+The flags are layered AND-gates. Localisation only runs on a detected mismatch; repair only runs on a localised leaf; the bootstrap fallback only runs when leaf re-replay could not reach the localised divergence (see [the bootstrap-snapshot fallback](anti-entropy-bootstrap-fallback.md) for the exact trigger conditions); and `AutoRemediateOnDigestMismatch` is an additional master gate in front of *both* repair stages. Detection and localisation are never gated by the repair controls, so you can observe drift without sending any repair traffic.
 
 ## The pipeline, stage by stage
 
 1. **Detect.** The digest probe is a low-frequency, read-only background pass that compares each shard's local content digest against every peer's digest. A sustained `Mismatch` for a `(tree, shard, peer)` triple is the signal that those clusters have genuinely diverged. The probe never mutates data and never advances a replication cursor.
 2. **Localise.** On a mismatch, the Merkle walk descends the local B+ tree top-down and narrows the divergence to a single leaf or a small set of leaves, using the clusters' one shared coordinate - separator-key ranges. It is strictly read-only.
 3. **Repair from the WAL.** Targeted leaf re-replay re-ships the retained WAL entries covering the localised ranges to the diverged peer. The repair travels the same TX-aware, causal-stable apply path as ordinary replication and is de-duplicated at the receiver on `(originClusterId, hlc)`, so it is idempotent.
-4. **Repair when the WAL is gone.** If the local WAL has been garbage-collected past the divergence point, re-replay cannot help. The bootstrap-snapshot fallback re-derives the committed projection of only the divergent leaf range from the live tree (which is immune to WAL trimming) and re-ships those committed rows.
+4. **Repair when re-replay cannot reach the divergence.** When re-replay cannot supply the missing writes, the bootstrap-snapshot fallback re-derives the committed projection of only the divergent leaf range from the live tree and re-ships those committed rows. See [the bootstrap-snapshot fallback](anti-entropy-bootstrap-fallback.md) for the conditions that trigger it and the bounds it respects.
 5. **Guard.** The remediation guards wrap the repair stages with an operator opt-in gate, a per-`(tree, peer)` rate cap, and a per-`(tree, peer)` circuit breaker, so automatic repair is opt-in, bounded, and self-fencing.
 
 ## Opting in end to end
@@ -108,7 +108,7 @@ The stack is designed to fail safe and to make *why* it is not repairing legible
 | Failure mode | What you see | What it means | Operator action |
 |---|---|---|---|
 | **Version skew** | `digest_probe.compared{outcome=version_skew}` and `merkle_walk.aborted{reason=version_skew}` | The two clusters carry different contribution-function versions, so their digests are not comparable - typically a rolling upgrade in flight. No divergence is asserted and no repair is attempted. | Expected during an upgrade; it self-clears once both sides run the same version. Investigate only if it persists after the rollout completes. |
-| **WAL-trimmed divergence** | `leaf_rereplay.skipped{reason=wal_trimmed}`, then either `bootstrap_fallback.triggered` (fallback on) or `bootstrap_fallback.skipped{reason=disabled}` (fallback off) | The missing writes have been garbage-collected from the local WAL, so re-replay cannot supply them. | Enable `BootstrapFallbackEnabled` so the snapshot fallback can re-derive the committed projection of the divergent range. While it is off, the divergence is detected and localised but not repaired. |
+| **Re-replay cannot reach the divergence** | `leaf_rereplay.skipped{reason=wal_trimmed}` or `{reason=range_empty}`, then either `bootstrap_fallback.triggered` (fallback on) or `bootstrap_fallback.skipped{reason=disabled}` (fallback off) | Re-replay could not supply the missing writes for the localised range (a trimmed WAL or a below-cursor gap). | Enable `BootstrapFallbackEnabled` so the snapshot fallback can re-derive the committed projection of the divergent range. While it is off, the divergence is detected and localised but not repaired. |
 | **Circuit-breaker tripped** | `digest_remediation.disabled{reason=circuit_open}` for a `(tree, peer)`, with `digest_remediation.skipped{reason=circuit_open}` per skipped pass | Repair failed `RemediationFailureThreshold` times in a row for that pair, so the breaker opened and is fencing further repair for `RemediationCircuitResetInterval`. | Investigate the underlying repair failures (transport, peer health). The breaker half-opens after the cooldown and closes itself on a successful trial pass; no manual reset is required. |
 
 Two further skip reasons are normal background noise rather than failures: `digest_probe.compared{outcome=remote_unavailable}` (the peer has digesting turned off for that tree) and `digest_remediation.skipped{reason=opt_out}` / `digest_remediation.disabled{reason=opt_out}` (you have not set `AutoRemediateOnDigestMismatch`, so detection runs but repair is intentionally off). A spent rate cap surfaces as `digest_remediation.skipped{reason=budget_exhausted}` and clears when the `RemediationTrafficWindow` rolls over.

@@ -32,7 +32,7 @@ namespace Orleans.Lattice.Replication;
 /// </para>
 /// <para>
 /// This policy is the default <see cref="IReceiverFlowControlPolicy"/>
-/// installed by <see cref="LatticeReplicationServiceCollectionExtensions.AddLatticeReplication(Orleans.Hosting.ISiloBuilder, System.Action{LatticeReplicationOptions})"/>;
+/// installed by <see cref="LatticeReplicationServiceCollectionExtensions.AddLatticeReplication(Orleans.Hosting.ISiloBuilder, System.Action{LatticeReplicationOptions}, bool)"/>;
 /// call
 /// <see cref="LatticeReplicationServiceCollectionExtensions.AddWalSaturationReceiverFlowControl(Orleans.Hosting.ISiloBuilder, System.Action{WalSaturationReceiverFlowControlOptions}?)"/>
 /// to tune the mapping. A host that wants the old blind-push behaviour

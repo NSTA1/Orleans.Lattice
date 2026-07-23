@@ -6,7 +6,7 @@ namespace Orleans.Lattice.Replication.Adapters;
 
 /// <summary>
 /// Default <see cref="ILeafSnapshotProvider"/> registered by
-/// <see cref="LatticeReplicationServiceCollectionExtensions.AddLatticeReplication(ISiloBuilder, System.Action{LatticeReplicationOptions})"/>.
+/// <see cref="LatticeReplicationServiceCollectionExtensions.AddLatticeReplication(ISiloBuilder, System.Action{LatticeReplicationOptions}, bool)"/>.
 /// Wraps the replication-package <see cref="ISnapshotProvider"/> with a
 /// leaf-key range filter so a consumer can drain a single leaf's key range
 /// without exporting the whole tree.

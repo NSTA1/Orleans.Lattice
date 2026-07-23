@@ -10,7 +10,7 @@ public static partial class LatticeReplicationServiceCollectionExtensions
     /// Registers <see cref="LatticeReplicationHealthCheck"/> on the supplied
     /// <see cref="IHealthChecksBuilder"/>. The check reads the cluster-wide
     /// singleton <see cref="ReplicationPeerStats"/> registered by
-    /// <see cref="AddLatticeReplication(ISiloBuilder, Action{LatticeReplicationOptions})"/>,
+    /// <see cref="AddLatticeReplication(ISiloBuilder, Action{LatticeReplicationOptions}, bool)"/>,
     /// so this extension must be called <i>after</i> <c>AddLatticeReplication</c>
     /// on the same <see cref="IServiceCollection"/>.
     /// </summary>

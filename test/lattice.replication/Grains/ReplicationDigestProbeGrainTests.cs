@@ -20,7 +20,7 @@ namespace Orleans.Lattice.Replication.Tests.Grains;
 /// captured by a <see cref="MeterCollector{T}"/>.
 /// </summary>
 [TestFixture]
-public class ReplicationDigestProbeGrainTests
+public partial class ReplicationDigestProbeGrainTests
 {
     private const string Tree = "probe-tree";
 

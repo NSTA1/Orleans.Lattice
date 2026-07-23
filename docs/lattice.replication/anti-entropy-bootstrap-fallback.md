@@ -1,6 +1,11 @@
 # Anti-entropy bootstrap-snapshot fallback (GC'd divergence)
 
-[Targeted leaf re-replay](anti-entropy-leaf-rereplay.md) repairs a localised divergence by re-shipping the relevant write-ahead-log entries. But when the local WAL has been garbage-collected past the divergence point, those entries are gone - re-replay emits the operator-only `leaf_rereplay.skipped{reason=wal_trimmed}` signal and stops. The **bootstrap-snapshot fallback** is the next line of defence: a strictly opt-in pass that re-derives the committed projection of *only* the divergent leaf range from the live tree (which is immune to WAL trimming) and re-ships those committed entries to the diverged peer.
+[Targeted leaf re-replay](anti-entropy-leaf-rereplay.md) repairs a localised divergence by re-shipping the relevant write-ahead-log entries. But re-replay cannot always reach the divergence the Merkle walk localised, and two cases defeat it:
+
+- **Trimmed WAL.** The local WAL has been garbage-collected past the divergence point, so those entries are gone from the log - re-replay emits `leaf_rereplay.skipped{reason=wal_trimmed}` and stops.
+- **Below-cursor blind spot.** A later write already advanced the peer's high-water-mark past an older gap of never-shipped entries, so re-replay's `Timestamp > peerCursor` selection filters them all out and selects nothing - re-replay emits `leaf_rereplay.skipped{reason=range_empty}` and stops.
+
+The **bootstrap-snapshot fallback** is the next line of defence for **both** cases: a strictly opt-in pass that re-derives the committed projection of *only* the divergent leaf range from the live tree (which is immune to both WAL trimming and the cursor filter) and re-ships those committed entries to the diverged peer.
 
 The repair travels the **same** replication transport and causal-stable apply path as ordinary replication. Re-shipped entries carry their committed-projection clock verbatim and are de-duplicated at the receiver on `(originClusterId, hlc)`, so re-sending is idempotent.
 
@@ -21,7 +26,7 @@ The fallback ships **committed projection rows only**: prepared (not-yet-decided
 
 ## Enabling it
 
-The fallback ships **dark** and is gated: targeted leaf re-replay must be enabled and must report a trimmed WAL, the walk must have localised at least one leaf, and `BootstrapFallbackEnabled` must be `true`. An un-opted host sees no new behaviour; when the WAL-trimmed signal fires while the flag is off, a single `bootstrap_fallback.skipped{reason=disabled}` is emitted so operators can see the fallback was available but not taken.
+The fallback ships **dark** and is gated: targeted leaf re-replay must be enabled and must report either a trimmed WAL (`reason=wal_trimmed`) or an empty selection over a genuinely divergent range (`reason=range_empty`, the below-cursor blind spot), the walk must have localised at least one leaf, and `BootstrapFallbackEnabled` must be `true`. An un-opted host sees no new behaviour; when either signal fires while the flag is off, a single `bootstrap_fallback.skipped{reason=disabled}` is emitted so operators can see the fallback was available but not taken.
 
 ```csharp verify
 siloBuilder.AddLatticeReplication(o =>
@@ -37,7 +42,8 @@ siloBuilder.AddLatticeReplication(o =>
     o.MerkleWalkEnabled = true;
     o.LeafReReplayEnabled = true;
 
-    // GC'd-divergence fallback (off by default). Runs only after a trimmed WAL.
+    // GC'd- or below-cursor-divergence fallback (off by default). Runs after a
+    // trimmed WAL or an empty below-cursor re-replay selection.
     o.BootstrapFallbackEnabled = true;
     o.BootstrapFallbackMaxEntries = 4096;
     o.BootstrapFallbackMaxBytes = 1024 * 1024;
@@ -46,7 +52,7 @@ siloBuilder.AddLatticeReplication(o =>
 
 | Option | Default | Notes |
 |---|---|---|
-| `BootstrapFallbackEnabled` | `false` | Master switch. When `false`, a WAL-trimmed divergence is counted (`bootstrap_fallback.skipped{reason=disabled}`) but never repaired. |
+| `BootstrapFallbackEnabled` | `false` | Master switch. When `false`, a trimmed-WAL or below-cursor divergence is counted (`bootstrap_fallback.skipped{reason=disabled}`) but never repaired. |
 | `BootstrapFallbackMaxEntries` | `4096` | Soft cap on committed entries re-shipped per pass; always ships at least one. Validated `>= 1`. |
 | `BootstrapFallbackMaxBytes` | `1048576` | Soft cap on the estimated re-shipped payload bytes per pass; always ships at least one. Validated `>= 1`. |
 

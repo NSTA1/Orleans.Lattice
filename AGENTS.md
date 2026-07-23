@@ -42,16 +42,18 @@ Convention: package `foo` has code at `src/foo/`, tests at `test/foo/`, docs at
 - Target framework is `net10.0`. The solution is `Orleans.Lattice.slnx`.
 - Build: `dotnet build -c Release`.
 - While iterating, run the smallest scope that validates the change - a single
-  method or fixture, never the whole suite. Exactly once, immediately before
-  raising a PR, run the full non-chaos suite with blame-hang enabled and no
-  output filtering.
-- The tiered run strategy, the exact per-tier filters, and the canonical pre-PR
-  command all live in the **testing** skill (`.github/skills/testing/SKILL.md`)
-  and `.github/instructions/testing.instructions.md` (auto-applied under
-  `test/lattice/**`). Follow the command there rather than one pasted here, so
-  this file cannot drift from it. Chaos tests (`[Category("Chaos")]`) are
-  CI-only; the Azure Table emulator suite (`[Category("AzureTableEmulator")]`)
-  only runs when Azurite is started locally.
+  method or fixture, never the whole suite. Before raising a PR, run the
+  non-chaos suite scoped to the test project(s) covering the packages you
+  changed - not the whole solution; the full cross-solution sweep is CI's job.
+- **The single master for all testing rules** - the tiered run strategy, the
+  exact per-tier filters, the pre-PR run scope, the categorization conventions,
+  and the repository hygiene gates - is
+  `.github/instructions/testing.instructions.md` (auto-applied under `test/**`
+  and `docs/**`);
+  the **testing** skill (`.github/skills/testing/SKILL.md`) points there too.
+  Follow that file rather than any command pasted elsewhere, so nothing drifts.
+  Chaos tests (`[Category("Chaos")]`) are CI-only; the Azure Table emulator suite
+  (`[Category("AzureTableEmulator")]`) only runs when Azurite is started locally.
 
 ## Conventions that matter
 
