@@ -183,6 +183,37 @@ public class ReplicationDigestProbeGrainTests
     }
 
     [Test]
+    public async Task ProcessNextPhaseAsync_reads_local_digest_under_a_system_origin_scope()
+    {
+        // Regression for the anti-entropy self-block on deny-by-default trees:
+        // the probe's own local projection-digest read funnels through the
+        // fail-closed data-plane access gate, so without a system-origin scope it
+        // resolves to the anonymous subject and a secured tree refuses it - which
+        // silently disabled detection and remediation on exactly the estates that
+        // need them. The read must run under a system-origin scope, and the scope
+        // must be restored afterwards.
+        var (grain, _, lattice, transport, _) = CreateProbeGrain();
+        var hash = new byte[] { 1, 2, 3 };
+        bool? systemOriginDuringRead = null;
+        lattice.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                systemOriginDuringRead = LatticeAccessGateContext.IsSystemOrigin;
+                return Task.FromResult(Digest(hash));
+            });
+        transport.ProbeDigestAsync("site-b", Arg.Any<DigestProbeRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new DigestProbeResponse { DigestAvailable = true, Digest = Digest(hash) }));
+
+        await grain.ProcessNextPhaseAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(systemOriginDuringRead, Is.True, "the local digest read must run under a system-origin scope");
+            Assert.That(LatticeAccessGateContext.IsSystemOrigin, Is.False, "the scope must be restored after the pass");
+        });
+    }
+
+    [Test]
     public async Task ProcessNextPhaseAsync_records_mismatch_when_digests_differ_same_version()
     {
         var (grain, _, lattice, transport, _) = CreateProbeGrain();

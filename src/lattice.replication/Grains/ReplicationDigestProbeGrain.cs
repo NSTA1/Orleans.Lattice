@@ -201,6 +201,18 @@ internal sealed class ReplicationDigestProbeGrain(
         var lattice = _grainFactory.GetGrain<ILattice>(TreeName);
         var latched = false;
 
+        // The anti-entropy probe is trusted in-silo infrastructure, not a user
+        // operation, yet its local reads (the per-shard projection digest and the
+        // read-only Merkle-walk descent) funnel through the same fail-closed
+        // data-plane access gate as user reads. Absent an ambient identity they
+        // resolve to the anonymous subject and a deny-by-default tree refuses
+        // them - which would silently disable remediation on exactly the secured
+        // estates that need it. Mark the pass system-origin so the gate's
+        // documented infrastructure bypass applies; the flag flows on outgoing
+        // in-silo grain calls (it deliberately does not cross the replication
+        // transport, so each peer re-establishes its own scope server-side).
+        using var systemOrigin = LatticeAccessGateContext.EnterSystemOrigin();
+
         for (var shard = 0; shard < shardCount && !latched; shard++)
         {
             LeafProjectionDigest local;
