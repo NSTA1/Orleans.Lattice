@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -73,6 +74,10 @@ public static partial class LatticeMcpServiceCollectionExtensions
         // The credential bridge and tool modules read the ambient HTTP context.
         services.AddHttpContextAccessor();
 
+        // OAuth 2.0 Protected Resource Metadata (RFC 9728) challenge hint. Inert
+        // unless the host sets LatticeApiMcpOptions.ProtectedResourceMetadata.
+        AddProtectedResourceMetadataChallenge(services);
+
         // Permission-aware discovery core: resolves each caller's usable facade
         // groups (default: via the Api.Auth effective-permissions surface) and
         // the per-session configurator that scopes the advertised tool set and
@@ -124,6 +129,10 @@ public static partial class LatticeMcpServiceCollectionExtensions
         {
             builder.RequireAuthorization();
         }
+
+        // Serve the anonymous OAuth protected-resource metadata document when the
+        // host opts in (no-op otherwise).
+        endpoints.MapProtectedResourceMetadata(options);
 
         return builder;
     }

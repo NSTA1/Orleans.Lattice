@@ -138,4 +138,16 @@ public sealed class LatticeApiMcpOptions
     /// same fail-closed replication access gate the facade enforces.
     /// </summary>
     public bool EnableReplicationControlTools { get; set; }
+
+    /// <summary>
+    /// Opt-in OAuth 2.0 Protected Resource Metadata (RFC 9728) for the MCP
+    /// endpoint. Defaults to <see langword="null"/>, which serves no metadata
+    /// document and leaves the <c>WWW-Authenticate</c> challenge untouched. When
+    /// set, <c>MapLatticeMcp</c> maps an anonymous metadata document at
+    /// <see cref="LatticeApiMcpProtectedResourceMetadata.WellKnownPath"/> and the
+    /// binding augments the endpoint's <c>401</c> bearer challenge with a
+    /// <c>resource_metadata</c> hint, so a spec-compliant MCP client can discover
+    /// the authorization server and run the OAuth flow itself.
+    /// </summary>
+    public LatticeApiMcpProtectedResourceMetadata? ProtectedResourceMetadata { get; set; }
 }

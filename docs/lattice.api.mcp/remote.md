@@ -74,6 +74,34 @@ services.AddLatticeMcpManagedIdentityAdministrator(o =>
 
 The managed-identity source takes precedence over `AdministratorCredential` regardless of registration order. It is **fail-closed**: if token acquisition fails it forwards no administrator credential (the introspection call is anonymous and the remote cluster denies it), self-healing on the next successful acquisition rather than forwarding a stale token.
 
+## OAuth discovery (RFC 9728)
+
+A remote head is the common place to advertise OAuth discovery, because a client that connects to it over the internet has no pre-shared token. `AddLatticeMcpRemote` wires the base MCP binding (including the discovery endpoint and challenge hint), so opt in by layering the `ProtectedResourceMetadata` option onto the shared `LatticeApiMcpOptions` with an additive `AddLatticeMcp` call. See [Setup](setup.md#oauth-discovery-rfc-9728) for what each field means and [Security](security.md#oauth-discovery-is-anonymous-by-design) for why the metadata endpoint is anonymous.
+
+```csharp verify
+var builder = WebApplication.CreateBuilder();
+
+builder.Services.AddLatticeMcpRemote(o =>
+{
+    o.State = new LatticeApiMcpRemoteEndpoint { Endpoint = "https://cluster.internal:5001" };
+    o.Auth = new LatticeApiMcpRemoteEndpoint { Endpoint = "https://cluster.internal:5001" };
+});
+
+// Additive: layer discovery onto the same options the remote binding registered.
+builder.Services.AddLatticeMcp(o =>
+{
+    o.ProtectedResourceMetadata = new LatticeApiMcpProtectedResourceMetadata
+    {
+        Resource = new Uri("https://mcp.example.com"),
+        AuthorizationServers = { new Uri("https://login.microsoftonline.com/<tenant>/v2.0") },
+        ScopesSupported = { "api://<server-app-id>/.default" },
+    };
+});
+
+var app = builder.Build();
+app.MapLatticeMcp();
+```
+
 ## Deferred tools
 
 A few tools back facade operations that have no gRPC method yet, so they cannot be served remotely. The remote host defers them - they are simply omitted from the remote tool list rather than advertised and then failing. Currently deferred: `lattice_state_get_tree_summary`, `lattice_state_get_shard_summaries`, `lattice_state_get_physical_shard_count`, and `lattice_backup_inventory`. They remain fully available in the in-silo topology; each becomes discoverable remotely with no other change once its gRPC method is bound.
