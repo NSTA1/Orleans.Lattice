@@ -276,6 +276,7 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
                 LatticeApiMcpGroup.Backup,
                 LatticeApiMcpGroup.Auth,
                 LatticeApiMcpGroup.Telemetry,
+                LatticeApiMcpGroup.Replication,
             }));
     }
 
