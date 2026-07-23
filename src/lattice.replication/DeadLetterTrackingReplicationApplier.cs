@@ -1,5 +1,6 @@
 using Orleans.Lattice.BPlusTree.Grains;
 using System.Collections.Concurrent;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication.Grains;
@@ -31,7 +32,8 @@ namespace Orleans.Lattice.Replication;
 internal sealed class DeadLetterTrackingReplicationApplier(
     IReplicationApplier inner,
     IGrainFactory grainFactory,
-    IOptionsMonitor<LatticeReplicationOptions> options) : IReplicationApplier
+    IOptionsMonitor<LatticeReplicationOptions> options,
+    ILogger<DeadLetterTrackingReplicationApplier> logger) : IReplicationApplier
 {
     private readonly ConcurrentDictionary<RetryKey, int> _failures = new();
 
@@ -173,6 +175,43 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         CancellationToken cancellationToken)
     {
         var key = KeyFor(entry);
+
+        // Fail-safe backstop: a structurally-invalid entry with an empty or
+        // whitespace TreeId cannot be applied to any tree (the canonical
+        // applier rejects it up front) and cannot be quarantined either -
+        // both the per-tree dead-letter grain and the per-origin
+        // high-water-mark grain are keyed on the tree id, so GetGrain would
+        // throw ArgumentException on the empty key before the entry is
+        // parked or the cursor advanced. Left unguarded, that turns a single
+        // malformed entry into a permanent convergence wedge and an
+        // unbounded re-ship/error-log loop (the retry counter never clears
+        // and the HWM never advances). Well-formed producers never emit an
+        // empty TreeId - the leaf/bootstrap re-replay sink re-stamps it from
+        // the batch tree name, and the framing wire path re-stamps it on
+        // decode - so this contains a malformed inbound entry rather than
+        // masking a routine one. Contain it: record the dead-letter metric,
+        // clear the counter, and return a non-applied result so the batch is
+        // not wedged and the quarantine path never crashes.
+        if (string.IsNullOrWhiteSpace(entry.TreeId))
+        {
+            logger.LogError(
+                failure,
+                "Replication received a structurally-invalid entry with an empty TreeId (origin {Origin}, key '{Key}', op {Op}); "
+                + "it cannot be applied or quarantined per-tree and has been dropped. This indicates a producer that shipped an "
+                + "entry without re-stamping its tree id.",
+                entry.OriginClusterId ?? "<none>",
+                entry.Key ?? string.Empty,
+                entry.Op);
+
+            LatticeReplicationMetrics.DeadLetterEnqueued.Add(
+                1,
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, string.Empty),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, LatticeReplicationMetrics.ReasonSchema));
+
+            _failures.TryRemove(key, out _);
+            return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
+        }
+
         var attempts = _failures.AddOrUpdate(key, 1, static (_, current) => current + 1);
 
         var max = options.Get(entry.TreeId).MaxApplyRetries;

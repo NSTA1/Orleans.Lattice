@@ -1,4 +1,5 @@
 using Orleans.Lattice.BPlusTree.Grains;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.Primitives;
@@ -27,6 +28,17 @@ public partial class DeadLetterTrackingReplicationApplierTests
                     IReplicationHighWaterMarkGrain hwm,
                     LatticeReplicationOptions options) Build(int maxRetries)
     {
+        var (decorator, inner, dlq, hwm, options, _) = BuildWithFactory(maxRetries);
+        return (decorator, inner, dlq, hwm, options);
+    }
+
+    private static (DeadLetterTrackingReplicationApplier decorator,
+                    IReplicationApplier inner,
+                    IReplicationDeadLetterGrain dlq,
+                    IReplicationHighWaterMarkGrain hwm,
+                    LatticeReplicationOptions options,
+                    IGrainFactory grainFactory) BuildWithFactory(int maxRetries)
+    {
         var inner = Substitute.For<IReplicationApplier>();
         var dlq = Substitute.For<IReplicationDeadLetterGrain>();
         var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
@@ -42,8 +54,9 @@ public partial class DeadLetterTrackingReplicationApplierTests
         var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
         monitor.Get(Arg.Any<string>()).Returns(options);
 
-        var decorator = new DeadLetterTrackingReplicationApplier(inner, grainFactory, monitor);
-        return (decorator, inner, dlq, hwm, options);
+        var decorator = new DeadLetterTrackingReplicationApplier(
+            inner, grainFactory, monitor, NullLogger<DeadLetterTrackingReplicationApplier>.Instance);
+        return (decorator, inner, dlq, hwm, options, grainFactory);
     }
 
     [Test]
@@ -255,5 +268,76 @@ public partial class DeadLetterTrackingReplicationApplierTests
             1,
             LatticeReplicationMetrics.ReasonUnknown,
             Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ApplyAsync_contains_empty_TreeId_entry_without_wedging()
+    {
+        // Fail-safe backstop for the #1331 convergence wedge. A
+        // structurally-invalid entry with an empty TreeId cannot be applied
+        // to any tree (the canonical applier rejects it up front) and cannot
+        // be quarantined either - the per-tree dead-letter grain and the
+        // per-origin high-water-mark grain are both keyed on the tree id, so
+        // GetGrain throws ArgumentException on the empty key before the entry
+        // is parked or the cursor advanced. Left unguarded, a single such
+        // entry becomes a permanent convergence wedge. The decorator must
+        // contain it: return a non-applied result without throwing and
+        // without keying any grain on the empty id.
+        var (decorator, inner, _, _, _, grainFactory) = BuildWithFactory(maxRetries: 1);
+        inner.ApplyAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
+            .Returns<Task<ApplyResult>>(_ => throw new ArgumentException("WalRecord.TreeId must be non-empty."));
+
+        // Match production: Orleans rejects an empty grain primary key.
+        grainFactory.GetGrain<IReplicationDeadLetterGrain>(string.Empty)
+            .Returns(_ => throw new ArgumentException("primaryKey"));
+        grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(string.Empty)
+            .Returns(_ => throw new ArgumentException("primaryKey"));
+
+        using var enqueued = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName, "orleans.lattice.replication.dead_letter.enqueued");
+
+        var entry = MakeEntry() with { TreeId = string.Empty };
+
+        ApplyResult result = default!;
+        Assert.That(
+            async () => result = await decorator.ApplyAsync(entry, CancellationToken.None),
+            Throws.Nothing);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Applied, Is.False);
+            Assert.That(result.HighWaterMark, Is.EqualTo(HybridLogicalClock.Zero));
+        });
+
+        // The empty-key quarantine grains were never touched.
+        grainFactory.DidNotReceive().GetGrain<IReplicationDeadLetterGrain>(string.Empty);
+        grainFactory.DidNotReceive().GetGrain<IReplicationHighWaterMarkGrain>(string.Empty);
+
+        // The drop is still surfaced on the dead-letter metric, tagged schema.
+        var measurement = enqueued.Measurements.Single();
+        Assert.That(measurement.Value, Is.EqualTo(1));
+        Assert.That(
+            measurement.Tags,
+            Has.Some.Matches<KeyValuePair<string, object?>>(
+                t => t.Key == LatticeReplicationMetrics.TagReason
+                    && (string?)t.Value == LatticeReplicationMetrics.ReasonSchema));
+    }
+
+    [Test]
+    public async Task ApplyAsync_contains_whitespace_TreeId_entry_without_wedging()
+    {
+        var (decorator, inner, _, _, _, grainFactory) = BuildWithFactory(maxRetries: 1);
+        inner.ApplyAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
+            .Returns<Task<ApplyResult>>(_ => throw new ArgumentException("bad tree"));
+
+        var entry = MakeEntry() with { TreeId = "   " };
+
+        ApplyResult result = default!;
+        Assert.That(
+            async () => result = await decorator.ApplyAsync(entry, CancellationToken.None),
+            Throws.Nothing);
+
+        Assert.That(result.Applied, Is.False);
+        grainFactory.DidNotReceive().GetGrain<IReplicationDeadLetterGrain>("   ");
     }
 }
