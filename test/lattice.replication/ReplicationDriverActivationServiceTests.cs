@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
+using Orleans.Lattice.Backup;
 using Orleans.Lattice.Replication;
 using Orleans.Lattice.Replication.Grains;
 
@@ -39,15 +40,23 @@ public class ReplicationDriverActivationServiceTests
             IReadOnlyDictionary<string, LatticeMergeMode>? trees,
             IReadOnlyCollection<string>? peers = null,
             IGrainFactory? customFactory = null,
-            IReplicationTopology? topology = null)
+            IReplicationTopology? topology = null,
+            IReplicatedTreeMembership? membership = null,
+            CompiledReplicationConfigSnapshotMaintainer? configMaintainer = null,
+            TimeSpan? runtimeConfigPollInterval = null)
     {
         var factory = customFactory ?? Substitute.For<IGrainFactory>();
         var resolvedTopology = topology ?? new FakeReplicationTopology(peers);
+        var monitor = Monitor(trees, peers);
+        var resolvedMembership = membership ?? new OptionsReplicatedTreeMembership(monitor);
         var service = new ReplicationDriverActivationService(
-            factory, Monitor(trees, peers),
+            factory, monitor,
             resolvedTopology,
             NullLogger<ReplicationDriverActivationService>.Instance,
-            new ReplicationPeerStats());
+            new ReplicationPeerStats(),
+            resolvedMembership,
+            configMaintainer,
+            runtimeConfigPollInterval);
         return (service, factory);
     }
 
@@ -393,6 +402,112 @@ public class ReplicationDriverActivationServiceTests
         Assert.That(topology.SubscriberCount, Is.EqualTo(0));
     }
 
+    // --- Runtime replication-config live enrolment ---
+
+    [Test]
+    public async Task ExecuteAsync_enrols_runtime_enabled_tree_after_config_epoch_advances()
+    {
+        // Regression for #1325: a host with an EMPTY static
+        // ReplicatedTrees map that opts into runtime replication
+        // config must still enrol shipper/maintenance grains for a
+        // tree that is enabled purely at runtime. Before the fix the
+        // driver read only the static options map and short-circuited,
+        // so a runtime-enabled tree never converged.
+        var store = new MutableConfigStore();
+        var maintainer = new CompiledReplicationConfigSnapshotMaintainer(
+            store, NullLogger<CompiledReplicationConfigSnapshotMaintainer>.Instance);
+        await maintainer.EnsureWarmAsync();
+
+        var monitor = Monitor(trees: null, peers: new[] { "site-b" });
+        var membership = new SnapshotReplicatedTreeMembership(maintainer, monitor);
+
+        var factory = Substitute.For<IGrainFactory>();
+        var maint = Substitute.For<IReplicationMaintenanceGrain>();
+        maint.EnsureActiveAsync(Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        var shipper = Substitute.For<IReplicationShipperGrain>();
+        shipper.EnsureActiveAsync(Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        factory.GetGrain<IReplicationMaintenanceGrain>("test").Returns(maint);
+        factory.GetGrain<IReplicationShipperGrain>("test/site-b").Returns(shipper);
+
+        var topology = new FakeReplicationTopology(new[] { "site-b" });
+        var (service, _) = Create(
+            trees: null,
+            peers: new[] { "site-b" },
+            customFactory: factory,
+            topology: topology,
+            membership: membership,
+            configMaintainer: maintainer,
+            runtimeConfigPollInterval: TimeSpan.FromMilliseconds(20));
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var run = RunExecuteAsync(service, cts.Token);
+
+        // Initial pass: static map empty, nothing enabled yet.
+        factory.DidNotReceive().GetGrain<IReplicationMaintenanceGrain>(Arg.Any<string>());
+
+        // Admin enables 'test' at runtime; the config-tree observer
+        // rebuilds the snapshot, advancing the epoch. The driver's
+        // poll loop must pick this up and enrol the tree live.
+        store.SetEntries(new Dictionary<string, LatticeReplicationConfigEntry>
+        {
+            ["test"] = ReplicationConfigSnapshotTestHelpers.Enabled(LatticeMergeMode.LwwRegister),
+        });
+        await maintainer.RebuildNowAsync();
+
+        for (var i = 0; i < 250; i++)
+        {
+            if (maint.ReceivedCalls().Any() && shipper.ReceivedCalls().Any())
+            {
+                break;
+            }
+            await Task.Delay(20);
+        }
+
+        await maint.Received(1).EnsureActiveAsync(Arg.Any<CancellationToken>());
+        await shipper.Received(1).EnsureActiveAsync(Arg.Any<CancellationToken>());
+
+        cts.Cancel();
+        try
+        {
+            await run;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+
+        service.Dispose();
+    }
+
+    /// <summary>
+    /// A runtime-mutable in-memory config store: the entry set can be
+    /// swapped after warm-start so a test can simulate an admin
+    /// enabling replication on a tree and then force a snapshot
+    /// rebuild via <c>RebuildNowAsync</c>.
+    /// </summary>
+    private sealed class MutableConfigStore : ILatticeReplicationConfigStore
+    {
+        private volatile IReadOnlyDictionary<string, LatticeReplicationConfigEntry> _entries =
+            new Dictionary<string, LatticeReplicationConfigEntry>();
+
+        public void SetEntries(IReadOnlyDictionary<string, LatticeReplicationConfigEntry> entries) =>
+            _entries = entries;
+
+        public Task<IReadOnlyDictionary<string, LatticeReplicationConfigEntry>> ReadEntriesAsync(
+            CancellationToken cancellationToken = default) => Task.FromResult(_entries);
+
+        public Task<LatticeReplicationConfigEntry?> ReadEntryAsync(
+            string treeId,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(_entries.TryGetValue(treeId, out var entry) ? entry : null);
+
+        public Task WriteEntryAsync(
+            string treeId,
+            string replicaId,
+            LatticeReplicationConfigEntry entry,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException("The mutable config store is written via SetEntries.");
+    }
+
     // --- Constructor null guards ---
 
     [Test]
@@ -404,7 +519,8 @@ public class ReplicationDriverActivationServiceTests
                 Monitor(trees: null),
                 new FakeReplicationTopology(),
                 NullLogger<ReplicationDriverActivationService>.Instance,
-                new ReplicationPeerStats()),
+                new ReplicationPeerStats(),
+                Substitute.For<IReplicatedTreeMembership>()),
             Throws.InstanceOf<ArgumentNullException>());
     }
 
@@ -417,7 +533,8 @@ public class ReplicationDriverActivationServiceTests
                 null!,
                 new FakeReplicationTopology(),
                 NullLogger<ReplicationDriverActivationService>.Instance,
-                new ReplicationPeerStats()),
+                new ReplicationPeerStats(),
+                Substitute.For<IReplicatedTreeMembership>()),
             Throws.InstanceOf<ArgumentNullException>());
     }
 
@@ -430,7 +547,8 @@ public class ReplicationDriverActivationServiceTests
                 Monitor(trees: null),
                 null!,
                 NullLogger<ReplicationDriverActivationService>.Instance,
-                new ReplicationPeerStats()),
+                new ReplicationPeerStats(),
+                Substitute.For<IReplicatedTreeMembership>()),
             Throws.InstanceOf<ArgumentNullException>());
     }
 
@@ -443,7 +561,8 @@ public class ReplicationDriverActivationServiceTests
                 Monitor(trees: null),
                 new FakeReplicationTopology(),
                 null!,
-                new ReplicationPeerStats()),
+                new ReplicationPeerStats(),
+                Substitute.For<IReplicatedTreeMembership>()),
             Throws.InstanceOf<ArgumentNullException>());
     }
 
@@ -463,6 +582,21 @@ public class ReplicationDriverActivationServiceTests
                 Monitor(trees: null),
                 new FakeReplicationTopology(),
                 NullLogger<ReplicationDriverActivationService>.Instance,
+                null!,
+                Substitute.For<IReplicatedTreeMembership>()),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public void Constructor_throws_when_membership_is_null()
+    {
+        Assert.That(
+            () => new ReplicationDriverActivationService(
+                Substitute.For<IGrainFactory>(),
+                Monitor(trees: null),
+                new FakeReplicationTopology(),
+                NullLogger<ReplicationDriverActivationService>.Instance,
+                new ReplicationPeerStats(),
                 null!),
             Throws.InstanceOf<ArgumentNullException>());
     }

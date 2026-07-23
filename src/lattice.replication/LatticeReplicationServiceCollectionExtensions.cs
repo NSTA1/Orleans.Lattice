@@ -2,6 +2,7 @@ using System.Linq;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Replication.Adapters;
@@ -366,9 +367,21 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         // activation of one shipper per (tree, peer) and one
         // maintenance grain per tree. Registered via
         // TryAddEnumerable so a host that pre-registers its own
-        // hosted service doesn't lose this one and vice versa.
+        // hosted service doesn't lose this one and vice versa. The
+        // factory injects the replicated-tree membership union and,
+        // when the host opted into runtime replication config, the
+        // snapshot maintainer so runtime-enabled trees are enrolled
+        // live; GetService keeps the maintainer optional for a
+        // static-only host.
         builder.Services.TryAddEnumerable(
-            ServiceDescriptor.Singleton<IHostedService, ReplicationDriverActivationService>());
+            ServiceDescriptor.Singleton<IHostedService, ReplicationDriverActivationService>(sp => new ReplicationDriverActivationService(
+                sp.GetRequiredService<IGrainFactory>(),
+                sp.GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>(),
+                sp.GetRequiredService<IReplicationTopology>(),
+                sp.GetRequiredService<ILogger<ReplicationDriverActivationService>>(),
+                sp.GetRequiredService<ReplicationPeerStats>(),
+                sp.GetRequiredService<Orleans.Lattice.Backup.IReplicatedTreeMembership>(),
+                sp.GetService<CompiledReplicationConfigSnapshotMaintainer>())));
 
         // Durable cross-cluster saga participant model. Registered here,
         // before the gRPC binding's TryAddSingleton default runs, so this
