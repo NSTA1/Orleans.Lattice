@@ -1,9 +1,11 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Api.Data;
+using Orleans.Lattice.Api.Replication;
 using Orleans.Lattice.Api.State;
 
 namespace Orleans.Lattice.Api.Mcp.Tests;
@@ -35,7 +37,7 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
         => Assert.That(() => new ServiceCollection().AddLatticeMcpRemote(null!), Throws.ArgumentNullException);
 
     [Test]
-    public void All_four_facades_are_registered_when_every_group_is_configured()
+    public void All_facade_groups_are_registered_when_every_group_is_configured()
     {
         using var provider = new ServiceCollection()
             .AddLatticeMcpRemote(o =>
@@ -44,6 +46,7 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
                 o.Data = Endpoint("https://data:5002");
                 o.Auth = Endpoint("https://auth:5003");
                 o.Backup = Endpoint("https://backup:5004");
+                o.Replication = Endpoint("https://replication:5005");
             })
             .BuildServiceProvider();
 
@@ -53,6 +56,7 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
             Assert.That(provider.GetService<ILatticeDataApi>(), Is.TypeOf<GrpcLatticeDataApi>());
             Assert.That(provider.GetService<ILatticeAuthAdmin>(), Is.TypeOf<GrpcLatticeAuthAdmin>());
             Assert.That(provider.GetService<ILatticeBackupControl>(), Is.TypeOf<GrpcLatticeBackupControl>());
+            Assert.That(provider.GetService<ILatticeReplicationControl>(), Is.TypeOf<GrpcLatticeReplicationControl>());
         });
     }
 
@@ -69,6 +73,41 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
             Assert.That(provider.GetService<ILatticeDataApi>(), Is.Null);
             Assert.That(provider.GetService<ILatticeAuthAdmin>(), Is.Null);
             Assert.That(provider.GetService<ILatticeBackupControl>(), Is.Null);
+            Assert.That(provider.GetService<ILatticeReplicationControl>(), Is.Null);
+        });
+    }
+
+    [Test]
+    public void Replication_control_flag_off_advertises_inspect_only()
+    {
+        using var provider = new ServiceCollection()
+            .AddLatticeMcpRemote(o => o.Replication = Endpoint("https://replication:5005"))
+            .BuildServiceProvider();
+
+        var options = provider.GetRequiredService<IOptions<LatticeApiMcpOptions>>().Value;
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.EnableReplicationTools, Is.True);
+            Assert.That(options.EnableReplicationControlTools, Is.False);
+        });
+    }
+
+    [Test]
+    public void Replication_control_flag_on_advertises_mutating_tools()
+    {
+        using var provider = new ServiceCollection()
+            .AddLatticeMcpRemote(o =>
+            {
+                o.Replication = Endpoint("https://replication:5005");
+                o.EnableReplicationControl = true;
+            })
+            .BuildServiceProvider();
+
+        var options = provider.GetRequiredService<IOptions<LatticeApiMcpOptions>>().Value;
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.EnableReplicationTools, Is.True);
+            Assert.That(options.EnableReplicationControlTools, Is.True);
         });
     }
 

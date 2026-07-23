@@ -1,6 +1,6 @@
 # Remote hosting
 
-The MCP server can run **in the silo** (co-hosted with the facades it binds, resolving them in-process) or **out of the silo** as a standalone host that reaches the cluster over the network. `AddLatticeMcpRemote(...)` wires the out-of-silo topology: the same four tool modules, bound over the `Orleans.Lattice.Api.*.Grpc` clients instead of the in-process facades.
+The MCP server can run **in the silo** (co-hosted with the facades it binds, resolving them in-process) or **out of the silo** as a standalone host that reaches the cluster over the network. `AddLatticeMcpRemote(...)` wires the out-of-silo topology: the same five tool modules, bound over the `Orleans.Lattice.Api.*.Grpc` clients instead of the in-process facades.
 
 ## When to use it
 
@@ -21,6 +21,10 @@ builder.Services.AddLatticeMcpRemote(o =>
 
     // Required for non-administrator callers' tools to be discovered remotely.
     o.Auth = new LatticeApiMcpRemoteEndpoint { Endpoint = "https://cluster-a.internal:5001" };
+
+    // Runtime per-tree replication control (inspect always; enable/disable gated).
+    o.Replication = new LatticeApiMcpRemoteEndpoint { Endpoint = "https://cluster-a.internal:5001" };
+    o.EnableReplicationControl = true;
 });
 
 var app = builder.Build();
@@ -33,11 +37,11 @@ Each `LatticeApiMcpRemoteEndpoint` names the served `Endpoint` (surfaced verbati
 
 | Option | Purpose |
 |---|---|
-| `State` / `Data` / `Auth` / `Backup` | The per-group remote endpoint, or `null` to not serve that group. |
+| `State` / `Data` / `Auth` / `Backup` / `Replication` | The per-group remote endpoint, or `null` to not serve that group. |
 | `CredentialHeaderName` | Header the resolved caller credential is stamped onto for the outbound call. Defaults to `authorization`. |
 | `CredentialScheme` | Scheme prefix prepended to the outbound token (`"{scheme} {token}"`). Defaults to `Bearer`; empty sends the bare token. |
 | `AdministratorCredential` | The **static** admin service credential used for trusted, read-only permission introspection of each caller. See [discovery](#discovery-requires-the-auth-endpoint) below. For a long-lived server prefer a self-refreshing managed-identity token (see [Refreshing administrator token](#refreshing-the-administrator-token)). |
-| `EnableDataWrites` / `EnableBackupControl` / `EnableAuthAdministration` | Forward the destructive-verb opt-in to the corresponding tool module. Ignored when that group's endpoint is unset. |
+| `EnableDataWrites` / `EnableBackupControl` / `EnableAuthAdministration` / `EnableReplicationControl` | Forward the destructive-verb opt-in to the corresponding tool module. Ignored when that group's endpoint is unset. |
 
 ## Credential flow over the wire
 

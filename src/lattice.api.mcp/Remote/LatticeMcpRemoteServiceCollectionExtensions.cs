@@ -9,6 +9,8 @@ using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Api.Backup.Grpc;
 using Orleans.Lattice.Api.Data;
 using Orleans.Lattice.Api.Data.Grpc;
+using Orleans.Lattice.Api.Replication;
+using Orleans.Lattice.Api.Replication.Grpc;
 using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Api.State.Grpc;
 using Orleans.Serialization;
@@ -110,6 +112,13 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
             services.TryAddSingleton<ILatticeBackupControl>(sp =>
                 new GrpcLatticeBackupControl(LatticeBackupApiGrpcClient.Create(BuildInvoker(sp, backup), sp)));
             services.AddBackupTools(options.EnableBackupControl);
+        }
+
+        if (options.Replication is { } replication)
+        {
+            services.TryAddSingleton<ILatticeReplicationControl>(sp =>
+                new GrpcLatticeReplicationControl(LatticeReplicationApiGrpcClient.Create(BuildInvoker(sp, replication), sp)));
+            services.AddReplicationTools(options.EnableReplicationControl);
         }
 
         return services;

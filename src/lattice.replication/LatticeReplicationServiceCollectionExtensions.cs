@@ -34,10 +34,33 @@ public static partial class LatticeReplicationServiceCollectionExtensions
     /// <see cref="LatticeOptions"/> so the core WAL grain observes the same
     /// per-tree values when both options instances are configured.
     /// </para>
+    /// <para>
+    /// By default this call configures replication from the static
+    /// <see cref="LatticeReplicationOptions.ReplicatedTrees"/> map only. Set
+    /// <paramref name="enableRuntimeConfig"/> to opt into runtime per-tree
+    /// enable/disable that converges across peers: it enrols the
+    /// <c>sys-replication-config</c> tree and swaps in the dynamic,
+    /// snapshot-backed membership and merge-mode seams. It is off by default so a
+    /// static-only deployment does not pay for, or ship, the runtime control
+    /// plane, mirroring how <see cref="ReplicateLatticeSystemTrees(ISiloBuilder, bool)"/>
+    /// gates the membership and auth system trees.
+    /// </para>
     /// </summary>
+    /// <param name="builder">The silo builder. Must not be <see langword="null"/>.</param>
+    /// <param name="configure">Delegate that populates <see cref="LatticeReplicationOptions"/>. Must not be <see langword="null"/>.</param>
+    /// <param name="enableRuntimeConfig">
+    /// When <see langword="true"/>, enrols the reserved <c>sys-replication-config</c>
+    /// tree and installs the dynamic, snapshot-backed replication-config control
+    /// plane (the <see cref="ILatticeReplicationConfigAuthority"/> the
+    /// <c>Orleans.Lattice.Api.Replication</c> facade drives). Defaults to
+    /// <see langword="false"/>, leaving replication configured purely from the
+    /// static <see cref="LatticeReplicationOptions.ReplicatedTrees"/> map.
+    /// </param>
+    /// <returns>The same <paramref name="builder"/> for chaining.</returns>
     public static ISiloBuilder AddLatticeReplication(
         this ISiloBuilder builder,
-        Action<LatticeReplicationOptions> configure)
+        Action<LatticeReplicationOptions> configure,
+        bool enableRuntimeConfig = false)
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(configure);
@@ -136,6 +159,12 @@ public static partial class LatticeReplicationServiceCollectionExtensions
                 builder.Services.RemoveAt(i);
             }
         }
+        // Register the options-backed resolver both as the concrete type (so the
+        // dynamic snapshot resolver installed when enableRuntimeConfig is set
+        // can inject it as its static seed/fallback) and as the active
+        // ILatticeMergeModeResolver. A user who registered their own resolver
+        // before this call is left untouched (both TryAdds are no-ops).
+        builder.Services.TryAddSingleton<ConfiguredLatticeMergeModeResolver>();
         builder.Services.TryAddSingleton<ILatticeMergeModeResolver, ConfiguredLatticeMergeModeResolver>();
 
         // Same swap protocol for the per-tree origin-cluster-id resolver:
@@ -171,6 +200,13 @@ public static partial class LatticeReplicationServiceCollectionExtensions
             }
         }
         builder.Services.TryAddSingleton<ILatticeReplicationContext, ConfiguredLatticeReplicationContext>();
+
+        // The reusable runtime precondition validator. Shared by the boot-time
+        // startup guard below (over statically declared trees) and the later
+        // runtime enable path, so a flag-mode tree declared or enabled without a
+        // local replica id is rejected cleanly rather than faulting on first
+        // write.
+        builder.Services.TryAddSingleton<ILatticeReplicationPreconditionValidator, LatticeReplicationPreconditionValidator>();
 
         // Fail fast at silo start when a flag-mode tree is declared without a
         // configured replica id, rather than faulting on the first flag-CRDT
@@ -385,6 +421,15 @@ public static partial class LatticeReplicationServiceCollectionExtensions
             sp.GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>(),
             sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<RestoreSagaDispatcher>>(),
             sp.GetServices<Orleans.Lattice.Backup.ILatticeBackupSetResolver>().FirstOrDefault()));
+
+        // Runtime replication-configuration control plane (opt-in). Applied last
+        // so the engine registrations above are the seed/fallback the dynamic,
+        // snapshot-backed seams layer on top. Off by default: a static-only
+        // deployment never enrols or ships the sys-replication-config tree.
+        if (enableRuntimeConfig)
+        {
+            ApplyReplicationConfigAnchor(builder);
+        }
 
         return builder;
     }

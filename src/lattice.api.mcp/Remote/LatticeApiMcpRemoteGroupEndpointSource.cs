@@ -15,6 +15,7 @@ internal sealed class LatticeApiMcpRemoteGroupEndpointSource : ILatticeApiMcpGro
     private readonly string? _data;
     private readonly string? _auth;
     private readonly string? _backup;
+    private readonly string? _replication;
 
     /// <summary>Captures the per-group endpoints from the resolved remote options.</summary>
     public LatticeApiMcpRemoteGroupEndpointSource(IOptions<LatticeApiMcpRemoteOptions> options)
@@ -25,6 +26,7 @@ internal sealed class LatticeApiMcpRemoteGroupEndpointSource : ILatticeApiMcpGro
         _data = value.Data?.Endpoint;
         _auth = value.Auth?.Endpoint;
         _backup = value.Backup?.Endpoint;
+        _replication = value.Replication?.Endpoint;
     }
 
     /// <inheritdoc />
@@ -34,6 +36,7 @@ internal sealed class LatticeApiMcpRemoteGroupEndpointSource : ILatticeApiMcpGro
         LatticeApiMcpGroup.Data => _data,
         LatticeApiMcpGroup.Auth => _auth,
         LatticeApiMcpGroup.Backup => _backup,
+        LatticeApiMcpGroup.Replication => _replication,
         _ => null,
     };
 }

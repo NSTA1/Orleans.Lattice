@@ -5,8 +5,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Api.Mcp</PackageId>
-    <Version>8.0.1</Version>
-    <Description>Model Context Protocol (MCP) server binding for Orleans.Lattice. Exposes the cluster's transport-agnostic API facades (state, data, backup, auth) as MCP tools over the official ModelContextProtocol SDK, with permission-aware tool discovery, an authenticated fail-closed credential bridge, and a default-deny authorization posture. Registered with AddLatticeMcp(...) and mapped with MapLatticeMcp(); per-facade tool modules are opt-in via AddStateTools/AddDataTools/AddBackupTools/AddAuthTools, and out-of-silo hosting is available via AddLatticeMcpRemote(...).</Description>
+    <Version>8.0.2</Version>
+    <Description>Model Context Protocol (MCP) server binding for Orleans.Lattice. Exposes the cluster's transport-agnostic API facades (state, data, backup, auth, replication) as MCP tools over the official ModelContextProtocol SDK, with permission-aware tool discovery, an authenticated fail-closed credential bridge, and a default-deny authorization posture. Registered with AddLatticeMcp(...) and mapped with MapLatticeMcp(); per-facade tool modules are opt-in via AddStateTools/AddDataTools/AddBackupTools/AddAuthTools/AddReplicationTools, and out-of-silo hosting is available via AddLatticeMcpRemote(...).</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
@@ -29,6 +29,7 @@
     <ProjectReference Include="..\lattice.api.data.grpc\Orleans.Lattice.Api.Data.Grpc.csproj" />
     <ProjectReference Include="..\lattice.api.auth.grpc\Orleans.Lattice.Api.Auth.Grpc.csproj" />
     <ProjectReference Include="..\lattice.api.backup.grpc\Orleans.Lattice.Api.Backup.Grpc.csproj" />
+    <ProjectReference Include="..\lattice.api.replication.grpc\Orleans.Lattice.Api.Replication.Grpc.csproj" />
     <PackageReference Include="ModelContextProtocol" Version="1.4.1" />
     <PackageReference Include="ModelContextProtocol.AspNetCore" Version="1.4.1" />
     <PackageReference Include="Azure.Core" Version="1.44.1" />

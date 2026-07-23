@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice</PackageId>
-    <Version>8.0.0</Version>
+    <Version>8.0.1</Version>
     <Description>Distributed B+ tree implementation (with CRDT primitives) for Microsoft Orleans.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
@@ -61,6 +61,8 @@
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Data.Grpc.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Auth" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Auth.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Replication" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Replication.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Storage.AzureTable" />
     <InternalsVisibleTo Include="Orleans.Lattice.Storage.AzureTable.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Benchmark.Microbench" />

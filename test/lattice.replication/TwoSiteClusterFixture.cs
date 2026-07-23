@@ -159,6 +159,13 @@ internal sealed class TwoSiteClusterFixture
         siloBuilder.UseInMemoryReminderService();
         siloBuilder.AddLatticeReplication(opts => opts.ClusterId = clusterId);
 
+        // Register the OR-Map shape for the dogfooded sys-replication-config tree
+        // so a real config-store OR-Map write is (de)serialisable on these silos,
+        // exactly as the enableRuntimeConfig anchor does on a real
+        // silo. Harmless to tests that never touch the config tree.
+        siloBuilder.AddOrMapShape<string, LatticeReplicationConfigEntry>(
+            LatticeSystemTreeNames.ReplicationConfig);
+
         // Replace the no-op transport registered by AddLatticeReplication with
         // the per-site loopback so tests can observe sends.
         if (Transports.TryGetValue(clusterId, out var transport))

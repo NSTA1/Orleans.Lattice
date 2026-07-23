@@ -58,6 +58,51 @@ public static class LatticeSystemTreeNames
     public const string AuthAudit = "sys-auth-audit";
 
     /// <summary>
+    /// The replicated runtime replication-configuration tree. Unlike the
+    /// membership and policy trees, this tree is <b>self-referential</b>: it
+    /// holds the per-tree map that decides which user trees replicate and under
+    /// which <see cref="LatticeMergeMode"/>, so it must itself replicate under a
+    /// fixed mode enrolled statically on every cluster (via
+    /// <c>AddLatticeReplication(..., enableRuntimeConfig: true)</c>) rather than
+    /// being configured through its own content. Its value shape is an
+    /// <see cref="Orleans.Lattice.OrMap{TKey, TValue}"/> keyed by target tree id
+    /// whose value is a <see cref="LatticeReplicationConfigEntry"/> composite
+    /// CRDT, so it always enrols under <see cref="LatticeMergeMode.OrMap"/>.
+    /// </summary>
+    public const string ReplicationConfig = "sys-replication-config";
+
+    /// <summary>
+    /// The single well-known key under which the
+    /// <see cref="ReplicationConfig"/> tree stores its whole per-tree
+    /// configuration map. The value at this key is one
+    /// <see cref="Orleans.Lattice.OrMap{TKey, TValue}"/> keyed by target tree
+    /// id whose value is a <see cref="LatticeReplicationConfigEntry"/>, so every
+    /// tree's enablement flag and declared merge mode live in a single
+    /// converged OR-Map rather than one leaf key per tree. Readers and authors
+    /// both address the map through
+    /// <c>lattice.OrMap&lt;string, LatticeReplicationConfigEntry&gt;(<see cref="ReplicationConfigMapKey"/>)</c>.
+    /// Changing this string is an on-disk-key break and must never be done
+    /// casually.
+    /// </summary>
+    public const string ReplicationConfigMapKey = "config";
+
+    /// <summary>
+    /// Builds the fixed single-entry enrolment map for the self-referential
+    /// <see cref="ReplicationConfig"/> tree. The tree always replicates under
+    /// <see cref="LatticeMergeMode.OrMap"/> - the merge mode is not configurable
+    /// because the tree is the source of every <i>other</i> tree's
+    /// configuration and must converge before it can be read.
+    /// </summary>
+    /// <returns>An ordinal-keyed single-entry map of the config tree id to <see cref="LatticeMergeMode.OrMap"/>.</returns>
+    public static IReadOnlyDictionary<string, LatticeMergeMode> BuildReplicationConfigEnrolmentMap()
+    {
+        return new Dictionary<string, LatticeMergeMode>(StringComparer.Ordinal)
+        {
+            [ReplicationConfig] = LatticeMergeMode.OrMap,
+        };
+    }
+
+    /// <summary>
     /// Builds the reserved-tree to <see cref="LatticeMergeMode"/> enrolment map.
     /// The membership and policy trees are always included; the append-only audit
     /// tree is included only when <paramref name="includeAudit"/> is <c>true</c>.

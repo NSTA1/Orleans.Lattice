@@ -10,9 +10,9 @@ namespace Orleans.Lattice.Api.Mcp;
 /// <para>
 /// A group is served remotely only when its per-group endpoint
 /// (<see cref="State"/> / <see cref="Data"/> / <see cref="Auth"/> /
-/// <see cref="Backup"/>) is supplied; an unset group is not registered and is
-/// reported unavailable with a <see langword="null"/> endpoint in the
-/// capabilities report, exactly as in the in-silo topology.
+/// <see cref="Backup"/> / <see cref="Replication"/>) is supplied; an unset group is
+/// not registered and is reported unavailable with a <see langword="null"/>
+/// endpoint in the capabilities report, exactly as in the in-silo topology.
 /// </para>
 /// <para>
 /// The caller credential the MCP credential bridge resolves for a session flows
@@ -58,6 +58,13 @@ public sealed class LatticeApiMcpRemoteOptions
     /// backup group remotely.
     /// </summary>
     public LatticeApiMcpRemoteEndpoint? Backup { get; set; }
+
+    /// <summary>
+    /// The remote endpoint for the replication control facade
+    /// (<c>ILatticeReplicationControl</c>), or <see langword="null"/> to not serve
+    /// the replication group remotely.
+    /// </summary>
+    public LatticeApiMcpRemoteEndpoint? Replication { get; set; }
 
     /// <summary>
     /// The request header the resolved caller credential is stamped onto for the
@@ -109,4 +116,12 @@ public sealed class LatticeApiMcpRemoteOptions
     /// (introspection tools only). Ignored when <see cref="Auth"/> is unset.
     /// </summary>
     public bool EnableAuthAdministration { get; set; }
+
+    /// <summary>
+    /// Whether the replication group's mutating control tools (enable, disable) are
+    /// advertised. Forwarded to <c>AddReplicationTools</c>. Defaults to
+    /// <see langword="false"/> (the read-only inspect tool only). Ignored when
+    /// <see cref="Replication"/> is unset.
+    /// </summary>
+    public bool EnableReplicationControl { get; set; }
 }

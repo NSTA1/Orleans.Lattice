@@ -1,6 +1,6 @@
 # Tools
 
-The MCP server exposes its capabilities as **tools**, grouped into four opt-in modules plus a `lattice_capabilities` meta-tool. Every tool is a thin adapter over the matching `Orleans.Lattice.Api.*` facade and is named `lattice_<group>_<verb>`. The server ships with no tools; each module is added explicitly.
+The MCP server exposes its capabilities as **tools**, grouped into five opt-in modules plus a `lattice_capabilities` meta-tool. Every tool is a thin adapter over the matching `Orleans.Lattice.Api.*` facade and is named `lattice_<group>_<verb>`. The server ships with no tools; each module is added explicitly.
 
 ## Opting in
 
@@ -12,6 +12,7 @@ services.AddStateTools();
 services.AddDataTools(enableWrites: true);
 services.AddBackupTools(enableControl: true);
 services.AddAuthTools(enableAdministration: true);
+services.AddReplicationTools(enableControl: true);
 ```
 
 Each module registration is idempotent, and within a module the destructive verbs stay hidden unless the host opts them in:
@@ -22,6 +23,7 @@ Each module registration is idempotent, and within a module the destructive verb
 | Data | `AddDataTools(enableWrites)` | always | writes, gated by `enableWrites` |
 | Backup | `AddBackupTools(enableControl)` | always | capture / restore / delete, gated by `enableControl` |
 | Auth | `AddAuthTools(enableAdministration)` | always | user / group / rule mutation, gated by `enableAdministration` |
+| Replication | `AddReplicationTools(enableControl)` | always | enable / disable replication, gated by `enableControl` |
 
 Read tools carry `readOnlyHint = true`; destructive tools carry `destructiveHint = true` and `readOnlyHint = false`, so a well-behaved MCP client can surface the distinction to the operator. Enabling a destructive verb only advertises it - it stays subject to the same fail-closed access gate the facade enforces (see [Security](security.md)).
 
@@ -105,6 +107,18 @@ Authorization administration over `ILatticeAuthAdmin`. Registered by `AddAuthToo
 | `lattice_auth_remove_rule` | admin | Remove a rule. |
 
 `lattice_auth_explain` and `lattice_auth_effective_permissions` take an optional `subjectKind` argument (`User` by default). Set it to `Group` when `subjectId` names a group, so the tool resolves the group's rule closure instead of treating the id as a user; otherwise a group subject matches no rules and the decision falls through to the tree's default effect.
+
+## Replication tools (`lattice_replication_*`)
+
+Runtime per-tree cross-cluster replication control over `ILatticeReplicationControl`. Registered by `AddReplicationTools(enableControl)`. The inspect tool is always exposed; the mutating control tools require `enableControl: true`, and remain subject to the facade's fail-closed replication access gate regardless. The module is served under both topologies: in-silo, and out-of-silo via `AddLatticeMcpRemote(o => { o.Replication = ...; o.EnableReplicationControl = ...; })` over the replication-API gRPC client (see [Remote hosting](remote.md)).
+
+| Tool | Kind | Purpose |
+|---|---|---|
+| `lattice_replication_get_config` | inspect | Report each authorized tree's enabled state, fixed merge mode, and ambiguity status. |
+| `lattice_replication_enable` | control | Enable replication for a tree under a fixed merge mode. |
+| `lattice_replication_disable` | control | Disable replication for a tree without purging already-replicated peer data. |
+
+The control tools carry `destructiveHint = true`; the inspect tool carries `readOnlyHint = true`. Discovery is permission-scoped by the `LatticeOperation.Replication` grant, so a caller without that grant is not shown the group.
 
 ## Next
 

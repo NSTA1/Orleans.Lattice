@@ -20,14 +20,16 @@ public sealed class LatticeApiMcpGroupCapabilityMapTests
             LatticeApiMcpGroup.Backup,
             LatticeApiMcpGroup.Auth,
             LatticeApiMcpGroup.Telemetry,
+            LatticeApiMcpGroup.Replication,
         }));
     }
 
     [Test]
     public void Existing_group_ordinals_are_unchanged()
     {
-        // The access-set bitmask keys on 1 << (int)group, so the four original
-        // members must keep their ordinal values; Telemetry appends after Auth.
+        // The access-set bitmask keys on 1 << (int)group, so the original
+        // members must keep their ordinal values; Telemetry appends after Auth
+        // and Replication appends after Telemetry.
         Assert.Multiple(() =>
         {
             Assert.That((int)LatticeApiMcpGroup.State, Is.EqualTo(0));
@@ -35,6 +37,7 @@ public sealed class LatticeApiMcpGroupCapabilityMapTests
             Assert.That((int)LatticeApiMcpGroup.Backup, Is.EqualTo(2));
             Assert.That((int)LatticeApiMcpGroup.Auth, Is.EqualTo(3));
             Assert.That((int)LatticeApiMcpGroup.Telemetry, Is.EqualTo(4));
+            Assert.That((int)LatticeApiMcpGroup.Replication, Is.EqualTo(5));
         });
     }
 
@@ -88,6 +91,35 @@ public sealed class LatticeApiMcpGroupCapabilityMapTests
     }
 
     [Test]
+    public void Replication_mask_is_replication_only()
+    {
+        Assert.That(
+            LatticeApiMcpGroupCapabilityMap.RequiredOperations(LatticeApiMcpGroup.Replication),
+            Is.EqualTo(LatticeOperation.Replication));
+    }
+
+    [Test]
+    public void Replication_mask_does_not_overlap_any_other_group()
+    {
+        var replication = LatticeApiMcpGroupCapabilityMap.RequiredOperations(LatticeApiMcpGroup.Replication);
+
+        Assert.Multiple(() =>
+        {
+            foreach (var group in LatticeApiMcpGroupCapabilityMap.AllGroups)
+            {
+                if (group == LatticeApiMcpGroup.Replication)
+                {
+                    continue;
+                }
+
+                var other = LatticeApiMcpGroupCapabilityMap.RequiredOperations(group);
+                Assert.That(replication & other, Is.EqualTo(LatticeOperation.None),
+                    $"No other operation - including {group} - may confer replication.");
+            }
+        });
+    }
+
+    [Test]
     public void Telemetry_mask_does_not_overlap_any_other_group()
     {
         var telemetry = LatticeApiMcpGroupCapabilityMap.RequiredOperations(LatticeApiMcpGroup.Telemetry);
@@ -123,6 +155,7 @@ public sealed class LatticeApiMcpGroupCapabilityMapTests
     [TestCase(LatticeApiMcpGroup.Backup, "backup")]
     [TestCase(LatticeApiMcpGroup.Auth, "auth")]
     [TestCase(LatticeApiMcpGroup.Telemetry, "telemetry")]
+    [TestCase(LatticeApiMcpGroup.Replication, "replication")]
     public void DisplayName_is_the_stable_lowercase_name(LatticeApiMcpGroup group, string expected)
     {
         Assert.That(LatticeApiMcpGroupCapabilityMap.DisplayName(group), Is.EqualTo(expected));

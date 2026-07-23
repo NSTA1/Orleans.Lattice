@@ -22,6 +22,7 @@ internal static class LatticeApiMcpGroupCapabilityMap
         LatticeApiMcpGroup.Backup,
         LatticeApiMcpGroup.Auth,
         LatticeApiMcpGroup.Telemetry,
+        LatticeApiMcpGroup.Replication,
     };
 
     /// <summary>
@@ -53,6 +54,9 @@ internal static class LatticeApiMcpGroupCapabilityMap
         // Cluster-wide, scopeless operational telemetry.
         LatticeApiMcpGroup.Telemetry => LatticeOperation.Telemetry,
 
+        // Runtime per-tree replication configuration.
+        LatticeApiMcpGroup.Replication => LatticeOperation.Replication,
+
         _ => LatticeOperation.None,
     };
 
@@ -64,6 +68,7 @@ internal static class LatticeApiMcpGroupCapabilityMap
         LatticeApiMcpGroup.Backup => "backup",
         LatticeApiMcpGroup.Auth => "auth",
         LatticeApiMcpGroup.Telemetry => "telemetry",
+        LatticeApiMcpGroup.Replication => "replication",
         _ => group.ToString().ToLowerInvariant(),
     };
 }
