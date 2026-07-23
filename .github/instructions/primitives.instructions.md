@@ -78,6 +78,6 @@ public sealed class MyAggregate
 
 ## Adding a New Primitive
 
-1. Define the `readonly record struct` in this folder.
+1. Define the type in this folder - a `readonly record struct` (with `[Immutable]`) for an immutable value type, or a `sealed class` for a mutable aggregate, per the Type Shape guidance above.
 2. Add a constant to `TypeAliases.cs` and apply `[Alias]`.
 3. Write unit tests in `test/lattice/Primitives/` verifying commutativity, associativity, and idempotency of merge.

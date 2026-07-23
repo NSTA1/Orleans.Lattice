@@ -21,10 +21,10 @@ High-level testing policy plus the repository hygiene gates. For the detailed me
   - **Never suppress or filter the failure output.** When a test fails, the reason must be visible from that single run. Do not pipe the output through `Select-String`/`grep`/`Select-Object` filters or otherwise discard it - a failure must never require a second run just to expose why it failed.
 
   ```powershell
-  dotnet test --filter "TestCategory!=Chaos" --blame-hang --blame-hang-timeout 3m
+  dotnet test --filter "TestCategory!=Chaos&TestCategory!=AzureTableEmulator" --blame-hang --blame-hang-timeout 3m
   ```
 
-  Chaos tests (`[Category("Chaos")]`) remain CI-only. The Azure Table emulator suite (`[Category("AzureTableEmulator")]`) only runs when Azurite is started locally; otherwise exclude it as described in `.github/instructions/testing.instructions.md`.
+  Chaos tests (`[Category("Chaos")]`) remain CI-only. The Azure Table emulator suite (`[Category("AzureTableEmulator")]`) is excluded above because it only runs when Azurite is started locally (CI runs it separately); drop the `TestCategory!=AzureTableEmulator` clause to include it once Azurite is up, as described in `.github/instructions/testing.instructions.md`.
 
 ## Hygiene gates
 
