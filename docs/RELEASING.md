@@ -98,7 +98,7 @@ For historical compatibility, the `v<X.Y.Z>` family tag (e.g. `v3.2.0`) is reser
 
 2. **Verify the working tree's `<Version>` slot.** For each package being released, `Get-Content src/<package>/<package>.csproj | Select-String "<Version>"` must show the version you intend to ship. The `<Version>` slot is authoritative - the publish workflow reads it to set the NuGet package version.
 
-3. **Confirm CI is green on the `main` commit you intend to tag.** `gh run list --branch main --limit 5` - the build-and-test run on the squash-merge commit must be `completed/success`.
+3. **Confirm CI was green on the PR before it merged.** CI (the `build-and-test` job) runs only on `pull_request` events, **not** on `push` to `main`. So there is no CI run on the squash-merge commit itself, and that commit's combined status reads `pending` with zero checks - this is expected, not a failure, so do not go hunting for a push-to-main run, check-suites, or check-runs on the merge commit. The green gate is the merged PR's final CI run: `gh pr checks <pr-number>` (or `gh run list --branch <feature-branch> --limit 5`) must show the `build-and-test` run `completed/success`. Because a squash merge replays the already-reviewed tree onto `main`, that PR run is the authoritative signal that the commit you are tagging is green.
 
 4. **Tag each package independently.** The publish workflow's per-tag trigger globs fire on `push` events to a **single tag ref**. A bulk push (`git push origin tag1 tag2 tag3`) sends all the refs in one HTTP request and GitHub coalesces them into a single push event - so the publish workflow fires for **at most one** of the tags, and the trailing tags ship no NuGet packages and create no GitHub Release. Push tags **one at a time**:
 
