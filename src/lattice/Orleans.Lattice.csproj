@@ -61,6 +61,8 @@
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Data.Grpc.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Auth" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Auth.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Replication" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Replication.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Storage.AzureTable" />
     <InternalsVisibleTo Include="Orleans.Lattice.Storage.AzureTable.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Benchmark.Microbench" />
