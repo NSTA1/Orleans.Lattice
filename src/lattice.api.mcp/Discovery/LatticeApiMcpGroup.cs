@@ -43,4 +43,14 @@ public enum LatticeApiMcpGroup
     /// - not even administrator - confers.
     /// </summary>
     Telemetry,
+
+    /// <summary>
+    /// The replication control facade (<c>ILatticeReplicationControl</c>):
+    /// runtime per-tree cross-cluster replication configuration - inspect the
+    /// replicated-tree set and, when opted in, enable or disable replication for
+    /// a tree. Advertised only when the caller holds a
+    /// <see cref="LatticeOperation.Replication"/> grant, which no other operation
+    /// - not even administrator - confers.
+    /// </summary>
+    Replication,
 }

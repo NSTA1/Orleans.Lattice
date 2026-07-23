@@ -116,4 +116,26 @@ public sealed class LatticeApiMcpOptions
     /// this flag; the flag only controls whether they are advertised at all.
     /// </summary>
     public bool EnableAuthAdministration { get; set; }
+
+    /// <summary>
+    /// Whether the replication control facade contributes tools. Defaults to
+    /// <see langword="false"/>. Set to <see langword="true"/> by
+    /// <c>AddReplicationTools</c> when the host opts the replication tool module
+    /// in. When set, the module contributes the read-only
+    /// <c>lattice_replication_get_config</c> inspect tool.
+    /// </summary>
+    public bool EnableReplicationTools { get; set; }
+
+    /// <summary>
+    /// Whether the replication tool module also contributes its <b>mutating</b>
+    /// control tools (<c>lattice_replication_enable</c>,
+    /// <c>lattice_replication_disable</c>) in addition to the read-only inspect
+    /// tool. Defaults to <see langword="false"/> so a registered replication
+    /// module is inspect-only until the host explicitly opts replication control
+    /// in - either by setting this flag or by passing <c>enableControl: true</c>
+    /// to <c>AddReplicationTools(...)</c>. Every control tool it then contributes
+    /// is annotated destructive and non-read-only, and remains subject to the
+    /// same fail-closed replication access gate the facade enforces.
+    /// </summary>
+    public bool EnableReplicationControlTools { get; set; }
 }
