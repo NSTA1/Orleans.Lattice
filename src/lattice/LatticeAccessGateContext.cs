@@ -33,10 +33,16 @@ namespace Orleans.Lattice;
 /// positive signal.
 /// </para>
 /// <para>
-/// This issue only defines the seam. Wiring the marker onto the
-/// maintenance / replication-apply / saga paths, and consulting
-/// <see cref="IsSystemOrigin"/> at the enforcement point, is a later step; the
-/// data-plane grain methods do not read it yet.
+/// The enforcement point consults <see cref="IsGateBypassed"/> (which folds
+/// in <see cref="IsSystemOrigin"/>) to skip authorization for an
+/// infrastructure turn. The marker is wired onto the receiver-side
+/// replication-apply path and onto the cross-cluster anti-entropy digest
+/// chain - the digest probe's local reads and the replication gRPC service's
+/// peer-serving digest handlers - so those trusted infrastructure reads are
+/// not refused as the anonymous subject on a deny-by-default tree. The flag
+/// propagates across in-silo grain calls but deliberately does not cross the
+/// replication transport, so each peer re-establishes its own scope
+/// server-side.
 /// </para>
 /// </remarks>
 internal static class LatticeAccessGateContext

@@ -426,8 +426,16 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         var lattice = _grainFactory.GetGrain<ILattice>(request.TreeName);
         try
         {
-            var digest = await lattice
-                .GetLeafProjectionDigestAsync(request.ShardIndex, context.CancellationToken)
+            // This RPC is reachable only by a peer that cleared the replication
+            // shared-secret interceptor - trusted infrastructure that already
+            // receives the full replicated dataset via Push, not an end user. The
+            // projection-digest read otherwise funnels through the fail-closed
+            // data-plane access gate and, lacking an ambient identity, resolves to
+            // the anonymous subject that a deny-by-default tree refuses. Read it
+            // under a system-origin scope so the gate's infrastructure bypass
+            // applies; the tree id is resolved locally (never trusting the wire).
+            var digest = await ReplicationSystemOriginDigestReader
+                .ReadShardDigestAsync(lattice, request.ShardIndex, context.CancellationToken)
                 .ConfigureAwait(false);
 
             return new DigestProbeResponseBox
@@ -601,8 +609,13 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         var lattice = _grainFactory.GetGrain<ILattice>(request.TreeName);
         try
         {
-            var digest = await lattice
-                .GetLeafProjectionDigestForRangeAsync(
+            // Same trust basis as ProbeDigest: an authenticated replication peer
+            // walking for drift localisation. Read the range digest under a
+            // system-origin scope so the fail-closed access gate's infrastructure
+            // bypass applies rather than refusing the anonymous subject.
+            var digest = await ReplicationSystemOriginDigestReader
+                .ReadRangeDigestAsync(
+                    lattice,
                     request.ShardIndex,
                     request.RangeStartKey,
                     request.RangeEndKey,
