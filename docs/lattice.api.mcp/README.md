@@ -20,6 +20,7 @@ It is built from four parts:
 - **Permission-scoped, not deny-after-list.** Discovery filters the tool list to the caller's effective permissions before it is returned, so an agent never sees a tool it cannot use.
 - **Opt-in and least-privilege.** The server ships no tools; each module is added explicitly, and within a module the destructive verbs stay hidden until the host enables them (`enableWrites`, `enableControl`, `enableAdministration`).
 - **Credential flow-through.** The credential bridge lifts the authenticated MCP session identity onto the ambient `LatticeCredentialContext`, so per-tree / per-key enforcement runs through the same access gate the gRPC bindings and the data path already use. The binding adds no authorization path of its own.
+- **OAuth discovery (opt-in).** Advertise OAuth 2.0 Protected Resource Metadata ([RFC 9728](https://www.rfc-editor.org/rfc/rfc9728)) so a spec-compliant MCP client can discover the authorization server and run the sign-in flow itself instead of needing a pre-pasted token. See [Setup](setup.md#oauth-discovery-rfc-9728).
 
 ## Quick start
 
