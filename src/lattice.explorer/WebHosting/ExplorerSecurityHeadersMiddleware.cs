@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Primitives;
+using Orleans.Lattice.Explorer.Core.Authentication;
 
 namespace Orleans.Lattice.Explorer.Web;
 
@@ -12,8 +14,46 @@ namespace Orleans.Lattice.Explorer.Web;
 /// <see cref="LatticeExplorerWebEndpointRouteBuilderExtensions.MapLatticeExplorer"/>,
 /// so both the standalone head and any host that mounts the explorer inherit it.
 /// </summary>
-internal sealed class ExplorerSecurityHeadersMiddleware(RequestDelegate next)
+internal sealed class ExplorerSecurityHeadersMiddleware
 {
+    private readonly RequestDelegate _next;
+
+    /// <summary>
+    /// The composed <c>Content-Security-Policy</c> header value, built once at
+    /// construction so the per-response path allocates nothing. Equals the
+    /// baseline <see cref="ExplorerSecurityHeaders.ContentSecurityPolicyValue"/>
+    /// when no provider contributed extra <c>form-action</c> sources; otherwise it
+    /// is the baseline extended with those sources (see
+    /// <see cref="ExplorerContentSecurityPolicyOptions"/>).
+    /// </summary>
+    private readonly StringValues _contentSecurityPolicy;
+
+    /// <summary>
+    /// Initializes the middleware and composes the cached
+    /// <c>Content-Security-Policy</c> value from the baseline policy plus any
+    /// <see cref="ExplorerContentSecurityPolicyOptions.AdditionalFormActionSources"/>
+    /// a federated sign-out provider contributed. The composition happens once
+    /// here (the middleware is a pipeline singleton), so no request pays for it.
+    /// </summary>
+    /// <param name="next">The next middleware in the pipeline.</param>
+    /// <param name="cspOptions">
+    /// The accumulated CSP source contributions, or <see langword="null"/> when
+    /// the options infrastructure is absent (a bare unit-test construction), in
+    /// which case the baseline policy is used.
+    /// </param>
+    public ExplorerSecurityHeadersMiddleware(
+        RequestDelegate next,
+        IOptions<ExplorerContentSecurityPolicyOptions>? cspOptions = null)
+    {
+        ArgumentNullException.ThrowIfNull(next);
+        _next = next;
+
+        var extraSources = cspOptions?.Value.AdditionalFormActionSources;
+        _contentSecurityPolicy = extraSources is { Count: > 0 }
+            ? ExplorerSecurityHeaders.BuildContentSecurityPolicy(extraSources)
+            : ExplorerSecurityHeaders.ContentSecurityPolicy;
+    }
+
     /// <summary>
     /// Sets each baseline security header only when it is not already present,
     /// so a value legitimately set elsewhere in the pipeline is preserved, then
@@ -30,7 +70,7 @@ internal sealed class ExplorerSecurityHeadersMiddleware(RequestDelegate next)
 
         if (StringValues.IsNullOrEmpty(headers.ContentSecurityPolicy))
         {
-            headers.ContentSecurityPolicy = ExplorerSecurityHeaders.ContentSecurityPolicy;
+            headers.ContentSecurityPolicy = _contentSecurityPolicy;
         }
 
         if (StringValues.IsNullOrEmpty(headers.XFrameOptions))
@@ -53,6 +93,6 @@ internal sealed class ExplorerSecurityHeadersMiddleware(RequestDelegate next)
             headers["Permissions-Policy"] = ExplorerSecurityHeaders.PermissionsPolicy;
         }
 
-        return next(context);
+        return _next(context);
     }
 }

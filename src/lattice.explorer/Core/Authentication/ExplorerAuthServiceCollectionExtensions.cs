@@ -25,6 +25,19 @@ public static class ExplorerAuthServiceCollectionExtensions
 
         services.TryAddSingleton<ICredentialStore, InMemoryCredentialStore>();
 
+        // Re-authentication configuration for the UI trap-and-redirect. Registered
+        // with TryAdd so a sign-in provider package (for example the hosted-web
+        // Entra provider) can override it to point at its challenge endpoint; the
+        // default carries no challenge path, so the UI degrades to a plain reload.
+        services.TryAddSingleton(new ExplorerReauthOptions());
+
+        // Federated sign-out configuration for the UI's "Sign out" button.
+        // Registered with TryAdd so a sign-in provider package (for example the
+        // hosted-web Entra provider) can override it to point at its server
+        // sign-out endpoint; the default carries no path, so the UI performs its
+        // local-only sign-out (drop the API credential) as before.
+        services.TryAddSingleton(new ExplorerSignOutOptions());
+
         // The built-in Basic provider is always available so the original
         // username/password flow keeps working. Optional providers (Entra,
         // custom) add themselves as further IExplorerAuthMethod registrations.

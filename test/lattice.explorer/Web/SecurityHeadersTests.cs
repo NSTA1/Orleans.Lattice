@@ -142,6 +142,67 @@ public class SecurityHeadersTests
         Assert.That(() => middleware.InvokeAsync(null!), Throws.ArgumentNullException);
     }
 
+    [Test]
+    public void Build_content_security_policy_with_no_sources_returns_the_baseline()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                ExplorerSecurityHeaders.BuildContentSecurityPolicy(null),
+                Is.EqualTo(ExplorerSecurityHeaders.ContentSecurityPolicyValue));
+            Assert.That(
+                ExplorerSecurityHeaders.BuildContentSecurityPolicy([]),
+                Is.EqualTo(ExplorerSecurityHeaders.ContentSecurityPolicyValue));
+        });
+    }
+
+    [Test]
+    public void Build_content_security_policy_appends_sources_to_the_form_action_directive()
+    {
+        var value = ExplorerSecurityHeaders.BuildContentSecurityPolicy(
+            ["https://login.microsoftonline.com", "https://login.microsoftonline.us"]);
+
+        Assert.Multiple(() =>
+        {
+            // Extends exactly the form-action directive (the baseline's last one),
+            // so the rest of the policy is untouched.
+            Assert.That(
+                value,
+                Is.EqualTo(ExplorerSecurityHeaders.ContentSecurityPolicyValue
+                    + " https://login.microsoftonline.com https://login.microsoftonline.us"));
+            Assert.That(value, Does.Contain("form-action 'self' https://login.microsoftonline.com"));
+        });
+    }
+
+    [Test]
+    public void Build_content_security_policy_drops_malformed_sources()
+    {
+        // Blank, whitespace-carrying, and separator-carrying sources are dropped so
+        // a contribution cannot inject an unrelated directive or policy.
+        var value = ExplorerSecurityHeaders.BuildContentSecurityPolicy(
+            ["", "  ", "has space", "evil.com; script-src *", "a,b", "https://ok.example"]);
+
+        Assert.That(
+            value,
+            Is.EqualTo(ExplorerSecurityHeaders.ContentSecurityPolicyValue + " https://ok.example"));
+    }
+
+    [Test]
+    public async Task A_configured_form_action_source_is_emitted_in_the_page_content_security_policy()
+    {
+        const string source = "https://login.microsoftonline.com";
+        await using var app = await CreateHostAsync(basePath: null, extraFormActionSources: [source]);
+        using var client = app.GetTestServer().CreateClient();
+
+        // The framework asset path carries the middleware's policy as the sole CSP
+        // (it is not the interactive endpoint), so the composed value is exact.
+        var response = await client.GetAsync("/_framework/blazor.web.js");
+
+        Assert.That(
+            Single(response, "Content-Security-Policy"),
+            Is.EqualTo(ExplorerSecurityHeaders.BuildContentSecurityPolicy([source])));
+    }
+
     private static void AssertExactBaselineHeaders(HttpResponseMessage response)
     {
         Assert.Multiple(() =>
@@ -178,7 +239,10 @@ public class SecurityHeadersTests
         return values[0];
     }
 
-    private static async Task<WebApplication> CreateHostAsync(string? basePath, bool mapHostRoute = false)
+    private static async Task<WebApplication> CreateHostAsync(
+        string? basePath,
+        bool mapHostRoute = false,
+        string[]? extraFormActionSources = null)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -189,6 +253,19 @@ public class SecurityHeadersTests
                 options.BasePath = basePath;
             }
         });
+
+        if (extraFormActionSources is not null)
+        {
+            // Mimic a federated sign-out provider contributing its identity
+            // provider origin to the CSP form-action allow-list.
+            builder.Services.Configure<ExplorerContentSecurityPolicyOptions>(cspOptions =>
+            {
+                foreach (var source in extraFormActionSources)
+                {
+                    cspOptions.AdditionalFormActionSources.Add(source);
+                }
+            });
+        }
 
         // Replace the real auth session with a substitute so no gRPC channel is
         // opened; rendering the host page only needs it to exist in the container.

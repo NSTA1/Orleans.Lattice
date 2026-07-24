@@ -165,6 +165,17 @@ its own `frame-ancestors 'self'` Content-Security-Policy, the browser enforces
 the intersection of the policies in force. The header values are cached, so this
 per-response path allocates nothing.
 
+The baseline `Content-Security-Policy` also carries `form-action 'self'`, so the
+console's forms may only post back to their own origin. A federated sign-out
+provider extends this: when the Entra hosted-web provider is registered it
+contributes its identity-provider authority origin as an additional `form-action`
+source through the core `ExplorerContentSecurityPolicyOptions` contract, which the
+middleware composes into the policy once at startup. Without it the browser would
+block the antiforgery-guarded sign-out `POST`, because that request redirects
+cross-origin (HTTP 302) to the identity provider's end-session endpoint and
+browsers enforce `form-action` across the whole redirect chain. A provider that
+contributes no origin leaves the baseline policy byte-for-byte unchanged.
+
 ## See also
 
 - [Explorer overview](README.md)

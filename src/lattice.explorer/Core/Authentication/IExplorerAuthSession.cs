@@ -35,6 +35,16 @@ public interface IExplorerAuthSession
     event Action? AuthenticationChanged;
 
     /// <summary>
+    /// Raised when the current sign-in can no longer keep the connection
+    /// authenticated and the operator must complete an interactive sign-in again
+    /// (the token could not be renewed silently - expiry, revocation, or withdrawn
+    /// consent). A UI head traps this to drive a graceful re-authentication rather
+    /// than surfacing a stuck call error. Fires at most once per sign-in; a fresh
+    /// sign-in re-arms it.
+    /// </summary>
+    event Action? ReauthRequired;
+
+    /// <summary>
     /// Loads any stored credential and, when present, applies it to the
     /// connection. Idempotent: the first call performs the work and later calls
     /// are no-ops.

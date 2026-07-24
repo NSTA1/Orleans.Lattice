@@ -95,6 +95,53 @@ public static class ExplorerEntraWebServiceCollectionExtensions
             services.TryAddEnumerable(ServiceDescriptor.Scoped<CircuitHandler, ExplorerEntraWebAutoSignInCircuitHandler>());
         }
 
+        // Publish the forced-interactive challenge path to the core explorer so its
+        // re-authentication interstitial can drive a fresh OIDC sign-in without the
+        // core taking any dependency on this package. Registered last so it wins
+        // over the core default (the auth registration adds a no-challenge default
+        // via TryAdd). Left untouched when the caller cleared the path.
+        if (!string.IsNullOrWhiteSpace(options.ReauthChallengePath))
+        {
+            services.AddSingleton(new ExplorerReauthOptions
+            {
+                ChallengePath = options.ReauthChallengePath,
+            });
+        }
+
+        // Publish the federated sign-out path to the core explorer so its "Sign
+        // out" button posts to the endpoint mapped by
+        // MapLatticeExplorerEntraWebSignOut, driving a full federated sign-out
+        // (end the browser cookie + Entra session, not just drop the API
+        // credential). Without this the button would only clear the local
+        // credential and the fallback authorization policy would silently
+        // re-authenticate the still-cookie-valid circuit. Registered last so it
+        // wins over the core default (a local-only sign-out added via TryAdd).
+        // Left untouched when the caller cleared the path.
+        if (!string.IsNullOrWhiteSpace(options.SignOutPath))
+        {
+            services.AddSingleton(new ExplorerSignOutOptions
+            {
+                FederatedSignOutPath = options.SignOutPath,
+            });
+
+            // Permit the Entra identity provider's origin as a CSP form-action
+            // source so the federated "Sign out" form is not blocked by the web
+            // head's default `form-action 'self'` policy. The button POSTs to the
+            // local sign-out endpoint above, which redirects the browser to
+            // Entra's end-session URL; browsers enforce `form-action` across the
+            // whole redirect chain, so that cross-origin target must be allowed.
+            // Derived from the configured authority instance's origin and only
+            // added when it parses as an absolute http(s) authority (fail closed:
+            // a malformed instance contributes nothing rather than a bad source).
+            if (Uri.TryCreate(options.Instance, UriKind.Absolute, out var instanceUri)
+                && (instanceUri.Scheme == Uri.UriSchemeHttps || instanceUri.Scheme == Uri.UriSchemeHttp))
+            {
+                var instanceOrigin = instanceUri.GetLeftPart(UriPartial.Authority);
+                services.Configure<ExplorerContentSecurityPolicyOptions>(
+                    cspOptions => cspOptions.AdditionalFormActionSources.Add(instanceOrigin));
+            }
+        }
+
         return services;
     }
 }

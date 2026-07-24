@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Components.Server;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Configuration;
@@ -131,19 +132,60 @@ public class LatticeExplorerWebServiceCollectionExtensionsTests
     }
 
     [Test]
-    public void AddLatticeExplorerWeb_without_environment_bootstrap_skips_the_seed()
+    public void AddLatticeExplorerWeb_registers_data_protection_by_default()
     {
-        var withBootstrap = new ServiceCollection();
-        withBootstrap.AddLatticeExplorerWeb();
+        var services = new ServiceCollection();
 
-        var withoutBootstrap = new ServiceCollection();
-        withoutBootstrap.AddLatticeExplorerWeb(o => o.UseEnvironmentBootstrap = false);
+        services.AddLatticeExplorerWeb();
 
-        var seedType = typeof(IExplorerConfigurationSeed);
-        Assert.Multiple(() =>
+        using var provider = services.BuildServiceProvider();
+        Assert.That(provider.GetService<IDataProtectionProvider>(), Is.Not.Null);
+    }
+
+    [Test]
+    public void AddLatticeExplorerWeb_blob_key_ring_without_credential_throws()
+    {
+        var services = new ServiceCollection();
+
+        Assert.That(
+            () => services.AddLatticeExplorerWeb(o =>
+                o.DataProtectionKeyRingBlobUri = new Uri("https://estate.blob.core.windows.net/keys/keyring.xml")),
+            Throws.InvalidOperationException.With.Message.Contains(nameof(LatticeExplorerWebOptions.DataProtectionKeyRingCredential)));
+    }
+
+    [Test]
+    public void AddLatticeExplorerWeb_shared_key_ring_builds_a_data_protection_provider()
+    {
+        var services = new ServiceCollection();
+
+        services.AddLatticeExplorerWeb(o =>
         {
-            Assert.That(withBootstrap.Any(d => d.ServiceType == seedType), Is.True);
-            Assert.That(withoutBootstrap.Any(d => d.ServiceType == seedType), Is.False);
+            o.DataProtectionKeyRingBlobUri = new Uri("https://estate.blob.core.windows.net/keys/keyring.xml");
+            o.DataProtectionKeyRingCredential = new FakeTokenCredential();
+            o.DataProtectionApplicationName = "lattice-explorer";
         });
+
+        using var provider = services.BuildServiceProvider();
+        Assert.That(provider.GetService<IDataProtectionProvider>(), Is.Not.Null);
+    }
+
+    [Test]
+    public void AddLatticeExplorerWeb_invokes_the_configure_data_protection_hook()
+    {
+        var services = new ServiceCollection();
+        var invoked = false;
+
+        services.AddLatticeExplorerWeb(o => o.ConfigureDataProtection = _ => invoked = true);
+
+        Assert.That(invoked, Is.True);
+    }
+
+    private sealed class FakeTokenCredential : Azure.Core.TokenCredential
+    {
+        public override Azure.Core.AccessToken GetToken(Azure.Core.TokenRequestContext requestContext, CancellationToken cancellationToken)
+            => new("fake-token", DateTimeOffset.UtcNow.AddHours(1));
+
+        public override ValueTask<Azure.Core.AccessToken> GetTokenAsync(Azure.Core.TokenRequestContext requestContext, CancellationToken cancellationToken)
+            => new(GetToken(requestContext, cancellationToken));
     }
 }

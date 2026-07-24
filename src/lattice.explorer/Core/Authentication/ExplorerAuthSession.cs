@@ -31,6 +31,7 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
     private StoredCredential? _credential;
     private ExplorerAuthSchemeAdvertisement _advertisement = ExplorerAuthSchemeAdvertisement.Empty;
     private bool _initialized;
+    private IReauthRequiredSource? _reauthSource;
 
     /// <summary>Creates the auth session over the explorer session and credential store.</summary>
     /// <param name="session">The explorer session that owns the endpoint and connection.</param>
@@ -97,6 +98,9 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
     public event Action? AuthenticationChanged;
 
     /// <inheritdoc />
+    public event Action? ReauthRequired;
+
+    /// <inheritdoc />
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
         var changed = false;
@@ -119,6 +123,7 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
             if (_credential is { } credential)
             {
                 _signIn = await ChallengeBasicAsync(credential, cancellationToken).ConfigureAwait(false);
+                HookReauthSource();
                 await ReconfigureAsync(cancellationToken).ConfigureAwait(false);
                 changed = true;
             }
@@ -201,6 +206,7 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
             }
 
             _signIn = signIn;
+            HookReauthSource();
             await ReconfigureAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -373,11 +379,39 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
 
     private void DisposeCurrentProvider()
     {
+        UnhookReauthSource();
         if (_signIn?.Authentication.CredentialProvider is IDisposable disposable)
         {
             disposable.Dispose();
         }
     }
+
+    /// <summary>
+    /// Subscribes to the current sign-in's re-authentication signal, when its
+    /// credential provider exposes one, so a latched revoked state is surfaced to
+    /// the UI through <see cref="ReauthRequired"/>. A no-op for static credentials
+    /// (Basic) whose provider never revokes.
+    /// </summary>
+    private void HookReauthSource()
+    {
+        if (_signIn?.Authentication.CredentialProvider is IReauthRequiredSource source)
+        {
+            _reauthSource = source;
+            source.ReauthRequired += OnReauthRequired;
+        }
+    }
+
+    /// <summary>Detaches the current re-authentication subscription, if any.</summary>
+    private void UnhookReauthSource()
+    {
+        if (_reauthSource is { } source)
+        {
+            source.ReauthRequired -= OnReauthRequired;
+            _reauthSource = null;
+        }
+    }
+
+    private void OnReauthRequired() => ReauthRequired?.Invoke();
 
     /// <inheritdoc />
     public void Dispose()

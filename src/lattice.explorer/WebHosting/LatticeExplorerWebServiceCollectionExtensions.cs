@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Orleans.Lattice.Explorer.Access;
@@ -101,7 +102,7 @@ public static class LatticeExplorerWebServiceCollectionExtensions
         // Authentication. The credential rests in an HttpOnly + Secure cookie
         // encrypted with Data Protection (no browser storage); the login dialog
         // posts to the server endpoints so the password never crosses the circuit.
-        services.AddDataProtection();
+        ConfigureDataProtection(services, options);
         services.AddHttpContextAccessor();
         services.TryAddSingleton<ICredentialStore, CookieCredentialStore>();
         services.TryAddSingleton(new ExplorerAuthUiOptions
@@ -127,6 +128,42 @@ public static class LatticeExplorerWebServiceCollectionExtensions
         services.AddExplorerSchema();
 
         return services;
+    }
+
+    /// <summary>
+    /// Registers ASP.NET Data Protection. Without configuration this is exactly the
+    /// framework default (a per-instance, ephemeral key ring). When a host supplies
+    /// <see cref="LatticeExplorerWebOptions.DataProtectionKeyRingBlobUri"/> the key
+    /// ring is instead persisted to shared Azure Blob Storage so every replica
+    /// shares one ring and can decrypt one another's OpenID Connect session cookie
+    /// - the load-bearing piece that lets a signed-in operator survive a failover
+    /// between replicas. Fail-closed: a blob URI with no credential is a
+    /// misconfiguration, not a silent fall-through to the ephemeral ring.
+    /// </summary>
+    private static void ConfigureDataProtection(IServiceCollection services, LatticeExplorerWebOptions options)
+    {
+        var dataProtection = services.AddDataProtection();
+
+        if (options.DataProtectionKeyRingBlobUri is { } blobUri)
+        {
+            if (options.DataProtectionKeyRingCredential is not { } credential)
+            {
+                throw new InvalidOperationException(
+                    $"{nameof(LatticeExplorerWebOptions)}.{nameof(LatticeExplorerWebOptions.DataProtectionKeyRingBlobUri)} is set but "
+                    + $"{nameof(LatticeExplorerWebOptions.DataProtectionKeyRingCredential)} is null. Persisting the Data Protection key "
+                    + "ring to shared blob storage requires a TokenCredential (for example DefaultAzureCredential or a managed-identity "
+                    + "credential).");
+            }
+
+            dataProtection.PersistKeysToAzureBlobStorage(blobUri, credential);
+        }
+
+        if (!string.IsNullOrWhiteSpace(options.DataProtectionApplicationName))
+        {
+            dataProtection.SetApplicationName(options.DataProtectionApplicationName);
+        }
+
+        options.ConfigureDataProtection?.Invoke(dataProtection);
     }
 
     private static string? ResolveConfigFilePath(LatticeExplorerWebOptions options)
