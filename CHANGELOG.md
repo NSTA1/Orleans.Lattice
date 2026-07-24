@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 This changelog covers the whole **package family** - every published `Orleans.Lattice` and `Orleans.Lattice.*` package, spanning the core library and its replication, storage, membership, auth, data, backup, caching, schema, scaling, dashboards, MCP, API/gRPC binding, and Explorer companions. Packages ship in lockstep on the major and minor digits; patch digits may advance per-package.
 
-## [Unreleased]
+## Unreleased
 
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), labelled `lattice` or `lattice.replication`. See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
 
@@ -188,6 +188,3 @@ This release carries **breaking changes** - review the sections below and each a
 Changelog entries for the v7.x release line have been archived to [`CHANGELOG.old.v7.md`](CHANGELOG.old.v7.md).
 
 Changelog entries for v6.x and earlier - down to the historical pre-v6.0.0 notes - have been archived to [`CHANGELOG.old.v6.md`](CHANGELOG.old.v6.md).
-
----
-[Unreleased]: https://github.com/NSTA1/Orleans.Lattice/compare/v8.0.0...HEAD
