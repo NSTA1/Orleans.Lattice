@@ -792,6 +792,43 @@ try {
     }
 
     # -----------------------------------------------------------------------
+    # 6b. Warm-up - wake the scale-to-zero MCP and Explorer heads so the freshly
+    #     activated single revision has a Ready replica before Front Door routes
+    #     users to it. A scaled-to-zero origin is cold at deploy time and cannot
+    #     answer the AFD (or platform) health probe, so a deploy-while-idle
+    #     briefly 404s at the global endpoint until a real request warms it. The
+    #     readiness probe gates traffic once a replica exists; this issues the
+    #     request that creates that replica. Best-effort and idempotent: /health
+    #     is exempt from the origin lock, so a direct-to-origin GET both triggers
+    #     HTTP-concurrency scale-from-zero and confirms the head is serving.
+    # -----------------------------------------------------------------------
+    if (-not $WhatIfPreference) {
+        Write-Phase 'Warm-up: waking scale-to-zero heads'
+        foreach ($r in $perRegion) {
+            foreach ($head in @(
+                @{ name = 'mcp'; fqdn = $r.mcpFqdn },
+                @{ name = 'explorer'; fqdn = $r.explorerFqdn }
+            )) {
+                if (-not $head.fqdn) { continue }
+                $url = "https://$($head.fqdn)/health"
+                $ok = $false
+                for ($attempt = 1; $attempt -le 6 -and -not $ok; $attempt++) {
+                    try {
+                        $resp = Invoke-WebRequest -Uri $url -Method Get -TimeoutSec 40 -SkipHttpErrorCheck -UseBasicParsing
+                        if ($resp.StatusCode -eq 200) { $ok = $true; break }
+                    }
+                    catch {
+                        # Cold-start / transient (connection reset, gateway 5xx while
+                        # the replica spins up); fall through and retry.
+                    }
+                    Start-Sleep -Seconds 5
+                }
+                Write-Host ("    [{0}] {1,-9} {2}" -f $r.regionCode, "$($head.name):", $(if ($ok) { 'ready' } else { 'not ready (continuing)' }))
+            }
+        }
+    }
+
+    # -----------------------------------------------------------------------
     # 7. MCP details - what an operator needs to connect an MCP client and how
     #    to grant a subject access. Never prints a secret. Only meaningful when
     #    Entra is on (OAuth discovery has an authorization server to point at).

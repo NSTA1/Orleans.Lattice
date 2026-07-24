@@ -483,9 +483,31 @@ resource siloApp 'Microsoft.App/containerApps@2024-03-01' = {
             cpu: json(siloCpu)
             memory: siloMemory
           }
-          // Liveness on the plain HTTP/1 port so the platform can probe without
-          // a shell and without negotiating HTTP/2.
+          // Health probes on the plain HTTP/1 port so the platform can probe
+          // without a shell and without negotiating HTTP/2. Startup gates the
+          // other two until the host is up; Readiness gates traffic so a single-
+          // revision rollout only cuts over once the new replica actually serves
+          // /health; Liveness restarts a hung replica.
           probes: [
+            {
+              type: 'Startup'
+              httpGet: {
+                path: '/health'
+                port: siloHttpPort
+              }
+              initialDelaySeconds: 2
+              periodSeconds: 5
+              failureThreshold: 24
+            }
+            {
+              type: 'Readiness'
+              httpGet: {
+                path: '/health'
+                port: siloHttpPort
+              }
+              periodSeconds: 10
+              failureThreshold: 3
+            }
             {
               type: 'Liveness'
               httpGet: {
@@ -648,6 +670,41 @@ resource mcpApp 'Microsoft.App/containerApps@2024-03-01' = {
             cpu: json(headCpu)
             memory: headMemory
           }
+          // Health probes against /health on the ingress port. Readiness gates
+          // Front Door / single-revision cutover so traffic only reaches a warm
+          // replica; Startup gives a cold scale-to-zero replica time to come up
+          // before liveness applies. Probes act only on running replicas, so they
+          // do not defeat scale-to-zero (an idle app has nothing to probe).
+          probes: [
+            {
+              type: 'Startup'
+              httpGet: {
+                path: '/health'
+                port: 8080
+              }
+              initialDelaySeconds: 2
+              periodSeconds: 5
+              failureThreshold: 24
+            }
+            {
+              type: 'Readiness'
+              httpGet: {
+                path: '/health'
+                port: 8080
+              }
+              periodSeconds: 10
+              failureThreshold: 3
+            }
+            {
+              type: 'Liveness'
+              httpGet: {
+                path: '/health'
+                port: 8080
+              }
+              initialDelaySeconds: 15
+              periodSeconds: 30
+            }
+          ]
           env: [
             // Silo gRPC State + auth-admin facades, dialed over server TLS by the
             // internal ACA FQDN. One endpoint serves both surfaces.
