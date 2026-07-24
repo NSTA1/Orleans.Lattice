@@ -172,6 +172,18 @@ param(
     # Pass -EnableReplicationControl:$false to withhold the surface entirely.
     [bool]$EnableReplicationControl = $true,
 
+    # Cross-cluster anti-entropy: the periodic digest probe + Merkle-walk drift
+    # localisation + bounded automatic remediation that re-ships divergent key
+    # ranges to a lagging peer. Quiet default OFF: a healthy estate converges via
+    # the forward change feed, so this is a fallback that heals divergence
+    # introduced out-of-band (rows written before a tree was brought into
+    # replication at runtime, or a peer offline past its WAL retention). Applied
+    # symmetrically to every region. -DigestProbeIntervalSeconds optionally
+    # shortens the probe cadence (0 keeps the package default).
+    [bool]$EnableDigestAntiEntropy = $false,
+
+    [int]$DigestProbeIntervalSeconds = 0,
+
     # The read-write Data API (write surface). Enabled by default: the write
     # facade is co-hosted on the silo gRPC endpoint and the MCP head advertises
     # its write tools. Set -EnableDataApi:$false to withhold the write surface;
@@ -496,6 +508,8 @@ try {
         authDefaultEffect       = $AuthDefaultEffect
         requireApiAuthorization = $RequireApiAuthorization
         enableReplicationControl = $EnableReplicationControl
+        enableDigestAntiEntropy  = $EnableDigestAntiEntropy
+        digestProbeIntervalSeconds = $DigestProbeIntervalSeconds
         # Entra is activated on pass 2 (the app registrations are created between
         # the passes), so it stays off here.
         entraEnabled            = $false
@@ -687,6 +701,8 @@ try {
             authDefaultEffect          = $AuthDefaultEffect
             requireApiAuthorization    = $RequireApiAuthorization
             enableReplicationControl   = $EnableReplicationControl
+            enableDigestAntiEntropy    = $EnableDigestAntiEntropy
+            digestProbeIntervalSeconds = $DigestProbeIntervalSeconds
             dataApiEnabled             = $EnableDataApi
             internalEnvironment        = ($DeploymentOption -eq 'private')
             infrastructureSubnetId     = $subnetId

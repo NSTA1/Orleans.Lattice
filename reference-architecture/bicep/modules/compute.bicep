@@ -213,6 +213,12 @@ param replicationKeySecretUri string = ''
 @description('Runtime per-tree replication control plane. Secure default OFF: leaves the sys-replication-config CRDT tree un-enrolled, the silo ILatticeReplicationControl gRPC binding un-hosted, and the MCP lattice_replication_* tools unadvertised, so a deployed estate carries no replication control surface until an operator opts in. When true the control plane is co-hosted but stays FAIL-CLOSED behind the deny-by-default LatticeOperation.Replication gate - which no other capability, not even Admin, confers - so enabling/disabling replication still requires an explicitly authored Replication grant. Bound to the silo Replication:EnableRuntimeConfig and the MCP Mcp:ReplicationEndpoint + Mcp:EnableReplicationControl.')
 param enableReplicationControl bool = false
 
+@description('Cross-cluster anti-entropy: the periodic digest probe + Merkle-walk drift localisation + bounded automatic remediation that re-ships divergent key ranges to a lagging peer. Secure/quiet default OFF: a healthy estate converges via the forward change feed, so this is a fallback that heals divergence introduced out-of-band (rows written before a tree was brought into replication at runtime, or a peer offline past its WAL retention). Set symmetrically across regions. Bound to the silo Replication:EnableDigestAntiEntropy.')
+param enableDigestAntiEntropy bool = false
+
+@description('Optional override (seconds) for the digest-probe cadence when enableDigestAntiEntropy is on. 0 keeps the package default. A shorter interval reconciles drift faster at the cost of more digest traffic. Bound to the silo Replication:DigestProbeIntervalSeconds.')
+param digestProbeIntervalSeconds int = 0
+
 @description('DEPLOYER SEAM: PromQL backend address the MCP cluster-telemetry tools proxy (the managed Prometheus query endpoint). Empty leaves the telemetry tool group off (the host skips it when unset). Bound to the host Mcp:Telemetry:BackendAddress.')
 param mcpTelemetryBackendAddress string = ''
 
@@ -523,6 +529,12 @@ resource siloApp 'Microsoft.App/containerApps@2024-03-01' = {
             // default LatticeOperation.Replication gate (an explicit grant is
             // required to enable/disable - not even Admin confers it).
             { name: 'Replication__EnableRuntimeConfig', value: string(enableReplicationControl) }
+            // Cross-cluster anti-entropy: digest probe + Merkle-walk drift
+            // localisation + bounded automatic remediation. Quiet default off;
+            // heals divergence the forward change feed cannot (out-of-band or
+            // post-WAL-retention). Set symmetrically across regions.
+            { name: 'Replication__EnableDigestAntiEntropy', value: string(enableDigestAntiEntropy) }
+            { name: 'Replication__DigestProbeIntervalSeconds', value: string(digestProbeIntervalSeconds) }
             // Entra authentication for the exposed facades.
             { name: 'Entra__Enabled', value: string(entraEnabled) }
             { name: 'Entra__TenantId', value: entraTenantId }

@@ -37,10 +37,10 @@
     of the released library, exactly as a real deployment would be.
   -->
   <ItemGroup>
-    <PackageReference Include="Orleans.Lattice" Version="8.0.1" />
+    <PackageReference Include="Orleans.Lattice" Version="8.0.2" />
     <PackageReference Include="Orleans.Lattice.Storage.AzureTable" Version="8.0.0" />
-    <PackageReference Include="Orleans.Lattice.Replication" Version="8.0.1" />
-    <PackageReference Include="Orleans.Lattice.Replication.Grpc" Version="8.0.0" />
+    <PackageReference Include="Orleans.Lattice.Replication" Version="8.0.6" />
+    <PackageReference Include="Orleans.Lattice.Replication.Grpc" Version="8.0.1" />
     <PackageReference Include="Orleans.Lattice.Api.Replication" Version="8.0.0" />
     <PackageReference Include="Orleans.Lattice.Api.Replication.Grpc" Version="8.0.0" />
     <PackageReference Include="Orleans.Lattice.Backup" Version="8.0.0" />

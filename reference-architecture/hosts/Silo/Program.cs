@@ -121,6 +121,19 @@ var allowPlaintextReplication = config.GetValue("Replication:AllowPlaintext", fa
 // enable it (the local compose harness does).
 var enableRuntimeReplicationConfig = config.GetValue("Replication:EnableRuntimeConfig", false);
 
+// Cross-cluster anti-entropy (the digest probe + Merkle-walk drift localisation +
+// bounded auto-remediation). Off by default: a healthy estate converges via the
+// forward change feed, so this periodic reconciliation is a fallback that heals
+// divergence introduced out-of-band - rows written before a tree was brought into
+// replication at runtime, or a peer that was offline past its WAL retention. The
+// repair re-ships only the localised divergent key ranges under a strict traffic
+// budget (with a scoped bootstrap-snapshot fallback when the WAL has rolled off),
+// so enabling it is safe on a live cluster. Set symmetrically per region via
+// Replication:EnableDigestAntiEntropy=true; Replication:DigestProbeIntervalSeconds
+// optionally shortens the default probe cadence for a faster reconciliation.
+var enableDigestAntiEntropy = config.GetValue("Replication:EnableDigestAntiEntropy", false);
+var digestProbeIntervalSeconds = config.GetValue("Replication:DigestProbeIntervalSeconds", 0);
+
 // Kestrel exposes two ports: an HTTP/1 port for health probes and the scaling
 // signal (both plain REST, so ACA can TCP/HTTP-probe without a shell), and an
 // HTTP/2 port for the gRPC surfaces (state, auth, replication).
@@ -187,6 +200,29 @@ builder.Host.UseOrleans(silo =>
         if (replicationPeers.Count > 0)
         {
             options.ReplicationPeers = replicationPeers.Keys.ToArray();
+        }
+
+        // Automatic cross-cluster anti-entropy: detect drift via the digest
+        // probe, localise it with the read-only Merkle walk, then auto-remediate
+        // by re-shipping the divergent ranges to the lagging peer. Each stage is
+        // an independent opt-in that defaults off, so the whole chain is turned
+        // on explicitly here: the master gate (AutoRemediateOnDigestMismatch)
+        // permits repair, and the two repair executors (LeafReReplayEnabled for
+        // the retained-WAL path and BootstrapFallbackEnabled for the scoped
+        // snapshot re-seed when the WAL was trimmed past the divergence point)
+        // actually ship the missing entries. Without the executors the probe
+        // detects and localises drift forever but never repairs it.
+        if (enableDigestAntiEntropy)
+        {
+            options.DigestProbeEnabled = true;
+            options.MerkleWalkEnabled = true;
+            options.AutoRemediateOnDigestMismatch = true;
+            options.LeafReReplayEnabled = true;
+            options.BootstrapFallbackEnabled = true;
+            if (digestProbeIntervalSeconds > 0)
+            {
+                options.DigestProbeInterval = TimeSpan.FromSeconds(digestProbeIntervalSeconds);
+            }
         }
     }, enableRuntimeConfig: enableRuntimeReplicationConfig);
 

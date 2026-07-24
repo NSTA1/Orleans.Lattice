@@ -112,6 +112,12 @@ param requireApiAuthorization bool = true
 @description('Runtime per-tree replication control plane, estate-wide. Secure default OFF: no sys-replication-config tree, no silo replication control gRPC binding, no MCP lattice_replication_* tools. When true the control plane is co-hosted but stays fail-closed behind the deny-by-default LatticeOperation.Replication gate (an explicit grant is required to enable/disable; not even Admin confers it).')
 param enableReplicationControl bool = false
 
+@description('Cross-cluster anti-entropy (digest probe + Merkle-walk drift localisation + bounded automatic remediation), estate-wide. Quiet default OFF: a healthy estate converges via the forward change feed; this fallback heals divergence introduced out-of-band or after a peer outage past WAL retention. Applied symmetrically to every region.')
+param enableDigestAntiEntropy bool = false
+
+@description('Optional digest-probe cadence override in seconds when enableDigestAntiEntropy is on. 0 keeps the package default.')
+param digestProbeIntervalSeconds int = 0
+
 @description('Whether Entra authentication is enabled on the exposed facades and heads across the estate.')
 param entraEnabled bool = false
 
@@ -221,6 +227,9 @@ module compute 'modules/compute.bicep' = [for (region, i) in regions: {
     requireApiAuthorization: requireApiAuthorization
     // Runtime replication control plane, secure default off (fail-closed when on).
     enableReplicationControl: enableReplicationControl
+    // Cross-cluster anti-entropy: digest probe + Merkle-walk + auto-remediation.
+    enableDigestAntiEntropy: enableDigestAntiEntropy
+    digestProbeIntervalSeconds: digestProbeIntervalSeconds
     entraEnabled: entraEnabled
     entraTenantId: entraTenantId
     entraClientId: entraClientId
