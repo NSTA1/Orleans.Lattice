@@ -157,6 +157,46 @@ public sealed class ExplorerEntraWebServiceCollectionExtensionsTests
     }
 
     [Test]
+    public void Registers_the_sign_out_options_with_the_federated_path()
+    {
+        var services = new ServiceCollection().AddLatticeExplorerEntraWebAuth(ConfigureValid);
+
+        using var provider = services.BuildServiceProvider();
+        var signOut = provider.GetService<ExplorerSignOutOptions>();
+        Assert.Multiple(() =>
+        {
+            Assert.That(signOut, Is.Not.Null);
+            Assert.That(signOut!.FederatedSignOutPath, Is.EqualTo("/explorer-entra/signout"));
+        });
+    }
+
+    [Test]
+    public void Registers_the_sign_out_options_with_a_custom_federated_path()
+    {
+        var services = new ServiceCollection().AddLatticeExplorerEntraWebAuth(o =>
+        {
+            ConfigureValid(o);
+            o.SignOutPath = "/custom/logout";
+        });
+
+        using var provider = services.BuildServiceProvider();
+        Assert.That(provider.GetRequiredService<ExplorerSignOutOptions>().FederatedSignOutPath, Is.EqualTo("/custom/logout"));
+    }
+
+    [Test]
+    public void Omits_the_sign_out_options_override_when_path_is_cleared()
+    {
+        var services = new ServiceCollection().AddLatticeExplorerEntraWebAuth(o =>
+        {
+            ConfigureValid(o);
+            o.SignOutPath = null;
+        });
+
+        var registered = services.Any(d => d.ServiceType == typeof(ExplorerSignOutOptions));
+        Assert.That(registered, Is.False, "clearing the path leaves the core default (a local-only sign-out) in place");
+    }
+
+    [Test]
     public void Returns_the_same_service_collection()
     {
         var services = new ServiceCollection();

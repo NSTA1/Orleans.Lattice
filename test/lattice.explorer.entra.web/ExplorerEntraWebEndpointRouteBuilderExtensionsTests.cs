@@ -1,4 +1,6 @@
+using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -8,9 +10,12 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
+using System.Net;
 using System.Text.Encodings.Web;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using NSubstitute;
+using Orleans.Lattice.Explorer.Core.Authentication;
 
 namespace Orleans.Lattice.Explorer.Entra.Web.Tests;
 
@@ -76,6 +81,119 @@ public sealed class ExplorerEntraWebEndpointRouteBuilderExtensionsTests
             .ToArray();
 
         Assert.That(patterns, Does.Contain("/custom/logout"));
+    }
+
+    [Test]
+    public void Sign_out_is_mapped_as_a_post()
+    {
+        var app = WebApplication.CreateBuilder().Build();
+
+        app.MapLatticeExplorerEntraWebSignOut();
+
+        var methods = ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(ds => ds.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Where(e => e.RoutePattern.RawText == "/explorer-entra/signout")
+            .SelectMany(e => e.Metadata.GetMetadata<HttpMethodMetadata>()?.HttpMethods ?? Array.Empty<string>())
+            .ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(methods, Does.Contain("POST"));
+            Assert.That(methods, Does.Not.Contain("GET"), "a state-mutating sign-out must not be reachable by a cross-site GET");
+        });
+    }
+
+    [Test]
+    public async Task Sign_out_post_without_antiforgery_token_is_rejected_and_does_not_sign_out()
+    {
+        var session = Substitute.For<IExplorerAuthSession>();
+        using var host = await BuildSignOutHostAsync(session);
+        using var client = host.GetTestServer().CreateClient();
+
+        using var response = await client.PostAsync("/explorer-entra/signout", new FormUrlEncodedContent(new Dictionary<string, string>()));
+
+        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+        await session.DidNotReceive().LogoutAsync(Arg.Any<CancellationToken>());
+        Assert.That(CapturingSignOutHandler.SignedOutSchemes, Is.Empty);
+    }
+
+    [Test]
+    public async Task Sign_out_post_with_valid_token_clears_credential_and_signs_out_both_schemes()
+    {
+        var session = Substitute.For<IExplorerAuthSession>();
+        using var host = await BuildSignOutHostAsync(session);
+        using var client = CreateCookieClient(host.GetTestServer());
+
+        var token = await GetTokenAsync(client);
+
+        using var response = await client.PostAsync("/explorer-entra/signout", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["__RequestVerificationToken"] = token,
+        }));
+
+        Assert.Multiple(() =>
+        {
+            // The federated sign-out drops the local API credential AND ends both
+            // the cookie and OpenID Connect sessions, so the fallback authorization
+            // policy cannot silently re-authenticate the circuit afterwards.
+            Assert.That(CapturingSignOutHandler.SignedOutSchemes, Does.Contain(CookieAuthenticationDefaults.AuthenticationScheme));
+            Assert.That(CapturingSignOutHandler.SignedOutSchemes, Does.Contain(OpenIdConnectDefaults.AuthenticationScheme));
+        });
+        await session.Received(1).LogoutAsync(Arg.Any<CancellationToken>());
+    }
+
+    private static async Task<IHost> BuildSignOutHostAsync(IExplorerAuthSession session)
+    {
+        CapturingSignOutHandler.Reset();
+        var builder = new HostBuilder().ConfigureWebHost(webHost =>
+        {
+            webHost
+                .UseTestServer()
+                .ConfigureServices(services =>
+                {
+                    services.AddRouting();
+                    services.AddDataProtection();
+                    services.AddAntiforgery();
+                    services.AddSingleton(session);
+                    services
+                        .AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+                        .AddScheme<AuthenticationSchemeOptions, CapturingSignOutHandler>(
+                            CookieAuthenticationDefaults.AuthenticationScheme, _ => { })
+                        .AddScheme<AuthenticationSchemeOptions, CapturingSignOutHandler>(
+                            OpenIdConnectDefaults.AuthenticationScheme, _ => { });
+                })
+                .Configure(app =>
+                {
+                    app.UseRouting();
+                    app.UseAuthentication();
+                    app.UseAntiforgery();
+                    app.UseEndpoints(endpoints =>
+                    {
+                        endpoints.MapGet("/test/token", (HttpContext context, IAntiforgery antiforgery) =>
+                        {
+                            var tokens = antiforgery.GetAndStoreTokens(context);
+                            return Results.Text(tokens.RequestToken ?? string.Empty);
+                        });
+                        endpoints.MapLatticeExplorerEntraWebSignOut();
+                    });
+                });
+        });
+
+        return await builder.StartAsync();
+    }
+
+    private static HttpClient CreateCookieClient(TestServer server) =>
+        new(new CookieContainerHandler { InnerHandler = server.CreateHandler() })
+        {
+            BaseAddress = new Uri("http://localhost/"),
+        };
+
+    private static async Task<string> GetTokenAsync(HttpClient client)
+    {
+        var token = await client.GetStringAsync("/test/token");
+        Assert.That(token, Is.Not.Empty, "Expected the test endpoint to issue an antiforgery request token.");
+        return token;
     }
 
     [Test]
@@ -287,6 +405,89 @@ public sealed class ExplorerEntraWebEndpointRouteBuilderExtensionsTests
                 : null;
             Response.StatusCode = StatusCodes.Status200OK;
             return Task.CompletedTask;
+        }
+    }
+
+    /// <summary>
+    /// A stand-in for the cookie and OpenID Connect handlers that records which
+    /// schemes the sign-out endpoint signed the browser out of, instead of driving
+    /// a real redirect to Entra's end-session endpoint, so the endpoint's
+    /// dual-scheme sign-out can be asserted offline.
+    /// </summary>
+    private sealed class CapturingSignOutHandler
+        : AuthenticationHandler<AuthenticationSchemeOptions>, IAuthenticationSignOutHandler
+    {
+        private static readonly HashSet<string> SignedOut = new(StringComparer.Ordinal);
+
+        public static IReadOnlyCollection<string> SignedOutSchemes
+        {
+            get
+            {
+                lock (SignedOut)
+                {
+                    return SignedOut.ToArray();
+                }
+            }
+        }
+
+        public CapturingSignOutHandler(
+            IOptionsMonitor<AuthenticationSchemeOptions> options,
+            ILoggerFactory logger,
+            UrlEncoder encoder)
+            : base(options, logger, encoder)
+        {
+        }
+
+        public static void Reset()
+        {
+            lock (SignedOut)
+            {
+                SignedOut.Clear();
+            }
+        }
+
+        protected override Task<AuthenticateResult> HandleAuthenticateAsync()
+            => Task.FromResult(AuthenticateResult.NoResult());
+
+        public Task SignOutAsync(AuthenticationProperties? properties)
+        {
+            lock (SignedOut)
+            {
+                SignedOut.Add(Scheme.Name);
+            }
+
+            return Task.CompletedTask;
+        }
+    }
+
+    /// <summary>
+    /// A delegating handler with a shared cookie jar so the antiforgery cookie
+    /// issued by the token-fetch request is presented on the subsequent POST.
+    /// </summary>
+    private sealed class CookieContainerHandler : DelegatingHandler
+    {
+        private readonly CookieContainer _cookies = new();
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var requestUri = request.RequestUri!;
+            var cookieHeader = _cookies.GetCookieHeader(requestUri);
+            if (!string.IsNullOrEmpty(cookieHeader))
+            {
+                request.Headers.Add("Cookie", cookieHeader);
+            }
+
+            var response = await base.SendAsync(request, cancellationToken);
+
+            if (response.Headers.TryGetValues("Set-Cookie", out var setCookies))
+            {
+                foreach (var setCookie in setCookies)
+                {
+                    _cookies.SetCookies(requestUri, setCookie);
+                }
+            }
+
+            return response;
         }
     }
 }

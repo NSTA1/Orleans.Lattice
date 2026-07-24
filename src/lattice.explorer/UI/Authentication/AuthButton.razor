@@ -14,9 +14,9 @@
             </svg>
             <span class="explorer-auth-name">@AuthSession.Username</span>
         </span>
-        @if (_options.UseServerFormPost)
+        @if (_signOut.UseServerFormPost)
         {
-            <form method="post" action="@_options.LogoutPath" class="explorer-auth-form">
+            <form method="post" action="@_signOut.FormAction" class="explorer-auth-form">
                 <AntiforgeryToken />
                 <button type="submit" class="explorer-btn-link" title="Sign out">Sign out</button>
             </form>
@@ -43,6 +43,7 @@ else
 @code {
     private bool _busy;
     private ExplorerAuthUiOptions _options = new();
+    private ExplorerSignOutTarget _signOut;
 
     /// <summary>Shared dialog state used to open the login dialog.</summary>
     [CascadingParameter]
@@ -51,6 +52,8 @@ else
     protected override void OnInitialized()
     {
         _options = (ExplorerAuthUiOptions?)Services.GetService(typeof(ExplorerAuthUiOptions)) ?? new ExplorerAuthUiOptions();
+        var signOutOptions = Services.GetService(typeof(ExplorerSignOutOptions)) as ExplorerSignOutOptions;
+        _signOut = ExplorerSignOut.Resolve(_options, signOutOptions);
         AuthSession.AuthenticationChanged += OnAuthenticationChanged;
     }
 

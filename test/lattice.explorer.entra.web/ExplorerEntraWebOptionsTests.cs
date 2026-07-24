@@ -27,6 +27,7 @@ public sealed class ExplorerEntraWebOptionsTests
             Assert.That(options.AutoSignIn, Is.True);
             Assert.That(options.Scopes, Is.Empty);
             Assert.That(options.ReauthChallengePath, Is.EqualTo("/explorer-entra/reauth"));
+            Assert.That(options.SignOutPath, Is.EqualTo("/explorer-entra/signout"));
         });
     }
 

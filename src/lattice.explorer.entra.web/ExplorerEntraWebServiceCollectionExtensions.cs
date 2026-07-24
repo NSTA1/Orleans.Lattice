@@ -108,6 +108,23 @@ public static class ExplorerEntraWebServiceCollectionExtensions
             });
         }
 
+        // Publish the federated sign-out path to the core explorer so its "Sign
+        // out" button posts to the endpoint mapped by
+        // MapLatticeExplorerEntraWebSignOut, driving a full federated sign-out
+        // (end the browser cookie + Entra session, not just drop the API
+        // credential). Without this the button would only clear the local
+        // credential and the fallback authorization policy would silently
+        // re-authenticate the still-cookie-valid circuit. Registered last so it
+        // wins over the core default (a local-only sign-out added via TryAdd).
+        // Left untouched when the caller cleared the path.
+        if (!string.IsNullOrWhiteSpace(options.SignOutPath))
+        {
+            services.AddSingleton(new ExplorerSignOutOptions
+            {
+                FederatedSignOutPath = options.SignOutPath,
+            });
+        }
+
         return services;
     }
 }

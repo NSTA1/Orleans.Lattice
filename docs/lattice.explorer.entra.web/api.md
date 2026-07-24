@@ -27,7 +27,7 @@ public static IEndpointConventionBuilder MapLatticeExplorerEntraWebSignOut(
     string redirectUri = "/")
 ```
 
-Maps a sign-out endpoint that clears the OpenID Connect cookie and signs the user out of Entra, redirecting to `redirectUri` afterwards. This is distinct from the Explorer's own State API sign-out, which only drops the API credential. Throws `ArgumentNullException` when `endpoints` is null and `ArgumentException` when `pattern` is blank.
+Maps a federated sign-out **`POST`** endpoint that drops the local State API credential (via `IExplorerAuthSession.LogoutAsync`, when the session is registered), clears the OpenID Connect cookie, and signs the user out of Entra, redirecting to `redirectUri` afterwards. Because signing out mutates session state it is a `POST` guarded by antiforgery validation - a cross-site `GET` (a logout-CSRF) cannot trigger it - so the Explorer's "Sign out" button renders an HTML form carrying a `RequestVerificationToken`. `AddLatticeExplorerEntraWebAuth` publishes `SignOutPath` as the core `ExplorerSignOutOptions.FederatedSignOutPath` so the button posts here automatically. This is distinct from the Explorer's own in-process State API sign-out, which only drops the API credential and leaves the browser session in place (letting the fallback authorization policy silently re-authenticate the circuit). Throws `ArgumentNullException` when `endpoints` is null and `ArgumentException` when `pattern` is blank.
 
 ```csharp
 public const string DefaultReauthPattern = "/explorer-entra/reauth";

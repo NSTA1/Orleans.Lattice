@@ -69,6 +69,37 @@ public class ExplorerAuthServiceCollectionExtensionsTests
     }
 
     [Test]
+    public void AddExplorerAuth_registersDefaultSignOutOptions_withNoFederatedPath()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IExplorerSession>());
+
+        services.AddExplorerAuth();
+
+        using var provider = services.BuildServiceProvider();
+        var signOut = provider.GetService<ExplorerSignOutOptions>();
+        Assert.Multiple(() =>
+        {
+            Assert.That(signOut, Is.Not.Null);
+            Assert.That(signOut!.FederatedSignOutPath, Is.Null, "the core default performs a local-only sign-out");
+        });
+    }
+
+    [Test]
+    public void AddExplorerAuth_keepsPreviouslyRegisteredSignOutOptions()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IExplorerSession>());
+        var configured = new ExplorerSignOutOptions { FederatedSignOutPath = "/explorer-entra/signout" };
+        services.AddSingleton(configured);
+
+        services.AddExplorerAuth();
+
+        using var provider = services.BuildServiceProvider();
+        Assert.That(provider.GetRequiredService<ExplorerSignOutOptions>(), Is.SameAs(configured));
+    }
+
+    [Test]
     public void AddExplorerAuth_nullServices_throws()
     {
         Assert.That(() => ((IServiceCollection)null!).AddExplorerAuth(), Throws.ArgumentNullException);

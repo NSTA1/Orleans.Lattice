@@ -1,10 +1,13 @@
+using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
+using Orleans.Lattice.Explorer.Core.Authentication;
 
 namespace Orleans.Lattice.Explorer.Entra.Web;
 
@@ -30,17 +33,30 @@ public static class ExplorerEntraWebEndpointRouteBuilderExtensions
     public const string DefaultReturnUrlParameter = "returnUrl";
 
     /// <summary>
-    /// Maps a sign-out endpoint that clears the OpenID Connect cookie and signs
-    /// the user out of Entra, redirecting back to <paramref name="redirectUri"/>
-    /// afterwards. Point a "Sign out" link or button at
-    /// <paramref name="pattern"/> to end the browser session (distinct from the
-    /// explorer's own State API sign-out, which only drops the API credential).
+    /// Maps a federated sign-out endpoint that clears the local State API
+    /// credential, clears the OpenID Connect cookie, and signs the user out of
+    /// Entra, redirecting back to <paramref name="redirectUri"/> afterwards. Point
+    /// the explorer's "Sign out" button at <paramref name="pattern"/> (the
+    /// registration publishes it as <see cref="ExplorerSignOutOptions"/> so the
+    /// core UI posts to it automatically).
+    /// <para>
+    /// This is a <b>POST</b> endpoint guarded by antiforgery validation: signing a
+    /// user out mutates session state, so it must not be reachable by a cross-site
+    /// <c>GET</c> (a logout-CSRF via an image tag or link) - the button renders an
+    /// HTML form carrying a <c>RequestVerificationToken</c>. It also drops the
+    /// in-circuit API credential via <see cref="IExplorerAuthSession.LogoutAsync"/>
+    /// (when the session is registered), so federated sign-out and local
+    /// credential clear happen together. Distinct from the explorer's own
+    /// in-process State API sign-out, which only drops the API credential and
+    /// leaves the browser session in place.
+    /// </para>
     /// </summary>
     /// <param name="endpoints">The endpoint route builder.</param>
     /// <param name="pattern">The route pattern. Defaults to <see cref="DefaultSignOutPattern"/>.</param>
     /// <param name="redirectUri">Where Entra returns the browser after sign-out. Defaults to <c>/</c>.</param>
     /// <returns>The endpoint convention builder for further configuration.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="endpoints"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="pattern"/> is null or whitespace.</exception>
     public static IEndpointConventionBuilder MapLatticeExplorerEntraWebSignOut(
         this IEndpointRouteBuilder endpoints,
         string pattern = DefaultSignOutPattern,
@@ -49,14 +65,50 @@ public static class ExplorerEntraWebEndpointRouteBuilderExtensions
         ArgumentNullException.ThrowIfNull(endpoints);
         ArgumentException.ThrowIfNullOrWhiteSpace(pattern);
 
-        return endpoints.MapGet(pattern, (HttpContext _) =>
-            Results.SignOut(
+        return endpoints.MapPost(pattern, async (HttpContext context, IAntiforgery antiforgery) =>
+        {
+            // Logout mutates the shared browser/session state, so a cross-site
+            // POST must not be able to drive it: fail closed on a missing or
+            // invalid antiforgery token, exactly as the cookie web head's own
+            // /auth/logout endpoint does.
+            if (!await IsRequestValidAsync(antiforgery, context).ConfigureAwait(false))
+            {
+                return Results.BadRequest();
+            }
+
+            // Drop the in-circuit State API credential too, so a federated
+            // sign-out and the local credential clear happen together and the
+            // explorer does not keep a live cluster credential after the browser
+            // session ends. Resolved from the request scope (never a captured
+            // singleton) and optional so the endpoint still signs the browser out
+            // when no explorer session is registered.
+            var session = context.RequestServices.GetService<IExplorerAuthSession>();
+            if (session is not null)
+            {
+                await session.LogoutAsync(context.RequestAborted).ConfigureAwait(false);
+            }
+
+            return Results.SignOut(
                 new AuthenticationProperties { RedirectUri = redirectUri },
                 new[]
                 {
                     CookieAuthenticationDefaults.AuthenticationScheme,
                     OpenIdConnectDefaults.AuthenticationScheme,
-                }));
+                });
+        });
+    }
+
+    private static async Task<bool> IsRequestValidAsync(IAntiforgery antiforgery, HttpContext context)
+    {
+        try
+        {
+            await antiforgery.ValidateRequestAsync(context).ConfigureAwait(false);
+            return true;
+        }
+        catch (AntiforgeryValidationException)
+        {
+            return false;
+        }
     }
 
     /// <summary>

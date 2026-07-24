@@ -139,6 +139,23 @@ public sealed class ExplorerEntraWebOptions
         ExplorerEntraWebEndpointRouteBuilderExtensions.DefaultReauthPattern;
 
     /// <summary>
+    /// The head-relative path of the federated sign-out endpoint (mapped by
+    /// <see cref="ExplorerEntraWebEndpointRouteBuilderExtensions.MapLatticeExplorerEntraWebSignOut"/>)
+    /// that the explorer's "Sign out" button posts to. Defaults to
+    /// <see cref="ExplorerEntraWebEndpointRouteBuilderExtensions.DefaultSignOutPattern"/>.
+    /// Registering the provider publishes this path as the core
+    /// <see cref="Orleans.Lattice.Explorer.Core.Authentication.ExplorerSignOutOptions.FederatedSignOutPath"/>
+    /// so the core UI drives a full federated sign-out (end the browser cookie and
+    /// Entra session, not just the local API credential) without taking a
+    /// dependency on this package. Set to <see langword="null"/> to leave the core
+    /// default (a local-only sign-out) in place; point
+    /// <see cref="ExplorerEntraWebEndpointRouteBuilderExtensions.MapLatticeExplorerEntraWebSignOut"/>
+    /// at the same path.
+    /// </summary>
+    public string? SignOutPath { get; set; } =
+        ExplorerEntraWebEndpointRouteBuilderExtensions.DefaultSignOutPattern;
+
+    /// <summary>
     /// Optional escape hatch to configure the underlying
     /// <see cref="MicrosoftIdentityOptions"/> directly - for example to attach a
     /// federated managed-identity <c>ClientCredentials</c> for secret-less auth,
