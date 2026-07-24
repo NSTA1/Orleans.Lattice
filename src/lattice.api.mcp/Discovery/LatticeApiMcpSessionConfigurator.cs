@@ -252,6 +252,7 @@ internal sealed class LatticeApiMcpSessionConfigurator
             new McpServerToolCreateOptions
             {
                 Name = "lattice_capabilities",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 Title = "Lattice capabilities",
                 Description =
                     "Reports which of the four Lattice API facade groups (state, data, backup, auth) "

@@ -47,11 +47,13 @@ It is the authorization sibling of the read-only [`Orleans.Lattice.Api.State`](.
 | List all rules (paged) | `ListRulesAsync` |
 | List a tree's rules (paged) | `ListRulesForTreeAsync` |
 
+> `ListRulesForTreeAsync` (MCP tool `lattice_auth_list_rules_for_tree`) returns a tree's own rules **and** the cluster-wide wildcard rules (scope `Tree:*`, authored with `LatticeScope.ClusterWide()`) that effectively govern it. Wildcard rules are stored under the reserved `*` tree id and carry `Scope.TreeId == "*"`, so you can tell them apart from exact-tree rules; listing the reserved `*` tree itself returns only its own bucket. Use `ExplainAsync` / `EffectivePermissionsAsync` for the resolved verdict a subject's access actually receives.
+
 ### Policy introspection
 
 | Operation | Facade method | Purpose |
 |---|---|---|
-| Explain a verdict | `ExplainAsync` | Returns the gate's allow/deny verdict for a subject / operation / scope, plus the authored rules that apply - for debugging policy. Pass `subjectKind: LatticeSubjectSelectorKind.Group` to explain the decision for a *group* (evaluated as a member of that group and its ancestors); the default is `User`. |
+| Explain a verdict | `ExplainAsync` | Returns the gate's allow/deny verdict for a subject / operation / scope, plus the authored rules that apply (including cluster-wide `Tree:*` wildcard rules that govern the target tree) - for debugging policy. Pass `subjectKind: LatticeSubjectSelectorKind.Group` to explain the decision for a *group* (evaluated as a member of that group and its ancestors); the default is `User`. |
 | Resolve effective permissions | `EffectivePermissionsAsync` | Returns the rules currently in effect for a subject (matched directly or through a group) - for dashboards and UX. Pass `subjectKind: LatticeSubjectSelectorKind.Group` to resolve a group's own rules; the default is `User`. |
 
 ## Wire model

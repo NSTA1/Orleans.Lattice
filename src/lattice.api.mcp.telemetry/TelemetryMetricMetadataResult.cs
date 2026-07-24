@@ -33,4 +33,15 @@ public sealed record TelemetryMetricMetadataResult
     /// <param name="error">The failure reason.</param>
     /// <returns>A failed result.</returns>
     public static TelemetryMetricMetadataResult Failure(string error) => new() { Success = false, Error = error };
+
+    /// <summary>
+    /// Creates a successful result with no metadata entries. Returned when the
+    /// backend has no metadata surface to serve (an empty or unwired metadata
+    /// endpoint), so the tool degrades gracefully to an empty typed result rather
+    /// than surfacing a raw backend fault - consistent with how
+    /// <c>lattice_telemetry_list_metrics</c> and the query tools return empty on
+    /// an unpopulated backend (issue #1339).
+    /// </summary>
+    /// <returns>A successful result carrying no metadata entries.</returns>
+    public static TelemetryMetricMetadataResult Empty() => new() { Success = true, Metrics = [] };
 }

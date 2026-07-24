@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Net;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
 
@@ -196,6 +197,15 @@ internal static class TelemetryToolHandlers
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+        {
+            // A 404 from the metadata endpoint means the backend exposes no
+            // metadata surface (unpopulated or partly unwired), not that the tool
+            // failed. Degrade to a graceful empty result - the same posture
+            // list_metrics and the query tools already take on an empty backend -
+            // rather than surfacing a raw 404 passthrough (issue #1339).
+            return TelemetryMetricMetadataResult.Empty();
         }
         catch (Exception ex)
         {

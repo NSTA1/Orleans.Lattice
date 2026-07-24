@@ -103,17 +103,23 @@ public sealed class AuthGrpcStateVisibilityTests
     }
 
     [Test]
-    public void get_entry_on_an_unauthorised_key_reads_back_not_found_for_the_reader()
+    public async Task get_entry_on_an_unauthorised_key_reads_back_not_found_for_the_reader()
     {
         // The reader can read treeA under "x/" but not key "y/1"; per-key
-        // enforcement denies it, which the facade surfaces as key-not-found and
-        // the gRPC binding maps to an RpcException with StatusCode.NotFound.
-        var ex = Assert.ThrowsAsync<RpcException>(async () => await CallAsync(
+        // enforcement denies it, which the facade surfaces as key-not-found. The
+        // structured typed not-found (issue #1339 Finding 1) preserves existence-
+        // hiding: the reader sees the same KeyNotFound status a genuine miss
+        // returns, with no entry, and no leak of whether "y/1" exists.
+        var response = await CallAsync(
             _host.Methods.GetEntry,
             new EntryGetRequest { TreeId = TreeA, Key = "y/1" },
-            Reader));
+            Reader);
 
-        Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.NotFound));
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.Status, Is.EqualTo(StateQueryStatus.KeyNotFound));
+            Assert.That(response.Entry, Is.Null);
+        });
     }
 
     [Test]
@@ -162,14 +168,22 @@ public sealed class AuthGrpcStateVisibilityTests
     }
 
     [Test]
-    public void get_entry_without_a_credential_header_fails_closed()
+    public async Task get_entry_without_a_credential_header_fails_closed()
     {
-        var ex = Assert.ThrowsAsync<RpcException>(async () => await CallAsync(
+        // An unresolved caller cannot see the tree at all, so the fully-hidden tree
+        // reads back as tree-not-found rather than leaking the record. The typed
+        // not-found (issue #1339 Finding 1) preserves fail-closed hiding: the
+        // response is TreeNotFound with no entry, identical to an unknown tree.
+        var response = await CallAsync(
             _host.Methods.GetEntry,
             new EntryGetRequest { TreeId = TreeA, Key = "x/1" },
-            subject: null));
+            subject: null);
 
-        Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.NotFound));
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.Status, Is.EqualTo(StateQueryStatus.TreeNotFound));
+            Assert.That(response.Entry, Is.Null);
+        });
     }
 
     [Test]

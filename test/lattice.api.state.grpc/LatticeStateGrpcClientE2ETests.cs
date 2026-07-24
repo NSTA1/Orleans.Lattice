@@ -135,10 +135,28 @@ public class LatticeStateGrpcClientE2ETests
         Assert.That(present.Entry, Is.Not.Null);
         Assert.That(present.Entry!.Key, Is.EqualTo(presentKey));
 
-        var missingEx = Assert.ThrowsAsync<RpcException>(async () =>
-            await client.GetEntryAsync(new EntryGetRequest { TreeId = TreeId, Key = "no-such-key" }));
-        Assert.That(missingEx!.StatusCode, Is.EqualTo(StatusCode.NotFound),
-            "a missing key surfaces as a NotFound RPC fault through the public client");
+        // A missing key is a typed not-found (KeyNotFound), not a transport fault:
+        // the structured response distinguishes it from an unknown tree so a
+        // routine miss never surfaces as an opaque error (issue #1339).
+        var missing = await client.GetEntryAsync(new EntryGetRequest { TreeId = TreeId, Key = "no-such-key" });
+        Assert.Multiple(() =>
+        {
+            Assert.That(missing.Status, Is.EqualTo(StateQueryStatus.KeyNotFound),
+                "a missing key in an existing tree reports a typed KeyNotFound, not a thrown fault");
+            Assert.That(missing.Entry, Is.Null, "a not-found response carries no entry");
+            Assert.That(missing.Key, Is.EqualTo("no-such-key"));
+        });
+
+        // An unknown tree is a distinct typed not-found (TreeNotFound), so the two
+        // not-found cases stay distinguishable by status.
+        var unknownTree = await client.GetEntryAsync(
+            new EntryGetRequest { TreeId = "tree-that-does-not-exist", Key = presentKey });
+        Assert.Multiple(() =>
+        {
+            Assert.That(unknownTree.Status, Is.EqualTo(StateQueryStatus.TreeNotFound),
+                "an unknown tree reports TreeNotFound, distinct from KeyNotFound");
+            Assert.That(unknownTree.Entry, Is.Null);
+        });
 
         // Live metric streaming through the public client: the first emitted
         // snapshot is the initial full sample and must carry the tree's counts.

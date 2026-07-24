@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Membership;
@@ -258,14 +259,73 @@ internal sealed class LatticeAuthAdmin(
         ArgumentNullException.ThrowIfNull(request);
         await AuthorizeAdminAsync(cancellationToken).ConfigureAwait(false);
 
+        // Fold the cluster-wide "*" wildcard bucket into the per-tree listing so a
+        // Tree:* rule that effectively governs this tree is surfaced rather than
+        // silently omitted (issue #1339). The reserved "*" tree lists only its own
+        // bucket. Paging is by (tree id, rule id) - the same catalog key
+        // ListRulesAsync uses - so the merged, wildcard-inclusive stream advances
+        // monotonically. Each store bucket is ascending by rule id (hence by
+        // catalog key within its fixed tree-id prefix), so a two-way merge yields a
+        // globally catalog-key-ordered stream.
+        var source = string.Equals(treeId, LatticeScope.ClusterWideTreeId, StringComparison.Ordinal)
+            ? _store.ListRulesForTreeAsync(treeId, cancellationToken)
+            : MergeByCatalogKeyAsync(
+                _store.ListRulesForTreeAsync(LatticeScope.ClusterWideTreeId, cancellationToken),
+                _store.ListRulesForTreeAsync(treeId, cancellationToken),
+                cancellationToken);
+
         var (page, next) = await PageAsync(
-            _store.ListRulesForTreeAsync(treeId, cancellationToken),
+            source,
             request.PageToken,
             request.EffectivePageSize,
-            static r => r.RuleId,
+            RuleCatalogKey,
             cancellationToken).ConfigureAwait(false);
 
         return new AuthRulePage { Entries = page, NextPageToken = next };
+    }
+
+    /// <summary>
+    /// Merges two rule streams that are each ascending by <see cref="RuleCatalogKey"/>
+    /// into a single ascending-by-catalog-key stream, streaming without buffering
+    /// either source. Used to fold the cluster-wide <c>*</c> wildcard bucket into a
+    /// per-tree rule listing.
+    /// </summary>
+    private static async IAsyncEnumerable<LatticeAuthorizationRule> MergeByCatalogKeyAsync(
+        IAsyncEnumerable<LatticeAuthorizationRule> left,
+        IAsyncEnumerable<LatticeAuthorizationRule> right,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await using var l = left.GetAsyncEnumerator(cancellationToken);
+        await using var r = right.GetAsyncEnumerator(cancellationToken);
+
+        var hasL = await l.MoveNextAsync().ConfigureAwait(false);
+        var hasR = await r.MoveNextAsync().ConfigureAwait(false);
+
+        while (hasL && hasR)
+        {
+            if (string.CompareOrdinal(RuleCatalogKey(l.Current), RuleCatalogKey(r.Current)) <= 0)
+            {
+                yield return l.Current;
+                hasL = await l.MoveNextAsync().ConfigureAwait(false);
+            }
+            else
+            {
+                yield return r.Current;
+                hasR = await r.MoveNextAsync().ConfigureAwait(false);
+            }
+        }
+
+        while (hasL)
+        {
+            yield return l.Current;
+            hasL = await l.MoveNextAsync().ConfigureAwait(false);
+        }
+
+        while (hasR)
+        {
+            yield return r.Current;
+            hasR = await r.MoveNextAsync().ConfigureAwait(false);
+        }
     }
 
     // ----- Policy introspection -----
@@ -475,11 +535,48 @@ internal sealed class LatticeAuthAdmin(
         CancellationToken cancellationToken)
     {
         var matched = new List<LatticeAuthorizationRule>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
         var cap = _apiOptions.MaxExplanationRules;
         var groupSet = ToGroupSet(subject.GroupIds);
 
+        // Scan the target tree's own rules first, then the cluster-wide "*" bucket
+        // so a Tree:* wildcard rule that grants (or denies) the request is cited in
+        // the explanation rather than silently omitted (issue #1339). The gate's
+        // verdict is authoritative; this only assembles the human-facing rule list.
+        await CollectFromTreeAsync(scope.TreeId, subject, operation, scope, groupSet, matched, seen, cap, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (!string.Equals(scope.TreeId, LatticeScope.ClusterWideTreeId, StringComparison.Ordinal))
+        {
+            await CollectFromTreeAsync(
+                LatticeScope.ClusterWideTreeId, subject, operation, scope, groupSet, matched, seen, cap, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        matched.Sort(static (a, b) => string.CompareOrdinal(a.RuleId, b.RuleId));
+        return matched;
+    }
+
+    /// <summary>
+    /// Appends every rule stored under <paramref name="treeId"/> that governs the
+    /// explain request (operation, subject, and scope overlap) to
+    /// <paramref name="matched"/>, deduplicating by rule id and honouring the
+    /// explanation cap. Used to fold both the target tree's exact rules and the
+    /// cluster-wide "*" wildcard bucket into a single citation list.
+    /// </summary>
+    private async Task CollectFromTreeAsync(
+        string treeId,
+        LatticeSubject subject,
+        LatticeOperation operation,
+        LatticeScope scope,
+        HashSet<string> groupSet,
+        List<LatticeAuthorizationRule> matched,
+        HashSet<string> seen,
+        int cap,
+        CancellationToken cancellationToken)
+    {
         // ListRulesForTreeAsync scans the policy tree system-origin internally.
-        await foreach (var rule in _store.ListRulesForTreeAsync(scope.TreeId, cancellationToken).ConfigureAwait(false))
+        await foreach (var rule in _store.ListRulesForTreeAsync(treeId, cancellationToken).ConfigureAwait(false))
         {
             if (matched.Count >= cap)
             {
@@ -501,11 +598,13 @@ internal sealed class LatticeAuthAdmin(
                 continue;
             }
 
+            if (!seen.Add(rule.RuleId))
+            {
+                continue;
+            }
+
             matched.Add(rule);
         }
-
-        matched.Sort(static (a, b) => string.CompareOrdinal(a.RuleId, b.RuleId));
-        return matched;
     }
 
     private static (string? Key, string? RangeStart, string? RangeEnd) TranslateScope(LatticeScope scope) =>

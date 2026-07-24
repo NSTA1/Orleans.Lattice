@@ -182,6 +182,7 @@ internal sealed class StateToolGroup : ILatticeApiMcpToolGroup
                 Name = name,
                 Title = title,
                 Description = description,
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 ReadOnly = true,
                 Destructive = false,
                 UseStructuredContent = true,
