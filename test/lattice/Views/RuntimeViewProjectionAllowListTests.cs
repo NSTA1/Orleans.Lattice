@@ -92,6 +92,56 @@ public sealed class RuntimeViewProjectionAllowListTests
     }
 
     [Test]
+    public void Resolve_falls_back_to_the_full_name_when_the_persisted_assembly_version_no_longer_matches()
+    {
+        // A view persisted by an older build of this assembly recorded a version-
+        // pinned AQN. After a package bump the exact AQN no longer matches the
+        // loaded type, but the version-free full name still identifies the same
+        // still-loaded projection, so re-hydration must recover it rather than
+        // leaving the view dormant.
+        var type = typeof(AllowedViewProjection);
+        var staleAqn =
+            $"{type.FullName}, {type.Assembly.GetName().Name}, Version=0.0.0.1, Culture=neutral, PublicKeyToken=null";
+
+        // Sanity: the forged version really does differ from the loaded AQN, so
+        // the exact-name path genuinely misses and the fallback is what recovers it.
+        Assert.That(staleAqn, Is.Not.EqualTo(type.AssemblyQualifiedName));
+
+        var resolved = RuntimeViewProjectionAllowList.Resolve(staleAqn, isAggregation: false);
+
+        Assert.That(resolved, Is.EqualTo(type));
+    }
+
+    [Test]
+    public void Resolve_full_name_fallback_still_enforces_the_projection_kind()
+    {
+        // The version-bump fallback must not weaken the kind check: a view
+        // projection named under a stale version is still rejected when requested
+        // as an aggregation.
+        var type = typeof(AllowedViewProjection);
+        var staleAqn =
+            $"{type.FullName}, {type.Assembly.GetName().Name}, Version=0.0.0.1, Culture=neutral, PublicKeyToken=null";
+
+        var resolved = RuntimeViewProjectionAllowList.Resolve(staleAqn, isAggregation: true);
+
+        Assert.That(resolved, Is.Null);
+    }
+
+    [Test]
+    public void Resolve_full_name_fallback_stays_within_the_loaded_projection_set()
+    {
+        // The fallback keys on the version-free full name, but only within the
+        // allow-list, so a non-projection full name under a forged version is
+        // still rejected without loading the assembly.
+        var staleAqn =
+            $"{typeof(string).FullName}, System.Private.CoreLib, Version=0.0.0.1, Culture=neutral, PublicKeyToken=forged";
+
+        var resolved = RuntimeViewProjectionAllowList.Resolve(staleAqn, isAggregation: false);
+
+        Assert.That(resolved, Is.Null);
+    }
+
+    [Test]
     public void Resolve_returns_null_for_null_or_empty()
     {
         Assert.Multiple(() =>

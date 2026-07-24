@@ -185,7 +185,10 @@ public class MaterialisedViewLifecycleManagementTests
             Assert.That(record!.SourceTreeId, Is.EqualTo(tree));
             Assert.That(record.IsAggregation, Is.False);
             Assert.That(record.ProjectionVersion, Is.EqualTo(new IdentityViewProjection().ProjectionVersion));
-            Assert.That(record.ProjectionTypeName, Does.Contain(nameof(IdentityViewProjection)));
+            // The persisted identity is the projection's version-free full name, so
+            // a package bump does not strand the view on re-hydration.
+            Assert.That(record.ProjectionTypeName, Is.EqualTo(typeof(IdentityViewProjection).FullName));
+            Assert.That(record.ProjectionTypeName, Does.Not.Contain("Version="));
         });
     }
 

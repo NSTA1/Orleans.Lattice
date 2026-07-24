@@ -30,9 +30,13 @@ internal sealed record RuntimeViewRegistration
     public required string SourceTreeId { get; init; }
 
     /// <summary>
-    /// The projection's concrete CLR type, captured as an
-    /// <see cref="System.Type.AssemblyQualifiedName"/> so it can be re-resolved
-    /// from the silo service provider on re-hydration.
+    /// The projection's concrete CLR type identity, captured as its version-free
+    /// <see cref="System.Type.FullName"/> (the namespace-qualified type name) so it
+    /// can be re-resolved from the silo service provider on re-hydration without
+    /// pinning the projection assembly's version - a package bump must not strand
+    /// the view. Records written by older builds hold an
+    /// <see cref="System.Type.AssemblyQualifiedName"/> instead; re-hydration
+    /// recovers the full name embedded in it, so those still resolve.
     /// </summary>
     [Id(2)]
     public required string ProjectionTypeName { get; init; }

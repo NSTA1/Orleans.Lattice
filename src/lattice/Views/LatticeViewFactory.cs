@@ -196,7 +196,18 @@ internal sealed class LatticeViewFactory(
             if (!IsStartupDeclared(viewName))
             {
                 var projection = (object?)registration.AggregationProjection ?? registration.Projection;
-                var typeName = projection!.GetType().AssemblyQualifiedName;
+
+                // Persist the projection's version-free full name (the namespace-
+                // qualified type name) rather than its assembly-qualified name. The
+                // AQN pins the assembly version at creation time, so a package bump
+                // would leave the persisted identity unmatchable on re-hydration and
+                // silently strand the view (it stays dormant until re-created). The
+                // full name is the stable identity; RuntimeViewProjectionAllowList
+                // resolves it against the set of projection types already loaded on
+                // the silo, so the load-time anti-tamper constraint is preserved.
+                // Registrations written by older builds hold an AQN; the allow-list
+                // recovers the full name embedded in it, so they re-hydrate too.
+                var typeName = projection!.GetType().FullName;
                 if (typeName is not null)
                 {
                     await RegistryGrain.RegisterAsync(new RuntimeViewRegistration
