@@ -56,13 +56,57 @@ internal static class RuntimeViewProjectionAllowList
         var allowList = GetAllowList();
         if (!allowList.TryGetValue(projectionTypeName, out var type))
         {
-            return null;
+            // Version-bump resilience: the persisted name is the projection's
+            // assembly-qualified name, which pins the assembly version at the time
+            // the view was created. After the projection's assembly is upgraded
+            // (a package bump), that exact AQN no longer matches the loaded type's
+            // AQN, so the exact-name lookup above misses. The allow-list is also
+            // keyed on the version-free full name, so fall back to that. This stays
+            // within the loaded-projection set (it never loads a new assembly or
+            // widens the trust surface); it only lets a still-loaded projection
+            // re-hydrate a view persisted by an older build of the same assembly.
+            var fullName = ExtractTypeFullName(projectionTypeName);
+            if (fullName is null || !allowList.TryGetValue(fullName, out type))
+            {
+                return null;
+            }
         }
 
         var required = isAggregation
             ? typeof(ILatticeAggregationProjection)
             : typeof(ILatticeViewProjection);
         return required.IsAssignableFrom(type) ? type : null;
+    }
+
+    /// <summary>
+    /// Extracts the version-free type full name (the namespace-qualified type name
+    /// without the trailing assembly identity) from an assembly-qualified name, or
+    /// <see langword="null"/> when the name is already a bare full name (no
+    /// assembly suffix to strip). The scan is bracket-depth aware so a generic
+    /// type's argument list - whose own assembly-qualified names contain commas -
+    /// is not mistaken for the type/assembly separator.
+    /// </summary>
+    private static string? ExtractTypeFullName(string assemblyQualifiedName)
+    {
+        var depth = 0;
+        for (var i = 0; i < assemblyQualifiedName.Length; i++)
+        {
+            var c = assemblyQualifiedName[i];
+            if (c == '[')
+            {
+                depth++;
+            }
+            else if (c == ']')
+            {
+                depth--;
+            }
+            else if (c == ',' && depth == 0)
+            {
+                return assemblyQualifiedName[..i].Trim();
+            }
+        }
+
+        return null;
     }
 
     private static FrozenDictionary<string, Type> GetAllowList()
