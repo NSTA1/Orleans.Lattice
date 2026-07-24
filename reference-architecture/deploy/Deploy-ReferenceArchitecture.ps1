@@ -711,6 +711,7 @@ try {
             authDefaultEffect          = $AuthDefaultEffect
             requireApiAuthorization    = $RequireApiAuthorization
             enableReplicationControl   = $EnableReplicationControl
+            enableBackupControl        = $EnableBackupControl
             enableDigestAntiEntropy    = $EnableDigestAntiEntropy
             digestProbeIntervalSeconds = $DigestProbeIntervalSeconds
             dataApiEnabled             = $EnableDataApi
