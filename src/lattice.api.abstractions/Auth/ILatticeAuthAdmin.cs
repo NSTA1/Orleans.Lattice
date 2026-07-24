@@ -112,7 +112,17 @@ public interface ILatticeAuthAdmin
     /// <param name="cancellationToken">Cancels the scan.</param>
     Task<AuthRulePage> ListRulesAsync(AuthPageRequest request, CancellationToken cancellationToken = default);
 
-    /// <summary>Reads one page of the rules governing a single tree, ordered by rule id.</summary>
+    /// <summary>Reads one page of the rules governing a single tree, ordered by <c>(governed tree id, rule id)</c>.</summary>
+    /// <remarks>
+    /// Returns the tree's own rules <b>and</b> the cluster-wide wildcard rules (scope
+    /// <c>Tree:*</c>, authored via <see cref="LatticeScope.ClusterWide"/>) that
+    /// effectively govern it - the wildcard rules are stored under the reserved
+    /// <c>*</c> tree id and carry <c>Scope.TreeId == "*"</c>, so a caller can tell
+    /// them apart from exact-tree rules. Reading the reserved <c>*</c> tree itself
+    /// returns only its own bucket. For the resolved verdict a subject's access
+    /// actually receives, use <see cref="ExplainAsync"/> or
+    /// <see cref="EffectivePermissionsAsync"/>.
+    /// </remarks>
     /// <param name="treeId">The governed tree id. Must not be <c>null</c> or empty.</param>
     /// <param name="request">Paging request (page size and continuation cursor). Must not be <c>null</c>.</param>
     /// <param name="cancellationToken">Cancels the scan.</param>

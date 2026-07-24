@@ -288,17 +288,14 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
     public override Task<EntryGetResponse> GetEntry(EntryGetRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static async (q, req, ct) =>
         {
+            // A not-found outcome (unknown tree or missing key) is part of the
+            // typed contract, not a fault: the response carries a Status field that
+            // distinguishes TreeNotFound from KeyNotFound, so both cases return the
+            // structured response rather than throwing a NotFound RpcException. The
+            // client maps the status onto its typed not-found result; throwing here
+            // would collapse both cases into one opaque transport error and force
+            // the caller to treat a routine miss as an exception (issue #1339).
             var result = await q.GetEntryAsync(req.TreeId, req.Key, ct).ConfigureAwait(false);
-            if (result.Status == StateQueryStatus.TreeNotFound)
-            {
-                throw NotFound($"Tree '{result.TreeId}' was not found.");
-            }
-
-            if (result.Status == StateQueryStatus.KeyNotFound)
-            {
-                throw NotFound($"Key '{result.Key}' was not found in tree '{result.TreeId}'.");
-            }
-
             return new EntryGetResponse
             {
                 Status = result.Status,

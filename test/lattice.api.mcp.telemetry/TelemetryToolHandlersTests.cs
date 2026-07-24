@@ -574,6 +574,26 @@ public sealed class TelemetryToolHandlersTests
     }
 
     [Test]
+    public async Task MetricMetadata_degrades_a_404_metadata_endpoint_to_a_graceful_empty_result()
+    {
+        // A backend whose metadata endpoint 404s (unpopulated or partly unwired)
+        // must not surface a raw 404 passthrough: it degrades to an empty success,
+        // consistent with how list_metrics and the query tools return empty on an
+        // empty backend (issue #1339). Distinct from a genuine backend fault (see
+        // the BadGateway test above, which stays a failure).
+        var client = Client("{}", out _, HttpStatusCode.NotFound);
+
+        var result = await TelemetryToolHandlers.MetricMetadataAsync(client, ReadAll(), CancellationToken.None, metric: null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Success, Is.True, "a 404 metadata endpoint degrades to success, not a raw passthrough");
+            Assert.That(result.Error, Is.Null);
+            Assert.That(result.Metrics, Is.Empty);
+        });
+    }
+
+    [Test]
     public void MetricMetadata_rejects_a_null_policy()
         => Assert.ThrowsAsync<ArgumentNullException>(
             () => TelemetryToolHandlers.MetricMetadataAsync(

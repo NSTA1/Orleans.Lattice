@@ -172,25 +172,43 @@ public class LatticeStateGrpcIntegrationTests
     }
 
     [Test]
-    public void get_entry_maps_missing_key_to_not_found_status_code()
+    public async Task get_entry_maps_missing_key_to_a_typed_key_not_found_status()
     {
-        var ex = Assert.ThrowsAsync<RpcException>(async () =>
+        // Issue #1339 Finding 1: a missing key in an existing tree is part of the
+        // typed contract, not a transport fault. The binding returns a structured
+        // response carrying StateQueryStatus.KeyNotFound with a null entry rather
+        // than throwing a NotFound RpcException.
+        var treeId = $"grpc-get-missing-{Guid.NewGuid():N}";
+        await _fixture.RegisterTreeAsync(treeId, shardCount: 1);
+
+        var response = await CallAsync(_host.Channel, _host.Methods.GetEntry,
+            new EntryGetRequest { TreeId = treeId, Key = "no-such-key" });
+
+        Assert.Multiple(() =>
         {
-            var treeId = $"grpc-get-missing-{Guid.NewGuid():N}";
-            await _fixture.RegisterTreeAsync(treeId, shardCount: 1);
-            await CallAsync(_host.Channel, _host.Methods.GetEntry,
-                new EntryGetRequest { TreeId = treeId, Key = "no-such-key" });
+            Assert.That(response.Status, Is.EqualTo(StateQueryStatus.KeyNotFound));
+            Assert.That(response.TreeId, Is.EqualTo(treeId));
+            Assert.That(response.Key, Is.EqualTo("no-such-key"));
+            Assert.That(response.Entry, Is.Null);
         });
-        Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.NotFound));
     }
 
     [Test]
-    public void get_entry_maps_missing_tree_to_not_found_status_code()
+    public async Task get_entry_maps_missing_tree_to_a_typed_tree_not_found_status()
     {
-        var ex = Assert.ThrowsAsync<RpcException>(async () =>
-            await CallAsync(_host.Channel, _host.Methods.GetEntry,
-                new EntryGetRequest { TreeId = $"missing-{Guid.NewGuid():N}", Key = "k" }));
-        Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.NotFound));
+        // Issue #1339 Finding 1: an unknown tree is distinguishable from a missing
+        // key by status (TreeNotFound vs KeyNotFound), and neither throws.
+        var treeId = $"missing-{Guid.NewGuid():N}";
+
+        var response = await CallAsync(_host.Channel, _host.Methods.GetEntry,
+            new EntryGetRequest { TreeId = treeId, Key = "k" });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.Status, Is.EqualTo(StateQueryStatus.TreeNotFound));
+            Assert.That(response.TreeId, Is.EqualTo(treeId));
+            Assert.That(response.Entry, Is.Null);
+        });
     }
 
     [Test]

@@ -78,23 +78,25 @@ internal static class AuthToolHandlers
     }
 
     /// <summary>Returns the direct members (users and nested groups) of a group.</summary>
-    public static Task<IReadOnlyList<string>> ListGroupMembersAsync(
+    public static async Task<AuthGroupMembersResult> ListGroupMembersAsync(
         ILatticeAuthAdmin admin,
         string groupId,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(admin);
-        return admin.ListGroupMembersAsync(groupId, cancellationToken);
+        var members = await admin.ListGroupMembersAsync(groupId, cancellationToken).ConfigureAwait(false);
+        return new AuthGroupMembersResult { GroupId = groupId, Members = members };
     }
 
     /// <summary>Returns the full transitive set of group ids a member belongs to.</summary>
-    public static Task<IReadOnlyList<string>> ListSubjectGroupsAsync(
+    public static async Task<AuthSubjectGroupsResult> ListSubjectGroupsAsync(
         ILatticeAuthAdmin admin,
         string memberId,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(admin);
-        return admin.ListSubjectGroupsAsync(memberId, cancellationToken);
+        var groups = await admin.ListSubjectGroupsAsync(memberId, cancellationToken).ConfigureAwait(false);
+        return new AuthSubjectGroupsResult { MemberId = memberId, Groups = groups };
     }
 
     /// <summary>Reads a single rule by its governed tree id and rule id, or <c>null</c> when none exists.</summary>

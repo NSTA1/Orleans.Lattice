@@ -50,6 +50,10 @@ public sealed class AuthAdminPolicyTests
         string ruleId, string group, string treeId, LatticeOperation ops) =>
         new(ruleId, LatticeSubjectSelector.Group(group), LatticeScope.Tree(treeId), ops, LatticeEffect.Allow);
 
+    private static LatticeAuthorizationRule AllowUserClusterWide(
+        string ruleId, string subject, LatticeOperation ops) =>
+        new(ruleId, LatticeSubjectSelector.User(subject), LatticeScope.ClusterWide(), ops, LatticeEffect.Allow);
+
     /// <summary>
     /// Resolves a named subject exactly as the facade does (system-origin group
     /// closure), so a parity assertion feeds the gate the same subject the facade
@@ -171,6 +175,113 @@ public sealed class AuthAdminPolicyTests
             Assert.That(deniedExplanation.Allowed, Is.EqualTo(deniedDecision.Allowed));
             Assert.That(deniedExplanation.Allowed, Is.False, "the ungranted Write must be denied");
         });
+    }
+
+    [Test]
+    public async Task explain_cites_a_wildcard_tree_rule_that_granted_access()
+    {
+        // Repro of issue #1339 Finding 5: the bootstrap-admin caller is granted by
+        // the root-of-trust bypass (allowed:true), and it also holds a Tree:*
+        // wildcard Allow rule. Before the fix, matchedRules only scanned the exact
+        // target tree, so the granting wildcard rule was omitted and explain
+        // asserted a verdict without citing any rule. After the fix, the cluster-
+        // wide "*" bucket is folded into the citation list.
+        const string tree = "policy-wildcard-explain";
+        const string ruleId = "ra-admin-full-access";
+        var scope = LatticeScope.Key(tree, "alpha");
+
+        using (AsAdmin())
+        {
+            await _fixture.Admin.PutRuleAsync(
+                AllowUserClusterWide(ruleId, AuthAdminClusterFixture.BootstrapAdmin, LatticeOperation.Write));
+        }
+
+        await _fixture.RebuildAsync();
+
+        AuthExplanation explanation;
+        using (AsAdmin())
+        {
+            explanation = await _fixture.Admin.ExplainAsync(
+                AuthAdminClusterFixture.BootstrapAdmin, LatticeOperation.Write, scope);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(explanation.Allowed, Is.True, "the bootstrap-admin root-of-trust grants the write");
+            Assert.That(explanation.MatchedRules.Select(r => r.RuleId), Does.Contain(ruleId),
+                "the Tree:* wildcard rule that governs the request must be cited (issue #1339)");
+        });
+    }
+
+    [Test]
+    public async Task list_rules_for_tree_includes_governing_wildcard_rules()
+    {
+        // Issue #1339 Finding 6: list_rules_for_tree now surfaces the cluster-wide
+        // Tree:* wildcard rules that effectively govern the tree alongside its own
+        // exact-treeId rules, so a caller cannot wrongly conclude a wildcard-governed
+        // tree is ungoverned. A wildcard rule is recognisable by Scope.TreeId == "*".
+        const string tree = "policy-wildcard-list";
+        using (AsAdmin())
+        {
+            await _fixture.Admin.PutRuleAsync(
+                AllowUserClusterWide("wildcard-only", Subject, LatticeOperation.Read));
+            await _fixture.Admin.PutRuleAsync(
+                AllowUserKey("exact-only", Subject, tree, "k", LatticeOperation.Read));
+
+            var listed = new List<LatticeAuthorizationRule>();
+            string? token = null;
+            do
+            {
+                var page = await _fixture.Admin.ListRulesForTreeAsync(
+                    tree, new AuthPageRequest { PageSize = 10, PageToken = token });
+                listed.AddRange(page.Entries);
+                token = page.NextPageToken;
+            }
+            while (token is not null);
+
+            var ruleIds = listed.Select(r => r.RuleId).ToList();
+            Assert.Multiple(() =>
+            {
+                Assert.That(ruleIds, Does.Contain("exact-only"),
+                    "an exact-treeId rule is listed");
+                Assert.That(ruleIds, Does.Contain("wildcard-only"),
+                    "a Tree:* wildcard rule governing the tree is now included (issue #1339 Finding 6)");
+                Assert.That(
+                    listed.Single(r => r.RuleId == "wildcard-only").Scope.TreeId,
+                    Is.EqualTo(LatticeScope.ClusterWideTreeId),
+                    "the wildcard rule keeps its '*' scope tree id so callers can tell it apart");
+                Assert.That(
+                    listed.Single(r => r.RuleId == "exact-only").Scope.TreeId,
+                    Is.EqualTo(tree));
+            });
+        }
+    }
+
+    [Test]
+    public async Task list_rules_for_tree_of_the_reserved_wildcard_tree_lists_only_its_own_bucket()
+    {
+        // Reading the reserved "*" tree returns only its own bucket - it must not
+        // recursively fold itself in - so a wildcard rule appears exactly once.
+        using (AsAdmin())
+        {
+            await _fixture.Admin.PutRuleAsync(
+                AllowUserClusterWide("wildcard-self", Subject, LatticeOperation.Read));
+
+            var listed = new List<LatticeAuthorizationRule>();
+            string? token = null;
+            do
+            {
+                var page = await _fixture.Admin.ListRulesForTreeAsync(
+                    LatticeScope.ClusterWideTreeId, new AuthPageRequest { PageSize = 10, PageToken = token });
+                listed.AddRange(page.Entries);
+                token = page.NextPageToken;
+            }
+            while (token is not null);
+
+            Assert.That(
+                listed.Count(r => r.RuleId == "wildcard-self"), Is.EqualTo(1),
+                "the reserved '*' tree lists its own bucket exactly once");
+        }
     }
 
     [Test]
