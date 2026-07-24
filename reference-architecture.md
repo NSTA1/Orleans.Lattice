@@ -150,7 +150,7 @@ region with deliberately different scaling profiles:
 
 | Head | Image | Min | Max | Rationale |
 |---|---|---|---|---|
-| Silo | built (silo host) | 1 | 10 | Stateful cluster member; a min floor keeps a membership quorum and never cold-starts the data plane. Scales up on WAL pressure. |
+| Silo | built (silo host) | 1 | 3 | Stateful cluster member; a min floor keeps a membership quorum and never cold-starts the data plane. Scales up on WAL pressure. |
 | MCP | built (MCP host) | 0 | N | Stateless remote MCP server; cold-starts on demand, idle at zero. |
 | Explorer | built (Explorer host) | 0 | N | Stateless operator console; a small admin tool, idle at zero. |
 | Grafana | stock `grafana/grafana-oss` | 0 | 1 | Stateless visualization head, provisioned config only, no database or volume. |
@@ -161,7 +161,7 @@ isolated-head design: an admin tool must not tax the data plane's scale economic
 
 ## Intra-region silo clustering
 
-The silo is a **single container app** whose **replicas** (1 to 10) form the
+The silo is a **single container app** whose **replicas** (1 to 3) form the
 Orleans cluster. Replicas discover and address each other two ways working
 together:
 
@@ -319,6 +319,12 @@ space:
   the per-region VNets are joined by **full-mesh global VNet peering**, so
   cross-region replication travels private address space and is never publicly
   reachable.
+- Because an internal ACA environment injected into a customer VNet gets **no
+  automatic private DNS zone**, the kit provisions **customer-managed private DNS**
+  (one zone per environment default domain, a wildcard A record to each
+  environment's static inbound IP, linked to every region VNet) so each region can
+  resolve its peers' internal head FQDNs. This is deployed by the Bicep
+  (`modules/privatedns.bicep`), not a manual step.
 - Replication is **still authenticated by the per-cluster replication key** (held
   in each region's Key Vault, read via managed identity), layered on top of the
   private transport as **defense in depth** - so a caller that reaches the
@@ -348,7 +354,7 @@ flowchart TB
     subgraph Private["Private option (VNet-injected, internal ingress)"]
         VA["Region A VNet<br/>internal-only ingress"]
         VB["Region B VNet<br/>internal-only ingress"]
-        VA <-->|"full-mesh VNet peering<br/>+ replication key auth"| VB
+        VA <-->|"full-mesh VNet peering + customer-managed private DNS<br/>+ replication key auth"| VB
         VKV["Key Vault: replication key<br/>(managed identity, subnet-firewalled)"]
         VA --- VKV
     end

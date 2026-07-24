@@ -168,12 +168,16 @@ transport as defense in depth, so `-ReplicationKey` is required here too.
     -ReplicationKey $key -GrafanaAdminPassword $gpw
 ```
 
-Private-option cross-region name resolution requires each region's VNet to be
-linked to its peers' ACA managed private DNS zones. Those zones are created in the
-platform-managed resource group once each environment exists, so this link is a
-manual post-deploy step (the private-option network foundation and its full-mesh
-peering live in `bicep/modules/vnet.bicep`); it is the one part of the private
-option that is not expressible before the environments are provisioned.
+Private-option cross-region name resolution is handled automatically by the kit.
+An internal ACA environment injected into a customer VNet gets no automatic
+private DNS zone, so `bicep/modules/privatedns.bicep` (deployed by `main.bicep`
+only when `-DeploymentOption private`) provisions one customer-managed private DNS
+zone per environment default domain, publishes a wildcard A record pointing every
+`*.<defaultDomain>` at that environment's static inbound IP, and links every zone
+to every region VNet. Each region can then resolve its peers' internal head FQDNs
+over the peered private network, so cross-region replication converges with no
+manual DNS step. The per-region VNet foundation and its full-mesh peering live in
+`bicep/modules/vnet.bicep`.
 
 Every managed environment is **zone-redundant** by default (`zoneRedundant`,
 default `true`) under both options, because both are VNet-injected. Once the silo
@@ -435,7 +439,7 @@ deployment option.
 4. **Autoscale.** Drive load at one region's silo and confirm the KEDA scaler
    raises the replica count above the floor, then scales back down after the load
    stops.
-   - Evidence: recorded. Each silo and MCP head carries a KEDA Prometheus scaler (WAL-pressure metric, minReplicas 1, maxReplicas 3, 30s poll, 300s cooldown), verified on the live estate. Availability under change was validated directly: a forced single-revision silo cutover served continuous HTTP 200 with zero dropped requests across the roll, as the readiness and startup probes gate traffic to warm replicas only. A sustained load-driven scale-out / scale-in timeline was not captured.
+   - Evidence: recorded. The silo carries a KEDA Prometheus scaler (WAL-pressure metric, minReplicas 1, maxReplicas 3, 30s poll, 300s cooldown), verified on the live estate; the MCP and Explorer heads scale to zero and back (minReplicas 0, maxReplicas 3) on an HTTP concurrency rule. Availability under change was validated directly: a forced single-revision silo cutover served continuous HTTP 200 with zero dropped requests across the roll, as the readiness and startup probes gate traffic to warm replicas only. A sustained load-driven scale-out / scale-in timeline was not captured.
 5. **Backup and restore.** Confirm the primary region writes a backup chain to
    the sink, then perform a restore into a standby and confirm the restored value
    is present and causally consistent.
