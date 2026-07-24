@@ -107,7 +107,7 @@ flowchart TB
     end
 
     subgraph RegionA["Region A (ACA environment)"]
-        SA["Silo app<br/>min 1 / max 10"]
+        SA["Silo app<br/>min 1 / max 3"]
         MA["MCP head<br/>scale to zero"]
         EA["Explorer head<br/>scale to zero"]
         GA["Grafana head<br/>scale to zero"]
@@ -116,7 +116,7 @@ flowchart TB
     end
 
     subgraph RegionB["Region B (ACA environment)"]
-        SB["Silo app<br/>min 1 / max 10"]
+        SB["Silo app<br/>min 1 / max 3"]
         MB["MCP head<br/>scale to zero"]
         EB["Explorer head<br/>scale to zero"]
         GB["Grafana head<br/>scale to zero"]
@@ -274,7 +274,7 @@ flowchart LR
     WAL["Per-silo WAL pressure"] --> SIG["lattice.scaling signal<br/>scaleValue (compute axis)"]
     SIG --> PROM["Managed Prometheus"]
     PROM --> KEDA["KEDA Prometheus scaler<br/>(ACA scale rule)"]
-    KEDA --> REPL["Silo replica count<br/>min 1 / max 10"]
+    KEDA --> REPL["Silo replica count<br/>min 1 / max 3"]
     REPL -->|"graceful scale-in"| DRAIN["Draining replica<br/>respects LatticeShuttingDownException"]
 ```
 
@@ -426,8 +426,8 @@ origin lock is **AFD Premium + Private Link** to an internal (VNet-injected,
 internal-ingress) environment, which removes the public ACA FQDN entirely - the
 **private** deployment option's upgrade path.
 
-
-Door WAF custom-rule policy to the Standard profile, and/or upgrade to AFD Premium
+The optional hardening path is to attach an Azure Front Door WAF custom-rule
+policy to the Standard profile, and/or upgrade to AFD Premium
 for Private Link private origins, managed WAF rule sets, and bot protection - with
 the cost trade-offs and private-option implications spelled out in
 [`reference-architecture/README.md`](reference-architecture/README.md).
@@ -475,7 +475,11 @@ sequenceDiagram
 
 ## Observability
 
-- **Azure Monitor managed Prometheus** scrapes the silo, MCP, and Explorer apps.
+- **Azure Monitor managed Prometheus** holds the region's metrics. Because a
+  Container Apps environment cannot natively scrape a container app into an Azure
+  Monitor workspace, an in-environment OpenTelemetry collector (one per region)
+  scrapes the silo `/metrics` endpoint over the internal network and remote-writes
+  the series into managed Prometheus.
 - The **MCP telemetry endpoint** (`Orleans.Lattice.Api.Mcp.Telemetry`) is backed
   by that managed Prometheus datasource, so the telemetry tool returns live
   metrics.

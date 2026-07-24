@@ -223,7 +223,7 @@ immediately under the same names.
 - The **silo** scales on the `lattice.scaling` compute-axis metric through a KEDA
   Prometheus scaler that queries the region's managed Prometheus. The floor is
   pinned at or above one replica (never zero) so the cluster always has a
-  membership quorum; the ceiling defaults to ten. A draining replica honours the
+  membership quorum; the ceiling defaults to three. A draining replica honours the
   termination grace period so in-flight shard transfers complete or hand off
   before exit.
 - The **MCP** and **Explorer** heads scale to zero and wake on HTTP concurrency;
@@ -405,10 +405,13 @@ plaintext h2c) documented and defaulted for development only. See
 
 ## Real-Azure validation runbook
 
-> Status: this runbook is authored and ready to run. The recorded evidence below
-> is left unchecked pending an operator executing it against a live subscription
-> (the reference deploy is intentionally not run as part of authoring this kit).
-> Fill in the evidence columns after a real run.
+> Status: this runbook is authored and ready to run. The kit has been deployed to
+> and operated against live Azure during development, including multi-region
+> (two-region) reference estates, exercising the deploy path, Entra auth, MCP and
+> Explorer reachability, and the backup and replication wiring. Capturing the
+> formal recorded evidence below (cross-region convergence, an autoscale timeline,
+> backup-and-restore, and a cost figure) is the outstanding step; fill in the
+> evidence columns after that run.
 
 Validated topology: two regions (for example `eastus` + `westeurope`), public
 network option, Entra enabled.
