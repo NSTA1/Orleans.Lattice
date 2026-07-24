@@ -155,7 +155,7 @@ param(
     [int]$SiloMinReplicas = 1,
 
     [ValidateRange(1, 100)]
-    [int]$SiloMaxReplicas = 10,
+    [int]$SiloMaxReplicas = 3,
 
     [ValidateSet('Deny', 'Allow')]
     [string]$AuthDefaultEffect = 'Deny',

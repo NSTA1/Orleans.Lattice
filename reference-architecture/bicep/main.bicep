@@ -60,9 +60,9 @@ param logAnalyticsRetentionInDays int = 30
 @minValue(1)
 param siloMinReplicas int = 1
 
-@description('Silo maximum replica count.')
+@description('Silo maximum replica count. Capped at 3 by default to bound data-plane scale-out (runaway KEDA scale-up was observed at the previous ceiling of 10).')
 @minValue(1)
-param siloMaxReplicas int = 10
+param siloMaxReplicas int = 3
 
 @description('OBSERVABILITY-SUBISSUE SEAM: managed-Prometheus query endpoint the silo KEDA scaler scrapes. Empty leaves every silo at its min-replica floor (the module still deploys).')
 param prometheusQueryEndpoint string = ''

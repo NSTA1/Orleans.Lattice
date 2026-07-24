@@ -82,7 +82,7 @@ guarantees) are documented in [`deploy/README.md`](deploy/README.md).
 | `-ReplicationTrees` | no | Estate-wide `treeName=MergeMode,...` map. |
 | `-BackupPrimaryRegionCode` | no | Defaults to the first region. |
 | `-IngressAllowedCidrs` | no | Ingress allow-list (public option). |
-| `-SiloMinReplicas` / `-SiloMaxReplicas` | no | Silo scale floor (default 1) and ceiling (default 10). The floor is never zero. |
+| `-SiloMinReplicas` / `-SiloMaxReplicas` | no | Silo scale floor (default 1) and ceiling (default 3). The floor is never zero. |
 | `-AuthDefaultEffect` | no | `Deny` (default, secure) or `Allow` (throwaway dev only). |
 | `-RequireApiAuthorization` | no | Default `$true`. |
 | `-EnableDataApi` | no | Default `$true`. Exposes the read-write Data API (write surface); set `-EnableDataApi:$false` to withhold it. |
@@ -110,7 +110,7 @@ through the script) are:
 | `imageTag` | (required) | Host image tag. |
 | `deploymentOption` | `public` | `public` or `private`. |
 | `zoneRedundant` | `true` | Zone-redundant compute (replicas spread across availability zones). Applies to both options - both are VNet-injected. |
-| `siloMinReplicas` / `siloMaxReplicas` | 1 / 10 | Silo autoscale bounds. |
+| `siloMinReplicas` / `siloMaxReplicas` | 1 / 3 | Silo autoscale bounds. |
 | `backupPrimaryRegionCode` | first region | The single backup-primary region. |
 | `replicationKey` | `''` | `@secure()`; the per-cluster replication key (both options - authenticates replication over public ingress, or over the private VNet mesh as defense in depth). |
 | `grafanaAdminPassword` | required | `@secure()`; per-region Grafana admin password (no default; must be non-empty). |

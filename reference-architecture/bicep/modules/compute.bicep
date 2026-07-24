@@ -105,9 +105,9 @@ param orleansGatewayPort int = 30000
 @minValue(1)
 param siloMinReplicas int = 1
 
-@description('Silo maximum replica count.')
+@description('Silo maximum replica count. Capped at 3 by default to bound the data-plane fan-out: the KEDA Prometheus scaler can otherwise ramp the silo well past the useful working set under load, which was observed to leave regions pinned at a high replica count (runaway scale-out) long after demand subsided. Raise deliberately for a genuinely larger keyspace.')
 @minValue(1)
-param siloMaxReplicas int = 10
+param siloMaxReplicas int = 3
 
 @description('Managed-Prometheus query endpoint the KEDA scaler scrapes the lattice.scaling signal from. OBSERVABILITY-SUBISSUE SEAM: empty string leaves the silo at its min-replica floor with no external scale rule wired, so this module builds and deploys standalone before observability lands.')
 param prometheusQueryEndpoint string = ''
@@ -123,9 +123,9 @@ param siloScaleThreshold string = '1'
 
 // --- Scale-to-zero heads ---
 
-@description('Maximum replicas for the MCP head (minimum is always 0).')
+@description('Maximum replicas for the MCP head (minimum is always 0). Capped at 3 by default to match the silo ceiling and bound scale-out for this small admin surface.')
 @minValue(1)
-param mcpMaxReplicas int = 5
+param mcpMaxReplicas int = 3
 
 @description('Maximum replicas for the Explorer head (minimum is always 0).')
 @minValue(1)
