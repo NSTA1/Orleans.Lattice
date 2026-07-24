@@ -1,0 +1,62 @@
+# =============================================================================
+# otel-collector-config.yaml - metrics scrape + remote-write agent config
+# -----------------------------------------------------------------------------
+# Rendered by observability.bicep at deploy time: the two placeholders below are
+# replaced with concrete values before the file is mounted (read-only, ephemeral
+# secret volume) into the otelcol-contrib container.
+#
+#   __SCRAPE_TARGET__          the silo's internal-network metrics address
+#                              (host:port, for example lattice-weu-silo:8080)
+#   __REMOTE_WRITE_ENDPOINT__  the Azure Monitor Workspace remote-write URL,
+#                              addressed at the co-located aad-auth-proxy sidecar
+#                              on localhost, which stamps the managed-identity
+#                              Entra token and forwards to the DCE.
+#
+# The prometheus receiver synthesises the `up`, `scrape_duration_seconds` and
+# `scrape_samples_scraped` series per target, so `count(up) > 0` holds as soon as
+# the first scrape succeeds. The silo /metrics endpoint exports the
+# orleans.lattice meter (dots become underscores through the Prometheus
+# exposition format, e.g. orleans_lattice_*).
+# =============================================================================
+receivers:
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: lattice-silo
+          scrape_interval: 30s
+          metrics_path: /metrics
+          scheme: http
+          static_configs:
+            - targets:
+                - __SCRAPE_TARGET__
+              labels:
+                # A stable head label so operators can slice by source in
+                # managed Prometheus / Grafana.
+                lattice_head: silo
+
+processors:
+  batch:
+    send_batch_size: 1000
+    timeout: 15s
+
+exporters:
+  prometheusremotewrite:
+    endpoint: __REMOTE_WRITE_ENDPOINT__
+    # Preserve resource attributes (job, instance) as labels on the written
+    # series so they survive into the Azure Monitor Workspace.
+    resource_to_telemetry_conversion:
+      enabled: true
+
+service:
+  # The collector's own self-telemetry is silenced: there is no local OTLP
+  # receiver to collect it and it would only add scrape noise.
+  telemetry:
+    metrics:
+      level: none
+    logs:
+      level: info
+  pipelines:
+    metrics:
+      receivers: [prometheus]
+      processors: [batch]
+      exporters: [prometheusremotewrite]

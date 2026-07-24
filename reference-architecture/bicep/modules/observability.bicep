@@ -73,24 +73,29 @@
 //    KEDA both speak native azure-workload identity to managed Prometheus.
 //
 // -----------------------------------------------------------------------------
-// RESIDUAL DEPLOYER STEP (managed-Prometheus <-> ACA scrape association)
+// METRICS INGESTION (managed-Prometheus scrape -> remote-write)
 // -----------------------------------------------------------------------------
-// Azure Monitor managed Prometheus SCRAPING of Azure Container Apps is not, at
-// current API availability, cleanly expressible as a first-class Bicep
-// association the way an AKS cluster's DCR association is. This module provisions
-// everything that IS expressible - the workspace, the DCE, the
-// Microsoft-PrometheusMetrics DCR, the RBAC, and the query endpoint - and leaves
-// exactly one residual for the deployer/coordinator to apply on the ACA managed
-// environment (which compute.bicep owns, so this module must not touch it):
+// Azure Container Apps cannot natively scrape into an Azure Monitor Workspace:
+// the ACA managed OpenTelemetry agent only targets App Insights / Datadog / OTLP
+// (there is no managed-Prometheus destination), and ACA has no AKS-style DCR
+// scrape association. So ingestion is completed IN-BAND by this module: it
+// deploys a small per-region OpenTelemetry Collector (contrib) container app
+// into the region's ACA environment that
 //
-//   Enable the managed environment's Prometheus scrape -> Azure Monitor workspace
-//   integration by setting the environment's OpenTelemetry / Azure Monitor
-//   metrics destination to this module's `azureMonitorWorkspaceId` output, or by
-//   attaching the DCE/DCR (`dataCollectionEndpointId` / `dataCollectionRuleId`
-//   outputs) to the environment once the ACA<->DCR association GA API is
-//   available. The three heads already expose OpenMetrics on their scrape port;
-//   only the environment-level destination wiring is outstanding.
+//   - scrapes the silo's /metrics endpoint over the environment-internal
+//     network (compute exposes the silo HTTP/1 port external:false and hands the
+//     address in via `siloScrapeTarget`), and
+//   - remote-writes the scraped series into this module's Azure Monitor
+//     Workspace through its Data Collection Endpoint + Rule, authenticating with
+//     the region managed identity via a co-located `aad-auth-proxy` sidecar
+//     (the collector cannot mint the rotating Entra token itself).
+//
+// The region identity is granted BOTH Monitoring Data Reader (query, below) and
+// Monitoring Metrics Publisher (ingest, scoped to the DCR). This closes the gap
+// that previously left the workspace holding zero series - every telemetry read
+// (`list_metrics`, `count(up)`, named queries) now resolves against real data.
 // =============================================================================
+
 
 targetScope = 'resourceGroup'
 
@@ -148,6 +153,23 @@ param grafanaMemory string = '1Gi'
 @description('Provision the bundled Orleans.Lattice.Dashboards JSON into Grafana via an ephemeral secret volume. Leave true for a turnkey head; set false to keep the ACA template lean and deliver dashboards out-of-band.')
 param provisionDashboards bool = true
 
+// --- Metrics scrape + remote-write collector (managed-Prometheus ingestion) ---
+
+@description('Silo internal-network metrics scrape target (host:port) the in-environment OpenTelemetry collector scrapes /metrics from (compute.outputs.siloMetricsScrapeTarget). Empty leaves the collector - and therefore managed-Prometheus ingestion - OFF, so the module still deploys standalone before compute exposes the seam. This is the seam that closes the ingestion gap: without it managed Prometheus holds zero series.')
+param siloScrapeTarget string = ''
+
+@description('OpenTelemetry Collector (contrib) image for the scrape + remote-write agent. Pinned upstream image; the collector config is injected via an ephemeral secret volume, never a custom build.')
+param otelCollectorImage string = 'otel/opentelemetry-collector-contrib:0.111.0'
+
+@description('Azure Monitor aad-auth-proxy image. Co-located sidecar that stamps the region managed-identity Entra token on the collector remote-write requests and forwards them to the Data Collection Endpoint (the collector cannot mint the token itself).')
+param aadAuthProxyImage string = 'mcr.microsoft.com/azuremonitor/auth-proxy/prod/aad-auth-proxy/images/aad-auth-proxy:0.1.0-main-04-10-2024-7067ac84'
+
+@description('Metrics collector container CPU (cores, as a string for the json() cast).')
+param collectorCpu string = '0.25'
+
+@description('Metrics collector container memory.')
+param collectorMemory string = '0.5Gi'
+
 // --- Log Analytics retention for the managed Prometheus DCR is N/A: metrics
 //     land in the Azure Monitor workspace, not Log Analytics (that cap lives in
 //     compute.bicep and is unaffected here). ---
@@ -156,10 +178,20 @@ param provisionDashboards bool = true
 // Azure Monitor workspace and nothing else.
 var monitoringDataReaderRoleId = 'b0d8363b-8ddd-447d-831f-62ca05bff136'
 
+// Monitoring Metrics Publisher built-in role - the WRITE counterpart: lets the
+// region managed identity ingest (remote-write) metrics through the Data
+// Collection Rule. Scoped to the DCR only, not the resource group.
+var monitoringMetricsPublisherRoleId = '3913510d-42f4-4e42-8a64-420c390055eb'
+
 var monitorAccountName = '${baseName}-${regionCode}-amw'
 var dceName = '${baseName}-${regionCode}-dce'
 var dcrName = '${baseName}-${regionCode}-dcr'
 var grafanaAppName = '${baseName}-${regionCode}-grafana'
+var collectorAppName = '${baseName}-${regionCode}-otelcol'
+var deployCollector = !empty(siloScrapeTarget)
+// Local port the aad-auth-proxy sidecar listens on; the collector remote-writes
+// to localhost:<port> and the proxy forwards to the DCE with the MSI token.
+var collectorProxyPort = 8081
 
 // =============================================================================
 // Azure Monitor workspace = managed Prometheus
@@ -178,9 +210,10 @@ resource monitorWorkspace 'Microsoft.Monitor/accounts@2023-04-03' = {
 // Data Collection Endpoint + Rule (Microsoft-PrometheusMetrics stream)
 // -----------------------------------------------------------------------------
 // The DCE is the ingestion front door; the DCR forwards the
-// Microsoft-PrometheusMetrics stream to the Azure Monitor workspace. Associating
-// the ACA managed environment as a scrape source is the documented residual
-// deployer step (see the header) - everything expressible in Bicep is here.
+// Microsoft-PrometheusMetrics stream to the Azure Monitor workspace. The
+// in-environment collector (below) remote-writes the silo's scraped metrics
+// through this DCE/DCR, so the workspace receives real series with no external
+// scrape association required.
 // =============================================================================
 
 resource dataCollectionEndpoint 'Microsoft.Insights/dataCollectionEndpoints@2023-03-11' = {
@@ -246,6 +279,26 @@ resource monitoringDataReader 'Microsoft.Authorization/roleAssignments@2022-04-0
   scope: monitorWorkspace
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', monitoringDataReaderRoleId)
+    principalId: managedIdentityPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// =============================================================================
+// Monitoring Metrics Publisher - the ingestion (write) grant, scoped to the DCR
+// -----------------------------------------------------------------------------
+// The region managed identity presents this to remote-write scraped metrics
+// through the Data Collection Rule (via the aad-auth-proxy sidecar). Query-side
+// Monitoring Data Reader above is read-only; without this write grant the
+// remote-write is rejected and the workspace stays empty. Scope is the DCR, not
+// the resource group.
+// =============================================================================
+
+resource monitoringMetricsPublisher 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(dataCollectionRule.id, managedIdentityPrincipalId, monitoringMetricsPublisherRoleId)
+  scope: dataCollectionRule
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', monitoringMetricsPublisherRoleId)
     principalId: managedIdentityPrincipalId
     principalType: 'ServicePrincipal'
   }
@@ -417,19 +470,118 @@ resource grafanaApp 'Microsoft.App/containerApps@2024-03-01' = {
 }
 
 // =============================================================================
+// Metrics scrape + remote-write collector - closes the ingestion gap
+// -----------------------------------------------------------------------------
+// A single per-region container app with two co-located containers sharing
+// localhost:
+//   - otelcol-contrib: prometheus receiver scrapes the silo /metrics over the
+//     environment-internal network; prometheusremotewrite exporter posts to the
+//     aad-auth-proxy on localhost.
+//   - aad-auth-proxy: stamps the region managed-identity Entra token
+//     (audience https://monitor.azure.com/.default) and forwards to the DCE.
+// Internal-only (no ingress); scales 1..1 (a scrape agent must stay resident).
+// Deployed only when a scrape target is supplied, so the module still builds and
+// deploys standalone before compute exposes the silo metrics seam.
+// =============================================================================
+
+// The remote-write URL is addressed at the local proxy; the proxy rewrites the
+// host to the DCE and adds auth. The DCR immutableId + Microsoft-PrometheusMetrics
+// stream select the ingestion pipeline.
+var collectorRemoteWriteEndpoint = 'http://localhost:${collectorProxyPort}/dataCollectionRules/${dataCollectionRule.properties.immutableId}/streams/Microsoft-PrometheusMetrics/api/v1/write?api-version=2023-04-24'
+
+var collectorConfigYaml = replace(
+  replace(
+    loadTextContent('scraper/otel-collector-config.yaml'),
+    '__SCRAPE_TARGET__',
+    siloScrapeTarget
+  ),
+  '__REMOTE_WRITE_ENDPOINT__',
+  collectorRemoteWriteEndpoint
+)
+
+resource collectorApp 'Microsoft.App/containerApps@2024-03-01' = if (deployCollector) {
+  name: collectorAppName
+  location: location
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${managedIdentityId}': {}
+    }
+  }
+  properties: {
+    managedEnvironmentId: environmentId
+    configuration: {
+      activeRevisionsMode: 'Single'
+      secrets: [
+        { name: 'collector-config-yaml', value: collectorConfigYaml }
+      ]
+    }
+    template: {
+      volumes: [
+        {
+          name: 'collector-config'
+          storageType: 'Secret'
+          secrets: [
+            { secretRef: 'collector-config-yaml', path: 'config.yaml' }
+          ]
+        }
+      ]
+      containers: [
+        {
+          name: 'otelcol'
+          image: otelCollectorImage
+          resources: {
+            cpu: json(collectorCpu)
+            memory: collectorMemory
+          }
+          args: [
+            '--config=/etc/otelcol-contrib/config.yaml'
+          ]
+          volumeMounts: [
+            { volumeName: 'collector-config', mountPath: '/etc/otelcol-contrib' }
+          ]
+        }
+        {
+          name: 'aad-auth-proxy'
+          image: aadAuthProxyImage
+          resources: {
+            cpu: json(collectorCpu)
+            memory: collectorMemory
+          }
+          env: [
+            // Forward to the region DCE metrics-ingestion endpoint, adding the
+            // managed-identity bearer token for the Azure Monitor audience.
+            { name: 'TARGET_HOST', value: dataCollectionEndpoint.properties.metricsIngestion.endpoint }
+            { name: 'LISTENING_PORT', value: string(collectorProxyPort) }
+            { name: 'IDENTITY_TYPE', value: 'userassigned' }
+            { name: 'AAD_CLIENT_ID', value: managedIdentityClientId }
+            { name: 'AUDIENCE', value: 'https://monitor.azure.com/.default' }
+          ]
+        }
+      ]
+      scale: {
+        // A scrape agent must stay resident; no scale-to-zero.
+        minReplicas: 1
+        maxReplicas: 1
+      }
+    }
+  }
+}
+
+// =============================================================================
 // Outputs - the observability seams the orchestrator wires back
 // =============================================================================
 
 @description('Managed Prometheus query endpoint. THE single feed: pass to compute.bicep\'s prometheusQueryEndpoint (silo KEDA scaler, second pass) AND to the MCP telemetry add-on\'s BackendAddress. Also the Grafana datasource url (already baked in-module).')
 output prometheusQueryEndpoint string = monitorWorkspace.properties.metrics.prometheusQueryEndpoint
 
-@description('Resource id of the Azure Monitor workspace (managed Prometheus). Residual-step target: the ACA environment\'s metrics destination.')
+@description('Resource id of the Azure Monitor workspace (managed Prometheus).')
 output azureMonitorWorkspaceId string = monitorWorkspace.id
 
 @description('Resource id of the Data Collection Endpoint (managed-Prometheus ingestion front door).')
 output dataCollectionEndpointId string = dataCollectionEndpoint.id
 
-@description('Resource id of the Data Collection Rule (Microsoft-PrometheusMetrics stream). Residual-step target for the ACA scrape association.')
+@description('Resource id of the Data Collection Rule (Microsoft-PrometheusMetrics stream) the in-environment collector remote-writes through.')
 output dataCollectionRuleId string = dataCollectionRule.id
 
 @description('Fully qualified domain name of the self-hosted Grafana head.')

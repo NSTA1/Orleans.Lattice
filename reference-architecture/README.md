@@ -257,6 +257,16 @@ immediately under the same names.
   `-GrafanaAdminPassword` you supplied (Prometheus is queried through the
   region's managed identity, no scraped secret).
 
+- Metrics reach that workspace through an in-environment OpenTelemetry collector
+  container app (one per region). A Container Apps environment cannot natively
+  scrape a container app into an Azure Monitor workspace, so the collector scrapes
+  the silo `/metrics` endpoint over the environment's internal network and
+  remote-writes to the region's data collection endpoint. A co-located
+  `aad-auth-proxy` sidecar mints the managed-identity token (the region identity
+  holds Monitoring Metrics Publisher on the data collection rule) so the write
+  carries no static secret. The KEDA scaler and the MCP telemetry tools then read
+  the same workspace back.
+
 ### Connect an MCP client
 
 The MCP head exposes the Lattice control surface (state, data, auth-admin, and

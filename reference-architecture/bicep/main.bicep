@@ -346,6 +346,11 @@ module observability 'modules/observability.bicep' = [for (region, i) in regions
     managedIdentityPrincipalId: compute[i].outputs.managedIdentityPrincipalId
     managedIdentityClientId: compute[i].outputs.managedIdentityClientId
     grafanaAdminPassword: grafanaAdminPassword
+    // Metrics ingestion: point the in-environment collector at the silo's
+    // internal-network /metrics address so managed Prometheus receives real
+    // series (the KEDA scaler + MCP telemetry + Grafana feed). compute exposes
+    // the silo HTTP/1 port external:false and emits this host:port seam.
+    siloScrapeTarget: compute[i].outputs.siloMetricsScrapeTarget
   }
 }]
 

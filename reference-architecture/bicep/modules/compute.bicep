@@ -441,7 +441,11 @@ resource siloApp 'Microsoft.App/containerApps@2024-03-01' = {
         targetPort: siloGrpcPort
         transport: 'http2'
         allowInsecure: false
-        // Orleans replica-to-replica ports on the environment-internal network.
+        // Orleans replica-to-replica ports on the environment-internal network,
+        // plus the HTTP/1 health+metrics+scaling port (8080) exposed
+        // internal-only so the in-environment metrics collector (observability
+        // module) can scrape /metrics over the environment network. The port
+        // stays external:false - it is never reachable from outside the env.
         additionalPortMappings: [
           {
             external: false
@@ -452,6 +456,11 @@ resource siloApp 'Microsoft.App/containerApps@2024-03-01' = {
             external: false
             targetPort: orleansGatewayPort
             exposedPort: orleansGatewayPort
+          }
+          {
+            external: false
+            targetPort: siloHttpPort
+            exposedPort: siloHttpPort
           }
         ]
       }
@@ -846,6 +855,9 @@ output logAnalyticsWorkspaceId string = law.id
 
 @description('Silo container app name.')
 output siloAppName string = siloApp.name
+
+@description('Silo internal-network metrics scrape target (host:port). The observability module points its in-environment OpenTelemetry collector at this address to scrape the silo /metrics endpoint over the ACA environment network. Reachable only from inside the environment (the port is exposed external:false).')
+output siloMetricsScrapeTarget string = '${siloApp.name}:${siloHttpPort}'
 
 @description('Silo State API FQDN (AFD origin seam for the read surface).')
 output siloStateApiFqdn string = siloApp.properties.configuration.ingress.fqdn
