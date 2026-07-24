@@ -10,6 +10,10 @@ This changelog covers the whole **package family** - every published `Orleans.La
 
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), labelled `lattice` or `lattice.replication`. See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
 
+## Released
+
+Published releases, newest first. Each section is keyed by its publish date; within a date, packages advance on their own patch digits per [`docs/RELEASING.md`](docs/RELEASING.md).
+
 ## [2026-07-24]
 
 Per-package patch activity for 2026-07-24. **`Orleans.Lattice.Replication` advances to 8.0.6** (`lattice.replication-v8.0.6`) and **`Orleans.Lattice` advances to 8.0.2** (`lattice-v8.0.2`); the Explorer family advances for multi-replica auth hardening - **`Orleans.Lattice.Explorer.Core` to 8.0.4** (`lattice.explorer.core-v8.0.4`), **`Orleans.Lattice.Explorer.UI` to 8.0.2** (`lattice.explorer.ui-v8.0.2`), **`Orleans.Lattice.Explorer.Web` to 8.0.3** (`lattice.explorer.web-v8.0.3`), and **`Orleans.Lattice.Explorer.Entra.Web` to 8.0.3** (`lattice.explorer.entra.web-v8.0.3`); every other package in the family remains at its current version.
@@ -187,4 +191,3 @@ Changelog entries for v6.x and earlier - down to the historical pre-v6.0.0 notes
 
 ---
 [Unreleased]: https://github.com/NSTA1/Orleans.Lattice/compare/v8.0.0...HEAD
-[2026-07-20]: https://github.com/NSTA1/Orleans.Lattice/compare/v7.9.1...v8.0.0
