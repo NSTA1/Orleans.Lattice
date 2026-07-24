@@ -144,4 +144,54 @@ public sealed class LatticeApiMcpToolSerializationTests
     {
         public long Value { get; init; }
     }
+
+    // ---- Finding 2 (auth list tools): a single authoritative object shape ----
+    // Returning a bare collection makes the SDK emit the text block as a raw
+    // array ([]) but wrap the structured block under a synthetic "result"
+    // property ({"result":[]}), so the two copies disagree on shape. Wrapping the
+    // return in a named record makes the root a JSON object, so both copies match.
+
+    [Test]
+    public void Group_members_result_serializes_as_a_single_named_object_not_a_bare_array()
+    {
+        var result = new AuthGroupMembersResult
+        {
+            GroupId = "ops",
+            Members = new[] { "alice", "team-a" },
+        };
+
+        var json = JsonSerializer.Serialize(result, Options);
+
+        using var doc = JsonDocument.Parse(json);
+        Assert.Multiple(() =>
+        {
+            Assert.That(doc.RootElement.ValueKind, Is.EqualTo(JsonValueKind.Object),
+                "the result must serialize as an object so the structured block is not SDK-wrapped under 'result'");
+            Assert.That(doc.RootElement.GetProperty("groupId").GetString(), Is.EqualTo("ops"));
+            Assert.That(doc.RootElement.GetProperty("members").GetArrayLength(), Is.EqualTo(2));
+            Assert.That(doc.RootElement.TryGetProperty("result", out _), Is.False,
+                "there must be no synthetic 'result' wrapper property");
+        });
+    }
+
+    [Test]
+    public void Subject_groups_result_serializes_as_a_single_named_object_when_empty()
+    {
+        var result = new AuthSubjectGroupsResult
+        {
+            MemberId = "alice",
+            Groups = Array.Empty<string>(),
+        };
+
+        var json = JsonSerializer.Serialize(result, Options);
+
+        using var doc = JsonDocument.Parse(json);
+        Assert.Multiple(() =>
+        {
+            Assert.That(doc.RootElement.ValueKind, Is.EqualTo(JsonValueKind.Object));
+            Assert.That(doc.RootElement.GetProperty("memberId").GetString(), Is.EqualTo("alice"));
+            Assert.That(doc.RootElement.GetProperty("groups").ValueKind, Is.EqualTo(JsonValueKind.Array));
+            Assert.That(doc.RootElement.GetProperty("groups").GetArrayLength(), Is.EqualTo(0));
+        });
+    }
 }

@@ -104,6 +104,66 @@ public sealed class AuthToolHandlersTests
     }
 
     [Test]
+    public async Task ListGroupMembersAsync_wraps_the_members_in_a_named_result()
+    {
+        var admin = Admin();
+        admin.ListGroupMembersAsync("ops", Arg.Any<CancellationToken>())
+            .Returns((IReadOnlyList<string>)new[] { "alice", "team-a" });
+
+        var result = await AuthToolHandlers.ListGroupMembersAsync(admin, "ops", CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.GroupId, Is.EqualTo("ops"));
+            Assert.That(result.Members, Is.EqualTo(new[] { "alice", "team-a" }));
+        });
+        await admin.Received(1).ListGroupMembersAsync("ops", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ListGroupMembersAsync_wraps_an_empty_membership_in_a_named_result()
+    {
+        var admin = Admin();
+        admin.ListGroupMembersAsync("ops", Arg.Any<CancellationToken>())
+            .Returns((IReadOnlyList<string>)Array.Empty<string>());
+
+        var result = await AuthToolHandlers.ListGroupMembersAsync(admin, "ops", CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.GroupId, Is.EqualTo("ops"));
+            Assert.That(result.Members, Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task ListSubjectGroupsAsync_wraps_the_groups_in_a_named_result()
+    {
+        var admin = Admin();
+        admin.ListSubjectGroupsAsync("alice", Arg.Any<CancellationToken>())
+            .Returns((IReadOnlyList<string>)new[] { "ops", "eng" });
+
+        var result = await AuthToolHandlers.ListSubjectGroupsAsync(admin, "alice", CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.MemberId, Is.EqualTo("alice"));
+            Assert.That(result.Groups, Is.EqualTo(new[] { "ops", "eng" }));
+        });
+        await admin.Received(1).ListSubjectGroupsAsync("alice", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public void ListMembership_handlers_reject_a_null_facade()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(() => AuthToolHandlers.ListGroupMembersAsync(null!, "g"), Throws.ArgumentNullException);
+            Assert.That(() => AuthToolHandlers.ListSubjectGroupsAsync(null!, "m"), Throws.ArgumentNullException);
+        });
+    }
+
+    [Test]
     public async Task UpsertGroupAsync_builds_and_writes_the_group_and_echoes_it()
     {
         var admin = Admin();

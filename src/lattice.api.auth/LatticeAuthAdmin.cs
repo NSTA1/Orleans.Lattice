@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Membership;
@@ -258,14 +259,73 @@ internal sealed class LatticeAuthAdmin(
         ArgumentNullException.ThrowIfNull(request);
         await AuthorizeAdminAsync(cancellationToken).ConfigureAwait(false);
 
+        // Fold the cluster-wide "*" wildcard bucket into the per-tree listing so a
+        // Tree:* rule that effectively governs this tree is surfaced rather than
+        // silently omitted (issue #1339). The reserved "*" tree lists only its own
+        // bucket. Paging is by (tree id, rule id) - the same catalog key
+        // ListRulesAsync uses - so the merged, wildcard-inclusive stream advances
+        // monotonically. Each store bucket is ascending by rule id (hence by
+        // catalog key within its fixed tree-id prefix), so a two-way merge yields a
+        // globally catalog-key-ordered stream.
+        var source = string.Equals(treeId, LatticeScope.ClusterWideTreeId, StringComparison.Ordinal)
+            ? _store.ListRulesForTreeAsync(treeId, cancellationToken)
+            : MergeByCatalogKeyAsync(
+                _store.ListRulesForTreeAsync(LatticeScope.ClusterWideTreeId, cancellationToken),
+                _store.ListRulesForTreeAsync(treeId, cancellationToken),
+                cancellationToken);
+
         var (page, next) = await PageAsync(
-            _store.ListRulesForTreeAsync(treeId, cancellationToken),
+            source,
             request.PageToken,
             request.EffectivePageSize,
-            static r => r.RuleId,
+            RuleCatalogKey,
             cancellationToken).ConfigureAwait(false);
 
         return new AuthRulePage { Entries = page, NextPageToken = next };
+    }
+
+    /// <summary>
+    /// Merges two rule streams that are each ascending by <see cref="RuleCatalogKey"/>
+    /// into a single ascending-by-catalog-key stream, streaming without buffering
+    /// either source. Used to fold the cluster-wide <c>*</c> wildcard bucket into a
+    /// per-tree rule listing.
+    /// </summary>
+    private static async IAsyncEnumerable<LatticeAuthorizationRule> MergeByCatalogKeyAsync(
+        IAsyncEnumerable<LatticeAuthorizationRule> left,
+        IAsyncEnumerable<LatticeAuthorizationRule> right,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await using var l = left.GetAsyncEnumerator(cancellationToken);
+        await using var r = right.GetAsyncEnumerator(cancellationToken);
+
+        var hasL = await l.MoveNextAsync().ConfigureAwait(false);
+        var hasR = await r.MoveNextAsync().ConfigureAwait(false);
+
+        while (hasL && hasR)
+        {
+            if (string.CompareOrdinal(RuleCatalogKey(l.Current), RuleCatalogKey(r.Current)) <= 0)
+            {
+                yield return l.Current;
+                hasL = await l.MoveNextAsync().ConfigureAwait(false);
+            }
+            else
+            {
+                yield return r.Current;
+                hasR = await r.MoveNextAsync().ConfigureAwait(false);
+            }
+        }
+
+        while (hasL)
+        {
+            yield return l.Current;
+            hasL = await l.MoveNextAsync().ConfigureAwait(false);
+        }
+
+        while (hasR)
+        {
+            yield return r.Current;
+            hasR = await r.MoveNextAsync().ConfigureAwait(false);
+        }
     }
 
     // ----- Policy introspection -----

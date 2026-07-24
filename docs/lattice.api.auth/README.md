@@ -47,7 +47,7 @@ It is the authorization sibling of the read-only [`Orleans.Lattice.Api.State`](.
 | List all rules (paged) | `ListRulesAsync` |
 | List a tree's rules (paged) | `ListRulesForTreeAsync` |
 
-> `ListRulesForTreeAsync` (MCP tool `lattice_auth_list_rules_for_tree`) matches the **exact** tree id only. A cluster-wide wildcard rule (scope `Tree:*`, authored with `LatticeScope.ClusterWide()`) governs every tree effectively but is stored under the reserved `*` tree id, so it is **not** returned by the per-tree listing. Use `ExplainAsync` / `EffectivePermissionsAsync` for a wildcard-inclusive view of what actually decides a subject's access to a tree.
+> `ListRulesForTreeAsync` (MCP tool `lattice_auth_list_rules_for_tree`) returns a tree's own rules **and** the cluster-wide wildcard rules (scope `Tree:*`, authored with `LatticeScope.ClusterWide()`) that effectively govern it. Wildcard rules are stored under the reserved `*` tree id and carry `Scope.TreeId == "*"`, so you can tell them apart from exact-tree rules; listing the reserved `*` tree itself returns only its own bucket. Use `ExplainAsync` / `EffectivePermissionsAsync` for the resolved verdict a subject's access actually receives.
 
 ### Policy introspection
 

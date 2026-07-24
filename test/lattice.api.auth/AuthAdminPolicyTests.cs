@@ -214,13 +214,12 @@ public sealed class AuthAdminPolicyTests
     }
 
     [Test]
-    public async Task list_rules_for_tree_excludes_wildcard_rules_by_exact_match_contract()
+    public async Task list_rules_for_tree_includes_governing_wildcard_rules()
     {
-        // Issue #1339 Finding 6 decision: list_rules_for_tree is an exact-treeId
-        // match by design (the store scans a single {treeId} prefix range). A
-        // Tree:* wildcard rule governs the tree effectively but is NOT returned by
-        // the per-tree listing; callers wanting a wildcard-inclusive view use
-        // explain / effective_permissions. This test pins that documented contract.
+        // Issue #1339 Finding 6: list_rules_for_tree now surfaces the cluster-wide
+        // Tree:* wildcard rules that effectively govern the tree alongside its own
+        // exact-treeId rules, so a caller cannot wrongly conclude a wildcard-governed
+        // tree is ungoverned. A wildcard rule is recognisable by Scope.TreeId == "*".
         const string tree = "policy-wildcard-list";
         using (AsAdmin())
         {
@@ -229,24 +228,59 @@ public sealed class AuthAdminPolicyTests
             await _fixture.Admin.PutRuleAsync(
                 AllowUserKey("exact-only", Subject, tree, "k", LatticeOperation.Read));
 
-            var exactRuleIds = new List<string>();
+            var listed = new List<LatticeAuthorizationRule>();
             string? token = null;
             do
             {
                 var page = await _fixture.Admin.ListRulesForTreeAsync(
                     tree, new AuthPageRequest { PageSize = 10, PageToken = token });
-                exactRuleIds.AddRange(page.Entries.Select(r => r.RuleId));
+                listed.AddRange(page.Entries);
                 token = page.NextPageToken;
             }
             while (token is not null);
 
+            var ruleIds = listed.Select(r => r.RuleId).ToList();
             Assert.Multiple(() =>
             {
-                Assert.That(exactRuleIds, Does.Contain("exact-only"),
+                Assert.That(ruleIds, Does.Contain("exact-only"),
                     "an exact-treeId rule is listed");
-                Assert.That(exactRuleIds, Does.Not.Contain("wildcard-only"),
-                    "a Tree:* wildcard rule is excluded from the exact-match per-tree listing (issue #1339 Finding 6)");
+                Assert.That(ruleIds, Does.Contain("wildcard-only"),
+                    "a Tree:* wildcard rule governing the tree is now included (issue #1339 Finding 6)");
+                Assert.That(
+                    listed.Single(r => r.RuleId == "wildcard-only").Scope.TreeId,
+                    Is.EqualTo(LatticeScope.ClusterWideTreeId),
+                    "the wildcard rule keeps its '*' scope tree id so callers can tell it apart");
+                Assert.That(
+                    listed.Single(r => r.RuleId == "exact-only").Scope.TreeId,
+                    Is.EqualTo(tree));
             });
+        }
+    }
+
+    [Test]
+    public async Task list_rules_for_tree_of_the_reserved_wildcard_tree_lists_only_its_own_bucket()
+    {
+        // Reading the reserved "*" tree returns only its own bucket - it must not
+        // recursively fold itself in - so a wildcard rule appears exactly once.
+        using (AsAdmin())
+        {
+            await _fixture.Admin.PutRuleAsync(
+                AllowUserClusterWide("wildcard-self", Subject, LatticeOperation.Read));
+
+            var listed = new List<LatticeAuthorizationRule>();
+            string? token = null;
+            do
+            {
+                var page = await _fixture.Admin.ListRulesForTreeAsync(
+                    LatticeScope.ClusterWideTreeId, new AuthPageRequest { PageSize = 10, PageToken = token });
+                listed.AddRange(page.Entries);
+                token = page.NextPageToken;
+            }
+            while (token is not null);
+
+            Assert.That(
+                listed.Count(r => r.RuleId == "wildcard-self"), Is.EqualTo(1),
+                "the reserved '*' tree lists its own bucket exactly once");
         }
     }
 
