@@ -22,6 +22,14 @@ public enum ExplorerWebTokenCacheKind
     /// Register a shared cache (for example
     /// <c>Orleans.Lattice.Caching.AzureBlob</c>) so a multi-replica host shares
     /// one token cache and cookies/tokens survive a replica restart.
+    /// <para>
+    /// For a geo-distributed (multi-region) deployment, point every region's
+    /// <see cref="Microsoft.Extensions.Caching.Distributed.IDistributedCache"/> at
+    /// a single <b>estate-global</b> container rather than a per-region one: a
+    /// signed-in operator's on-behalf-of token is then acquirable on any replica in
+    /// any region, so a mid-session failover across regions is seamless and never
+    /// forces an interactive re-authentication.
+    /// </para>
     /// </summary>
     Distributed,
 }
@@ -114,6 +122,21 @@ public sealed class ExplorerEntraWebOptions
     /// to always require the manual dialog click.
     /// </summary>
     public bool AutoSignIn { get; set; } = true;
+
+    /// <summary>
+    /// The head-relative path of the forced-interactive re-authentication endpoint
+    /// (mapped by
+    /// <see cref="ExplorerEntraWebEndpointRouteBuilderExtensions.MapLatticeExplorerEntraWebReauth"/>)
+    /// that the explorer's re-authentication interstitial navigates to when the
+    /// downstream token can no longer be renewed silently. Defaults to
+    /// <see cref="ExplorerEntraWebEndpointRouteBuilderExtensions.DefaultReauthPattern"/>.
+    /// Registering the provider publishes this path to the core explorer so the UI
+    /// can drive a graceful re-authentication without depending on this package.
+    /// Set to <see langword="null"/> to leave the core default (a plain reload) in
+    /// place.
+    /// </summary>
+    public string? ReauthChallengePath { get; set; } =
+        ExplorerEntraWebEndpointRouteBuilderExtensions.DefaultReauthPattern;
 
     /// <summary>
     /// Optional escape hatch to configure the underlying

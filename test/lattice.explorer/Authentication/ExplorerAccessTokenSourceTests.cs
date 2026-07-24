@@ -147,6 +147,53 @@ public class ExplorerAccessTokenSourceTests
     }
 
     [Test]
+    public async Task Acquire_returnsNull_raisesReauthRequired_exactlyOnce()
+    {
+        var time = new MutableTimeProvider(Origin);
+        var source = new ExplorerAccessTokenSource(
+            Token(Origin.AddMinutes(10), "first"),
+            _ => new ValueTask<ExplorerAccessToken?>((ExplorerAccessToken?)null),
+            time);
+
+        var reauthCount = 0;
+        source.ReauthRequired += () => Interlocked.Increment(ref reauthCount);
+
+        // First forced refresh latches the revoked state and fires the event.
+        var first = await source.RefreshAsync();
+        // Later calls stay revoked but must not re-raise the event.
+        var second = await source.RefreshAsync();
+        _ = await source.GetAuthorizationHeaderAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first, Is.False);
+            Assert.That(second, Is.False);
+            Assert.That(reauthCount, Is.EqualTo(1), "the revoked transition is edge-triggered - raised once, never again");
+        });
+    }
+
+    [Test]
+    public async Task Renewal_success_neverRaisesReauthRequired()
+    {
+        var time = new MutableTimeProvider(Origin);
+        var source = new ExplorerAccessTokenSource(
+            Token(Origin.AddMinutes(10), "first"),
+            _ => new ValueTask<ExplorerAccessToken?>(Token(Origin.AddMinutes(30), "renewed")),
+            time);
+
+        var raised = false;
+        source.ReauthRequired += () => raised = true;
+
+        var refreshed = await source.RefreshAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(refreshed, Is.True);
+            Assert.That(raised, Is.False, "a source that can still renew never asks for re-authentication");
+        });
+    }
+
+    [Test]
     public void Constructor_nullAcquire_throws()
     {
         Assert.That(

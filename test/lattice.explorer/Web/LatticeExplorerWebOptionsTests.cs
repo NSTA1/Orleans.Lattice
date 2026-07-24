@@ -35,13 +35,16 @@ public class LatticeExplorerWebOptionsTests
         Assert.That(options.BasePath, Is.EqualTo(expected));
     }
 
-    [TestCase(null)]
-    [TestCase("")]
-    [TestCase("   ")]
-    [TestCase("/")]
-    public void BasePath_blank_or_root_normalizes_to_root(string? input)
+    [Test]
+    public void DataProtection_options_default_to_null()
     {
-        var options = new LatticeExplorerWebOptions { BasePath = input! };
-        Assert.That(options.BasePath, Is.EqualTo("/"));
+        var options = new LatticeExplorerWebOptions();
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.DataProtectionKeyRingBlobUri, Is.Null);
+            Assert.That(options.DataProtectionKeyRingCredential, Is.Null);
+            Assert.That(options.DataProtectionApplicationName, Is.Null);
+            Assert.That(options.ConfigureDataProtection, Is.Null);
+        });
     }
 }

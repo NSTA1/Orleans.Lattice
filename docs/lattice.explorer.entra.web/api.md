@@ -29,6 +29,20 @@ public static IEndpointConventionBuilder MapLatticeExplorerEntraWebSignOut(
 
 Maps a sign-out endpoint that clears the OpenID Connect cookie and signs the user out of Entra, redirecting to `redirectUri` afterwards. This is distinct from the Explorer's own State API sign-out, which only drops the API credential. Throws `ArgumentNullException` when `endpoints` is null and `ArgumentException` when `pattern` is blank.
 
+```csharp
+public const string DefaultReauthPattern = "/explorer-entra/reauth";
+public const string DefaultReauthPrompt = "login";
+public const string DefaultReturnUrlParameter = "returnUrl";
+
+public static IEndpointConventionBuilder MapLatticeExplorerEntraWebReauth(
+    this IEndpointRouteBuilder endpoints,
+    string pattern = DefaultReauthPattern,
+    string prompt = DefaultReauthPrompt,
+    string returnUrlParameter = DefaultReturnUrlParameter)
+```
+
+Maps a forced-interactive re-authentication endpoint that issues an OpenID Connect challenge with `prompt=login`, so a **new** authorization code is redeemed even when a valid session cookie already exists - repopulating a failover replica's token cache. The core Explorer's re-authentication interstitial navigates here when the credential latches into its revoked state. The endpoint honours the `returnUrlParameter` query value only when it is a **local** path (an absolute or protocol-relative URL is rejected and the browser returns to `/`), so it cannot be abused as an open redirect. Pass `select_account` for `prompt` to let the operator pick a different account. Throws `ArgumentNullException` when `endpoints` is null and `ArgumentException` when `pattern`, `prompt`, or `returnUrlParameter` is blank.
+
 ## `IExplorerWebTokenAcquirer`
 
 ```csharp

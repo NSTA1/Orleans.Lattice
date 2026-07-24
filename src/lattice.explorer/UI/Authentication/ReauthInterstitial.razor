@@ -1,0 +1,55 @@
+@using Orleans.Lattice.Explorer.Core.Authentication
+@implements IDisposable
+@inject IExplorerAuthSession AuthSession
+@inject NavigationManager Navigation
+@inject IServiceProvider Services
+
+@if (_reauthRequired)
+{
+    <div class="explorer-config-overlay">
+        <div class="explorer-config-dialog" role="alertdialog" aria-modal="true" aria-label="Session expired">
+            <h2>Your session expired</h2>
+            <p class="explorer-config-help">
+                Your sign-in could not be renewed - this can happen after the console moves between
+                replicas, or when your session times out. Sign in again to continue where you left off.
+            </p>
+            <div class="explorer-config-actions">
+                <button type="button" class="explorer-btn explorer-btn-primary" @onclick="ReauthenticateAsync">
+                    Sign in again
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private bool _reauthRequired;
+    private ExplorerReauthOptions? _options;
+
+    /// <inheritdoc />
+    protected override void OnInitialized()
+    {
+        _options = Services.GetService(typeof(ExplorerReauthOptions)) as ExplorerReauthOptions;
+        AuthSession.ReauthRequired += OnReauthRequired;
+    }
+
+    private void OnReauthRequired()
+    {
+        _reauthRequired = true;
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void ReauthenticateAsync()
+    {
+        // A full-page navigation (not a circuit-internal one) is what forces the
+        // OpenID Connect middleware to redeem a fresh authorization code even when
+        // a valid session cookie already exists - the plain-refresh path cannot.
+        Navigation.NavigateTo(BuildChallengeUrl(), forceLoad: true);
+    }
+
+    private string BuildChallengeUrl()
+        => ExplorerReauthChallenge.BuildUrl(_options, new Uri(Navigation.Uri).PathAndQuery);
+
+    /// <inheritdoc />
+    public void Dispose() => AuthSession.ReauthRequired -= OnReauthRequired;
+}

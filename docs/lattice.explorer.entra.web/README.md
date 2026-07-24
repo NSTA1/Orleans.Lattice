@@ -13,12 +13,13 @@ It is the web counterpart to [`Orleans.Lattice.Explorer.Entra`](../lattice.explo
 - **No public API change to the released Explorer.** The package plugs into the core `IExplorerAuthMethod` seam for the `entra` scheme; the existing sign-in dialog already renders a generic "Sign in with Entra ID" button when the State API advertises that scheme. The OIDC redirect happens at the ASP.NET middleware layer, not inside the SignalR circuit.
 - **Per-circuit credential isolation.** The auth method and token acquirer are registered **scoped**, so each user's circuit acquires and holds only its own token.
 - **Fail-closed authorization.** By default the registration installs a fallback authorization policy that challenges any unauthenticated request into the OIDC redirect. A re-auth-required signal from Microsoft.Identity.Web is translated into a typed `ExplorerWebReauthRequiredException` and latches the credential as revoked rather than serving a stale token.
-- **Multi-replica ready.** Select the distributed token cache and register a shared `IDistributedCache` (for example [`Orleans.Lattice.Caching.AzureBlob`](../lattice.caching.azureblob/README.md)) so a user routed to a cold replica does not silently lose their session.
+- **Multi-replica ready.** Select the distributed token cache and register a shared `IDistributedCache` (for example [`Orleans.Lattice.Caching.AzureBlob`](../lattice.caching.azureblob/README.md)) so a user routed to a cold replica does not silently lose their session. See [multi-replica and failover hosting](../lattice.explorer/multi-replica-hosting.md).
+- **Graceful re-authentication.** When the credential latches as revoked, the core Explorer shows a "sign in again" interstitial that navigates to the mapped `MapLatticeExplorerEntraWebReauth` endpoint, which forces a fresh interactive sign-in (`prompt=login`) so a new authorization code is redeemed and the replica's token cache is repopulated.
 - **Optional auto-sign-in.** A best-effort Blazor Server circuit handler completes the State API sign-in automatically for an already browser-authenticated user, so the console connects without a manual click; any failure degrades silently to the interactive dialog.
 
 ## Setup
 
-Register the provider on the web host and map the sign-out endpoint. Supplying the tenant and the Explorer console's own application (client) id is required.
+Register the provider on the web host and map the re-authentication and sign-out endpoints. Supplying the tenant and the Explorer console's own application (client) id is required.
 
 ```csharp verify
 using Microsoft.AspNetCore.Builder;
@@ -35,6 +36,7 @@ builder.Services.AddLatticeExplorerEntraWebAuth(options =>
 });
 
 var app = builder.Build();
+app.MapLatticeExplorerEntraWebReauth();
 app.MapLatticeExplorerEntraWebSignOut();
 ```
 

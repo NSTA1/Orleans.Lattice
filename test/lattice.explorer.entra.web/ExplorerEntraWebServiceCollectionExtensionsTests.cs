@@ -117,6 +117,46 @@ public sealed class ExplorerEntraWebServiceCollectionExtensionsTests
     }
 
     [Test]
+    public void Registers_the_reauth_options_with_the_challenge_path()
+    {
+        var services = new ServiceCollection().AddLatticeExplorerEntraWebAuth(ConfigureValid);
+
+        using var provider = services.BuildServiceProvider();
+        var reauth = provider.GetService<ExplorerReauthOptions>();
+        Assert.Multiple(() =>
+        {
+            Assert.That(reauth, Is.Not.Null);
+            Assert.That(reauth!.ChallengePath, Is.EqualTo("/explorer-entra/reauth"));
+        });
+    }
+
+    [Test]
+    public void Registers_the_reauth_options_with_a_custom_challenge_path()
+    {
+        var services = new ServiceCollection().AddLatticeExplorerEntraWebAuth(o =>
+        {
+            ConfigureValid(o);
+            o.ReauthChallengePath = "/custom/reauth";
+        });
+
+        using var provider = services.BuildServiceProvider();
+        Assert.That(provider.GetRequiredService<ExplorerReauthOptions>().ChallengePath, Is.EqualTo("/custom/reauth"));
+    }
+
+    [Test]
+    public void Omits_the_reauth_options_override_when_challenge_path_is_cleared()
+    {
+        var services = new ServiceCollection().AddLatticeExplorerEntraWebAuth(o =>
+        {
+            ConfigureValid(o);
+            o.ReauthChallengePath = null;
+        });
+
+        var registered = services.Any(d => d.ServiceType == typeof(ExplorerReauthOptions));
+        Assert.That(registered, Is.False, "clearing the path leaves the core default (a plain reload) in place");
+    }
+
+    [Test]
     public void Returns_the_same_service_collection()
     {
         var services = new ServiceCollection();

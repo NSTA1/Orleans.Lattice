@@ -95,6 +95,19 @@ public static class ExplorerEntraWebServiceCollectionExtensions
             services.TryAddEnumerable(ServiceDescriptor.Scoped<CircuitHandler, ExplorerEntraWebAutoSignInCircuitHandler>());
         }
 
+        // Publish the forced-interactive challenge path to the core explorer so its
+        // re-authentication interstitial can drive a fresh OIDC sign-in without the
+        // core taking any dependency on this package. Registered last so it wins
+        // over the core default (the auth registration adds a no-challenge default
+        // via TryAdd). Left untouched when the caller cleared the path.
+        if (!string.IsNullOrWhiteSpace(options.ReauthChallengePath))
+        {
+            services.AddSingleton(new ExplorerReauthOptions
+            {
+                ChallengePath = options.ReauthChallengePath,
+            });
+        }
+
         return services;
     }
 }

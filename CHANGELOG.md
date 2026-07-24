@@ -10,6 +10,11 @@ This changelog covers the whole **package family** - every published `Orleans.La
 
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), labelled `lattice` or `lattice.replication`. See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
 
+### Added
+
+- **Orleans.Lattice.Explorer / Orleans.Lattice.Explorer.Entra.Web: graceful re-authentication and cross-instance-durable auth state for multi-replica / failover hosting (opt-in, additive - default behaviour unchanged).** Running the Explorer behind more than one replica could wedge a signed-in operator when a mid-session move landed them on a replica that could neither decrypt their session cookie nor acquire a downstream token. Two complementary opt-in fixes address this. **Graceful re-authentication:** a new `MapLatticeExplorerEntraWebReauth` endpoint issues a forced-interactive OpenID Connect challenge (`prompt=login`) that redeems a fresh authorization code even when a valid session cookie already exists, repopulating the receiving replica's token cache; its caller-supplied return URL is guarded to local paths only (fail-closed open-redirect protection). The console now traps the credential's revoked state and shows a "Your session expired - sign in again" interstitial that navigates to that endpoint, instead of rendering the raw gRPC error inside the circuit. **Cross-instance-durable auth state:** `LatticeExplorerWebOptions` gains opt-in options (`DataProtectionKeyRingBlobUri`, `DataProtectionKeyRingCredential`, `DataProtectionApplicationName`, `ConfigureDataProtection`) to persist the ASP.NET Data Protection key ring to shared Azure Blob Storage so every replica can decrypt one another's session cookie (fail-closed: a blob URI with no credential throws at registration rather than falling back to the ephemeral ring), and the distributed token cache is documented as a first-class estate-global choice. When none of the new options are set, behaviour is exactly as before. ([#1338](https://github.com/NSTA1/Orleans.Lattice/issues/1338))
+
+
 ## [2026-07-24]
 
 Per-package patch activity for 2026-07-24. **`Orleans.Lattice.Replication` advances to 8.0.6** (`lattice.replication-v8.0.6`) and **`Orleans.Lattice` advances to 8.0.2** (`lattice-v8.0.2`); every other package in the family remains at its current version.

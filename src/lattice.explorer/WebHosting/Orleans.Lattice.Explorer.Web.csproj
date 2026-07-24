@@ -29,6 +29,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Azure.Core" Version="1.46.2" />
+    <PackageReference Include="Azure.Extensions.AspNetCore.DataProtection.Blobs" Version="1.5.1" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\UI\Orleans.Lattice.Explorer.UI.csproj" />
   </ItemGroup>
 

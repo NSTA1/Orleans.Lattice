@@ -29,10 +29,12 @@ namespace Orleans.Lattice.Explorer.Core.Authentication;
 /// that it can no longer renew (returns <see langword="null"/>), the source
 /// latches into a revoked state and every subsequent request returns
 /// <see langword="null"/> / <see langword="false"/> so the user is re-challenged
-/// interactively rather than dropped into a broken session.
+/// interactively rather than dropped into a broken session. The transition is
+/// observable through <see cref="IReauthRequiredSource.ReauthRequired"/>, which
+/// fires once so a UI head can drive a graceful interactive re-authentication.
 /// </para>
 /// </remarks>
-public sealed class ExplorerAccessTokenSource : ILatticeCallCredentialProvider, IDisposable
+public sealed class ExplorerAccessTokenSource : ILatticeCallCredentialProvider, IReauthRequiredSource, IDisposable
 {
     /// <summary>The default proactive-refresh margin: renew two minutes before expiry.</summary>
     public static readonly TimeSpan DefaultRefreshMargin = TimeSpan.FromMinutes(2);
@@ -89,6 +91,9 @@ public sealed class ExplorerAccessTokenSource : ILatticeCallCredentialProvider, 
     }
 
     /// <inheritdoc />
+    public event Action? ReauthRequired;
+
+    /// <inheritdoc />
     public async ValueTask<string?> GetAuthorizationHeaderAsync(CancellationToken cancellationToken = default)
     {
         // Fast path: a still-valid token is served without touching the gate, so
@@ -120,6 +125,12 @@ public sealed class ExplorerAccessTokenSource : ILatticeCallCredentialProvider, 
         // its own acquire. This makes even a burst of forced (post-401) refreshes
         // single-flight, not just the proactive expiry path.
         var seenGeneration = Volatile.Read(ref _generation);
+
+        // Set inside the gate when this call is the one that latches the source
+        // into its revoked state, so the ReauthRequired event is raised exactly
+        // once - after the gate is released, never while holding it, so a handler
+        // may safely query the source or its owning session.
+        var justRevoked = false;
 
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -154,11 +165,20 @@ public sealed class ExplorerAccessTokenSource : ILatticeCallCredentialProvider, 
             }
 
             _revoked = true;
+            justRevoked = true;
             return false;
         }
         finally
         {
             _gate.Release();
+
+            // Raised outside the gate, and only by the caller that performed the
+            // transition, so the user is re-challenged interactively exactly once
+            // rather than being dropped into a broken session.
+            if (justRevoked)
+            {
+                ReauthRequired?.Invoke();
+            }
         }
     }
 
