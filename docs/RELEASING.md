@@ -126,7 +126,7 @@ If multiple tags were pushed in a single `git push origin tag1 tag2 ...` operati
 
 ## Updating `CHANGELOG.md`
 
-Every release folds the working tree's `## [Unreleased]` section into a dated `## [YYYY-MM-DD]` section keyed by the **release date, not by a version**. Because the family ships per-package (patch digits advance independently, and there is usually no single family version for a given ship), a day can carry several package waves - they all belong to **one** date section for that day:
+Every release folds the working tree's `## Unreleased` section into a dated `## [YYYY-MM-DD]` section keyed by the **release date, not by a version**. The dated sections live under a plain `## Released` heading - the counterpart to `## Unreleased`; both rolling titles are unbracketed and unlinked so they render as plain text, while each dated section keeps its bracketed `## [YYYY-MM-DD]` form. Because the family ships per-package (patch digits advance independently, and there is usually no single family version for a given ship), a day can carry several package waves - they all belong to **one** date section for that day:
 
 - If a `## [YYYY-MM-DD]` section for today does **not** exist yet, create it: an opening paragraph that enumerates every package version shipped that day (new-package debuts and per-package advances alike), followed by `### Added` / `### Changed` / `### Fixed` / `### Security` subsections (Keep a Changelog order).
 - If a `## [YYYY-MM-DD]` section for today **already exists**, merge the new entries into it rather than opening a second dated section: add each bullet under the shared subheading for its change kind, and extend the opening paragraph with the newly-shipped package versions.
@@ -135,13 +135,9 @@ Every release folds the working tree's `## [Unreleased]` section into a dated `#
 
 The ship commit that merges the changelog edit is the commit the tag(s) point at.
 
-### Compare links
+### Section titles and compare links
 
-The footer `[YYYY-MM-DD]: .../compare/<base>...<target>` links follow the "Keep a Changelog" convention, but they only work when a git tag exists for both ends. Because this repo tags **per-package** (`lattice.<pkg>-v<X.Y.Z>`) and only creates a **family** tag (`vX.Y.Z`) for a coordinated lockstep release, the rule is:
+The two rolling section titles - `## Unreleased` and `## Released` - are plain, unbracketed headings, and `CHANGELOG.md` carries **no footer link-reference definitions**; each dated section keeps its bracketed `## [YYYY-MM-DD]` form.
 
-- **Add a compare link only for a date whose day was a coordinated lockstep release with a real family `vX.Y.Z` tag** (typically a minor/major boundary, plus any patch wave that was actually tagged family-wide). Anchor it on the date (`[YYYY-MM-DD]: .../compare/<prior family tag>...vX.Y.Z`), with `<base>` the **nearest existing prior family tag**, skipping over any intervening per-package-wave dates that have no family tag.
-- **Do not add a compare link for a date whose packages shipped only under their own `lattice.<pkg>-v<X.Y.Z>` tags** (a per-package patch wave). The date header has no single tag to link to; the section's prose enumerates the exact per-package versions, which is the authoritative record.
-- Keep `[Unreleased]` pointed at the most recent existing family tag (`compare/vX.Y.Z...HEAD`), never at a per-package-wave date.
-
-A footer comment in `CHANGELOG.md` records which sections intentionally carry no compare link, so the omission is not mistaken for an oversight.
+Earlier revisions followed the "Keep a Changelog" convention of a footer `[YYYY-MM-DD]: .../compare/<base>...<target>` block (plus `[Unreleased]: .../compare/vX.Y.Z...HEAD`). That convention was dropped because it rendered inconsistently: the family tags **per-package** (`lattice.<pkg>-v<X.Y.Z>`) and only mints a **family** tag (`vX.Y.Z`) for a coordinated lockstep release, so most dates had no single tag to anchor a link - only the occasional lockstep date and `Unreleased` turned into links, while every per-package-wave date stayed plain bracketed text, a half-linked ladder. Each dated section's opening paragraph already enumerates the exact per-package versions and their `lattice.<pkg>-v<X.Y.Z>` tags, which is the authoritative record; compare those tags directly for a diff. Do not reintroduce footer compare-link definitions.
 
