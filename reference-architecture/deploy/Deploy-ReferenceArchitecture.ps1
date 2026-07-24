@@ -172,6 +172,15 @@ param(
     # Pass -EnableReplicationControl:$false to withhold the surface entirely.
     [bool]$EnableReplicationControl = $true,
 
+    # MCP backup control surface. The reference estate ships it ON (this switch
+    # defaults true): the silo Orleans.Lattice.Api.Backup gRPC facade is always
+    # co-hosted, and this makes the MCP head advertise the backup tool group (read
+    # plus the mutating capture/restore/delete verbs). SAFE ON by default because
+    # the surface is FAIL-CLOSED behind the deny-by-default LatticeOperation.Backup
+    # gate - every call re-validates the forwarded Entra JWT and needs an authored
+    # Backup grant. Pass -EnableBackupControl:$false to withhold the surface.
+    [bool]$EnableBackupControl = $true,
+
     # Cross-cluster anti-entropy: the periodic digest probe + Merkle-walk drift
     # localisation + bounded automatic remediation that re-ships divergent key
     # ranges to a lagging peer. Quiet default OFF: a healthy estate converges via
@@ -508,6 +517,7 @@ try {
         authDefaultEffect       = $AuthDefaultEffect
         requireApiAuthorization = $RequireApiAuthorization
         enableReplicationControl = $EnableReplicationControl
+        enableBackupControl      = $EnableBackupControl
         enableDigestAntiEntropy  = $EnableDigestAntiEntropy
         digestProbeIntervalSeconds = $DigestProbeIntervalSeconds
         # Entra is activated on pass 2 (the app registrations are created between

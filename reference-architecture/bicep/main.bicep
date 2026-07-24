@@ -112,6 +112,9 @@ param requireApiAuthorization bool = true
 @description('Runtime per-tree replication control plane, estate-wide. Secure default OFF: no sys-replication-config tree, no silo replication control gRPC binding, no MCP lattice_replication_* tools. When true the control plane is co-hosted but stays fail-closed behind the deny-by-default LatticeOperation.Replication gate (an explicit grant is required to enable/disable; not even Admin confers it).')
 param enableReplicationControl bool = false
 
+@description('MCP backup control surface, estate-wide. The silo Orleans.Lattice.Api.Backup facade is always co-hosted; this gates only whether the MCP head advertises the backup tool group (read plus the mutating capture/restore/delete verbs). Fail-closed behind the deny-by-default LatticeOperation.Backup gate when on.')
+param enableBackupControl bool = false
+
 @description('Cross-cluster anti-entropy (digest probe + Merkle-walk drift localisation + bounded automatic remediation), estate-wide. Quiet default OFF: a healthy estate converges via the forward change feed; this fallback heals divergence introduced out-of-band or after a peer outage past WAL retention. Applied symmetrically to every region.')
 param enableDigestAntiEntropy bool = false
 
@@ -227,6 +230,9 @@ module compute 'modules/compute.bicep' = [for (region, i) in regions: {
     requireApiAuthorization: requireApiAuthorization
     // Runtime replication control plane, secure default off (fail-closed when on).
     enableReplicationControl: enableReplicationControl
+    // MCP backup control surface (silo backup facade always co-hosted; gates only
+    // MCP advertisement of the backup tool group). Fail-closed behind Backup gate.
+    enableBackupControl: enableBackupControl
     // Cross-cluster anti-entropy: digest probe + Merkle-walk + auto-remediation.
     enableDigestAntiEntropy: enableDigestAntiEntropy
     digestProbeIntervalSeconds: digestProbeIntervalSeconds
