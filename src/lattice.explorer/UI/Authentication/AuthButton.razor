@@ -16,7 +16,7 @@
         </span>
         @if (_signOut.UseServerFormPost)
         {
-            <form method="post" action="@_signOut.FormAction" class="explorer-auth-form">
+            <form method="post" action="@_signOut.FormAction" class="explorer-auth-form" data-enhance="false">
                 <AntiforgeryToken />
                 <button type="submit" class="explorer-btn-link" title="Sign out">Sign out</button>
             </form>
