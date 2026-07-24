@@ -17,9 +17,25 @@ namespace Orleans.Lattice;
 /// (3) the persisted checkpoint is older than
 /// <see cref="LatticeOptions.LeafProjectionRetention"/>.
 /// </para>
+/// <para>
+/// Orleans-serializable so that an activation fault raised on a leaf placed
+/// on a peer silo (for example when the data API or a replication digest
+/// probe activates the leaf from another silo) round-trips cleanly to the
+/// caller as this typed, actionable exception rather than degrading into an
+/// opaque <c>CodecNotFoundException</c> messaging failure.
+/// </para>
 /// </summary>
+[GenerateSerializer]
+[Alias(TypeAliases.LeafProjectionStale)]
 public sealed class LeafProjectionStaleException : InvalidOperationException
 {
+    /// <summary>
+    /// Initialises a new instance with no diagnostic context. Provided to
+    /// satisfy the framework's exception construction contract; production
+    /// throw sites use the message or message + inner-exception overloads.
+    /// </summary>
+    public LeafProjectionStaleException() { }
+
     /// <summary>
     /// Initialises a new instance with the specified message.
     /// </summary>

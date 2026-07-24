@@ -108,6 +108,15 @@ internal static class TypeAliases
     internal const string StaleShardRouting = "ol.ssr";
     internal const string ShardActivationTimeout = "ol.sat";
 
+    // Leaf projection staleness surface. Thrown by BPlusLeafGrain during
+    // activation (ReplayWalSinceCheckpointAsync) when the durable projection
+    // checkpoint has fallen off / diverged from the per-shard WAL and the
+    // ProjectionRebuildPolicy elects to surface rather than auto-recover.
+    // Serializable because leaf activation is routinely driven cross-silo
+    // (data API, replication digest probe), so the fault must round-trip as
+    // this typed exception instead of an opaque CodecNotFoundException.
+    internal const string LeafProjectionStale = "ol.lps";
+
     // Lattice host / silo shutdown back-pressure surface. Thrown by
     // any public ILattice operator that cannot complete because the
     // owning silo's WalCommitLogWriter is draining (host shutdown).
