@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Components.Server.Circuits;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Orleans.Lattice.Explorer.Core.Authentication;
 
 namespace Orleans.Lattice.Explorer.Entra.Web.Tests;
@@ -194,6 +195,58 @@ public sealed class ExplorerEntraWebServiceCollectionExtensionsTests
 
         var registered = services.Any(d => d.ServiceType == typeof(ExplorerSignOutOptions));
         Assert.That(registered, Is.False, "clearing the path leaves the core default (a local-only sign-out) in place");
+    }
+
+    [Test]
+    public void Contributes_the_default_instance_origin_as_a_form_action_source()
+    {
+        var services = new ServiceCollection().AddLatticeExplorerEntraWebAuth(ConfigureValid);
+
+        using var provider = services.BuildServiceProvider();
+        var csp = provider.GetRequiredService<IOptions<ExplorerContentSecurityPolicyOptions>>().Value;
+
+        // The federated sign-out POST is redirected to the Entra end-session URL,
+        // which browsers check against form-action; the provider must permit that
+        // origin so the default `form-action 'self'` policy does not block it.
+        Assert.That(
+            csp.AdditionalFormActionSources,
+            Does.Contain("https://login.microsoftonline.com"));
+    }
+
+    [Test]
+    public void Contributes_a_custom_instance_origin_as_a_form_action_source()
+    {
+        var services = new ServiceCollection().AddLatticeExplorerEntraWebAuth(o =>
+        {
+            ConfigureValid(o);
+            o.Instance = "https://login.microsoftonline.us/";
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var csp = provider.GetRequiredService<IOptions<ExplorerContentSecurityPolicyOptions>>().Value;
+
+        // Only the origin (scheme + authority) is contributed, never the trailing
+        // path, so national-cloud and sovereign authorities are handled too.
+        Assert.That(
+            csp.AdditionalFormActionSources,
+            Does.Contain("https://login.microsoftonline.us"));
+    }
+
+    [Test]
+    public void Omits_the_form_action_source_when_the_federated_sign_out_is_cleared()
+    {
+        var services = new ServiceCollection().AddLatticeExplorerEntraWebAuth(o =>
+        {
+            ConfigureValid(o);
+            o.SignOutPath = null;
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var csp = provider.GetRequiredService<IOptions<ExplorerContentSecurityPolicyOptions>>().Value;
+
+        // With no federated sign-out wired there is no cross-origin redirect to
+        // permit, so the tightest form-action policy is left in place.
+        Assert.That(csp.AdditionalFormActionSources, Is.Empty);
     }
 
     [Test]

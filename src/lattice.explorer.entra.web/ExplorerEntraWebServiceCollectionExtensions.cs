@@ -123,6 +123,23 @@ public static class ExplorerEntraWebServiceCollectionExtensions
             {
                 FederatedSignOutPath = options.SignOutPath,
             });
+
+            // Permit the Entra identity provider's origin as a CSP form-action
+            // source so the federated "Sign out" form is not blocked by the web
+            // head's default `form-action 'self'` policy. The button POSTs to the
+            // local sign-out endpoint above, which redirects the browser to
+            // Entra's end-session URL; browsers enforce `form-action` across the
+            // whole redirect chain, so that cross-origin target must be allowed.
+            // Derived from the configured authority instance's origin and only
+            // added when it parses as an absolute http(s) authority (fail closed:
+            // a malformed instance contributes nothing rather than a bad source).
+            if (Uri.TryCreate(options.Instance, UriKind.Absolute, out var instanceUri)
+                && (instanceUri.Scheme == Uri.UriSchemeHttps || instanceUri.Scheme == Uri.UriSchemeHttp))
+            {
+                var instanceOrigin = instanceUri.GetLeftPart(UriPartial.Authority);
+                services.Configure<ExplorerContentSecurityPolicyOptions>(
+                    cspOptions => cspOptions.AdditionalFormActionSources.Add(instanceOrigin));
+            }
         }
 
         return services;
