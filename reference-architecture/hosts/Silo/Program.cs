@@ -55,6 +55,13 @@ using Orleans.Lattice.Storage.AzureTable;
 var builder = WebApplication.CreateBuilder(args);
 var config = builder.Configuration;
 
+// Front Door (og-state) and Container Apps both probe this host's /health path
+// continuously - AFD once per edge PoP, ACA on its liveness cadence. Drop the
+// framework "Request starting"/"Request finished" chatter on the probe path so it
+// does not dominate log storage; real (non-probe) requests keep full logging and
+// any warning/error on /health still surfaces. Mirrors the MCP and Explorer heads.
+builder.Logging.SuppressHealthProbeRequestLogs();
+
 var storage = AzureStorageIdentity.FromConfiguration(config);
 
 var clusterId = config["Cluster:Id"] ?? "lattice";
@@ -506,7 +513,14 @@ if (enableRuntimeReplicationConfig)
 // them without a shell in the final image.
 app.MapLatticeScalingSignal();
 app.MapPrometheusScrapingEndpoint();
-app.MapGet("/health", () => Results.Ok("healthy"));
+
+// Liveness probe. Front Door's og-state origin group probes this path with HEAD
+// on the gRPC (HTTP/2) ingress port, and Container Apps probes it with GET on the
+// internal HTTP/1 port; map both verbs so every probe gets 200 rather than a 404
+// (HEAD has no matching endpoint under a GET-only map). Reached directly and
+// exempt from the Front Door origin lock above. Its request logs are suppressed
+// (see SuppressHealthProbeRequestLogs at startup).
+app.MapMethods("/health", ["GET", "HEAD"], () => Results.Ok("healthy"));
 
 app.Run();
 

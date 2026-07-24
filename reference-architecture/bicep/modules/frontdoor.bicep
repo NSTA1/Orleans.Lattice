@@ -168,8 +168,8 @@ param origins array
 @maxValue(255)
 param probeIntervalSeconds int = 240
 
-@description('Path the AFD health probe requests against each origin. A lightweight HEAD is issued against this path.')
-param probePath string = '/'
+@description('Health-probe path for the State API (silo) origin group. Front Door reaches the silo on its gRPC (HTTP/2) ingress port, which serves no endpoint at the shared `/` - a HEAD probe there is answered 404 and emits a request-log pair on every probe. The silo maps an anonymous `/health` endpoint (GET+HEAD) on every Kestrel port including the gRPC one, which returns 200 and whose request logs the host suppresses, so it is probed there instead.')
+param stateProbePath string = '/health'
 
 @description('Health-probe path for the Explorer origin group. The Explorer console protects `/` behind a require-authenticated-user policy (it 302-redirects anonymous probes to sign-in, which AFD scores unhealthy), so it is probed at its dedicated anonymous `/health` endpoint instead of the shared `/`.')
 param explorerProbePath string = '/health'
@@ -195,8 +195,13 @@ var loadBalancingSettings = {
   additionalLatencyInMilliseconds: 50
 }
 
-var healthProbeSettings = {
-  probePath: probePath
+// The silo is fronted on its gRPC (HTTP/2) ingress port, which serves no endpoint
+// at the shared `/`; a HEAD probe there is answered 404 and logs a request pair on
+// every probe. It is probed at the anonymous `/health` endpoint (see
+// stateProbePath) the silo maps on every Kestrel port instead, which returns 200
+// and whose request logs the host suppresses.
+var stateHealthProbeSettings = {
+  probePath: stateProbePath
   probeRequestType: 'HEAD'
   probeProtocol: 'Https'
   probeIntervalInSeconds: probeIntervalSeconds
@@ -215,9 +220,8 @@ var explorerHealthProbeSettings = {
 // The MCP head serves the Streamable-HTTP transport at `/` (POST/GET only), so a
 // HEAD probe against the shared `/` is answered 405 and logs a request pair on
 // every probe. It is probed at its anonymous `/health` endpoint (see mcpProbePath)
-// instead, which returns 200 and whose request logs the host suppresses. State
-// still uses the shared `/` because og-state fronts the silo's HTTP/2 gRPC port,
-// which has no `/health`.
+// instead, which returns 200 and whose request logs the host suppresses. The State
+// origin group applies the same treatment via stateProbePath / `/health`.
 var mcpHealthProbeSettings = {
   probePath: mcpProbePath
   probeRequestType: 'HEAD'
@@ -340,7 +344,7 @@ resource originGroupState 'Microsoft.Cdn/profiles/originGroups@2024-02-01' = {
   name: 'og-state'
   properties: {
     loadBalancingSettings: loadBalancingSettings
-    healthProbeSettings: healthProbeSettings
+    healthProbeSettings: stateHealthProbeSettings
     sessionAffinityState: 'Disabled'
   }
 }
