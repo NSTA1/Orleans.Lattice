@@ -450,6 +450,14 @@ if (requireApiAuthorization && entraEnabled)
     // Entra-resolved subject unless it is a bootstrap administrator, so only the
     // designated security admin(s) can read or mutate the access model.
     builder.Services.AddSingleton<ILatticeAuthApiAuthorizer, AllowAllAuthApiAuthorizer>();
+
+    // Seed each bootstrap administrator with a cluster-wide full-access grant at
+    // startup so the security administrator can discover and use every MCP tool
+    // group immediately after deployment. The bootstrap bypass already gives them
+    // full call-time authority, but MCP discovery advertises tools only against
+    // authored rules - this closes that gap declaratively. Self-guards when no
+    // administrator is configured; the write is idempotent and replicated.
+    builder.Services.AddHostedService<AdministratorAccessSeeder>();
 }
 
 // The write-capable data-API gRPC binding, co-hosted on the same silo gRPC port.
