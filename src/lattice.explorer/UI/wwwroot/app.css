@@ -198,6 +198,13 @@ code, .explorer-mono {
     color: var(--text-dim);
 }
 
+.explorer-brand-auth {
+    display: inline-flex;
+    align-items: center;
+    margin-left: auto;
+    padding-left: 0.5rem;
+}
+
 .explorer-cluster {
     display: inline-flex;
     align-items: baseline;
