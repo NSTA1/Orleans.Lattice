@@ -56,11 +56,21 @@ var builder = WebApplication.CreateBuilder(args);
 var config = builder.Configuration;
 
 // Front Door (og-state) and Container Apps both probe this host's /health path
-// continuously - AFD once per edge PoP, ACA on its liveness cadence. Drop the
-// framework "Request starting"/"Request finished" chatter on the probe path so it
-// does not dominate log storage; real (non-probe) requests keep full logging and
-// any warning/error on /health still surfaces. Mirrors the MCP and Explorer heads.
-builder.Logging.SuppressHealthProbeRequestLogs();
+// continuously - AFD once per edge PoP, ACA on its liveness cadence. Separately,
+// the cross-region replication engine transport fires silo-to-silo on a fixed
+// cadence regardless of activity: the anti-entropy digest probe, peer high-water-
+// mark polling, and Merkle walk all hit the orleans.lattice.replication.* gRPC
+// services, each successful call emitting a burst of framework "Request starting"/
+// "Request finished"/routing chatter. Drop that sub-Warning noise for the health
+// path and the engine-transport services so it does not dominate log storage; a
+// probe that draws a non-success response, every real (non-probe) request, and any
+// warning/error still surface. The engine-transport service ids mirror the Front
+// Door origin-lock exemption list below (the same internal silo-to-silo surface).
+builder.Logging.SuppressProbeRequestLogs(
+    FrontDoorOriginLockApplicationBuilderExtensions.HealthPath,
+    "/orleans.lattice.replication.LatticeReplication",
+    "/orleans.lattice.replication.LatticeRemoteSnapshot",
+    "/orleans.lattice.replication.LatticeSaga");
 
 var storage = AzureStorageIdentity.FromConfiguration(config);
 
