@@ -93,7 +93,8 @@ public partial class ReplicationDigestProbeGrainTests
         var grain = new ReplicationDigestProbeGrain(
             context, reminders, NullLogger<ReplicationDigestProbeGrain>.Instance,
             replicationMonitor, latticeMonitor, topology, transport,
-            replicationTransport, batchEncoder, shardCounts, grainFactory, snapshotProvider, state);
+            replicationTransport, batchEncoder, shardCounts, grainFactory, snapshotProvider,
+            Substitute.For<ILatticeMergeModeResolver>(), state);
 
         return (grain, state, lattice, transport, shardCounts);
     }
@@ -352,6 +353,7 @@ public partial class ReplicationDigestProbeGrainTests
             Substitute.For<IShardCountProvider>(),
             Substitute.For<IGrainFactory>(),
             Substitute.For<ISnapshotProvider>(),
+            Substitute.For<ILatticeMergeModeResolver>(),
             new FakePersistentState<ReplicationDigestProbeState>());
 
         Assert.That(
@@ -377,6 +379,7 @@ public partial class ReplicationDigestProbeGrainTests
                 Substitute.For<IShardCountProvider>(),
                 Substitute.For<IGrainFactory>(),
                 Substitute.For<ISnapshotProvider>(),
+                Substitute.For<ILatticeMergeModeResolver>(),
                 new FakePersistentState<ReplicationDigestProbeState>()),
             Throws.InstanceOf<ArgumentNullException>());
     }

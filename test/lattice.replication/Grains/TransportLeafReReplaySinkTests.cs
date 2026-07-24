@@ -47,6 +47,18 @@ public sealed class TransportLeafReReplaySinkTests
         OriginClusterId = Origin,
     };
 
+    /// <summary>
+    /// Fixed-mode resolver stub. Mirrors the producer-side seam the sink uses
+    /// to re-stamp <see cref="WalRecord.Mode"/> from the batch tree name.
+    /// </summary>
+    private sealed class FixedModeResolver(LatticeMergeMode? mode) : ILatticeMergeModeResolver
+    {
+        public LatticeMergeMode? Resolve(string treeId) => mode;
+    }
+
+    private static readonly ILatticeMergeModeResolver LwwResolver =
+        new FixedModeResolver(LatticeMergeMode.LwwRegister);
+
     private sealed class CapturingTransport : IReplicationTransport
     {
         public ReplicationBatch? Sent { get; private set; }
@@ -67,7 +79,7 @@ public sealed class TransportLeafReReplaySinkTests
         // the batch tree name so the receiver never sees an empty TreeId,
         // which it can neither apply nor quarantine.
         var transport = new CapturingTransport();
-        var sink = new TransportLeafReReplaySink(transport, _encoder, Origin);
+        var sink = new TransportLeafReReplaySink(transport, _encoder, LwwResolver, Origin);
 
         var entries = new[]
         {
@@ -101,7 +113,7 @@ public sealed class TransportLeafReReplaySinkTests
         // Bootstrap-fallback entries already carry the correct TreeId; the
         // re-stamp is a no-op for them.
         var transport = new CapturingTransport();
-        var sink = new TransportLeafReReplaySink(transport, _encoder, Origin);
+        var sink = new TransportLeafReReplaySink(transport, _encoder, LwwResolver, Origin);
 
         var entries = new[] { EntryWithTreeId(treeId: Tree, key: "a") };
 
@@ -115,12 +127,51 @@ public sealed class TransportLeafReReplaySinkTests
     public async Task ReplayAsync_empty_entries_ships_nothing()
     {
         var transport = new CapturingTransport();
-        var sink = new TransportLeafReReplaySink(transport, _encoder, Origin);
+        var sink = new TransportLeafReReplaySink(transport, _encoder, LwwResolver, Origin);
 
         var shipped = await sink.ReplayAsync(
             Peer, Tree, Array.Empty<WalRecord>(), CancellationToken.None);
 
         Assert.That(shipped, Is.Zero);
         Assert.That(transport.Sent, Is.Null);
+    }
+
+    [Test]
+    public async Task ReplayAsync_restamps_Mode_from_resolver_for_non_lww_tree()
+    {
+        // Regression for #1334. WAL-sourced re-replay entries lose their Mode
+        // on read-back when it was the enum default (LwwRegister), and
+        // bootstrap-fallback entries are re-derived from the live projection
+        // with no Mode at all - so both arrive here as LwwRegister. For a tree
+        // whose fixed merge mode is not LwwRegister (here an OR-Map tree, as
+        // the internal sys-replication-config tree is), the receiver's
+        // merge-mode gate rejects a wire mode that disagrees with the locally
+        // resolved mode. The sink must re-stamp Mode from the resolver so the
+        // receiver admits the remediation entries.
+        var transport = new CapturingTransport();
+        var resolver = new FixedModeResolver(LatticeMergeMode.OrMap);
+        var sink = new TransportLeafReReplaySink(transport, _encoder, resolver, Origin);
+
+        // Entries arrive carrying the wrong (default) mode, exactly as they
+        // surface from the WAL read-back / live re-derivation.
+        var entries = new[]
+        {
+            EntryWithTreeId(treeId: Tree, key: "a") with { Mode = LatticeMergeMode.LwwRegister },
+            EntryWithTreeId(treeId: string.Empty, key: "b") with { Mode = LatticeMergeMode.LwwRegister },
+        };
+
+        var shipped = await sink.ReplayAsync(Peer, Tree, entries, CancellationToken.None);
+
+        Assert.That(shipped, Is.EqualTo(2));
+
+        // The in-memory envelope carries the resolved mode on every entry.
+        var envelope = transport.Sent!.Value.Envelope!.Value;
+        Assert.That(envelope.Entries.Select(e => e.Mode), Is.All.EqualTo(LatticeMergeMode.OrMap));
+
+        // And so does the batch after a real wire round-trip through the
+        // encoder, proving the receiver decodes the corrected mode.
+        var decoded = _encoder.Decode(transport.Sent!.Value.Payload);
+        Assert.That(decoded.Entries.Select(e => e.Mode), Is.All.EqualTo(LatticeMergeMode.OrMap));
+        Assert.That(decoded.Entries.Select(e => e.TreeId), Is.All.EqualTo(Tree));
     }
 }

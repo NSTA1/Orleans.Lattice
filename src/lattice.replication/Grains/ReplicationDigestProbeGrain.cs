@@ -47,6 +47,7 @@ internal sealed class ReplicationDigestProbeGrain(
     IShardCountProvider shardCounts,
     IGrainFactory grainFactory,
     ISnapshotProvider snapshotProvider,
+    ILatticeMergeModeResolver mergeModeResolver,
     [PersistentState("replication-digest-probe", LatticeOptions.StorageProviderName)]
     IPersistentState<ReplicationDigestProbeState> state)
     : CoordinatorGrain<ReplicationDigestProbeGrain>(context, reminderRegistry, logger),
@@ -70,6 +71,8 @@ internal sealed class ReplicationDigestProbeGrain(
         grainFactory ?? throw new ArgumentNullException(nameof(grainFactory));
     private readonly ISnapshotProvider _snapshotProvider =
         snapshotProvider ?? throw new ArgumentNullException(nameof(snapshotProvider));
+    private readonly ILatticeMergeModeResolver _mergeModeResolver =
+        mergeModeResolver ?? throw new ArgumentNullException(nameof(mergeModeResolver));
 
     private readonly Random _random = new();
 
@@ -583,7 +586,7 @@ internal sealed class ReplicationDigestProbeGrain(
             var partitionCount = Math.Max(1, options.ReplogPartitions);
             var pageSize = Math.Max(1, options.ShipPartitionPageSize);
             var walSource = new WalGrainReReplaySource(_grainFactory, TreeName, partitionCount, pageSize);
-            var sink = new TransportLeafReReplaySink(_replicationTransport, _batchEncoder, originClusterId);
+            var sink = new TransportLeafReReplaySink(_replicationTransport, _batchEncoder, _mergeModeResolver, originClusterId);
 
             return await LeafReReplayer.ReplayAsync(
                 TreeName,
@@ -650,7 +653,7 @@ internal sealed class ReplicationDigestProbeGrain(
         try
         {
             var originClusterId = options.ClusterId;
-            var sink = new TransportLeafReReplaySink(_replicationTransport, _batchEncoder, originClusterId);
+            var sink = new TransportLeafReReplaySink(_replicationTransport, _batchEncoder, _mergeModeResolver, originClusterId);
 
             return await BootstrapFallbackPlanner.PlanAsync(
                 TreeName,
