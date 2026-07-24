@@ -387,6 +387,29 @@ module frontdoor 'modules/frontdoor.bicep' = if (deploymentOption == 'public') {
 }
 
 // =============================================================================
+// Private DNS lane (cross-region internal-FQDN resolution) - private option only.
+// -----------------------------------------------------------------------------
+// The public option uses public DNS + Front Door, so it needs no private zones.
+// The private option runs internal-ingress environments in peered VNets that have
+// no automatic private DNS zone; this module publishes one customer-managed zone
+// per environment default domain (wildcard A -> environment static IP) and links
+// every zone to every region VNet, so cross-region replication can resolve the
+// peer silo's internal FQDN. Runs AFTER the compute loop (needs each environment's
+// default domain + static IP) and consumes the vnet ids, so it is one-directional.
+// =============================================================================
+
+module privateDns 'modules/privatedns.bicep' = if (deploymentOption == 'private') {
+  name: 'privateDns'
+  params: {
+    environmentZones: [for (region, i) in regions: {
+      defaultDomain: compute[i].outputs.environmentDefaultDomain
+      staticIp: compute[i].outputs.environmentStaticIp
+    }]
+    vnetResourceIds: [for (region, i) in regions: vnet.outputs.perRegionNetwork[i].vnetId]
+  }
+}
+
+// =============================================================================
 // AcrPull role assignments
 // -----------------------------------------------------------------------------
 // Each region identity's AcrPull assignment is declared INSIDE compute.bicep
