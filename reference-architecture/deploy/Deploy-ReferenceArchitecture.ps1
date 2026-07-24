@@ -575,6 +575,14 @@ try {
     $perRegionNetwork = if ($outputs.PSObject.Properties.Name -contains 'perRegionNetwork') { $outputs.perRegionNetwork.value } else { @() }
     $frontDoorId = $outputs.frontDoorId.value
     $frontDoorEndpoints = $outputs.frontDoorEndpoints.value
+    # The private deployment option provisions no Front Door, so this output is an
+    # empty object. Under Set-StrictMode -Version Latest a direct property access
+    # (e.g. $frontDoorEndpoints.explorer) on an empty-but-non-null object throws.
+    # Coerce the empty object to $null so every downstream "$frontDoorEndpoints -and
+    # $frontDoorEndpoints.<name>" guard short-circuits cleanly.
+    if ($frontDoorEndpoints -and (@($frontDoorEndpoints.PSObject.Properties).Count -eq 0)) {
+        $frontDoorEndpoints = $null
+    }
 
     # -----------------------------------------------------------------------
     # 4. Entra - app registrations, SPs, federated identity credentials, RBAC.
@@ -801,8 +809,10 @@ try {
     #     request that creates that replica. Best-effort and idempotent: /health
     #     is exempt from the origin lock, so a direct-to-origin GET both triggers
     #     HTTP-concurrency scale-from-zero and confirms the head is serving.
+    #     Skipped for the private option: internal ingress is not reachable from the
+    #     deployer host and there is no Front Door edge to pre-warm.
     # -----------------------------------------------------------------------
-    if (-not $WhatIfPreference) {
+    if (-not $WhatIfPreference -and $DeploymentOption -eq 'public') {
         Write-Phase 'Warm-up: waking scale-to-zero heads'
         foreach ($r in $perRegion) {
             foreach ($head in @(

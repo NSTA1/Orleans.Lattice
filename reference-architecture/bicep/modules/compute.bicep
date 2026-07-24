@@ -846,6 +846,41 @@ resource explorerApp 'Microsoft.App/containerApps@2024-03-01' = {
             cpu: json(headCpu)
             memory: headMemory
           }
+          // Health probes against /health on the ingress port. Readiness gates
+          // Front Door / single-revision cutover so traffic only reaches a warm
+          // replica; Startup gives a cold scale-to-zero replica time to come up
+          // before liveness applies. Probes act only on running replicas, so they
+          // do not defeat scale-to-zero (an idle app has nothing to probe).
+          probes: [
+            {
+              type: 'Startup'
+              httpGet: {
+                path: '/health'
+                port: 8080
+              }
+              initialDelaySeconds: 2
+              periodSeconds: 5
+              failureThreshold: 24
+            }
+            {
+              type: 'Readiness'
+              httpGet: {
+                path: '/health'
+                port: 8080
+              }
+              periodSeconds: 10
+              failureThreshold: 3
+            }
+            {
+              type: 'Liveness'
+              httpGet: {
+                path: '/health'
+                port: 8080
+              }
+              initialDelaySeconds: 15
+              periodSeconds: 30
+            }
+          ]
           env: concat([
             // Remote silo State + auth gRPC endpoint the console dials (as a
             // gRPC / gRPC-web client) over server TLS. Seeds the console's
@@ -909,6 +944,9 @@ output environmentId string = environment.id
 
 @description('Default domain of the ACA managed environment.')
 output environmentDefaultDomain string = environment.properties.defaultDomain
+
+@description('Static inbound IP of the ACA managed environment. For the private (internal-ingress) option this is a VNet-private address; the deployer/DNS module publishes a wildcard A record for the environment default domain pointing at it so every peer region VNet can resolve this environment\'s internal head FQDNs (cross-region replication dials peer silos by internal FQDN).')
+output environmentStaticIp string = environment.properties.staticIp
 
 @description('Resource id of the region user-assigned managed identity (AcrPull role assignment target in main.bicep).')
 output managedIdentityId string = identity.id
