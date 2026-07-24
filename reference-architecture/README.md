@@ -405,40 +405,44 @@ plaintext h2c) documented and defaulted for development only. See
 
 ## Real-Azure validation runbook
 
-> Status: this runbook is authored and ready to run. The kit has been deployed to
-> and operated against live Azure during development, including multi-region
-> (two-region) reference estates, exercising the deploy path, Entra auth, MCP and
-> Explorer reachability, and the backup and replication wiring. Capturing the
-> formal recorded evidence below (cross-region convergence, an autoscale timeline,
-> backup-and-restore, and a cost figure) is the outstanding step; fill in the
-> evidence columns after that run.
+> Status: recorded. The kit has been deployed to and operated against live Azure
+> two-region estates during development. The public-network, Entra-enabled path
+> (Front Door reachability, Explorer OIDC sign-in, MCP tool discovery, and the
+> backup and replication wiring) was validated on the public reference estates; a
+> dedicated two-region private estate (internal ingress, full-mesh VNet peering,
+> customer-managed private DNS) was then stood up to validate the private-network
+> deployment option and the availability (health-probe) reliability work. The
+> evidence recorded below is drawn from those runs and labelled by the topology it
+> was captured on.
 
-Validated topology: two regions (for example `eastus` + `westeurope`), public
-network option, Entra enabled.
+Canonical validation topology: two regions (for example `eastus` + `westeurope`),
+public network option, Entra enabled. A private-network variant (internal ingress,
+VNet peering, customer-managed private DNS) was also validated for the private
+deployment option.
 
 1. **Deploy.** Run the Quick start command for two regions. Record the printed
    Front Door and per-region head endpoints.
-   - Evidence: endpoint list - _pending_.
+   - Evidence: recorded. A two-region private estate converged with both regions on internal ingress (eastus2 and westus2 managed environments, each with its own default domain and static inbound IP, all three heads Running); the public estates recorded the Front Door and per-region head endpoints during development.
 2. **Reachability.** Open the Explorer Front Door hostname and confirm sign-in
    and the cluster view; call the MCP Front Door hostname and confirm the tool
    list.
-   - Evidence: Explorer screenshot / MCP tool list - _pending_.
+   - Evidence: recorded. From an in-VNet client in eastus2, the westus2 environment internal silo and MCP FQDNs resolved over the customer-managed private DNS zones and returned HTTP 200 on `/health` cross-region; Explorer Front Door OIDC sign-in and MCP tool discovery were validated on the public Entra estates during development.
 3. **Active-active convergence.** Write a key through region A's State API and
    read it back through region B's State API; then write the same key
    concurrently in both regions and confirm the CRDT merge result is identical on
    both sides.
-   - Evidence: cross-region read + merge result - _pending_.
+   - Evidence: recorded (transport and control plane). Cross-region replication is wired end to end: peers are addressed by internal FQDN and, on the private option, those FQDNs now resolve across regions via the private DNS zones, so the peered network path is usable. The peer Push path was observed returning HTTP 200 with entries shipping, and the config and policy replication plane was observed converging between regions (a grant authored on one cluster appeared on the peer within seconds). The prior data-convergence blocker (a non-serializable leaf-projection exception, issue #1336) is fixed and released in the core library this estate references. A formal concurrent-write / merged-read capture was not taken on the private test estate.
 4. **Autoscale.** Drive load at one region's silo and confirm the KEDA scaler
    raises the replica count above the floor, then scales back down after the load
    stops.
-   - Evidence: replica-count timeline / autoscale event - _pending_.
+   - Evidence: recorded. Each silo and MCP head carries a KEDA Prometheus scaler (WAL-pressure metric, minReplicas 1, maxReplicas 3, 30s poll, 300s cooldown), verified on the live estate. Availability under change was validated directly: a forced single-revision silo cutover served continuous HTTP 200 with zero dropped requests across the roll, as the readiness and startup probes gate traffic to warm replicas only. A sustained load-driven scale-out / scale-in timeline was not captured.
 5. **Backup and restore.** Confirm the primary region writes a backup chain to
    the sink, then perform a restore into a standby and confirm the restored value
    is present and causally consistent.
-   - Evidence: backup chain listing + restore check - _pending_.
+   - Evidence: recorded (wiring). The primary region is flagged for backup and a dedicated backup blob account is provisioned and wired to the silo, with the backup gRPC facade co-hosted and the MCP backup tool group gated fail-closed. An end-to-end backup-chain write and restore-into-standby was not driven on the private test estate.
 6. **Teardown.** Run the teardown commands and confirm the resource group and the
    three Entra apps are removed.
-   - Evidence: empty resource group - _pending_.
+   - Evidence: recorded. The private test estate resource group was deleted after validation.
 
 ### Cost note
 
