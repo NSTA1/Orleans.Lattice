@@ -533,7 +533,13 @@ Security is a first-class property of this architecture, not an afterthought:
   as the root of trust. Under deny-by-default every other caller - operator or
   service - is refused until this administrator grants access at runtime through
   the Explorer Access tab (itself administrator-gated). The seeded subject is
-  matched on the Entra object id (`oid`) claim.
+  matched on the Entra object id (`oid`) claim. Beyond the call-time bootstrap
+  bypass, the silo host proactively seeds this administrator a cluster-wide
+  full-access grant as an authored policy entry at startup (an idempotent,
+  replicated write via a hosted seeder) so that permission-scoped MCP tool
+  discovery - which advertises only tool groups backed by authored rules -
+  surfaces every group immediately after deployment, rather than nothing until
+  the administrator authors a first rule.
 - **Write surface is subject-gated.** The read-write Data API is enabled by
   default but rides the same deny-by-default access gate: every mutation is
   authorized against the caller's resolved subject, and the surface can be
