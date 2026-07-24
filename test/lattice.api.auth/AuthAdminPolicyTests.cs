@@ -50,6 +50,10 @@ public sealed class AuthAdminPolicyTests
         string ruleId, string group, string treeId, LatticeOperation ops) =>
         new(ruleId, LatticeSubjectSelector.Group(group), LatticeScope.Tree(treeId), ops, LatticeEffect.Allow);
 
+    private static LatticeAuthorizationRule AllowUserClusterWide(
+        string ruleId, string subject, LatticeOperation ops) =>
+        new(ruleId, LatticeSubjectSelector.User(subject), LatticeScope.ClusterWide(), ops, LatticeEffect.Allow);
+
     /// <summary>
     /// Resolves a named subject exactly as the facade does (system-origin group
     /// closure), so a parity assertion feeds the gate the same subject the facade
@@ -171,6 +175,79 @@ public sealed class AuthAdminPolicyTests
             Assert.That(deniedExplanation.Allowed, Is.EqualTo(deniedDecision.Allowed));
             Assert.That(deniedExplanation.Allowed, Is.False, "the ungranted Write must be denied");
         });
+    }
+
+    [Test]
+    public async Task explain_cites_a_wildcard_tree_rule_that_granted_access()
+    {
+        // Repro of issue #1339 Finding 5: the bootstrap-admin caller is granted by
+        // the root-of-trust bypass (allowed:true), and it also holds a Tree:*
+        // wildcard Allow rule. Before the fix, matchedRules only scanned the exact
+        // target tree, so the granting wildcard rule was omitted and explain
+        // asserted a verdict without citing any rule. After the fix, the cluster-
+        // wide "*" bucket is folded into the citation list.
+        const string tree = "policy-wildcard-explain";
+        const string ruleId = "ra-admin-full-access";
+        var scope = LatticeScope.Key(tree, "alpha");
+
+        using (AsAdmin())
+        {
+            await _fixture.Admin.PutRuleAsync(
+                AllowUserClusterWide(ruleId, AuthAdminClusterFixture.BootstrapAdmin, LatticeOperation.Write));
+        }
+
+        await _fixture.RebuildAsync();
+
+        AuthExplanation explanation;
+        using (AsAdmin())
+        {
+            explanation = await _fixture.Admin.ExplainAsync(
+                AuthAdminClusterFixture.BootstrapAdmin, LatticeOperation.Write, scope);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(explanation.Allowed, Is.True, "the bootstrap-admin root-of-trust grants the write");
+            Assert.That(explanation.MatchedRules.Select(r => r.RuleId), Does.Contain(ruleId),
+                "the Tree:* wildcard rule that governs the request must be cited (issue #1339)");
+        });
+    }
+
+    [Test]
+    public async Task list_rules_for_tree_excludes_wildcard_rules_by_exact_match_contract()
+    {
+        // Issue #1339 Finding 6 decision: list_rules_for_tree is an exact-treeId
+        // match by design (the store scans a single {treeId} prefix range). A
+        // Tree:* wildcard rule governs the tree effectively but is NOT returned by
+        // the per-tree listing; callers wanting a wildcard-inclusive view use
+        // explain / effective_permissions. This test pins that documented contract.
+        const string tree = "policy-wildcard-list";
+        using (AsAdmin())
+        {
+            await _fixture.Admin.PutRuleAsync(
+                AllowUserClusterWide("wildcard-only", Subject, LatticeOperation.Read));
+            await _fixture.Admin.PutRuleAsync(
+                AllowUserKey("exact-only", Subject, tree, "k", LatticeOperation.Read));
+
+            var exactRuleIds = new List<string>();
+            string? token = null;
+            do
+            {
+                var page = await _fixture.Admin.ListRulesForTreeAsync(
+                    tree, new AuthPageRequest { PageSize = 10, PageToken = token });
+                exactRuleIds.AddRange(page.Entries.Select(r => r.RuleId));
+                token = page.NextPageToken;
+            }
+            while (token is not null);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(exactRuleIds, Does.Contain("exact-only"),
+                    "an exact-treeId rule is listed");
+                Assert.That(exactRuleIds, Does.Not.Contain("wildcard-only"),
+                    "a Tree:* wildcard rule is excluded from the exact-match per-tree listing (issue #1339 Finding 6)");
+            });
+        }
     }
 
     [Test]

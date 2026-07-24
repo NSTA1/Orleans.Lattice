@@ -85,7 +85,9 @@ internal sealed class AuthToolGroup : ILatticeApiMcpToolGroup
             Read(services, AuthToolHandlers.ListRulesForTreeAsync, "lattice_auth_list_rules_for_tree",
                 "List a tree's authorization rules",
                 "Reads one page of the rules governing a single tree, ordered by rule id. Pass the returned next page "
-                + "token to continue. Read-only."),
+                + "token to continue. Matches the exact tree id only: cluster-wide wildcard rules (scope Tree:*) that "
+                + "govern this tree are stored under the reserved '*' tree id and are NOT returned here - use "
+                + "lattice_auth_explain or lattice_auth_effective_permissions for a wildcard-inclusive view. Read-only."),
         };
 
         if (enableAdministration)
@@ -126,6 +128,7 @@ internal sealed class AuthToolGroup : ILatticeApiMcpToolGroup
                 Name = name,
                 Title = title,
                 Description = description,
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 ReadOnly = true,
                 Destructive = false,
                 UseStructuredContent = true,
@@ -145,6 +148,7 @@ internal sealed class AuthToolGroup : ILatticeApiMcpToolGroup
                 Name = name,
                 Title = title,
                 Description = description,
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 ReadOnly = false,
                 Destructive = true,
                 UseStructuredContent = true,

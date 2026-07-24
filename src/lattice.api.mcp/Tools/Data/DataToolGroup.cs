@@ -77,6 +77,7 @@ internal sealed class DataToolGroup : ILatticeApiMcpToolGroup
             new McpServerToolCreateOptions
             {
                 Name = "lattice_data_get",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 Title = "Read a data entry",
                 Description =
                     "Reads the value at a key on a tree. A key the caller may not read reports "
@@ -92,6 +93,7 @@ internal sealed class DataToolGroup : ILatticeApiMcpToolGroup
             new McpServerToolCreateOptions
             {
                 Name = "lattice_data_read_range",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 Title = "Read a page of data entries",
                 Description =
                     "Reads one page of a bounded, ascending key range on a tree, pruned to the "
@@ -108,6 +110,7 @@ internal sealed class DataToolGroup : ILatticeApiMcpToolGroup
             new McpServerToolCreateOptions
             {
                 Name = "lattice_data_set",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 Title = "Write a data entry",
                 Description =
                     "Writes a value at a key on a tree. Fails closed: a caller who may not write the "
@@ -123,6 +126,7 @@ internal sealed class DataToolGroup : ILatticeApiMcpToolGroup
             new McpServerToolCreateOptions
             {
                 Name = "lattice_data_delete",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 Title = "Delete a data entry",
                 Description =
                     "Deletes a key on a tree, returning whether a live value was removed. Fails "
@@ -138,6 +142,7 @@ internal sealed class DataToolGroup : ILatticeApiMcpToolGroup
             new McpServerToolCreateOptions
             {
                 Name = "lattice_data_set_many_atomic",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 Title = "Commit an atomic batch on one tree",
                 Description =
                     "Commits upserts and deletes all-or-nothing on one tree, keyed by operationId for "
@@ -154,6 +159,7 @@ internal sealed class DataToolGroup : ILatticeApiMcpToolGroup
             new McpServerToolCreateOptions
             {
                 Name = "lattice_data_set_many_atomic_cross_tree",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 Title = "Commit an atomic batch across trees",
                 Description =
                     "Commits per-tree upserts and deletes across every named tree all-or-nothing, "

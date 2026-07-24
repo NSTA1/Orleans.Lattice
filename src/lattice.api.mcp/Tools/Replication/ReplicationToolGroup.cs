@@ -86,6 +86,7 @@ internal sealed class ReplicationToolGroup : ILatticeApiMcpToolGroup
             new McpServerToolCreateOptions
             {
                 Name = "lattice_replication_get_config",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 Title = "Get replication config",
                 Description =
                     "Reports the runtime replicated-tree set the caller may manage: each tree's enabled state, "
@@ -113,6 +114,7 @@ internal sealed class ReplicationToolGroup : ILatticeApiMcpToolGroup
             new McpServerToolCreateOptions
             {
                 Name = "lattice_replication_enable",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 Title = "Enable replication",
                 Description =
                     "Enables cross-cluster replication for a tree under a fixed merge mode, authoring config that "
@@ -138,6 +140,7 @@ internal sealed class ReplicationToolGroup : ILatticeApiMcpToolGroup
             new McpServerToolCreateOptions
             {
                 Name = "lattice_replication_disable",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 Title = "Disable replication",
                 Description =
                     "Disables cross-cluster replication for a tree, pausing shipping of new mutations. Never purges "

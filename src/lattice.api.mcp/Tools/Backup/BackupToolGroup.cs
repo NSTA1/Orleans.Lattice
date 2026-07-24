@@ -97,6 +97,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
             new McpServerToolCreateOptions
             {
                 Name = "lattice_backup_list",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 Title = "List backups",
                 Description =
                     "Lists one cursor-paged page of the backup catalog the caller may read, ordered by backup id "
@@ -120,6 +121,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
             new McpServerToolCreateOptions
             {
                 Name = "lattice_backup_describe",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 Title = "Describe backup",
                 Description =
                     "Describes a single backup and its base-first restore chain. Reports found=false when no backup "
@@ -140,6 +142,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
             new McpServerToolCreateOptions
             {
                 Name = "lattice_backup_inventory",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 Title = "Backup inventory",
                 Description =
                     "Summarises the backups the caller may read: counts, byte totals, oldest/newest timestamps, and "
@@ -165,6 +168,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
             new McpServerToolCreateOptions
             {
                 Name = "lattice_backup_scope_status",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 Title = "Backup scope status",
                 Description =
                     "Reads a single scope's schedule registration, last-run timestamps and outcome, and chain depth. "
@@ -191,6 +195,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
             new McpServerToolCreateOptions
             {
                 Name = "lattice_backup_export_artifact",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 Title = "Export backup artifact",
                 Description =
                     "Exports one bounded page of a backup artifact's bytes, base64-encoded, resuming from chunkOffset. "
@@ -219,6 +224,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
             new McpServerToolCreateOptions
             {
                 Name = "lattice_backup_create",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 Title = "Create backup",
                 Description =
                     "Captures a full backup of the requested scope. Mutating: subject to the fail-closed backup access "
@@ -247,6 +253,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
             new McpServerToolCreateOptions
             {
                 Name = "lattice_backup_create_incremental",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 Title = "Create incremental backup",
                 Description =
                     "Captures an incremental backup layered on a base backup. Mutating: subject to the fail-closed "
@@ -273,6 +280,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
             new McpServerToolCreateOptions
             {
                 Name = "lattice_backup_restore",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 Title = "Restore backup",
                 Description =
                     "Restores a backup into its target tree, walking its base chain. Mutating: subject to the "
@@ -306,6 +314,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
             new McpServerToolCreateOptions
             {
                 Name = "lattice_backup_revert_restore",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 Title = "Revert restore",
                 Description =
                     "Reverts a shadow-cutover restore, reconstructed from the fields of a prior lattice_backup_restore result. "
@@ -330,6 +339,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
             new McpServerToolCreateOptions
             {
                 Name = "lattice_backup_delete",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 Title = "Delete backup",
                 Description =
                     "Deletes a backup and the artifacts it uniquely owns. Reports deleted=false when no backup with "

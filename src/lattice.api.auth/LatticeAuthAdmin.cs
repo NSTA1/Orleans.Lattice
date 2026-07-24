@@ -475,11 +475,48 @@ internal sealed class LatticeAuthAdmin(
         CancellationToken cancellationToken)
     {
         var matched = new List<LatticeAuthorizationRule>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
         var cap = _apiOptions.MaxExplanationRules;
         var groupSet = ToGroupSet(subject.GroupIds);
 
+        // Scan the target tree's own rules first, then the cluster-wide "*" bucket
+        // so a Tree:* wildcard rule that grants (or denies) the request is cited in
+        // the explanation rather than silently omitted (issue #1339). The gate's
+        // verdict is authoritative; this only assembles the human-facing rule list.
+        await CollectFromTreeAsync(scope.TreeId, subject, operation, scope, groupSet, matched, seen, cap, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (!string.Equals(scope.TreeId, LatticeScope.ClusterWideTreeId, StringComparison.Ordinal))
+        {
+            await CollectFromTreeAsync(
+                LatticeScope.ClusterWideTreeId, subject, operation, scope, groupSet, matched, seen, cap, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        matched.Sort(static (a, b) => string.CompareOrdinal(a.RuleId, b.RuleId));
+        return matched;
+    }
+
+    /// <summary>
+    /// Appends every rule stored under <paramref name="treeId"/> that governs the
+    /// explain request (operation, subject, and scope overlap) to
+    /// <paramref name="matched"/>, deduplicating by rule id and honouring the
+    /// explanation cap. Used to fold both the target tree's exact rules and the
+    /// cluster-wide "*" wildcard bucket into a single citation list.
+    /// </summary>
+    private async Task CollectFromTreeAsync(
+        string treeId,
+        LatticeSubject subject,
+        LatticeOperation operation,
+        LatticeScope scope,
+        HashSet<string> groupSet,
+        List<LatticeAuthorizationRule> matched,
+        HashSet<string> seen,
+        int cap,
+        CancellationToken cancellationToken)
+    {
         // ListRulesForTreeAsync scans the policy tree system-origin internally.
-        await foreach (var rule in _store.ListRulesForTreeAsync(scope.TreeId, cancellationToken).ConfigureAwait(false))
+        await foreach (var rule in _store.ListRulesForTreeAsync(treeId, cancellationToken).ConfigureAwait(false))
         {
             if (matched.Count >= cap)
             {
@@ -501,11 +538,13 @@ internal sealed class LatticeAuthAdmin(
                 continue;
             }
 
+            if (!seen.Add(rule.RuleId))
+            {
+                continue;
+            }
+
             matched.Add(rule);
         }
-
-        matched.Sort(static (a, b) => string.CompareOrdinal(a.RuleId, b.RuleId));
-        return matched;
     }
 
     private static (string? Key, string? RangeStart, string? RangeEnd) TranslateScope(LatticeScope scope) =>

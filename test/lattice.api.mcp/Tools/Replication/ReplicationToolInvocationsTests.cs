@@ -1,5 +1,8 @@
+using Grpc.Core;
+using ModelContextProtocol;
 using NSubstitute;
 using Orleans.Lattice.Api.Replication;
+using Orleans.Lattice.Replication;
 
 namespace Orleans.Lattice.Api.Mcp.Tests;
 
@@ -111,6 +114,48 @@ public sealed class ReplicationToolInvocationsTests
 
         control.DidNotReceiveWithAnyArgs().EnableReplicationAsync(
             default!, default, default, default);
+    }
+
+    [Test]
+    public void Enable_rethrows_an_in_silo_mode_change_rejection_as_an_actionable_mcp_error()
+    {
+        // In-silo topology: the facade throws the domain rejection directly. The
+        // adapter must re-surface its actionable message as an McpException so the
+        // SDK does not mask it as a generic "an error occurred" invocation failure
+        // (issue #1339).
+        const string message =
+            "Replication for tree 'orders' is already enabled under LwwRegister and its merge mode "
+            + "cannot be changed in place; disable then re-enable it under OrSet.";
+        var control = Substitute.For<ILatticeReplicationControl>();
+        control.EnableReplicationAsync("orders", LatticeMergeMode.OrSet, null, Arg.Any<CancellationToken>())
+            .Returns<Task<ReplicationEnableResult>>(_ => throw new LatticeReplicationModeChangeRejectedException(
+                message, "orders", LatticeMergeMode.OrSet, LatticeMergeMode.LwwRegister, currentModeAmbiguous: false));
+
+        var ex = Assert.ThrowsAsync<McpException>(
+            async () => await ReplicationToolInvocations.EnableReplicationAsync(
+                control, "orders", "OrSet", null, CancellationToken.None));
+        Assert.That(ex!.Message, Is.EqualTo(message),
+            "the actionable disable-then-re-enable guidance is preserved verbatim");
+    }
+
+    [Test]
+    public void Enable_rethrows_a_remote_failed_precondition_as_an_actionable_mcp_error()
+    {
+        // Remote topology: the gRPC binding already mapped the rejection to a
+        // FailedPrecondition status whose detail is the actionable message. The
+        // adapter must surface that detail through an McpException.
+        const string detail =
+            "Replication for tree 'mcp-test-2' is already enabled; its merge mode cannot be changed "
+            + "in place - disable then re-enable it.";
+        var control = Substitute.For<ILatticeReplicationControl>();
+        control.EnableReplicationAsync("mcp-test-2", LatticeMergeMode.OrSet, null, Arg.Any<CancellationToken>())
+            .Returns<Task<ReplicationEnableResult>>(_ => throw new RpcException(
+                new Status(StatusCode.FailedPrecondition, detail)));
+
+        var ex = Assert.ThrowsAsync<McpException>(
+            async () => await ReplicationToolInvocations.EnableReplicationAsync(
+                control, "mcp-test-2", "OrSet", null, CancellationToken.None));
+        Assert.That(ex!.Message, Is.EqualTo(detail));
     }
 
     [Test]
