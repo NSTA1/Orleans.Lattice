@@ -461,7 +461,8 @@ public class AntiEntropyRemediationGuardChaosTests
         var grain = new ReplicationDigestProbeGrain(
             context, reminders, NullLogger<ReplicationDigestProbeGrain>.Instance,
             replicationMonitor, latticeMonitor, topology, transport,
-            replicationTransport, batchEncoder, shardCounts, grainFactory, snapshotProvider, state);
+            replicationTransport, batchEncoder, shardCounts, grainFactory, snapshotProvider,
+            Substitute.For<ILatticeMergeModeResolver>(), state);
 
         return (grain, state, lattice, transport, replicationTransport);
     }
