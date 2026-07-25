@@ -10,6 +10,10 @@ This changelog covers the whole **package family** - every published `Orleans.La
 
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), labelled `lattice` or `lattice.replication`. See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
 
+### Fixed
+
+- **Orleans.Lattice: the tag-index reconcile fired by a shadow-cutover restore no longer strands membership rows when reads run against the index concurrently.** After a restore reverted a subject tree, the reconcile that drops tag-membership rows for keys absent from the restored point-in-time deleted those rows while it was still streaming its scan over the very same index tree. Under a concurrent reader the scan enumerator could be reopened mid-sweep, and a delete issued during the scan restructured the tree being enumerated, so the resumed cursor skipped a contiguous tail of rows and left them answering tag queries until the next scheduled reconcile sweep. The reconcile now drains its scan into a buffer before issuing any delete, so every orphaned membership row is dropped exactly once regardless of page size or concurrent readers. ([#1351](https://github.com/NSTA1/Orleans.Lattice/issues/1351))
+
 ## Released
 
 Published releases, newest first. Each section is keyed by its publish date; within a date, packages advance on their own patch digits per [`docs/RELEASING.md`](docs/RELEASING.md).
