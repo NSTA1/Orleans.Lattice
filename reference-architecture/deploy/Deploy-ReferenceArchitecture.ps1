@@ -126,13 +126,24 @@ param(
     [ValidatePattern('^[a-z0-9]+$')]
     [string]$BaseName,
 
-    # Each item: @{ regionCode = '<3-6 char code>'; location = '<azure region>' }.
+    # Each item is a region to deploy a full per-region compute stack into. Accepts
+    # either a hashtable @{ regionCode = '<2-8 char code>'; location = '<azure region>' }
+    # or the compact string form 'regionCode=location' (for example 'use=eastus').
+    # The string form exists so the estate can be driven from PowerShell's
+    # interactive parameter prompt, which can only supply strings - it cannot
+    # construct a hashtable. regionCode is 2-8 lowercase alphanumerics, unique per
+    # region; location is an Azure region such as 'eastus' or 'uksouth'.
     [Parameter(Mandatory)]
     [ValidateNotNullOrEmpty()]
     [object[]]$Regions,
 
-    [Parameter(Mandatory)]
-    [string]$ImageTag,
+    # Container image tag stamped on all three host images (silo / MCP / Explorer).
+    # Required, but validated in the body rather than via [Parameter(Mandatory)] so
+    # an omitted value fails with an actionable message instead of PowerShell's
+    # opaque "Cannot bind argument to parameter 'ImageTag' because it is an empty
+    # string" prompt rejection (the ReplicationKey check below follows the same
+    # convention).
+    [string]$ImageTag = '',
 
     [ValidateSet('public', 'private')]
     [string]$DeploymentOption = 'public',
@@ -362,6 +373,65 @@ function Get-ByRegionCode {
     return $null
 }
 
+function ConvertTo-RegionEntry {
+    # Normalises one -Regions element to a canonical @{ regionCode; location }
+    # hashtable. Accepts a hashtable / dictionary, an object exposing regionCode +
+    # location properties, or the compact string 'regionCode=location' (also
+    # 'regionCode:location'). The string form is what PowerShell's interactive
+    # parameter prompt yields (it cannot build a hashtable), so supporting it is
+    # what makes an interactive run - or a plain '-Regions use=eastus,euw=westeurope'
+    # - work instead of failing deep in the run with an opaque StrictMode
+    # "property 'regionCode' cannot be found on this object" error.
+    param(
+        [Parameter(Mandatory)][AllowNull()][AllowEmptyString()]$Value,
+        [int]$Index
+    )
+
+    $code = $null
+    $location = $null
+
+    if ($null -eq $Value) {
+        # Falls through to the throw below.
+    }
+    elseif ($Value -is [System.Collections.IDictionary]) {
+        $code = [string]$Value['regionCode']
+        $location = [string]$Value['location']
+    }
+    elseif ($Value -is [string]) {
+        $parts = $Value.Trim() -split '\s*[=:]\s*', 2
+        if ($parts.Count -eq 2) {
+            $code = $parts[0].Trim()
+            $location = $parts[1].Trim()
+        }
+    }
+    else {
+        # PSCustomObject or any other object: probe properties WITHOUT a bare
+        # .regionCode access, which trips Set-StrictMode -Version Latest when the
+        # property is absent (the exact opaque failure this function prevents).
+        $codeProp = $Value.PSObject.Properties['regionCode']
+        $locProp = $Value.PSObject.Properties['location']
+        if ($codeProp) { $code = [string]$codeProp.Value }
+        if ($locProp) { $location = [string]$locProp.Value }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($code) -or [string]::IsNullOrWhiteSpace($location)) {
+        throw @"
+-Regions entry #$Index is not a valid region (got: '$Value').
+Pass each region either as a hashtable:
+    -Regions @(@{ regionCode = 'use'; location = 'eastus' }, @{ regionCode = 'euw'; location = 'westeurope' })
+or, when answering the interactive prompt (which can only supply strings), as
+'regionCode=location', one per line and a blank line to finish:
+    Regions[0]: use=eastus
+    Regions[1]: euw=westeurope
+    Regions[2]:
+regionCode is 2-8 lowercase alphanumeric characters and unique per region;
+location is an Azure region such as 'eastus' or 'uksouth'.
+"@
+    }
+
+    return @{ regionCode = $code; location = $location }
+}
+
 # ---------------------------------------------------------------------------
 # Preflight
 # ---------------------------------------------------------------------------
@@ -374,10 +444,25 @@ foreach ($template in @($MainTemplate, $BootstrapTemplate, $ComputeTemplate, $En
     if (-not (Test-Path $template)) { throw "Required template is missing: $template" }
 }
 
-foreach ($region in $Regions) {
-    if (-not $region.regionCode -or -not $region.location) {
-        throw 'Every -Regions entry must have a regionCode and a location, for example @{ regionCode = "use"; location = "eastus" }.'
+# Normalise every region entry up front (accepts hashtables, region objects, or
+# 'regionCode=location' strings) so a malformed or string-shaped entry fails here
+# with an actionable message instead of an opaque StrictMode "property 'regionCode'
+# cannot be found" error deep in the run.
+$Regions = @(
+    for ($i = 0; $i -lt $Regions.Count; $i++) {
+        ConvertTo-RegionEntry -Value $Regions[$i] -Index $i
     }
+)
+if ($Regions.Count -lt 1) {
+    throw 'Provide at least one region via -Regions.'
+}
+$duplicateCodes = $Regions | Group-Object { $_.regionCode } | Where-Object { $_.Count -gt 1 }
+if ($duplicateCodes) {
+    throw "Duplicate regionCode(s): $(($duplicateCodes.Name) -join ', '). Each -Regions entry needs a unique regionCode (it is baked into per-region resource names)."
+}
+
+if ([string]::IsNullOrWhiteSpace($ImageTag)) {
+    throw "-ImageTag is required: the container image tag stamped on all three host images (silo / MCP / Explorer), for example -ImageTag 2025.07.29. It must match the tag 'az acr build' publishes; pass -SkipImageBuild only when that tag already exists in the registry."
 }
 
 if (-not $BackupPrimaryRegionCode) { $BackupPrimaryRegionCode = $Regions[0].regionCode }
@@ -797,6 +882,10 @@ try {
         Write-Host "      silo      https://$($r.siloStateApiFqdn)"
         Write-Host "      mcp       https://$($r.mcpFqdn)"
         Write-Host "      explorer  https://$($r.explorerFqdn)"
+        $obsHead = Get-ByRegionCode -Items $perRegionObservability -RegionCode $r.regionCode
+        if ($obsHead -and $obsHead.grafanaFqdn) {
+            Write-Host "      grafana   https://$($obsHead.grafanaFqdn)  (admin user 'admin', password as supplied)"
+        }
     }
 
     # -----------------------------------------------------------------------
