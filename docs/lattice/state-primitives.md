@@ -2,6 +2,9 @@
 
 All state in the tree is designed to advance monotonically - it can move forward but never backwards. This makes operations idempotent and crash-safe.
 
+See [CRDT Primitives](../crdt/readme.md) for a beginner-friendly introduction to the concepts and terminology - read below for a more detailed explanation..
+
+
 ## Hybrid Logical Clock (HLC)
 
 Each grain maintains an `HybridLogicalClock` that combines wall-clock time with a logical counter:

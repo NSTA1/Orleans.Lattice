@@ -22,7 +22,7 @@ It supports:
 - Per-tree event stream, diagnostics, and `System.Diagnostics.Metrics` instruments.
 - Optional cross-cluster replication via the sibling [`Orleans.Lattice.Replication`](docs/lattice.replication/README.md) package.
 
-The name comes from its use of **lattice-based state primitives** - mathematical structures where merges are commutative, associative, and idempotent - which is what makes the system conflict-free and recoverable without distributed locks or consensus.
+The name comes from its use of **lattice-based state primitives** - mathematical structures where merges are commutative, associative, and idempotent - which is what makes the system conflict-free and recoverable without distributed locks or consensus (**provided** you use its [CRDT Primitives](docs/crdt/readme.md))
 
 For a reference deployment blueprint - an active-active, cross-region estate on Azure Container Apps with a durable write-ahead log, cross-region replication, Entra ID auth, MCP endpoints, and a deployed Explorer - see the [reference architecture](reference-architecture.md).
 
