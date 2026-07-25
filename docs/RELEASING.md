@@ -110,6 +110,8 @@ For historical compatibility, the `v<X.Y.Z>` family tag (e.g. `v3.2.0`) is reser
 
 5. **Verify each publish run** reaches `completed/success` before declaring the release done. Failed runs leave NuGet in an inconsistent state where some packages of a coordinated release have shipped and others have not.
 
+6. **Bump the reference-architecture package pins as a post-release action.** The `reference-architecture/` hosts consume the family through `PackageReference` to **published** NuGet packages (never `ProjectReference` into `src/`), and the `build-and-test` reference-architecture job restores those versions from nuget.org. So a pin bump to a version that has not shipped yet fails restore with `NU1102: Unable to find package ... with version (>= X.Y.Z)`. Never bump a reference-architecture pin in the same PR that ships the package - that PR cannot go green until the very package it is publishing exists. Instead, once step 5 confirms the publish run succeeded and the new version is live on nuget.org, raise a **separate follow-up PR** that advances the affected `reference-architecture/**/*.csproj` pins to the just-published version(s). That PR restores cleanly because the packages now exist. Only reference-architecture hosts that actually consume a bumped package need updating; leave the others untouched.
+
 ## Recovery for an accidental bulk push
 
 If multiple tags were pushed in a single `git push origin tag1 tag2 ...` operation, only one publish run will fire. To recover:
