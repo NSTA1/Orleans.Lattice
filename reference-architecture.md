@@ -1,6 +1,6 @@
 # Reference Architecture: active-active cross-region Orleans.Lattice on Azure Container Apps
 
-This is a production-grade blueprint for running Orleans.Lattice as an
+This is a reference blueprint for running Orleans.Lattice as an
 active-active, cross-region, cross-cluster estate on **Azure Container Apps
 (ACA)**, with a durable write-ahead log, a shared Azure Blob backup sink,
 `lattice.scaling`-driven autoscaling, Microsoft Entra ID authentication, MCP

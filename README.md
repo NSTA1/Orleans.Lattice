@@ -24,7 +24,7 @@ It supports:
 
 The name comes from its use of **lattice-based state primitives** - mathematical structures where merges are commutative, associative, and idempotent - which is what makes the system conflict-free and recoverable without distributed locks or consensus.
 
-For a production deployment blueprint - an active-active, cross-region estate on Azure Container Apps with a durable write-ahead log, cross-region replication, Entra ID auth, MCP endpoints, and a deployed Explorer - see the [reference architecture](reference-architecture.md).
+For a reference deployment blueprint - an active-active, cross-region estate on Azure Container Apps with a durable write-ahead log, cross-region replication, Entra ID auth, MCP endpoints, and a deployed Explorer - see the [reference architecture](reference-architecture.md).
 
 ## Core Properties
 
@@ -65,7 +65,7 @@ Behaviour is validated end-to-end by a suite of [chaos tests](docs/lattice/chaos
 | **Predicate operations** | Filter typed reads, conditional writes, atomic batches, scans, cursors, and range deletes with an ordinary `Expression<Func<T, bool>>` evaluated server-side; only matching keys or values cross the wire. | [Predicate Operations](docs/lattice/predicated-operations.md) | [sample](samples/PredicateOperations/README.md) |
 | **Projection rebuild** | Cross-silo divergence detection with policy-driven recovery. | [Projection Rebuild](docs/lattice/projection-rebuild.md) | n/a |
 | **Queues** | Typed, cluster-internal FIFO queues backed by a reserved system tree, with optional bounded FIFO eviction. | [Queues](docs/lattice/queues.md) | n/a |
-| **Reference architecture** | A production blueprint plus a parameterised deployment kit for an active-active, cross-region Orleans.Lattice estate on Azure Container Apps: durable WAL, cross-region replication, a shared Azure Blob backup sink, `lattice.scaling` autoscaling, Entra ID auth, MCP endpoints, a deployed Explorer, and Azure Front Door global ingress. | [Reference Architecture](reference-architecture.md) | [kit](reference-architecture/README.md) |
+| **Reference architecture** | A reference blueprint plus a parameterised deployment kit for an active-active, cross-region Orleans.Lattice estate on Azure Container Apps: durable WAL, cross-region replication, a shared Azure Blob backup sink, `lattice.scaling` autoscaling, Entra ID auth, MCP endpoints, a deployed Explorer, and Azure Front Door global ingress. | [Reference Architecture](reference-architecture.md) | [kit](reference-architecture/README.md) |
 | **Resize** | Change `MaxLeafKeys` or `MaxInternalChildren` on a live tree, undoable within the retention window. | [Tree Sizing](docs/lattice/tree-sizing.md) | [sample](samples/Resize/README.md) |
 | **Retry policy** | Opt-in retry surface for transient storage faults with caller-supplied idempotency keys. Library default is zero ambient cost. | [Retry Policy](docs/lattice/retry-policy.md) | [sample](samples/RetryPolicy/README.md) |
 | **Runtime replication config** | Enable or disable cross-cluster replication per tree at runtime - through a control API, MCP tools, or gRPC - instead of static boot-time configuration. The per-tree decision is distributed as a replicated CRDT system tree, so every cluster converges on the same enabled state and merge mode, fixed at enable-time and failing closed on ambiguity. | [Runtime replication config](docs/lattice.api.replication/README.md) | [sample](samples/RuntimeReplicationConfig/README.md) |
