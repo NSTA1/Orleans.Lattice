@@ -199,17 +199,33 @@ public sealed class MvRegister : ICrdt<MvRegister>
         // multi-valued only transiently, so both entry lists are tiny;
         // a linear ContainsDot scan beats allocating two HashSets per
         // merge on the replication hot path.
-        var survivors = new List<MvRegisterEntry>(localEntries.Count + otherEntries.Count);
+        //
+        // The survivors list is allocated lazily: under at-least-once and
+        // duplicate delivery the common merge is idempotent (every local
+        // entry is kept and no other-side entry is added), so the result is
+        // the local entry list unchanged. In that steady state we never
+        // materialise a survivors list and leave Entries untouched; the list
+        // is only built the first time the merge drops a local entry or adds
+        // an other-side entry.
+        var localCount = localEntries.Count;
+        List<MvRegisterEntry>? survivors = null;
 
         // Keep a local entry iff the other side either still has the
         // same dot (so it has not been superseded there) or has never
         // observed it.
-        foreach (var entry in localEntries)
+        for (var i = 0; i < localCount; i++)
         {
+            var entry = localEntries[i];
             if (ContainsDot(otherEntries, entry.ReplicaId, entry.Counter)
                 || !IsObserved(entry, otherContext))
             {
-                survivors.Add(entry);
+                survivors?.Add(entry);
+            }
+            else if (survivors is null)
+            {
+                // First drop: materialise the list with the kept prefix.
+                survivors = new List<MvRegisterEntry>(localCount + otherEntries.Count);
+                for (var k = 0; k < i; k++) survivors.Add(localEntries[k]);
             }
         }
 
@@ -220,6 +236,15 @@ public sealed class MvRegister : ICrdt<MvRegister>
         {
             if (ContainsDot(localEntries, entry.ReplicaId, entry.Counter)) continue;
             if (IsObserved(entry, Context)) continue;
+
+            // First addition with no prior drop: every local entry survived,
+            // so seed the list from the full local entry list before adding.
+            if (survivors is null)
+            {
+                survivors = new List<MvRegisterEntry>(localCount + otherEntries.Count);
+                survivors.AddRange(localEntries);
+            }
+
             survivors.Add(entry);
         }
 
@@ -234,7 +259,9 @@ public sealed class MvRegister : ICrdt<MvRegister>
             if (!existed || counter > slot) slot = counter;
         }
 
-        Entries = survivors;
+        // Only replace Entries when a structural change was made; an
+        // idempotent merge leaves the local entry list as-is.
+        if (survivors is not null) Entries = survivors;
     }
 
     /// <summary>Creates a deep copy of this register.</summary>
@@ -317,17 +344,32 @@ public sealed class MvRegister : ICrdt<MvRegister>
         // so those eliminated allocations are paid on every delta applied.
         var localEntries = Entries;
         var otherCount = hasEntries ? otherEntries!.Count : 0;
-        var survivors = new List<MvRegisterEntry>(localEntries.Count + otherCount);
+        var localCount = localEntries.Count;
+
+        // The survivors list is allocated lazily. Duplicate / retried delta
+        // delivery is idempotent: every local entry is kept and no delta
+        // entry is added, so the entry list is unchanged. In that steady
+        // state we never materialise a survivors list and leave Entries
+        // untouched; it is only built the first time the fold drops a local
+        // entry or adds a delta entry.
+        List<MvRegisterEntry>? survivors = null;
 
         // Keep a local entry iff the delta still carries the same dot (so it
         // has not been superseded there) or the delta's context has never
         // observed it.
-        foreach (var entry in localEntries)
+        for (var i = 0; i < localCount; i++)
         {
+            var entry = localEntries[i];
             if ((hasEntries && ContainsDot(otherEntries!, entry.ReplicaId, entry.Counter))
                 || !IsObserved(entry, otherContext))
             {
-                survivors.Add(entry);
+                survivors?.Add(entry);
+            }
+            else if (survivors is null)
+            {
+                // First drop: materialise the list with the kept prefix.
+                survivors = new List<MvRegisterEntry>(localCount + otherCount);
+                for (var k = 0; k < i; k++) survivors.Add(localEntries[k]);
             }
         }
 
@@ -338,6 +380,15 @@ public sealed class MvRegister : ICrdt<MvRegister>
             var entry = otherEntries![i];
             if (ContainsDot(localEntries, entry.ReplicaId, entry.Counter)) continue;
             if (IsObserved(entry, Context)) continue;
+
+            // First addition with no prior drop: every local entry survived,
+            // so seed the list from the full local entry list before adding.
+            if (survivors is null)
+            {
+                survivors = new List<MvRegisterEntry>(localCount + otherCount);
+                survivors.AddRange(localEntries);
+            }
+
             survivors.Add(entry);
         }
 
@@ -351,6 +402,8 @@ public sealed class MvRegister : ICrdt<MvRegister>
             }
         }
 
-        Entries = survivors;
+        // Only replace Entries when a structural change was made; an
+        // idempotent delta leaves the local entry list as-is.
+        if (survivors is not null) Entries = survivors;
     }
 }

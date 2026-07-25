@@ -505,6 +505,17 @@ internal sealed partial class ViewMaintainerGrain(
     }
 
     /// <inheritdoc />
+    public async Task WaitForSourceHeadAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
+    {
+        // Capture the head and wait in one activation turn. Both awaits are
+        // in-process calls on this grain, so the read handle pays a single
+        // maintainer round-trip instead of a CaptureSourceHeadHlc RPC followed
+        // by a WaitForSourceHlc RPC.
+        var head = await CaptureSourceHeadHlcAsync(cancellationToken);
+        await WaitForSourceHlcAsync(head, timeout, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task RebuildAsync(CancellationToken cancellationToken = default)
     {
         using var viewWriteScope = ViewWriteContext.BeginScope();
