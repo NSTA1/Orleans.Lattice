@@ -1,0 +1,21 @@
+# Grafana dashboard-provider provisioning for the self-hosted Grafana head.
+#
+# Loaded verbatim by observability.bicep (loadTextContent) and mounted read-only
+# at /etc/grafana/provisioning/dashboards. It registers a file provider that
+# loads every dashboard JSON mounted at the `path` below. The bundled
+# Orleans.Lattice.Dashboards JSON files are mounted (as an ephemeral secret
+# volume) at that same path by observability.bicep, so the dashboards are
+# provisioned on start-up with no database and no persistent volume.
+apiVersion: 1
+providers:
+  - name: orleans-lattice
+    orgId: 1
+    folder: Orleans.Lattice
+    type: file
+    disableDeletion: true
+    editable: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards/orleans-lattice
+      foldersFromFilesStructure: false

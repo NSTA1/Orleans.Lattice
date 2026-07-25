@@ -1,0 +1,68 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Orleans.Lattice.ReferenceArchitecture.Silo</RootNamespace>
+    <AssemblyName>Orleans.Lattice.ReferenceArchitecture.Silo</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <!--
+      InvariantGlobalization is enabled after the ordinal-only audit recorded in
+      reference-architecture/hosts/README.md: the core's string comparisons are
+      overwhelmingly StringComparer.Ordinal, and the only non-ordinal sites are a
+      handful of ToLowerInvariant() calls on guaranteed-ASCII inputs (lowercased
+      gRPC header names and hex digest strings). ASCII invariant lowercasing does
+      not depend on ICU, so dropping ICU is correctness-safe for these hosts and
+      shrinks the chiseled image further.
+    -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Orleans.Server" Version="10.2.0" />
+    <PackageReference Include="Microsoft.Orleans.Clustering.AzureStorage" Version="10.2.0" />
+    <PackageReference Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.2.0" />
+    <PackageReference Include="Microsoft.Orleans.Reminders.AzureStorage" Version="10.2.0" />
+    <PackageReference Include="Azure.Identity" Version="1.21.0" />
+    <PackageReference Include="Azure.Data.Tables" Version="12.11.0" />
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.15.3" />
+    <PackageReference Include="OpenTelemetry.Exporter.Prometheus.AspNetCore" Version="1.15.3-beta.1" />
+  </ItemGroup>
+
+  <!--
+    Published Orleans.Lattice NuGet packages (nuget.org, the released 8.0.x
+    wave), NOT project references into src/. This host is a downstream consumer
+    of the released library, exactly as a real deployment would be.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Orleans.Lattice" Version="8.0.3" />
+    <PackageReference Include="Orleans.Lattice.Storage.AzureTable" Version="8.0.0" />
+    <PackageReference Include="Orleans.Lattice.Replication" Version="8.0.6" />
+    <PackageReference Include="Orleans.Lattice.Replication.Grpc" Version="8.0.1" />
+    <PackageReference Include="Orleans.Lattice.Api.Replication" Version="8.0.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Replication.Grpc" Version="8.0.0" />
+    <PackageReference Include="Orleans.Lattice.Backup" Version="8.0.0" />
+    <PackageReference Include="Orleans.Lattice.Backup.AzureBlob" Version="8.0.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Backup" Version="8.0.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Backup.Grpc" Version="8.0.0" />
+    <PackageReference Include="Orleans.Lattice.Api.State" Version="8.0.0" />
+    <PackageReference Include="Orleans.Lattice.Api.State.Grpc" Version="8.0.1" />
+    <PackageReference Include="Orleans.Lattice.Api.Data" Version="8.0.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Data.Grpc" Version="8.0.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Auth" Version="8.0.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Auth.Grpc" Version="8.0.0" />
+    <PackageReference Include="Orleans.Lattice.Auth" Version="8.0.0" />
+    <PackageReference Include="Orleans.Lattice.Membership" Version="8.0.0" />
+    <PackageReference Include="Orleans.Lattice.Membership.Entra" Version="8.0.0" />
+    <PackageReference Include="Orleans.Lattice.Membership.Entra.Graph" Version="8.0.1" />
+    <PackageReference Include="Orleans.Lattice.Scaling" Version="8.0.0" />
+  </ItemGroup>
+
+  <!-- Shared reference-architecture hosting helpers (Front Door origin lock). -->
+  <ItemGroup>
+    <ProjectReference Include="..\Common\Orleans.Lattice.ReferenceArchitecture.Hosting.csproj" />
+  </ItemGroup>
+
+</Project>

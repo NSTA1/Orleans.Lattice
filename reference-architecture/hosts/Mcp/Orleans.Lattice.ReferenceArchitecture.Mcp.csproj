@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Orleans.Lattice.ReferenceArchitecture.Mcp</RootNamespace>
+    <AssemblyName>Orleans.Lattice.ReferenceArchitecture.Mcp</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <!--
+      InvariantGlobalization is enabled after the ordinal-only audit recorded in
+      reference-architecture/hosts/README.md. This head is a stateless gRPC
+      client + MCP transport; it performs no culture-sensitive comparison on any
+      correctness-relevant path, so dropping ICU is safe and shrinks the image.
+    -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <!--
+    Published Orleans.Lattice NuGet packages (nuget.org, the released 8.0.x
+    wave), NOT project references into src/. Orleans.Lattice.Api.Mcp brings the
+    ModelContextProtocol server transport and the facade gRPC client packages
+    (State / Auth / Data / Backup / Replication) transitively.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Orleans.Lattice.Api.Mcp" Version="8.0.4" />
+    <PackageReference Include="Orleans.Lattice.Api.Mcp.Telemetry" Version="8.0.2" />
+    <PackageReference Include="Orleans.Lattice.Api.Mcp.Telemetry.Azure" Version="8.0.0" />
+    <PackageReference Include="Azure.Identity" Version="1.21.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
+  </ItemGroup>
+
+  <!-- Shared reference-architecture hosting helpers (Front Door origin lock). -->
+  <ItemGroup>
+    <ProjectReference Include="..\Common\Orleans.Lattice.ReferenceArchitecture.Hosting.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Orleans.Lattice.ReferenceArchitecture.Hosting</RootNamespace>
+    <AssemblyName>Orleans.Lattice.ReferenceArchitecture.Hosting</AssemblyName>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <!--
+    Shared, host-neutral hosting helpers for the reference-architecture heads
+    (silo, MCP, Explorer). References the ASP.NET Core shared framework only, so
+    it carries no third-party dependencies and drops cleanly into each host's
+    chiseled image. Not a published package (IsPackable=false).
+  -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+</Project>
