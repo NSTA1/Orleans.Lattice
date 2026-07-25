@@ -464,6 +464,26 @@ internal sealed partial class ShardRootGrain
 
     private async Task<Dictionary<string, byte[]>> TraverseForBatchReadAsync(List<string> keys)
     {
+        // Single-leaf fast path: when the root is itself a leaf every key
+        // targets the same leaf cache, so skip the per-key leaf-bucketing
+        // dictionary, the per-key bucket lists, and the result-merge dictionary
+        // entirely and issue one GetManyAsync over the whole key list. Only
+        // taken when the root node id really is a leaf grain; a corrupt
+        // RootIsLeaf flag resolving an internal node (issue 899) still needs the
+        // per-key descent handled by the general path below.
+        if (state.State.RootIsLeaf && IsLeafGrainId(state.State.RootNodeId!.Value))
+        {
+            var rootLeafId = state.State.RootNodeId!.Value;
+#if LATTICE_DIAG
+            foreach (var key in keys)
+            {
+                DiagSink.Write($"[DIAG read-routing] gid={context.GrainId} key={key} leafId={rootLeafId} rootIsLeaf=true movedSlots=[{string.Join(',', state.State.MovedAwaySlots.Keys)}] phase={state.State.SplitInProgress?.Phase.ToString() ?? "(none)"} batch=true");
+            }
+#endif
+            var rootCache = ResolveLeafCacheGrain(rootLeafId);
+            return await rootCache.GetManyAsync(keys);
+        }
+
         // Group keys by their target leaf.
         var leafBuckets = new Dictionary<GrainId, List<string>>();
         foreach (var key in keys)
