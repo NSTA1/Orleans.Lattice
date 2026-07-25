@@ -442,6 +442,13 @@ resource grafanaApp 'Microsoft.App/containerApps@2024-03-01' = {
             // Managed-identity auth to Azure Monitor managed Prometheus. The
             // datasource declares authType: msi; these settings tell Grafana to
             // use the region user-assigned identity to mint the AAD token.
+            // GF_AUTH_AZURE_AUTH_ENABLED is what actually turns ON Azure AD
+            // authentication for the core Prometheus data source (without it
+            // Grafana ignores the datasource's azureCredentials and sends the
+            // query with no Authorization header, which managed Prometheus
+            // rejects). GF_AZURE_MANAGED_IDENTITY_* then make the region
+            // user-assigned managed identity the credential it uses.
+            { name: 'GF_AUTH_AZURE_AUTH_ENABLED', value: 'true' }
             { name: 'GF_AZURE_MANAGED_IDENTITY_ENABLED', value: 'true' }
             { name: 'GF_AZURE_MANAGED_IDENTITY_CLIENT_ID', value: managedIdentityClientId }
             { name: 'GF_AZURE_CLOUD', value: 'AzureCloud' }
