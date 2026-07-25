@@ -21,8 +21,11 @@ From one parameter set, across N regions:
    `../hosts/{Silo,Mcp,Explorer}/Dockerfile`. No image is published to a public
    registry.
 3. **The estate** (`../bicep/main.bicep`) - per-region compute, storage,
-   networking, observability, and the single global Azure Front Door profile, in
-   the module order `main.bicep` encodes.
+   networking (both options VNet-injected and zone-redundant; the private option
+   adds full-mesh VNet peering), observability, and the global entry point, in the
+   module order `main.bicep` encodes. The public option provisions a single global
+   Azure Front Door profile; the private option provisions cross-region private DNS
+   instead.
 4. **Entra** (`../bicep/entra/entra.bicep`, Microsoft Graph extension) - app
    registrations, service principals, federated identity credentials, and the
    app-to-app app-role grants (see below).
@@ -41,8 +44,9 @@ forming a Bicep compile cycle, so the script runs them on a second pass:
   auth mode shipped by #1286); the region managed identity already holds
   Monitoring Data Reader on the workspace. When the observability lane is absent
   the backend is empty and the host leaves the telemetry tool group off.
-- **Front Door id** - activates the `X-Azure-FDID` origin lock on every
-  client-facing head.
+- **Front Door id** (public option) - activates the `X-Azure-FDID` origin lock
+  on every client-facing head. The private option has no Front Door, so this
+  seam is empty and the lock is not wired.
 
 Because the Prometheus endpoint is per-region and the replication seams are not
 threaded by `main.bicep` at all, **pass 2 deploys each region's `compute.bicep`
@@ -119,6 +123,68 @@ after the first deploy; they then grant further operators access at runtime
 through the Explorer Access tab, which is itself administrator-gated (every
 membership / policy write requires an `Admin` verdict on the authorization tree).
 
+## Running it
+
+Invoke it with a full parameter set (recommended). Splat the parameters and read
+the two `SecureString`s so nothing secret is echoed:
+
+```powershell
+$key = Read-Host -AsSecureString 'Replication key'
+$gpw = Read-Host -AsSecureString 'Grafana admin password'
+
+./Deploy-ReferenceArchitecture.ps1 `
+    -SubscriptionId <sub-guid> `
+    -ResourceGroup rg-lattice `
+    -Location uksouth `
+    -BaseName lattice `
+    -Regions @(@{ regionCode = 'uks'; location = 'uksouth' }, @{ regionCode = 'wus'; location = 'westus3' }) `
+    -ImageTag 2025.07.29 `
+    -ReplicationKey $key `
+    -GrafanaAdminPassword $gpw `
+    -EntraEnabled -EntraTenantId <tenant-guid>
+```
+
+Running it with **no arguments** drops into PowerShell's per-parameter prompt,
+which can only supply **strings** - it cannot build the `-Regions` hashtables. For
+an interactive run, give each region in the compact `regionCode=location` form, one
+per line, and a blank line to finish; and type a non-empty `-ImageTag` (a blank
+entry is rejected):
+
+```text
+Regions[0]: uks=uksouth
+Regions[1]: wus=westus3
+Regions[2]:
+ImageTag: 2025.07.29
+```
+
+Add `-WhatIf` to preview every action without mutating Azure.
+
+### Quick start: the three-region sample
+
+For a zero-decision evaluation estate, `deployment-sample.ps1` wraps this
+deployer and needs only a deployment name. It fixes the three regions to East US
+2, West US 3, and West Europe, derives every other value from the name (base name
+= the name, resource group = `rg-<name>`), and generates the replication key and
+Grafana admin password for you (the password is printed once at the end, to use
+as the `admin` user at the per-region Grafana URLs the deployer lists under its
+estate endpoints).
+It deploys the public network option with Entra sign-in on.
+
+It first requires an authenticated Azure CLI session (it errors out asking you to
+run `az login` if none is present), then resolves the target subscription (the
+current `az` context, or `-SubscriptionId`) and its tenant, prints them with the
+signed-in user, and asks you to confirm before creating anything:
+
+```powershell
+# Deploy into the current 'az' subscription (you are shown it and asked to confirm).
+./deployment-sample.ps1 -DeploymentName demo
+```
+
+The deployment name must be 3 to 16 lowercase letters or digits. Pass `-Force` to
+skip the confirmation prompt, or `-WhatIf` to preview. For any other topology
+(private networking, a different region set, a pre-existing Entra app), drive
+`Deploy-ReferenceArchitecture.ps1` directly as above.
+
 ## Parameters
 
 | Parameter | Required | Notes |
@@ -127,8 +193,8 @@ membership / policy write requires an `Admin` verdict on the authorization tree)
 | `-ResourceGroup` | yes | Created if absent (idempotent). |
 | `-Location` | yes | Resource-group location. |
 | `-BaseName` | yes | 3-16 lowercase alphanumerics, shared estate-wide. |
-| `-Regions` | yes | Array of `@{ regionCode = '...'; location = '...' }`. One or many. |
-| `-ImageTag` | yes | Tag applied to all three built images. |
+| `-Regions` | yes | One or more regions. Each entry is a hashtable `@{ regionCode = '<2-8 chars>'; location = '<azure region>' }` or the compact string `'regionCode=location'` (for example `'use=eastus'`); the string form is what the interactive prompt accepts. |
+| `-ImageTag` | yes | Non-empty tag applied to all three built images (silo / MCP / Explorer). |
 | `-DeploymentOption` | no | `public` (default, external ingress + replication key over public ingress) or `private` (internal ingress + VNet peering, replication key layered on as defense in depth). Both are VNet-injected + zone-redundant, and both provision the per-region replication Key Vault. |
 | `-ZoneRedundant` | no | `$true` (default) or `$false`. Zone-redundant compute for both options. |
 | `-ReplicationTrees` | no | Estate-wide `treeName=MergeMode,...` map. |

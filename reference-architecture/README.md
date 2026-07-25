@@ -276,11 +276,51 @@ immediately under the same names.
 The MCP head exposes the Lattice control surface (state, data, auth-admin, and
 telemetry tool groups) as a Model Context Protocol server over streamable HTTP. It
 runs stateless behind Front Door, is authenticated with a Microsoft Entra bearer
-token, and is origin-locked: Front Door injects the `X-Azure-FDID` header on the
+token that a spec-compliant client acquires automatically via OAuth discovery
+(below), and is origin-locked: Front Door injects the `X-Azure-FDID` header on the
 client's behalf, so a client that reaches the head through the Front Door hostname
 supplies **only** an `Authorization` header. (A client that bypasses Front Door and
 dials a region's container-app FQDN directly must add the matching
 `X-Azure-FDID` header itself.)
+
+#### Preferred: automatic OAuth discovery (RFC 9728)
+
+When Entra is enabled the head advertises OAuth 2.0 Protected Resource Metadata
+([RFC 9728](https://www.rfc-editor.org/rfc/rfc9728)), so a spec-compliant MCP
+client acquires its own token and nothing is pasted by hand. On the first
+unauthenticated request the head returns `401` with a `WWW-Authenticate` challenge
+whose `resource_metadata` parameter points at the anonymous metadata document
+served at `/.well-known/oauth-protected-resource`. The client fetches that
+document, reads the Entra `authorization_servers` issuer and the silo
+`scopes_supported` scope from it, runs the sign-in flow itself, and retries with
+the token it obtained. Point the client at the head URL and let it discover the
+rest - no `Authorization` header:
+
+```json
+{
+  "mcpServers": {
+    "lattice-ra": {
+      "type": "http",
+      "url": "https://<mcp-front-door-hostname>/",
+      "tools": ["*"]
+    }
+  }
+}
+```
+
+Visual Studio Code, Visual Studio, and GitHub Copilot sign in with their own
+pre-authorized first-party Entra client, so no client id is needed; a client that
+prompts for one can use the Visual Studio Code id
+`aebc6443-996d-45c2-90f0-388ff96faa56`. A signed-in caller sees no tools until the
+security administrator grants their Entra object id (`oid`) access on the Explorer
+console Access tab; discovery then advertises only the tool groups they hold, and
+every forwarded call is re-authorized at the silo.
+
+#### Fallback: supply a bearer token by hand
+
+A client that does not support OAuth discovery - and the raw JSON-RPC smoke-test
+below - authenticates instead by minting an Entra token and sending it as a static
+`Authorization` header.
 
 **1. Mint an access token for the silo facade.** The MCP tools call through to the
 region silo, so the token's audience is the silo facade app, not the MCP head. For
