@@ -85,6 +85,16 @@ internal interface IViewMaintainerGrain : IGrainWithStringKey
     Task<HybridLogicalClock> CaptureSourceHeadHlcAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Read-your-writes barrier against the current source head: captures the
+    /// source head HLC and drives drains until the view has applied up to it, or
+    /// throws <see cref="TimeoutException"/> once <paramref name="timeout"/>
+    /// elapses. Combines the capture and the wait into a single maintainer call
+    /// so the read handle does not pay two sequential grain round-trips per
+    /// barrier; the capture and wait run in-process on the one activation.
+    /// </summary>
+    Task WaitForSourceHeadAsync(TimeSpan timeout, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Tears the view down: unregisters the keepalive reminder so the grain stops
     /// being kept alive, releases the source WAL cursor pin, deletes every backing
     /// view-tree generation through the standard tree-deletion machinery, and
