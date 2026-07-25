@@ -1,0 +1,16 @@
+@* -----------------------------------------------------------------------------
+   This host has no Razor components of its own - the Explorer's App root and all
+   its interactive components ship inside the Orleans.Lattice.Explorer.Web hosting
+   library (an RCL). Under the .NET 10 SDK a Web host with zero Razor content is
+   not detected as a Blazor host, so the framework's _framework/blazor.web.js
+   static asset is never contributed to the app: the console renders server-side
+   but the interactive circuit never starts (Sign in does nothing, tabs stay
+   greyed, capability probes never run, "Access to the state API was denied").
+
+   The library ships a build props that sets RequiresAspNetWebAssets=true to force
+   this, but that property alone no longer emits blazor.web.js on .NET 10. The
+   reliable trigger is the presence of Razor content in the host itself, so this
+   otherwise-empty _Imports.razor exists solely to make the SDK treat the host as
+   a Blazor app and emit the framework script. Do not delete it.
+   ----------------------------------------------------------------------------- *@
+@using Microsoft.AspNetCore.Components

@@ -1,0 +1,19 @@
+# Build context for the three host images (az acr build runs from this folder).
+# Keep it minimal and deterministic so a local build never leaks into the image.
+
+# Local .NET build artifacts. Copying a stale obj/ into the Linux build is fatal:
+# its project.assets.json bakes in the local (Windows) NuGet fallback-folder path,
+# which breaks the container's 'dotnet publish --no-restore'. The image restores
+# from scratch, so bin/ and obj/ must never enter the context.
+**/bin/
+**/obj/
+
+# VCS, editor and OS noise.
+.git/
+.gitignore
+**/.vs/
+**/*.user
+.DS_Store
+
+# The local docker-compose smoke-test harness is not part of any host image.
+local/
