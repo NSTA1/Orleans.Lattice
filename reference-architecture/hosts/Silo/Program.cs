@@ -522,7 +522,7 @@ if (enableRuntimeReplicationConfig)
 // meter) in one registration.
 builder.Services.AddOpenTelemetry()
     .WithMetrics(metrics => metrics
-        .AddMeter("orleans.lattice*")
+        .AddMeter($"{LatticeMetrics.MeterName}*")
         .AddPrometheusExporter());
 
 var app = builder.Build();
