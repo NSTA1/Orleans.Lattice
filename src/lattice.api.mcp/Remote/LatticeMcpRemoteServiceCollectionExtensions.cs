@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using Grpc.Core;
 using Grpc.Core.Interceptors;
 using Grpc.Net.Client;
@@ -65,6 +66,15 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
         services.AddLatticeMcp();
         services.Configure(configure);
 
+        // Replace the in-silo single-region router with the multi-region router
+        // built from the configured default region plus each peer. Built eagerly
+        // from the materialised options - the region set is static configuration -
+        // so both discovery (via the catalog) and per-call routing derive from this
+        // one source of truth and can never disagree.
+        var definitions = BuildRegionDefinitions(options);
+        services.Replace(ServiceDescriptor.Singleton<ILatticeApiMcpRegionRouter>(
+            new LatticeApiMcpRegionRouter(options.RegionId, definitions)));
+
         // Orleans serialization so the gRPC clients can build wire marshallers that
         // match the server. Idempotent.
         services.AddSerializer();
@@ -89,45 +99,152 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
         if (options.State is { } state)
         {
             services.TryAddSingleton<ILatticeStateQuery>(sp =>
-                new GrpcLatticeStateQuery(LatticeStateApiGrpcClient.Create(BuildInvoker(sp, state), sp)));
+                new GrpcLatticeStateQuery(LatticeStateApiGrpcClient.Create(
+                    BuildRoutingInvoker(sp, options, state, static r => r.State), sp)));
             services.AddStateTools();
         }
 
         if (options.Data is { } data)
         {
             services.TryAddSingleton<ILatticeDataApi>(sp =>
-                new GrpcLatticeDataApi(LatticeDataApiGrpcClient.Create(BuildInvoker(sp, data), sp)));
+                new GrpcLatticeDataApi(LatticeDataApiGrpcClient.Create(
+                    BuildRoutingInvoker(sp, options, data, static r => r.Data), sp)));
             services.AddDataTools(options.EnableDataWrites);
         }
 
         if (options.Auth is { } auth)
         {
             services.TryAddSingleton<ILatticeAuthAdmin>(sp =>
-                new GrpcLatticeAuthAdmin(LatticeAuthApiGrpcClient.Create(BuildInvoker(sp, auth), sp)));
+                new GrpcLatticeAuthAdmin(LatticeAuthApiGrpcClient.Create(
+                    BuildRoutingInvoker(sp, options, auth, static r => r.Auth), sp)));
             services.AddAuthTools(options.EnableAuthAdministration);
         }
 
         if (options.Backup is { } backup)
         {
             services.TryAddSingleton<ILatticeBackupControl>(sp =>
-                new GrpcLatticeBackupControl(LatticeBackupApiGrpcClient.Create(BuildInvoker(sp, backup), sp)));
+                new GrpcLatticeBackupControl(LatticeBackupApiGrpcClient.Create(
+                    BuildRoutingInvoker(sp, options, backup, static r => r.Backup), sp)));
             services.AddBackupTools(options.EnableBackupControl);
         }
 
         if (options.Replication is { } replication)
         {
             services.TryAddSingleton<ILatticeReplicationControl>(sp =>
-                new GrpcLatticeReplicationControl(LatticeReplicationApiGrpcClient.Create(BuildInvoker(sp, replication), sp)));
+                new GrpcLatticeReplicationControl(LatticeReplicationApiGrpcClient.Create(
+                    BuildRoutingInvoker(sp, options, replication, static r => r.Replication), sp)));
             services.AddReplicationTools(options.EnableReplicationControl);
         }
 
         return services;
     }
 
-    private static CallInvoker BuildInvoker(IServiceProvider services, LatticeApiMcpRemoteEndpoint endpoint)
+    /// <summary>
+    /// Builds a region-routing invoker for one facade group: the default region's
+    /// channel plus every peer that serves the group, keyed by region id, wrapped
+    /// once with the caller-credential-forwarding interceptor. Each region's raw
+    /// channel is built exactly once here (the invoker lives in the group facade's
+    /// singleton), never per call; a call with no region selected takes the routing
+    /// invoker's cached default-channel branch, adding no allocation versus the
+    /// single-region binding. The same forwarded caller credential flows to
+    /// whichever region is selected, so the target authorizes independently,
+    /// fail-closed.
+    /// </summary>
+    private static CallInvoker BuildRoutingInvoker(
+        IServiceProvider services,
+        LatticeApiMcpRemoteOptions options,
+        LatticeApiMcpRemoteEndpoint defaultEndpoint,
+        Func<LatticeApiMcpRemoteRegionOptions, LatticeApiMcpRemoteEndpoint?> regionEndpointSelector)
     {
         var interceptor = services.GetRequiredService<LatticeApiMcpCredentialForwardingInterceptor>();
-        var invoker = endpoint.CallInvoker ?? GrpcChannel.ForAddress(endpoint.Endpoint).CreateCallInvoker();
-        return invoker.Intercept(interceptor);
+        var defaultInvoker = RawInvoker(defaultEndpoint);
+
+        var byRegion = new Dictionary<string, CallInvoker>(StringComparer.Ordinal)
+        {
+            [options.RegionId] = defaultInvoker,
+        };
+
+        foreach (var region in options.Regions)
+        {
+            var endpoint = regionEndpointSelector(region);
+            if (endpoint is not null)
+            {
+                byRegion[region.RegionId] = RawInvoker(endpoint);
+            }
+        }
+
+        var routing = new RegionRoutingCallInvoker(
+            defaultInvoker,
+            byRegion.ToFrozenDictionary(StringComparer.Ordinal));
+        return routing.Intercept(interceptor);
+    }
+
+    private static CallInvoker RawInvoker(LatticeApiMcpRemoteEndpoint endpoint)
+        => endpoint.CallInvoker ?? GrpcChannel.ForAddress(endpoint.Endpoint).CreateCallInvoker();
+
+    private static IReadOnlyList<LatticeApiMcpRegionDefinition> BuildRegionDefinitions(
+        LatticeApiMcpRemoteOptions options)
+    {
+        var definitions = new List<LatticeApiMcpRegionDefinition>(1 + options.Regions.Count)
+        {
+            new()
+            {
+                RegionId = options.RegionId,
+                ClusterId = options.ClusterId ?? string.Empty,
+                IsCurrent = true,
+                Groups = GroupEndpoints(
+                    options.State, options.Data, options.Backup, options.Auth, options.Replication),
+            },
+        };
+
+        foreach (var region in options.Regions)
+        {
+            definitions.Add(new LatticeApiMcpRegionDefinition
+            {
+                RegionId = region.RegionId,
+                ClusterId = region.ClusterId ?? string.Empty,
+                IsCurrent = false,
+                Groups = GroupEndpoints(
+                    region.State, region.Data, region.Backup, region.Auth, region.Replication),
+            });
+        }
+
+        return definitions;
+    }
+
+    private static IReadOnlyDictionary<LatticeApiMcpGroup, string?> GroupEndpoints(
+        LatticeApiMcpRemoteEndpoint? state,
+        LatticeApiMcpRemoteEndpoint? data,
+        LatticeApiMcpRemoteEndpoint? backup,
+        LatticeApiMcpRemoteEndpoint? auth,
+        LatticeApiMcpRemoteEndpoint? replication)
+    {
+        var groups = new Dictionary<LatticeApiMcpGroup, string?>();
+        if (state is not null)
+        {
+            groups[LatticeApiMcpGroup.State] = state.Endpoint;
+        }
+
+        if (data is not null)
+        {
+            groups[LatticeApiMcpGroup.Data] = data.Endpoint;
+        }
+
+        if (backup is not null)
+        {
+            groups[LatticeApiMcpGroup.Backup] = backup.Endpoint;
+        }
+
+        if (auth is not null)
+        {
+            groups[LatticeApiMcpGroup.Auth] = auth.Endpoint;
+        }
+
+        if (replication is not null)
+        {
+            groups[LatticeApiMcpGroup.Replication] = replication.Endpoint;
+        }
+
+        return groups;
     }
 }

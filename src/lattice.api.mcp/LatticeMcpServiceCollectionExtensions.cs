@@ -85,6 +85,17 @@ public static partial class LatticeMcpServiceCollectionExtensions
         services.TryAddSingleton<ILatticeApiMcpPermissionResolver, AuthAdminMcpPermissionResolver>();
         services.TryAddSingleton<LatticeApiMcpSessionConfigurator>();
 
+        // Region routing/discovery. The in-silo topology has a single current
+        // region co-hosting every registered facade group; the router is built
+        // lazily from the registered tool-group set (populated after this call) so
+        // the current region's per-group availability matches exactly what is
+        // served. The remote-host binding replaces this router with a multi-region
+        // one built from its configured peers. The catalog is topology-agnostic and
+        // projects whichever router is registered, so discovery and routing share a
+        // single source of truth.
+        services.TryAddSingleton<ILatticeApiMcpRegionRouter>(BuildInSiloRegionRouter);
+        services.TryAddSingleton<Orleans.Lattice.Api.Region.ILatticeRegionCatalog, LatticeApiMcpRegionCatalog>();
+
         // MCP server over the streamable-HTTP transport. No tools are registered
         // here; per-facade tool modules attach separately.
         services.AddMcpServer().WithHttpTransport();
@@ -135,5 +146,29 @@ public static partial class LatticeMcpServiceCollectionExtensions
         endpoints.MapProtectedResourceMetadata(options);
 
         return builder;
+    }
+
+    private static LatticeApiMcpRegionRouter BuildInSiloRegionRouter(IServiceProvider services)
+    {
+        // Every co-hosted facade group is served by the single current region at a
+        // null (in-process) endpoint. The cluster id is resolved lazily by the
+        // catalog at read time, so it is left empty here.
+        var groups = new Dictionary<LatticeApiMcpGroup, string?>();
+        foreach (var group in services.GetServices<ILatticeApiMcpToolGroup>())
+        {
+            groups[group.Group] = null;
+        }
+
+        var definition = new LatticeApiMcpRegionDefinition
+        {
+            RegionId = LatticeApiMcpRemoteOptions.DefaultRegionId,
+            ClusterId = string.Empty,
+            IsCurrent = true,
+            Groups = groups,
+        };
+
+        return new LatticeApiMcpRegionRouter(
+            LatticeApiMcpRemoteOptions.DefaultRegionId,
+            new[] { definition });
     }
 }

@@ -42,6 +42,40 @@ Each `LatticeApiMcpRemoteEndpoint` names the served `Endpoint` (surfaced verbati
 | `CredentialScheme` | Scheme prefix prepended to the outbound token (`"{scheme} {token}"`). Defaults to `Bearer`; empty sends the bare token. |
 | `AdministratorCredential` | The **static** admin service credential used for trusted, read-only permission introspection of each caller. See [discovery](#discovery-requires-the-auth-endpoint) below. For a long-lived server prefer a self-refreshing managed-identity token (see [Refreshing administrator token](#refreshing-the-administrator-token)). |
 | `EnableDataWrites` / `EnableBackupControl` / `EnableAuthAdministration` / `EnableReplicationControl` | Forward the destructive-verb opt-in to the corresponding tool module. Ignored when that group's endpoint is unset. |
+| `RegionId` | The id of the current (default) region a call targets when no `region` selector is supplied. Defaults to `current`. |
+| `ClusterId` | The Orleans cluster id of the current region, surfaced in `lattice_list_regions`. Optional advertisement metadata. |
+| `Regions` | Additional peer regions a caller may target with the optional per-call `region` argument. Each is a `LatticeApiMcpRemoteRegionOptions` with its own `RegionId`, optional `ClusterId`, and per-group endpoints. |
+
+## Multi-region routing
+
+By default the endpoints above define a single region - the current cluster. To let one MCP head front more than one region, add a `LatticeApiMcpRemoteRegionOptions` per peer to `Regions`. The top-level endpoints stay the default (current) region, so an existing single-region configuration is unchanged; the peers are additive and opt-in per call.
+
+```csharp verify
+var builder = WebApplication.CreateBuilder();
+
+builder.Services.AddLatticeMcpRemote(o =>
+{
+    // The current (default) region, targeted when no `region` is supplied.
+    o.RegionId = "us-east";
+    o.ClusterId = "cluster-us-east";
+    o.Data = new LatticeApiMcpRemoteEndpoint { Endpoint = "https://us-east.internal:5001" };
+    o.Auth = new LatticeApiMcpRemoteEndpoint { Endpoint = "https://us-east.internal:5001" };
+
+    // A reachable peer region a caller may target with `"region": "eu-west"`.
+    o.Regions.Add(new LatticeApiMcpRemoteRegionOptions
+    {
+        RegionId = "eu-west",
+        ClusterId = "cluster-eu-west",
+        Data = new LatticeApiMcpRemoteEndpoint { Endpoint = "https://eu-west.internal:5001" },
+        Auth = new LatticeApiMcpRemoteEndpoint { Endpoint = "https://eu-west.internal:5001" },
+    });
+});
+
+var app = builder.Build();
+app.MapLatticeMcp();
+```
+
+The region list `lattice_list_regions` reports, and the routing a `region` argument drives, are both built once at startup from this single configuration, so discovery and routing can never disagree. A region serves a facade group only when that group's per-region endpoint is set; an unset group is reported unavailable for the region and is not routable there (fail-closed discovery). A cross-region call forwards the same caller credential to the target region's gRPC binding via the same interceptor described below, so the target authorizes it independently. See [Tools](tools.md#region-targeting) for the caller-facing surface.
 
 ## Credential flow over the wire
 

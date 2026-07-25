@@ -32,6 +32,37 @@ namespace Orleans.Lattice.Api.Mcp;
 public sealed class LatticeApiMcpRemoteOptions
 {
     /// <summary>
+    /// The default value for <see cref="RegionId"/> when the host does not name
+    /// the current region explicitly.
+    /// </summary>
+    public const string DefaultRegionId = "current";
+
+    /// <summary>
+    /// The id of the default (current) region - the one a tool call targets when
+    /// no optional <c>region</c> selector is supplied, so every existing call is
+    /// unchanged. The top-level per-group endpoints (<see cref="State"/> /
+    /// <see cref="Data"/> / <see cref="Auth"/> / <see cref="Backup"/> /
+    /// <see cref="Replication"/>) define this region. Defaults to
+    /// <see cref="DefaultRegionId"/>.
+    /// </summary>
+    public string RegionId { get; set; } = DefaultRegionId;
+
+    /// <summary>
+    /// The Orleans cluster id the default region belongs to, surfaced in
+    /// <c>lattice_list_regions</c>. Optional; when unset the discovery tool
+    /// resolves it from the state facade at read time.
+    /// </summary>
+    public string? ClusterId { get; set; }
+
+    /// <summary>
+    /// The additional (peer) regions a caller may optionally target on any tool
+    /// call, beyond the default region defined by the top-level endpoints. Empty
+    /// by default, in which case only the current region is routable and every
+    /// existing single-region deployment is unchanged.
+    /// </summary>
+    public IList<LatticeApiMcpRemoteRegionOptions> Regions { get; } = new List<LatticeApiMcpRemoteRegionOptions>();
+
+    /// <summary>
     /// The remote endpoint for the read-only state facade
     /// (<c>ILatticeStateQuery</c>), or <see langword="null"/> to not serve the
     /// state group remotely.

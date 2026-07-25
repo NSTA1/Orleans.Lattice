@@ -1,6 +1,6 @@
 # Tools
 
-The MCP server exposes its capabilities as **tools**, grouped into five opt-in modules plus a `lattice_capabilities` meta-tool. Every tool is a thin adapter over the matching `Orleans.Lattice.Api.*` facade and is named `lattice_<group>_<verb>`. The server ships with no tools; each module is added explicitly.
+The MCP server exposes its capabilities as **tools**, grouped into five opt-in modules plus a `lattice_capabilities` and a `lattice_list_regions` meta-tool. Every tool is a thin adapter over the matching `Orleans.Lattice.Api.*` facade and is named `lattice_<group>_<verb>`. The server ships with no tools; each module is added explicitly.
 
 ## Opting in
 
@@ -30,6 +30,28 @@ Read tools carry `readOnlyHint = true`; destructive tools carry `destructiveHint
 ## Discovery
 
 The `lattice_capabilities` meta-tool reports which groups are enabled on the server and, for the authenticated caller, which tools its effective permissions unlock. Discovery is permission-scoped: a tool the caller may not use is never listed, so an agent's tool list is exactly the set it can invoke.
+
+## Region targeting
+
+A single MCP server can front more than one region (the current cluster plus configured, reachable peers - see [Remote host](remote.md)). Two additive surfaces expose this:
+
+- **`lattice_list_regions`** - a read-only meta-tool that lists the regions the server can route a call to, current region first, each with its region id, cluster id, and per-group endpoint availability. A region with no route or credentials for a group is reported unavailable for it, and a region with no route at all is omitted entirely (fail-closed discovery). The tool is projected from the shared `Orleans.Lattice.Api.Region.ILatticeRegionCatalog` contract, so a client reads the same region model the facade layer exposes.
+- **An optional `region` argument on every tool** - pass a listed region id to route that single call to the named region; omit it to target the current region. Omitting it is byte-for-byte identical to a region-unaware call. The result is annotated with the region it was served from (in the result's `_meta.region`) whenever a `region` was supplied.
+
+Region targeting is fail-closed at both ends. Targeting an unknown region, or a region that does not serve the tool's group, returns a clean typed fault that points the caller at `lattice_list_regions` - never a leaked exception. A cross-region call forwards the **same** caller credential to the target region, so the target authorizes it independently: a caller lacking rights in the target region is denied there. A region is never an authorization bypass.
+
+A tool call targeting a named region passes the region id as the optional `region` argument:
+
+```jsonc
+// lattice_data_get, explicitly targeting the "us-east" region.
+{
+  "treeId": "orders",
+  "key": "order-42",
+  "region": "us-east"
+}
+```
+
+The result carries the served region in its `_meta.region` field. Omit `region` to target the current region; the call and its result are then identical to a region-unaware binding. Call `lattice_list_regions` (no arguments) first to discover the routable region ids.
 
 ## State tools (`lattice_state_*`)
 

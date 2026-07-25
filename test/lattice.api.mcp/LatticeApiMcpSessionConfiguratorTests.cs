@@ -95,8 +95,8 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(ToolNames(dataPlan.Tools), Is.EquivalentTo(new[] { "lattice_capabilities", "data_read" }));
-            Assert.That(ToolNames(authPlan.Tools), Is.EquivalentTo(new[] { "lattice_capabilities", "auth_admin" }));
+            Assert.That(ToolNames(dataPlan.Tools), Is.EquivalentTo(new[] { "lattice_capabilities", "lattice_list_regions", "data_read" }));
+            Assert.That(ToolNames(authPlan.Tools), Is.EquivalentTo(new[] { "lattice_capabilities", "lattice_list_regions", "auth_admin" }));
             Assert.That(GroupAvailable(dataPlan.Capabilities, LatticeApiMcpGroup.Data), Is.True);
             Assert.That(GroupAvailable(dataPlan.Capabilities, LatticeApiMcpGroup.Auth), Is.False);
             Assert.That(GroupAvailable(authPlan.Capabilities, LatticeApiMcpGroup.Auth), Is.True);
@@ -161,7 +161,7 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(ToolNames(plan.Tools), Is.EquivalentTo(new[] { "lattice_capabilities" }));
+            Assert.That(ToolNames(plan.Tools), Is.EquivalentTo(new[] { "lattice_capabilities", "lattice_list_regions" }));
             Assert.That(plan.Capabilities.Authenticated, Is.True);
             Assert.That(plan.Capabilities.SubjectId, Is.EqualTo("alice"));
             Assert.That(plan.Instructions, Does.Contain("No facade groups are available"));
@@ -186,7 +186,7 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
             Assert.That(GroupAvailable(plan.Capabilities, LatticeApiMcpGroup.Data), Is.True);
             Assert.That(GroupAvailable(plan.Capabilities, LatticeApiMcpGroup.State), Is.False,
                 "A granted-but-unregistered group is not usable and must report unavailable.");
-            Assert.That(ToolNames(plan.Tools), Is.EquivalentTo(new[] { "lattice_capabilities", "data_read" }));
+            Assert.That(ToolNames(plan.Tools), Is.EquivalentTo(new[] { "lattice_capabilities", "lattice_list_regions", "data_read" }));
         });
     }
 
@@ -254,7 +254,7 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
         Assert.Multiple(() =>
         {
             Assert.That(GroupAvailable(plan.Capabilities, LatticeApiMcpGroup.Telemetry), Is.True);
-            Assert.That(ToolNames(plan.Tools), Is.EquivalentTo(new[] { "lattice_capabilities", "telemetry_read" }));
+            Assert.That(ToolNames(plan.Tools), Is.EquivalentTo(new[] { "lattice_capabilities", "lattice_list_regions", "telemetry_read" }));
         });
     }
 
@@ -319,7 +319,7 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
         Assert.Multiple(() =>
         {
             Assert.That(options.ToolCollection, Is.Not.Null);
-            Assert.That(ToolNames(options.ToolCollection!), Is.EquivalentTo(new[] { "lattice_capabilities", "data_read" }));
+            Assert.That(ToolNames(options.ToolCollection!), Is.EquivalentTo(new[] { "lattice_capabilities", "lattice_list_regions", "data_read" }));
             Assert.That(options.Capabilities?.Tools?.ListChanged, Is.True);
             Assert.That(options.ServerInstructions, Is.Not.Null.And.Not.Empty);
         });
@@ -393,8 +393,8 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
 
         var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
 
-        Assert.That(ToolNames(plan.Tools), Is.EquivalentTo(new[] { "lattice_capabilities" }),
-            "The default-deny authorizer must hide every facade tool, leaving only the ungated meta-tool.");
+        Assert.That(ToolNames(plan.Tools), Is.EquivalentTo(new[] { "lattice_capabilities", "lattice_list_regions" }),
+            "The default-deny authorizer must hide every facade tool, leaving only the ungated meta-tools.");
     }
 
     [Test]
@@ -409,7 +409,7 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
 
         var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
 
-        Assert.That(ToolNames(plan.Tools), Is.EquivalentTo(new[] { "lattice_capabilities", "data_get" }),
+        Assert.That(ToolNames(plan.Tools), Is.EquivalentTo(new[] { "lattice_capabilities", "lattice_list_regions", "data_get" }),
             "Only the tool the authorizer permits is advertised; the denied sibling is omitted.");
     }
 
