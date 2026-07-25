@@ -506,13 +506,23 @@ if (enableRuntimeReplicationConfig)
     }
 }
 
-// Export the orleans.lattice meter over Prometheus at /metrics so a scraper
-// (the local compose Prometheus, or Azure Managed Prometheus) can collect the
-// cluster telemetry that backs the bundled Grafana dashboards and the MCP
+// Export the whole orleans.lattice meter family over Prometheus at /metrics so a
+// scraper (the local compose Prometheus, or Azure Managed Prometheus) can collect
+// the cluster telemetry that backs the bundled Grafana dashboards and the MCP
 // telemetry tools.
+//
+// OpenTelemetry's AddMeter matches a meter name EXACTLY - it does not cascade to
+// child namespaces - so registering only "orleans.lattice" (LatticeMetrics.MeterName)
+// silently dropped every sibling meter from /metrics: orleans.lattice.replication,
+// orleans.lattice.replication.grpc, orleans.lattice.membership, orleans.lattice.auth,
+// orleans.lattice.backup, and orleans.lattice.scaling never reached the backend, so
+// the MCP telemetry tools and Grafana could not see replication apply lag, peer
+// entries/bytes-behind, ship duration, membership, auth, backup, or scaling series.
+// The "orleans.lattice*" wildcard exports the entire family (and any future lattice
+// meter) in one registration.
 builder.Services.AddOpenTelemetry()
     .WithMetrics(metrics => metrics
-        .AddMeter(LatticeMetrics.MeterName)
+        .AddMeter($"{LatticeMetrics.MeterName}*")
         .AddPrometheusExporter());
 
 var app = builder.Build();
