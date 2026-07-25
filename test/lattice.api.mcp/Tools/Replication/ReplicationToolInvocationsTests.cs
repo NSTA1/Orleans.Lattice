@@ -1,5 +1,4 @@
 using Grpc.Core;
-using ModelContextProtocol;
 using NSubstitute;
 using Orleans.Lattice.Api.Replication;
 using Orleans.Lattice.Replication;
@@ -117,12 +116,13 @@ public sealed class ReplicationToolInvocationsTests
     }
 
     [Test]
-    public void Enable_rethrows_an_in_silo_mode_change_rejection_as_an_actionable_mcp_error()
+    public void Enable_propagates_an_in_silo_mode_change_rejection_unchanged_for_the_seam_to_translate()
     {
-        // In-silo topology: the facade throws the domain rejection directly. The
-        // adapter must re-surface its actionable message as an McpException so the
-        // SDK does not mask it as a generic "an error occurred" invocation failure
-        // (issue #1339).
+        // The adapter is now pure: it references only always-loaded types and does
+        // not name LatticeReplicationModeChangeRejectedException (a satellite type
+        // whose presence in a catch clause is exactly the JIT trap of issue #1352).
+        // The in-silo domain rejection therefore propagates unchanged; the shared
+        // CredentialStampingTool seam translates it into an actionable McpException.
         const string message =
             "Replication for tree 'orders' is already enabled under LwwRegister and its merge mode "
             + "cannot be changed in place; disable then re-enable it under OrSet.";
@@ -131,19 +131,20 @@ public sealed class ReplicationToolInvocationsTests
             .Returns<Task<ReplicationEnableResult>>(_ => throw new LatticeReplicationModeChangeRejectedException(
                 message, "orders", LatticeMergeMode.OrSet, LatticeMergeMode.LwwRegister, currentModeAmbiguous: false));
 
-        var ex = Assert.ThrowsAsync<McpException>(
+        var ex = Assert.ThrowsAsync<LatticeReplicationModeChangeRejectedException>(
             async () => await ReplicationToolInvocations.EnableReplicationAsync(
                 control, "orders", "OrSet", null, CancellationToken.None));
         Assert.That(ex!.Message, Is.EqualTo(message),
-            "the actionable disable-then-re-enable guidance is preserved verbatim");
+            "the actionable guidance is preserved for the seam to surface");
     }
 
     [Test]
-    public void Enable_rethrows_a_remote_failed_precondition_as_an_actionable_mcp_error()
+    public void Enable_propagates_a_remote_failed_precondition_unchanged_for_the_seam_to_translate()
     {
-        // Remote topology: the gRPC binding already mapped the rejection to a
-        // FailedPrecondition status whose detail is the actionable message. The
-        // adapter must surface that detail through an McpException.
+        // Remote topology: the gRPC binding maps the rejection to a
+        // FailedPrecondition RpcException whose detail is the actionable message.
+        // The pure adapter propagates it; the shared seam surfaces the detail
+        // through an McpException (see McpToolFaultTranslatorTests).
         const string detail =
             "Replication for tree 'mcp-test-2' is already enabled; its merge mode cannot be changed "
             + "in place - disable then re-enable it.";
@@ -152,10 +153,10 @@ public sealed class ReplicationToolInvocationsTests
             .Returns<Task<ReplicationEnableResult>>(_ => throw new RpcException(
                 new Status(StatusCode.FailedPrecondition, detail)));
 
-        var ex = Assert.ThrowsAsync<McpException>(
+        var ex = Assert.ThrowsAsync<RpcException>(
             async () => await ReplicationToolInvocations.EnableReplicationAsync(
                 control, "mcp-test-2", "OrSet", null, CancellationToken.None));
-        Assert.That(ex!.Message, Is.EqualTo(detail));
+        Assert.That(ex!.Status.Detail, Is.EqualTo(detail));
     }
 
     [Test]
