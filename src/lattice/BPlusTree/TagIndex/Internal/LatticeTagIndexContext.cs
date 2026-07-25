@@ -709,6 +709,11 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         return observed;
     }
 
+    // A membership row identified as an orphan candidate by the read-only scan
+    // pass of ReconcileSubjectAsync, buffered so deletes are deferred until the
+    // index-tree scan has fully drained (see issue 1351).
+    private readonly record struct OrphanCandidate(string RowKey, string Tree, string Key, string Tag);
+
     internal async Task<TagReconcileReport> ReconcileSubjectAsync(string treeId, string? startInclusive, string? endExclusive, CancellationToken cancellationToken)
     {
         var subject = SubjectTreeFor(treeId);
@@ -721,8 +726,17 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
             keysScanned++;
         }
 
+        // Collect orphan candidates in a first, read-only pass, then delete them
+        // in a second pass. Deleting membership rows while the index-tree scan is
+        // still streaming mutates the very tree being enumerated: an orphan delete
+        // can trigger a leaf merge that relocates a not-yet-visited page, so the
+        // paginated cursor skips a contiguous tail of rows and leaves them
+        // stranded (issue 1351). Draining the scan fully before the first write
+        // keeps enumeration over a structurally stable tree, so every membership
+        // row is visited exactly once regardless of page size or concurrent
+        // readers.
         var rowsScanned = 0;
-        var orphans = 0;
+        List<OrphanCandidate>? candidates = null;
         await foreach (var rowKey in ScanLiveKeysAsync(null, null, cancellationToken).ConfigureAwait(false))
         {
             if (rowKey.Length > 0 && rowKey[0] == Sep)
@@ -748,19 +762,28 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
             rowsScanned++;
             if (!live.Contains(key))
             {
+                (candidates ??= []).Add(new OrphanCandidate(rowKey, rowTree, key, rowTag));
+            }
+        }
+
+        var orphans = 0;
+        if (candidates is not null)
+        {
+            foreach (var candidate in candidates)
+            {
                 // Re-verify against the subject before deleting: the live set is
                 // a point-in-time snapshot, so a key written concurrently after
                 // the snapshot (value first, then tags) could otherwise have its
                 // freshly-committed tag rows destroyed as false orphans.
-                if (await subject.ExistsAsync(key, cancellationToken).ConfigureAwait(false))
+                if (await subject.ExistsAsync(candidate.Key, cancellationToken).ConfigureAwait(false))
                 {
                     continue;
                 }
                 // In a flag membership mode this authors a disable delta (the
                 // scan already filtered out already-disabled rows), never a
                 // plain delete - so orphan cleanup also ships a typed delta.
-                await RemoveRowAsync(rowKey, cancellationToken).ConfigureAwait(false);
-                await RemoveRowAsync(KeyRowKey(rowTree, key, rowTag), cancellationToken).ConfigureAwait(false);
+                await RemoveRowAsync(candidate.RowKey, cancellationToken).ConfigureAwait(false);
+                await RemoveRowAsync(KeyRowKey(candidate.Tree, candidate.Key, candidate.Tag), cancellationToken).ConfigureAwait(false);
                 orphans++;
             }
         }
