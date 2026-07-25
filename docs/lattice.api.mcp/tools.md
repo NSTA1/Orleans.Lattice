@@ -120,6 +120,18 @@ Runtime per-tree cross-cluster replication control over `ILatticeReplicationCont
 
 The control tools carry `destructiveHint = true`; the inspect tool carries `readOnlyHint = true`. Discovery is permission-scoped by the `LatticeOperation.Replication` grant, so a caller without that grant is not shown the group.
 
+## Error handling
+
+Every facade-backed tool call is routed through a single translation seam, so a fault is surfaced to the client as an actionable error result rather than the SDK's opaque generic mask. The translated message names the failure class:
+
+| Fault | What the client sees |
+|---|---|
+| A remote gRPC `RpcException` of any status | The status code plus the binding's sanitised detail (for example a `FailedPrecondition` guidance message verbatim, a `PermissionDenied`/`Unauthenticated` denial, or a server-side fault code that points at the cluster logs). |
+| A local MCP-host fault (assembly load failure, argument or mapping error) | The exception type name and message, so an operator can diagnose a host-side problem directly. |
+| A fail-closed authorization denial | Surfaced as a denial with its safe message; it is never downgraded or swallowed. |
+
+The seam never forwards a raw server exception or stack trace across the gRPC boundary: the deliberately generic `Internal` wire message stays generic, and the translation only ever adds the gRPC status code and the detail the binding already chose to expose (see [Security](security.md)).
+
 ## Next
 
 - [Security](security.md) - how tools are gated and how the caller credential flows.

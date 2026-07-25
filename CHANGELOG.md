@@ -10,6 +10,10 @@ This changelog covers the whole **package family** - every published `Orleans.La
 
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), labelled `lattice` or `lattice.replication`. See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
 
+### Fixed
+
+- **Orleans.Lattice.Api.Mcp: tool faults now surface an actionable, class-specific error instead of the SDK's opaque generic mask.** A fault escaping a facade-backed MCP tool (replication, backup, auth, data, or state) was almost always reported to the client as the ModelContextProtocol SDK's bare `"An error occurred invoking '<tool>'."` string, with the real cause discarded - so an operator could not tell a remote server-side fault from a precondition rejection, an authorization denial, or a local MCP-host problem. Every facade-backed tool invocation is now routed through a single shared translation seam (`McpToolFaultTranslator`, applied once at the `CredentialStampingTool` decorator that wraps every group tool) that converts any escaping exception into an actionable message: a remote `RpcException` of any status is surfaced with its gRPC status code and the binding's sanitised detail (not only `FailedPrecondition`), a fail-closed authorization denial stays a denial, and a local MCP-process fault (assembly load failure, argument or mapping error) is surfaced with its type name and message. The seam references only always-loaded types, so it also catches the `FileNotFoundException`/`TypeLoadException` the JIT raises when an adapter names a satellite assembly that is not present. Security is unchanged: the seam never forwards a raw server exception or stack trace across the gRPC boundary - the deliberately generic `Internal` wire message stays generic - and a `PermissionDenied` fault stays fail-closed. ([#1352](https://github.com/NSTA1/Orleans.Lattice/issues/1352))
+
 ## Released
 
 Published releases, newest first. Each section is keyed by its publish date; within a date, packages advance on their own patch digits per [`docs/RELEASING.md`](docs/RELEASING.md).

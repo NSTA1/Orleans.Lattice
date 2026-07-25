@@ -1,7 +1,4 @@
-using Grpc.Core;
-using ModelContextProtocol;
 using Orleans.Lattice.Api.Replication;
-using Orleans.Lattice.Replication;
 
 namespace Orleans.Lattice.Api.Mcp;
 
@@ -9,10 +6,13 @@ namespace Orleans.Lattice.Api.Mcp;
 /// The pure adapter layer between the replication MCP tools and the
 /// <see cref="ILatticeReplicationControl"/> facade: one method per tool that maps
 /// the tool's arguments onto a facade call and projects the facade result onto
-/// the compact MCP DTO. These methods hold no transport or authorization concern
-/// - the fail-closed replication access gate lives in the facade and the caller
-/// credential is stamped on the ambient context by the tool delegate before the
-/// method runs - so they are directly unit-testable against a fake facade.
+/// the compact MCP DTO. These methods hold no transport, authorization, or
+/// fault-translation concern - the fail-closed replication access gate lives in
+/// the facade, the caller credential is stamped on the ambient context by the
+/// tool delegate before the method runs, and any escaping fault is translated to
+/// an actionable <see cref="McpException"/> at the shared
+/// <see cref="CredentialStampingTool"/> invocation seam - so they are directly
+/// unit-testable against a fake facade.
 /// </summary>
 internal static class ReplicationToolInvocations
 {
@@ -32,18 +32,21 @@ internal static class ReplicationToolInvocations
     /// Enables replication for a tree under a fixed merge mode.
     /// </summary>
     /// <remarks>
-    /// A rejected in-place merge-mode change (the tree is already enabled under a
-    /// different or ambiguous mode) is re-surfaced as an <see cref="McpException"/>
-    /// carrying the facade's actionable message, so the MCP client sees "the mode
-    /// of an already-enabled tree cannot be changed; disable then re-enable"
-    /// instead of the SDK's generic "an error occurred invoking the tool" mask
-    /// (issue #1339). Both hosting topologies are covered: the in-silo facade
-    /// throws <see cref="LatticeReplicationModeChangeRejectedException"/> directly,
-    /// while the remote gRPC binding maps it to an
-    /// <see cref="StatusCode.FailedPrecondition"/> <see cref="RpcException"/> whose
-    /// detail carries the same message. A fail-closed authorization denial still
-    /// propagates unchanged - only the actionable precondition rejection is
-    /// translated.
+    /// This method is a pure adapter and references only always-loaded types. In
+    /// particular it does <b>not</b> name
+    /// <c>LatticeReplicationModeChangeRejectedException</c> (a type in the
+    /// satellite <c>Orleans.Lattice.Replication</c> assembly): naming it in a
+    /// <c>catch</c> clause here would make the JIT throw
+    /// <see cref="System.IO.FileNotFoundException"/> while compiling this method
+    /// whenever that assembly is absent from the MCP host, masking the real cause
+    /// before any gRPC call is dispatched (issue #1352). A rejected in-place
+    /// merge-mode change - whether surfaced in-silo as the domain exception or
+    /// remotely as a <see cref="Grpc.Core.StatusCode.FailedPrecondition"/>
+    /// <see cref="Grpc.Core.RpcException"/> whose detail carries the actionable
+    /// message - is converted into a <see cref="ModelContextProtocol.McpException"/>
+    /// at the shared <see cref="CredentialStampingTool"/> seam via
+    /// <see cref="McpToolFaultTranslator"/>, so the MCP client sees the actionable
+    /// guidance instead of the SDK's generic mask (issue #1339, generalised).
     /// </remarks>
     public static async Task<McpReplicationEnableResult> EnableReplicationAsync(
         ILatticeReplicationControl control,
@@ -54,26 +57,12 @@ internal static class ReplicationToolInvocations
     {
         ArgumentNullException.ThrowIfNull(control);
         var mergeMode = ReplicationToolMappings.ToMergeMode(mode);
-        try
-        {
-            var result = await control.EnableReplicationAsync(
-                treeId,
-                mergeMode,
-                string.IsNullOrEmpty(bootstrapSourceClusterId) ? null : bootstrapSourceClusterId,
-                cancellationToken).ConfigureAwait(false);
-            return ReplicationToolMappings.ToMcp(result);
-        }
-        catch (LatticeReplicationModeChangeRejectedException ex)
-        {
-            // In-silo topology: the facade throws the domain rejection directly.
-            throw new McpException(ex.Message);
-        }
-        catch (RpcException ex) when (ex.StatusCode == StatusCode.FailedPrecondition)
-        {
-            // Remote topology: the gRPC binding already mapped the rejection to a
-            // FailedPrecondition status whose detail is the actionable message.
-            throw new McpException(ex.Status.Detail);
-        }
+        var result = await control.EnableReplicationAsync(
+            treeId,
+            mergeMode,
+            string.IsNullOrEmpty(bootstrapSourceClusterId) ? null : bootstrapSourceClusterId,
+            cancellationToken).ConfigureAwait(false);
+        return ReplicationToolMappings.ToMcp(result);
     }
 
     /// <summary>Disables replication for a tree.</summary>
