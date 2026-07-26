@@ -25,8 +25,15 @@ dashboards shipped by `Orleans.Lattice.Dashboards` (mounted read-only from
 
 ```bash
 cd reference-architecture/local
-cp .env.example .env            # PowerShell: Copy-Item .env.example .env
 docker compose up --build
+```
+
+Every value has a baked-in local dev default, so no `.env` file is required.
+Copy `.env.example` to `.env` only if you want to override a default (for
+example, point the storage connection string somewhere other than Azurite):
+
+```bash
+cp .env.example .env            # PowerShell: Copy-Item .env.example .env
 ```
 
 Then:
@@ -35,7 +42,8 @@ Then:
   first-run connection is seeded from `LATTICE_EXPLORER_ENDPOINT`; sign in with
   the built-in Basic provider (any credentials - the dev cluster is open).
 - The MCP endpoint is reachable at <http://localhost:8090> (MCP transport root;
-  liveness at `/health`).
+  liveness at `/health`). It advertises the full tool set (state, data, backup,
+  auth, telemetry, replication) - see the dev-auth note below for why.
 - Grafana is at <http://localhost:3000> (anonymous viewer is enabled; the admin
   login is `admin` / `admin`). The Orleans.Lattice dashboards appear under the
   `Orleans.Lattice` folder and populate as the silo emits metrics.
@@ -60,14 +68,35 @@ they become in a real deployment (see
 | `Entra__Enabled` (all heads) | `false` (no sign-in) | `true` (Entra JWT on every facade) |
 | `StateApi__RequireAuthorization` / `Mcp__RequireAuthorization` | `false` | `true` |
 | `Auth__DefaultEffect` (silo) | `Allow` | `Deny` (deny-by-default) |
+| `Mcp__DevAuthenticateAll` (mcp) | `true` (synthetic subject) | `false` (real Entra subject) |
 | `Replication__AllowPlaintext` (silo) | `true` (h2c) | `false` (server TLS via the region FQDN) |
 | Storage identity | Azurite connection string | managed identity (`DefaultAzureCredential`) |
 
+### Why the MCP head authenticates a synthetic subject
+
+MCP tool **discovery** is fail-closed: the head advertises a tool group only
+when the caller holds an **authored** Allow rule covering one of the group's
+operations. With no identity provider (Entra off) an anonymous caller resolves
+to no subject and is offered **zero tools** - even though `Auth__DefaultEffect=
+Allow` would permit the calls. Two coordinated dev toggles bridge that gap:
+
+- The MCP head (`Mcp__DevAuthenticateAll=true`) authenticates **every** request
+  as one fixed synthetic subject, `Mcp__DevSubjectId` (default `local-dev-admin`).
+  This branch is honoured only because Entra is disabled; it is forced inert in
+  any Entra deployment, so it can never weaken a real estate.
+- The silo (`Auth__BootstrapAdministrators=local-dev-admin`) seeds that same
+  subject a cluster-wide full-access grant at startup, so discovery advertises
+  the complete tool set to it.
+
+The two ids **must match**. This is the same seeding mechanism a deployed estate
+uses for its designated security administrator; here it targets a throwaway
+synthetic subject instead of a real Entra `oid`.
+
 The single "secret", the per-cluster replication key, is a **dev placeholder**
-supplied from `.env` (`LATTICE_REPLICATION_SECRET`). No real secret is ever
-baked into an image, this compose file, or source. The Azurite account key in
-`.env.example` is the fixed, publicly-documented emulator credential - it is not
-a secret and only ever addresses the local emulator.
+with a baked-in default (`LATTICE_REPLICATION_SECRET`), overridable via `.env`.
+No real secret is ever baked into an image, this compose file, or source. The
+Azurite account key is the fixed, publicly-documented emulator credential - it
+is not a secret and only ever addresses the local emulator.
 
 ## Notes
 

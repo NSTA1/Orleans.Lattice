@@ -24,13 +24,18 @@
 #   * The State/Auth gRPC surface does NOT require authorization
 #     (StateApi__RequireAuthorization=false, Mcp__RequireAuthorization=false).
 #   * The authorization core runs allow-by-default (Auth__DefaultEffect=Allow).
+#   * The MCP head authenticates every request as a fixed synthetic subject
+#     (Mcp__DevAuthenticateAll=true) so its fail-closed tool discovery has a
+#     credential to scope against and surfaces the full tool set.
 #   * Cross-region replication endpoints permit plaintext h2c
 #     (Replication__AllowPlaintext=true).
-# The only "secret", the per-cluster replication key, is a documented dev
-# placeholder injected from .env (copy .env.example to .env). No real secret is
-# ever baked into an image, this file, or source. In Azure these toggles flip to
-# their secure defaults (Deny, RequireAuthorization=true, Entra enabled, managed
-# identity for storage); see reference-architecture/hosts/README.md.
+# Every value has a baked-in local dev default, so `docker compose up --build`
+# runs with no .env file. The only "secret", the per-cluster replication key, is
+# a documented dev placeholder; copy .env.example to .env only to override a
+# default. No real secret is ever baked into an image, this file, or source. In
+# Azure these toggles flip to their secure defaults (Deny, RequireAuthorization=
+# true, Entra enabled, managed identity for storage); see
+# reference-architecture/hosts/README.md.
 # ---------------------------------------------------------------------------
 
 name: lattice-reference-local
@@ -58,8 +63,10 @@ services:
       azurite:
         condition: service_healthy
     environment:
-      # Storage: point every Orleans + Lattice Azure provider at Azurite.
-      Storage__ConnectionString: "${STORAGE_CONNECTION_STRING}"
+      # Storage: point every Orleans + Lattice Azure provider at Azurite. The
+      # default is the fixed, publicly-documented Azurite emulator connection
+      # string (not a secret); override via .env / STORAGE_CONNECTION_STRING.
+      Storage__ConnectionString: "${STORAGE_CONNECTION_STRING:-DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;QueueEndpoint=http://azurite:10001/devstoreaccount1;TableEndpoint=http://azurite:10002/devstoreaccount1;}"
       # Cluster identity.
       Cluster__Id: "lattice-local"
       Cluster__ServiceId: "lattice-local"
@@ -67,6 +74,18 @@ services:
       Auth__DefaultEffect: "Allow"
       StateApi__RequireAuthorization: "false"
       Entra__Enabled: "false"
+      # Dev bypass: seed a cluster-wide full-access grant for the synthetic subject
+      # the MCP head authenticates every request as (Mcp__DevSubjectId below). MCP
+      # tool DISCOVERY advertises a tool group only against an AUTHORED Allow rule,
+      # so without this the open local head would surface zero tools. Must match the
+      # MCP head's Mcp__DevSubjectId exactly.
+      Auth__BootstrapAdministrators: "local-dev-admin"
+      # Dev bypass: with Entra off the silo has no identity provider, so a forwarded
+      # credential reads as anonymous and the control-plane-isolated authorization
+      # tree denies the head's permission introspection. Trust a forwarded bearer
+      # token as its named subject when that id is a configured bootstrap admin, so
+      # the head is served as the administrator and discovery lights up every tool.
+      Auth__DevAuthenticateForwardedSubject: "true"
       # Single-region: no replication peers; plaintext allowed for h2c.
       Replication__AllowPlaintext: "true"
       # Runtime per-tree replication config (8.0.6): enrol the sys-replication-config
@@ -79,7 +98,7 @@ services:
       # enabled tree has no peer to ship to); the AUTHORIZED replication path (an
       # explicit LatticeOperation.Replication grant) is a deployed-estate concern.
       Replication__EnableRuntimeConfig: "true"
-      LATTICE_REPLICATION_SECRET: "${LATTICE_REPLICATION_SECRET}"
+      LATTICE_REPLICATION_SECRET: "${LATTICE_REPLICATION_SECRET:-local-dev-only-not-a-real-secret}"
       # This lone silo owns the backup schedule (primary).
       Backup__Primary: "true"
       Scaling__MinReplicas: "1"
@@ -116,6 +135,14 @@ services:
       # Dev bypass: open MCP endpoint, no Entra.
       Entra__Enabled: "false"
       Mcp__RequireAuthorization: "false"
+      # Dev bypass: MCP tool discovery is fail-closed on the caller's resolved
+      # credential, so an open head with no identity plane would advertise ZERO
+      # tools. Authenticate every request as a single fixed synthetic subject that
+      # the silo has seeded as a bootstrap administrator (Auth__BootstrapAdministrators
+      # above), lighting up the full tool set. Only honoured because Entra is off;
+      # forced inert in any Entra deployment.
+      Mcp__DevAuthenticateAll: "true"
+      Mcp__DevSubjectId: "local-dev-admin"
     ports:
       - "8090:8080"
 

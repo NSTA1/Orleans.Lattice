@@ -8,6 +8,7 @@ using Orleans.Lattice.Api.Mcp;
 using Orleans.Lattice.Api.Mcp.Telemetry;
 using Orleans.Lattice.Api.Mcp.Telemetry.Azure;
 using Orleans.Lattice.ReferenceArchitecture.Hosting;
+using Orleans.Lattice.ReferenceArchitecture.Mcp;
 
 // ---------------------------------------------------------------------------
 // Reference-architecture MCP head.
@@ -74,6 +75,21 @@ var verifyRegionIdentity = config.GetValue("Mcp:VerifyRegionIdentity", false);
 
 var entraEnabled = config.GetValue("Entra:Enabled", false);
 var requireAuthorization = config.GetValue("Mcp:RequireAuthorization", entraEnabled);
+
+// Development-only authentication bypass for the local compose harness. MCP tool
+// discovery is fail-closed on the caller's resolved credential, so a head running
+// without an identity provider (Entra off) advertises ZERO tools. When explicitly
+// opted in here, every request is authenticated as a single fixed synthetic
+// subject that the silo has seeded as a bootstrap administrator, lighting up the
+// full tool set for local exploration. Forced OFF whenever Entra is enabled, so it
+// can never weaken a real deployment even if the flag is left set.
+var devAuthenticateAll = !entraEnabled && config.GetValue("Mcp:DevAuthenticateAll", false);
+var devSubjectId = config["Mcp:DevSubjectId"];
+if (string.IsNullOrWhiteSpace(devSubjectId))
+{
+    devSubjectId = DevBypassAuthenticationHandler.DefaultSubjectId;
+}
+
 var enableAuthAdministration = config.GetValue("Mcp:EnableAuthAdministration", false);
 var enableDataWrites = config.GetValue("Mcp:EnableDataWrites", false);
 var enableBackupControl = config.GetValue("Mcp:EnableBackupControl", false);
@@ -375,6 +391,14 @@ if (entraEnabled)
         builder.Services.AddLatticeMcp(mcp => mcp.ProtectedResourceMetadata = metadata);
     }
 }
+else if (devAuthenticateAll)
+{
+    // Local dev bypass: authenticate every request as the fixed synthetic subject
+    // so the fail-closed tool discovery has a credential to scope against. See the
+    // devAuthenticateAll comment above; this branch is unreachable when Entra is on.
+    builder.Services.AddLocalDevBypass(devSubjectId);
+    builder.Services.AddAuthorization();
+}
 
 var app = builder.Build();
 
@@ -382,10 +406,18 @@ var app = builder.Build();
 // /health (the platform liveness probe, reached directly) is exempt.
 app.UseFrontDoorOriginLock(frontDoorId);
 
-if (entraEnabled)
+if (entraEnabled || devAuthenticateAll)
 {
     app.UseAuthentication();
     app.UseAuthorization();
+}
+
+if (devAuthenticateAll)
+{
+    app.Logger.LogWarning(
+        "DEVELOPMENT AUTH BYPASS ACTIVE: every MCP request is authenticated as synthetic subject '{SubjectId}'. " +
+        "This is only permitted because Entra is disabled and Mcp:DevAuthenticateAll=true. Never enable this in a real deployment.",
+        devSubjectId);
 }
 
 app.MapLatticeMcp();
