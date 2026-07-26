@@ -270,7 +270,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
                 [Description("The content-addressed id of the backup to restore to.")] string backupId,
                 CancellationToken cancellationToken,
                 [Description("The tree to restore into; null restores into the captured tree.")] string? targetTreeId = null,
-                [Description("Restore mode: InPlace (default) or ShadowCutover.")] string? mode = null,
+                [Description("Restore mode. InPlace (default): an HLC-preserving last-writer-wins merge into the live tree that heals missing or stale entries (a captured entry wins only when its clock is newer than, or the key is absent from, the live tree) and therefore never overwrites data that is newer live - it is a convergent repair, NOT a rollback. ShadowCutover: rebuilds the scope into a fresh physical tree and atomically swaps it in, a wholesale point-in-time replacement (true rollback) that is reversible via lattice_backup_revert_restore.")] string? mode = null,
                 [Description("Idempotency key that makes a retried restore a no-op; null derives one.")] string? operationId = null) =>
             {
                 using var scope = StampCredential(context.Services!);
@@ -283,9 +283,15 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
                 SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 Title = "Restore backup",
                 Description =
-                    "Restores a backup into its target tree, walking its base chain. Mutating: subject to the "
-                    + "fail-closed backup access gate. For a ShadowCutover restore the result carries the physical "
-                    + "tree ids needed to revert. Requires backup control to be enabled on the server.",
+                    "Restores a backup into its target tree, walking its base chain. Two modes with different "
+                    + "semantics: InPlace (default) applies an HLC-preserving last-writer-wins merge into the live "
+                    + "tree - it heals missing or stale entries (the backup wins only where its clock is newer, or "
+                    + "the key is absent live) but never clobbers entries that are newer live, so it converges/repairs "
+                    + "rather than rolling a diverged tree back to an older state. ShadowCutover rebuilds the scope into "
+                    + "a fresh physical tree and atomically swaps it in for a wholesale point-in-time replacement (a "
+                    + "true rollback); the result carries the physical tree ids needed to revert it via "
+                    + "lattice_backup_revert_restore. Mutating: subject to the fail-closed backup access gate. Requires "
+                    + "backup control to be enabled on the server.",
                 ReadOnly = false,
                 Destructive = true,
                 UseStructuredContent = true,
