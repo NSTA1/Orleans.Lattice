@@ -101,8 +101,35 @@ provisions the Prometheus data source and the dashboards shipped by
      `admin` / `admin`). The Orleans.Lattice dashboards appear under the
      `Orleans.Lattice` folder and populate as the silo emits metrics.
 
-   A tree is materialized by its first write (for example an MCP `lattice_data_set`
-   call, or a write through the Data API); it then appears in the Explorer catalog.
+## Add trees and data (for a demo)
+
+**A fresh cluster has no trees.** Nothing is pre-seeded, so on first start the
+Explorer catalog is empty and the metrics dashboards are flat. A tree is not
+declared up front - it is **materialized by its first write** and then appears in
+the Explorer catalog automatically. Some convenient ways to put data in:
+
+- **Ask an LLM to drive the MCP head (most convenient).** Point any MCP-capable
+  assistant (Copilot, Claude Desktop, or your own client) at the Streamable-HTTP
+  MCP endpoint <http://localhost:8090> and ask it, in plain English, to create a
+  tree and write some entries. The head advertises the full write tool set, so the
+  model can call `lattice_data_set` / `lattice_data_set_many_atomic` to seed trees,
+  then `lattice_state_list_trees` and `lattice_state_scan_entries` to read them
+  back - a fast, no-code way to populate a demo and explore the state tools. The
+  local head is open (dev bypass), so no token is needed.
+
+- **Call the MCP head from a small script.** Any Model Context Protocol client
+  works. For example, with the TypeScript SDK, connect a
+  `StreamableHTTPClientTransport` to <http://localhost:8090> and call the
+  `lattice_data_set` tool (arguments: `treeId`, `key`, and a base64 `value`); the
+  named tree springs into existence on the first write.
+
+- **Write through the Data API directly.** The silo's read-write Data API gRPC
+  facade is enabled and open in this harness (`localhost:18081`); a Lattice client
+  or the Data API binding can write to it without going through MCP.
+
+After any of these, refresh the Explorer at <http://localhost:8080> - the new tree
+appears in the catalog, and you can browse its shards, entries, and history, and
+watch the Grafana dashboards react.
 
 ## Teardown
 
