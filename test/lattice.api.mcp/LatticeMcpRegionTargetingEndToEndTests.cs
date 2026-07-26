@@ -5,8 +5,10 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
+using NSubstitute;
 using Orleans.Lattice.Api.Data;
 using Orleans.Lattice.Api.Region;
+using Orleans.Lattice.Api.State;
 
 namespace Orleans.Lattice.Api.Mcp.Tests;
 
@@ -115,6 +117,47 @@ public sealed class LatticeMcpRegionTargetingEndToEndTests
         });
     }
 
+    [Test]
+    public async Task Verified_peer_region_serves_the_targeted_call()
+    {
+        await using var host = await StartVerifyingHostAsync(stateClusterId: "cluster-eu");
+        await using var client = await ConnectAsync(host);
+
+        var result = await client.CallToolAsync(
+            "lattice_data_get",
+            new Dictionary<string, object?> { ["treeId"] = "t", ["key"] = "k", ["region"] = "eu" },
+            cancellationToken: TestContext.CurrentContext.CancellationToken);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsError, Is.Not.True);
+            Assert.That(result.Meta!["region"]!.GetValue<string>(), Is.EqualTo("eu"));
+        });
+    }
+
+    [Test]
+    public async Task Peer_region_that_fails_identity_verification_is_rejected_fail_closed()
+    {
+        // The peer's endpoint answers as a different cluster - the anycast/Front-Door
+        // "wrong region" trap. The gate must refuse it rather than silently serve it.
+        await using var host = await StartVerifyingHostAsync(stateClusterId: "cluster-wrong");
+        await using var client = await ConnectAsync(host);
+
+        var result = await client.CallToolAsync(
+            "lattice_data_get",
+            new Dictionary<string, object?> { ["treeId"] = "t", ["key"] = "k", ["region"] = "eu" },
+            cancellationToken: TestContext.CurrentContext.CancellationToken);
+
+        var text = result.Content.OfType<TextContentBlock>().FirstOrDefault()?.Text ?? string.Empty;
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsError, Is.True);
+            Assert.That(text, Does.Contain("failed identity verification"));
+            Assert.That(text, Does.Contain("Front Door"),
+                "The fault must name the likely cause so an operator can correct the endpoint.");
+        });
+    }
+
     private static async Task<McpClient> ConnectAsync(WebApplication host)
     {
         var transport = new HttpClientTransport(
@@ -166,6 +209,67 @@ public sealed class LatticeMcpRegionTargetingEndToEndTests
                     },
                 },
             }));
+
+        builder.Services.AddLatticeMcp(o =>
+        {
+            o.RequireAuthorization = false;
+            o.EnableDataTools = true;
+        });
+        builder.Services.AddDataTools();
+
+        var app = builder.Build();
+        app.MapLatticeMcp();
+        await app.StartAsync();
+        return app;
+    }
+
+    private static async Task<WebApplication> StartVerifyingHostAsync(string stateClusterId)
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseKestrel();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        builder.Logging.ClearProviders();
+
+        builder.Services.AddSingleton<ILatticeApiMcpCredentialBridge>(
+            new StubBridge(new LatticeCredential("agent")));
+        builder.Services.AddSingleton<ILatticeApiMcpPermissionResolver>(
+            new StubResolver(LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data)));
+        builder.Services.AddSingleton<ILatticeApiMcpAuthorizer>(new AllowAllMcpAuthorizer());
+        builder.Services.AddSingleton<ILatticeDataApi>(new FoundDataApi());
+
+        // The EU peer serves both data (so the call can be routed there) and state
+        // (so the verifier has a facade to probe). It advertises cluster-eu; the
+        // probe answers as stateClusterId, so the caller chooses match or mismatch.
+        builder.Services.AddSingleton<ILatticeApiMcpRegionRouter>(
+            new LatticeApiMcpRegionRouter("us", new[]
+            {
+                new LatticeApiMcpRegionDefinition
+                {
+                    RegionId = "us",
+                    ClusterId = "cluster-us",
+                    IsCurrent = true,
+                    Groups = new Dictionary<LatticeApiMcpGroup, string?> { [LatticeApiMcpGroup.Data] = null },
+                },
+                new LatticeApiMcpRegionDefinition
+                {
+                    RegionId = "eu",
+                    ClusterId = "cluster-eu",
+                    IsCurrent = false,
+                    Groups = new Dictionary<LatticeApiMcpGroup, string?>
+                    {
+                        [LatticeApiMcpGroup.Data] = "https://eu-data:5001",
+                        [LatticeApiMcpGroup.State] = "https://eu-state:5001",
+                    },
+                },
+            }));
+
+        var stateQuery = Substitute.For<ILatticeStateQuery>();
+        stateQuery.GetClusterInfoAsync(Arg.Any<CancellationToken>())
+            .Returns(new ClusterInfo { ClusterId = stateClusterId, ServiceId = "svc" });
+        builder.Services.AddSingleton(stateQuery);
+        builder.Services.AddSingleton<ILatticeApiMcpRegionIdentityVerifier>(
+            static sp => new LatticeApiMcpRegionIdentityVerifier(
+                sp.GetRequiredService<ILatticeApiMcpRegionRouter>(), sp));
 
         builder.Services.AddLatticeMcp(o =>
         {

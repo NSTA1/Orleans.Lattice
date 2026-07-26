@@ -75,6 +75,19 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton<ILatticeApiMcpRegionRouter>(
             new LatticeApiMcpRegionRouter(options.RegionId, definitions)));
 
+        // Opt-in region-identity verification: prove each peer region's endpoint
+        // reaches the cluster it advertises before a call is routed there, so a
+        // region mis-pointed at a shared/anycast endpoint is caught (omitted from
+        // discovery, rejected fail-closed on routing) rather than silently answering
+        // from the wrong cluster. Registered only when enabled, so the default path
+        // resolves no verifier and is byte-for-byte unchanged.
+        if (options.VerifyRegionIdentity)
+        {
+            services.Replace(ServiceDescriptor.Singleton<ILatticeApiMcpRegionIdentityVerifier>(
+                static sp => new LatticeApiMcpRegionIdentityVerifier(
+                    sp.GetRequiredService<ILatticeApiMcpRegionRouter>(), sp)));
+        }
+
         // Orleans serialization so the gRPC clients can build wire marshallers that
         // match the server. Idempotent.
         services.AddSerializer();

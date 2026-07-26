@@ -29,31 +29,53 @@ internal sealed class LatticeApiMcpRegionCatalog : ILatticeRegionCatalog
         CancellationToken cancellationToken = default)
     {
         var snapshot = _router.Snapshot();
+        var verifier = _services.GetService<ILatticeApiMcpRegionIdentityVerifier>();
+        var needsEnrichment = NeedsClusterIdEnrichment(snapshot);
 
-        // Fast path: the router already knows every cluster id (the remote-host
-        // topology names them in configuration), so return the frozen snapshot
-        // verbatim with no allocation.
-        if (!NeedsClusterIdEnrichment(snapshot))
+        // Fast path: no verification configured and every cluster id already known,
+        // so return the frozen snapshot verbatim with no allocation.
+        if (verifier is null && !needsEnrichment)
         {
             return snapshot;
         }
 
-        var clusterId = await ResolveCurrentClusterIdAsync(cancellationToken).ConfigureAwait(false);
-        if (string.IsNullOrEmpty(clusterId))
-        {
-            return snapshot;
-        }
+        var clusterId = needsEnrichment
+            ? await ResolveCurrentClusterIdAsync(cancellationToken).ConfigureAwait(false)
+            : null;
 
-        var enriched = new LatticeRegionDescriptor[snapshot.Count];
+        var result = new List<LatticeRegionDescriptor>(snapshot.Count);
         for (var i = 0; i < snapshot.Count; i++)
         {
             var descriptor = snapshot[i];
-            enriched[i] = descriptor.IsCurrent && string.IsNullOrEmpty(descriptor.ClusterId)
-                ? descriptor with { ClusterId = clusterId }
-                : descriptor;
+
+            if (descriptor.IsCurrent)
+            {
+                if (string.IsNullOrEmpty(descriptor.ClusterId) && !string.IsNullOrEmpty(clusterId))
+                {
+                    descriptor = descriptor with { ClusterId = clusterId };
+                }
+
+                result.Add(descriptor);
+                continue;
+            }
+
+            // Fail-closed discovery: a peer whose endpoint does not provably reach
+            // its own cluster (or is unreachable) is omitted, so a caller is never
+            // pointed at a region a subsequent tool call could not honour.
+            if (verifier is not null)
+            {
+                var verdict = await verifier.VerifyAsync(descriptor.RegionId, cancellationToken)
+                    .ConfigureAwait(false);
+                if (verdict is RegionIdentityVerdict.Mismatch or RegionIdentityVerdict.Unreachable)
+                {
+                    continue;
+                }
+            }
+
+            result.Add(descriptor);
         }
 
-        return enriched;
+        return result;
     }
 
     private static bool NeedsClusterIdEnrichment(IReadOnlyList<LatticeRegionDescriptor> snapshot)

@@ -110,6 +110,18 @@ internal sealed class CredentialStampingTool : DelegatingMcpServerTool
         }
 
         using var credentialScope = McpToolCredentialScope.Stamp(services);
+
+        // A peer region is verified before it serves the call (when verification is
+        // configured): its identity is proven to reach the expected cluster, so a
+        // region mis-pointed at a shared/anycast endpoint is rejected fail-closed
+        // rather than silently answering from the wrong cluster. The current region
+        // is local and authoritative, so it is never probed.
+        if (!route.IsDefault)
+        {
+            await EnsureRegionVerifiedAsync(services, route.ServedRegionId, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         var regionScope = route.IsDefault ? null : LatticeApiMcpRegionScope.Enter(route.ServedRegionId);
         try
         {
@@ -120,6 +132,28 @@ internal sealed class CredentialStampingTool : DelegatingMcpServerTool
         finally
         {
             regionScope?.Dispose();
+        }
+    }
+
+    private static async ValueTask EnsureRegionVerifiedAsync(
+        IServiceProvider services, string regionId, CancellationToken cancellationToken)
+    {
+        var verifier = services.GetService<ILatticeApiMcpRegionIdentityVerifier>();
+        if (verifier is null)
+        {
+            // Verification not configured: routing proceeds exactly as before.
+            return;
+        }
+
+        var verdict = await verifier.VerifyAsync(regionId, cancellationToken).ConfigureAwait(false);
+        if (verdict is RegionIdentityVerdict.Mismatch or RegionIdentityVerdict.Unreachable)
+        {
+            throw new McpException(
+                $"Region '{regionId}' failed identity verification and cannot be targeted: its configured "
+                + "endpoint does not reach the region's own cluster. This usually means the region is pointed "
+                + "at a shared or anycast endpoint (for example an Azure Front Door endpoint that latency-routes "
+                + "to the nearest region) rather than the region's direct endpoint. Call lattice_list_regions "
+                + "for the regions this server can reach.");
         }
     }
 

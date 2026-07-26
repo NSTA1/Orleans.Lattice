@@ -63,6 +63,22 @@ public sealed class LatticeApiMcpRemoteOptions
     public IList<LatticeApiMcpRemoteRegionOptions> Regions { get; } = new List<LatticeApiMcpRemoteRegionOptions>();
 
     /// <summary>
+    /// Whether a peer region's identity is asserted before a call is routed to it:
+    /// the region's own state facade is probed once and its reported cluster id
+    /// compared to the region's advertised <see cref="LatticeApiMcpRemoteRegionOptions.ClusterId"/>.
+    /// A region whose endpoint does not reach the expected cluster - the failure
+    /// mode when it is pointed at a shared or anycast endpoint such as an Azure
+    /// Front Door endpoint that latency-routes to the nearest region - is omitted
+    /// from <c>lattice_list_regions</c> and rejected fail-closed when targeted, so
+    /// a call is never silently answered by the wrong cluster. Defaults to
+    /// <see langword="false"/> (no probe, the routing path unchanged); enable it for
+    /// a public multi-region deployment where peers are fronted by a global load
+    /// balancer. A region with no advertised cluster id or no state facade cannot be
+    /// asserted and stays routable regardless.
+    /// </summary>
+    public bool VerifyRegionIdentity { get; set; }
+
+    /// <summary>
     /// The remote endpoint for the read-only state facade
     /// (<c>ILatticeStateQuery</c>), or <see langword="null"/> to not serve the
     /// state group remotely.

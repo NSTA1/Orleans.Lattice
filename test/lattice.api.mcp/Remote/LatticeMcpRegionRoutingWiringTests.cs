@@ -158,4 +158,38 @@ public sealed class LatticeMcpRegionRoutingWiringTests
 
         Assert.That(provider.GetService<Orleans.Lattice.Api.State.ILatticeStateQuery>(), Is.Not.Null);
     }
+
+    [Test]
+    public void Verify_region_identity_defaults_off()
+        => Assert.That(new LatticeApiMcpRemoteOptions().VerifyRegionIdentity, Is.False);
+
+    [Test]
+    public void Region_identity_verifier_is_not_registered_by_default()
+    {
+        using var provider = MultiRegionProvider();
+
+        Assert.That(provider.GetService<ILatticeApiMcpRegionIdentityVerifier>(), Is.Null,
+            "The default path adds no verifier, so region routing is byte-for-byte unchanged.");
+    }
+
+    [Test]
+    public void Region_identity_verifier_is_registered_when_verification_is_enabled()
+    {
+        using var provider = new ServiceCollection()
+            .AddLatticeMcpRemote(o =>
+            {
+                o.RegionId = "us";
+                o.State = Endpoint("https://us-state:5001");
+                o.VerifyRegionIdentity = true;
+                o.Regions.Add(new LatticeApiMcpRemoteRegionOptions
+                {
+                    RegionId = "eu",
+                    ClusterId = "cluster-eu",
+                    State = Endpoint("https://eu-state:5001"),
+                });
+            })
+            .BuildServiceProvider();
+
+        Assert.That(provider.GetService<ILatticeApiMcpRegionIdentityVerifier>(), Is.Not.Null);
+    }
 }

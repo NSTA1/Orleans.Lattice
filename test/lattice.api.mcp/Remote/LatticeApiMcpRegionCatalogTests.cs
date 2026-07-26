@@ -106,4 +106,87 @@ public sealed class LatticeApiMcpRegionCatalogTests
         => Assert.That(
             () => new LatticeApiMcpRegionCatalog(Router("c"), null!),
             Throws.ArgumentNullException);
+
+    private static LatticeApiMcpRegionRouter RouterWithPeer(string peerRegionId)
+    {
+        var current = new LatticeApiMcpRegionDefinition
+        {
+            RegionId = "us",
+            ClusterId = "cluster-us",
+            IsCurrent = true,
+            Groups = new Dictionary<LatticeApiMcpGroup, string?> { [LatticeApiMcpGroup.State] = null },
+        };
+        var peer = new LatticeApiMcpRegionDefinition
+        {
+            RegionId = peerRegionId,
+            ClusterId = $"cluster-{peerRegionId}",
+            IsCurrent = false,
+            Groups = new Dictionary<LatticeApiMcpGroup, string?>
+            {
+                [LatticeApiMcpGroup.State] = $"https://{peerRegionId}-state:5001",
+            },
+        };
+
+        return new LatticeApiMcpRegionRouter("us", new[] { current, peer });
+    }
+
+    private static IServiceProvider ServicesWith(RegionIdentityVerdict peerVerdict)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<ILatticeApiMcpRegionIdentityVerifier>(new FakeVerifier(peerVerdict));
+        return services.BuildServiceProvider();
+    }
+
+    [Test]
+    public async Task Verified_peer_is_listed()
+    {
+        var catalog = new LatticeApiMcpRegionCatalog(
+            RouterWithPeer("eu"), ServicesWith(RegionIdentityVerdict.Verified));
+
+        var regions = await catalog.ListRegionsAsync();
+
+        Assert.That(regions.Select(r => r.RegionId), Is.EqualTo(new[] { "us", "eu" }));
+    }
+
+    [Test]
+    public async Task Skipped_peer_is_listed()
+    {
+        // The verifier cannot assert against the peer (fail-open), so it stays routable.
+        var catalog = new LatticeApiMcpRegionCatalog(
+            RouterWithPeer("eu"), ServicesWith(RegionIdentityVerdict.Skipped));
+
+        var regions = await catalog.ListRegionsAsync();
+
+        Assert.That(regions.Select(r => r.RegionId), Is.EqualTo(new[] { "us", "eu" }));
+    }
+
+    [Test]
+    public async Task Mismatched_peer_is_omitted()
+    {
+        var catalog = new LatticeApiMcpRegionCatalog(
+            RouterWithPeer("eu"), ServicesWith(RegionIdentityVerdict.Mismatch));
+
+        var regions = await catalog.ListRegionsAsync();
+
+        Assert.That(regions.Select(r => r.RegionId), Is.EqualTo(new[] { "us" }),
+            "Fail-closed discovery: a peer that resolves to the wrong cluster is not advertised.");
+    }
+
+    [Test]
+    public async Task Unreachable_peer_is_omitted()
+    {
+        var catalog = new LatticeApiMcpRegionCatalog(
+            RouterWithPeer("eu"), ServicesWith(RegionIdentityVerdict.Unreachable));
+
+        var regions = await catalog.ListRegionsAsync();
+
+        Assert.That(regions.Select(r => r.RegionId), Is.EqualTo(new[] { "us" }));
+    }
+
+    private sealed class FakeVerifier(RegionIdentityVerdict peerVerdict) : ILatticeApiMcpRegionIdentityVerifier
+    {
+        public ValueTask<RegionIdentityVerdict> VerifyAsync(
+            string regionId, CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(peerVerdict);
+    }
 }
