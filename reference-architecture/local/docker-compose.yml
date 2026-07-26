@@ -107,6 +107,15 @@ services:
       - "18080:8080"
       # Silo gRPC (state / auth / replication) - exposed for host-side tooling.
       - "18081:8081"
+      # Explorer web console. The explorer container shares this silo's network
+      # namespace (network_mode: service:silo) so it can dial the state API over a
+      # genuine loopback address (http://localhost:8081) - the explorer's transport
+      # policy only permits the anonymous plaintext dev path to a LOOPBACK host, and
+      # a cross-container service name (silo:8081) is not loopback. Because the
+      # explorer then has no network namespace of its own, its published port is
+      # declared here on the namespace owner. The explorer's Kestrel binds 8082
+      # (8080/8081 are already taken by this silo in the shared namespace).
+      - "8080:8082"
 
   mcp:
     build:
@@ -152,14 +161,25 @@ services:
       dockerfile: hosts/Explorer/Dockerfile
     depends_on:
       - silo
+    # Share the silo's network namespace so the explorer reaches the state API
+    # over loopback (http://localhost:8081). The explorer's transport-security
+    # policy only allows the anonymous-plaintext dev path to a LOOPBACK endpoint;
+    # a cross-container service name (silo:8081) is non-loopback and is rejected
+    # with "insecure loopback-dev mode is only allowed for a loopback endpoint".
+    # Sharing the namespace makes localhost inside this container the silo. The
+    # published UI port (8080 -> 8082) is declared on the silo service above.
+    network_mode: "service:silo"
     environment:
-      # Standalone Explorer head connects to the silo's State/Auth gRPC endpoint.
-      LATTICE_EXPLORER_ENDPOINT: "http://silo:8081"
+      # Bind Kestrel to 8082: 8080 (silo HTTP) and 8081 (silo gRPC) are already
+      # in use in the shared namespace.
+      ASPNETCORE_HTTP_PORTS: "8082"
+      # Loopback state-API endpoint (see network_mode above). Reachable AND
+      # loopback-valid, so the anonymous-plaintext dev path is permitted and the
+      # first-run dialog is pre-seeded ready to connect.
+      LATTICE_EXPLORER_ENDPOINT: "http://localhost:8081"
       # Dev bypass: plaintext h2c to the silo, no Entra sign-in.
       LATTICE_EXPLORER_INSECURE_DEV: "true"
       Entra__Enabled: "false"
-    ports:
-      - "8080:8080"
 
   prometheus:
     image: prom/prometheus:latest
