@@ -44,6 +44,7 @@ public class AbstractionsPublicApiContractTests
         "Orleans.Lattice.Api.Backup",
         "Orleans.Lattice.Api.Schema",
         "Orleans.Lattice.Api.Replication",
+        "Orleans.Lattice.Api.Region",
     };
 
     [TestCaseSource(nameof(ServiceInterfaces))]
@@ -115,6 +116,31 @@ public class AbstractionsPublicApiContractTests
                 $"{type.FullName} must live in the abstractions assembly.");
             Assert.That(ContractNamespaces.Contains(type.Namespace), Is.True,
                 $"{type.FullName} must live in a contracted namespace.");
+        });
+    }
+
+    // The region-discovery surface added by issue #1364: the transport-agnostic
+    // catalog contract and the two wire types it exchanges, so a future Explorer
+    // gRPC/facade binding can consume the same region model the MCP tool does.
+    private static readonly IReadOnlyList<Type> RegionContractTypes = new[]
+    {
+        typeof(Region.ILatticeRegionCatalog),
+        typeof(Region.LatticeRegionDescriptor),
+        typeof(Region.LatticeRegionGroupReachability),
+    };
+
+    [TestCaseSource(nameof(RegionContractTypes))]
+    public void Region_contract_type_is_public_in_the_abstractions_assembly(Type type)
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(type.IsPublic, Is.True,
+                $"{type.FullName} must be public so a future Explorer binding can consume the region "
+                + "contract without an InternalsVisibleTo grant.");
+            Assert.That(type.Assembly, Is.EqualTo(AbstractionsAssembly),
+                $"{type.FullName} must live in the abstractions assembly.");
+            Assert.That(type.Namespace, Is.EqualTo("Orleans.Lattice.Api.Region"),
+                $"{type.FullName} must live in the region contract namespace.");
         });
     }
 }

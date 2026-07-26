@@ -42,6 +42,57 @@ Each `LatticeApiMcpRemoteEndpoint` names the served `Endpoint` (surfaced verbati
 | `CredentialScheme` | Scheme prefix prepended to the outbound token (`"{scheme} {token}"`). Defaults to `Bearer`; empty sends the bare token. |
 | `AdministratorCredential` | The **static** admin service credential used for trusted, read-only permission introspection of each caller. See [discovery](#discovery-requires-the-auth-endpoint) below. For a long-lived server prefer a self-refreshing managed-identity token (see [Refreshing administrator token](#refreshing-the-administrator-token)). |
 | `EnableDataWrites` / `EnableBackupControl` / `EnableAuthAdministration` / `EnableReplicationControl` | Forward the destructive-verb opt-in to the corresponding tool module. Ignored when that group's endpoint is unset. |
+| `RegionId` | The id of the current (default) region a call targets when no `region` selector is supplied. Defaults to `current`. |
+| `ClusterId` | The Orleans cluster id of the current region, surfaced in `lattice_list_regions`. Optional advertisement metadata. |
+| `Regions` | Additional peer regions a caller may target with the optional per-call `region` argument. Each is a `LatticeApiMcpRemoteRegionOptions` with its own `RegionId`, optional `ClusterId`, and per-group endpoints. |
+| `VerifyRegionIdentity` | When `true`, each peer region's endpoint is probed once and its reported cluster id checked against the region's advertised `ClusterId` before any call is routed there; a region that reaches the wrong cluster is omitted from `lattice_list_regions` and rejected fail-closed. Defaults to `false`. See [Region targeting behind a global load balancer](#region-targeting-behind-a-global-load-balancer). |
+
+## Multi-region routing
+
+By default the endpoints above define a single region - the current cluster. To let one MCP head front more than one region, add a `LatticeApiMcpRemoteRegionOptions` per peer to `Regions`. The top-level endpoints stay the default (current) region, so an existing single-region configuration is unchanged; the peers are additive and opt-in per call.
+
+```csharp verify
+var builder = WebApplication.CreateBuilder();
+
+builder.Services.AddLatticeMcpRemote(o =>
+{
+    // The current (default) region, targeted when no `region` is supplied.
+    o.RegionId = "us-east";
+    o.ClusterId = "cluster-us-east";
+    o.Data = new LatticeApiMcpRemoteEndpoint { Endpoint = "https://us-east.internal:5001" };
+    o.Auth = new LatticeApiMcpRemoteEndpoint { Endpoint = "https://us-east.internal:5001" };
+
+    // A reachable peer region a caller may target with `"region": "eu-west"`.
+    // Each peer endpoint is that region's OWN, region-pinned silo FQDN - never a
+    // shared/anycast endpoint - so the `region` selector is deterministic.
+    o.Regions.Add(new LatticeApiMcpRemoteRegionOptions
+    {
+        RegionId = "eu-west",
+        ClusterId = "cluster-eu-west",
+        Data = new LatticeApiMcpRemoteEndpoint { Endpoint = "https://eu-west.internal:5001" },
+        Auth = new LatticeApiMcpRemoteEndpoint { Endpoint = "https://eu-west.internal:5001" },
+    });
+
+    // Prove each peer reaches the cluster it advertises before routing to it.
+    o.VerifyRegionIdentity = true;
+});
+
+var app = builder.Build();
+app.MapLatticeMcp();
+```
+
+The region list `lattice_list_regions` reports, and the routing a `region` argument drives, are both built once at startup from this single configuration, so discovery and routing can never disagree. A region serves a facade group only when that group's per-region endpoint is set; an unset group is reported unavailable for the region and is not routable there (fail-closed discovery). A cross-region call forwards the same caller credential to the target region's gRPC binding via the same interceptor described below, so the target authorizes it independently. See [Tools](tools.md#region-targeting) for the caller-facing surface.
+
+## Region targeting behind a global load balancer
+
+Region targeting is **deterministic** - a `region` selector must reach that exact region. That is fundamentally at odds with a global anycast load balancer (for example Azure Front Door), whose job is to *hide* which region serves a request by latency-routing to the nearest healthy origin. So a peer region must be addressed by its **own, region-pinned endpoint** (its silo's direct gRPC FQDN), never a shared Front Door endpoint. Point a region at an anycast endpoint and a call targeting it lands on whichever region the load balancer picks, and the served-region annotation becomes untrustworthy.
+
+Two consequences when the deployment fronts its regions with a load balancer that enforces an origin lock (a required header such as `X-Azure-FDID`):
+
+- **Stamp the origin-lock header on the direct dial yourself.** Reach the peer's internal gRPC ingress directly and supply a pre-built `CallInvoker` (via `LatticeApiMcpRemoteEndpoint.CallInvoker`) that adds the required header - one global Front Door id typically validates every regional origin, so the same invoker works for every peer. Do **not** route gRPC *through* the load balancer: it would inject the header itself (a duplicate the origin lock rejects) and gRPC-through-Front-Door is not generally supported.
+- **Turn on `VerifyRegionIdentity`.** It probes each peer's state facade once and checks the reported cluster id against the region's advertised `ClusterId`. A region whose endpoint reaches the wrong cluster - the exact symptom of a mis-pointed or anycast endpoint - is omitted from `lattice_list_regions` and rejected fail-closed when targeted, so a misconfiguration surfaces as a clean discovery gap rather than a call silently answered by the wrong region.
+
+The reference architecture already builds one origin-lock `CallInvoker` per silo FQDN that stamps `X-Azure-FDID` on every outbound gRPC call (its MCP head dials the silo directly, not through Front Door). That same per-endpoint invoker is the hook a multi-region deployment hands to each peer region's `LatticeApiMcpRemoteEndpoint.CallInvoker`, alongside `VerifyRegionIdentity`, to target regions deterministically behind a Front Door estate.
 
 ## Credential flow over the wire
 

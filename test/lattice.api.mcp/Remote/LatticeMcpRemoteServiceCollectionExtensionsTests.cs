@@ -184,8 +184,8 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(ToolNames(statePlan), Is.EquivalentTo(new[] { "lattice_capabilities", "state_read" }));
-            Assert.That(ToolNames(authPlan), Is.EquivalentTo(new[] { "lattice_capabilities", "auth_admin" }));
+            Assert.That(ToolNames(statePlan), Is.EquivalentTo(new[] { "lattice_capabilities", "lattice_list_regions", "state_read" }));
+            Assert.That(ToolNames(authPlan), Is.EquivalentTo(new[] { "lattice_capabilities", "lattice_list_regions", "auth_admin" }));
         });
     }
 

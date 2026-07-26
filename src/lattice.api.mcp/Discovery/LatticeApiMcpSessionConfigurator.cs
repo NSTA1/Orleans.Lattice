@@ -128,6 +128,7 @@ internal sealed class LatticeApiMcpSessionConfigurator
             // agent can learn what it may (or may not) do; group tools are added
             // only for the groups the caller is granted.
             tools.Add(CreateCapabilitiesTool(capabilities));
+            tools.Add(CreateListRegionsTool());
             await AddPermittedGroupToolsAsync(tools, access, httpContext, cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -197,7 +198,7 @@ internal sealed class LatticeApiMcpSessionConfigurator
                     continue;
                 }
 
-                if (!tools.TryAdd(new CredentialStampingTool(tool)))
+                if (!tools.TryAdd(new CredentialStampingTool(tool, group.Group)))
                 {
                     _logger.LogWarning(
                         "MCP tool '{ToolName}' from group '{Group}' collides with an existing tool and was skipped.",
@@ -264,6 +265,25 @@ internal sealed class LatticeApiMcpSessionConfigurator
                 UseStructuredContent = true,
             });
 
+    private static McpServerTool CreateListRegionsTool()
+        => McpServerTool.Create(
+            RegionDiscoveryToolHandlers.ListRegionsAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_list_regions",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Lattice regions",
+                Description =
+                    "Lists the regions this server can route a tool call to: the current cluster plus "
+                    + "any reachable, credentialed peer region, each with per-group endpoint availability. "
+                    + "A region with no route or credentials is omitted (fail-closed). Pass a listed "
+                    + "region id as the optional 'region' argument of any tool to target that region; "
+                    + "omit it to target the current region. Read-only.",
+                ReadOnly = true,
+                Destructive = false,
+                UseStructuredContent = true,
+            });
+
     private static string BuildInstructions(LatticeApiMcpCapabilities capabilities)
     {
         var builder = new StringBuilder();
@@ -315,7 +335,10 @@ internal sealed class LatticeApiMcpSessionConfigurator
             builder.Append(". ");
         }
 
-        builder.Append("Call lattice_capabilities for the machine-readable capability report.");
+        builder.Append("Call lattice_capabilities for the machine-readable capability report. ");
+        builder.Append(
+            "Call lattice_list_regions to discover which regions you can target; pass a region id as "
+            + "the optional 'region' argument of any tool to route it there (omit it for the current region).");
         return builder.ToString();
     }
 }

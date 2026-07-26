@@ -8,8 +8,16 @@ The Orleans.Lattice API surface is built in layers. Each **facade** package (`Or
 
 `Orleans.Lattice.Api.Abstractions` is the seam between the facades and their consumers. It carries only the contract:
 
-- **The service interfaces** - `ILatticeStateQuery`, `ILatticeStateObserver`, and `ILatticeStateMetricsObserver` (state); `ILatticeDataApi` (data); `ILatticeAuthAdmin` (auth); `ILatticeBackupControl` (backup); and `ILatticeSchemaControl` (schema).
+- **The service interfaces** - `ILatticeStateQuery`, `ILatticeStateObserver`, and `ILatticeStateMetricsObserver` (state); `ILatticeDataApi` (data); `ILatticeAuthAdmin` (auth); `ILatticeBackupControl` (backup); `ILatticeSchemaControl` (schema); and `ILatticeRegionCatalog` (region discovery).
 - **Their request / response models** - the results, pages, records, and requests those interfaces exchange, each with its stable Orleans serialization alias.
+
+### Region contract
+
+The `Orleans.Lattice.Api.Region` namespace carries the transport-agnostic region-discovery contract, so any consumer - the MCP `lattice_list_regions` tool today, a future Explorer UI or gRPC binding - reads the same region model rather than a surface-specific type:
+
+- `ILatticeRegionCatalog` - `ListRegionsAsync` lists the regions a server can route to, current region first.
+- `LatticeRegionDescriptor` - one region's id, cluster id, whether it is the current region, and its per-group reachability.
+- `LatticeRegionGroupReachability` - whether a facade group is reachable in a region and the endpoint it is served at.
 
 The package has no implementation, no registration extension, and no background work. Facade packages reference it and implement the interfaces; binding and MCP packages reference it and consume them.
 
