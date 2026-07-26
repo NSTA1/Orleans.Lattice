@@ -212,4 +212,22 @@ public readonly record struct LatticeSnapshotCoordinate
     /// </para>
     /// </summary>
     [Id(5)] public Guid SnapshotBaselineToken { get; init; }
+
+    /// <summary>
+    /// The resolved physical tree id the snapshot fan-out captured against,
+    /// recorded so the per-shard <see cref="Orleans.Lattice.BPlusTree.State.SnapshotShardBaseline"/>
+    /// rows are keyed by the same tree id on both the capture/seed path (the
+    /// physical shard-root grain) and the cursor's open/read path. Normally
+    /// identical to the logical tree id, but after a
+    /// <c>ShadowCutover</c> backup restore the logical tree aliases to a fresh
+    /// physical tree (<c>{tree}-bkprestore-restore-shadow-N</c>) and the two
+    /// diverge; pinning the physical id here keeps both paths addressing the
+    /// same transient snapshot leaf and durable baseline row.
+    /// <para>
+    /// <see langword="null"/> on coordinates persisted before this slot was
+    /// introduced; the cursor then falls back to the logical tree id, which is
+    /// correct for any non-restored tree (physical id equals logical id).
+    /// </para>
+    /// </summary>
+    [Id(6)] public string? PhysicalTreeId { get; init; }
 }
