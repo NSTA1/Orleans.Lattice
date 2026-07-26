@@ -213,6 +213,27 @@ inert under Entra (the real OIDC sign-in provider is used instead), so it can ne
 weaken a real estate. The username **must match** the silo's bootstrap admin (and
 the MCP head's `Mcp__DevSubjectId`).
 
+### The Access tab is display-only here
+
+The Explorer's **Access** area (membership and access-control administration) opens
+and renders, but managing grants or policies through it has **no practical effect
+in this harness**, because the cluster is not actually enforcing authorization:
+
+- `Auth__DefaultEffect=Allow` makes the model **allow-by-default**, so a call is
+  permitted whether or not any grant covers it. (A real estate runs `Deny`, where
+  grants are load-bearing.)
+- `StateApi__RequireAuthorization` / `Mcp__RequireAuthorization` are `false`, so the
+  coarse transport gates are open (`AllowAll...Authorizer`) and never consult a
+  policy.
+- With Entra off there is **no real identity population** to administer - the only
+  subject is the single synthetic bootstrap admin (`local-dev-admin`), which already
+  holds a cluster-wide grant.
+
+So the area is useful for **seeing the UI and the seeded admin grant**, not for
+demonstrating enforcement. To exercise real authorization (deny-by-default, authored
+grants that actually gate reads and writes, per-user visibility), run against a
+deployed, Entra-enabled estate - see [`../hosts/README.md`](../hosts/README.md).
+
 The single "secret", the per-cluster replication key, is a **dev placeholder**
 with a baked-in default (`LATTICE_REPLICATION_SECRET`), overridable via `.env`.
 No real secret is ever baked into an image, this compose file, or source. The
