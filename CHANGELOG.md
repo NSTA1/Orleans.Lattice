@@ -22,6 +22,14 @@ Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.
 
 Published releases, newest first. Each section is keyed by its publish date; within a date, packages advance on their own patch digits per [`docs/RELEASING.md`](docs/RELEASING.md).
 
+## [2026-07-26]
+
+Per-package patch activity for 2026-07-26. **`Orleans.Lattice.Api.Mcp` advances to 8.0.7** (`lattice.api.mcp-v8.0.7`); every other package in the family remains at its current version.
+
+### Fixed
+
+- **Orleans.Lattice.Api.Mcp: a remote MCP head now advertises the head-local telemetry group in `lattice_list_regions` for the current region, so it agrees with `lattice_capabilities` (`Orleans.Lattice.Api.Mcp` 8.0.7).** When an out-of-silo head wired the telemetry tools (`AddTelemetryTools`), `lattice_capabilities` reported telemetry as available (it derives availability from the registered tool group), but `lattice_list_regions` reported it unavailable for the current region, so the two discovery surfaces disagreed. The remote region topology mapped only the facade groups that carry a per-region gRPC endpoint (state, data, backup, auth, replication) and telemetry is a head-local PromQL proxy with no such endpoint, so it was structurally omitted. The remote router is now built by a factory that derives current-region telemetry availability from the registered telemetry tool group - the same capability signal `lattice_capabilities` and the in-silo router already use - and advertises it with a null endpoint. Peer regions never advertise telemetry (a peer head's telemetry, if any, is that head's own local concern), and the telemetry tools remain non-region-routed, so this is a discovery-consistency fix with no change to call routing. ([#1387](https://github.com/NSTA1/Orleans.Lattice/pull/1387))
+
 ## [2026-07-25]
 
 Per-package patch activity for 2026-07-25. **`Orleans.Lattice.Api.Mcp` advances to 8.0.5** (`lattice.api.mcp-v8.0.5`) and **`Orleans.Lattice` advances to 8.0.4** (`lattice-v8.0.4`); every other package in the family remains at its current version.

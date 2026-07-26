@@ -8,7 +8,8 @@ learning aid, not a secure deployment template.
 
 | Service | Image / build | Purpose | Host URL |
 |---|---|---|---|
-| `azurite` | `mcr.microsoft.com/azure-storage/azurite` | Azure Storage emulator: Table (clustering, grain state, reminders, WAL) + Blob (backup sink) | Table `:10002`, Blob `:10000` |
+| `azurite` | `mcr.microsoft.com/azure-storage/azurite` | Azure Storage emulator: Table (clustering, grain state, reminders, WAL) | Table `:10002`, Blob `:10000` |
+| `azurite-backup-sink` | `mcr.microsoft.com/azure-storage/azurite` | Dedicated Azure Storage emulator (own mounted volume) for the Blob backup sink, isolated from the primary cluster storage | Blob `:11000` |
 | `silo` | builds `hosts/Silo/Dockerfile` | The always-on Orleans + Lattice silo cluster | health/metrics `http://localhost:18080`, gRPC `:18081` |
 | `mcp` | builds `hosts/Mcp/Dockerfile` | Stateless remote MCP head (gRPC client to the silo) | `http://localhost:8090` |
 | `explorer` | builds `hosts/Explorer/Dockerfile` | Standalone Explorer web console (gRPC-web client to the silo) | `http://localhost:8080` |
@@ -40,8 +41,8 @@ provisions the Prometheus data source and the dashboards shipped by
 - **Docker Desktop** (or a Docker Engine with the Compose v2 plugin) running. No
   .NET SDK, Azure subscription, or Azure CLI is needed - the heads build inside
   containers and all storage is emulated by Azurite.
-- Free local ports: `8080`, `8090`, `18080`, `18081`, `10000-10002`, `9090`,
-  `3000`. Stop anything already bound to them (or edit the `ports:` mappings).
+- Free local ports: `8080`, `8090`, `18080`, `18081`, `10000-10002`, `11000`,
+  `9090`, `3000`. Stop anything already bound to them (or edit the `ports:` mappings).
 
 ## Setup and run (step by step)
 
@@ -133,10 +134,11 @@ watch the Grafana dashboards react.
 
 ## Teardown
 
-Azurite persists its Table + Blob data (the durable WAL, grain state, clustering,
-reminders, and the Blob backup sink) to a named Docker volume (`azurite-data`), so
-the cluster's state **survives a restart and recreate**. Choose a teardown based on
-whether you want to keep that data:
+Azurite persists its Table + Blob data to named Docker volumes, so the cluster's
+state **survives a restart and recreate**. The primary emulator (`azurite-data`)
+holds the durable WAL, grain state, clustering, and reminders; the dedicated
+backup sink (`azurite-backup-data`) holds the Blob backups. Choose a teardown
+based on whether you want to keep that data:
 
 - **Stop, keep data** - stop and remove the containers but keep the volume, so the
   next `docker compose up` resumes with the same trees and state:
@@ -145,8 +147,8 @@ whether you want to keep that data:
   docker compose down
   ```
 
-- **Stop and wipe data** - also drop the `azurite-data` volume for a clean slate
-  (the next start comes up with an empty cluster):
+- **Stop and wipe data** - also drop the `azurite-data` and `azurite-backup-data`
+  volumes for a clean slate (the next start comes up with an empty cluster):
 
   ```bash
   docker compose down -v
