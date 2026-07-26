@@ -32,6 +32,11 @@ From one parameter set, across N regions:
 5. **Symmetric replication** - reciprocal peer enrollment, the estate-wide wire
    merge mode, and the per-region Key Vault replication-key secret URI, applied to
    every region.
+6. **MCP cross-region targeting** - each region's MCP head is given its own region
+   id/cluster id plus a route to every peer region's silo (the same per-region
+   silo FQDNs replication uses), so one Front Door MCP endpoint can serve
+   `lattice_list_regions` and per-call `region`-targeted tool calls across the
+   whole estate. Threaded on pass 2 alongside the replication peers.
 
 ## Two-pass deployment
 
@@ -69,6 +74,28 @@ all-at-once convenience template" pattern.
 - The replication key is byte-identical across regions (one Key Vault secret per
   region, same material). It is a `SecureString` in and an `@secure()` Bicep
   parameter out - never written to disk, never logged, never an output.
+
+## MCP cross-region targeting
+
+The MCP head fronts its co-located silo by default, but the estate is deployed with
+one global Front Door in front of every region, so the script also wires each head
+to reach its peers directly:
+
+- Each head advertises its own region (`Mcp:RegionId` = the region code,
+  `Mcp:ClusterId` = `<baseName>-<regionCode>`), surfaced by `lattice_list_regions`.
+- The peer set is exactly the replication peer set: every other region, dialed at
+  its DIRECT region-pinned silo gRPC FQDN (`https://<siloStateApiFqdn>`, never the
+  anycast Front Door hostname). That single endpoint serves every facade group, so
+  a caller can pass an optional `region` on any tool call to pin it to a region.
+- `Mcp:VerifyRegionIdentity` is enabled whenever peers exist: before routing to a
+  peer the head probes its state facade and compares the reported cluster id to the
+  advertised one, rejecting fail-closed a region whose endpoint does not actually
+  reach the expected cluster. The peers use direct FQDNs, so the assertion passes.
+- The head stamps the shared `X-Azure-FDID` origin-lock header on every cross-region
+  call, exactly as it does for its co-located silo, so the peer silo accepts it.
+
+Threaded on pass 2 (the peer FQDNs are only known after pass 1), reusing the same
+`perRegion[].siloStateApiFqdn` values the replication peer list is built from.
 
 ## Entra design (federated identity, no secrets)
 

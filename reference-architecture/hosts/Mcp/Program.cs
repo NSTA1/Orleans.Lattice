@@ -54,6 +54,24 @@ var dataEndpoint = config["Mcp:DataEndpoint"];
 var backupEndpoint = config["Mcp:BackupEndpoint"];
 var replicationEndpoint = config["Mcp:ReplicationEndpoint"];
 
+// Multi-region targeting. The top-level endpoints above define the DEFAULT
+// (current) region a tool call targets when no optional `region` selector is
+// supplied; these name the current region for lattice_list_regions. Mcp:Regions
+// (below) enumerates the peer regions a caller may additionally target. All three
+// are unset in a single-region deployment, leaving the head unchanged.
+var regionId = config["Mcp:RegionId"];
+var clusterId = config["Mcp:ClusterId"];
+
+// Assert a peer region actually reaches its advertised cluster before routing to
+// it (probe its state facade once, compare the reported cluster id). This is the
+// real guarantee behind a global load balancer: a peer accidentally pointed at an
+// anycast/Front Door endpoint that latency-routes to the nearest region fails the
+// assertion and is omitted / rejected fail-closed rather than silently answered by
+// the wrong cluster. On by default here because the reference estate fronts every
+// region with one global Front Door; peers are always dialed at their DIRECT
+// region-pinned silo FQDN, so the assertion passes.
+var verifyRegionIdentity = config.GetValue("Mcp:VerifyRegionIdentity", false);
+
 var entraEnabled = config.GetValue("Entra:Enabled", false);
 var requireAuthorization = config.GetValue("Mcp:RequireAuthorization", entraEnabled);
 var enableAuthAdministration = config.GetValue("Mcp:EnableAuthAdministration", false);
@@ -135,8 +153,57 @@ CallInvoker? OriginLockInvoker(string? endpoint)
     return invoker;
 }
 
+// Build the peer (additional) regions a caller may target via the optional
+// per-call `region` selector, from Mcp:Regions[]. Each peer facade group is dialed
+// at the peer's DIRECT region-pinned silo gRPC FQDN (NOT the anycast Front Door
+// endpoint - that would defeat region targeting and, with VerifyRegionIdentity on,
+// be rejected) and wrapped with the SAME origin-lock invoker as the current region
+// (the estate shares one Front Door id, and the peer silo enforces the same
+// X-Azure-FDID lock). The peer's single silo endpoint serves every facade group,
+// mirroring the current-region wiring above. The forwarded caller credential
+// authorizes the call independently at the peer, fail-closed.
+LatticeApiMcpRemoteEndpoint? RegionEndpoint(string? endpoint)
+    => string.IsNullOrWhiteSpace(endpoint)
+        ? null
+        : new LatticeApiMcpRemoteEndpoint { Endpoint = endpoint, CallInvoker = OriginLockInvoker(endpoint) };
+
+var peerRegions = new List<LatticeApiMcpRemoteRegionOptions>();
+foreach (var regionSection in config.GetSection("Mcp:Regions").GetChildren())
+{
+    var peerRegionId = regionSection["RegionId"];
+    if (string.IsNullOrWhiteSpace(peerRegionId))
+    {
+        continue;
+    }
+
+    var peerState = regionSection["StateEndpoint"];
+    var peerAuth = regionSection["AuthEndpoint"] ?? peerState;
+    peerRegions.Add(new LatticeApiMcpRemoteRegionOptions
+    {
+        RegionId = peerRegionId,
+        ClusterId = regionSection["ClusterId"],
+        State = RegionEndpoint(peerState),
+        Auth = RegionEndpoint(peerAuth),
+        Data = RegionEndpoint(regionSection["DataEndpoint"]),
+        Backup = RegionEndpoint(regionSection["BackupEndpoint"]),
+        Replication = RegionEndpoint(regionSection["ReplicationEndpoint"]),
+    });
+}
+
 builder.Services.AddLatticeMcpRemote(options =>
 {
+    if (!string.IsNullOrWhiteSpace(regionId))
+    {
+        options.RegionId = regionId;
+    }
+
+    options.ClusterId = clusterId;
+    options.VerifyRegionIdentity = verifyRegionIdentity;
+    foreach (var peer in peerRegions)
+    {
+        options.Regions.Add(peer);
+    }
+
     options.State = new LatticeApiMcpRemoteEndpoint { Endpoint = stateEndpoint, CallInvoker = OriginLockInvoker(stateEndpoint) };
     options.Auth = new LatticeApiMcpRemoteEndpoint { Endpoint = authEndpoint, CallInvoker = OriginLockInvoker(authEndpoint) };
     if (!string.IsNullOrWhiteSpace(dataEndpoint))

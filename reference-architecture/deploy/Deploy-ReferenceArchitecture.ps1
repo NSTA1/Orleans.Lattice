@@ -757,6 +757,24 @@ try {
         }
         $replicationPeers = ($peerEntries -join ',')
 
+        # MCP cross-region targeting reuses exactly the replication peer set: each
+        # OTHER region, dialed at its DIRECT region-pinned silo gRPC FQDN (the same
+        # siloStateApiFqdn, never the anycast Front Door endpoint). That single
+        # endpoint serves every facade group, as the local silo does for the current
+        # region. A caller targets a peer by its region code. Region-identity
+        # verification is enabled whenever peers exist: the peers are dialed at their
+        # direct FQDN behind the shared Front Door origin lock, so the assertion
+        # passes, while a peer misconfigured to an anycast endpoint is rejected.
+        $mcpPeerRegions = @()
+        foreach ($other in $perRegion) {
+            if ($other.regionCode -eq $code) { continue }
+            $mcpPeerRegions += @{
+                regionId      = $other.regionCode
+                clusterId     = "$BaseName-$($other.regionCode)"
+                stateEndpoint = "https://$($other.siloStateApiFqdn)"
+            }
+        }
+
         $obs = Get-ByRegionCode -Items $perRegionObservability -RegionCode $code
         $prometheus = if ($obs) { $obs.prometheusQueryEndpoint } else { '' }
         # The MCP cluster-telemetry tools query the same managed Prometheus
@@ -823,6 +841,14 @@ try {
             replicationPeers           = $replicationPeers
             replicationTrees           = $ReplicationTrees
             replicationKeySecretUri    = $replicationKeySecretUri
+            # MCP cross-region targeting: this region's own id/cluster for
+            # lattice_list_regions, the peer regions a caller may target on any tool
+            # call, and fail-closed region-identity verification (on whenever peers
+            # exist, since every region is fronted by one global Front Door).
+            mcpRegionId                = $code
+            mcpClusterId               = $clusterId
+            mcpVerifyRegionIdentity    = ($mcpPeerRegions.Count -gt 0)
+            mcpPeerRegions             = @($mcpPeerRegions)
             # Entra.
             entraEnabled               = [bool]$EntraEnabled
             entraTenantId              = $EntraTenantId

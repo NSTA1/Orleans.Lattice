@@ -383,12 +383,56 @@ Notes and gotchas:
 - **Token lifetime.** An Entra access token expires in about an hour. Re-mint and
   refresh the `Authorization` header before it lapses (automation should acquire a
   fresh token per session).
-- **Region round-robin.** Front Door load-balances each request across the regional
-  origins with no affinity. The config-plane grants and telemetry are symmetric
-  across regions, but a data-plane tree written in one region is not visible to a
-  read routed to the other until replication converges it. For a deterministic
-  single-region check, call that region's MCP container-app FQDN directly and add
-  the `X-Azure-FDID` header.
+- **Region round-robin and explicit targeting.** Front Door load-balances each
+  request across the regional origins with no affinity. The config-plane grants and
+  telemetry are symmetric across regions (the auth tree is replicated), but a
+  data-plane tree written in one region is not visible to a read routed to another
+  until replication converges it. The MCP head is wired for **cross-region
+  targeting**, so you do not need to bypass Front Door for a deterministic
+  single-region check: call `lattice_list_regions` to enumerate the estate's
+  regions (each region's id, cluster id, and per-facade reachability), then pass an
+  optional `region` argument on any tool call to pin it to that region. The served
+  region is echoed back in the result's `region` metadata. A call with no `region`
+  targets the head's own (current) region. See
+  [Target a specific region](#target-a-specific-region) below.
+
+#### Target a specific region
+
+Every region's MCP head fronts its co-located silo **and** holds a direct,
+region-pinned route to every peer region's silo (the same FQDN cross-region
+replication uses - never the anycast Front Door hostname). This lets one Front Door
+MCP endpoint serve the whole estate while still letting a caller address a single
+region deterministically:
+
+- `lattice_list_regions` returns every routable region with its `regionId`,
+  `clusterId`, `isCurrent` flag, and per-facade-group reachability. A region that
+  cannot be reached (or, with identity verification on, whose endpoint does not
+  actually reach its advertised cluster) is omitted, so the list is fail-closed.
+- Any tool call accepts an optional `region` argument set to a `regionId` from that
+  list. The call is routed to that region's silo, re-authorized there against the
+  same forwarded token (fail-closed - a region is never an authorization bypass),
+  and the result's `region` metadata reports which region served it.
+
+Because the estate is fronted by one global Front Door, the head enables
+**region-identity verification**: before a peer is routed to, its state facade is
+probed once and its reported cluster id compared to the advertised one, so a region
+accidentally pointed at an anycast endpoint that latency-routes to the wrong cluster
+is rejected rather than silently answered by the wrong region. A `region` value that
+is unknown, unreachable, or fails verification returns a typed MCP error, never a
+call served by the wrong cluster.
+
+For example, write a key through one region and read it back from another to confirm
+convergence, both through the same Front Door endpoint:
+
+```powershell
+# List regions, then target each explicitly by its regionId on the tool call.
+$list = '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"lattice_list_regions","arguments":{}}}'
+(Invoke-WebRequest -Method Post -Uri $url -Headers $h -Body $list -UseBasicParsing).Content
+
+# Read a key pinned to a specific region (regionId from the list above).
+$get = '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"lattice_data_get","arguments":{"treeId":"orders","key":"o-1","region":"euw"}}}'
+(Invoke-WebRequest -Method Post -Uri $url -Headers $h -Body $get -UseBasicParsing).Content
+```
 
 ## Optional hardening and upgrade path
 

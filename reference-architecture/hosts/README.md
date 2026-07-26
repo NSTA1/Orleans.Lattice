@@ -75,6 +75,9 @@ underscore separator, case-insensitive).
 | `Mcp:Telemetry:BackendAddress` | - | PromQL backend for the telemetry tool module (only wired when set). |
 | `Mcp:Telemetry:AuthMode` | `None` | Backend auth mode. `None` for an unauthenticated backend (local compose Prometheus). `DynamicBearer` makes the head mint a rotating managed-identity Entra token per query for an Azure Monitor managed-Prometheus endpoint (no static secret); the workload identity needs Monitoring Data Reader on the workspace. |
 | `Mcp:Telemetry:Scope` | `https://prometheus.monitor.azure.com/.default` | Access-token scope for `DynamicBearer` mode; override only for a non-default Azure Monitor audience. |
+| `Mcp:RegionId` / `Mcp:ClusterId` | `current` / - | This head's own (default) region id and cluster id, surfaced by `lattice_list_regions` and targeted when a tool call supplies no `region`. Compute sets them to the region code and Orleans cluster id. |
+| `Mcp:VerifyRegionIdentity` | `false` | Probe each peer region's state facade once and reject a peer whose endpoint does not reach its advertised cluster (an anycast/Front Door misconfiguration). Compute sets it `true` whenever peer regions are wired. |
+| `Mcp:Regions:{n}:RegionId` / `:ClusterId` / `:StateEndpoint` / `:AuthEndpoint` / `:DataEndpoint` / `:BackupEndpoint` / `:ReplicationEndpoint` | - | The peer regions a caller may target via the optional per-call `region` selector. Each peer is dialed at its DIRECT region-pinned silo gRPC FQDN (the same endpoint replication uses), which serves every facade group. Compute populates these on pass 2 from the sibling regions' silo FQDNs. |
 | `Entra:Enabled` / `Entra:TenantId` / `Entra:Authority` / `Entra:Audience` / `Entra:ClientId` | - | Entra JWT validation on the front door; the token is forwarded to and re-validated by the silo. |
 
 ### Explorer
