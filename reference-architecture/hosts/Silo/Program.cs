@@ -366,6 +366,15 @@ builder.Host.UseOrleans(silo =>
             });
         }
     }
+    else if (config.GetValue("Auth:DevAuthenticateForwardedSubject", false))
+    {
+        // Local dev bypass (Entra off): resolve a forwarded bearer token to its
+        // named subject when that id is a configured bootstrap administrator, so
+        // the MCP head's permission introspection is served as the administrator
+        // and discovery advertises the full tool set. Registered only in the
+        // no-Entra harness; see DevBypassCredentialAuthenticator.
+        silo.Services.AddSingleton<ILatticeCredentialAuthenticator, DevBypassCredentialAuthenticator>();
+    }
 });
 
 // The gRPC bindings over the facades. RequireAuthorization is off for the local
@@ -450,15 +459,18 @@ if (requireApiAuthorization && entraEnabled)
     // Entra-resolved subject unless it is a bootstrap administrator, so only the
     // designated security admin(s) can read or mutate the access model.
     builder.Services.AddSingleton<ILatticeAuthApiAuthorizer, AllowAllAuthApiAuthorizer>();
-
-    // Seed each bootstrap administrator with a cluster-wide full-access grant at
-    // startup so the security administrator can discover and use every MCP tool
-    // group immediately after deployment. The bootstrap bypass already gives them
-    // full call-time authority, but MCP discovery advertises tools only against
-    // authored rules - this closes that gap declaratively. Self-guards when no
-    // administrator is configured; the write is idempotent and replicated.
-    builder.Services.AddHostedService<AdministratorAccessSeeder>();
 }
+
+// Seed each configured bootstrap administrator with a cluster-wide full-access
+// grant at startup so the security administrator can discover and use every MCP
+// tool group immediately after deployment. The bootstrap bypass already gives
+// them full call-time authority, but MCP discovery advertises tools only against
+// authored rules - this closes that gap declaratively. Registered in every mode
+// (including the open local compose harness, where the synthetic dev-bypass
+// subject is a configured bootstrap administrator) so the head surfaces its tools;
+// self-guards when no administrator is configured. The write is idempotent and
+// replicated.
+builder.Services.AddHostedService<AdministratorAccessSeeder>();
 
 // The write-capable data-API gRPC binding, co-hosted on the same silo gRPC port.
 // The coarse transport gate is opened (AllowAllDataApiAuthorizer) because the

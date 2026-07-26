@@ -24,13 +24,18 @@
 #   * The State/Auth gRPC surface does NOT require authorization
 #     (StateApi__RequireAuthorization=false, Mcp__RequireAuthorization=false).
 #   * The authorization core runs allow-by-default (Auth__DefaultEffect=Allow).
+#   * The MCP head authenticates every request as a fixed synthetic subject
+#     (Mcp__DevAuthenticateAll=true) so its fail-closed tool discovery has a
+#     credential to scope against and surfaces the full tool set.
 #   * Cross-region replication endpoints permit plaintext h2c
 #     (Replication__AllowPlaintext=true).
-# The only "secret", the per-cluster replication key, is a documented dev
-# placeholder injected from .env (copy .env.example to .env). No real secret is
-# ever baked into an image, this file, or source. In Azure these toggles flip to
-# their secure defaults (Deny, RequireAuthorization=true, Entra enabled, managed
-# identity for storage); see reference-architecture/hosts/README.md.
+# Every value has a baked-in local dev default, so `docker compose up --build`
+# runs with no .env file. The only "secret", the per-cluster replication key, is
+# a documented dev placeholder; copy .env.example to .env only to override a
+# default. No real secret is ever baked into an image, this file, or source. In
+# Azure these toggles flip to their secure defaults (Deny, RequireAuthorization=
+# true, Entra enabled, managed identity for storage); see
+# reference-architecture/hosts/README.md.
 # ---------------------------------------------------------------------------
 
 name: lattice-reference-local
@@ -38,7 +43,15 @@ name: lattice-reference-local
 services:
   azurite:
     image: mcr.microsoft.com/azure-storage/azurite:latest
-    command: azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck
+    # Persist to /data (the image's declared volume mount point) so the emulator's
+    # Table + Blob data - the Orleans clustering table, the durable Table WAL, the
+    # grain state store, the reminders table, and the Blob backup sink - survives a
+    # container restart and recreate. The `-l /data` flag is REQUIRED: this command
+    # overrides the image default (which sets it), and without it Azurite writes to
+    # its ephemeral working directory instead of the mounted volume.
+    command: azurite -l /data --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck
+    volumes:
+      - azurite-data:/data
     ports:
       - "10000:10000"
       - "10001:10001"
@@ -58,8 +71,10 @@ services:
       azurite:
         condition: service_healthy
     environment:
-      # Storage: point every Orleans + Lattice Azure provider at Azurite.
-      Storage__ConnectionString: "${STORAGE_CONNECTION_STRING}"
+      # Storage: point every Orleans + Lattice Azure provider at Azurite. The
+      # default is the fixed, publicly-documented Azurite emulator connection
+      # string (not a secret); override via .env / STORAGE_CONNECTION_STRING.
+      Storage__ConnectionString: "${STORAGE_CONNECTION_STRING:-DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;QueueEndpoint=http://azurite:10001/devstoreaccount1;TableEndpoint=http://azurite:10002/devstoreaccount1;}"
       # Cluster identity.
       Cluster__Id: "lattice-local"
       Cluster__ServiceId: "lattice-local"
@@ -67,6 +82,18 @@ services:
       Auth__DefaultEffect: "Allow"
       StateApi__RequireAuthorization: "false"
       Entra__Enabled: "false"
+      # Dev bypass: seed a cluster-wide full-access grant for the synthetic subject
+      # the MCP head authenticates every request as (Mcp__DevSubjectId below). MCP
+      # tool DISCOVERY advertises a tool group only against an AUTHORED Allow rule,
+      # so without this the open local head would surface zero tools. Must match the
+      # MCP head's Mcp__DevSubjectId exactly.
+      Auth__BootstrapAdministrators: "local-dev-admin"
+      # Dev bypass: with Entra off the silo has no identity provider, so a forwarded
+      # credential reads as anonymous and the control-plane-isolated authorization
+      # tree denies the head's permission introspection. Trust a forwarded bearer
+      # token as its named subject when that id is a configured bootstrap admin, so
+      # the head is served as the administrator and discovery lights up every tool.
+      Auth__DevAuthenticateForwardedSubject: "true"
       # Single-region: no replication peers; plaintext allowed for h2c.
       Replication__AllowPlaintext: "true"
       # Runtime per-tree replication config (8.0.6): enrol the sys-replication-config
@@ -79,7 +106,7 @@ services:
       # enabled tree has no peer to ship to); the AUTHORIZED replication path (an
       # explicit LatticeOperation.Replication grant) is a deployed-estate concern.
       Replication__EnableRuntimeConfig: "true"
-      LATTICE_REPLICATION_SECRET: "${LATTICE_REPLICATION_SECRET}"
+      LATTICE_REPLICATION_SECRET: "${LATTICE_REPLICATION_SECRET:-local-dev-only-not-a-real-secret}"
       # This lone silo owns the backup schedule (primary).
       Backup__Primary: "true"
       Scaling__MinReplicas: "1"
@@ -88,6 +115,15 @@ services:
       - "18080:8080"
       # Silo gRPC (state / auth / replication) - exposed for host-side tooling.
       - "18081:8081"
+      # Explorer web console. The explorer container shares this silo's network
+      # namespace (network_mode: service:silo) so it can dial the state API over a
+      # genuine loopback address (http://localhost:8081) - the explorer's transport
+      # policy only permits the anonymous plaintext dev path to a LOOPBACK host, and
+      # a cross-container service name (silo:8081) is not loopback. Because the
+      # explorer then has no network namespace of its own, its published port is
+      # declared here on the namespace owner. The explorer's Kestrel binds 8082
+      # (8080/8081 are already taken by this silo in the shared namespace).
+      - "8080:8082"
 
   mcp:
     build:
@@ -116,6 +152,14 @@ services:
       # Dev bypass: open MCP endpoint, no Entra.
       Entra__Enabled: "false"
       Mcp__RequireAuthorization: "false"
+      # Dev bypass: MCP tool discovery is fail-closed on the caller's resolved
+      # credential, so an open head with no identity plane would advertise ZERO
+      # tools. Authenticate every request as a single fixed synthetic subject that
+      # the silo has seeded as a bootstrap administrator (Auth__BootstrapAdministrators
+      # above), lighting up the full tool set. Only honoured because Entra is off;
+      # forced inert in any Entra deployment.
+      Mcp__DevAuthenticateAll: "true"
+      Mcp__DevSubjectId: "local-dev-admin"
     ports:
       - "8090:8080"
 
@@ -125,14 +169,36 @@ services:
       dockerfile: hosts/Explorer/Dockerfile
     depends_on:
       - silo
+    # Share the silo's network namespace so the explorer reaches the state API
+    # over loopback (http://localhost:8081). The explorer's transport-security
+    # policy only allows the anonymous-plaintext dev path to a LOOPBACK endpoint;
+    # a cross-container service name (silo:8081) is non-loopback and is rejected
+    # with "insecure loopback-dev mode is only allowed for a loopback endpoint".
+    # Sharing the namespace makes localhost inside this container the silo. The
+    # published UI port (8080 -> 8082) is declared on the silo service above.
+    network_mode: "service:silo"
     environment:
-      # Standalone Explorer head connects to the silo's State/Auth gRPC endpoint.
-      LATTICE_EXPLORER_ENDPOINT: "http://silo:8081"
+      # Bind Kestrel to 8082: 8080 (silo HTTP) and 8081 (silo gRPC) are already
+      # in use in the shared namespace.
+      ASPNETCORE_HTTP_PORTS: "8082"
+      # Loopback state-API endpoint (see network_mode above). Reachable AND
+      # loopback-valid, so the anonymous-plaintext dev path is permitted and the
+      # first-run dialog is pre-seeded ready to connect.
+      LATTICE_EXPLORER_ENDPOINT: "http://localhost:8081"
       # Dev bypass: plaintext h2c to the silo, no Entra sign-in.
       LATTICE_EXPLORER_INSECURE_DEV: "true"
       Entra__Enabled: "false"
-    ports:
-      - "8080:8080"
+      # Dev bypass: auto-sign-in the console as the bootstrap administrator. With
+      # Entra off the console would otherwise connect ANONYMOUSLY, which the silo's
+      # state-visibility filter fail-closes (empty tree catalog, denied Access
+      # area). The host's DevBypassExplorerAuthMethod (registered only when Entra is
+      # off) forwards this username to the silo as `Bearer <username>`, which the
+      # silo trusts because it is a configured Auth__BootstrapAdministrators id - so
+      # the console is served as the admin, exactly like the MCP head. Must match
+      # the silo's bootstrap admin (and the MCP head's Mcp__DevSubjectId). The
+      # password is required by the sign-in seed but ignored by the dev bypass.
+      LATTICE_EXPLORER_USERNAME: "local-dev-admin"
+      LATTICE_EXPLORER_PASSWORD: "local-dev-unused"
 
   prometheus:
     image: prom/prometheus:latest
@@ -159,3 +225,9 @@ services:
       - ../../src/lattice.dashboards/Grafana:/var/lib/grafana/dashboards/orleans-lattice:ro
     ports:
       - "3000:3000"
+
+volumes:
+  # Durable local storage for the Azurite emulator (Table WAL + grain state +
+  # clustering + reminders + Blob backup sink). Survives `docker compose restart`
+  # and recreate; drop it with `docker compose down -v` for a clean slate.
+  azurite-data:

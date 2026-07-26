@@ -1,8 +1,11 @@
 using Azure.Identity;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Identity.Abstractions;
 using Orleans.Lattice.Caching.AzureBlob;
+using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Entra.Web;
 using Orleans.Lattice.Explorer.Web;
+using Orleans.Lattice.ReferenceArchitecture.Explorer;
 using Orleans.Lattice.ReferenceArchitecture.Hosting;
 
 // ---------------------------------------------------------------------------
@@ -141,6 +144,21 @@ if (entraEnabled)
             };
         }
     });
+}
+else
+{
+    // Local dev bypass (Entra disabled): the console has no identity provider, so a
+    // stock anonymous state-API connection is fail-closed by the silo's
+    // state-visibility filter - the tree catalog comes back empty and the Access
+    // area is denied. Replace the built-in Basic auth method with one that signs
+    // the console in as the configured bootstrap administrator by forwarding
+    // `Bearer <subject>`, exactly the credential the silo's
+    // DevBypassCredentialAuthenticator trusts (and the MCP head already forwards).
+    // Driven by the LATTICE_EXPLORER_USERNAME sign-in seed so it auto-applies on
+    // first load with no dialog. Registered ONLY when Entra is disabled, so it can
+    // never coexist with, or weaken, a real deployment's Entra sign-in.
+    builder.Services.RemoveAll<IExplorerAuthMethod>();
+    builder.Services.AddSingleton<IExplorerAuthMethod, DevBypassExplorerAuthMethod>();
 }
 
 var app = builder.Build();
