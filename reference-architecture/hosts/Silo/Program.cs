@@ -74,6 +74,12 @@ builder.Logging.SuppressProbeRequestLogs(
 
 var storage = AzureStorageIdentity.FromConfiguration(config);
 
+// The Blob backup sink resolves its own storage identity so durable backups can
+// live in a storage account isolated from the primary cluster storage (in the
+// local harness, the dedicated azurite-backup-sink container). Falls back to the
+// primary storage identity when no backup-specific storage is configured.
+var backupStorage = AzureStorageIdentity.ForBackupSink(config, storage);
+
 var clusterId = config["Cluster:Id"] ?? "lattice";
 var serviceId = config["Cluster:ServiceId"] ?? clusterId;
 var replicationClusterId = config["Replication:ClusterId"] ?? clusterId;
@@ -263,7 +269,7 @@ builder.Host.UseOrleans(silo =>
     // -- Backup sink + primary/standby scheduler --------------------------
     silo.AddLatticeBackup();
     silo.AddLatticeBackupAzureBlob(options =>
-        storage.ConfigureBackupSink(options, config["Backup:ContainerName"] ?? LatticeBackupAzureBlobOptions.DefaultContainerName));
+        backupStorage.ConfigureBackupSink(options, config["Backup:ContainerName"] ?? LatticeBackupAzureBlobOptions.DefaultContainerName));
 
     // The backup control facade over the engine: the read/capture/restore/delete
     // control plane the Explorer's Backups area (and the MCP backup tools) drive.

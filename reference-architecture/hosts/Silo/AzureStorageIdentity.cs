@@ -78,6 +78,33 @@ internal sealed class AzureStorageIdentity
     }
 
     /// <summary>
+    /// Resolves the identity for the Blob backup sink. Prefers a dedicated backup
+    /// connection string (<c>Backup:BlobConnectionString</c>, emulator / dev) or
+    /// service URI (<c>Backup:BlobServiceUri</c>, managed identity) so durable
+    /// backups can live in a storage account isolated from the primary cluster
+    /// storage; falls back to <paramref name="primary"/> when neither is set.
+    /// </summary>
+    public static AzureStorageIdentity ForBackupSink(IConfiguration configuration, AzureStorageIdentity primary)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(primary);
+
+        var connectionString = configuration["Backup:BlobConnectionString"];
+        if (!string.IsNullOrWhiteSpace(connectionString))
+        {
+            return new AzureStorageIdentity(connectionString, null, null, new DefaultAzureCredential());
+        }
+
+        var blobUriRaw = configuration["Backup:BlobServiceUri"];
+        if (!string.IsNullOrWhiteSpace(blobUriRaw))
+        {
+            return new AzureStorageIdentity(null, null, new Uri(blobUriRaw), new DefaultAzureCredential());
+        }
+
+        return primary;
+    }
+
+    /// <summary>
     /// Builds a <see cref="TableServiceClient"/> for the resolved identity: a
     /// connection string in emulator / dev mode, or the table service URI plus
     /// the managed-identity token credential otherwise.

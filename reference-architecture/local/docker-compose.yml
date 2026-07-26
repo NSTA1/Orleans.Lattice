@@ -5,7 +5,11 @@
 #
 #   azurite     - Azure Storage emulator (Table + Blob + Queue) backing the
 #                 Orleans clustering table, the durable Table WAL, the grain
-#                 state store, the reminders table, and the Blob backup sink.
+#                 state store, and the reminders table.
+#   azurite-backup-sink
+#               - a SEPARATE Azure Storage emulator instance, with its own
+#                 mounted volume, dedicated to the Blob backup sink so durable
+#                 backups are isolated from the primary cluster storage.
 #   silo        - the reference Silo head (hosts/Silo), the always-on cluster.
 #   mcp         - the reference MCP head (hosts/Mcp), a stateless gRPC client.
 #   explorer    - the reference Explorer web head (hosts/Explorer), a gRPC-web
@@ -45,10 +49,10 @@ services:
     image: mcr.microsoft.com/azure-storage/azurite:latest
     # Persist to /data (the image's declared volume mount point) so the emulator's
     # Table + Blob data - the Orleans clustering table, the durable Table WAL, the
-    # grain state store, the reminders table, and the Blob backup sink - survives a
-    # container restart and recreate. The `-l /data` flag is REQUIRED: this command
-    # overrides the image default (which sets it), and without it Azurite writes to
-    # its ephemeral working directory instead of the mounted volume.
+    # grain state store, and the reminders table - survives a container restart and
+    # recreate. The `-l /data` flag is REQUIRED: this command overrides the image
+    # default (which sets it), and without it Azurite writes to its ephemeral
+    # working directory instead of the mounted volume.
     command: azurite -l /data --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck
     volumes:
       - azurite-data:/data
@@ -63,6 +67,28 @@ services:
       retries: 20
       start_period: 5s
 
+  azurite-backup-sink:
+    image: mcr.microsoft.com/azure-storage/azurite:latest
+    # A DEDICATED emulator instance for the Blob backup sink, isolated from the
+    # primary cluster storage (azurite above) so durable backups live in their own
+    # account with their own mounted volume - closer to a real deployment, where
+    # backups target a separate storage account. Persists to /data on its own named
+    # volume (azurite-backup-data); `-l /data` is REQUIRED for the same reason as
+    # above. The silo's backup sink is pointed here via Backup__BlobConnectionString.
+    command: azurite -l /data --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck
+    volumes:
+      - azurite-backup-data:/data
+    ports:
+      # Blob only (the backup sink is Blob storage); mapped off the primary
+      # Azurite's host ports to avoid a collision.
+      - "11000:10000"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "10000"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
   silo:
     build:
       context: ..
@@ -70,11 +96,19 @@ services:
     depends_on:
       azurite:
         condition: service_healthy
+      azurite-backup-sink:
+        condition: service_healthy
     environment:
       # Storage: point every Orleans + Lattice Azure provider at Azurite. The
       # default is the fixed, publicly-documented Azurite emulator connection
       # string (not a secret); override via .env / STORAGE_CONNECTION_STRING.
       Storage__ConnectionString: "${STORAGE_CONNECTION_STRING:-DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;QueueEndpoint=http://azurite:10001/devstoreaccount1;TableEndpoint=http://azurite:10002/devstoreaccount1;}"
+      # Backup Blob sink: a DEDICATED Azurite instance (azurite-backup-sink) with
+      # its own mounted volume, isolating durable backups from the primary cluster
+      # storage above. Blob-only connection string pointing at that container; the
+      # default is the fixed Azurite emulator account (not a secret), override via
+      # .env / BACKUP_BLOB_CONNECTION_STRING.
+      Backup__BlobConnectionString: "${BACKUP_BLOB_CONNECTION_STRING:-DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-backup-sink:10000/devstoreaccount1;}"
       # Cluster identity.
       Cluster__Id: "lattice-local"
       Cluster__ServiceId: "lattice-local"
@@ -147,6 +181,13 @@ services:
       # the authorized path is demonstrated on a deployed Entra-enabled estate.
       Mcp__ReplicationEndpoint: "http://silo:8081"
       Mcp__EnableReplicationControl: "true"
+      # The backup control facade rides the same silo gRPC endpoint (the silo maps
+      # the backup control-API gRPC binding). Point the head at it and advertise the
+      # mutating capture/restore/revert/delete tools so the local smoke test can
+      # exercise the lattice_backup_* tool group and the Explorer Backups area. As
+      # with every plane here it is UNAUTHORIZED (no identity plane in this harness).
+      Mcp__BackupEndpoint: "http://silo:8081"
+      Mcp__EnableBackupControl: "true"
       # Cluster telemetry tools proxy the local Prometheus.
       Mcp__Telemetry__BackendAddress: "http://prometheus:9090"
       # Dev bypass: open MCP endpoint, no Entra.
@@ -227,7 +268,11 @@ services:
       - "3000:3000"
 
 volumes:
-  # Durable local storage for the Azurite emulator (Table WAL + grain state +
-  # clustering + reminders + Blob backup sink). Survives `docker compose restart`
-  # and recreate; drop it with `docker compose down -v` for a clean slate.
+  # Durable local storage for the primary Azurite emulator (Table WAL + grain
+  # state + clustering + reminders). Survives `docker compose restart` and
+  # recreate; drop it with `docker compose down -v` for a clean slate.
   azurite-data:
+  # Durable local storage for the dedicated backup-sink Azurite emulator (the
+  # Blob backup sink). Kept separate from azurite-data so backups are isolated
+  # from the primary cluster storage; also dropped by `docker compose down -v`.
+  azurite-backup-data:

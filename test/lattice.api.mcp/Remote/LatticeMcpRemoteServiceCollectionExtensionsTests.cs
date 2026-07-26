@@ -133,6 +133,63 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
     }
 
     [Test]
+    public void Current_region_advertises_telemetry_when_the_flag_is_set()
+    {
+        using var provider = new ServiceCollection()
+            .AddLatticeMcpRemote(o =>
+            {
+                o.State = Endpoint("https://state:5001");
+                o.TelemetryAvailable = true;
+            })
+            .BuildServiceProvider();
+
+        var router = provider.GetRequiredService<ILatticeApiMcpRegionRouter>();
+        var current = router.Snapshot().Single(r => r.IsCurrent);
+        var telemetry = current.Groups.Single(g => g.Group == "telemetry");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(telemetry.Available, Is.True);
+            Assert.That(telemetry.Endpoint, Is.Null, "Telemetry is a head-local proxy with no per-region endpoint.");
+        });
+    }
+
+    [Test]
+    public void Current_region_omits_telemetry_when_the_flag_is_unset()
+    {
+        using var provider = new ServiceCollection()
+            .AddLatticeMcpRemote(o => o.State = Endpoint("https://state:5001"))
+            .BuildServiceProvider();
+
+        var router = provider.GetRequiredService<ILatticeApiMcpRegionRouter>();
+        var current = router.Snapshot().Single(r => r.IsCurrent);
+
+        Assert.That(current.Groups.Single(g => g.Group == "telemetry").Available, Is.False);
+    }
+
+    [Test]
+    public void Peer_region_never_advertises_telemetry()
+    {
+        using var provider = new ServiceCollection()
+            .AddLatticeMcpRemote(o =>
+            {
+                o.State = Endpoint("https://state:5001");
+                o.TelemetryAvailable = true;
+                o.Regions.Add(new LatticeApiMcpRemoteRegionOptions
+                {
+                    RegionId = "peer",
+                    State = Endpoint("https://peer-state:5001"),
+                });
+            })
+            .BuildServiceProvider();
+
+        var router = provider.GetRequiredService<ILatticeApiMcpRegionRouter>();
+        var peer = router.Snapshot().Single(r => !r.IsCurrent);
+
+        Assert.That(peer.Groups.Single(g => g.Group == "telemetry").Available, Is.False);
+    }
+
+    [Test]
     public async Task Capabilities_report_the_configured_per_group_endpoints()
     {
         var endpointSource = new LatticeApiMcpRemoteGroupEndpointSource(RemoteTestSupport.Options(o =>

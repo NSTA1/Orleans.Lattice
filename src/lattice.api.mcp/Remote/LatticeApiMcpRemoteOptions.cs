@@ -114,6 +114,21 @@ public sealed class LatticeApiMcpRemoteOptions
     public LatticeApiMcpRemoteEndpoint? Replication { get; set; }
 
     /// <summary>
+    /// Whether the current region serves cluster telemetry: the head-local
+    /// <c>lattice_telemetry_*</c> tools that proxy a PromQL-compatible backend.
+    /// Telemetry has no per-region gRPC endpoint (unlike <see cref="State"/> /
+    /// <see cref="Data"/> / <see cref="Auth"/> / <see cref="Backup"/> /
+    /// <see cref="Replication"/>) - it is a head-local proxy - so its availability
+    /// in <c>lattice_list_regions</c> for the current region is driven by this flag
+    /// rather than by an endpoint, keeping that report consistent with
+    /// <c>lattice_capabilities</c> (which already derives it from the registered
+    /// telemetry tool group). Set it when the host also calls
+    /// <c>AddTelemetryTools</c>. Defaults to <see langword="false"/>. Peer regions
+    /// never advertise telemetry: the telemetry tools are not region-routed.
+    /// </summary>
+    public bool TelemetryAvailable { get; set; }
+
+    /// <summary>
     /// The request header the resolved caller credential is stamped onto for the
     /// outbound gRPC call. Defaults to <c>authorization</c>, matching the gRPC
     /// bindings' default credential header.

@@ -206,7 +206,8 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
                 ClusterId = options.ClusterId ?? string.Empty,
                 IsCurrent = true,
                 Groups = GroupEndpoints(
-                    options.State, options.Data, options.Backup, options.Auth, options.Replication),
+                    options.State, options.Data, options.Backup, options.Auth, options.Replication,
+                    telemetryAvailable: options.TelemetryAvailable),
             },
         };
 
@@ -218,7 +219,8 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
                 ClusterId = region.ClusterId ?? string.Empty,
                 IsCurrent = false,
                 Groups = GroupEndpoints(
-                    region.State, region.Data, region.Backup, region.Auth, region.Replication),
+                    region.State, region.Data, region.Backup, region.Auth, region.Replication,
+                    telemetryAvailable: false),
             });
         }
 
@@ -230,7 +232,8 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
         LatticeApiMcpRemoteEndpoint? data,
         LatticeApiMcpRemoteEndpoint? backup,
         LatticeApiMcpRemoteEndpoint? auth,
-        LatticeApiMcpRemoteEndpoint? replication)
+        LatticeApiMcpRemoteEndpoint? replication,
+        bool telemetryAvailable)
     {
         var groups = new Dictionary<LatticeApiMcpGroup, string?>();
         if (state is not null)
@@ -256,6 +259,14 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
         if (replication is not null)
         {
             groups[LatticeApiMcpGroup.Replication] = replication.Endpoint;
+        }
+
+        // Telemetry is a head-local PromQL proxy with no per-region gRPC endpoint,
+        // so it carries a null endpoint and is advertised for the current region
+        // only when the host has wired the telemetry tools.
+        if (telemetryAvailable)
+        {
+            groups[LatticeApiMcpGroup.Telemetry] = null;
         }
 
         return groups;
