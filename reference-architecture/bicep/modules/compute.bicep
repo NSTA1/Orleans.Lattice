@@ -233,6 +233,18 @@ param mcpTelemetryBackendAddress string = ''
 ])
 param mcpTelemetryAuthMode string = ''
 
+@description('DEPLOYER SEAM (pass 2): the stable region id this MCP head advertises as its DEFAULT (current) region in lattice_list_regions - the region a tool call targets when no optional per-call `region` selector is supplied. Empty leaves the head on the package default ("current"), unchanged for a single-region estate. Bound to Mcp:RegionId.')
+param mcpRegionId string = ''
+
+@description('DEPLOYER SEAM (pass 2): the Orleans cluster id of this region, surfaced in lattice_list_regions and used to assert peer identity. Empty resolves it from the state facade at read time. Bound to Mcp:ClusterId.')
+param mcpClusterId string = ''
+
+@description('DEPLOYER SEAM (pass 2): assert each peer region actually reaches its advertised cluster before routing to it (probe its state facade once, compare cluster id). Rejects fail-closed a peer accidentally pointed at an anycast/Front Door endpoint. Defaults false (single-region); the deployer sets it true when peers are wired behind a global Front Door. Bound to Mcp:VerifyRegionIdentity.')
+param mcpVerifyRegionIdentity bool = false
+
+@description('DEPLOYER SEAM (pass 2): the peer regions a caller may additionally target via the optional per-call `region` selector, each { regionId, clusterId, stateEndpoint } where stateEndpoint is the peer region\'s DIRECT region-pinned silo gRPC FQDN (never the anycast Front Door endpoint). That single endpoint serves every facade group, exactly as the local silo does for the current region. Empty (single-region estate, or pass 1 before peer FQDNs are known) leaves the head single-region and unchanged. Bound to Mcp:Regions[].')
+param mcpPeerRegions array = []
+
 
 // --- Container sizing ---
 
@@ -274,6 +286,36 @@ var explorerAppName = '${namePrefix}-explorer'
 var siloImage = '${acrLoginServer}/${siloImageRepository}:${imageTag}'
 var mcpImage = '${acrLoginServer}/${mcpImageRepository}:${imageTag}'
 var explorerImage = '${acrLoginServer}/${explorerImageRepository}:${imageTag}'
+
+// --- Multi-region MCP targeting env (appended to the MCP head's env below) ---
+// The current region is named for lattice_list_regions; each peer in
+// mcpPeerRegions is dialed at its DIRECT region-pinned silo gRPC FQDN
+// (stateEndpoint), which serves every facade group exactly as the local silo does
+// for the current region. The peer facade set mirrors the current-region gating
+// (data / replication / backup) so discovery is symmetric. Empty inputs (a
+// single-region estate, or pass 1 before peer FQDNs are known) yield an empty
+// env fragment, leaving every existing deployment byte-for-byte unchanged.
+var mcpCurrentRegionEnv = concat(
+  empty(mcpRegionId) ? [] : [ { name: 'Mcp__RegionId', value: mcpRegionId } ],
+  empty(mcpClusterId) ? [] : [ { name: 'Mcp__ClusterId', value: mcpClusterId } ],
+  [ { name: 'Mcp__VerifyRegionIdentity', value: string(mcpVerifyRegionIdentity) } ]
+)
+
+var mcpPeerRegionEnvGroups = [for (peer, i) in mcpPeerRegions: concat(
+  [
+    { name: 'Mcp__Regions__${i}__RegionId', value: peer.regionId }
+    { name: 'Mcp__Regions__${i}__StateEndpoint', value: peer.stateEndpoint }
+    { name: 'Mcp__Regions__${i}__AuthEndpoint', value: peer.stateEndpoint }
+  ],
+  (contains(peer, 'clusterId') && !empty(peer.clusterId)) ? [ { name: 'Mcp__Regions__${i}__ClusterId', value: peer.clusterId } ] : [],
+  dataApiEnabled ? [ { name: 'Mcp__Regions__${i}__DataEndpoint', value: peer.stateEndpoint } ] : [],
+  enableReplicationControl ? [ { name: 'Mcp__Regions__${i}__ReplicationEndpoint', value: peer.stateEndpoint } ] : [],
+  enableBackupControl ? [ { name: 'Mcp__Regions__${i}__BackupEndpoint', value: peer.stateEndpoint } ] : []
+)]
+
+var mcpPeerRegionEnv = flatten(mcpPeerRegionEnvGroups)
+
+var mcpRegionEnv = concat(mcpCurrentRegionEnv, mcpPeerRegionEnv)
 
 var enableSiloScaleRule = !empty(prometheusQueryEndpoint)
 // Substitute the concrete silo app name into the scale query placeholder so the
@@ -705,7 +747,7 @@ resource mcpApp 'Microsoft.App/containerApps@2024-03-01' = {
               periodSeconds: 30
             }
           ]
-          env: [
+          env: concat([
             // Silo gRPC State + auth-admin facades, dialed over server TLS by the
             // internal ACA FQDN. One endpoint serves both surfaces.
             { name: 'Mcp__StateEndpoint', value: 'https://${siloApp.properties.configuration.ingress.fqdn}' }
@@ -773,7 +815,7 @@ resource mcpApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'ASPNETCORE_URLS', value: 'http://0.0.0.0:8080' }
             // Global-ingress origin lock (see silo head). Empty until pass 2.
             { name: 'LATTICE_FRONT_DOOR_ID', value: frontDoorId }
-          ]
+          ], mcpRegionEnv)
         }
       ]
       scale: {
