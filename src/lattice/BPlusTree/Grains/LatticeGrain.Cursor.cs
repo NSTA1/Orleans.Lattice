@@ -311,6 +311,16 @@ internal sealed partial class LatticeGrain
             // leaves load and serve them instead of replaying the WAL, and the
             // cursor close path deletes them by re-deriving the same keys.
             SnapshotBaselineToken = baselineToken,
+
+            // Pin the resolved physical tree id so the cursor's open/read path
+            // keys the transient snapshot leaves (and their durable baseline
+            // rows) by the same tree id the physical shard roots used at
+            // capture/seed time. After a ShadowCutover restore the logical tree
+            // aliases to a fresh physical tree, so keying the leaf by the
+            // logical id would miss the seeded activation and force a
+            // from-storage reload that throws LatticeSnapshotExpiredException
+            // (issue #1386).
+            PhysicalTreeId = physicalTreeId,
         };
 
         var cursorId = Guid.NewGuid().ToString("N");

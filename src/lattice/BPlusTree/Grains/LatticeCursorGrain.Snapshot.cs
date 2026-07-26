@@ -250,7 +250,7 @@ internal sealed partial class LatticeCursorGrain
         // flag while persisting) has durable rows to reclaim here.
         if (!state.State.SnapshotBaselinePersisted) return;
 
-        var treeId = state.State.TreeId;
+        var treeId = SnapshotLeafTreeId(coord);
         foreach (var shardIndex in coord.PerShardWalOffsets.Keys)
         {
             try
@@ -524,7 +524,7 @@ internal sealed partial class LatticeCursorGrain
     {
         var leaf = grainFactory.GetGrain<ISnapshotLeafGrain>(BuildSnapshotLeafKey(coord, shardIndex));
         var (ownedSlots, vsc) = ResolveOwnedSlots(coord, shardIndex);
-        await leaf.OpenAsync(state.State.TreeId, shardIndex, capturedOffsetsByPartition, ownedSlots, vsc, coord.SnapshotBaselineToken, default);
+        await leaf.OpenAsync(SnapshotLeafTreeId(coord), shardIndex, capturedOffsetsByPartition, ownedSlots, vsc, coord.SnapshotBaselineToken, default);
         return await leaf.GetKeysAsync(effStart, effEnd, limit: pageSize, predicate: predicate, reverse: reverse);
     }
 
@@ -540,7 +540,7 @@ internal sealed partial class LatticeCursorGrain
     {
         var leaf = grainFactory.GetGrain<ISnapshotLeafGrain>(BuildSnapshotLeafKey(coord, shardIndex));
         var (ownedSlots, vsc) = ResolveOwnedSlots(coord, shardIndex);
-        await leaf.OpenAsync(state.State.TreeId, shardIndex, capturedOffsetsByPartition, ownedSlots, vsc, coord.SnapshotBaselineToken, default);
+        await leaf.OpenAsync(SnapshotLeafTreeId(coord), shardIndex, capturedOffsetsByPartition, ownedSlots, vsc, coord.SnapshotBaselineToken, default);
         return await leaf.GetEntriesAsync(effStart, effEnd, limit: pageSize, predicate: predicate, reverse: reverse);
     }
 
@@ -578,7 +578,7 @@ internal sealed partial class LatticeCursorGrain
     {
         var leaf = grainFactory.GetGrain<ISnapshotLeafGrain>(BuildSnapshotLeafKey(coord, shardIndex));
         var (ownedSlots, vsc) = ResolveOwnedSlots(coord, shardIndex);
-        await leaf.OpenAsync(state.State.TreeId, shardIndex, capturedOffsetsByPartition, ownedSlots, vsc, coord.SnapshotBaselineToken, default);
+        await leaf.OpenAsync(SnapshotLeafTreeId(coord), shardIndex, capturedOffsetsByPartition, ownedSlots, vsc, coord.SnapshotBaselineToken, default);
         return await leaf.GetRawEntriesAsync(effStart, effEnd, limit: pageSize, predicate: predicate, reverse: reverse);
     }
 
@@ -853,12 +853,28 @@ internal sealed partial class LatticeCursorGrain
     /// </summary>
     private string BuildSnapshotLeafKey(LatticeSnapshotCoordinate coord, int shardIndex)
     {
+        var treeId = SnapshotLeafTreeId(coord);
         if (coord.SnapshotBaselineToken != Guid.Empty)
-            return SnapshotLeafGrain.BuildBaselineKey(state.State.TreeId, shardIndex, coord.SnapshotBaselineToken);
+            return SnapshotLeafGrain.BuildBaselineKey(treeId, shardIndex, coord.SnapshotBaselineToken);
 
         var hash = ComputeCoordinateHash(coord);
-        return $"{state.State.TreeId}/{shardIndex}/{hash}";
+        return $"{treeId}/{shardIndex}/{hash}";
     }
+
+    /// <summary>
+    /// Resolves the tree id the per-shard snapshot leaves and their durable
+    /// baseline rows are keyed by. This must be the physical tree id the
+    /// capture/seed path (the physical shard roots) used, so the cursor reaches
+    /// the very activation that holds the in-memory seed rather than a fresh
+    /// activation that would fail the from-storage reload
+    /// (<see cref="LatticeSnapshotExpiredException"/>) after a shadow-cutover
+    /// restore aliased the logical tree to a fresh physical tree (issue #1386).
+    /// Falls back to the persisted logical tree id for legacy coordinates that
+    /// carry no pinned physical id, which is correct on any non-restored tree
+    /// where the physical id equals the logical id.
+    /// </summary>
+    private string SnapshotLeafTreeId(LatticeSnapshotCoordinate coord) =>
+        coord.PhysicalTreeId ?? state.State.TreeId;
 
     /// <summary>
     /// FNV-1a 64-bit hash over the snapshot coordinate fields in a
