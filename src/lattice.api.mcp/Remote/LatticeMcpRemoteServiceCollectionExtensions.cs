@@ -67,13 +67,18 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
         services.Configure(configure);
 
         // Replace the in-silo single-region router with the multi-region router
-        // built from the configured default region plus each peer. Built eagerly
-        // from the materialised options - the region set is static configuration -
-        // so both discovery (via the catalog) and per-call routing derive from this
-        // one source of truth and can never disagree.
-        var definitions = BuildRegionDefinitions(options);
-        services.Replace(ServiceDescriptor.Singleton<ILatticeApiMcpRegionRouter>(
-            new LatticeApiMcpRegionRouter(options.RegionId, definitions)));
+        // built from the configured default region plus each peer. The region set
+        // itself is static configuration, but whether the current region serves the
+        // head-local telemetry group is a capability - it depends on whether the
+        // host also wired the telemetry tools (AddTelemetryTools registers an
+        // ILatticeApiMcpToolGroup for it) - so the router is built by a factory that
+        // reads the registered tool groups, exactly as the in-silo router and the
+        // capabilities report do. Both discovery (via the catalog) and per-call
+        // routing derive from this one source of truth and can never disagree.
+        services.Replace(ServiceDescriptor.Singleton<ILatticeApiMcpRegionRouter>(sp =>
+            new LatticeApiMcpRegionRouter(
+                options.RegionId,
+                BuildRegionDefinitions(options, TelemetryGroupRegistered(sp)))));
 
         // Opt-in region-identity verification: prove each peer region's endpoint
         // reaches the cluster it advertises before a call is routed there, so a
@@ -195,8 +200,13 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
     private static CallInvoker RawInvoker(LatticeApiMcpRemoteEndpoint endpoint)
         => endpoint.CallInvoker ?? GrpcChannel.ForAddress(endpoint.Endpoint).CreateCallInvoker();
 
+    private static bool TelemetryGroupRegistered(IServiceProvider services)
+        => services.GetServices<ILatticeApiMcpToolGroup>()
+            .Any(group => group.Group == LatticeApiMcpGroup.Telemetry);
+
     private static IReadOnlyList<LatticeApiMcpRegionDefinition> BuildRegionDefinitions(
-        LatticeApiMcpRemoteOptions options)
+        LatticeApiMcpRemoteOptions options,
+        bool telemetryRegistered)
     {
         var definitions = new List<LatticeApiMcpRegionDefinition>(1 + options.Regions.Count)
         {
@@ -206,7 +216,8 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
                 ClusterId = options.ClusterId ?? string.Empty,
                 IsCurrent = true,
                 Groups = GroupEndpoints(
-                    options.State, options.Data, options.Backup, options.Auth, options.Replication),
+                    options.State, options.Data, options.Backup, options.Auth, options.Replication,
+                    telemetryAvailable: telemetryRegistered),
             },
         };
 
@@ -218,7 +229,8 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
                 ClusterId = region.ClusterId ?? string.Empty,
                 IsCurrent = false,
                 Groups = GroupEndpoints(
-                    region.State, region.Data, region.Backup, region.Auth, region.Replication),
+                    region.State, region.Data, region.Backup, region.Auth, region.Replication,
+                    telemetryAvailable: false),
             });
         }
 
@@ -230,7 +242,8 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
         LatticeApiMcpRemoteEndpoint? data,
         LatticeApiMcpRemoteEndpoint? backup,
         LatticeApiMcpRemoteEndpoint? auth,
-        LatticeApiMcpRemoteEndpoint? replication)
+        LatticeApiMcpRemoteEndpoint? replication,
+        bool telemetryAvailable)
     {
         var groups = new Dictionary<LatticeApiMcpGroup, string?>();
         if (state is not null)
@@ -256,6 +269,15 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
         if (replication is not null)
         {
             groups[LatticeApiMcpGroup.Replication] = replication.Endpoint;
+        }
+
+        // Telemetry is a head-local PromQL proxy with no per-region gRPC endpoint,
+        // so it carries a null endpoint and is advertised for the current region
+        // only when its tool group is registered (peers never serve it: a peer's
+        // telemetry, if any, is that peer head's own local concern).
+        if (telemetryAvailable)
+        {
+            groups[LatticeApiMcpGroup.Telemetry] = null;
         }
 
         return groups;
