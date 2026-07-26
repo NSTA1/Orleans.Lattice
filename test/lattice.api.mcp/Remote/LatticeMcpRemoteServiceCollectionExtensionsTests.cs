@@ -133,14 +133,12 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
     }
 
     [Test]
-    public void Current_region_advertises_telemetry_when_the_flag_is_set()
+    public void Current_region_advertises_telemetry_when_the_tool_group_is_registered()
     {
         using var provider = new ServiceCollection()
-            .AddLatticeMcpRemote(o =>
-            {
-                o.State = Endpoint("https://state:5001");
-                o.TelemetryAvailable = true;
-            })
+            .AddLatticeMcpRemote(o => o.State = Endpoint("https://state:5001"))
+            .AddSingleton<ILatticeApiMcpToolGroup>(
+                new FakeToolGroup(LatticeApiMcpGroup.Telemetry, "lattice_telemetry_query"))
             .BuildServiceProvider();
 
         var router = provider.GetRequiredService<ILatticeApiMcpRegionRouter>();
@@ -155,7 +153,7 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
     }
 
     [Test]
-    public void Current_region_omits_telemetry_when_the_flag_is_unset()
+    public void Current_region_omits_telemetry_when_no_telemetry_tool_group_is_registered()
     {
         using var provider = new ServiceCollection()
             .AddLatticeMcpRemote(o => o.State = Endpoint("https://state:5001"))
@@ -168,19 +166,20 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
     }
 
     [Test]
-    public void Peer_region_never_advertises_telemetry()
+    public void Peer_region_never_advertises_telemetry_even_when_registered()
     {
         using var provider = new ServiceCollection()
             .AddLatticeMcpRemote(o =>
             {
                 o.State = Endpoint("https://state:5001");
-                o.TelemetryAvailable = true;
                 o.Regions.Add(new LatticeApiMcpRemoteRegionOptions
                 {
                     RegionId = "peer",
                     State = Endpoint("https://peer-state:5001"),
                 });
             })
+            .AddSingleton<ILatticeApiMcpToolGroup>(
+                new FakeToolGroup(LatticeApiMcpGroup.Telemetry, "lattice_telemetry_query"))
             .BuildServiceProvider();
 
         var router = provider.GetRequiredService<ILatticeApiMcpRegionRouter>();
