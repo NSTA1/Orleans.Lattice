@@ -15,46 +15,122 @@ learning aid, not a secure deployment template.
 | `prometheus` | `prom/prometheus` | Scrapes the silo `/metrics` endpoint | `http://localhost:9090` |
 | `grafana` | `grafana/grafana-oss` | Bundled Orleans.Lattice dashboards over Prometheus | `http://localhost:3000` |
 
-The silo reaches Azurite by connection string; the MCP and Explorer heads reach
-the silo by its compose service name (`http://silo:8081`); Prometheus scrapes
-`silo:8080/metrics`; Grafana provisions the Prometheus data source and the
-dashboards shipped by `Orleans.Lattice.Dashboards` (mounted read-only from
-`src/lattice.dashboards`).
+The silo reaches Azurite by connection string. The **MCP** head reaches the silo
+by its compose service name (`http://silo:8081`). The **Explorer** head shares the
+silo's network namespace (`network_mode: service:silo`) and reaches the silo over
+loopback (`http://localhost:8081`) - its transport-security policy only permits the
+anonymous plaintext dev path to a *loopback* host, and a cross-container service
+name (`silo:8081`) is not loopback. Prometheus scrapes `silo:8080/metrics`; Grafana
+provisions the Prometheus data source and the dashboards shipped by
+`Orleans.Lattice.Dashboards` (mounted read-only from `src/lattice.dashboards`).
 
-## Run it
+## Endpoints and ports
 
-```bash
-cd reference-architecture/local
-docker compose up --build
-```
+| Head | Browse / call at | Container port (host:container) | Notes |
+|---|---|---|---|
+| Explorer web console | <http://localhost:8080> | `8080:8082` (declared on `silo`) | Blazor Server; auto-connects and auto-signs-in on first load (see below). Kestrel binds `8082` because `8080`/`8081` are the silo's in the shared namespace. |
+| MCP endpoint | <http://localhost:8090> | `8090:8080` | Streamable-HTTP MCP transport root; liveness at `/health`. Advertises the full tool set (state, data, backup, auth, telemetry, replication). |
+| Silo health / metrics | <http://localhost:18080> | `18080:8080` | `/health`, scaling signal, Prometheus `/metrics`. |
+| Silo gRPC (state / auth / replication) | `localhost:18081` | `18081:8081` | Exposed for host-side tooling; the heads dial it in-cluster (`silo:8081`, or loopback for the Explorer). |
+| Prometheus | <http://localhost:9090> | `9090:9090` | |
+| Grafana | <http://localhost:3000> | `3000:3000` | Anonymous viewer enabled; admin `admin`/`admin`. |
 
-Every value has a baked-in local dev default, so no `.env` file is required.
-Copy `.env.example` to `.env` only if you want to override a default (for
-example, point the storage connection string somewhere other than Azurite):
+## Prerequisites
 
-```bash
-cp .env.example .env            # PowerShell: Copy-Item .env.example .env
-```
+- **Docker Desktop** (or a Docker Engine with the Compose v2 plugin) running. No
+  .NET SDK, Azure subscription, or Azure CLI is needed - the heads build inside
+  containers and all storage is emulated by Azurite.
+- Free local ports: `8080`, `8090`, `18080`, `18081`, `10000-10002`, `9090`,
+  `3000`. Stop anything already bound to them (or edit the `ports:` mappings).
 
-Then:
+## Setup and run (step by step)
 
-- Open the Explorer at <http://localhost:8080> and browse the live cluster. The
-  first-run connection is seeded from `LATTICE_EXPLORER_ENDPOINT`; sign in with
-  the built-in Basic provider (any credentials - the dev cluster is open).
-- The MCP endpoint is reachable at <http://localhost:8090> (MCP transport root;
-  liveness at `/health`). It advertises the full tool set (state, data, backup,
-  auth, telemetry, replication) - see the dev-auth note below for why.
-- Grafana is at <http://localhost:3000> (anonymous viewer is enabled; the admin
-  login is `admin` / `admin`). The Orleans.Lattice dashboards appear under the
-  `Orleans.Lattice` folder and populate as the silo emits metrics.
+1. **Change into the harness directory** (all commands below run from here):
 
-Tear down with `docker compose down` (add `-v` to drop the Azurite data volume).
+   ```bash
+   cd reference-architecture/local
+   ```
 
-Validate the compose file without starting anything:
+2. *(Optional)* **Override a default.** Every value has a baked-in local dev
+   default, so no `.env` file is required. Create one only to override something
+   (for example to point the storage connection string somewhere other than
+   Azurite):
 
-```bash
-docker compose config
-```
+   ```bash
+   cp .env.example .env            # PowerShell: Copy-Item .env.example .env
+   ```
+
+3. *(Optional)* **Validate the compose file** without starting anything:
+
+   ```bash
+   docker compose config
+   ```
+
+4. **Build and start the stack.** The first run builds the three .NET head images
+   in-container, so it takes a few minutes; later runs are cached and start in
+   seconds:
+
+   ```bash
+   docker compose up --build          # add -d to run detached (in the background)
+   ```
+
+5. **Wait for the silo to come up.** Azurite is health-gated, so the silo waits
+   for the Table endpoint before it starts. Watch the logs until the silo reports
+   it is listening:
+
+   ```bash
+   docker compose logs -f silo        # Ctrl+C to stop following
+   ```
+
+6. **Use the cluster:**
+
+   - **Explorer** - open <http://localhost:8080> and browse the live cluster. It
+     **auto-connects** on first load (endpoint seeded from
+     `LATTICE_EXPLORER_ENDPOINT`) and **auto-signs-in** as the bootstrap
+     administrator `local-dev-admin` (seeded from `LATTICE_EXPLORER_USERNAME`) -
+     no dialog, no credentials to type. With Entra disabled the console would
+     otherwise connect anonymously, which the silo's state-visibility filter
+     fail-closes to an empty tree catalog and a denied Access area; the dev
+     sign-in forwards a trusted bootstrap-admin bearer token (the same mechanism
+     MCP uses) so the catalog and Access area are fully populated. See the
+     dev-auth note below.
+   - **MCP** - reachable at <http://localhost:8090> (Streamable-HTTP MCP transport
+     root; liveness at `/health`). It advertises the full tool set (state, data,
+     backup, auth, telemetry, replication) - see the dev-auth note below for why.
+   - **Grafana** - <http://localhost:3000> (anonymous viewer enabled; admin login
+     `admin` / `admin`). The Orleans.Lattice dashboards appear under the
+     `Orleans.Lattice` folder and populate as the silo emits metrics.
+
+   A tree is materialized by its first write (for example an MCP `lattice_data_set`
+   call, or a write through the Data API); it then appears in the Explorer catalog.
+
+## Teardown
+
+Azurite persists its Table + Blob data (the durable WAL, grain state, clustering,
+reminders, and the Blob backup sink) to a named Docker volume (`azurite-data`), so
+the cluster's state **survives a restart and recreate**. Choose a teardown based on
+whether you want to keep that data:
+
+- **Stop, keep data** - stop and remove the containers but keep the volume, so the
+  next `docker compose up` resumes with the same trees and state:
+
+  ```bash
+  docker compose down
+  ```
+
+- **Stop and wipe data** - also drop the `azurite-data` volume for a clean slate
+  (the next start comes up with an empty cluster):
+
+  ```bash
+  docker compose down -v
+  ```
+
+- **Pause without removing** - just stop the containers, keeping everything in
+  place to resume with `docker compose start`:
+
+  ```bash
+  docker compose stop
+  ```
 
 ## Security posture: this is a documented dev bypass
 
@@ -69,6 +145,7 @@ they become in a real deployment (see
 | `StateApi__RequireAuthorization` / `Mcp__RequireAuthorization` | `false` | `true` |
 | `Auth__DefaultEffect` (silo) | `Allow` | `Deny` (deny-by-default) |
 | `Mcp__DevAuthenticateAll` (mcp) | `true` (synthetic subject) | `false` (real Entra subject) |
+| `LATTICE_EXPLORER_USERNAME` (explorer) | `local-dev-admin` (dev bearer sign-in) | unset (interactive Entra OIDC sign-in) |
 | `Replication__AllowPlaintext` (silo) | `true` (h2c) | `false` (server TLS via the region FQDN) |
 | Storage identity | Azurite connection string | managed identity (`DefaultAzureCredential`) |
 
@@ -91,6 +168,23 @@ Allow` would permit the calls. Two coordinated dev toggles bridge that gap:
 The two ids **must match**. This is the same seeding mechanism a deployed estate
 uses for its designated security administrator; here it targets a throwaway
 synthetic subject instead of a real Entra `oid`.
+
+### Why the Explorer console auto-signs-in
+
+The Explorer's read-only surfaces (the tree catalog, per-tree structure, and the
+Access area) flow through the **same** fail-closed state-visibility filter: an
+anonymous caller sees an empty catalog and a denied Access area, so the console
+would look broken next to MCP, which sees everything. With Entra off the console
+has no sign-in provider to authenticate against, so the reference host registers a
+dev-only sign-in method (`DevBypassExplorerAuthMethod`, wired **only** when
+`Entra__Enabled=false`) that forwards `authorization: Bearer <username>` to the
+silo - the exact credential the silo's `DevBypassCredentialAuthenticator` trusts
+when the id is a configured bootstrap administrator. It is applied automatically by
+the console's launcher sign-in seed (`LATTICE_EXPLORER_USERNAME`), so the console
+comes up connected and authorized with no dialog. As with the MCP head this is
+inert under Entra (the real OIDC sign-in provider is used instead), so it can never
+weaken a real estate. The username **must match** the silo's bootstrap admin (and
+the MCP head's `Mcp__DevSubjectId`).
 
 The single "secret", the per-cluster replication key, is a **dev placeholder**
 with a baked-in default (`LATTICE_REPLICATION_SECRET`), overridable via `.env`.

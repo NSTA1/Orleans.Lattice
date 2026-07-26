@@ -43,7 +43,15 @@ name: lattice-reference-local
 services:
   azurite:
     image: mcr.microsoft.com/azure-storage/azurite:latest
-    command: azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck
+    # Persist to /data (the image's declared volume mount point) so the emulator's
+    # Table + Blob data - the Orleans clustering table, the durable Table WAL, the
+    # grain state store, the reminders table, and the Blob backup sink - survives a
+    # container restart and recreate. The `-l /data` flag is REQUIRED: this command
+    # overrides the image default (which sets it), and without it Azurite writes to
+    # its ephemeral working directory instead of the mounted volume.
+    command: azurite -l /data --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck
+    volumes:
+      - azurite-data:/data
     ports:
       - "10000:10000"
       - "10001:10001"
@@ -180,6 +188,17 @@ services:
       # Dev bypass: plaintext h2c to the silo, no Entra sign-in.
       LATTICE_EXPLORER_INSECURE_DEV: "true"
       Entra__Enabled: "false"
+      # Dev bypass: auto-sign-in the console as the bootstrap administrator. With
+      # Entra off the console would otherwise connect ANONYMOUSLY, which the silo's
+      # state-visibility filter fail-closes (empty tree catalog, denied Access
+      # area). The host's DevBypassExplorerAuthMethod (registered only when Entra is
+      # off) forwards this username to the silo as `Bearer <username>`, which the
+      # silo trusts because it is a configured Auth__BootstrapAdministrators id - so
+      # the console is served as the admin, exactly like the MCP head. Must match
+      # the silo's bootstrap admin (and the MCP head's Mcp__DevSubjectId). The
+      # password is required by the sign-in seed but ignored by the dev bypass.
+      LATTICE_EXPLORER_USERNAME: "local-dev-admin"
+      LATTICE_EXPLORER_PASSWORD: "local-dev-unused"
 
   prometheus:
     image: prom/prometheus:latest
@@ -206,3 +225,9 @@ services:
       - ../../src/lattice.dashboards/Grafana:/var/lib/grafana/dashboards/orleans-lattice:ro
     ports:
       - "3000:3000"
+
+volumes:
+  # Durable local storage for the Azurite emulator (Table WAL + grain state +
+  # clustering + reminders + Blob backup sink). Survives `docker compose restart`
+  # and recreate; drop it with `docker compose down -v` for a clean slate.
+  azurite-data:
