@@ -37,7 +37,7 @@
     of the released library, exactly as a real deployment would be.
   -->
   <ItemGroup>
-    <PackageReference Include="Orleans.Lattice" Version="8.0.6" />
+    <PackageReference Include="Orleans.Lattice" Version="8.0.7" />
     <PackageReference Include="Orleans.Lattice.Storage.AzureTable" Version="8.0.0" />
     <PackageReference Include="Orleans.Lattice.Replication" Version="8.0.7" />
     <PackageReference Include="Orleans.Lattice.Replication.Grpc" Version="8.0.1" />
@@ -47,10 +47,10 @@
     <PackageReference Include="Orleans.Lattice.Backup.AzureBlob" Version="8.0.0" />
     <PackageReference Include="Orleans.Lattice.Api.Backup" Version="8.0.0" />
     <PackageReference Include="Orleans.Lattice.Api.Backup.Grpc" Version="8.0.0" />
-    <PackageReference Include="Orleans.Lattice.Api.State" Version="8.0.1" />
+    <PackageReference Include="Orleans.Lattice.Api.State" Version="8.0.2" />
     <PackageReference Include="Orleans.Lattice.Api.State.Grpc" Version="8.0.1" />
-    <PackageReference Include="Orleans.Lattice.Api.Data" Version="8.0.1" />
-    <PackageReference Include="Orleans.Lattice.Api.Data.Grpc" Version="8.0.1" />
+    <PackageReference Include="Orleans.Lattice.Api.Data" Version="8.0.2" />
+    <PackageReference Include="Orleans.Lattice.Api.Data.Grpc" Version="8.0.2" />
     <PackageReference Include="Orleans.Lattice.Api.Auth" Version="8.0.0" />
     <PackageReference Include="Orleans.Lattice.Api.Auth.Grpc" Version="8.0.0" />
     <PackageReference Include="Orleans.Lattice.Auth" Version="8.0.0" />
