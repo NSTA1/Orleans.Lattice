@@ -158,6 +158,156 @@ public sealed class GrpcDataDtoSerializationTests
     }
 
     [Test]
+    public void DataSetManyRequest_round_trips_with_upserts()
+    {
+        var original = new DataSetManyRequest
+        {
+            TreeId = "tree-a",
+            Upserts =
+            [
+                new DataEntry { Key = "a", Value = new byte[] { 1 } },
+                new DataEntry { Key = "b", Value = new byte[] { 2 } },
+            ],
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TreeId, Is.EqualTo("tree-a"));
+            Assert.That(copy.Upserts.Select(e => e.Key), Is.EqualTo(new[] { "a", "b" }));
+            Assert.That(copy.Upserts[1].Value, Is.EqualTo(new byte[] { 2 }));
+        });
+    }
+
+    [Test]
+    public void DataSetManyResponse_round_trips()
+    {
+        Assert.That(RoundTrip(new DataSetManyResponse()), Is.EqualTo(new DataSetManyResponse()));
+    }
+
+    [Test]
+    public void CrdtWriteRequest_round_trips_every_field()
+    {
+        var original = new CrdtWriteRequest
+        {
+            TreeId = "tree-a",
+            Key = "k",
+            Op = CrdtWriteOp.SequenceInsertAt,
+            ReplicaId = "r1",
+            Amount = 7,
+            Element = new byte[] { 4, 5 },
+            Field = "f",
+            Index = 3,
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TreeId, Is.EqualTo("tree-a"));
+            Assert.That(copy.Key, Is.EqualTo("k"));
+            Assert.That(copy.Op, Is.EqualTo(CrdtWriteOp.SequenceInsertAt));
+            Assert.That(copy.ReplicaId, Is.EqualTo("r1"));
+            Assert.That(copy.Amount, Is.EqualTo(7));
+            Assert.That(copy.Element, Is.EqualTo(new byte[] { 4, 5 }));
+            Assert.That(copy.Field, Is.EqualTo("f"));
+            Assert.That(copy.Index, Is.EqualTo(3));
+        });
+    }
+
+    [Test]
+    public void CrdtWriteResponse_round_trips()
+    {
+        Assert.That(RoundTrip(new CrdtWriteResponse()), Is.EqualTo(new CrdtWriteResponse()));
+    }
+
+    [Test]
+    public void CrdtReadRequest_round_trips()
+    {
+        var original = new CrdtReadRequest { TreeId = "tree-a", Key = "k", Kind = CrdtKind.OrMap };
+
+        Assert.That(RoundTrip(original), Is.EqualTo(original));
+    }
+
+    [Test]
+    public void CrdtReadResponse_round_trips_scalar_shapes()
+    {
+        var counter = RoundTrip(new CrdtReadResponse { CounterValue = 42 });
+        var flag = RoundTrip(new CrdtReadResponse { FlagValue = true });
+        var elements = RoundTrip(new CrdtReadResponse { Elements = [new byte[] { 1 }, new byte[] { 2 }] });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(counter.CounterValue, Is.EqualTo(42));
+            Assert.That(flag.FlagValue, Is.True);
+            Assert.That(elements.Elements.Select(e => e[0]), Is.EqualTo(new byte[] { 1, 2 }));
+        });
+    }
+
+    [Test]
+    public void CrdtReadResponse_round_trips_vector_and_map_shapes()
+    {
+        var original = new CrdtReadResponse
+        {
+            Vector = [new CrdtVectorEntry { ReplicaId = "r1", Clock = "100:2" }],
+            Map =
+            [
+                new CrdtMapField { Field = "title", Values = [new byte[] { 9 }] },
+            ],
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Vector, Has.Count.EqualTo(1));
+            Assert.That(copy.Vector[0].ReplicaId, Is.EqualTo("r1"));
+            Assert.That(copy.Vector[0].Clock, Is.EqualTo("100:2"));
+            Assert.That(copy.Map, Has.Count.EqualTo(1));
+            Assert.That(copy.Map[0].Field, Is.EqualTo("title"));
+            Assert.That(copy.Map[0].Values[0], Is.EqualTo(new byte[] { 9 }));
+        });
+    }
+
+    [Test]
+    public void CrdtVectorEntry_round_trips()
+    {
+        var original = new CrdtVectorEntry { ReplicaId = "r1", Clock = "5:1" };
+
+        Assert.That(RoundTrip(original), Is.EqualTo(original));
+    }
+
+    [Test]
+    public void CrdtMapField_round_trips()
+    {
+        var copy = RoundTrip(new CrdtMapField { Field = "f", Values = [new byte[] { 3 }] });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Field, Is.EqualTo("f"));
+            Assert.That(copy.Values[0], Is.EqualTo(new byte[] { 3 }));
+        });
+    }
+
+    [Test]
+    public void Marshaller_round_trips_a_crdt_write_request_through_the_grpc_contexts()
+    {
+        var original = new CrdtWriteRequest
+        {
+            TreeId = "t",
+            Key = "k",
+            Op = CrdtWriteOp.CounterIncrement,
+            ReplicaId = "r1",
+            Amount = 3,
+        };
+
+        var copy = MarshalRoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Op, Is.EqualTo(CrdtWriteOp.CounterIncrement));
+            Assert.That(copy.Amount, Is.EqualTo(3));
+        });
+    }
+
+    [Test]
     public void Marshaller_round_trips_a_set_request_through_the_grpc_contexts()
     {
         var original = new DataSetRequest { TreeId = "tree-a", Key = "k1", Value = new byte[] { 7, 7, 7 } };

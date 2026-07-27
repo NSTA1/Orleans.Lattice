@@ -40,4 +40,34 @@ public static class GrpcDataTypeAliases
 
     /// <summary>Alias for <see cref="DataGetRequest"/>.</summary>
     public const string DataGetRequest = "oladg.getq";
+
+    /// <summary>Alias for <see cref="DataSetManyRequest"/>.</summary>
+    public const string DataSetManyRequest = "oladg.smq";
+
+    /// <summary>Alias for <see cref="DataSetManyResponse"/>.</summary>
+    public const string DataSetManyResponse = "oladg.smr";
+
+    /// <summary>Alias for <see cref="CrdtKind"/>.</summary>
+    public const string CrdtKind = "oladg.crk";
+
+    /// <summary>Alias for <see cref="CrdtWriteOp"/>.</summary>
+    public const string CrdtWriteOp = "oladg.crop";
+
+    /// <summary>Alias for <see cref="CrdtWriteRequest"/>.</summary>
+    public const string CrdtWriteRequest = "oladg.crwq";
+
+    /// <summary>Alias for <see cref="CrdtWriteResponse"/>.</summary>
+    public const string CrdtWriteResponse = "oladg.crwr";
+
+    /// <summary>Alias for <see cref="CrdtReadRequest"/>.</summary>
+    public const string CrdtReadRequest = "oladg.crrq";
+
+    /// <summary>Alias for <see cref="CrdtReadResponse"/>.</summary>
+    public const string CrdtReadResponse = "oladg.crrr";
+
+    /// <summary>Alias for <see cref="CrdtVectorEntry"/>.</summary>
+    public const string CrdtVectorEntry = "oladg.crve";
+
+    /// <summary>Alias for <see cref="CrdtMapField"/>.</summary>
+    public const string CrdtMapField = "oladg.crmf";
 }

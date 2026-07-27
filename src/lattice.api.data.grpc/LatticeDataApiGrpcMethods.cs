@@ -40,8 +40,17 @@ internal sealed class LatticeDataApiGrpcMethods
     /// <summary>The unary point-get RPC method name.</summary>
     public const string GetMethodName = "Get";
 
+    /// <summary>The unary non-atomic bulk-write RPC method name.</summary>
+    public const string SetManyMethodName = "SetMany";
+
     /// <summary>The unary bounded range-read RPC method name.</summary>
     public const string ReadRangeMethodName = "ReadRange";
+
+    /// <summary>The unary unified typed-CRDT write RPC method name.</summary>
+    public const string CrdtWriteMethodName = "CrdtWrite";
+
+    /// <summary>The unary unified typed-CRDT read RPC method name.</summary>
+    public const string CrdtReadMethodName = "CrdtRead";
 
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeDataApiGrpcMethods(
@@ -56,7 +65,13 @@ internal sealed class LatticeDataApiGrpcMethods
         Serializer<DataGetRequest> getRequestSerializer,
         Serializer<DataReadResult> readResultSerializer,
         Serializer<DataRangeRequest> rangeRequestSerializer,
-        Serializer<DataRangePage> rangePageSerializer)
+        Serializer<DataRangePage> rangePageSerializer,
+        Serializer<DataSetManyRequest> setManyRequestSerializer,
+        Serializer<DataSetManyResponse> setManyResponseSerializer,
+        Serializer<CrdtWriteRequest> crdtWriteRequestSerializer,
+        Serializer<CrdtWriteResponse> crdtWriteResponseSerializer,
+        Serializer<CrdtReadRequest> crdtReadRequestSerializer,
+        Serializer<CrdtReadResponse> crdtReadResponseSerializer)
     {
         ArgumentNullException.ThrowIfNull(setRequestSerializer);
         ArgumentNullException.ThrowIfNull(setResponseSerializer);
@@ -70,6 +85,12 @@ internal sealed class LatticeDataApiGrpcMethods
         ArgumentNullException.ThrowIfNull(readResultSerializer);
         ArgumentNullException.ThrowIfNull(rangeRequestSerializer);
         ArgumentNullException.ThrowIfNull(rangePageSerializer);
+        ArgumentNullException.ThrowIfNull(setManyRequestSerializer);
+        ArgumentNullException.ThrowIfNull(setManyResponseSerializer);
+        ArgumentNullException.ThrowIfNull(crdtWriteRequestSerializer);
+        ArgumentNullException.ThrowIfNull(crdtWriteResponseSerializer);
+        ArgumentNullException.ThrowIfNull(crdtReadRequestSerializer);
+        ArgumentNullException.ThrowIfNull(crdtReadResponseSerializer);
 
         Set = new Method<DataSetRequest, DataSetResponse>(
             type: MethodType.Unary,
@@ -112,6 +133,27 @@ internal sealed class LatticeDataApiGrpcMethods
             name: ReadRangeMethodName,
             requestMarshaller: LatticeDataApiGrpcMarshallers.Create(rangeRequestSerializer),
             responseMarshaller: LatticeDataApiGrpcMarshallers.Create(rangePageSerializer));
+
+        SetMany = new Method<DataSetManyRequest, DataSetManyResponse>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: SetManyMethodName,
+            requestMarshaller: LatticeDataApiGrpcMarshallers.Create(setManyRequestSerializer),
+            responseMarshaller: LatticeDataApiGrpcMarshallers.Create(setManyResponseSerializer));
+
+        CrdtWrite = new Method<CrdtWriteRequest, CrdtWriteResponse>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: CrdtWriteMethodName,
+            requestMarshaller: LatticeDataApiGrpcMarshallers.Create(crdtWriteRequestSerializer),
+            responseMarshaller: LatticeDataApiGrpcMarshallers.Create(crdtWriteResponseSerializer));
+
+        CrdtRead = new Method<CrdtReadRequest, CrdtReadResponse>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: CrdtReadMethodName,
+            requestMarshaller: LatticeDataApiGrpcMarshallers.Create(crdtReadRequestSerializer),
+            responseMarshaller: LatticeDataApiGrpcMarshallers.Create(crdtReadResponseSerializer));
     }
 
     /// <summary>The unary <c>Set</c> point-write RPC.</summary>
@@ -131,6 +173,15 @@ internal sealed class LatticeDataApiGrpcMethods
 
     /// <summary>The unary <c>ReadRange</c> bounded range-read RPC.</summary>
     public Method<DataRangeRequest, DataRangePage> ReadRange { get; }
+
+    /// <summary>The unary <c>SetMany</c> non-atomic bulk-write RPC.</summary>
+    public Method<DataSetManyRequest, DataSetManyResponse> SetMany { get; }
+
+    /// <summary>The unary <c>CrdtWrite</c> unified typed-CRDT write RPC.</summary>
+    public Method<CrdtWriteRequest, CrdtWriteResponse> CrdtWrite { get; }
+
+    /// <summary>The unary <c>CrdtRead</c> unified typed-CRDT read RPC.</summary>
+    public Method<CrdtReadRequest, CrdtReadResponse> CrdtRead { get; }
 
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out of
@@ -153,7 +204,13 @@ internal sealed class LatticeDataApiGrpcMethods
             serializerProvider.GetRequiredService<Serializer<DataGetRequest>>(),
             serializerProvider.GetRequiredService<Serializer<DataReadResult>>(),
             serializerProvider.GetRequiredService<Serializer<DataRangeRequest>>(),
-            serializerProvider.GetRequiredService<Serializer<DataRangePage>>());
+            serializerProvider.GetRequiredService<Serializer<DataRangePage>>(),
+            serializerProvider.GetRequiredService<Serializer<DataSetManyRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<DataSetManyResponse>>(),
+            serializerProvider.GetRequiredService<Serializer<CrdtWriteRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<CrdtWriteResponse>>(),
+            serializerProvider.GetRequiredService<Serializer<CrdtReadRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<CrdtReadResponse>>());
     }
 }
 

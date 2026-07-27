@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Api.Mcp;
 /// authorization path of its own: fail-closed behaviour is inherited from the
 /// facade (a denied read reports absent; a denied write throws).
 /// </summary>
-internal static class DataToolCore
+internal static partial class DataToolCore
 {
     /// <summary>Maps <see cref="ILatticeDataApi.GetAsync"/> onto the <c>data_get</c> result.</summary>
     public static async Task<DataGetToolResult> GetAsync(
@@ -149,6 +149,20 @@ internal static class DataToolCore
             Outcome = outcome.ToString(),
             Committed = outcome == CrossTreeAtomicWriteOutcome.Committed,
         };
+    }
+
+    /// <summary>Maps <see cref="ILatticeDataApi.SetManyAsync"/> onto the <c>data_set_many</c> result.</summary>
+    public static async Task<DataSetManyToolResult> SetManyAsync(
+        ILatticeDataApi api,
+        string treeId,
+        IReadOnlyList<DataEntryDto>? upserts,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(api);
+
+        var entries = ToDataEntries(upserts);
+        await api.SetManyAsync(treeId, entries, cancellationToken).ConfigureAwait(false);
+        return new DataSetManyToolResult { TreeId = treeId, Count = entries.Count };
     }
 
     private static List<DataEntry> ToDataEntries(IReadOnlyList<DataEntryDto>? upserts)

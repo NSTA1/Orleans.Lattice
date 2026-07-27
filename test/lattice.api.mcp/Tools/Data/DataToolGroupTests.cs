@@ -6,20 +6,31 @@ namespace Orleans.Lattice.Api.Mcp.Tests;
 
 /// <summary>
 /// Unit tests for <see cref="DataToolGroup"/>, the data tool module. Proves the
-/// write opt-in (writes disabled offers only the two read tools; writes enabled
-/// adds the four mutating tools), that the module serves the data group, and that
-/// the read tools carry <c>readOnlyHint</c> while the write tools carry
-/// <c>destructiveHint</c> and are non-<c>readOnlyHint</c>. Deterministic - the
-/// tools are inspected, never invoked.
+/// write opt-in (writes disabled offers only the read tools - the two point /
+/// range reads and the eight typed-CRDT reads; writes enabled adds the mutating
+/// tools - five point / batch writes and the eight typed-CRDT writes), that the
+/// module serves the data group, and that the read tools carry <c>readOnlyHint</c>
+/// while the write tools carry <c>destructiveHint</c> and are non-<c>readOnlyHint</c>.
+/// Deterministic - the tools are inspected, never invoked.
 /// </summary>
 [TestFixture]
 public sealed class DataToolGroupTests
 {
-    private static readonly string[] ReadToolNames = { "lattice_data_get", "lattice_data_read_range" };
+    private static readonly string[] ReadToolNames =
+    {
+        "lattice_data_get", "lattice_data_read_range",
+        "lattice_data_pncounter_get", "lattice_data_orset_get", "lattice_data_orflag_get",
+        "lattice_data_rwflag_get", "lattice_data_version_vector_get", "lattice_data_mvregister_get",
+        "lattice_data_sequence_get", "lattice_data_ormap_get",
+    };
 
     private static readonly string[] WriteToolNames =
     {
-        "lattice_data_set", "lattice_data_delete", "lattice_data_set_many_atomic", "lattice_data_set_many_atomic_cross_tree",
+        "lattice_data_set", "lattice_data_delete", "lattice_data_set_many",
+        "lattice_data_set_many_atomic", "lattice_data_set_many_atomic_cross_tree",
+        "lattice_data_pncounter", "lattice_data_orset", "lattice_data_orflag", "lattice_data_rwflag",
+        "lattice_data_version_vector_tick", "lattice_data_mvregister_set", "lattice_data_sequence",
+        "lattice_data_ormap",
     };
 
     private static HashSet<string> ToolNames(DataToolGroup group)
@@ -37,13 +48,13 @@ public sealed class DataToolGroupTests
     }
 
     [Test]
-    public void Writes_disabled_offers_only_the_two_read_tools()
+    public void Writes_disabled_offers_only_the_read_tools()
     {
         var group = new DataToolGroup(enableWrites: false);
 
         Assert.Multiple(() =>
         {
-            Assert.That(group.Tools, Has.Count.EqualTo(2));
+            Assert.That(group.Tools, Has.Count.EqualTo(ReadToolNames.Length));
             Assert.That(ToolNames(group), Is.EquivalentTo(ReadToolNames));
         });
     }
@@ -55,7 +66,7 @@ public sealed class DataToolGroupTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(group.Tools, Has.Count.EqualTo(6));
+            Assert.That(group.Tools, Has.Count.EqualTo(ReadToolNames.Length + WriteToolNames.Length));
             Assert.That(ToolNames(group), Is.EquivalentTo(ReadToolNames.Concat(WriteToolNames)));
         });
     }

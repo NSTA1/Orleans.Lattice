@@ -245,6 +245,41 @@ public sealed class DataToolCoreTests
     }
 
     [Test]
+    public async Task SetManyAsync_writes_every_upsert_without_atomicity()
+    {
+        var api = new FakeDataApi();
+        var upserts = new[]
+        {
+            new DataEntryDto { Key = "k1", Value = Bytes("v1") },
+            new DataEntryDto { Key = "k2", Value = Bytes("v2") },
+        };
+
+        var result = await DataToolCore.SetManyAsync(api, Tree, upserts, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.TreeId, Is.EqualTo(Tree));
+            Assert.That(result.Count, Is.EqualTo(2));
+            Assert.That(api.Contains(Tree, "k1"), Is.True);
+            Assert.That(api.Contains(Tree, "k2"), Is.True);
+        });
+    }
+
+    [Test]
+    public async Task SetManyAsync_accepts_a_null_upsert_list_as_empty()
+    {
+        var api = new FakeDataApi();
+
+        var result = await DataToolCore.SetManyAsync(api, Tree, upserts: null, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Count, Is.EqualTo(0));
+            Assert.That(api.Count, Is.EqualTo(0));
+        });
+    }
+
+    [Test]
     public void SetManyAtomicCrossTreeAsync_rejects_a_null_batch_list()
     {
         var api = new FakeDataApi();

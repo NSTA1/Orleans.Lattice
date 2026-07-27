@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Api.Data;
 /// the authorization enforcement wired at the cluster grain fires automatically
 /// once the caller identity flows on the ambient credential context.
 /// </summary>
-internal sealed class LatticeDataApi(
+internal sealed partial class LatticeDataApi(
     IGrainFactory grainFactory,
     IOptions<LatticeApiDataOptions> apiOptions) : ILatticeDataApi
 {
@@ -107,6 +107,22 @@ internal sealed class LatticeDataApi(
         }
 
         return _grainFactory.SetManyAtomicAsync(treeBatches, operationId, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task SetManyAsync(
+        string treeId,
+        IReadOnlyList<DataEntry> upserts,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentNullException.ThrowIfNull(upserts);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var pairs = ToKeyValuePairs(upserts is List<DataEntry> list ? list : [.. upserts]);
+
+        var tree = _grainFactory.GetGrain<ILattice>(treeId);
+        return tree.SetManyAsync(pairs, cancellationToken);
     }
 
     /// <inheritdoc />
