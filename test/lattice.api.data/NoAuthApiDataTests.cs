@@ -112,6 +112,27 @@ public sealed class NoAuthApiDataTests
     }
 
     [Test]
+    public async Task get_on_unknown_tree_reports_miss_and_does_not_register_it()
+    {
+        // A read must never materialise a tree: probing an unknown tree must report
+        // a clean miss without routing into the shard root (which would register the
+        // tree and seed its shard roots as a write side-effect of a read).
+        const string tree = "noauth-ghost-tree";
+        var handle = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
+
+        var existedBefore = await handle.TreeExistsAsync();
+        var result = await _fixture.Api.GetAsync(tree, "any-key");
+        var existsAfter = await handle.TreeExistsAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(existedBefore, Is.False);
+            Assert.That(result.Found, Is.False, "an unknown tree reports a clean miss");
+            Assert.That(existsAfter, Is.False, "a read must not auto-register the tree");
+        });
+    }
+
+    [Test]
     public async Task bounded_range_read_returns_all_entries_without_auth()
     {
         const string tree = "noauth-range";

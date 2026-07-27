@@ -129,7 +129,9 @@ internal sealed class StateToolGroup : ILatticeApiMcpToolGroup
                 "lattice_state_get_tree_structure",
                 "Get tree structure",
                 "Returns the bounded structural node graph of one tree (shard roots, internal nodes, leaves), depth- "
-                + "and node-budget limited, optionally scoped to one shard or descended into a named node. An "
+                + "and node-budget limited, optionally scoped to one shard or descended into a named node. By default "
+                + "(no shardIndex) it enumerates every shard root - typically 64 - even for an empty tree, so scope to a "
+                + "single shard or lower maxNodes to bound the cost. An "
                 + "unknown tree is reported as a structured status (status=TreeNotFound), not a transport fault. "
                 + "Read-only."),
             Create(
@@ -139,7 +141,9 @@ internal sealed class StateToolGroup : ILatticeApiMcpToolGroup
                 "Scan entries",
                 "Scans a key-ordered, paged page of one tree's live entries, optionally scoped to a key range or "
                 + "filtered by a tag index, with a size-bounded per-entry value preview. Excludes tombstoned and "
-                + "TTL-expired entries. Not-found outcomes ride as a structured status, never a transport fault: an "
+                + "TTL-expired entries. The continuationToken is a single-use forward-only cursor: each token is "
+                + "consumed by the next page and cannot be replayed to re-read an earlier page - page forward and keep "
+                + "only the latest token. Not-found outcomes ride as a structured status, never a transport fault: an "
                 + "unknown tree reports status=TreeNotFound, and a tag-filtered scan whose indexName names no "
                 + "materialised index reports status=IndexNotFound (distinct from a real-but-empty index, which is "
                 + "status=Found with zero entries). Read-only."),

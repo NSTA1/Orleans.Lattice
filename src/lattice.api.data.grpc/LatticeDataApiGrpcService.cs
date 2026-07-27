@@ -341,6 +341,16 @@ internal sealed class LatticeDataApiGrpcService : LatticeDataApiGrpcServiceBase
             // guard already fired with nothing partially applied.
             throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
         }
+        catch (LatticeReplicationModeMismatchException ex)
+        {
+            // A CRDT (or plain LWW) write used a shape that differs from the
+            // single mode the replicated tree is declared with. This is a
+            // deterministic caller/configuration precondition - the write shape
+            // is wrong for the tree - not a server fault. Map to FailedPrecondition
+            // carrying the self-contained caller-facing message, ahead of the
+            // generic server-fault catch that would otherwise mask it as Internal.
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
+        }
         catch (LatticeSaturatedException)
         {
             // The tree is WAL-saturated and shed the operation. Map to the

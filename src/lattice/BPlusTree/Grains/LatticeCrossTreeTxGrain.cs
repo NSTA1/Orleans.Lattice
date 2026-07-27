@@ -130,6 +130,28 @@ internal sealed class LatticeCrossTreeTxGrain(
         // system-origin turn.
         batches = await EnforceCrossTreeSchemaAsync(batches);
 
+        // Caller-supplied idempotency: reject a reused operationId whose set of
+        // participating trees or keys changed, BEFORE the memoized re-attach below -
+        // otherwise an already-completed coordinator would silently replay its
+        // original verdict for a different write. This mirrors the single-tree
+        // saga's contract, which enforces fingerprint stability for any non-fresh
+        // phase (including Completed), not just an in-flight one. A null fingerprint
+        // (a vacuous empty-batch commit, or legacy pre-fingerprint state) skips the
+        // check and proceeds through the normal idempotent path.
+        if (state.State.Phase != CrossTreeTxPhase.NotStarted
+            && state.State.Fingerprint is { } persisted)
+        {
+            var incoming = ComputeFingerprint(BuildParticipants(batches));
+            if (!CryptographicOperations.FixedTimeEquals(persisted, incoming))
+            {
+                throw new LatticeIdempotencyKeyMismatchException(
+                    "This cross-tree atomic-write operationId was already submitted with a different set of "
+                    + "trees or keys. Reusing an operationId requires the exact same participating trees and "
+                    + "the exact same keys. Resubmit the original trees and keys, or use a new operationId.",
+                    OperationId);
+            }
+        }
+
         // Idempotent re-attach to an already-decided coordinator: return the
         // memoized verdict (or rethrow the original failure) without re-running.
         if (state.State.Phase == CrossTreeTxPhase.Completed)
@@ -164,21 +186,6 @@ internal sealed class LatticeCrossTreeTxGrain(
             state.State.Phase = CrossTreeTxPhase.Preparing;
             await RegisterKeepaliveAsync();
             await state.WriteStateAsync();
-        }
-        else
-        {
-            // Re-submit of an in-flight coordinator: enforce tree-set / key-set
-            // stability, mirroring the single-tree saga's idempotency contract.
-            var incoming = ComputeFingerprint(BuildParticipants(batches));
-            if (state.State.Fingerprint is not { } persisted
-                || !CryptographicOperations.FixedTimeEquals(persisted, incoming))
-            {
-                throw new LatticeIdempotencyKeyMismatchException(
-                    "This cross-tree atomic-write operationId was already submitted with a different set of "
-                    + "trees or keys. Reusing an operationId requires the exact same participating trees and "
-                    + "the exact same keys. Resubmit the original trees and keys, or use a new operationId.",
-                    OperationId);
-            }
         }
 
         await RunCoordinatorAsync();

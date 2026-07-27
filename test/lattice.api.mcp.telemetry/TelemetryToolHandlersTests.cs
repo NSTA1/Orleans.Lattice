@@ -594,6 +594,46 @@ public sealed class TelemetryToolHandlersTests
     }
 
     [Test]
+    public async Task MetricMetadata_named_lookup_that_resolves_nothing_carries_a_distinct_notice()
+    {
+        // Issue #1402 item 12: list_metrics returns Prometheus exposition names
+        // (…_total) that do not resolve verbatim here, which keys on the OTEL base
+        // instrument name. A named lookup resolving nothing must be a distinct
+        // signal - a success carrying a 'notice' advisory - not indistinguishable
+        // from an admitted-but-empty listing.
+        var client = Client("{\"status\":\"success\",\"data\":{}}", out _);
+
+        var result = await TelemetryToolHandlers.MetricMetadataAsync(
+            client, ReadAll(), CancellationToken.None, "orleans_lattice_backup_captures_total");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Success, Is.True);
+            Assert.That(result.Metrics, Is.Empty);
+            Assert.That(result.Notice, Is.Not.Null);
+            Assert.That(result.Notice, Does.Contain("orleans_lattice_backup_captures_total"));
+            Assert.That(result.Notice, Does.Contain("base instrument name"));
+        });
+    }
+
+    [Test]
+    public async Task MetricMetadata_unnamed_listing_carries_no_notice()
+    {
+        // The advisory is only for a specific named lookup that resolved nothing;
+        // a full (unnamed) listing that is simply empty is not flagged.
+        var client = Client("{\"status\":\"success\",\"data\":{}}", out _);
+
+        var result = await TelemetryToolHandlers.MetricMetadataAsync(
+            client, ReadAll(), CancellationToken.None, metric: null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Success, Is.True);
+            Assert.That(result.Notice, Is.Null);
+        });
+    }
+
+    [Test]
     public void MetricMetadata_rejects_a_null_policy()
         => Assert.ThrowsAsync<ArgumentNullException>(
             () => TelemetryToolHandlers.MetricMetadataAsync(

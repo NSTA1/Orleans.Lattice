@@ -192,7 +192,26 @@ internal static class TelemetryToolHandlers
                 return TelemetryMetricMetadataResult.Failure(StatusMessage(response.Status));
             }
 
-            return MapMetadata(response.Data, policy);
+            var mapped = MapMetadata(response.Data, policy);
+
+            // Make an unrecognised name a distinct signal: a specific metric name
+            // that resolves to no metadata is almost always a Prometheus exposition
+            // name (…_total/_bucket/_count/_sum) passed where the OTEL base
+            // instrument name is expected. Attach an advisory so the caller can
+            // tell this apart from an admitted-but-genuinely-empty listing.
+            if (metric is not null && mapped.Success && mapped.Metrics.Count == 0)
+            {
+                return mapped with
+                {
+                    Notice =
+                        $"No metadata resolved for '{metric}'. This is likely a Prometheus exposition "
+                        + "name; retry with the OTEL base instrument name (drop the _total/_bucket/_count/_sum "
+                        + "suffix), for example 'orleans_lattice_backup_captures' rather than "
+                        + "'orleans_lattice_backup_captures_total'.",
+                };
+            }
+
+            return mapped;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

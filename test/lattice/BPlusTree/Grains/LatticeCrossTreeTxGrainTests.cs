@@ -245,6 +245,41 @@ public class LatticeCrossTreeTxGrainTests
     }
 
     [Test]
+    public async Task CommitAsync_resubmit_with_different_keyset_after_completion_throws()
+    {
+        // Issue #1402 item 2: the fingerprint-stability guard must also fire once
+        // the coordinator has COMPLETED - not only while it is in flight. Before the
+        // fix a reused operationId with a changed tree/key set was silently replayed
+        // as the original memoized verdict instead of failing the precondition, so
+        // the single-tree and cross-tree idempotency contracts disagreed.
+        var (grain, state, _, _) = CreateGrain(["orders", "inventory"]);
+        var outcome = await grain.CommitAsync(Batches(("orders", "order:1", "A"), ("inventory", "sku:1", "B")));
+        Assert.That(state.State.Phase, Is.EqualTo(CrossTreeTxPhase.Completed), "the first submit runs to completion");
+        Assert.That(outcome, Is.EqualTo(CrossTreeAtomicWriteOutcome.Committed));
+
+        var ex = Assert.ThrowsAsync<LatticeIdempotencyKeyMismatchException>(() => grain.CommitAsync(
+            Batches(("orders", "order:CHANGED", "A"), ("inventory", "sku:1", "B"))));
+        Assert.That(ex!.Message, Does.Contain("different set of").And.Not.Contain("cluster logs"));
+    }
+
+    [Test]
+    public async Task CommitAsync_resubmit_with_same_keyset_after_completion_replays_memoized_outcome()
+    {
+        // The counterpart guarantee: an identical resubmit after completion stays a
+        // safe idempotent replay (the fingerprint matches), returning the memoized
+        // verdict rather than re-running the saga.
+        var (grain, _, _, participants) = CreateGrain(["orders", "inventory"]);
+        var rows = Batches(("orders", "order:1", "A"), ("inventory", "sku:1", "B"));
+        await grain.CommitAsync(rows);
+
+        var replay = await grain.CommitAsync(Batches(("orders", "order:1", "A"), ("inventory", "sku:1", "B")));
+
+        Assert.That(replay, Is.EqualTo(CrossTreeAtomicWriteOutcome.Committed));
+        // Finalize ran exactly once - the replay did not re-drive the coordinator.
+        await participants["orders"].Received(1).FinalizeAsync(true);
+    }
+
+    [Test]
     public async Task GetDecisionAsync_reflects_phase()
     {
         var (grain, state, _, _) = CreateGrain(["orders"]);

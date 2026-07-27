@@ -1062,10 +1062,9 @@ internal sealed class LatticeStateQuery(
                 ex);
         }
 
-        // The merge mode is declared per tree, so the CRDT shape tag is the
-        // same for every entry on the page; resolve it once and stamp each
-        // record with it (null for an opaque last-writer-wins tree).
-        var crdtShape = ResolveCrdtShape(request.TreeId);
+        // The per-entry CRDT shape is resolved from each entry's own per-key merge
+        // mode inside BuildEntryRecordAsync, so a local mixed-mode tree decodes each
+        // typed CRDT rather than reading it back as opaque internal serialization.
 
         // A view read bypasses the data-plane gate (it runs under a view-read
         // scope), so a prefix-granted caller's per-key pruning on the source is
@@ -1083,7 +1082,7 @@ internal sealed class LatticeStateQuery(
                 continue;
             }
 
-            var record = await BuildEntryRecordAsync(tree, entry.Key, entry.Value, previewBudget, crdtShape, cancellationToken)
+            var record = await BuildEntryRecordAsync(tree, request.TreeId, entry.Key, entry.Value, previewBudget, cancellationToken)
                 .ConfigureAwait(false);
             // Decode current members off the full snapshot value bytes (before the
             // preview clip) so the Data list shows a CRDT entry's materialised
@@ -1144,7 +1143,6 @@ internal sealed class LatticeStateQuery(
         var index = tagFactory.Create(tree, request.IndexName!);
         var pageSize = ClampPageSize(request.PageSize);
         var previewBudget = ClampScanPreviewBudget(request.ValuePreviewBudget);
-        var crdtShape = ResolveCrdtShape(request.TreeId);
 
         // Tag-filtered paging is keyed on the source key (the membership query
         // yields keys in ascending ordinal order); the continuation token is the
@@ -1177,7 +1175,7 @@ internal sealed class LatticeStateQuery(
             }
 
             records.Add(WithCurrentMembers(
-                BuildEntryRecord(key, versioned.Value, versioned.Version, versioned.ExpiresAtTicks, previewBudget, crdtShape),
+                BuildEntryRecord(key, versioned.Value, versioned.Version, versioned.ExpiresAtTicks, previewBudget, ResolveCrdtShape(request.TreeId, versioned.MergeMode), versioned.MergeMode),
                 request.TreeId,
                 versioned.Value));
         }
@@ -1240,7 +1238,8 @@ internal sealed class LatticeStateQuery(
             versioned.Version,
             versioned.ExpiresAtTicks,
             _apiOptions.SingleEntryValuePreviewBytes,
-            ResolveCrdtShape(treeId));
+            ResolveCrdtShape(treeId, versioned.MergeMode),
+            versioned.MergeMode);
 
         // For a typed CRDT entry, decode the full folded state into its current
         // member set so the consumer (the Explorer Data tab) can render the
@@ -1459,46 +1458,53 @@ internal sealed class LatticeStateQuery(
     /// the tree's shape, an unregistered shape, or a decode failure (corrupt or
     /// forward-incompatible bytes are swallowed rather than failing the read).
     /// </summary>
-    private IReadOnlyList<CrdtMemberValue> DecodeCurrentStateMembers(
+    private (bool Decoded, IReadOnlyList<CrdtMemberValue> Members) DecodeCurrentStateMembers(
         string treeId,
         byte[] value,
         string? crdtShape)
     {
         if (crdtShape is null)
         {
-            return Array.Empty<CrdtMemberValue>();
+            // Opaque last-writer-wins (or a blob with no member shape): nothing to
+            // decode, and the raw bytes are the value.
+            return (false, Array.Empty<CrdtMemberValue>());
         }
 
         var shapeRegistry = _services.GetService<CrdtShapeRegistry>();
         if (shapeRegistry is null)
         {
-            return Array.Empty<CrdtMemberValue>();
+            // A minimal deployment without the shape registry cannot decode the
+            // logical value; the caller flags the entry raw.
+            return (false, Array.Empty<CrdtMemberValue>());
         }
 
         var decoderRegistry = _services.GetService<CrdtProvenanceDecoderRegistry>()
             ?? CrdtProvenanceDecoderRegistry.Default;
         if (!decoderRegistry.TryGet(crdtShape, out var decoder))
         {
-            return Array.Empty<CrdtMemberValue>();
+            return (false, Array.Empty<CrdtMemberValue>());
         }
 
         var shape = shapeRegistry.TryGet(treeId, decoder.Mode);
         if (shape is null)
         {
-            return Array.Empty<CrdtMemberValue>();
+            return (false, Array.Empty<CrdtMemberValue>());
         }
 
         try
         {
             var state = shape.DeserializeState(value);
-            return decoder.DecodeCurrentValue(state);
+            // A successful decode - even to zero live members - is authoritative:
+            // the entry is a genuine typed CRDT whose logical value is known, so it
+            // is not raw.
+            return (true, decoder.DecodeCurrentValue(state));
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // A value whose bytes cannot be decoded (corrupt or
             // forward-incompatible) carries no members rather than failing the
-            // detail read.
-            return Array.Empty<CrdtMemberValue>();
+            // detail read, and is flagged raw by the caller.
+            return (false, Array.Empty<CrdtMemberValue>());
         }
     }
 
@@ -1513,10 +1519,24 @@ internal sealed class LatticeStateQuery(
     {
         if (record.CrdtShape is null)
         {
-            return record;
+            // Opaque last-writer-wins (or a view/blob with no member shape): the
+            // preview bytes are the raw stored value. Flag it so no consumer
+            // mistakes application-defined bytes for a decoded logical projection.
+            return record with { Raw = true };
         }
 
-        var members = DecodeCurrentStateMembers(treeId, fullValue, record.CrdtShape);
+        var (decoded, members) = DecodeCurrentStateMembers(treeId, fullValue, record.CrdtShape);
+        if (!decoded)
+        {
+            // A typed CRDT whose logical value could not be decoded here (no shape
+            // registry / shape / decoder, or a decode failure): the bytes are
+            // internal CRDT serialization, so flag them raw rather than presenting
+            // them as if they were the value.
+            return record with { Raw = true };
+        }
+
+        // Decoded (possibly to zero live members) - not raw. Preserve the existing
+        // graceful-degrade contract of only stamping CurrentMembers when non-empty.
         return members.Count > 0 ? record with { CurrentMembers = members } : record;
     }
 
@@ -1697,17 +1717,19 @@ internal sealed class LatticeStateQuery(
 
     private async Task<EntryRecord> BuildEntryRecordAsync(
         ILattice tree,
+        string treeId,
         string key,
         byte[] value,
         int previewBudget,
-        string? crdtShape,
         CancellationToken cancellationToken)
     {
         // The cursor page carries the snapshot value bytes (used verbatim for
-        // the preview and full length); the per-entry version / TTL is overlaid
-        // from a metadata read so the record carries HLC and expiry.
+        // the preview and full length); the per-entry version / TTL / merge mode
+        // is overlaid from a metadata read so the record carries HLC, expiry, and
+        // the per-key convergence discriminator.
         var versioned = await tree.GetWithVersionAsync(key, cancellationToken).ConfigureAwait(false);
-        return BuildEntryRecord(key, value, versioned.Version, versioned.ExpiresAtTicks, previewBudget, crdtShape);
+        var crdtShape = ResolveCrdtShape(treeId, versioned.MergeMode);
+        return BuildEntryRecord(key, value, versioned.Version, versioned.ExpiresAtTicks, previewBudget, crdtShape, versioned.MergeMode);
     }
 
     private static EntryRecord BuildEntryRecord(
@@ -1716,7 +1738,8 @@ internal sealed class LatticeStateQuery(
         Orleans.Lattice.HybridLogicalClock version,
         long expiresAtTicks,
         int previewBudget,
-        string? crdtShape)
+        string? crdtShape,
+        LatticeMergeMode? mergeMode)
     {
         var fullLength = value.Length;
         var truncated = fullLength > previewBudget;
@@ -1732,43 +1755,48 @@ internal sealed class LatticeStateQuery(
             IsTombstone = false,
             ExpiresAtTicks = expiresAtTicks,
             CrdtShape = crdtShape,
+            MergeMode = mergeMode,
         };
     }
 
     /// <summary>
-    /// Resolves the CRDT shape tag for <paramref name="treeId"/>.
+    /// Resolves the CRDT shape tag for a single entry, preferring the entry's own
+    /// per-key merge mode (recorded by the leaf and threaded through the read) over
+    /// the per-tree merge-mode map.
     /// <para>
-    /// An ordinary tree's shape is its declared per-tree
-    /// <see cref="LatticeMergeMode"/> (the only thing the system knows about a
-    /// value's shape - the core stores every value as opaque bytes), so an
-    /// undeclared (single-cluster) or last-writer-wins tree yields
-    /// <see langword="null"/> and a typed CRDT tree yields the mode name (e.g.
-    /// <c>"OrSet"</c>).
+    /// This is what lets a local, non-replicated, or mixed-mode tree decode a typed
+    /// CRDT's logical value: the per-tree <see cref="ILatticeMergeModeResolver"/>
+    /// returns <see langword="null"/> for every tree in a single-cluster deployment,
+    /// so without the per-key discriminator a PN-counter (say) would read back as its
+    /// opaque internal serialization. When the per-key mode is present it wins; a
+    /// last-writer-wins (or absent) per-key mode yields <see langword="null"/> (an
+    /// opaque value).
     /// </para>
     /// <para>
-    /// A materialised-view tree (<c>view-*</c>) has no entry in the merge-mode map
-    /// (views are not replicated trees), so its shape is derived from its view
-    /// kind: a predicate / key-preserving view stores its source tree's value
-    /// verbatim and therefore mirrors the source tree's merge mode, while an
-    /// aggregation view (aggregation rows) and a history / accumulative view
-    /// (<c>HistoryRow</c> blobs) are not member CRDTs and yield
-    /// <see langword="null"/> (rendered as an opaque blob).
-    /// </para>
-    /// <para>
-    /// A tag-index membership tree (<c>tag-*</c>) is resolved through the same
-    /// merge-mode map as any other tree: a flag-membership index declared as
-    /// <c>OrFlag</c> / <c>RwFlag</c> yields that shape and renders its current
-    /// boolean state, while a default (last-writer-wins) index stores a one-byte
-    /// presence sentinel and correctly yields <see langword="null"/>.
+    /// A materialised-view tree (<c>view-*</c>) ignores the per-key mode and resolves
+    /// by view kind: a predicate / key-preserving view mirrors its source tree's merge
+    /// mode, while an aggregation or history / accumulative view is not a member CRDT
+    /// and yields <see langword="null"/> (rendered as an opaque blob). A tag-index
+    /// membership tree (<c>tag-*</c>) resolves through the same per-key / per-tree path
+    /// as any other tree: a flag-membership index yields its flag shape, while a
+    /// default (last-writer-wins) index correctly yields <see langword="null"/>.
     /// </para>
     /// </summary>
-    private string? ResolveCrdtShape(string treeId)
+    private string? ResolveCrdtShape(string treeId, LatticeMergeMode? perKeyMode)
     {
         if (IsViewTree(treeId))
         {
             return ResolveViewCrdtShape(treeId);
         }
 
+        if (perKeyMode is not null)
+        {
+            return perKeyMode is LatticeMergeMode.LwwRegister ? null : perKeyMode.Value.ToString();
+        }
+
+        // No per-key discriminator recorded (a plain last-writer-wins key, or a
+        // pre-existing entry written before the leaf stamped modes): fall back to
+        // the per-tree map so a declared replicated tree still resolves its shape.
         var mode = _services.GetService<ILatticeMergeModeResolver>()?.Resolve(treeId);
         return mode is null or LatticeMergeMode.LwwRegister ? null : mode.Value.ToString();
     }

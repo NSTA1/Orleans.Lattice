@@ -24,4 +24,12 @@ internal sealed record McpBackupChain
     /// was not found.
     /// </summary>
     public IReadOnlyList<string> ChainBackupIds { get; init; } = Array.Empty<string>();
+
+    /// <summary>
+    /// The content-addressed artifacts the described backup references, each
+    /// carrying the <see cref="McpBackupArtifact.ArtifactId"/> that
+    /// <c>lattice_backup_export_artifact</c> needs to drive an export. Empty when
+    /// the backup was not found or references no artifacts.
+    /// </summary>
+    public IReadOnlyList<McpBackupArtifact> Artifacts { get; init; } = Array.Empty<McpBackupArtifact>();
 }

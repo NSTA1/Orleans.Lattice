@@ -39,6 +39,38 @@ public sealed class BackupToolInvocationsTests
     }
 
     [Test]
+    public async Task Describe_surfaces_artifact_ids_that_drive_export_artifact()
+    {
+        // Issue #1402 item 6: export_artifact needs an artifactId, and describe is
+        // the tool that must expose it. Prove the described backup surfaces its
+        // content-addressed artifacts and that the surfaced id actually drives an
+        // export end-to-end.
+        var control = new FakeLatticeBackupControl();
+        var created = await BackupToolInvocations.CreateBackupAsync(
+            control, "nightly", "orders", null, null, 0, CancellationToken.None);
+
+        var described = await BackupToolInvocations.DescribeBackupAsync(
+            control, created.BackupId, CancellationToken.None);
+
+        Assert.That(described.Artifacts, Is.Not.Empty, "describe must expose the backup's artifacts");
+        var artifact = described.Artifacts[0];
+        Assert.Multiple(() =>
+        {
+            Assert.That(artifact.ArtifactId, Is.EqualTo("artifact-0"));
+            Assert.That(artifact.ContentHash, Is.EqualTo("hash-0"));
+            Assert.That(artifact.ByteLength, Is.EqualTo(12));
+            Assert.That(artifact.ChunkCount, Is.EqualTo(1));
+        });
+
+        // The surfaced id is drivable: seed its bytes and export the first page.
+        control.SeedArtifact(created.BackupId, artifact.ArtifactId, Encoding.UTF8.GetBytes("payload-bytes"));
+        var page = await BackupToolInvocations.ExportArtifactAsync(
+            control, created.BackupId, artifact.ArtifactId, chunkOffset: 0, maxBytes: 0, CancellationToken.None);
+
+        Assert.That(page.Base64Chunk, Is.Not.Empty);
+    }
+
+    [Test]
     public async Task Create_incremental_records_the_base_and_chain()
     {
         var control = new FakeLatticeBackupControl();

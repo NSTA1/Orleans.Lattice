@@ -57,4 +57,26 @@ public sealed record EntryRecord
     /// empty CRDT, or when no decoder is available for the shape.
     /// </summary>
     [Id(8)] public IReadOnlyList<CrdtMemberValue> CurrentMembers { get; init; } = Array.Empty<CrdtMemberValue>();
+
+    /// <summary>
+    /// The per-key convergence discriminator recorded for this entry, or
+    /// <see langword="null"/> when the entry is a plain last-writer-wins value.
+    /// Resolved from the leaf's own per-key mode map, so it is reported even on a
+    /// local, non-replicated, or mixed-mode tree where the per-tree merge-mode
+    /// resolver reports nothing. Additive; pre-existing callers may ignore it.
+    /// </summary>
+    [Id(9)] public LatticeMergeMode? MergeMode { get; init; }
+
+    /// <summary>
+    /// <see langword="true"/> when <see cref="ValuePreview"/> is the raw stored
+    /// bytes rather than a decoded logical CRDT projection - i.e. a genuinely
+    /// opaque value (plain last-writer-wins), or a typed CRDT whose logical value
+    /// could not be decoded here (no registered shape/decoder, or a deployment
+    /// without the CRDT shape registry). When <see langword="false"/> the entry's
+    /// logical value decoded successfully and is described by
+    /// <see cref="CrdtShape"/> / <see cref="CurrentMembers"/>. Internal CRDT
+    /// serialization is never presented as if it were the value without this flag
+    /// set. Additive; pre-existing callers may ignore it.
+    /// </summary>
+    [Id(10)] public bool Raw { get; init; }
 }

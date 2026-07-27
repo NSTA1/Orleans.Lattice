@@ -29,6 +29,16 @@ public sealed record TelemetryMetricMetadataResult
     /// <summary>The admitted metadata entries.</summary>
     public IReadOnlyList<TelemetryMetricMetadata> Metrics { get; init; } = [];
 
+    /// <summary>
+    /// A non-fatal advisory populated when a specific metric name was requested
+    /// but resolved to no metadata - typically because a Prometheus exposition
+    /// name (with a <c>_total</c>/<c>_bucket</c>/<c>_count</c>/<c>_sum</c> suffix)
+    /// was passed instead of the OTEL base instrument name. This makes an
+    /// unrecognised name a distinct signal from an admitted-but-genuinely-empty
+    /// result; otherwise <see langword="null"/>.
+    /// </summary>
+    public string? Notice { get; init; }
+
     /// <summary>Creates a failed result carrying <paramref name="error"/>.</summary>
     /// <param name="error">The failure reason.</param>
     /// <returns>A failed result.</returns>
