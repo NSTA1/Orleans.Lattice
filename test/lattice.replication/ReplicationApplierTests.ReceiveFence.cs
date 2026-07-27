@@ -36,7 +36,7 @@ public partial class ReplicationApplierTests
             .Returns(true);
         hwm.GetVectorAsync(Arg.Any<CancellationToken>()).Returns(new VersionVector());
         var gate = new ToggleReceiveGate { Paused = true };
-        var applier = new ReplicationApplier(factory, Monitor(), receiveGate: gate);
+        var applier = new ReplicationApplier(factory, Monitor(), receiveGate: gate, replicationContext: new AnyTreeLwwContext());
         return (applier, apply, gate);
     }
 

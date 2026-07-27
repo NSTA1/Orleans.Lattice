@@ -131,7 +131,8 @@ public partial class BootstrapAtomicVisibilityTests
                 var producerFeed = new ChangeFeed(producerCluster.Client, producerOptions, producerResolver);
                 var receiverApplier = new ReplicationApplier(
                     receiverCluster.Client,
-                    receiverOptions);
+                    receiverOptions,
+                    replicationContext: new OverridesReplicationContext());
 
                 using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
                 var pumpErrors = new System.Collections.Concurrent.ConcurrentQueue<Exception>();

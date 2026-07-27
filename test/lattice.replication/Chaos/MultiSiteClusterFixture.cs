@@ -235,7 +235,8 @@ internal sealed class MultiSiteClusterFixture
                 options,
                 crdtShapes: siloShapes,
                 logger: null,
-                peerStats: _peerStats[i]);
+                peerStats: _peerStats[i],
+                replicationContext: new ConfiguredLatticeReplicationContext(resolver, options));
         }
     }
 

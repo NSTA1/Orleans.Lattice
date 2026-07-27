@@ -57,7 +57,7 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyAsync_bootstrap_or_set_full_state_installs_into_empty_receiver()
     {
-        var (applier, lattice, apply, _) = CreateTypedCrdtApplier();
+        var (applier, lattice, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
         var entry = SnapshotEntry("k", Hlc(10), LatticeMergeMode.OrSet,
             EncodeOrSet(s => s.Add(OrSetMember, "site-b", 1)));
 
@@ -78,7 +78,7 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyAsync_bootstrap_pn_counter_full_state_merges()
     {
-        var (applier, lattice, _, _) = CreateTypedCrdtApplier();
+        var (applier, lattice, _, _) = CreateTypedCrdtApplier(LatticeMergeMode.PnCounter);
         var entry = SnapshotEntry("k", Hlc(11), LatticeMergeMode.PnCounter,
             EncodePnCounter(c => c.Increment("site-b", 7)));
 
@@ -95,7 +95,7 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyAsync_bootstrap_version_vector_full_state_merges()
     {
-        var (applier, lattice, _, _) = CreateTypedCrdtApplier();
+        var (applier, lattice, _, _) = CreateTypedCrdtApplier(LatticeMergeMode.VersionVector);
         var remoteHlc = Hlc(42, 3);
         var entry = SnapshotEntry("k", Hlc(12), LatticeMergeMode.VersionVector,
             EncodeVersionVector(v => v.Entries["site-b"] = remoteHlc));
@@ -113,7 +113,7 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyAsync_bootstrap_mv_register_full_state_merges()
     {
-        var (applier, lattice, _, _) = CreateTypedCrdtApplier();
+        var (applier, lattice, _, _) = CreateTypedCrdtApplier(LatticeMergeMode.MvRegister);
         var entry = SnapshotEntry("k", Hlc(13), LatticeMergeMode.MvRegister,
             EncodeMvRegister(r => r.Set("site-b", new byte[] { 0xab })));
 
@@ -130,7 +130,7 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyAsync_bootstrap_or_flag_full_state_merges()
     {
-        var (applier, lattice, _, _) = CreateTypedCrdtApplier();
+        var (applier, lattice, _, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrFlag);
         var entry = SnapshotEntry("k", Hlc(14), LatticeMergeMode.OrFlag,
             EncodeOrFlag(f => f.Enable("site-b", 1)));
 
@@ -147,7 +147,7 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyAsync_bootstrap_rw_flag_full_state_merges()
     {
-        var (applier, lattice, _, _) = CreateTypedCrdtApplier();
+        var (applier, lattice, _, _) = CreateTypedCrdtApplier(LatticeMergeMode.RwFlag);
         var entry = SnapshotEntry("k", Hlc(15), LatticeMergeMode.RwFlag,
             EncodeRwFlag(f => f.Enable("site-b", 1)));
 
@@ -164,7 +164,7 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyAsync_bootstrap_sequence_full_state_merges()
     {
-        var (applier, lattice, _, _) = CreateTypedCrdtApplier();
+        var (applier, lattice, _, _) = CreateTypedCrdtApplier(LatticeMergeMode.Sequence);
         var entry = SnapshotEntry("k", Hlc(16), LatticeMergeMode.Sequence,
             EncodeRga(r => r.InsertAfter(default, "site-b", new byte[] { 0x01 })));
 
@@ -189,7 +189,7 @@ public partial class ReplicationApplierTests
         // full state carries a different member. A state-based CRDT merge
         // must yield the union - neither the local add nor the snapshot add
         // may be clobbered (a blind LWW overwrite would lose one).
-        var (applier, lattice, _, _) = CreateTypedCrdtApplier();
+        var (applier, lattice, _, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
         var localMember = new byte[] { 0x01 };
         var remoteMember = new byte[] { 0x02 };
         var existing = EncodeOrSet(s => s.Add(localMember, "site-a", 1));
@@ -215,7 +215,7 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyAsync_bootstrap_full_state_advances_high_water_mark()
     {
-        var (applier, _, _, hwm) = CreateTypedCrdtApplier();
+        var (applier, _, _, hwm) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
         var ts = Hlc(77, 2);
         var entry = SnapshotEntry("k", ts, LatticeMergeMode.OrSet,
             EncodeOrSet(s => s.Add(OrSetMember, "site-b", 1)));
@@ -229,7 +229,7 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyAsync_bootstrap_full_state_retries_on_cas_failure()
     {
-        var (applier, lattice, _, _) = CreateTypedCrdtApplier();
+        var (applier, lattice, _, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
         // A non-empty receiver forces the merge-and-write loop (not the
         // verbatim install fast-path), so each CAS attempt re-reads and
         // re-writes; the first two lose the race.
@@ -254,7 +254,7 @@ public partial class ReplicationApplierTests
         // A CRDT-mode Set with neither a Delta (steady-state) nor a Value
         // (bootstrap) is malformed and must fault rather than silently
         // installing empty state.
-        var (applier, _, _, _) = CreateTypedCrdtApplier();
+        var (applier, _, _, _) = CreateTypedCrdtApplier(LatticeMergeMode.PnCounter);
         var entry = SetEntry("k", Hlc(1)) with
         {
             Mode = LatticeMergeMode.PnCounter,

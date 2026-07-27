@@ -102,7 +102,8 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyAsync_non_cross_tree_terminal_passes_null_operation_id()
     {
-        var (applier, apply) = CreateCrossTreeApplier(replicatedTrees: null);
+        var (applier, apply) = CreateCrossTreeApplier(
+            new Dictionary<string, LatticeMergeMode> { [Tree] = LatticeMergeMode.LwwRegister });
         var txid = Guid.NewGuid();
 
         var entry = new WalRecord

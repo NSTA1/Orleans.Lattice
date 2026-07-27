@@ -136,7 +136,7 @@ public partial class ReplicationApplierTests
         factory.GetGrain<IReplicationHighWaterMarkGrain>(Tree).Returns(hwm);
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(HybridLogicalClock.Zero);
         hwm.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>()).Returns(true);
-        var applier = new ReplicationApplier(factory, Monitor());
+        var applier = new ReplicationApplier(factory, Monitor(), replicationContext: new AnyTreeLwwContext());
 
         var ts = Hlc(10, 1);
         var local = SetEntry("k", ts, origin: LocalCluster);
@@ -181,7 +181,7 @@ public partial class ReplicationApplierTests
         factory.GetGrain<IReplicationHighWaterMarkGrain>(Tree).Returns(hwm);
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(HybridLogicalClock.Zero);
         hwm.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>()).Returns(true);
-        var applier = new ReplicationApplier(factory, monitor);
+        var applier = new ReplicationApplier(factory, monitor, replicationContext: new AnyTreeLwwContext());
 
         // Cache holds 64 entries; first 64 distinct entries all apply.
         for (var i = 0; i < 64; i++)

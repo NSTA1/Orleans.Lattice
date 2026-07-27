@@ -28,7 +28,7 @@ public partial class ReplicationApplierTests
         hwm.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>()).Returns(true);
         hwm.GetVectorAsync(Arg.Any<CancellationToken>()).Returns(new VersionVector());
         var stats = new ReplicationPeerStats();
-        var applier = new ReplicationApplier(factory, Monitor(), crdtShapes: null, logger: null, peerStats: stats);
+        var applier = new ReplicationApplier(factory, Monitor(), crdtShapes: null, logger: null, peerStats: stats, replicationContext: new AnyTreeLwwContext());
         return (applier, apply, stats);
     }
 

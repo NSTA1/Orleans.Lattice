@@ -115,7 +115,7 @@ public partial class ReplicationShipperGrainTests
         var applierOptions = new LatticeReplicationOptions { ClusterId = Peer };
         applierMonitor.CurrentValue.Returns(applierOptions);
         applierMonitor.Get(Arg.Any<string>()).Returns(applierOptions);
-        var applier = new ReplicationApplier(applierFactory, applierMonitor, receiveGate: gate);
+        var applier = new ReplicationApplier(applierFactory, applierMonitor, receiveGate: gate, replicationContext: new OverridesReplicationContext());
 
         var transport = new ReplayingApplierTransport(walRecordEncoder, applier);
 

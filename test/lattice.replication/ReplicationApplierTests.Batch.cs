@@ -553,7 +553,7 @@ public partial class ReplicationApplierTests
         monitor.CurrentValue.Returns(options);
         monitor.Get(Arg.Any<string>()).Returns(options);
 
-        var applier = new ReplicationApplier(factory, monitor);
+        var applier = new ReplicationApplier(factory, monitor, replicationContext: new AnyTreeLwwContext());
         return (applier, factory, applies, hwms);
     }
 
