@@ -247,7 +247,7 @@ internal static class StateToolHandlers
         CancellationToken cancellationToken,
         [Description("Logical tree identifier.")]
         string treeId,
-        [Description("When set, restrict the response to the single shard with this index instead of every shard root.")]
+        [Description("When set, restrict the response to the single shard with this index instead of every shard root. When null, the graph enumerates all shard roots (up to the tree's shard count, typically 64) even for an empty tree - scope to a single shard, or rely on maxNodes, to bound the cost.")]
         int? shardIndex = null,
         [Description("When set, descend into the internal node with this id (a nodeId from a prior response) and return only that subtree.")]
         string? subPathNodeId = null,
@@ -287,7 +287,7 @@ internal static class StateToolHandlers
         bool reverse = false,
         [Description("Max entries per page (values <= 0 use the configured default; larger values are clamped to the configured maximum).")]
         int pageSize = 0,
-        [Description("Opaque continuation token from a prior page; null or empty opens a fresh scan. On a continuation, mode is ignored.")]
+        [Description("Opaque continuation token from a prior page; null or empty opens a fresh scan. Single-use and forward-only: consumed by the page it fetches and cannot be replayed to re-read an earlier page. On a continuation, mode is ignored.")]
         string? continuationToken = null,
         [Description("Per-entry value-preview byte budget (values <= 0 use the configured default; larger values are clamped). The full value length is always reported.")]
         int valuePreviewBudget = 0,

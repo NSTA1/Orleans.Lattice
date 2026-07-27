@@ -31,6 +31,48 @@ public sealed class CrdtApiDataTests
     }
 
     [Test]
+    public async Task point_read_is_self_describing_for_a_local_crdt_key()
+    {
+        // A local, non-replicated tree has no per-tree merge mode, yet the leaf
+        // records the per-key discriminator on the CRDT write. The point read must
+        // report that mode rather than reading the counter back as opaque internal
+        // serialization.
+        const string tree = "crdt-selfdescribe";
+        await _fixture.RegisterTreeAsync(tree);
+
+        await _fixture.Api.CounterIncrementAsync(tree, "c", "r1", 7);
+
+        var read = await _fixture.Api.GetAsync(tree, "c");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(read.Found, Is.True);
+            Assert.That(read.MergeMode, Is.EqualTo(LatticeMergeMode.PnCounter));
+            // The data plane returns the raw internal bytes and flags them; the
+            // logical value comes from the typed getter.
+            Assert.That(read.Raw, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task point_read_flags_a_plain_value_as_raw_with_no_mode()
+    {
+        const string tree = "crdt-plainvalue";
+        await _fixture.RegisterTreeAsync(tree);
+
+        await _fixture.Api.SetAsync(tree, "k", new byte[] { 1, 2, 3 });
+
+        var read = await _fixture.Api.GetAsync(tree, "k");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(read.Found, Is.True);
+            Assert.That(read.MergeMode, Is.Null, "a plain last-writer-wins value has no per-key mode");
+            Assert.That(read.Raw, Is.True, "the data plane always returns raw stored bytes");
+        });
+    }
+
+    [Test]
     public async Task pn_counter_sums_increments_and_decrements()
     {
         const string tree = "crdt-counter";

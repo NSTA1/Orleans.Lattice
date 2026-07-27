@@ -124,8 +124,10 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
                 SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 Title = "Describe backup",
                 Description =
-                    "Describes a single backup and its base-first restore chain. Reports found=false when no backup "
-                    + "with the id exists. Read-only.",
+                    "Describes a single backup and its base-first restore chain. Also surfaces the backup's "
+                    + "content-addressed artifacts (each with its artifactId, content hash, and byte length) so "
+                    + "lattice_backup_export_artifact can be driven from the returned artifactId. Reports "
+                    + "found=false when no backup with the id exists. Read-only.",
                 ReadOnly = true,
                 Destructive = false,
                 UseStructuredContent = true,
@@ -199,6 +201,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
                 Title = "Export backup artifact",
                 Description =
                     "Exports one bounded page of a backup artifact's bytes, base64-encoded, resuming from chunkOffset. "
+                    + "Obtain the artifactId from lattice_backup_describe, which lists each backup's artifacts. "
                     + "Surfaces nextChunkOffset and endOfStream so a caller drains a large artifact without the server "
                     + "materialising it whole. Read-only.",
                 ReadOnly = true,

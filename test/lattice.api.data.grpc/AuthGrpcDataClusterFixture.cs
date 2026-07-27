@@ -162,6 +162,13 @@ internal sealed class AuthGrpcDataClusterFixture
         return new GrpcDataHost(host, channel);
     }
 
+    /// <summary>
+    /// The tree-id prefix that <see cref="PrefixMergeModeResolver"/> declares as a
+    /// cross-cluster-replicated <see cref="LatticeMergeMode.PnCounter"/> tree, so a
+    /// mismatched-shape write against it exercises the origin write guard.
+    /// </summary>
+    public const string ReplicatedCounterPrefix = "replicated-counter-";
+
     private sealed class SiloConfigurator : ISiloConfigurator
     {
         public void Configure(ISiloBuilder siloBuilder)
@@ -177,12 +184,28 @@ internal sealed class AuthGrpcDataClusterFixture
             siloBuilder.AddLatticeMembership();
             siloBuilder.Services
                 .AddSingleton<ILatticeCredentialAuthenticator, ApiDataGrpcTestCredentialAuthenticator>();
+            siloBuilder.Services
+                .AddSingleton<ILatticeMergeModeResolver, PrefixMergeModeResolver>();
             siloBuilder.AddLatticeAuth(options =>
             {
                 options.DefaultEffect = LatticeEffect.Deny;
                 options.BootstrapAdministrators.Add(BootstrapAdmin);
             });
         }
+    }
+
+    /// <summary>
+    /// Declares trees whose id starts with <see cref="ReplicatedCounterPrefix"/> as
+    /// replicated under <see cref="LatticeMergeMode.PnCounter"/>; every other tree
+    /// resolves to <see langword="null"/> (unenrolled), so the fixture's other tests
+    /// are unaffected.
+    /// </summary>
+    private sealed class PrefixMergeModeResolver : ILatticeMergeModeResolver
+    {
+        public LatticeMergeMode? Resolve(string treeId) =>
+            treeId.StartsWith(ReplicatedCounterPrefix, StringComparison.Ordinal)
+                ? LatticeMergeMode.PnCounter
+                : null;
     }
 }
 

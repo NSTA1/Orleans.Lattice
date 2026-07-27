@@ -133,14 +133,36 @@ internal sealed partial class LatticeDataApi(
         cancellationToken.ThrowIfCancellationRequested();
 
         var tree = _grainFactory.GetGrain<ILattice>(treeId);
-        var value = await tree.GetAsync(key, cancellationToken).ConfigureAwait(false);
+
+        // A read must never materialise a tree: probing an unknown tree reports a
+        // clean miss rather than routing into the shard root (which would register
+        // the tree and seed its shard roots as a write side-effect of a read).
+        if (!await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return new DataReadResult
+            {
+                TreeId = treeId,
+                Key = key,
+                Found = false,
+                Value = Array.Empty<byte>(),
+            };
+        }
+
+        // A versioned read (single shard RPC, same cost as the plain get) so the
+        // result can report the entry's per-key merge mode and flag the payload
+        // raw - a typed CRDT's value bytes are its internal serialization, never a
+        // decoded logical projection on the data plane.
+        var versioned = await tree.GetWithVersionAsync(key, cancellationToken).ConfigureAwait(false);
+        var found = versioned.Value is not null;
 
         return new DataReadResult
         {
             TreeId = treeId,
             Key = key,
-            Found = value is not null,
-            Value = value ?? Array.Empty<byte>(),
+            Found = found,
+            Value = versioned.Value ?? Array.Empty<byte>(),
+            MergeMode = found ? versioned.MergeMode : null,
+            Raw = found,
         };
     }
 
@@ -202,7 +224,11 @@ internal sealed partial class LatticeDataApi(
         foreach (var entry in page.Entries)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            entries.Add(new DataEntry { Key = entry.Key, Value = entry.Value });
+            // The bulk range read returns raw stored bytes verbatim; flag them so a
+            // consumer never mistakes a typed CRDT's internal serialization for a
+            // decoded value. Per-key mode is not resolved here (the cursor carries
+            // none) - a self-describing per-key read is the point read or scan_entries.
+            entries.Add(new DataEntry { Key = entry.Key, Value = entry.Value, Raw = true });
         }
 
         string? continuation = page.HasMore ? cursorId : null;

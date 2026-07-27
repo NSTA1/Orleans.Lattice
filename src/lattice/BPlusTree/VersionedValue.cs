@@ -29,4 +29,15 @@ public sealed record VersionedValue
     /// <c>0</c> for persisted state and callers that pre-date the field.
     /// </summary>
     [Id(2)] public long ExpiresAtTicks { get; init; }
+
+    /// <summary>
+    /// The per-key convergence discriminator recorded by the leaf for this key,
+    /// or <see langword="null"/> when the key is a plain last-writer-wins row (or
+    /// no mode has been recorded). Surfaced so read/projection callers can decode
+    /// a typed CRDT's logical value - and flag genuinely opaque payloads as raw -
+    /// even on a local, non-replicated, or mixed-mode tree, where the per-tree
+    /// merge-mode resolver reports nothing. Additive; defaults to <see langword="null"/>
+    /// for persisted state and callers that pre-date the field.
+    /// </summary>
+    [Id(3)] public LatticeMergeMode? MergeMode { get; init; }
 }

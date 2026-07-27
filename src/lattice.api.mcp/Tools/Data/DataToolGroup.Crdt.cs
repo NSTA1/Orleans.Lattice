@@ -287,8 +287,13 @@ internal sealed partial class DataToolGroup
                     + "is a dictionary that converges by recursive per-key merge: each field is itself a CRDT (here "
                     + "a keep-concurrent-values register), so concurrent writes to different fields both survive and "
                     + "concurrent writes to one field are kept as concurrent values. Choose set (needs field, "
-                    + "replicaId, value) or remove (needs field). The host must have registered the map shape for "
-                    + "the tree. Fails closed: a caller who may not write the key is denied. Invalid base64 is a "
+                    + "replicaId, value) or remove (needs field). LIMITATION: an OR-Map requires a host-registered "
+                    + "CrdtShape (declared at silo startup via AddOrMapShape<TKey,TValue>); there is no MCP tool to "
+                    + "register a shape, so OR-Map writes only work on trees pre-provisioned host-side. A write to a "
+                    + "tree with no registered shape returns a clean FailedPrecondition caller error (not a server "
+                    + "fault) naming the missing registration - note this is asymmetric with lattice_data_ormap_get, "
+                    + "which returns an empty map rather than erroring on the same unprovisioned tree. Fails closed: a "
+                    + "caller who may not write the key is denied. Invalid base64 is a "
                     + "caller error." + CrdtModeNote + " Destructive.",
                 ReadOnly = false,
                 Destructive = true,
@@ -307,7 +312,10 @@ internal sealed partial class DataToolGroup
                     "Reads an OR-Map's live fields, each mapped to its current concurrent value bytes (one "
                     + "normally, more than one only while a field's concurrent writes are unresolved), each value "
                     + "base64-encoded. Tombstoned and absent fields are omitted; an absent or unreadable key yields "
-                    + "an empty map, never a fault. Read-only.",
+                    + "an empty map, never a fault. Note the asymmetry with lattice_data_ormap (write): on a tree "
+                    + "with no host-registered OR-Map shape this read still returns an empty map, whereas a write "
+                    + "returns a FailedPrecondition caller error - so an empty read does not imply the map is "
+                    + "writable via MCP. Read-only.",
                 ReadOnly = true,
                 Destructive = false,
                 UseStructuredContent = true,

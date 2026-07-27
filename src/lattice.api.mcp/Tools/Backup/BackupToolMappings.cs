@@ -85,7 +85,38 @@ internal static class BackupToolMappings
             Found = true,
             Manifest = ToMcp(description.Manifest),
             ChainBackupIds = description.ChainBackupIds,
+            Artifacts = ToMcpArtifacts(description.Manifest),
         };
+    }
+
+    /// <summary>
+    /// Projects a manifest's content descriptors onto their compact MCP artifact
+    /// DTOs, exposing the artifact ids that drive <c>export_artifact</c>.
+    /// </summary>
+    /// <param name="manifest">The manifest whose artifacts to project.</param>
+    /// <returns>The per-artifact projections, in manifest order.</returns>
+    private static IReadOnlyList<McpBackupArtifact> ToMcpArtifacts(BackupManifest manifest)
+    {
+        var descriptors = manifest.ContentDescriptors;
+        if (descriptors.Count == 0)
+        {
+            return Array.Empty<McpBackupArtifact>();
+        }
+
+        var artifacts = new McpBackupArtifact[descriptors.Count];
+        for (var i = 0; i < descriptors.Count; i++)
+        {
+            var descriptor = descriptors[i];
+            artifacts[i] = new McpBackupArtifact
+            {
+                ArtifactId = descriptor.ArtifactId,
+                ContentHash = descriptor.ContentHash,
+                ByteLength = descriptor.ByteLength,
+                ChunkCount = descriptor.ChunkCount,
+            };
+        }
+
+        return artifacts;
     }
 
     /// <summary>Projects an inventory report onto its MCP DTO.</summary>

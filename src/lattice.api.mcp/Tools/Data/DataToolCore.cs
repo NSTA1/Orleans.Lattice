@@ -30,6 +30,8 @@ internal static partial class DataToolCore
             Key = result.Key,
             Found = result.Found,
             Value = result.Value,
+            MergeMode = result.MergeMode?.ToString(),
+            Raw = result.Raw,
         };
     }
 

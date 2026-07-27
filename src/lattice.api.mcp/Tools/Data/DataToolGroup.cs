@@ -103,7 +103,13 @@ internal sealed partial class DataToolGroup : ILatticeApiMcpToolGroup
                 Description =
                     "Reads the value at a key on a tree, returned base64-encoded in the result. "
                     + "A routine miss is never a fault: an unknown tree, a missing key, or a key the "
-                    + "caller may not read all report found=false with no value. Caller errors (for "
+                    + "caller may not read all report found=false with no value. The result reports the "
+                    + "entry's per-key mergeMode (e.g. PnCounter, OrSet; null for a plain "
+                    + "last-writer-wins value) and always sets raw=true: the data plane returns the raw "
+                    + "stored bytes and never decodes a typed CRDT, so when mergeMode is non-null the "
+                    + "value is the CRDT's internal serialization - use the matching typed getter "
+                    + "(lattice_data_pncounter_get, lattice_data_orset_get, ...) or the state API's "
+                    + "scan_entries/get_entry for the logical value. Caller errors (for "
                     + "example a null tree id or key) surface as an invalid-argument error. Read-only.",
                 ReadOnly = true,
                 Destructive = false,
@@ -122,8 +128,15 @@ internal sealed partial class DataToolGroup : ILatticeApiMcpToolGroup
                     "Reads one page of a bounded, ascending key range on a tree, pruned to the "
                     + "caller's authorized subset, with each value base64-encoded. Pass the returned "
                     + "continuationToken back to resume paging; a null token means the range is "
-                    + "drained. An unknown tree returns an empty page, not a fault. An invalid or "
-                    + "expired continuation token is a caller error (invalid-argument). Read-only.",
+                    + "drained. The continuationToken is a single-use forward-only cursor: each token "
+                    + "advances the scan and is consumed by the next page, so a given token cannot be "
+                    + "replayed to re-fetch a page already read - page forward and keep only the latest "
+                    + "token. An unknown tree returns an empty page, not a fault. An invalid, expired, "
+                    + "or already-consumed continuation token is a caller error (invalid-argument). "
+                    + "Every returned entry is raw stored bytes (raw=true) and is not CRDT-decoded; the "
+                    + "bulk range path does not resolve per-key mergeMode - use lattice_data_get or the "
+                    + "state API's scan_entries when you need each entry's mergeMode or a decoded value. "
+                    + "Read-only.",
                 ReadOnly = true,
                 Destructive = false,
                 UseStructuredContent = true,
@@ -247,7 +260,7 @@ internal sealed partial class DataToolGroup : ILatticeApiMcpToolGroup
         string? endExclusive = null,
         [Description("Maximum entries on this page. Non-positive falls back to the configured default; larger values are clamped.")]
         int pageSize = 0,
-        [Description("Continuation token from a prior page, or null to open a fresh scan. When set, the range bounds are ignored.")]
+        [Description("Continuation token from a prior page, or null to open a fresh scan. Single-use and forward-only: consumed by the page it fetches and cannot be replayed. When set, the range bounds are ignored.")]
         string? continuationToken = null,
         CancellationToken cancellationToken = default)
         => DataToolCore.ReadRangeAsync(

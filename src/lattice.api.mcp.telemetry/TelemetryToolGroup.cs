@@ -50,7 +50,11 @@ internal sealed class TelemetryToolGroup : ILatticeApiMcpToolGroup
                 "lattice_telemetry_query",
                 "Run an instant telemetry query",
                 "Evaluates a PromQL expression at a single instant against the cluster's read-only metrics "
-                + "backend, returning the projected vector or scalar series. Read-only."),
+                + "backend, returning the projected vector or scalar series. Absent and denied are surfaced "
+                + "differently: under the deny-all posture a query naming a non-admitted metric is rejected "
+                + "with a denial message, whereas a query for a metric that exists in the allow-list but has "
+                + "produced no samples (or an unknown metric under a read-all posture) returns success with an "
+                + "empty series - an empty series therefore means 'no data', not 'denied'. Read-only."),
             Create(
                 services,
                 TelemetryToolHandlers.QueryRangeAsync,
@@ -65,14 +69,22 @@ internal sealed class TelemetryToolGroup : ILatticeApiMcpToolGroup
                 "lattice_telemetry_list_metrics",
                 "List telemetry metric names",
                 "Lists the metric names the backend exposes, filtered to those the metric-access policy admits "
-                + "in the deny-all posture. Read-only."),
+                + "in the deny-all posture. These are Prometheus exposition names, which carry a suffix "
+                + "(_total for counters; _bucket/_count/_sum for histograms) that the underlying OTEL base "
+                + "instrument name does not - so a name listed here often will not resolve verbatim in "
+                + "metric_metadata, which keys on the base instrument name (strip the exposition suffix). "
+                + "Read-only."),
             Create(
                 services,
                 TelemetryToolHandlers.MetricMetadataAsync,
                 "lattice_telemetry_metric_metadata",
                 "Read telemetry metric metadata",
                 "Reads backend metadata (type, help text, and unit) for a named metric, or for every admitted "
-                + "metric when none is named. A non-admitted named metric is rejected in the deny-all posture. "
+                + "metric when none is named. This keys on the OTEL base instrument name, not the Prometheus "
+                + "exposition name returned by list_metrics: pass the base name (drop the "
+                + "_total/_bucket/_count/_sum suffix). A named lookup that resolves nothing returns an empty "
+                + "result carrying a 'notice' advisory, distinguishing an unrecognised name from an "
+                + "admitted-but-empty listing. A non-admitted named metric is rejected in the deny-all posture. "
                 + "Read-only."),
         };
     }

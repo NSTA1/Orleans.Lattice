@@ -384,6 +384,54 @@ public sealed class AuthGrpcDataTests
     }
 
     [Test]
+    public async Task cross_tree_atomic_reusing_operationId_with_a_changed_tree_or_key_set_is_failed_precondition()
+    {
+        // Issue #1402 item 2: the cross-tree atomic write must reject a reused
+        // operationId whose tree/key set changed as a caller precondition (just as
+        // the single-tree variant does), surfacing FailedPrecondition over the wire
+        // with nothing from the mismatched retry applied.
+        const string treeA = "grpc-xt-idem-a";
+        const string treeB = "grpc-xt-idem-b";
+        await _fixture.RegisterTreeAsync(treeA);
+        await _fixture.RegisterTreeAsync(treeB);
+        await _fixture.GrantAsync(
+            AllowTree(Writer, treeA, WriteOps),
+            AllowTree(Writer, treeB, WriteOps));
+
+        var first = new DataCrossTreeRequest
+        {
+            OperationId = "grpc-xt-idem-1",
+            Batches =
+            [
+                new DataTreeBatch { TreeId = treeA, Upserts = [new DataEntry { Key = "k", Value = new byte[] { 1 } }] },
+                new DataTreeBatch { TreeId = treeB, Upserts = [new DataEntry { Key = "k", Value = new byte[] { 2 } }] },
+            ],
+        };
+        await CallAsync(_host.Methods.SetManyAtomicCrossTree, first, Writer);
+
+        var mismatched = new DataCrossTreeRequest
+        {
+            OperationId = "grpc-xt-idem-1",
+            Batches =
+            [
+                new DataTreeBatch { TreeId = treeA, Upserts = [new DataEntry { Key = "different", Value = new byte[] { 9 } }] },
+                new DataTreeBatch { TreeId = treeB, Upserts = [new DataEntry { Key = "k", Value = new byte[] { 2 } }] },
+            ],
+        };
+
+        var ex = Assert.ThrowsAsync<RpcException>(async () => await CallAsync(
+            _host.Methods.SetManyAtomicCrossTree, mismatched, Writer));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.FailedPrecondition));
+            Assert.That(ex.Status.Detail, Does.Not.Contain("cluster logs"));
+            Assert.That(_fixture.ReadRawAsync(treeA, "different").Result, Is.Null,
+                "no partial state after a rejected key-set-mismatch retry");
+        });
+    }
+
+    [Test]
     public async Task bounded_range_read_over_the_wire_prunes_to_the_authorized_subset()
     {
         const string tree = "grpc-range-scope";
@@ -584,5 +632,32 @@ public sealed class AuthGrpcDataTests
             Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.FailedPrecondition));
             Assert.That(ex!.Status.Detail, Does.Contain("AddOrMapShape"));
         });
+    }
+
+    [Test]
+    public async Task mismatched_shape_write_on_a_replicated_tree_is_failed_precondition_not_internal()
+    {
+        // A plain LWW Set targets a tree the silo declares as a replicated
+        // PN-counter, so the origin write guard rejects it with
+        // LatticeReplicationModeMismatchException before it commits. Across the
+        // wire that deterministic caller/configuration precondition must surface
+        // as FailedPrecondition with a self-contained message - not an opaque
+        // Internal fault (issue #1402 item 5) - and nothing may be written.
+        var tree = AuthGrpcDataClusterFixture.ReplicatedCounterPrefix + "grpc-1402";
+        await _fixture.RegisterTreeAsync(tree);
+        await _fixture.GrantAsync(AllowTree(Writer, tree, WriteOps));
+
+        var ex = Assert.ThrowsAsync<RpcException>(async () => await CallAsync(
+            _host.Methods.Set,
+            new DataSetRequest { TreeId = tree, Key = "k1", Value = new byte[] { 1 } },
+            Writer));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.FailedPrecondition));
+            Assert.That(ex!.Status.Detail, Does.Not.Contain("cluster logs"));
+        });
+
+        Assert.That(await _fixture.ReadRawAsync(tree, "k1"), Is.Null);
     }
 }
