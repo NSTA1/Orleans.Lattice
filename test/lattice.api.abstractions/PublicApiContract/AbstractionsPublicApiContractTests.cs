@@ -143,4 +143,45 @@ public class AbstractionsPublicApiContractTests
                 $"{type.FullName} must live in the region contract namespace.");
         });
     }
+
+    // The batch and typed-CRDT surface added by issues #1366 and #1361: the
+    // non-atomic multi-key write and the eight typed-CRDT verb families, kept on
+    // the transport-agnostic data facade so the same operations can be surfaced
+    // by a gRPC binding, the MCP tool, and a future Explorer binding alike.
+    private static readonly IReadOnlyList<string> DataApiCrdtMembers = new[]
+    {
+        nameof(ILatticeDataApi.SetManyAsync),
+        nameof(ILatticeDataApi.CounterIncrementAsync),
+        nameof(ILatticeDataApi.CounterDecrementAsync),
+        nameof(ILatticeDataApi.CounterGetAsync),
+        nameof(ILatticeDataApi.SetAddAsync),
+        nameof(ILatticeDataApi.SetRemoveAsync),
+        nameof(ILatticeDataApi.SetGetAsync),
+        nameof(ILatticeDataApi.OrFlagEnableAsync),
+        nameof(ILatticeDataApi.OrFlagDisableAsync),
+        nameof(ILatticeDataApi.OrFlagGetAsync),
+        nameof(ILatticeDataApi.RwFlagEnableAsync),
+        nameof(ILatticeDataApi.RwFlagDisableAsync),
+        nameof(ILatticeDataApi.RwFlagGetAsync),
+        nameof(ILatticeDataApi.VersionVectorTickAsync),
+        nameof(ILatticeDataApi.VersionVectorGetAsync),
+        nameof(ILatticeDataApi.RegisterSetAsync),
+        nameof(ILatticeDataApi.RegisterGetAsync),
+        nameof(ILatticeDataApi.SequenceInsertAtAsync),
+        nameof(ILatticeDataApi.SequenceRemoveAtAsync),
+        nameof(ILatticeDataApi.SequenceGetAsync),
+        nameof(ILatticeDataApi.MapSetAsync),
+        nameof(ILatticeDataApi.MapRemoveAsync),
+        nameof(ILatticeDataApi.MapGetAsync),
+    };
+
+    [TestCaseSource(nameof(DataApiCrdtMembers))]
+    public void Data_api_exposes_the_batch_and_typed_crdt_operation(string memberName)
+    {
+        var method = typeof(ILatticeDataApi).GetMethod(memberName);
+
+        Assert.That(method, Is.Not.Null,
+            $"ILatticeDataApi must declare a public {memberName} operation so the gRPC binding, the "
+            + "MCP tool, and a future Explorer binding can adapt it from one transport-agnostic seam.");
+    }
 }

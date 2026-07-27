@@ -708,7 +708,7 @@ internal sealed partial class BPlusLeafGrain
     {
         var registry = ResolveCrdtShapeRegistry();
         var shape = registry.TryGet(state.State.TreeId ?? string.Empty, mode)
-            ?? throw new InvalidOperationException(
+            ?? throw new LatticeCrdtShapeNotRegisteredException(
                 "No CrdtShape is registered for tree '"
                 + (state.State.TreeId ?? string.Empty)
                 + "' at mode '"
@@ -716,7 +716,8 @@ internal sealed partial class BPlusLeafGrain
                 + "'. A prepared CRDT-mode atomic write cannot fold its typed "
                 + "delta on the terminal commit without a shape descriptor; "
                 + "register the OR-Map pair via ISiloBuilder.AddOrMapShape<TKey, TValue>(treeName) "
-                + "for OR-Map trees (closed-shape modes resolve through the global fallback).");
+                + "for OR-Map trees (closed-shape modes resolve through the global fallback).",
+                state.State.TreeId ?? string.Empty);
 
         // Strip any version envelope from the durable delta before deserialising
         // (version-agnostic; identity when no versioning is active) so the fold

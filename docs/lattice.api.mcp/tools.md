@@ -78,7 +78,7 @@ Read-only introspection over `ILatticeStateQuery`. Registered by `AddStateTools(
 
 ## Data tools (`lattice_data_*`)
 
-Read/write access over `ILatticeDataApi`. Registered by `AddDataTools(enableWrites)`. The two read tools are always exposed; the four write tools require `enableWrites: true`.
+Read/write access over `ILatticeDataApi`. Registered by `AddDataTools(enableWrites)`. The read tools - the two point / range reads plus the eight typed-CRDT reads - are always exposed; the write tools (the point / batch writes plus the eight typed-CRDT writes) require `enableWrites: true`.
 
 | Tool | Kind | Purpose |
 |---|---|---|
@@ -86,8 +86,26 @@ Read/write access over `ILatticeDataApi`. Registered by `AddDataTools(enableWrit
 | `lattice_data_read_range` | read | Read a key range. Only `treeId` is required; the range bounds, page size, and continuation token are optional (omit them for a full, unbounded first page). |
 | `lattice_data_set` | write | Set a single key. |
 | `lattice_data_delete` | write | Delete a single key. |
+| `lattice_data_set_many` | write | Non-atomic single-tree batch: apply each key independently (best-effort, per-key authorized). |
 | `lattice_data_set_many_atomic` | write | Atomic single-tree batch. |
 | `lattice_data_set_many_atomic_cross_tree` | write | Atomic cross-tree batch. |
+
+### Typed CRDT tools
+
+These surface the eight replicated primitives directly, so a caller reads and writes a value's convergent type without hand-encoding CRDT state. Element and value bytes are base64-encoded; a write attributes its mutation to a `replicaId`. Each write tool takes an `operation` discriminator; each type also has a paired read. See [CRDT primitives](../crdt/readme.md) for the merge rules summarised below.
+
+| Type | Write tool | Read tool | Merge rule |
+|---|---|---|---|
+| PN-Counter | `lattice_data_pncounter` (increment / decrement) | `lattice_data_pncounter_get` | Per-replica signed sum. |
+| OR-Set | `lattice_data_orset` (add / remove) | `lattice_data_orset_get` | Add-wins, observed-remove. |
+| OR-Flag | `lattice_data_orflag` (enable / disable) | `lattice_data_orflag_get` | Enable-wins. |
+| RW-Flag | `lattice_data_rwflag` (enable / disable) | `lattice_data_rwflag_get` | Disable-wins. |
+| Version Vector | `lattice_data_version_vector_tick` | `lattice_data_version_vector_get` | Per-replica max clock. |
+| MV-Register | `lattice_data_mvregister_set` | `lattice_data_mvregister_get` | Keep concurrent values. |
+| Sequence | `lattice_data_sequence` (insert-at / remove-at) | `lattice_data_sequence_get` | Ordered insert / tombstone. |
+| OR-Map | `lattice_data_ormap` (set / remove) | `lattice_data_ormap_get` | Recursive per-key merge. |
+
+The OR-Map tools operate on an `OrMap<string, MvRegister>` (string field keys; each field value a multi-value register of base64 bytes). The host must register that shape for the target tree name (`AddOrMapShape<string, MvRegister>(treeName)`) for these tools to resolve.
 
 ## Backup tools (`lattice_backup_*`)
 

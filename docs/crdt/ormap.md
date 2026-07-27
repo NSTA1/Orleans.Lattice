@@ -42,6 +42,12 @@ First, register the map's shape on the host (once, at startup):
 siloBuilder.AddOrMapShape<string, PnCounter>("election-2026");
 ```
 
+If this registration is missing, an OR-Map write to the tree raises
+`LatticeCrdtShapeNotRegisteredException` (a subclass of `InvalidOperationException`)
+rather than silently mis-dispatching; the API bindings surface it as a
+client-error precondition (for example gRPC `FailedPrecondition`). The closed-shape
+primitives never need this - they resolve through the global registry fallback.
+
 Then read and write it through the typed accessor:
 
 ```csharp verify

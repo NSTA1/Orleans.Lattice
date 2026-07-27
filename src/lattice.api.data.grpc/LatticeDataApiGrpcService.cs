@@ -6,9 +6,10 @@ namespace Orleans.Lattice.Api.Data.Grpc;
 /// <summary>
 /// Abstract base for the write-capable data-API gRPC service. Carries the
 /// <see cref="BindServiceMethodAttribute"/> that <c>Grpc.AspNetCore</c> reflects
-/// against to discover and register the six unary RPCs (<c>Set</c>,
+/// against to discover and register the nine unary RPCs (<c>Set</c>,
 /// <c>Delete</c>, <c>SetManyAtomic</c>, <c>SetManyAtomicCrossTree</c>,
-/// <c>Get</c>, <c>ReadRange</c>).
+/// <c>Get</c>, <c>ReadRange</c>, <c>SetMany</c>, <c>CrdtWrite</c>,
+/// <c>CrdtRead</c>).
 /// </summary>
 /// <remarks>
 /// The base/derived split mirrors the codegen shape <c>Grpc.Tools</c> produces
@@ -40,6 +41,15 @@ internal abstract class LatticeDataApiGrpcServiceBase
     /// <summary>Reads one page of a bounded range. Implemented in <see cref="LatticeDataApiGrpcService"/>.</summary>
     public abstract Task<DataRangePage> ReadRange(DataRangeRequest request, ServerCallContext context);
 
+    /// <summary>Commits a non-atomic bulk write. Implemented in <see cref="LatticeDataApiGrpcService"/>.</summary>
+    public abstract Task<DataSetManyResponse> SetMany(DataSetManyRequest request, ServerCallContext context);
+
+    /// <summary>Applies a typed CRDT write. Implemented in <see cref="LatticeDataApiGrpcService"/>.</summary>
+    public abstract Task<CrdtWriteResponse> CrdtWrite(CrdtWriteRequest request, ServerCallContext context);
+
+    /// <summary>Reads a typed CRDT logical value. Implemented in <see cref="LatticeDataApiGrpcService"/>.</summary>
+    public abstract Task<CrdtReadResponse> CrdtRead(CrdtReadRequest request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at
     /// startup with <paramref name="serviceImpl"/> set to <see langword="null"/>
@@ -65,6 +75,9 @@ internal abstract class LatticeDataApiGrpcServiceBase
             binder.AddMethod(methods.SetManyAtomicCrossTree, (UnaryServerMethod<DataCrossTreeRequest, DataCrossTreeResponse>?)null);
             binder.AddMethod(methods.Get, (UnaryServerMethod<DataGetRequest, DataReadResult>?)null);
             binder.AddMethod(methods.ReadRange, (UnaryServerMethod<DataRangeRequest, DataRangePage>?)null);
+            binder.AddMethod(methods.SetMany, (UnaryServerMethod<DataSetManyRequest, DataSetManyResponse>?)null);
+            binder.AddMethod(methods.CrdtWrite, (UnaryServerMethod<CrdtWriteRequest, CrdtWriteResponse>?)null);
+            binder.AddMethod(methods.CrdtRead, (UnaryServerMethod<CrdtReadRequest, CrdtReadResponse>?)null);
             return;
         }
 
@@ -74,6 +87,9 @@ internal abstract class LatticeDataApiGrpcServiceBase
         binder.AddMethod(methods.SetManyAtomicCrossTree, new UnaryServerMethod<DataCrossTreeRequest, DataCrossTreeResponse>(serviceImpl.SetManyAtomicCrossTree));
         binder.AddMethod(methods.Get, new UnaryServerMethod<DataGetRequest, DataReadResult>(serviceImpl.Get));
         binder.AddMethod(methods.ReadRange, new UnaryServerMethod<DataRangeRequest, DataRangePage>(serviceImpl.ReadRange));
+        binder.AddMethod(methods.SetMany, new UnaryServerMethod<DataSetManyRequest, DataSetManyResponse>(serviceImpl.SetMany));
+        binder.AddMethod(methods.CrdtWrite, new UnaryServerMethod<CrdtWriteRequest, CrdtWriteResponse>(serviceImpl.CrdtWrite));
+        binder.AddMethod(methods.CrdtRead, new UnaryServerMethod<CrdtReadRequest, CrdtReadResponse>(serviceImpl.CrdtRead));
     }
 }
 
@@ -184,6 +200,94 @@ internal sealed class LatticeDataApiGrpcService : LatticeDataApiGrpcServiceBase
     public override Task<DataRangePage> ReadRange(DataRangeRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (api, req, ct) => api.ReadRangeAsync(req, ct));
 
+    /// <inheritdoc />
+    public override Task<DataSetManyResponse> SetMany(DataSetManyRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static async (api, req, ct) =>
+        {
+            await api.SetManyAsync(req.TreeId, req.Upserts, ct).ConfigureAwait(false);
+            return new DataSetManyResponse();
+        });
+
+    /// <inheritdoc />
+    public override Task<CrdtWriteResponse> CrdtWrite(CrdtWriteRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static async (api, req, ct) =>
+        {
+            await DispatchCrdtWriteAsync(api, req, ct).ConfigureAwait(false);
+            return new CrdtWriteResponse();
+        });
+
+    /// <inheritdoc />
+    public override Task<CrdtReadResponse> CrdtRead(CrdtReadRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (api, req, ct) => DispatchCrdtReadAsync(api, req, ct));
+
+    private static Task DispatchCrdtWriteAsync(ILatticeDataApi api, CrdtWriteRequest req, CancellationToken ct)
+        => req.Op switch
+        {
+            CrdtWriteOp.CounterIncrement => api.CounterIncrementAsync(req.TreeId, req.Key, req.ReplicaId, req.Amount, ct),
+            CrdtWriteOp.CounterDecrement => api.CounterDecrementAsync(req.TreeId, req.Key, req.ReplicaId, req.Amount, ct),
+            CrdtWriteOp.SetAdd => api.SetAddAsync(req.TreeId, req.Key, req.Element, req.ReplicaId, ct),
+            CrdtWriteOp.SetRemove => api.SetRemoveAsync(req.TreeId, req.Key, req.Element, ct),
+            CrdtWriteOp.OrFlagEnable => api.OrFlagEnableAsync(req.TreeId, req.Key, req.ReplicaId, ct),
+            CrdtWriteOp.OrFlagDisable => api.OrFlagDisableAsync(req.TreeId, req.Key, ct),
+            CrdtWriteOp.RwFlagEnable => api.RwFlagEnableAsync(req.TreeId, req.Key, req.ReplicaId, ct),
+            CrdtWriteOp.RwFlagDisable => api.RwFlagDisableAsync(req.TreeId, req.Key, req.ReplicaId, ct),
+            CrdtWriteOp.VersionVectorTick => api.VersionVectorTickAsync(req.TreeId, req.Key, req.ReplicaId, ct),
+            CrdtWriteOp.RegisterSet => api.RegisterSetAsync(req.TreeId, req.Key, req.ReplicaId, req.Element, ct),
+            CrdtWriteOp.SequenceInsertAt => api.SequenceInsertAtAsync(req.TreeId, req.Key, req.Index, req.ReplicaId, req.Element, ct),
+            CrdtWriteOp.SequenceRemoveAt => api.SequenceRemoveAtAsync(req.TreeId, req.Key, req.Index, ct),
+            CrdtWriteOp.MapSet => api.MapSetAsync(req.TreeId, req.Key, req.Field, req.ReplicaId, req.Element, ct),
+            CrdtWriteOp.MapRemove => api.MapRemoveAsync(req.TreeId, req.Key, req.Field, ct),
+            _ => throw new ArgumentException($"Unknown CRDT write op '{req.Op}'.", nameof(req)),
+        };
+
+    private static async Task<CrdtReadResponse> DispatchCrdtReadAsync(ILatticeDataApi api, CrdtReadRequest req, CancellationToken ct)
+    {
+        switch (req.Kind)
+        {
+            case CrdtKind.PnCounter:
+                return new CrdtReadResponse { CounterValue = await api.CounterGetAsync(req.TreeId, req.Key, ct).ConfigureAwait(false) };
+            case CrdtKind.OrSet:
+                return new CrdtReadResponse { Elements = ToList(await api.SetGetAsync(req.TreeId, req.Key, ct).ConfigureAwait(false)) };
+            case CrdtKind.OrFlag:
+                return new CrdtReadResponse { FlagValue = await api.OrFlagGetAsync(req.TreeId, req.Key, ct).ConfigureAwait(false) };
+            case CrdtKind.RwFlag:
+                return new CrdtReadResponse { FlagValue = await api.RwFlagGetAsync(req.TreeId, req.Key, ct).ConfigureAwait(false) };
+            case CrdtKind.MvRegister:
+                return new CrdtReadResponse { Elements = ToList(await api.RegisterGetAsync(req.TreeId, req.Key, ct).ConfigureAwait(false)) };
+            case CrdtKind.Sequence:
+                return new CrdtReadResponse { Elements = ToList(await api.SequenceGetAsync(req.TreeId, req.Key, ct).ConfigureAwait(false)) };
+            case CrdtKind.VersionVector:
+            {
+                var vector = await api.VersionVectorGetAsync(req.TreeId, req.Key, ct).ConfigureAwait(false);
+                var entries = new List<CrdtVectorEntry>(vector.Count);
+                foreach (var (replicaId, clock) in vector)
+                {
+                    entries.Add(new CrdtVectorEntry { ReplicaId = replicaId, Clock = clock });
+                }
+
+                return new CrdtReadResponse { Vector = entries };
+            }
+
+            case CrdtKind.OrMap:
+            {
+                var map = await api.MapGetAsync(req.TreeId, req.Key, ct).ConfigureAwait(false);
+                var fields = new List<CrdtMapField>(map.Count);
+                foreach (var (field, values) in map)
+                {
+                    fields.Add(new CrdtMapField { Field = field, Values = ToList(values) });
+                }
+
+                return new CrdtReadResponse { Map = fields };
+            }
+
+            default:
+                throw new ArgumentException($"Unknown CRDT read kind '{req.Kind}'.", nameof(req));
+        }
+    }
+
+    private static List<byte[]> ToList(IReadOnlyList<byte[]> values)
+        => values as List<byte[]> ?? [.. values];
+
     private async Task<TResponse> InvokeAsync<TRequest, TResponse>(
         TRequest request,
         ServerCallContext context,
@@ -216,6 +320,17 @@ internal sealed class LatticeDataApiGrpcService : LatticeDataApiGrpcServiceBase
         catch (ArgumentException ex)
         {
             throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+        }
+        catch (LatticeCrdtShapeNotRegisteredException ex)
+        {
+            // A typed OR-Map verb targeted a tree whose host never registered the
+            // map shape. This is a deterministic host-configuration precondition,
+            // not a server fault: map to FailedPrecondition carrying the
+            // self-contained remediation message (register via AddOrMapShape) so
+            // the caller is not misdirected to the cluster logs. Placed with the
+            // other typed InvalidOperationException-derived arms, ahead of the
+            // generic server-fault catch that would otherwise mask it as Internal.
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
         }
         catch (LatticeIdempotencyKeyMismatchException ex)
         {

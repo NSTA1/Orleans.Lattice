@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Api.Mcp.Tests;
 /// absent on a read, exactly as the gated facade behaves for an unauthorized
 /// caller. No timing, ordering, or transport behaviour is modelled.
 /// </summary>
-internal sealed class FakeDataApi : ILatticeDataApi
+internal sealed partial class FakeDataApi : ILatticeDataApi
 {
     private readonly Dictionary<(string Tree, string Key), byte[]> _store = new();
 
@@ -108,6 +108,25 @@ internal sealed class FakeDataApi : ILatticeDataApi
         }
 
         return Task.FromResult(CrossTreeAtomicWriteOutcome.Committed);
+    }
+
+    public Task SetManyAsync(
+        string treeId,
+        IReadOnlyList<DataEntry> upserts,
+        CancellationToken cancellationToken = default)
+    {
+        // Authorize every leg before any apply, mirroring the gated facade.
+        foreach (var upsert in upserts)
+        {
+            ThrowIfDenied(treeId, upsert.Key);
+        }
+
+        foreach (var upsert in upserts)
+        {
+            _store[(treeId, upsert.Key)] = upsert.Value;
+        }
+
+        return Task.CompletedTask;
     }
 
     public Task<DataReadResult> GetAsync(string treeId, string key, CancellationToken cancellationToken = default)

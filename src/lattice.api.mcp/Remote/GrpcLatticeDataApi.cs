@@ -13,13 +13,15 @@ namespace Orleans.Lattice.Api.Mcp;
 /// <remarks>
 /// The gRPC binding signals a denied write as a <c>PermissionDenied</c>
 /// <see cref="RpcException"/>; the facade contract is a
-/// <see cref="LatticeAuthorizationDeniedException"/>. The four mutating members
+/// <see cref="LatticeAuthorizationDeniedException"/>. The mutating members
 /// translate the former to the latter so a denied write surfaces the same typed
-/// failure - with nothing persisted - as in-silo. The two read members never
+/// failure - with nothing persisted - as in-silo. The read members never
 /// throw on denial: an unreadable key reports absent and a range read prunes to
-/// the authorized subset, exactly as the wire contract already returns.
+/// the authorized subset, exactly as the wire contract already returns. The
+/// typed-CRDT members are split into <c>GrpcLatticeDataApi.Crdt.cs</c>; they
+/// collapse onto the two unified <c>CrdtWrite</c> / <c>CrdtRead</c> RPCs.
 /// </remarks>
-internal sealed class GrpcLatticeDataApi : ILatticeDataApi
+internal sealed partial class GrpcLatticeDataApi : ILatticeDataApi
 {
     private readonly LatticeDataApiGrpcClient _client;
 
@@ -100,6 +102,28 @@ internal sealed class GrpcLatticeDataApi : ILatticeDataApi
                 new DataCrossTreeRequest { Batches = wire, OperationId = operationId },
                 cancellationToken).ConfigureAwait(false);
             return response.Outcome;
+        }
+        catch (RpcException ex) when (ex.StatusCode == StatusCode.PermissionDenied)
+        {
+            throw Denied(ex);
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task SetManyAsync(
+        string treeId,
+        IReadOnlyList<DataEntry> upserts,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(upserts);
+
+        var wire = upserts as List<DataEntry> ?? [.. upserts];
+
+        try
+        {
+            await _client.SetManyAsync(
+                new DataSetManyRequest { TreeId = treeId, Upserts = wire },
+                cancellationToken).ConfigureAwait(false);
         }
         catch (RpcException ex) when (ex.StatusCode == StatusCode.PermissionDenied)
         {

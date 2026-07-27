@@ -75,6 +75,18 @@ public sealed class LatticeDataApiGrpcClient
     public Task<DataRangePage> ReadRangeAsync(DataRangeRequest request, CancellationToken cancellationToken = default)
         => UnaryAsync(_methods.ReadRange, request, cancellationToken);
 
+    /// <summary>Commits a non-atomic, upsert-only bulk write. A denied key aborts before any write with a <c>PermissionDenied</c> status.</summary>
+    public Task<DataSetManyResponse> SetManyAsync(DataSetManyRequest request, CancellationToken cancellationToken = default)
+        => UnaryAsync(_methods.SetMany, request, cancellationToken);
+
+    /// <summary>Applies a typed CRDT write delta. A denied key aborts with a <c>PermissionDenied</c> status.</summary>
+    public Task<CrdtWriteResponse> CrdtWriteAsync(CrdtWriteRequest request, CancellationToken cancellationToken = default)
+        => UnaryAsync(_methods.CrdtWrite, request, cancellationToken);
+
+    /// <summary>Reads a typed CRDT logical value. An unreadable key yields the empty value for its kind.</summary>
+    public Task<CrdtReadResponse> CrdtReadAsync(CrdtReadRequest request, CancellationToken cancellationToken = default)
+        => UnaryAsync(_methods.CrdtRead, request, cancellationToken);
+
     private async Task<TResponse> UnaryAsync<TRequest, TResponse>(
         Method<TRequest, TResponse> method,
         TRequest request,

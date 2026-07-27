@@ -176,4 +176,125 @@ public sealed class GrpcLatticeDataApiTests
                 .SetAsync("t", "k", Array.Empty<byte>(), cts.Token),
             Throws.InstanceOf<OperationCanceledException>());
     }
+
+    [Test]
+    public async Task SetManyAsync_forwards_tree_and_upserts()
+    {
+        var invoker = new FakeCallInvoker(_ => new DataSetManyResponse());
+        var upserts = new[]
+        {
+            new DataEntry { Key = "a", Value = new byte[] { 1 } },
+            new DataEntry { Key = "b", Value = new byte[] { 2 } },
+        };
+
+        await Adapter(invoker).SetManyAsync("tree", upserts);
+
+        var sent = (DataSetManyRequest)invoker.LastRequest!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(sent.TreeId, Is.EqualTo("tree"));
+            Assert.That(sent.Upserts.Select(e => e.Key), Is.EqualTo(new[] { "a", "b" }));
+        });
+    }
+
+    [Test]
+    public void SetManyAsync_translates_permission_denied()
+        => Assert.That(
+            async () => await Adapter(new FakeCallInvoker(_ => Denied())).SetManyAsync("t", Array.Empty<DataEntry>()),
+            Throws.TypeOf<LatticeAuthorizationDeniedException>());
+
+    [Test]
+    public async Task CounterIncrementAsync_forwards_a_typed_write_request()
+    {
+        var invoker = new FakeCallInvoker(_ => new CrdtWriteResponse());
+
+        await Adapter(invoker).CounterIncrementAsync("tree", "c", "r1", 5);
+
+        var sent = (CrdtWriteRequest)invoker.LastRequest!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(sent.TreeId, Is.EqualTo("tree"));
+            Assert.That(sent.Key, Is.EqualTo("c"));
+            Assert.That(sent.Op, Is.EqualTo(CrdtWriteOp.CounterIncrement));
+            Assert.That(sent.ReplicaId, Is.EqualTo("r1"));
+            Assert.That(sent.Amount, Is.EqualTo(5));
+        });
+    }
+
+    [Test]
+    public async Task SequenceInsertAtAsync_forwards_index_and_element()
+    {
+        var invoker = new FakeCallInvoker(_ => new CrdtWriteResponse());
+
+        await Adapter(invoker).SequenceInsertAtAsync("tree", "q", 2, "r1", new byte[] { 7 });
+
+        var sent = (CrdtWriteRequest)invoker.LastRequest!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(sent.Op, Is.EqualTo(CrdtWriteOp.SequenceInsertAt));
+            Assert.That(sent.Index, Is.EqualTo(2));
+            Assert.That(sent.Element, Is.EqualTo(new byte[] { 7 }));
+        });
+    }
+
+    [Test]
+    public void SetAddAsync_translates_permission_denied()
+        => Assert.That(
+            async () => await Adapter(new FakeCallInvoker(_ => Denied())).SetAddAsync("t", "k", new byte[] { 1 }, "r1"),
+            Throws.TypeOf<LatticeAuthorizationDeniedException>());
+
+    [Test]
+    public async Task CounterGetAsync_maps_the_counter_value()
+    {
+        var invoker = new FakeCallInvoker(_ => new CrdtReadResponse { CounterValue = 42 });
+
+        var value = await Adapter(invoker).CounterGetAsync("tree", "c");
+
+        var sent = (CrdtReadRequest)invoker.LastRequest!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(sent.Kind, Is.EqualTo(CrdtKind.PnCounter));
+            Assert.That(value, Is.EqualTo(42));
+        });
+    }
+
+    [Test]
+    public async Task SetGetAsync_maps_the_element_bytes()
+    {
+        var invoker = new FakeCallInvoker(_ => new CrdtReadResponse { Elements = { new byte[] { 1 }, new byte[] { 2 } } });
+
+        var elements = await Adapter(invoker).SetGetAsync("tree", "s");
+
+        Assert.That(elements.Select(e => e[0]), Is.EqualTo(new byte[] { 1, 2 }));
+    }
+
+    [Test]
+    public async Task VersionVectorGetAsync_maps_the_vector_entries()
+    {
+        var invoker = new FakeCallInvoker(_ => new CrdtReadResponse
+        {
+            Vector = { new CrdtVectorEntry { ReplicaId = "r1", Clock = "9:1" } },
+        });
+
+        var vector = await Adapter(invoker).VersionVectorGetAsync("tree", "v");
+
+        Assert.That(vector["r1"], Is.EqualTo("9:1"));
+    }
+
+    [Test]
+    public async Task MapGetAsync_maps_the_fields()
+    {
+        var invoker = new FakeCallInvoker(_ => new CrdtReadResponse
+        {
+            Map = { new CrdtMapField { Field = "title", Values = { new byte[] { 3 } } } },
+        });
+
+        var map = await Adapter(invoker).MapGetAsync("tree", "doc");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(map.Keys, Is.EquivalentTo(new[] { "title" }));
+            Assert.That(map["title"][0], Is.EqualTo(new byte[] { 3 }));
+        });
+    }
 }

@@ -68,10 +68,14 @@ public partial class BPlusLeafGrainTests
         // surface a configuration error rather than silently
         // mis-dispatching the typed delta.
         var grain = CreateCrdtGrain();
-        var ex = Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        var ex = Assert.ThrowsAsync<LatticeCrdtShapeNotRegisteredException>(async () =>
             await grain.ApplyCrdtDeltaAsync("k", LatticeMergeMode.OrMap, Encoding.UTF8.GetBytes("{}")));
-        Assert.That(ex!.Message, Does.Contain("CrdtShape"));
-        Assert.That(ex!.Message, Does.Contain("OrMap"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex, Is.InstanceOf<InvalidOperationException>());
+            Assert.That(ex!.Message, Does.Contain("CrdtShape"));
+            Assert.That(ex!.Message, Does.Contain("OrMap"));
+        });
     }
 
     // ── happy paths ────────────────────────────────────────────

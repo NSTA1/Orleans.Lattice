@@ -126,14 +126,16 @@ internal sealed partial class BPlusLeafGrain
         var shape = registry.TryGet(state.State.TreeId ?? string.Empty, mode);
         if (shape is null)
         {
-            throw new InvalidOperationException(
+            var treeId = state.State.TreeId ?? string.Empty;
+            throw new LatticeCrdtShapeNotRegisteredException(
                 "No CrdtShape is registered for tree '"
-                + (state.State.TreeId ?? string.Empty)
+                + treeId
                 + "' at mode '"
                 + mode
                 + "'. Register a shape via ISiloBuilder.AddOrMapShape<TKey, TValue>(treeName) "
                 + "for OR-Map trees; closed-shape modes resolve through the global registry "
-                + "fallback automatically.");
+                + "fallback automatically.",
+                treeId);
         }
 
         // step 1 (merge) - resolve the current typed state (shadow, cold

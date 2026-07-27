@@ -27,11 +27,13 @@ namespace Orleans.Lattice.Api.Mcp;
 public static class LatticeMcpDataToolsServiceCollectionExtensions
 {
     /// <summary>
-    /// Adds the data tool module to the MCP server. Always contributes the two
-    /// read tools (<c>data_get</c>, <c>data_read_range</c>); contributes the four
-    /// mutating tools (<c>data_set</c>, <c>data_delete</c>,
-    /// <c>data_set_many_atomic</c>, <c>data_set_many_atomic_cross_tree</c>) only
-    /// when <paramref name="enableWrites"/> is <see langword="true"/>. Call once.
+    /// Adds the data tool module to the MCP server. Always contributes the read
+    /// tools - the two point / range reads (<c>data_get</c>, <c>data_read_range</c>)
+    /// plus the eight typed-CRDT reads; contributes the mutating tools (the point /
+    /// batch writes <c>data_set</c>, <c>data_delete</c>, <c>data_set_many</c>,
+    /// <c>data_set_many_atomic</c>, <c>data_set_many_atomic_cross_tree</c> plus the
+    /// eight typed-CRDT writes) only when <paramref name="enableWrites"/> is
+    /// <see langword="true"/>. Call once.
     /// </summary>
     /// <param name="services">The host's service collection.</param>
     /// <param name="enableWrites">

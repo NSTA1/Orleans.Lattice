@@ -11,8 +11,9 @@ namespace Orleans.Lattice.Api.Mcp;
 /// The data tool module: an <see cref="ILatticeApiMcpToolGroup"/> serving
 /// <see cref="LatticeApiMcpGroup.Data"/> with thin MCP tools over the internal
 /// <see cref="ILatticeDataApi"/> facade. Point reads and a bounded range read are
-/// always contributed; the mutating verbs (set, delete, single-tree atomic batch,
-/// cross-tree atomic batch) are contributed only when the host opts writes in.
+/// always contributed; the mutating verbs (set, delete, non-atomic bulk write,
+/// single-tree atomic batch, cross-tree atomic batch) are contributed only when
+/// the host opts writes in.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -29,30 +30,49 @@ namespace Orleans.Lattice.Api.Mcp;
 /// carry <c>destructiveHint</c> and are non-<c>readOnlyHint</c>.
 /// </para>
 /// </remarks>
-internal sealed class DataToolGroup : ILatticeApiMcpToolGroup
+internal sealed partial class DataToolGroup : ILatticeApiMcpToolGroup
 {
     private readonly IReadOnlyList<McpServerTool> _tools;
 
     /// <summary>
     /// Builds the data tool module. When <paramref name="enableWrites"/> is
-    /// <see langword="false"/> (the default) only the two read tools are
-    /// contributed; when <see langword="true"/> the four mutating tools are added.
+    /// <see langword="false"/> (the default) only the read tools are contributed
+    /// (the two point / range reads plus the eight typed-CRDT reads); when
+    /// <see langword="true"/> the mutating tools (five point / batch writes plus
+    /// the eight typed-CRDT writes) are added.
     /// </summary>
     /// <param name="enableWrites">Whether the mutating data tools are contributed.</param>
     public DataToolGroup(bool enableWrites)
     {
-        var tools = new List<McpServerTool>(enableWrites ? 6 : 2)
+        var tools = new List<McpServerTool>(enableWrites ? 23 : 10)
         {
             BuildGetTool(),
             BuildReadRangeTool(),
+            BuildCounterGetTool(),
+            BuildSetGetTool(),
+            BuildOrFlagGetTool(),
+            BuildRwFlagGetTool(),
+            BuildVersionVectorGetTool(),
+            BuildRegisterGetTool(),
+            BuildSequenceGetTool(),
+            BuildMapGetTool(),
         };
 
         if (enableWrites)
         {
             tools.Add(BuildSetTool());
             tools.Add(BuildDeleteTool());
+            tools.Add(BuildSetManyTool());
             tools.Add(BuildSetManyAtomicTool());
             tools.Add(BuildSetManyAtomicCrossTreeTool());
+            tools.Add(BuildCounterWriteTool());
+            tools.Add(BuildSetWriteTool());
+            tools.Add(BuildOrFlagWriteTool());
+            tools.Add(BuildRwFlagWriteTool());
+            tools.Add(BuildVersionVectorTickTool());
+            tools.Add(BuildRegisterSetTool());
+            tools.Add(BuildSequenceWriteTool());
+            tools.Add(BuildMapWriteTool());
         }
 
         _tools = tools;
@@ -140,6 +160,29 @@ internal sealed class DataToolGroup : ILatticeApiMcpToolGroup
                     + "deleted=false when the key was already absent (an unknown tree also reports "
                     + "deleted=false). Fails closed: a caller who may not delete the key is denied. "
                     + "Destructive.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildSetManyTool()
+        => McpServerTool.Create(
+            SetManyToolAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_data_set_many",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Write many entries non-atomically",
+                Description =
+                    "Writes many base64-encoded key / value pairs on one tree in a single call, the "
+                    + "cheap bulk-load path. This is NOT atomic and NOT idempotent: the batch fans out "
+                    + "per shard and each slice commits independently, so a mid-flight failure can leave "
+                    + "some keys written and others not, with no rollback and no operationId to make a "
+                    + "retry a safe no-op. Use lattice_data_set_many_atomic when you need all-or-nothing "
+                    + "semantics. Authorization is enforced per key exactly as the atomic batch: a caller "
+                    + "who may not write any targeted key is denied and that key is not written. An empty "
+                    + "upserts list is a no-op; a value that is not valid base64, or a null tree id, is a "
+                    + "caller error (invalid-argument). Destructive.",
                 ReadOnly = false,
                 Destructive = true,
                 UseStructuredContent = true,
@@ -253,6 +296,14 @@ internal sealed class DataToolGroup : ILatticeApiMcpToolGroup
         [Description("The entry key to delete.")] string key,
         CancellationToken cancellationToken)
         => DataToolCore.DeleteAsync(ResolveApi(context), treeId, key, cancellationToken);
+
+    private static Task<DataSetManyToolResult> SetManyToolAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("Logical tree identifier.")] string treeId,
+        [Description("The key / value pairs to write non-atomically. Each value is a base64-encoded byte string. An empty list is a no-op.")]
+        IReadOnlyList<DataEntryDto>? upserts,
+        CancellationToken cancellationToken)
+        => DataToolCore.SetManyAsync(ResolveApi(context), treeId, upserts, cancellationToken);
 
     private static Task<DataAtomicBatchToolResult> SetManyAtomicToolAsync(
         RequestContext<CallToolRequestParams> context,

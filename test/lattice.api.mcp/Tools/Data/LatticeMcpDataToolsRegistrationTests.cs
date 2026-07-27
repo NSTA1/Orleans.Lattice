@@ -37,7 +37,13 @@ public sealed class LatticeMcpDataToolsRegistrationTests
 
         Assert.That(
             group.Tools.Select(t => t.ProtocolTool.Name),
-            Is.EquivalentTo(new[] { "lattice_data_get", "lattice_data_read_range" }));
+            Is.EquivalentTo(new[]
+            {
+                "lattice_data_get", "lattice_data_read_range",
+                "lattice_data_pncounter_get", "lattice_data_orset_get", "lattice_data_orflag_get",
+                "lattice_data_rwflag_get", "lattice_data_version_vector_get", "lattice_data_mvregister_get",
+                "lattice_data_sequence_get", "lattice_data_ormap_get",
+            }));
     }
 
     [Test]
@@ -54,7 +60,13 @@ public sealed class LatticeMcpDataToolsRegistrationTests
             Is.EquivalentTo(new[]
             {
                 "lattice_data_get", "lattice_data_read_range", "lattice_data_set", "lattice_data_delete",
-                "lattice_data_set_many_atomic", "lattice_data_set_many_atomic_cross_tree",
+                "lattice_data_set_many", "lattice_data_set_many_atomic", "lattice_data_set_many_atomic_cross_tree",
+                "lattice_data_pncounter_get", "lattice_data_orset_get", "lattice_data_orflag_get",
+                "lattice_data_rwflag_get", "lattice_data_version_vector_get", "lattice_data_mvregister_get",
+                "lattice_data_sequence_get", "lattice_data_ormap_get",
+                "lattice_data_pncounter", "lattice_data_orset", "lattice_data_orflag", "lattice_data_rwflag",
+                "lattice_data_version_vector_tick", "lattice_data_mvregister_set", "lattice_data_sequence",
+                "lattice_data_ormap",
             }));
     }
 
