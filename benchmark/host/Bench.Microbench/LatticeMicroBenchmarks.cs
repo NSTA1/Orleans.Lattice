@@ -887,6 +887,7 @@ public class LatticeMicroBenchmarks
         BuildOrSetOpsFixture();
         BuildOrMapBulkSetFixture();
         BuildRgaFixture();
+        BuildFlagFixture();
         BuildLeafQueueFixture();
         BuildCrdtGrowStateFixture();
         BuildCrdtGrowStateWriterFixture();
@@ -3243,6 +3244,21 @@ public class LatticeMicroBenchmarks
     private int _rgaKeyCount;
     private Rga _rgaToListFixture = null!;
 
+    // ===== OrFlag / RwFlag membership micro-suite operands =====
+    // The two flag CRDTs are the tag-index membership primitives (one flag
+    // per (tag, member) row). A row is overwhelmingly a single enable dot
+    // with 0-1 tombstone dots, so these operands hold that steady state.
+    // The read targets carry one tombstone so the enabled-check exercises
+    // the tombstone branch that previously allocated a HashSet on every
+    // call; the merge operands carry 1-2 dots per list so the union takes
+    // the linear-scan branch this change adds.
+    private OrFlag _orFlagReadTarget = null!;
+    private OrFlag _orFlagMergeLeft = null!;
+    private OrFlag _orFlagMergeRight = null!;
+    private RwFlag _rwFlagReadTarget = null!;
+    private RwFlag _rwFlagMergeLeft = null!;
+    private RwFlag _rwFlagMergeRight = null!;
+
     private void BuildShipFramingFixture()
     {
         // Self-contained ServiceProvider for the two Orleans serializers
@@ -3841,6 +3857,86 @@ public class LatticeMicroBenchmarks
     {
         return _rgaToListFixture.ToList();
     }
+
+    /// <summary>
+    /// Builds the operands for the four flag-CRDT benchmarks. The read
+    /// targets are enabled but carry one tombstone dot so the
+    /// enabled-check walks the tombstone branch; the merge operands each
+    /// carry 1-2 dots per list - the single-membership steady state a
+    /// tag-index row holds - so the union takes the linear-scan branch.
+    /// </summary>
+    private void BuildFlagFixture()
+    {
+        // OrFlag: enabled with one enable dot; a tombstone for a *different*
+        // dot keeps it enabled while forcing the tombstone read branch.
+        _orFlagReadTarget = new OrFlag();
+        _orFlagReadTarget.Enable("replica", 1);
+        _orFlagReadTarget.Tombstones.Add(new OrSetDot { ReplicaId = "replica", Counter = 2 });
+
+        _orFlagMergeLeft = new OrFlag();
+        _orFlagMergeLeft.Enable("replica-left", 1);
+        _orFlagMergeLeft.Enable("replica-left", 2);
+        _orFlagMergeLeft.Tombstones.Add(new OrSetDot { ReplicaId = "replica-left", Counter = 3 });
+
+        _orFlagMergeRight = new OrFlag();
+        _orFlagMergeRight.Enable("replica-right", 1);
+        _orFlagMergeRight.Tombstones.Add(new OrSetDot { ReplicaId = "replica-right", Counter = 2 });
+
+        // RwFlag: enabled with one enable dot; a disable dot that the enable
+        // has already observed (present in Tombstones) keeps it enabled while
+        // forcing the LiveDisableCount tombstone read branch.
+        _rwFlagReadTarget = new RwFlag();
+        _rwFlagReadTarget.Enable("replica", 1);
+        _rwFlagReadTarget.Disables.Add(new OrSetDot { ReplicaId = "replica", Counter = 2 });
+        _rwFlagReadTarget.Tombstones.Add(new OrSetDot { ReplicaId = "replica", Counter = 2 });
+
+        _rwFlagMergeLeft = new RwFlag();
+        _rwFlagMergeLeft.Enable("replica-left", 1);
+        _rwFlagMergeLeft.Disable("replica-left", 2);
+
+        _rwFlagMergeRight = new RwFlag();
+        _rwFlagMergeRight.Enable("replica-right", 1);
+        _rwFlagMergeRight.Disable("replica-right", 2);
+    }
+
+    /// <summary>
+    /// Read-path instrument: <see cref="OrFlag.IsEnabled"/> against a flag
+    /// that carries a tombstone. The enabled-check now scans the tiny
+    /// tombstone list directly instead of allocating and populating a
+    /// transient <see cref="HashSet{T}"/> on every membership probe - the
+    /// allocation the tag-index membership read path previously paid per
+    /// call.
+    /// </summary>
+    [Benchmark(Description = "OrFlag IsEnabled (tombstoned)")]
+    public bool OrFlag_IsEnabled() => _orFlagReadTarget.IsEnabled;
+
+    /// <summary>
+    /// Merge-path instrument: <see cref="OrFlag.Merge"/> clones the left
+    /// operand and folds the right in. With single-membership dot lists the
+    /// per-list union takes the linear-scan branch and allocates no
+    /// transient <see cref="HashSet{T}"/> - the allocation surface the
+    /// tag-index reconcile pays on every flag row merge.
+    /// </summary>
+    [Benchmark(Description = "OrFlag merge")]
+    public OrFlag OrFlag_Merge() => OrFlag.Merge(_orFlagMergeLeft, _orFlagMergeRight);
+
+    /// <summary>
+    /// Read-path instrument: <see cref="RwFlag.IsEnabled"/> against a flag
+    /// whose single disable dot has been observed-and-cancelled. The
+    /// live-disable check now scans the tiny tombstone list directly
+    /// instead of allocating a transient <see cref="HashSet{T}"/> per probe.
+    /// </summary>
+    [Benchmark(Description = "RwFlag IsEnabled (tombstoned)")]
+    public bool RwFlag_IsEnabled() => _rwFlagReadTarget.IsEnabled;
+
+    /// <summary>
+    /// Merge-path instrument: <see cref="RwFlag.Merge"/> clones the left
+    /// operand and folds the right in. With single-membership dot lists the
+    /// three per-list unions take the linear-scan branch and allocate no
+    /// transient <see cref="HashSet{T}"/>.
+    /// </summary>
+    [Benchmark(Description = "RwFlag merge")]
+    public RwFlag RwFlag_Merge() => RwFlag.Merge(_rwFlagMergeLeft, _rwFlagMergeRight);
 }
 
 /// <summary>

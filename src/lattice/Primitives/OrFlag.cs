@@ -22,6 +22,14 @@ namespace Orleans.Lattice;
 [Alias(TypeAliases.OrFlag)]
 public sealed class OrFlag : ICrdt<OrFlag>
 {
+    // Below this many tombstone dots a linear scan beats allocating and
+    // populating a HashSet for the membership checks. A flag carries one
+    // dot per concurrent enable/disable, overwhelmingly 1-2 in practice,
+    // so the linear path is the common case; the set is only built once a
+    // flag genuinely accumulates many concurrent dots. Mirrors
+    // OrSet.DotLinearScanThreshold.
+    private const int DotLinearScanThreshold = 4;
+
     /// <summary>
     /// Live enable dots. The flag is enabled if and only if at least one
     /// of these dots is not present in <see cref="Tombstones"/>.
@@ -68,8 +76,18 @@ public sealed class OrFlag : ICrdt<OrFlag>
     public bool Disable()
     {
         if (Enables.Count == 0) return false;
-        var tombSet = new HashSet<OrSetDot>(Tombstones);
         var anyAdded = false;
+        if (Tombstones.Count <= DotLinearScanThreshold)
+        {
+            // Tiny tombstone list (the common 0-1-dot case): a linear
+            // Contains against the growing list beats allocating a HashSet.
+            foreach (var dot in Enables)
+            {
+                if (!Tombstones.Contains(dot)) { Tombstones.Add(dot); anyAdded = true; }
+            }
+            return anyAdded;
+        }
+        var tombSet = new HashSet<OrSetDot>(Tombstones);
         foreach (var dot in Enables)
         {
             if (tombSet.Add(dot))
@@ -129,30 +147,24 @@ public sealed class OrFlag : ICrdt<OrFlag>
     /// </param>
     public void MergeDelta(OrFlagDelta delta)
     {
-        var enables = delta.Enables;
-        if (enables is { Count: > 0 })
-        {
-            var seen = new HashSet<OrSetDot>(Enables);
-            foreach (var dot in enables)
-            {
-                if (seen.Add(dot)) Enables.Add(dot);
-            }
-        }
-        var disables = delta.Disables;
-        if (disables is { Count: > 0 })
-        {
-            var seen = new HashSet<OrSetDot>(Tombstones);
-            foreach (var dot in disables)
-            {
-                if (seen.Add(dot)) Tombstones.Add(dot);
-            }
-        }
+        UnionDots(Enables, delta.Enables);
+        UnionDots(Tombstones, delta.Disables);
     }
 
     private int LiveEnableCount()
     {
         if (Enables.Count == 0) return 0;
         if (Tombstones.Count == 0) return Enables.Count;
+        if (Tombstones.Count <= DotLinearScanThreshold)
+        {
+            // Tiny tombstone list: linear scan beats hashing.
+            var liveLinear = 0;
+            foreach (var dot in Enables)
+            {
+                if (!Tombstones.Contains(dot)) liveLinear++;
+            }
+            return liveLinear;
+        }
         var tombSet = new HashSet<OrSetDot>(Tombstones);
         var live = 0;
         foreach (var dot in Enables)
@@ -165,9 +177,39 @@ public sealed class OrFlag : ICrdt<OrFlag>
     private static void UnionInto(List<OrSetDot> target, List<OrSetDot> source)
     {
         if (source.Count == 0) return;
+        if (target.Count <= DotLinearScanThreshold && source.Count <= DotLinearScanThreshold)
+        {
+            // Tiny dot lists (the common 1-2-concurrent-dot case): a linear
+            // Contains is cheaper than allocating a HashSet.
+            foreach (var dot in source)
+            {
+                if (!target.Contains(dot)) target.Add(dot);
+            }
+            return;
+        }
         var seen = new HashSet<OrSetDot>(target);
         foreach (var dot in source)
         {
+            if (seen.Add(dot)) target.Add(dot);
+        }
+    }
+
+    private static void UnionDots(List<OrSetDot> target, IReadOnlyList<OrSetDot>? source)
+    {
+        if (source is not { Count: > 0 }) return;
+        if (target.Count <= DotLinearScanThreshold && source.Count <= DotLinearScanThreshold)
+        {
+            for (var i = 0; i < source.Count; i++)
+            {
+                var dot = source[i];
+                if (!target.Contains(dot)) target.Add(dot);
+            }
+            return;
+        }
+        var seen = new HashSet<OrSetDot>(target);
+        for (var i = 0; i < source.Count; i++)
+        {
+            var dot = source[i];
             if (seen.Add(dot)) target.Add(dot);
         }
     }
