@@ -23,6 +23,14 @@ namespace Orleans.Lattice;
 [Alias(TypeAliases.RwFlag)]
 public sealed class RwFlag : ICrdt<RwFlag>
 {
+    // Below this many tombstone dots a linear scan beats allocating and
+    // populating a HashSet for the membership checks. A flag carries one
+    // dot per concurrent enable/disable, overwhelmingly 1-2 in practice,
+    // so the linear path is the common case; the set is only built once a
+    // flag genuinely accumulates many concurrent dots. Mirrors
+    // OrSet.DotLinearScanThreshold.
+    private const int DotLinearScanThreshold = 4;
+
     /// <summary>
     /// Enable dots. The flag can only be enabled when at least one enable
     /// dot is present; enable dots are grow-only and are never cancelled
@@ -94,8 +102,18 @@ public sealed class RwFlag : ICrdt<RwFlag>
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         Enables.Add(new OrSetDot { ReplicaId = replicaId, Counter = counter });
         if (Disables.Count == 0) return false;
-        var tombSet = new HashSet<OrSetDot>(Tombstones);
         var anyAdded = false;
+        if (Tombstones.Count <= DotLinearScanThreshold)
+        {
+            // Tiny tombstone list (the common 0-1-dot case): a linear
+            // Contains against the growing list beats allocating a HashSet.
+            foreach (var dot in Disables)
+            {
+                if (!Tombstones.Contains(dot)) { Tombstones.Add(dot); anyAdded = true; }
+            }
+            return anyAdded;
+        }
+        var tombSet = new HashSet<OrSetDot>(Tombstones);
         foreach (var dot in Disables)
         {
             if (tombSet.Add(dot))
@@ -169,6 +187,16 @@ public sealed class RwFlag : ICrdt<RwFlag>
     {
         if (Disables.Count == 0) return 0;
         if (Tombstones.Count == 0) return Disables.Count;
+        if (Tombstones.Count <= DotLinearScanThreshold)
+        {
+            // Tiny tombstone list: linear scan beats hashing.
+            var liveLinear = 0;
+            foreach (var dot in Disables)
+            {
+                if (!Tombstones.Contains(dot)) liveLinear++;
+            }
+            return liveLinear;
+        }
         var tombSet = new HashSet<OrSetDot>(Tombstones);
         var live = 0;
         foreach (var dot in Disables)
@@ -181,6 +209,16 @@ public sealed class RwFlag : ICrdt<RwFlag>
     private static void UnionInto(List<OrSetDot> target, List<OrSetDot> source)
     {
         if (source.Count == 0) return;
+        if (target.Count <= DotLinearScanThreshold && source.Count <= DotLinearScanThreshold)
+        {
+            // Tiny dot lists (the common 1-2-concurrent-dot case): a linear
+            // Contains is cheaper than allocating a HashSet.
+            foreach (var dot in source)
+            {
+                if (!target.Contains(dot)) target.Add(dot);
+            }
+            return;
+        }
         var seen = new HashSet<OrSetDot>(target);
         foreach (var dot in source)
         {
@@ -191,9 +229,19 @@ public sealed class RwFlag : ICrdt<RwFlag>
     private static void UnionDots(List<OrSetDot> target, IReadOnlyList<OrSetDot>? source)
     {
         if (source is not { Count: > 0 }) return;
-        var seen = new HashSet<OrSetDot>(target);
-        foreach (var dot in source)
+        if (target.Count <= DotLinearScanThreshold && source.Count <= DotLinearScanThreshold)
         {
+            for (var i = 0; i < source.Count; i++)
+            {
+                var dot = source[i];
+                if (!target.Contains(dot)) target.Add(dot);
+            }
+            return;
+        }
+        var seen = new HashSet<OrSetDot>(target);
+        for (var i = 0; i < source.Count; i++)
+        {
+            var dot = source[i];
             if (seen.Add(dot)) target.Add(dot);
         }
     }
