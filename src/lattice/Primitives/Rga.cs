@@ -37,6 +37,15 @@ using System.Runtime.InteropServices;
 [Alias(TypeAliases.Rga)]
 public sealed class Rga : ICrdt<Rga>
 {
+    // Below this many incoming nodes (MergeFrom) or delta operations
+    // (MergeDelta) a linear scan over the node list beats allocating and
+    // filling a full dot->node index over every local node. Steady-state
+    // replication delivers one or two operations per merge, so the linear
+    // path is the common case; the index is built only for a large
+    // catch-up merge. Mirrors the DotLinearScanThreshold fast path the
+    // sibling OrSet / OrMap / OrFlag primitives already use.
+    private const int MergeLinearScanThreshold = 4;
+
     /// <summary>
     /// Every node in the sequence, live or tombstoned, in arbitrary
     /// storage order. Materialise via <see cref="ToList"/> for the
@@ -276,12 +285,29 @@ public sealed class Rga : ICrdt<Rga>
         ArgumentNullException.ThrowIfNull(other);
         if (other.Nodes.Count == 0) return;
 
-        var localByDot = new Dictionary<OrSetDot, RgaNode>(Nodes.Count);
-        foreach (var n in Nodes) localByDot[n.Dot] = n;
+        // For a small incoming side (the steady-state replication merge)
+        // probe the node list directly; only a large catch-up merge builds
+        // the full dot->node index over every local node.
+        Dictionary<OrSetDot, RgaNode>? localByDot = null;
+        if (other.Nodes.Count > MergeLinearScanThreshold)
+        {
+            localByDot = new Dictionary<OrSetDot, RgaNode>(Nodes.Count);
+            foreach (var n in Nodes) localByDot[n.Dot] = n;
+        }
+
+        RgaNode? Lookup(OrSetDot dot)
+        {
+            if (localByDot is not null) return localByDot.TryGetValue(dot, out var found) ? found : null;
+            foreach (var n in Nodes)
+            {
+                if (n.Counter == dot.Counter && n.ReplicaId == dot.ReplicaId) return n;
+            }
+            return null;
+        }
 
         foreach (var n in other.Nodes)
         {
-            if (localByDot.TryGetValue(n.Dot, out var existing))
+            if (Lookup(n.Dot) is { } existing)
             {
                 // Tombstone is monotonic: once observed-removed on
                 // either side, the result is tombstoned.
@@ -297,15 +323,16 @@ public sealed class Rga : ICrdt<Rga>
             }
             else
             {
-                Nodes.Add(new RgaNode
+                var added = new RgaNode
                 {
                     ReplicaId = n.ReplicaId,
                     Counter = n.Counter,
                     ParentDot = n.ParentDot,
                     Value = n.Value,
                     IsTombstone = n.IsTombstone,
-                });
-                localByDot[n.Dot] = Nodes[^1];
+                };
+                Nodes.Add(added);
+                localByDot?[n.Dot] = added;
             }
         }
 
@@ -340,8 +367,28 @@ public sealed class Rga : ICrdt<Rga>
     /// </param>
     public void MergeDelta(RgaDelta delta)
     {
-        var byDot = new Dictionary<OrSetDot, RgaNode>(Nodes.Count);
-        foreach (var n in Nodes) byDot[n.Dot] = n;
+        var insertCount = delta.Inserts?.Count ?? 0;
+        var tombstoneCount = delta.Tombstones?.Count ?? 0;
+
+        // For a small incoming delta (the steady-state replication case)
+        // probe the node list directly; only a large catch-up delta builds
+        // the full dot->node index over every local node.
+        Dictionary<OrSetDot, RgaNode>? byDot = null;
+        if (insertCount + tombstoneCount > MergeLinearScanThreshold)
+        {
+            byDot = new Dictionary<OrSetDot, RgaNode>(Nodes.Count);
+            foreach (var n in Nodes) byDot[n.Dot] = n;
+        }
+
+        RgaNode? Lookup(OrSetDot dot)
+        {
+            if (byDot is not null) return byDot.TryGetValue(dot, out var found) ? found : null;
+            foreach (var n in Nodes)
+            {
+                if (n.Counter == dot.Counter && n.ReplicaId == dot.ReplicaId) return n;
+            }
+            return null;
+        }
 
         var inserts = delta.Inserts;
         if (inserts is { Count: > 0 })
@@ -350,7 +397,7 @@ public sealed class Rga : ICrdt<Rga>
             {
                 var dot = ins.Dot;
                 BumpContext(ins.ReplicaId, ins.Counter);
-                if (byDot.TryGetValue(dot, out var existing))
+                if (Lookup(dot) is { } existing)
                 {
                     // Idempotent refresh: the insert is authoritative for
                     // the structural parent link and value; the tombstone
@@ -369,7 +416,7 @@ public sealed class Rga : ICrdt<Rga>
                         IsTombstone = false,
                     };
                     Nodes.Add(node);
-                    byDot[dot] = node;
+                    byDot?[dot] = node;
                 }
             }
         }
@@ -380,7 +427,7 @@ public sealed class Rga : ICrdt<Rga>
             foreach (var dot in tombstones)
             {
                 BumpContext(dot.ReplicaId, dot.Counter);
-                if (byDot.TryGetValue(dot, out var node))
+                if (Lookup(dot) is { } node)
                 {
                     node.IsTombstone = true;
                 }
@@ -399,7 +446,7 @@ public sealed class Rga : ICrdt<Rga>
                         IsTombstone = true,
                     };
                     Nodes.Add(placeholder);
-                    byDot[dot] = placeholder;
+                    byDot?[dot] = placeholder;
                 }
             }
         }

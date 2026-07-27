@@ -520,4 +520,100 @@ public class RgaTests
         Assert.That(resolved[0].Value, Is.Not.Null);
         Assert.That(resolved[0].Value, Is.Empty);
     }
+
+    // The merge paths select a linear node scan for a small incoming side
+    // and a dot->node index for a large one (MergeLinearScanThreshold = 4).
+    // The next tests drive both sides of that boundary and assert the two
+    // paths converge to the same sequence.
+
+    [Test]
+    public void MergeFrom_large_incoming_side_uses_index_path_and_converges()
+    {
+        var left = new Rga();
+        left.InsertAfter(Rga.Root, "l", B("seed"));
+
+        // A right side of 8 chained nodes exceeds the threshold, so the
+        // single MergeFrom below takes the dictionary index path.
+        var right = new Rga();
+        var p = Rga.Root;
+        for (var i = 0; i < 8; i++)
+        {
+            p = right.InsertAfter(p, "r", B("n" + i));
+        }
+
+        var merged = left.Clone();
+        merged.MergeFrom(right);
+
+        Assert.That(Strings(merged), Does.Contain("seed"));
+        Assert.That(Strings(merged), Has.Count.EqualTo(9));
+
+        // Re-merging the same large side over the index path is idempotent.
+        var reMerged = merged.Clone();
+        reMerged.MergeFrom(right);
+        Assert.That(Strings(reMerged), Is.EqualTo(Strings(merged)));
+
+        // The index path agrees with folding the same nodes one small merge
+        // at a time (each incoming side of one node takes the linear path).
+        var viaLinear = left.Clone();
+        foreach (var node in right.Nodes)
+        {
+            var single = new Rga();
+            single.Nodes.Add(new RgaNode
+            {
+                ReplicaId = node.ReplicaId,
+                Counter = node.Counter,
+                ParentDot = node.ParentDot,
+                Value = node.Value,
+                IsTombstone = node.IsTombstone,
+            });
+            viaLinear.MergeFrom(single);
+        }
+        Assert.That(Strings(viaLinear), Is.EqualTo(Strings(merged)));
+    }
+
+    [Test]
+    public void MergeDelta_index_and_linear_paths_agree_at_threshold_boundary()
+    {
+        // Author a base sequence and a delta that inserts several nodes plus
+        // tombstones one existing node. Apply it as one large delta (index
+        // path, total ops > 4) and as a sequence of one-op deltas (linear
+        // path, each <= 4); the resolved sequences must be identical.
+        var seed = new Rga();
+        var d0 = seed.InsertAfter(Rga.Root, "s", B("0"));
+
+        var inserts = new[]
+        {
+            Insert("a", 1, d0, B("a")),
+            Insert("a", 2, new OrSetDot { ReplicaId = "a", Counter = 1 }, B("b")),
+            Insert("a", 3, new OrSetDot { ReplicaId = "a", Counter = 2 }, B("c")),
+            Insert("a", 4, new OrSetDot { ReplicaId = "a", Counter = 3 }, B("d")),
+            Insert("a", 5, new OrSetDot { ReplicaId = "a", Counter = 4 }, B("e")),
+        };
+
+        var viaIndex = seed.Clone();
+        viaIndex.MergeDelta(new RgaDelta
+        {
+            Inserts = inserts,
+            Tombstones = new[] { d0 }, // 5 inserts + 1 tombstone = 6 ops -> index path
+        });
+
+        var viaLinear = seed.Clone();
+        foreach (var ins in inserts)
+        {
+            viaLinear.MergeDelta(new RgaDelta
+            {
+                Inserts = new[] { ins },
+                Tombstones = Array.Empty<OrSetDot>(),
+            });
+        }
+        viaLinear.MergeDelta(new RgaDelta
+        {
+            Inserts = Array.Empty<RgaDeltaNode>(),
+            Tombstones = new[] { d0 }, // 1 op -> linear path
+        });
+
+        Assert.That(Strings(viaLinear), Is.EqualTo(Strings(viaIndex)));
+        Assert.That(viaIndex.ContainsDot(d0), Is.True); // tombstone preserved
+        Assert.That(Strings(viaIndex), Does.Not.Contain("0"));
+    }
 }

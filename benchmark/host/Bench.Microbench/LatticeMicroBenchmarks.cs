@@ -3244,6 +3244,15 @@ public class LatticeMicroBenchmarks
     private int _rgaKeyCount;
     private Rga _rgaToListFixture = null!;
 
+    // Merge-path operands: a pre-built sequence of N live nodes and a
+    // single-operation delta whose dot already exists in the sequence (an
+    // idempotent re-insert). Applying it repeatedly neither grows nor
+    // changes the sequence, so the benchmark isolates exactly the per-merge
+    // dot->node index the small-delta path now skips. Sized by
+    // BENCH_MICROBENCH_RGA_KEYS.
+    private Rga _rgaMergeDeltaFixture = null!;
+    private RgaDelta _rgaMergeDelta;
+
     // ===== OrFlag / RwFlag membership micro-suite operands =====
     // The two flag CRDTs are the tag-index membership primitives (one flag
     // per (tag, member) row). A row is overwhelmingly a single enable dot
@@ -3764,6 +3773,36 @@ public class LatticeMicroBenchmarks
         {
             parent = _rgaToListFixture.InsertAfter(parent, "replica", _rgaValue);
         }
+
+        // A second N-node sequence plus an idempotent single-insert delta
+        // (the last node re-shipped under its own parent). The dot already
+        // exists, so MergeDelta refreshes it in place without appending or
+        // changing liveness - safe to apply on every benchmark iteration -
+        // while still exercising the full node lookup the merge performs.
+        _rgaMergeDeltaFixture = new Rga();
+        var mergeParent = Rga.Root;
+        var priorParent = Rga.Root;
+        var lastDot = Rga.Root;
+        for (var i = 0; i < keys; i++)
+        {
+            priorParent = mergeParent;
+            mergeParent = _rgaMergeDeltaFixture.InsertAfter(mergeParent, "replica", _rgaValue);
+            lastDot = mergeParent;
+        }
+        _rgaMergeDelta = new RgaDelta
+        {
+            Inserts = new[]
+            {
+                new RgaDeltaNode
+                {
+                    ReplicaId = lastDot.ReplicaId,
+                    Counter = lastDot.Counter,
+                    ParentDot = priorParent,
+                    Value = _rgaValue,
+                },
+            },
+            Tombstones = Array.Empty<OrSetDot>(),
+        };
     }
 
     /// <summary>
@@ -3856,6 +3895,24 @@ public class LatticeMicroBenchmarks
     public IReadOnlyList<(OrSetDot Dot, byte[] Value)> Rga_ToList()
     {
         return _rgaToListFixture.ToList();
+    }
+
+    /// <summary>
+    /// Merge-path instrument: a single-operation <see cref="Rga.MergeDelta"/>
+    /// against a pre-built N-node sequence - the steady-state replication
+    /// shape where each delivered delta carries one or two operations. The
+    /// small-delta path now probes the node list directly instead of
+    /// building and filling a full dot->node index over every local node on
+    /// every call, so the per-merge O(N) dictionary allocation this
+    /// benchmark exists to quantify is removed. The delta is an idempotent
+    /// re-insert of an existing node, so repeated application leaves the
+    /// sequence unchanged and the measurement stays on the merge machinery.
+    /// </summary>
+    [Benchmark(Description = "Rga merge delta (small)")]
+    public Rga Rga_MergeDelta()
+    {
+        _rgaMergeDeltaFixture.MergeDelta(_rgaMergeDelta);
+        return _rgaMergeDeltaFixture;
     }
 
     /// <summary>
