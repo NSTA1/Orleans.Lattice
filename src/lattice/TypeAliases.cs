@@ -140,6 +140,13 @@ internal static class TypeAliases
     // server-side saga failure - the API bindings map it to a client-error status.
     internal const string LatticeIdempotencyKeyMismatch = "ol.ikm";
 
+    // Unregistered OR-Map CRDT shape surface. Thrown by the leaf grain's typed
+    // CRDT apply / prepared-fold paths when an OR-Map verb targets a tree whose
+    // host never registered the (TKey, TValue) shape via AddOrMapShape. A
+    // deterministic host-configuration precondition, distinct from a genuine
+    // server-side fault - the API bindings map it to a client-error status.
+    internal const string LatticeCrdtShapeNotRegistered = "ol.csnr";
+
     // Per-tree admission-control quota surface. Thrown by the public ILattice
     // write guard when a locally-authored write is refused because the tree's
     // cached live-key count or estimated-byte footprint has reached the

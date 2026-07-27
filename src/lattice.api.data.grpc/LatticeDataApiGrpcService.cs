@@ -321,6 +321,17 @@ internal sealed class LatticeDataApiGrpcService : LatticeDataApiGrpcServiceBase
         {
             throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
         }
+        catch (LatticeCrdtShapeNotRegisteredException ex)
+        {
+            // A typed OR-Map verb targeted a tree whose host never registered the
+            // map shape. This is a deterministic host-configuration precondition,
+            // not a server fault: map to FailedPrecondition carrying the
+            // self-contained remediation message (register via AddOrMapShape) so
+            // the caller is not misdirected to the cluster logs. Placed with the
+            // other typed InvalidOperationException-derived arms, ahead of the
+            // generic server-fault catch that would otherwise mask it as Internal.
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
+        }
         catch (LatticeIdempotencyKeyMismatchException ex)
         {
             // Reusing a caller-supplied operationId with a different key (or tree)

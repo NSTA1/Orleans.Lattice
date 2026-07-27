@@ -555,4 +555,34 @@ public sealed class AuthGrpcDataTests
 
         Assert.That(read.CounterValue, Is.EqualTo(0));
     }
+
+    [Test]
+    public async Task crdt_map_write_on_a_tree_with_no_registered_shape_is_failed_precondition()
+    {
+        // The default gRPC-host cluster registers no OR-Map (TKey, TValue) shape,
+        // so an OR-Map verb is a deterministic host-configuration precondition -
+        // it must surface as FailedPrecondition (not an opaque Internal fault).
+        const string tree = "grpc-crdt-map-noshape";
+        await _fixture.RegisterTreeAsync(tree);
+        await _fixture.GrantAsync(AllowTree(Writer, tree, CrdtOps));
+
+        var ex = Assert.ThrowsAsync<RpcException>(async () => await CallAsync(
+            _host.Methods.CrdtWrite,
+            new CrdtWriteRequest
+            {
+                TreeId = tree,
+                Key = "m",
+                Op = CrdtWriteOp.MapSet,
+                ReplicaId = "r1",
+                Field = "f",
+                Element = new byte[] { 9 },
+            },
+            Writer));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.FailedPrecondition));
+            Assert.That(ex!.Status.Detail, Does.Contain("AddOrMapShape"));
+        });
+    }
 }

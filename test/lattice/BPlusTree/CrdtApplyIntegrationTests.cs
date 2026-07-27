@@ -179,10 +179,18 @@ public class CrdtApplyIntegrationTests
         // Tree was created without AddOrMapShape<TKey, TValue> - the leaf
         // must surface a clear configuration error rather than silently
         // applying the wrong typed dispatch.
-        var ex = Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        // Tree was created without AddOrMapShape<TKey, TValue> - the leaf
+        // must surface a clear configuration error rather than silently
+        // applying the wrong typed dispatch. Asserting the typed subclass here
+        // also proves it marshals across the real grain boundary intact.
+        var ex = Assert.ThrowsAsync<LatticeCrdtShapeNotRegisteredException>(async () =>
             await tree.ApplyCrdtDeltaAsync("k", LatticeMergeMode.OrMap, new byte[] { 0x7b, 0x7d })); // "{}"
-        Assert.That(ex!.Message, Does.Contain("CrdtShape"));
-        Assert.That(ex!.Message, Does.Contain("OrMap"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex, Is.InstanceOf<InvalidOperationException>());
+            Assert.That(ex!.Message, Does.Contain("CrdtShape"));
+            Assert.That(ex!.Message, Does.Contain("OrMap"));
+        });
     }
 
     [Test]
