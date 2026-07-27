@@ -86,6 +86,9 @@ public sealed class AuthGrpcDataTests
     private const LatticeOperation ReadOps =
         LatticeOperation.Read | LatticeOperation.RangeRead;
 
+    private const LatticeOperation CrdtOps =
+        LatticeOperation.CrdtApply | LatticeOperation.Read;
+
     [Test]
     public async Task authorized_set_over_the_wire_is_durable()
     {
@@ -424,5 +427,132 @@ public sealed class AuthGrpcDataTests
             Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
             Assert.That(_fixture.ReadRawAsync(tree, "k2").Result, Is.Null);
         });
+    }
+
+    [Test]
+    public async Task set_many_over_the_wire_writes_every_key()
+    {
+        const string tree = "grpc-set-many";
+        await _fixture.RegisterTreeAsync(tree);
+        await _fixture.GrantAsync(AllowTree(Writer, tree, WriteOps));
+
+        await CallAsync(
+            _host.Methods.SetMany,
+            new DataSetManyRequest
+            {
+                TreeId = tree,
+                Upserts =
+                {
+                    new DataEntry { Key = "a", Value = new byte[] { 1 } },
+                    new DataEntry { Key = "b", Value = new byte[] { 2 } },
+                },
+            },
+            Writer);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(_fixture.ReadRawAsync(tree, "a").Result, Is.EqualTo(new byte[] { 1 }));
+            Assert.That(_fixture.ReadRawAsync(tree, "b").Result, Is.EqualTo(new byte[] { 2 }));
+        });
+    }
+
+    [Test]
+    public async Task set_many_over_the_wire_on_a_denied_key_is_permission_denied()
+    {
+        const string tree = "grpc-set-many-denied";
+        await _fixture.RegisterTreeAsync(tree);
+
+        var ex = Assert.ThrowsAsync<RpcException>(async () => await CallAsync(
+            _host.Methods.SetMany,
+            new DataSetManyRequest { TreeId = tree, Upserts = { new DataEntry { Key = "a", Value = new byte[] { 1 } } } },
+            Writer));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
+            Assert.That(_fixture.ReadRawAsync(tree, "a").Result, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task crdt_counter_write_then_read_over_the_wire_round_trips()
+    {
+        const string tree = "grpc-crdt-counter";
+        await _fixture.RegisterTreeAsync(tree);
+        await _fixture.GrantAsync(AllowTree(Writer, tree, CrdtOps));
+
+        await CallAsync(
+            _host.Methods.CrdtWrite,
+            new CrdtWriteRequest { TreeId = tree, Key = "c", Op = CrdtWriteOp.CounterIncrement, ReplicaId = "r1", Amount = 4 },
+            Writer);
+        await CallAsync(
+            _host.Methods.CrdtWrite,
+            new CrdtWriteRequest { TreeId = tree, Key = "c", Op = CrdtWriteOp.CounterDecrement, ReplicaId = "r2", Amount = 1 },
+            Writer);
+
+        var read = await CallAsync(
+            _host.Methods.CrdtRead,
+            new CrdtReadRequest { TreeId = tree, Key = "c", Kind = CrdtKind.PnCounter },
+            Writer);
+
+        Assert.That(read.CounterValue, Is.EqualTo(3));
+    }
+
+    [Test]
+    public async Task crdt_orset_write_then_read_over_the_wire_round_trips()
+    {
+        const string tree = "grpc-crdt-orset";
+        await _fixture.RegisterTreeAsync(tree);
+        await _fixture.GrantAsync(AllowTree(Writer, tree, CrdtOps));
+
+        await CallAsync(
+            _host.Methods.CrdtWrite,
+            new CrdtWriteRequest { TreeId = tree, Key = "s", Op = CrdtWriteOp.SetAdd, ReplicaId = "r1", Element = new byte[] { 7 } },
+            Writer);
+
+        var read = await CallAsync(
+            _host.Methods.CrdtRead,
+            new CrdtReadRequest { TreeId = tree, Key = "s", Kind = CrdtKind.OrSet },
+            Writer);
+
+        Assert.That(read.Elements, Has.Count.EqualTo(1).And.ItemAt(0).EqualTo(new byte[] { 7 }));
+    }
+
+    [Test]
+    public async Task crdt_write_over_the_wire_on_a_denied_key_is_permission_denied()
+    {
+        const string tree = "grpc-crdt-denied";
+        await _fixture.RegisterTreeAsync(tree);
+
+        var ex = Assert.ThrowsAsync<RpcException>(async () => await CallAsync(
+            _host.Methods.CrdtWrite,
+            new CrdtWriteRequest { TreeId = tree, Key = "c", Op = CrdtWriteOp.CounterIncrement, ReplicaId = "r1", Amount = 1 },
+            Writer));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
+            Assert.That(ex!.Trailers.GetValue(LatticeDataApiGrpcService.DeniedTreeTrailer), Is.EqualTo(tree));
+        });
+    }
+
+    [Test]
+    public async Task crdt_read_over_the_wire_of_a_denied_key_reads_back_empty()
+    {
+        const string tree = "grpc-crdt-read-denied";
+        await _fixture.RegisterTreeAsync(tree);
+        await _fixture.GrantAsync(AllowTree(Writer, tree, CrdtOps));
+        await CallAsync(
+            _host.Methods.CrdtWrite,
+            new CrdtWriteRequest { TreeId = tree, Key = "c", Op = CrdtWriteOp.CounterIncrement, ReplicaId = "r1", Amount = 5 },
+            Writer);
+
+        // Reader has no grant: a fail-closed read reads the empty value, not a fault.
+        var read = await CallAsync(
+            _host.Methods.CrdtRead,
+            new CrdtReadRequest { TreeId = tree, Key = "c", Kind = CrdtKind.PnCounter },
+            Reader);
+
+        Assert.That(read.CounterValue, Is.EqualTo(0));
     }
 }
