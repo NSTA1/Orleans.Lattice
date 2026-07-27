@@ -230,6 +230,26 @@ public sealed class LatticeEntryHistoryIntegrationTests
     }
 
     [Test]
+    public async Task GetEntryHistoryAsync_never_written_key_returns_key_not_found()
+    {
+        // The tree exists (and has a history view) but the key was never
+        // written: a key with no history at all is KeyNotFound (issue #1396 N3),
+        // distinct from a key whose older revisions aged out (Found, truncated).
+        const string tree = "hist-never-written-src";
+        const string view = "hist-never-written-view";
+        await _fixture.RegisterTreeAsync(tree);
+        await _fixture.CreateHistoryViewAsync(tree, view);
+
+        var result = await _fixture.Query.GetEntryHistoryAsync(Request(tree, "no-such-key"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(StateQueryStatus.KeyNotFound));
+            Assert.That(result.Revisions, Is.Empty);
+        });
+    }
+
+    [Test]
     public async Task GetEntryHistoryAsync_unknown_tree_returns_tree_not_found()
     {
         var result = await _fixture.Query.GetEntryHistoryAsync(Request("hist-no-such-tree", "k"));

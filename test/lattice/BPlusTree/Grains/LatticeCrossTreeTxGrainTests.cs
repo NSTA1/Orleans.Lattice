@@ -235,9 +235,13 @@ public class LatticeCrossTreeTxGrainTests
         await grain.CommitAsync(Batches(("orders", "order:1", "A"), ("inventory", "sku:1", "B")));
 
         // Force the in-flight stability branch, then re-submit a changed key set.
+        // The mismatch is a caller error, surfaced as the dedicated typed
+        // exception (which derives from InvalidOperationException) with a
+        // self-contained message that does not mention cluster logs.
         state.State.Phase = CrossTreeTxPhase.Preparing;
-        Assert.ThrowsAsync<InvalidOperationException>(() => grain.CommitAsync(
+        var ex = Assert.ThrowsAsync<LatticeIdempotencyKeyMismatchException>(() => grain.CommitAsync(
             Batches(("orders", "order:CHANGED", "A"), ("inventory", "sku:1", "B"))));
+        Assert.That(ex!.Message, Does.Contain("different set of").And.Not.Contain("cluster logs"));
     }
 
     [Test]

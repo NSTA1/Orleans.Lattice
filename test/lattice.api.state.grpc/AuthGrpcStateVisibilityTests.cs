@@ -154,17 +154,23 @@ public sealed class AuthGrpcStateVisibilityTests
     }
 
     [Test]
-    public void scan_entries_without_a_credential_header_fails_closed()
+    public async Task scan_entries_without_a_credential_header_fails_closed()
     {
         // An unresolved caller cannot see the tree at all, so the fully-hidden
-        // tree reads back as tree-not-found (RpcException NotFound over the wire)
-        // rather than leaking an empty-but-existing page.
-        var ex = Assert.ThrowsAsync<RpcException>(async () => await CallAsync(
+        // tree reads back as tree-not-found rather than leaking an empty-but-
+        // existing page. The typed not-found rides as a structured status (issue
+        // #1396): the response is TreeNotFound with no entries, identical to an
+        // unknown tree, so fail-closed hiding is preserved.
+        var response = await CallAsync(
             _host.Methods.ScanEntries,
             new EntryScanRequest { TreeId = TreeA, PageSize = 100 },
-            subject: null));
+            subject: null);
 
-        Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.NotFound));
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.Status, Is.EqualTo(StateQueryStatus.TreeNotFound));
+            Assert.That(response.Entries, Is.Empty);
+        });
     }
 
     [Test]

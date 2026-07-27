@@ -173,9 +173,11 @@ internal sealed class LatticeCrossTreeTxGrain(
             if (state.State.Fingerprint is not { } persisted
                 || !CryptographicOperations.FixedTimeEquals(persisted, incoming))
             {
-                throw new InvalidOperationException(
-                    $"Cross-tree atomic-write operation '{OperationId}' was previously submitted with a " +
-                    "different tree set or key set; reuse of an operationId requires the exact same trees and keys.");
+                throw new LatticeIdempotencyKeyMismatchException(
+                    "This cross-tree atomic-write operationId was already submitted with a different set of "
+                    + "trees or keys. Reusing an operationId requires the exact same participating trees and "
+                    + "the exact same keys. Resubmit the original trees and keys, or use a new operationId.",
+                    OperationId);
             }
         }
 

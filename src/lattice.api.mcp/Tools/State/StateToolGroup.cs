@@ -129,7 +129,9 @@ internal sealed class StateToolGroup : ILatticeApiMcpToolGroup
                 "lattice_state_get_tree_structure",
                 "Get tree structure",
                 "Returns the bounded structural node graph of one tree (shard roots, internal nodes, leaves), depth- "
-                + "and node-budget limited, optionally scoped to one shard or descended into a named node. Read-only."),
+                + "and node-budget limited, optionally scoped to one shard or descended into a named node. An "
+                + "unknown tree is reported as a structured status (status=TreeNotFound), not a transport fault. "
+                + "Read-only."),
             Create(
                 services,
                 StateToolHandlers.ScanEntriesAsync,
@@ -137,28 +139,36 @@ internal sealed class StateToolGroup : ILatticeApiMcpToolGroup
                 "Scan entries",
                 "Scans a key-ordered, paged page of one tree's live entries, optionally scoped to a key range or "
                 + "filtered by a tag index, with a size-bounded per-entry value preview. Excludes tombstoned and "
-                + "TTL-expired entries. Read-only."),
+                + "TTL-expired entries. Not-found outcomes ride as a structured status, never a transport fault: an "
+                + "unknown tree reports status=TreeNotFound, and a tag-filtered scan whose indexName names no "
+                + "materialised index reports status=IndexNotFound (distinct from a real-but-empty index, which is "
+                + "status=Found with zero entries). Read-only."),
             Create(
                 services,
                 StateToolHandlers.GetEntryAsync,
                 "lattice_state_get_entry",
                 "Get entry",
-                "Returns the full record for a single key with a larger value-preview budget than a scan, or a typed "
-                + "not-found that distinguishes an unknown tree from a missing key. Read-only."),
+                "Returns the full record for a single key with a larger value-preview budget than a scan. "
+                + "Not-found outcomes ride as a structured status, never a transport fault: an unknown tree "
+                + "reports status=TreeNotFound and a missing key reports status=KeyNotFound. Read-only."),
             Create(
                 services,
                 StateToolHandlers.GetEntryHistoryAsync,
                 "lattice_state_get_entry_history",
                 "Get entry history",
-                "Reads a single key's change-history timeline as a continuation-paged page of revision records, "
-                + "reporting whether the timeline is durable-bounded or a truncated fallback. Read-only."),
+                "Reads a single key's change-history timeline as a continuation-paged page of revision records. "
+                + "Not-found outcomes ride as a structured status, never a transport fault: an unknown tree reports "
+                + "status=TreeNotFound, and a key that has no history at all reports status=KeyNotFound (distinct "
+                + "from a key whose older revisions aged out of the durable window, which is status=Found with the "
+                + "timeline reported as truncated rather than durable-bounded). Read-only."),
             Create(
                 services,
                 StateToolHandlers.CancelScanAsync,
                 "lattice_state_cancel_scan",
                 "Cancel scan",
-                "Releases the server-side snapshot cursor named by a scan continuation token, freeing its WAL "
-                + "retention pin and per-shard baseline promptly. Best-effort and idempotent. Read-only."),
+                "Releases the server-side snapshot cursor named by a scan continuation token, promptly freeing the "
+                + "server resources it was holding. Call it to release a snapshot scan you will not finish paging. "
+                + "Best-effort and idempotent: an empty or unknown token is a tolerated no-op. Read-only."),
         };
     }
 

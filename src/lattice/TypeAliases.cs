@@ -132,6 +132,14 @@ internal static class TypeAliases
     // transition for that silo activation.
     internal const string LatticeSaturated = "ol.lsa";
 
+    // Idempotency-key-reuse misuse surface. Thrown by the atomic-write saga and
+    // the cross-tree transaction coordinator when a caller-supplied operationId
+    // is re-submitted with a different key set (or, cross-tree, a different tree
+    // or key set) than the first submission bound to it. A deterministic caller
+    // error (client-side misuse of the idempotency key), distinct from a genuine
+    // server-side saga failure - the API bindings map it to a client-error status.
+    internal const string LatticeIdempotencyKeyMismatch = "ol.ikm";
+
     // Per-tree admission-control quota surface. Thrown by the public ILattice
     // write guard when a locally-authored write is refused because the tree's
     // cached live-key count or estimated-byte footprint has reached the

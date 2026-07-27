@@ -624,6 +624,58 @@ public sealed class LatticeCatalogIntegrationTests
     }
 
     [Test]
+    public async Task ScanEntriesAsync_with_typoed_index_name_returns_index_not_found()
+    {
+        await _fixture.CreatePopulatedTreeAsync("orders", keyCount: 3);
+
+        var index = _fixture.CreateTagIndex("orders", "orders-by-status");
+        await index.Key("key-00000").AddAsync(["open"]);
+
+        // A mistyped index name names no materialised tag index. It reports
+        // IndexNotFound (issue #1396 N4) so the caller can tell a typo from a
+        // real-but-empty index, which both otherwise return an empty Found page.
+        var result = await _fixture.Query.ScanEntriesAsync(new EntryScanRequest
+        {
+            TreeId = "orders",
+            IndexName = "orders-by-statuss",
+            Tag = "open",
+            PageSize = 100,
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(StateQueryStatus.IndexNotFound));
+            Assert.That(result.Entries, Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task ScanEntriesAsync_with_real_index_but_absent_tag_returns_found_empty()
+    {
+        await _fixture.CreatePopulatedTreeAsync("orders", keyCount: 3);
+
+        var index = _fixture.CreateTagIndex("orders", "orders-by-status");
+        await index.Key("key-00000").AddAsync(["open"]);
+
+        // The index exists but carries no members for this tag: that is a
+        // real-but-empty result (Found with zero entries), distinct from the
+        // IndexNotFound reported for a mistyped index name.
+        var result = await _fixture.Query.ScanEntriesAsync(new EntryScanRequest
+        {
+            TreeId = "orders",
+            IndexName = "orders-by-status",
+            Tag = "no-such-tag",
+            PageSize = 100,
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Status, Is.EqualTo(StateQueryStatus.Found));
+            Assert.That(result.Entries, Is.Empty);
+        });
+    }
+
+    [Test]
     public async Task ScanEntriesAsync_with_tag_pages_without_overlap()
     {
         await _fixture.CreatePopulatedTreeAsync("orders", keyCount: 5);
