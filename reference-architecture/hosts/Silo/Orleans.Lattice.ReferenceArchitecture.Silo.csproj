@@ -51,7 +51,7 @@
     <PackageReference Include="Orleans.Lattice.Api.State.Grpc" Version="8.0.1" />
     <PackageReference Include="Orleans.Lattice.Api.Data" Version="8.0.2" />
     <PackageReference Include="Orleans.Lattice.Api.Data.Grpc" Version="8.0.2" />
-    <PackageReference Include="Orleans.Lattice.Api.Auth" Version="8.0.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Auth" Version="8.0.1" />
     <PackageReference Include="Orleans.Lattice.Api.Auth.Grpc" Version="8.0.0" />
     <PackageReference Include="Orleans.Lattice.Auth" Version="8.0.0" />
     <PackageReference Include="Orleans.Lattice.Membership" Version="8.0.0" />
