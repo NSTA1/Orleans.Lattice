@@ -105,12 +105,40 @@ public sealed class LatticeStateGrpcHistoryIntegrationTests
     }
 
     [Test]
-    public void get_entry_history_maps_missing_tree_to_not_found_status_code()
+    public async Task get_entry_history_maps_missing_tree_to_tree_not_found_status()
     {
-        var ex = Assert.ThrowsAsync<RpcException>(async () =>
-            await CallAsync(_host.Channel, _host.Methods.GetEntryHistory,
-                new EntryHistoryRequest { TreeId = $"missing-{Guid.NewGuid():N}", Key = "k" }));
-        Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.NotFound));
+        var request = new EntryHistoryRequest { TreeId = $"missing-{Guid.NewGuid():N}", Key = "k" };
+
+        // An unknown tree is part of the typed contract (issue #1396): it rides
+        // as a structured Status, not an opaque NotFound transport fault.
+        var response = await CallAsync(_host.Channel, _host.Methods.GetEntryHistory, request);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.Status, Is.EqualTo(StateQueryStatus.TreeNotFound));
+            Assert.That(response.TreeId, Is.EqualTo(request.TreeId));
+            Assert.That(response.Revisions, Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task get_entry_history_maps_never_written_key_to_key_not_found_status()
+    {
+        var treeId = $"grpc-hist-nokey-{Guid.NewGuid():N}";
+        var view = $"{treeId}-view";
+        await _fixture.RegisterTreeAsync(treeId, shardCount: 1);
+        await _fixture.CreateHistoryViewAsync(treeId, view);
+
+        // The tree exists but the key was never written: a key with no history
+        // at all is KeyNotFound (issue #1396 N3), distinct from Found+empty.
+        var response = await CallAsync(_host.Channel, _host.Methods.GetEntryHistory,
+            new EntryHistoryRequest { TreeId = treeId, Key = $"never-{Guid.NewGuid():N}", Limit = 100 });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.Status, Is.EqualTo(StateQueryStatus.KeyNotFound));
+            Assert.That(response.Revisions, Is.Empty);
+        });
     }
 
     [Test]

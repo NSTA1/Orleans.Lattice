@@ -1118,6 +1118,29 @@ internal sealed class LatticeStateQuery(
             return EntryScanResult.Found(request.TreeId, Array.Empty<EntryRecord>(), continuationToken: null);
         }
 
+        // A tag index materialises as an internal membership tree named
+        // "tag-{indexName}". If that tree was never created, the index name is a
+        // typo (or the index has never been populated) - report IndexNotFound so
+        // the caller can tell a mistyped index from a real-but-empty one, which
+        // both otherwise return an empty Found page. Only check on a fresh open:
+        // a valid continuation token already implies the index existed at open,
+        // so paging does not pay a per-page existence round-trip.
+        if (string.IsNullOrEmpty(request.ContinuationToken))
+        {
+            var indexTreeId = LatticeConstants.TagIndexTreePrefix + request.IndexName!;
+            var indexTree = _grainFactory.GetGrain<ILattice>(indexTreeId);
+            bool indexExists;
+            using (LatticeAccessGateContext.EnterSystemOrigin())
+            {
+                indexExists = await indexTree.TreeExistsAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            if (!indexExists)
+            {
+                return EntryScanResult.IndexNotFound(request.TreeId);
+            }
+        }
+
         var index = tagFactory.Create(tree, request.IndexName!);
         var pageSize = ClampPageSize(request.PageSize);
         var previewBudget = ClampScanPreviewBudget(request.ValuePreviewBudget);
@@ -1300,6 +1323,18 @@ internal sealed class LatticeStateQuery(
 
         var bound = MapHistoryBound(page);
         var earliest = bound == EntryHistoryBound.Truncated ? page.EarliestAvailable : HybridLogicalClock.Zero;
+
+        // Distinguish "key never existed" from "exists with an empty/aged-out
+        // timeline". On a fresh read (no continuation token) that yields zero
+        // revisions and whose timeline is durable-bounded (not truncated), the
+        // key has no history at all - report KeyNotFound. When the timeline is
+        // Truncated the key may exist but its revisions aged out of the durable
+        // window, so it stays Found with an empty page and the truncation bound.
+        var freshRead = string.IsNullOrEmpty(request.ContinuationToken);
+        if (freshRead && records.Count == 0 && bound != EntryHistoryBound.Truncated)
+        {
+            return EntryHistoryResult.KeyNotFound(request.TreeId, request.Key);
+        }
 
         return EntryHistoryResult.Found(request.TreeId, request.Key, records, page.Continuation, bound, earliest);
     }

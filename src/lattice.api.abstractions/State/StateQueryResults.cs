@@ -13,6 +13,14 @@ public enum StateQueryStatus
 
     /// <summary>The tree exists but the requested key was not found.</summary>
     KeyNotFound = 2,
+
+    /// <summary>
+    /// The named tag index does not exist (no membership tree has been
+    /// materialised for it). Distinguishes a mistyped index name from a
+    /// real-but-empty index, which returns <see cref="Found"/> with zero
+    /// entries.
+    /// </summary>
+    IndexNotFound = 3,
 }
 
 /// <summary>
@@ -173,6 +181,17 @@ public sealed record EntryScanResult
     {
         ArgumentNullException.ThrowIfNull(treeId);
         return new EntryScanResult { Status = StateQueryStatus.TreeNotFound, TreeId = treeId };
+    }
+
+    /// <summary>
+    /// Builds an index-not-found result for a tag-filtered scan whose
+    /// <see cref="EntryScanRequest.IndexName"/> names no materialised tag
+    /// index. Distinguishes a mistyped index name from a real-but-empty index.
+    /// </summary>
+    public static EntryScanResult IndexNotFound(string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        return new EntryScanResult { Status = StateQueryStatus.IndexNotFound, TreeId = treeId };
     }
 }
 

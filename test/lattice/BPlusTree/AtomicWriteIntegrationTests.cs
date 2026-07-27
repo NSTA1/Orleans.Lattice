@@ -160,7 +160,9 @@ public class AtomicWriteIntegrationTests
 
         Assert.That(
             async () => await tree.SetManyAtomicAsync(wrongBatch, operationId),
-            Throws.InvalidOperationException.With.Message.Contains("different key set"));
+            Throws.TypeOf<LatticeIdempotencyKeyMismatchException>()
+                .With.Message.Contains("different set of keys")
+                .And.Message.Not.Contains("cluster logs"));
     }
 
     [TestCase(null)]

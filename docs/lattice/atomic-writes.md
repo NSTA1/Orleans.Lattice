@@ -423,7 +423,8 @@ An `operationId` is bound to the exact **set of keys** submitted on its
 first call. The saga persists a SHA-256 fingerprint of the sorted key
 set during `Prepare`; a subsequent call reusing the same `operationId`
 with a different key set (added, removed, or renamed keys) throws
-`InvalidOperationException`. Reordering keys or changing their values
+`LatticeIdempotencyKeyMismatchException` (a subclass of
+`InvalidOperationException`). Reordering keys or changing their values
 is allowed - the fingerprint hashes the sorted key list only, so the
 same logical retry with a slightly-different serialized payload is
 accepted as idempotent.
@@ -889,7 +890,8 @@ batch that is.
 - **Idempotent retry.** Re-submitting the same `operationId` with the
   same tree-set and key-set re-attaches to the in-flight (or completed)
   saga and returns its memoized outcome. Re-submitting the same
-  `operationId` with a *different* tree-set or key-set throws.
+  `operationId` with a *different* tree-set or key-set throws
+  `LatticeIdempotencyKeyMismatchException`.
 - **Atomicity, not cross-tree read isolation.** The guarantee is
   all-or-nothing *commit* of the write, anchored to the coordinator's single
   decision write as one global linearization point: at any single instant the

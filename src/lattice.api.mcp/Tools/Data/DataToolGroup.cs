@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using Microsoft.Extensions.DependencyInjection;
+using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using Orleans.Lattice.Api.Data;
@@ -80,8 +81,10 @@ internal sealed class DataToolGroup : ILatticeApiMcpToolGroup
                 SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 Title = "Read a data entry",
                 Description =
-                    "Reads the value at a key on a tree. A key the caller may not read reports "
-                    + "absent (found=false), never a value. Read-only.",
+                    "Reads the value at a key on a tree, returned base64-encoded in the result. "
+                    + "A routine miss is never a fault: an unknown tree, a missing key, or a key the "
+                    + "caller may not read all report found=false with no value. Caller errors (for "
+                    + "example a null tree id or key) surface as an invalid-argument error. Read-only.",
                 ReadOnly = true,
                 Destructive = false,
                 UseStructuredContent = true,
@@ -97,8 +100,10 @@ internal sealed class DataToolGroup : ILatticeApiMcpToolGroup
                 Title = "Read a page of data entries",
                 Description =
                     "Reads one page of a bounded, ascending key range on a tree, pruned to the "
-                    + "caller's authorized subset. Pass the returned continuationToken back to resume "
-                    + "paging. Read-only.",
+                    + "caller's authorized subset, with each value base64-encoded. Pass the returned "
+                    + "continuationToken back to resume paging; a null token means the range is "
+                    + "drained. An unknown tree returns an empty page, not a fault. An invalid or "
+                    + "expired continuation token is a caller error (invalid-argument). Read-only.",
                 ReadOnly = true,
                 Destructive = false,
                 UseStructuredContent = true,
@@ -113,8 +118,10 @@ internal sealed class DataToolGroup : ILatticeApiMcpToolGroup
                 SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 Title = "Write a data entry",
                 Description =
-                    "Writes a value at a key on a tree. Fails closed: a caller who may not write the "
-                    + "key is denied and nothing is persisted. Destructive.",
+                    "Writes a base64-encoded value at a key on a tree. Fails closed: a caller who may "
+                    + "not write the key is denied and nothing is persisted. Caller errors - a value "
+                    + "that is not valid base64, or a null tree id or key - surface as an "
+                    + "invalid-argument error, not a server fault. Destructive.",
                 ReadOnly = false,
                 Destructive = true,
                 UseStructuredContent = true,
@@ -129,8 +136,10 @@ internal sealed class DataToolGroup : ILatticeApiMcpToolGroup
                 SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 Title = "Delete a data entry",
                 Description =
-                    "Deletes a key on a tree, returning whether a live value was removed. Fails "
-                    + "closed: a caller who may not delete the key is denied. Destructive.",
+                    "Deletes a key on a tree, returning deleted=true when a live value was removed and "
+                    + "deleted=false when the key was already absent (an unknown tree also reports "
+                    + "deleted=false). Fails closed: a caller who may not delete the key is denied. "
+                    + "Destructive.",
                 ReadOnly = false,
                 Destructive = true,
                 UseStructuredContent = true,
@@ -147,7 +156,11 @@ internal sealed class DataToolGroup : ILatticeApiMcpToolGroup
                 Description =
                     "Commits upserts and deletes all-or-nothing on one tree, keyed by operationId for "
                     + "idempotent retry. Every leg is authorized before any apply, so a single denied "
-                    + "leg aborts the whole batch with nothing persisted. Destructive.",
+                    + "leg aborts the whole batch with nothing persisted. Reusing an operationId is a "
+                    + "no-op retry only when the batch presents the exact same set of keys; reusing it "
+                    + "with a different key set is a caller error (failed-precondition), rejected with "
+                    + "nothing applied. A malformed batch (duplicate keys, or an empty operationId or "
+                    + "one containing '/') is an invalid-argument caller error. Destructive.",
                 ReadOnly = false,
                 Destructive = true,
                 UseStructuredContent = true,
@@ -165,7 +178,11 @@ internal sealed class DataToolGroup : ILatticeApiMcpToolGroup
                     "Commits per-tree upserts and deletes across every named tree all-or-nothing, "
                     + "keyed by operationId. Returns Committed when every tree's batch committed, or "
                     + "PreconditionFailed when a guard aborted it with nothing committed. Every leg is "
-                    + "authorized before any apply. Destructive.",
+                    + "authorized before any apply. Reusing an operationId is a no-op retry only when "
+                    + "it presents the exact same set of trees and keys; reusing it with a different "
+                    + "tree or key set is a caller error (failed-precondition), rejected with nothing "
+                    + "applied. A malformed batch (duplicate or non-distinct trees or keys, or an "
+                    + "operationId containing '/') is an invalid-argument caller error. Destructive.",
                 ReadOnly = false,
                 Destructive = true,
                 UseStructuredContent = true,
@@ -197,9 +214,38 @@ internal sealed class DataToolGroup : ILatticeApiMcpToolGroup
         RequestContext<CallToolRequestParams> context,
         [Description("Logical tree identifier.")] string treeId,
         [Description("The entry key to write.")] string key,
-        [Description("The value bytes to store (base64-encoded).")] byte[] value,
+        [Description("The value to store, as a base64-encoded byte string (required). Invalid base64 is rejected as a caller error.")] string value,
         CancellationToken cancellationToken)
-        => DataToolCore.SetAsync(ResolveApi(context), treeId, key, value, cancellationToken);
+        => DataToolCore.SetAsync(ResolveApi(context), treeId, key, DecodeBase64Value(value), cancellationToken);
+
+    /// <summary>
+    /// Decodes the caller-supplied base64 <c>value</c> argument of
+    /// <c>lattice_data_set</c> into the raw bytes the facade stores. A missing or
+    /// non-base64 value is a caller error, surfaced as a clean, self-contained
+    /// <see cref="McpException"/> rather than the raw JSON deserialization fault
+    /// that a <c>byte[]</c> tool parameter would leak.
+    /// </summary>
+    /// <param name="value">The base64 text supplied for the <c>value</c> argument.</param>
+    /// <returns>The decoded value bytes.</returns>
+    /// <exception cref="McpException">The value is null or is not valid base64.</exception>
+    internal static byte[] DecodeBase64Value(string value)
+    {
+        if (value is null)
+        {
+            throw new McpException(
+                "The 'value' parameter is required and must be a base64-encoded byte string.");
+        }
+
+        try
+        {
+            return Convert.FromBase64String(value);
+        }
+        catch (FormatException)
+        {
+            throw new McpException(
+                "The 'value' parameter must be base64-encoded; the supplied text is not valid base64.");
+        }
+    }
 
     private static Task<DataDeleteToolResult> DeleteToolAsync(
         RequestContext<CallToolRequestParams> context,

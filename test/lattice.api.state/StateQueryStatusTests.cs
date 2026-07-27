@@ -34,6 +34,12 @@ public sealed class StateQueryStatusTests
     }
 
     [Test]
+    public void IndexNotFound_keeps_its_ordinal()
+    {
+        Assert.That((int)StateQueryStatus.IndexNotFound, Is.EqualTo(3));
+    }
+
+    [Test]
     public void The_known_members_are_distinct()
     {
         var known = new[]
@@ -41,6 +47,7 @@ public sealed class StateQueryStatusTests
             StateQueryStatus.Found,
             StateQueryStatus.TreeNotFound,
             StateQueryStatus.KeyNotFound,
+            StateQueryStatus.IndexNotFound,
         };
 
         Assert.That(known.Cast<int>().Distinct().Count(), Is.EqualTo(known.Length));

@@ -217,6 +217,15 @@ internal sealed class LatticeDataApiGrpcService : LatticeDataApiGrpcServiceBase
         {
             throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
         }
+        catch (LatticeIdempotencyKeyMismatchException ex)
+        {
+            // Reusing a caller-supplied operationId with a different key (or tree)
+            // set is a client-side misuse of the idempotency key, not a server
+            // fault. Map to FailedPrecondition carrying the self-contained
+            // caller-facing message so no cluster-log spelunking is implied; the
+            // guard already fired with nothing partially applied.
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
+        }
         catch (LatticeSaturatedException)
         {
             // The tree is WAL-saturated and shed the operation. Map to the

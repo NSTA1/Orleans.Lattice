@@ -96,13 +96,20 @@ public class LatticeStateGrpcIntegrationTests
     }
 
     [Test]
-    public void get_tree_structure_maps_missing_tree_to_not_found_status_code()
+    public async Task get_tree_structure_maps_missing_tree_to_tree_not_found_status()
     {
         var request = new StructureRequest { TreeId = $"missing-{Guid.NewGuid():N}" };
 
-        var ex = Assert.ThrowsAsync<RpcException>(async () =>
-            await CallAsync(_host.Channel, _host.Methods.GetTreeStructure, request));
-        Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.NotFound));
+        // An unknown tree is part of the typed contract (issue #1396): it rides
+        // as a structured Status, not an opaque NotFound transport fault.
+        var response = await CallAsync(_host.Channel, _host.Methods.GetTreeStructure, request);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.Status, Is.EqualTo(StateQueryStatus.TreeNotFound));
+            Assert.That(response.TreeId, Is.EqualTo(request.TreeId));
+            Assert.That(response.Roots, Is.Empty);
+        });
     }
 
     [Test]
@@ -144,12 +151,20 @@ public class LatticeStateGrpcIntegrationTests
     }
 
     [Test]
-    public void scan_entries_maps_missing_tree_to_not_found_status_code()
+    public async Task scan_entries_maps_missing_tree_to_tree_not_found_status()
     {
-        var ex = Assert.ThrowsAsync<RpcException>(async () =>
-            await CallAsync(_host.Channel, _host.Methods.ScanEntries,
-                new EntryScanRequest { TreeId = $"missing-{Guid.NewGuid():N}", PageSize = 10 }));
-        Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.NotFound));
+        var request = new EntryScanRequest { TreeId = $"missing-{Guid.NewGuid():N}", PageSize = 10 };
+
+        // An unknown tree is part of the typed contract (issue #1396): it rides
+        // as a structured Status, not an opaque NotFound transport fault.
+        var response = await CallAsync(_host.Channel, _host.Methods.ScanEntries, request);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.Status, Is.EqualTo(StateQueryStatus.TreeNotFound));
+            Assert.That(response.TreeId, Is.EqualTo(request.TreeId));
+            Assert.That(response.Entries, Is.Empty);
+        });
     }
 
     [Test]

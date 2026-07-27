@@ -275,6 +275,51 @@ public sealed class AuthGrpcDataTests
     }
 
     [Test]
+    public async Task atomic_batch_reusing_operationId_with_a_different_key_set_maps_to_failed_precondition()
+    {
+        const string tree = "grpc-atomic-mismatch";
+        await _fixture.RegisterTreeAsync(tree);
+        await _fixture.GrantAsync(AllowTree(Writer, tree, WriteOps));
+
+        var first = new DataAtomicRequest
+        {
+            TreeId = tree,
+            OperationId = "grpc-atomic-mismatch-1",
+            Batch = new DataAtomicBatch
+            {
+                Upserts = [new DataEntry { Key = "a/1", Value = new byte[] { 1 } }],
+            },
+        };
+        await CallAsync(_host.Methods.SetManyAtomic, first, Writer);
+
+        // Re-submitting the same operationId with a different key set is a caller
+        // error, not a server fault (issue #1396). It maps to FailedPrecondition
+        // with a self-contained message that never mentions cluster logs, and
+        // nothing from the second batch is applied.
+        var mismatched = new DataAtomicRequest
+        {
+            TreeId = tree,
+            OperationId = "grpc-atomic-mismatch-1",
+            Batch = new DataAtomicBatch
+            {
+                Upserts = [new DataEntry { Key = "b/1", Value = new byte[] { 9 } }],
+            },
+        };
+
+        var ex = Assert.ThrowsAsync<RpcException>(async () => await CallAsync(
+            _host.Methods.SetManyAtomic, mismatched, Writer));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.FailedPrecondition));
+            Assert.That(ex.Status.Detail, Does.Contain("different set of keys"));
+            Assert.That(ex.Status.Detail, Does.Not.Contain("cluster logs"));
+            Assert.That(_fixture.ReadRawAsync(tree, "b/1").Result, Is.Null,
+                "no partial state after a rejected key-set-mismatch retry");
+        });
+    }
+
+    [Test]
     public async Task cross_tree_atomic_over_the_wire_aborts_on_a_denied_leg()
     {
         const string treeA = "grpc-xt-a";

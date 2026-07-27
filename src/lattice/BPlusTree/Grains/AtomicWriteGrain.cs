@@ -142,6 +142,22 @@ internal sealed class AtomicWriteGrain(
     /// </summary>
     private string OperationKey => GrainContext.GrainId.Key.ToString()!;
 
+    /// <summary>
+    /// The caller-supplied idempotency key portion of <see cref="OperationKey"/>
+    /// (the segment after the <c>/</c> separator), used to attribute a
+    /// key-set-mismatch rejection without leaking the internal composite key
+    /// shape into the caller-facing message.
+    /// </summary>
+    private string OperationIdOnly
+    {
+        get
+        {
+            var key = OperationKey;
+            var idx = key.IndexOf('/');
+            return idx < 0 || idx == key.Length - 1 ? key : key[(idx + 1)..];
+        }
+    }
+
     /// <inheritdoc />
     protected override string TtlReminderName => RetentionReminderName;
 
@@ -201,6 +217,20 @@ internal sealed class AtomicWriteGrain(
         }
     }
 
+    /// <summary>
+    /// Builds the caller-facing rejection for a caller-supplied idempotency key
+    /// re-submitted with a different key set. The message is self-contained and
+    /// leaks no internal composite-key shape; the offending
+    /// <see cref="OperationIdOnly"/> rides on the typed exception for
+    /// diagnostics.
+    /// </summary>
+    private LatticeIdempotencyKeyMismatchException KeySetMismatch() =>
+        new(
+            "This atomic-write operationId was already submitted with a different set of keys. "
+            + "Reusing a caller-supplied operationId requires the exact same set of keys "
+            + "(their order and values may differ). Resubmit the original keys, or use a new operationId.",
+            OperationIdOnly);
+
     /// <inheritdoc />
     public async Task ExecuteAsync(string treeId, List<KeyValuePair<string, byte[]>> entries, List<bool>? entryDeletes = null)
     {
@@ -232,9 +262,7 @@ internal sealed class AtomicWriteGrain(
             var incomingFingerprint = ComputeKeyFingerprint(entries);
             if (!CryptographicOperations.FixedTimeEquals(persistedFingerprint, incomingFingerprint))
             {
-                throw new InvalidOperationException(
-                    $"Atomic-write operation '{OperationKey}' was previously submitted with a different key set; " +
-                    "reuse of a caller-supplied operationId requires the exact same set of keys.");
+                throw KeySetMismatch();
             }
         }
 
@@ -317,9 +345,7 @@ internal sealed class AtomicWriteGrain(
             var incomingFingerprint = ComputeKeyFingerprint(entries);
             if (!CryptographicOperations.FixedTimeEquals(persistedFingerprint, incomingFingerprint))
             {
-                throw new InvalidOperationException(
-                    $"Atomic-write operation '{OperationKey}' was previously submitted with a different key set; " +
-                    "reuse of a caller-supplied operationId requires the exact same set of keys.");
+                throw KeySetMismatch();
             }
         }
 
@@ -386,9 +412,7 @@ internal sealed class AtomicWriteGrain(
             var incomingFingerprint = ComputeKeyFingerprint(entries);
             if (!CryptographicOperations.FixedTimeEquals(persistedFingerprint, incomingFingerprint))
             {
-                throw new InvalidOperationException(
-                    $"Atomic-write operation '{OperationKey}' was previously submitted with a different key set; " +
-                    "reuse of a caller-supplied operationId requires the exact same set of keys.");
+                throw KeySetMismatch();
             }
         }
 

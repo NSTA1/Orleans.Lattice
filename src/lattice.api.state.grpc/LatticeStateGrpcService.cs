@@ -251,11 +251,11 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
         => InvokeAsync(request, context, static async (q, req, ct) =>
         {
             var result = await q.GetTreeStructureAsync(req, ct).ConfigureAwait(false);
-            if (result.Status == StateQueryStatus.TreeNotFound)
-            {
-                throw NotFound($"Tree '{result.TreeId}' was not found.");
-            }
 
+            // A TreeNotFound outcome is part of the typed contract, not a fault:
+            // the response carries a Status field, so it rides as structured
+            // content exactly like GetEntry (issue #1339) rather than collapsing
+            // into an opaque NotFound transport error.
             return new StructureResponse
             {
                 Status = result.Status,
@@ -270,11 +270,11 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
         => InvokeAsync(request, context, static async (q, req, ct) =>
         {
             var result = await q.ScanEntriesAsync(req, ct).ConfigureAwait(false);
-            if (result.Status == StateQueryStatus.TreeNotFound)
-            {
-                throw NotFound($"Tree '{result.TreeId}' was not found.");
-            }
 
+            // TreeNotFound (and IndexNotFound, for a tag-filtered scan naming an
+            // unknown index) are typed statuses, not faults: they ride as
+            // structured content like GetEntry (issue #1339) rather than as an
+            // opaque NotFound transport error.
             return new EntryScanResponse
             {
                 Status = result.Status,
@@ -310,11 +310,11 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
         => InvokeAsync(request, context, static async (q, req, ct) =>
         {
             var result = await q.GetEntryHistoryAsync(req, ct).ConfigureAwait(false);
-            if (result.Status == StateQueryStatus.TreeNotFound)
-            {
-                throw NotFound($"Tree '{result.TreeId}' was not found.");
-            }
 
+            // TreeNotFound (and KeyNotFound, for a key that never existed) are
+            // typed statuses, not faults: they ride as structured content like
+            // GetEntry (issue #1339) rather than as an opaque NotFound transport
+            // error.
             return new EntryHistoryResponse
             {
                 Status = result.Status,
@@ -525,7 +525,4 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
             throw new RpcException(new Status(StatusCode.Internal, "The state-API request failed."));
         }
     }
-
-    private static RpcException NotFound(string message)
-        => new(new Status(StatusCode.NotFound, message));
 }

@@ -630,7 +630,7 @@ public partial class AtomicWriteGrainTests
     }
 
     [Test]
-    public void ExecuteAsync_throws_InvalidOperationException_when_reentered_with_different_key_set()
+    public void ExecuteAsync_throws_key_mismatch_when_reentered_with_different_key_set()
     {
         // Seed persisted state as if a prior saga is mid-flight with keys k1,k2.
         var original = MakeEntries(("k1", [1]), ("k2", [2]));
@@ -648,9 +648,14 @@ public partial class AtomicWriteGrainTests
         var (grain, _, _, _, _) = CreateGrain(existingState: seeded);
         var mismatched = MakeEntries(("k1", [1]), ("DIFFERENT", [9]));
 
+        // The mismatch is a caller error, surfaced as the dedicated typed
+        // exception (which derives from InvalidOperationException) with a
+        // self-contained message that does not mention cluster logs.
         Assert.That(
             async () => await grain.ExecuteAsync(TreeId, mismatched),
-            Throws.InvalidOperationException.With.Message.Contains("different key set"));
+            Throws.TypeOf<LatticeIdempotencyKeyMismatchException>()
+                .With.Message.Contains("different set of keys")
+                .And.Message.Not.Contains("cluster logs"));
     }
 
     [Test]

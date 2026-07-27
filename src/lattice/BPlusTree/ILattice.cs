@@ -190,7 +190,8 @@ public interface ILattice : IGrainWithStringKey
     /// <param name="operationId">Stable caller-supplied idempotency key. Must be non-empty and must not contain <c>'/'</c> (reserved as the grain-key separator).</param>
     /// <param name="cancellationToken">Cancels orchestration before the saga is submitted. Once the saga has accepted the batch it drives itself to a terminal state via reminders and is not cooperatively cancelled.</param>
     /// <exception cref="ArgumentException">Thrown when <paramref name="operationId"/> is null, empty, whitespace, or contains <c>'/'</c>; or when <paramref name="entries"/> contains duplicate keys or null values.</exception>
-    /// <exception cref="InvalidOperationException">Thrown when <paramref name="operationId"/> was previously submitted with a different key set, or when a write fails and compensation completes.</exception>
+    /// <exception cref="LatticeIdempotencyKeyMismatchException">Thrown when <paramref name="operationId"/> was previously submitted with a different key set.</exception>
+    /// <exception cref="InvalidOperationException">Thrown when a write fails and compensation completes.</exception>
     Task SetManyAtomicAsync(List<KeyValuePair<string, byte[]>> entries, string operationId, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -222,7 +223,8 @@ public interface ILattice : IGrainWithStringKey
     /// <param name="operationId">Stable caller-supplied idempotency key. Must be non-empty and must not contain <c>'/'</c> (reserved as the grain-key separator).</param>
     /// <param name="cancellationToken">Cancels orchestration before the saga is submitted. Once the saga has accepted the batch it drives itself to a terminal state via reminders and is not cooperatively cancelled.</param>
     /// <exception cref="ArgumentException">Thrown when <paramref name="operationId"/> is null, empty, whitespace, or contains <c>'/'</c>; or when the combined batch contains a duplicate or null key, or a null upsert value.</exception>
-    /// <exception cref="InvalidOperationException">Thrown when <paramref name="operationId"/> was previously submitted with a different key set, or when a write fails and compensation completes.</exception>
+    /// <exception cref="LatticeIdempotencyKeyMismatchException">Thrown when <paramref name="operationId"/> was previously submitted with a different key set.</exception>
+    /// <exception cref="InvalidOperationException">Thrown when a write fails and compensation completes.</exception>
     Task SetManyAtomicAsync(
         List<KeyValuePair<string, byte[]>> upserts,
         IReadOnlyList<string> deletes,

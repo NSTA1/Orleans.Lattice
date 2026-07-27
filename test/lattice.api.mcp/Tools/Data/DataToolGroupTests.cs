@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ModelContextProtocol;
 using ModelContextProtocol.Server;
 
 namespace Orleans.Lattice.Api.Mcp.Tests;
@@ -132,6 +133,52 @@ public sealed class DataToolGroupTests
 
         Assert.That(required, Is.EquivalentTo(new[] { "treeId", "key" }),
             "The genuinely-required point-read inputs must stay required.");
+    }
+
+    [Test]
+    public void Data_set_still_requires_the_value_input()
+    {
+        var group = new DataToolGroup(enableWrites: true);
+
+        var required = RequiredPropertyNames(Tool(group, "lattice_data_set"));
+
+        Assert.That(required, Is.SupersetOf(new[] { "treeId", "key", "value" }),
+            "The base64 value input must stay schema-required after the string re-typing.");
+    }
+
+    [Test]
+    public void DecodeBase64Value_decodes_valid_base64_to_the_original_bytes()
+    {
+        var original = new byte[] { 1, 2, 3, 250, 0, 42 };
+        var encoded = Convert.ToBase64String(original);
+
+        var decoded = DataToolGroup.DecodeBase64Value(encoded);
+
+        Assert.That(decoded, Is.EqualTo(original));
+    }
+
+    [Test]
+    public void DecodeBase64Value_rejects_non_base64_with_a_clean_caller_facing_message()
+    {
+        // The old byte[] tool parameter leaked a raw System.Text.Json fault
+        // ("The JSON value could not be converted to System.Byte[]"); the decode
+        // seam must surface a clean, self-contained base64 validation error.
+        var ex = Assert.Throws<McpException>(() => DataToolGroup.DecodeBase64Value("not valid base64!!!"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.Message, Does.Contain("base64"));
+            Assert.That(ex.Message, Does.Not.Contain("JSON"));
+            Assert.That(ex.Message, Does.Not.Contain("System.Byte"));
+        });
+    }
+
+    [Test]
+    public void DecodeBase64Value_rejects_null_as_a_required_input_error()
+    {
+        var ex = Assert.Throws<McpException>(() => DataToolGroup.DecodeBase64Value(null!));
+
+        Assert.That(ex!.Message, Does.Contain("required").And.Contain("base64"));
     }
 
     private static HashSet<string> RequiredPropertyNames(McpServerTool tool)
