@@ -38,6 +38,14 @@ Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.
 
 Published releases, newest first. Each section is keyed by its publish date; within a date, packages advance on their own patch digits per [`docs/RELEASING.md`](docs/RELEASING.md).
 
+## [2026-07-27]
+
+Per-package patch activity for 2026-07-27. **`Orleans.Lattice.Replication` advances to 8.0.7** (`lattice.replication-v8.0.7`); every other package in the family remains at its current version.
+
+### Security
+
+- **Orleans.Lattice.Replication: the receiver-side enrollment gate now fails closed when no enrollment source is wired (`Orleans.Lattice.Replication` 8.0.7).** `ReplicationApplier.ClassifyInboundTree` decides whether an inbound tree may be applied by resolving the tree's locally configured merge mode from an enrollment source - an injected `ILatticeReplicationContext` or the per-tree `ReplicatedTrees` option map. When neither source was present the applier previously fell through to an admit arm, applying peer mutations for a tree the local cluster had never enrolled. The gate now treats a missing enrollment source as a hard drop: the entry (or, on the batch path, the contiguous same-tree run) is discarded without a dead-letter, since the tree id is peer-controlled, and a one-time misconfiguration warning is logged. In a correctly wired silo the production `ConfiguredLatticeReplicationContext` is always registered, so the new arm is unreachable there and runtime-enabled trees continue to resolve their mode through the same context; the change only removes the fail-open behaviour a misconfigured or hand-built applier could exhibit. ([#1398](https://github.com/NSTA1/Orleans.Lattice/issues/1398))
+
 ## [2026-07-26]
 
 Per-package patch activity for 2026-07-26. **`Orleans.Lattice.Api.Mcp` advances to 8.0.7** (`lattice.api.mcp-v8.0.7`) and **`Orleans.Lattice` advances to 8.0.5** (`lattice-v8.0.5`); every other package in the family remains at its current version.

@@ -19,7 +19,7 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyAsync_per_entry_crdt_delta_records_crdt_delta_not_full_state_set()
     {
-        var (applier, lattice, apply, _) = CreateTypedCrdtApplier();
+        var (applier, lattice, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.PnCounter);
         var ts = Hlc(33, 2);
         var entry = SetEntry("k", ts) with
         {
@@ -40,7 +40,7 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyAsync_bootstrap_full_state_set_stays_state_merge_not_crdt_delta()
     {
-        var (applier, lattice, apply, _) = CreateTypedCrdtApplier();
+        var (applier, lattice, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
         // Bootstrap row: full state in Value, no per-delta shape.
         var entry = SetEntry("k", Hlc(5)) with
         {

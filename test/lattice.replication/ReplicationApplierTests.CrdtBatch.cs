@@ -26,7 +26,7 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyBatchAsync_multi_crdt_entries_collapse_to_one_apply_crdt_delta_many()
     {
-        var (applier, lattice, apply, _) = CreateTypedCrdtApplier();
+        var (applier, lattice, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
         var entries = new[]
         {
             OrSetEntry("a", Hlc(10), new byte[] { 1 }),
@@ -51,7 +51,7 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyBatchAsync_crdt_batch_advances_hwm_to_max_timestamp()
     {
-        var (applier, _, _, hwm) = CreateTypedCrdtApplier();
+        var (applier, _, _, hwm) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
         var entries = new[]
         {
             OrSetEntry("a", Hlc(10), new byte[] { 1 }),
@@ -68,7 +68,7 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyBatchAsync_crdt_batch_preserves_per_item_hlc_origin_delta_and_mode()
     {
-        var (applier, _, apply, _) = CreateTypedCrdtApplier();
+        var (applier, _, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
         var memberA = new byte[] { 0xaa };
         var entries = new[]
         {
@@ -90,7 +90,7 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyBatchAsync_mixed_crdt_modes_single_origin_batch_together()
     {
-        var (applier, _, apply, _) = CreateTypedCrdtApplier();
+        var (applier, _, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
         var entries = new[]
         {
             OrSetEntry("a", Hlc(10), new byte[] { 1 }),
@@ -114,7 +114,7 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyBatchAsync_crdt_set_with_null_delta_routes_to_per_entry_path_and_throws()
     {
-        var (applier, _, apply, _) = CreateTypedCrdtApplier();
+        var (applier, _, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
         var entries = new[]
         {
             SetEntry("a", Hlc(10)) with { Mode = LatticeMergeMode.OrSet, Value = null, Delta = null },
@@ -134,7 +134,7 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyBatchAsync_prepared_crdt_entry_stays_on_per_entry_prepared_path()
     {
-        var (applier, _, apply, _) = CreateTypedCrdtApplier();
+        var (applier, _, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
         var txId = Guid.NewGuid();
         var entries = new[]
         {
@@ -163,7 +163,7 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyBatchAsync_crdt_entry_at_or_below_hwm_is_deduped()
     {
-        var (applier, _, apply, hwm) = CreateTypedCrdtApplier();
+        var (applier, _, apply, hwm) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(25));
         hwm.GetPinnedFloorAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(25));
         var entries = new[]
@@ -181,7 +181,7 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyBatchAsync_or_map_entry_stays_off_batch_path()
     {
-        var (applier, _, apply, _) = CreateTypedCrdtApplier();
+        var (applier, _, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
         var entries = new[]
         {
             OrSetEntry("a", Hlc(10), new byte[] { 1 }),
@@ -203,7 +203,7 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyBatchAsync_crdt_batch_flush_failure_propagates()
     {
-        var (applier, _, apply, _) = CreateTypedCrdtApplier();
+        var (applier, _, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
         apply.ApplyCrdtDeltaManyAsync(Arg.Any<IReadOnlyList<ApplyCrdtDeltaItem>>())
             .Returns(_ => Task.FromException(new InvalidOperationException("boom")));
         var entries = new[]

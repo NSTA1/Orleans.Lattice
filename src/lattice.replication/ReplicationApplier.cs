@@ -49,6 +49,16 @@ internal sealed partial class ReplicationApplier(
         logger ?? NullLogger<ReplicationApplier>.Instance;
 
     /// <summary>
+    /// One-shot guard for the "no enrollment source wired" misconfiguration
+    /// warning (issue #1398). Flipped to 1 the first time the fail-closed
+    /// <see cref="InboundTreeAdmission.RejectNoEnrollmentSource"/> arm drops an
+    /// entry, so the diagnostic - and its per-entry string interpolation - fires
+    /// once per applier rather than on every dropped inbound entry. Never
+    /// touched on the steady-state (enrolled) apply path.
+    /// </summary>
+    private int _noEnrollmentSourceWarned;
+
+    /// <summary>
     /// Optional receiver-side applied-content index. When non-<see langword="null"/>
     /// and the entry's tree has
     /// <see cref="LatticeReplicationOptions.ContentHashDedupEnabled"/>
@@ -197,9 +207,11 @@ internal sealed partial class ReplicationApplier(
             // unbounded DLQ activations) and dead-letter an entry whose
             // peer-supplied wire mode disagrees with the locally resolved mode
             // for an enrolled tree (re-resolving the mode locally rather than
-            // trusting the wire field). Enforced before any grain call so the
-            // rejection is cheap and covers every transport that funnels through
-            // the applier.
+            // trusting the wire field). If the receiver has no enrollment source
+            // wired at all the gate cannot be evaluated, so it fails closed and
+            // drops the entry too (issue #1398). Enforced before any grain call
+            // so the rejection is cheap and covers every transport that funnels
+            // through the applier.
             switch (ClassifyInboundTree(in entry))
             {
                 case InboundTreeAdmission.RejectNotReplicated:
@@ -207,6 +219,27 @@ internal sealed partial class ReplicationApplier(
                         "Rejected inbound replication entry for tree '{Tree}' from origin '{Origin}': "
                         + "the tree is not enrolled for replication on this receiver.",
                         entry.TreeId, entry.OriginClusterId);
+                    outcome = LatticeReplicationMetrics.OutcomeRejectedNotReplicated;
+                    return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
+
+                case InboundTreeAdmission.RejectNoEnrollmentSource:
+                    // Fail closed on ambiguity (issue #1398): with no enrollment
+                    // source wired at all the gate cannot be evaluated, so the
+                    // entry is dropped like a non-enrolled tree (no dead-letter -
+                    // the tree id is peer-controlled). Unreachable in production
+                    // (the context is always registered); reachable only by a
+                    // mis-wired hand-built applier, so warn once - the interpolated
+                    // message must not allocate per inbound entry on this arm.
+                    if (Interlocked.Exchange(ref _noEnrollmentSourceWarned, 1) == 0)
+                    {
+                        _logger.LogWarning(
+                            "Dropping inbound replication entry for tree '{Tree}' from origin '{Origin}': "
+                            + "no replication enrollment source is configured on this receiver "
+                            + "(no ILatticeReplicationContext and no ReplicatedTrees map), so the "
+                            + "enrollment gate cannot be evaluated. All inbound entries are dropped "
+                            + "until a replication context is wired. This warning is logged once.",
+                            entry.TreeId, entry.OriginClusterId);
+                    }
                     outcome = LatticeReplicationMetrics.OutcomeRejectedNotReplicated;
                     return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
 
@@ -1001,6 +1034,17 @@ internal sealed partial class ReplicationApplier(
 
         /// <summary>The entry's tree is enrolled but its peer-supplied wire mode disagrees with the local mode; dead-letter it.</summary>
         RejectModeMismatch,
+
+        /// <summary>
+        /// The receiver has no replication enrollment source wired at all (neither an
+        /// injected <see cref="ILatticeReplicationContext"/> nor a
+        /// <see cref="LatticeReplicationOptions.ReplicatedTrees"/> map), so the enrollment
+        /// gate cannot be evaluated. Fail closed and drop the entry (like
+        /// <see cref="RejectNotReplicated"/>, no dead-letter - the tree id is
+        /// peer-controlled). Distinguished from <see cref="RejectNotReplicated"/> only so
+        /// the drop can carry a one-time misconfiguration warning.
+        /// </summary>
+        RejectNoEnrollmentSource,
     }
 
     /// <summary>
@@ -1012,14 +1056,18 @@ internal sealed partial class ReplicationApplier(
     /// unverified), nor override the merge algebra by supplying a different
     /// wire <see cref="WalRecord.Mode"/>.
     /// <para>
-    /// Enforcement requires an enrollment source. A hand-built applier with
-    /// neither an injected <see cref="ILatticeReplicationContext"/> nor a
+    /// The gate fails closed on ambiguity (issue #1398). A hand-built applier
+    /// with neither an injected <see cref="ILatticeReplicationContext"/> nor a
     /// per-tree <see cref="LatticeReplicationOptions.ReplicatedTrees"/> map has
-    /// no enrollment signal and stays on the legacy pass-through
-    /// (<see cref="InboundTreeAdmission.Admit"/>). Production always registers
-    /// <c>ConfiguredLatticeReplicationContext</c>, so the gate is always live
-    /// there. The lookup is a single cached dictionary read (no per-entry
-    /// allocation): <see cref="ILatticeReplicationContext.ResolveMergeMode"/>
+    /// no enrollment signal, so the gate cannot be evaluated and the entry is
+    /// dropped (<see cref="InboundTreeAdmission.RejectNoEnrollmentSource"/>)
+    /// rather than admitted. Production always registers
+    /// <c>ConfiguredLatticeReplicationContext</c>, so <c>hasEnrollmentSource</c>
+    /// is always <see langword="true"/> there and this arm is unreachable; a
+    /// tree enabled at runtime via replication control resolves through the same
+    /// context (its resolver reports the live mode) and is admitted on the
+    /// normal enrolled path. The lookup is a single cached dictionary read (no
+    /// per-entry allocation): <see cref="ILatticeReplicationContext.ResolveMergeMode"/>
     /// is cache-backed and <see cref="IOptionsMonitor{TOptions}.Get"/> returns
     /// a cached options instance.
     /// </para>
@@ -1029,7 +1077,7 @@ internal sealed partial class ReplicationApplier(
         var localMode = ResolveLocalMergeMode(entry.TreeId, out var hasEnrollmentSource);
         if (!hasEnrollmentSource)
         {
-            return InboundTreeAdmission.Admit;
+            return InboundTreeAdmission.RejectNoEnrollmentSource;
         }
 
         if (localMode is null)
@@ -1051,8 +1099,8 @@ internal sealed partial class ReplicationApplier(
     /// context was injected. <paramref name="hasEnrollmentSource"/> reports
     /// whether any enrollment configuration was available at all: when both the
     /// context and the map are absent the applier cannot enforce the gate and
-    /// the caller admits the entry unchanged. Returns <c>null</c> for a tree
-    /// that has an enrollment source but is not enrolled.
+    /// the caller fails closed, dropping the entry (issue #1398). Returns
+    /// <c>null</c> for a tree that has an enrollment source but is not enrolled.
     /// </summary>
     private LatticeMergeMode? ResolveLocalMergeMode(string treeId, out bool hasEnrollmentSource)
     {

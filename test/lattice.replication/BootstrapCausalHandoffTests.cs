@@ -236,7 +236,7 @@ public partial class BootstrapCausalHandoffTests
 
         return new HandoffHarness
         {
-            Applier = new ReplicationApplier(factory, monitor),
+            Applier = new ReplicationApplier(factory, monitor, replicationContext: new OverridesReplicationContext()),
             Factory = factory,
             Monitor = monitor,
             Apply = apply,

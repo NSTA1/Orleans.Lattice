@@ -154,17 +154,70 @@ public partial class ReplicationApplierTests
     }
 
     [Test]
-    public async Task ApplyAsync_admits_entry_when_no_enrollment_source_is_configured()
+    public async Task ApplyAsync_drops_entry_when_no_enrollment_source_is_configured()
     {
-        // Neither a replication context nor a ReplicatedTrees map: the applier
-        // has no enrollment signal and stays on the legacy pass-through.
-        var (applier, apply, _, _) = CreateEnrollmentApplier();
+        // Fail closed on ambiguity (issue #1398): neither a replication context
+        // nor a ReplicatedTrees map is wired, so the applier has no enrollment
+        // signal and cannot evaluate the gate. The entry is dropped (not
+        // admitted, not parked) - a peer holding the mesh secret must not be
+        // able to write a tree a mis-wired receiver kept cluster-local.
+        var (applier, apply, hwm, dlq) = CreateEnrollmentApplier();
         var ts = Hlc(40);
 
         var result = await applier.ApplyAsync(EnrollmentEntry(SysAuthTree, "k", ts));
 
-        Assert.That(result.Applied, Is.True);
+        Assert.That(result.Applied, Is.False);
+        Assert.That(result.HighWaterMark, Is.EqualTo(HybridLogicalClock.Zero));
+        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
+        await hwm.DidNotReceiveWithAnyArgs().TryAdvanceAsync(default!, default, default);
+        // Dropped, never parked: the tree id is peer-controlled.
+        await dlq.DidNotReceiveWithAnyArgs().EnqueueAsync(default, default!, default, default!, default);
+    }
+
+    [Test]
+    public async Task ApplyBatchAsync_drops_multi_entry_run_when_no_enrollment_source_is_configured()
+    {
+        // The batch run path mirrors the per-entry fail-closed drop (issue #1398).
+        var (applier, apply, hwm, dlq) = CreateEnrollmentApplier();
+
+        var batch = new[]
+        {
+            EnrollmentEntry(SysAuthTree, "a", Hlc(41)),
+            EnrollmentEntry(SysAuthTree, "b", Hlc(42)),
+        };
+
+        var result = await applier.ApplyBatchAsync(batch);
+
+        Assert.That(result.Applied, Is.False);
+        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
+        await apply.DidNotReceiveWithAnyArgs().ApplyMergeManyAsync(default!);
+        await hwm.DidNotReceiveWithAnyArgs().TryAdvanceAsync(default!, default, default);
+        await dlq.DidNotReceiveWithAnyArgs().EnqueueAsync(default, default!, default, default!, default);
+    }
+
+    [Test]
+    public async Task ApplyAsync_admits_tree_enabled_at_runtime_once_enrollment_source_reports_its_mode()
+    {
+        // A tree enabled at runtime via replication control resolves through the
+        // same ILatticeReplicationContext (its resolver begins reporting the live
+        // mode). Before enablement the context resolves the tree to null and the
+        // entry is dropped as not-replicated; after enablement the identical
+        // context path admits it. The enrollment MECHANISM is wired throughout,
+        // so the fail-closed no-source arm (issue #1398) is never involved.
+        var modes = new Dictionary<string, LatticeMergeMode> { [OrdersTree] = LatticeMergeMode.LwwRegister };
+        var (applier, apply, hwm, _) = CreateEnrollmentApplier(new MapReplicationContext(modes));
+
+        var beforeEnable = await applier.ApplyAsync(EnrollmentEntry("runtime-tree", "k", Hlc(45)));
+        Assert.That(beforeEnable.Applied, Is.False, "A tree not yet enabled resolves to null and is dropped.");
+
+        // Runtime-enable the tree: the resolver now reports its live mode.
+        modes["runtime-tree"] = LatticeMergeMode.LwwRegister;
+        var ts = Hlc(46, 1);
+        var afterEnable = await applier.ApplyAsync(EnrollmentEntry("runtime-tree", "k", ts));
+
+        Assert.That(afterEnable.Applied, Is.True, "Once enabled at runtime the same context path admits the entry.");
         await apply.Received(1).ApplySetAsync("k", Arg.Any<byte[]>(), ts, RemoteCluster, null, 0);
+        await hwm.Received(1).TryAdvanceAsync(RemoteCluster, ts, Arg.Any<CancellationToken>());
     }
 
     [Test]

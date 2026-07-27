@@ -146,7 +146,8 @@ internal sealed class ProductionShipperFixture : IAsyncDisposable
                 optsMonitor,
                 crdtShapes: null,
                 logger: null,
-                peerStats: _peerStats[i]);
+                peerStats: _peerStats[i],
+                replicationContext: new OverridesReplicationContext());
             _appliers[i] = new FaultInjectingReplicationApplier(inner, _peerStats[i], localClusterId);
             _registry.RegisterApplier(localClusterId, _appliers[i]);
             var siloHandle = (InProcessSiloHandle)cluster.Silos.First();

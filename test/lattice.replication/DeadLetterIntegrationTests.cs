@@ -59,7 +59,10 @@ public class DeadLetterIntegrationTests
 
         _inspector = new LatticeReplicationDeadLetters(
             _cluster.GrainFactory,
-            new ReplicationApplier(_cluster.GrainFactory, _optionsMonitor));
+            new ReplicationApplier(
+                _cluster.GrainFactory,
+                _optionsMonitor,
+                replicationContext: new OverridesReplicationContext()));
     }
 
     [OneTimeTearDown]

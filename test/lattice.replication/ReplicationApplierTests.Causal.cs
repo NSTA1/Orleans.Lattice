@@ -94,7 +94,7 @@ public partial class ReplicationApplierTests
 
         return new CausalHarness
         {
-            Applier = new ReplicationApplier(factory, monitor),
+            Applier = new ReplicationApplier(factory, monitor, replicationContext: new AnyTreeLwwContext()),
             Factory = factory,
             Apply = apply,
             Hwm = hwm,

@@ -1145,6 +1145,34 @@ internal sealed partial class ReplicationApplier
             return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
         }
 
+        if (admission == InboundTreeAdmission.RejectNoEnrollmentSource)
+        {
+            // Fail closed on ambiguity (issue #1398): mirror the per-entry arm
+            // in ApplyAsync. With no enrollment source wired the gate cannot be
+            // evaluated, so the whole run is dropped (no dead-letter - the tree
+            // id is peer-controlled). Unreachable in production; reachable only
+            // by a mis-wired hand-built applier, so warn once.
+            if (Interlocked.Exchange(ref _noEnrollmentSourceWarned, 1) == 0)
+            {
+                _logger.LogWarning(
+                    "Dropping inbound replication run for tree '{Tree}' from origin '{Origin}': "
+                    + "no replication enrollment source is configured on this receiver "
+                    + "(no ILatticeReplicationContext and no ReplicatedTrees map), so the "
+                    + "enrollment gate cannot be evaluated. All inbound entries are dropped "
+                    + "until a replication context is wired. This warning is logged once.",
+                    treeId, origin);
+            }
+
+            for (var k = startInclusive; k < endExclusive; k++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var startTs = Stopwatch.GetTimestamp();
+                RecordApplyDuration(treeId, origin, startTs, LatticeReplicationMetrics.OutcomeRejectedNotReplicated);
+            }
+
+            return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
+        }
+
         _logger.LogWarning(
             "Rejected inbound replication run of {Count} entries for tree '{Tree}' from origin '{Origin}': "
             + "the tree is not enrolled for replication on this receiver.",

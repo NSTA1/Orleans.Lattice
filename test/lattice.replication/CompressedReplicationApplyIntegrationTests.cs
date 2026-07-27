@@ -174,7 +174,11 @@ public class CompressedReplicationApplyIntegrationTests
         };
         monitor.CurrentValue.Returns(opts);
         monitor.Get(Arg.Any<string>()).Returns(opts);
-        return new ReplicationApplier(_fixture.SiteB.Client, monitor);
+        return new ReplicationApplier(
+            _fixture.SiteB.Client,
+            monitor,
+            replicationContext: new OverridesReplicationContext(
+                CompressedTwoSiteClusterFixture.TreeModeOverrides, CompressedTwoSiteClusterFixture.SiteBClusterId));
     }
 
     [Test]

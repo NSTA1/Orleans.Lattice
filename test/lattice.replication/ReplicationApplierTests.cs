@@ -15,6 +15,27 @@ public partial class ReplicationApplierTests
     private const string LocalCluster = "site-a";
     private const string RemoteCluster = "site-b";
 
+    /// <summary>
+    /// Enrollment source for the mechanics/routing fixtures that exercise the
+    /// apply path rather than the enrollment gate itself. Reports every tree as
+    /// enrolled at <see cref="LatticeMergeMode.LwwRegister"/> (with optional
+    /// per-tree overrides for typed-CRDT fixtures), which keeps the receiver
+    /// gate a pass-through for these tests while satisfying the fail-closed
+    /// requirement that an enrollment source be wired at all (issue #1398).
+    /// </summary>
+    private sealed class AnyTreeLwwContext(IReadOnlyDictionary<string, LatticeMergeMode>? overrides = null)
+        : ILatticeReplicationContext
+    {
+        public bool IsReplicationEnabled => true;
+
+        public string LocalReplicaId => LocalCluster;
+
+        public LatticeMergeMode? ResolveMergeMode(string treeId) =>
+            overrides is not null && overrides.TryGetValue(treeId, out var mode)
+                ? mode
+                : LatticeMergeMode.LwwRegister;
+    }
+
     private static IOptionsMonitor<LatticeReplicationOptions> Monitor(string clusterId = LocalCluster)
     {
         var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
@@ -40,7 +61,7 @@ public partial class ReplicationApplierTests
         hwm.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
             .Returns(true);
         hwm.GetVectorAsync(Arg.Any<CancellationToken>()).Returns(new VersionVector());
-        var applier = new ReplicationApplier(factory, Monitor());
+        var applier = new ReplicationApplier(factory, Monitor(), replicationContext: new AnyTreeLwwContext());
         return (applier, factory, apply, hwm);
     }
 
@@ -269,7 +290,7 @@ public partial class ReplicationApplierTests
         var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
         monitor.Get(Arg.Any<string>())
             .Returns(new LatticeReplicationOptions { ClusterId = LocalCluster });
-        var applier = new ReplicationApplier(factory, monitor);
+        var applier = new ReplicationApplier(factory, monitor, replicationContext: new AnyTreeLwwContext());
 
         await applier.ApplyAsync(new WalRecord
         {
@@ -369,7 +390,7 @@ public partial class ReplicationApplierTests
         ILattice Lattice,
         IReplicationApplyGrain Apply,
         IReplicationHighWaterMarkGrain Hwm)
-        CreateTypedCrdtApplier()
+        CreateTypedCrdtApplier(LatticeMergeMode mode = LatticeMergeMode.LwwRegister)
     {
         var factory = Substitute.For<IGrainFactory>();
         var apply = Substitute.For<IReplicationApplyGrain>();
@@ -385,7 +406,14 @@ public partial class ReplicationApplierTests
             .Returns(new VersionedValue { Value = null, Version = HybridLogicalClock.Zero });
         lattice.SetIfVersionAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
             .Returns(true);
-        return (new ReplicationApplier(factory, Monitor()), lattice, apply, hwm);
+        return (
+            new ReplicationApplier(
+                factory,
+                Monitor(),
+                replicationContext: new AnyTreeLwwContext(new Dictionary<string, LatticeMergeMode> { [Tree] = mode })),
+            lattice,
+            apply,
+            hwm);
     }
 
     private static byte[] EncodeOrSet(Action<OrSet>? configure = null)
@@ -465,7 +493,7 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyAsync_dispatches_or_set_delta_through_crdt_delta_grain_seam()
     {
-        var (applier, lattice, apply, _) = CreateTypedCrdtApplier();
+        var (applier, lattice, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
         var entry = SetEntry("k", Hlc(10)) with
         {
             Mode = LatticeMergeMode.OrSet,
@@ -487,7 +515,7 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyAsync_dispatches_pn_counter_delta_through_crdt_delta_grain_seam()
     {
-        var (applier, lattice, apply, _) = CreateTypedCrdtApplier();
+        var (applier, lattice, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.PnCounter);
         var entry = SetEntry("k", Hlc(11)) with
         {
             Mode = LatticeMergeMode.PnCounter,
@@ -505,7 +533,7 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyAsync_dispatches_version_vector_delta_through_crdt_delta_grain_seam()
     {
-        var (applier, lattice, apply, _) = CreateTypedCrdtApplier();
+        var (applier, lattice, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.VersionVector);
         var remoteHlc = Hlc(42, 3);
         var entry = SetEntry("k", Hlc(12)) with
         {
@@ -524,7 +552,7 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyAsync_dispatches_mv_register_delta_through_crdt_delta_grain_seam()
     {
-        var (applier, lattice, apply, _) = CreateTypedCrdtApplier();
+        var (applier, lattice, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.MvRegister);
         var entry = SetEntry("k", Hlc(17)) with
         {
             Mode = LatticeMergeMode.MvRegister,
@@ -553,7 +581,7 @@ public partial class ReplicationApplierTests
     {
         // Per-origin HWM is updated even for typed CRDT modes - re-delivery
         // of the same (origin, hlc) pair must be a no-op.
-        var (applier, _, _, hwm) = CreateTypedCrdtApplier();
+        var (applier, _, _, hwm) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
         var ts = Hlc(99, 1);
         var entry = SetEntry("k", ts) with
         {
@@ -571,7 +599,7 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyAsync_state_merge_dedupes_when_entry_below_hwm()
     {
-        var (applier, lattice, _, hwm) = CreateTypedCrdtApplier();
+        var (applier, lattice, _, hwm) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(50));
         hwm.GetPinnedFloorAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(50));
         var entry = SetEntry("k", Hlc(20)) with
@@ -597,7 +625,7 @@ public partial class ReplicationApplierTests
         // It does still reject a CRDT-mode entry that arrives with
         // neither a Value nor a Delta - the typed-delta dispatch
         // surfaces the missing Delta as an ArgumentException.
-        var (applier, _, _, _) = CreateTypedCrdtApplier();
+        var (applier, _, _, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
         var entry = SetEntry("k", Hlc(1)) with
         {
             Mode = LatticeMergeMode.OrSet,
@@ -615,7 +643,7 @@ public partial class ReplicationApplierTests
         // Value == null + Delta != null. The applier must accept that
         // shape and route the delta through the CrdtDelta grain seam (not
         // require Value just because the legacy shape carried both slots).
-        var (applier, lattice, apply, _) = CreateTypedCrdtApplier();
+        var (applier, lattice, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
         var entry = SetEntry("k", Hlc(1)) with
         {
             Mode = LatticeMergeMode.OrSet,
@@ -650,7 +678,7 @@ public partial class ReplicationApplierTests
     [Test]
     public void ApplyAsync_throws_for_unrecognised_replication_mode()
     {
-        var (applier, _, _, _) = CreateTypedCrdtApplier();
+        var (applier, _, _, _) = CreateTypedCrdtApplier((LatticeMergeMode)999);
         var entry = SetEntry("k", Hlc(1)) with
         {
             Mode = (LatticeMergeMode)999,
@@ -665,7 +693,7 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyAsync_crdt_delta_bypasses_apply_set_grain_seam()
     {
-        var (applier, lattice, apply, _) = CreateTypedCrdtApplier();
+    var (applier, lattice, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
         var entry = SetEntry("k", Hlc(1)) with
         {
             Mode = LatticeMergeMode.OrSet,
@@ -882,7 +910,7 @@ public partial class ReplicationApplierTests
         using var collector = new MeterCollector<double>(
             LatticeReplicationMetrics.MeterName,
             LatticeReplicationMetrics.ApplyDurationName);
-        var (applier, _, _, _) = CreateTypedCrdtApplier();
+            var (applier, _, _, _) = CreateTypedCrdtApplier((LatticeMergeMode)999);
         var entry = SetEntry("k", Hlc(1)) with
         {
             Mode = (LatticeMergeMode)999,
