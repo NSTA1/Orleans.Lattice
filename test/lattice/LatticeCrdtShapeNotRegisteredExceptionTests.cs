@@ -93,7 +93,7 @@ public class LatticeCrdtShapeNotRegisteredExceptionTests
             .Cast<AliasAttribute>()
             .SingleOrDefault();
         Assert.That(aliasAttr, Is.Not.Null);
-        Assert.That(aliasAttr!.Alias, Is.EqualTo("ol.csnr"),
+        Assert.That(aliasAttr!.Alias, Is.EqualTo("ol.csn"),
             "the alias value pins the Orleans wire format; a rename would break rolling-upgrade peers");
     }
 

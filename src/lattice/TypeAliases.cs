@@ -145,7 +145,7 @@ internal static class TypeAliases
     // host never registered the (TKey, TValue) shape via AddOrMapShape. A
     // deterministic host-configuration precondition, distinct from a genuine
     // server-side fault - the API bindings map it to a client-error status.
-    internal const string LatticeCrdtShapeNotRegistered = "ol.csnr";
+    internal const string LatticeCrdtShapeNotRegistered = "ol.csn";
 
     // Per-tree admission-control quota surface. Thrown by the public ILattice
     // write guard when a locally-authored write is refused because the tree's
