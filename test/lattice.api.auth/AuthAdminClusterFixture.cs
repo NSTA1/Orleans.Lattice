@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Hosting;
 using Orleans.Lattice.Auth;
@@ -18,6 +19,23 @@ internal sealed class AuthAdminClusterFixture
 {
     /// <summary>A bootstrap administrator subject id configured on the silo (root-of-trust bypass).</summary>
     public const string BootstrapAdmin = "root-admin";
+
+    private readonly bool _allTreesGrantsEnabled;
+
+    /// <summary>
+    /// Creates the fixture.
+    /// </summary>
+    /// <param name="allTreesGrantsEnabled">
+    /// When <see langword="true"/>, the silo enables
+    /// <see cref="LatticeAuthOptions.AllTreesGrantsEnabled"/> so a data-plane
+    /// <c>Tree:*</c> rule is authorable and consulted. Off by default, matching a
+    /// stock deployment; a test that authors a wildcard data rule must opt in.
+    /// </param>
+    public AuthAdminClusterFixture(bool allTreesGrantsEnabled = false) =>
+        _allTreesGrantsEnabled = allTreesGrantsEnabled;
+
+    /// <summary>The host-configuration key carrying the all-trees tier flag into the static silo configurator.</summary>
+    private const string AllTreesGrantsConfigKey = "Test:AllTreesGrantsEnabled";
 
     /// <summary>The deployed test cluster.</summary>
     public TestCluster Cluster { get; private set; } = null!;
@@ -73,6 +91,11 @@ internal sealed class AuthAdminClusterFixture
     public async Task InitializeAsync()
     {
         var builder = new TestClusterBuilder(initialSilosCount: 1);
+        builder.ConfigureHostConfiguration(config => config.AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                [AllTreesGrantsConfigKey] = _allTreesGrantsEnabled ? "true" : "false",
+            }));
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
         Cluster = builder.Build();
         await Cluster.DeployAsync();
@@ -92,6 +115,8 @@ internal sealed class AuthAdminClusterFixture
     {
         public void Configure(ISiloBuilder siloBuilder)
         {
+            var allTreesGrantsEnabled =
+                siloBuilder.Configuration.GetValue<bool>(AllTreesGrantsConfigKey);
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             siloBuilder.ConfigureLattice(o =>
             {
@@ -105,6 +130,7 @@ internal sealed class AuthAdminClusterFixture
             {
                 options.DefaultEffect = LatticeEffect.Deny;
                 options.BootstrapAdministrators.Add(BootstrapAdmin);
+                options.AllTreesGrantsEnabled = allTreesGrantsEnabled;
             });
             siloBuilder.AddLatticeAuthApi();
         }

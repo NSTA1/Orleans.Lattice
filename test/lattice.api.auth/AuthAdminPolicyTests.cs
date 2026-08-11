@@ -25,7 +25,7 @@ public sealed class AuthAdminPolicyTests
     [OneTimeSetUp]
     public async Task OneTimeSetUp()
     {
-        _fixture = new AuthAdminClusterFixture();
+        _fixture = new AuthAdminClusterFixture(allTreesGrantsEnabled: true);
         await _fixture.InitializeAsync();
     }
 
