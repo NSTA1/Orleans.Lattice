@@ -37,11 +37,11 @@ Each `LatticeApiMcpRemoteEndpoint` names the served `Endpoint` (surfaced verbati
 
 | Option | Purpose |
 |---|---|
-| `State` / `Data` / `Auth` / `Backup` / `Replication` | The per-group remote endpoint, or `null` to not serve that group. |
+| `State` / `Data` / `Auth` / `Backup` / `Replication` / `TreeAdmin` | The per-group remote endpoint, or `null` to not serve that group. The tree-administration endpoint also backs the tree-administration schema tools (`lattice_treeadmin_schema_*`), since the schema-API and tree-administration gRPC services are co-hosted on the same silo address. |
 | `CredentialHeaderName` | Header the resolved caller credential is stamped onto for the outbound call. Defaults to `authorization`. |
 | `CredentialScheme` | Scheme prefix prepended to the outbound token (`"{scheme} {token}"`). Defaults to `Bearer`; empty sends the bare token. |
 | `AdministratorCredential` | The **static** admin service credential used for trusted, read-only permission introspection of each caller. See [discovery](#discovery-requires-the-auth-endpoint) below. For a long-lived server prefer a self-refreshing managed-identity token (see [Refreshing administrator token](#refreshing-the-administrator-token)). |
-| `EnableDataWrites` / `EnableBackupControl` / `EnableAuthAdministration` / `EnableReplicationControl` | Forward the destructive-verb opt-in to the corresponding tool module. Ignored when that group's endpoint is unset. |
+| `EnableDataWrites` / `EnableBackupControl` / `EnableAuthAdministration` / `EnableReplicationControl` / `EnableSchemaControl` | Forward the destructive-verb opt-in to the corresponding tool module. Ignored when that group's endpoint is unset. `EnableSchemaControl` gates the mutating `lattice_treeadmin_schema_*` tools and is ignored when `TreeAdmin` is unset. |
 | `RegionId` | The id of the current (default) region a call targets when no `region` selector is supplied. Defaults to `current`. |
 | `ClusterId` | The Orleans cluster id of the current region, surfaced in `lattice_list_regions`. Optional advertisement metadata. |
 | `Regions` | Additional peer regions a caller may target with the optional per-call `region` argument. Each is a `LatticeApiMcpRemoteRegionOptions` with its own `RegionId`, optional `ClusterId`, and per-group endpoints. |

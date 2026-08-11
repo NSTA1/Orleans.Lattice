@@ -6,6 +6,7 @@ using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Api.Data;
 using Orleans.Lattice.Api.Replication;
+using Orleans.Lattice.Api.Schema;
 using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Api.TreeAdmin;
 
@@ -60,6 +61,7 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
             Assert.That(provider.GetService<ILatticeBackupControl>(), Is.TypeOf<GrpcLatticeBackupControl>());
             Assert.That(provider.GetService<ILatticeReplicationControl>(), Is.TypeOf<GrpcLatticeReplicationControl>());
             Assert.That(provider.GetService<ILatticeTreeAdmin>(), Is.TypeOf<GrpcLatticeTreeAdmin>());
+            Assert.That(provider.GetService<ILatticeSchemaControl>(), Is.TypeOf<GrpcLatticeSchemaControl>());
         });
     }
 
@@ -78,6 +80,7 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
             Assert.That(provider.GetService<ILatticeBackupControl>(), Is.Null);
             Assert.That(provider.GetService<ILatticeReplicationControl>(), Is.Null);
             Assert.That(provider.GetService<ILatticeTreeAdmin>(), Is.Null);
+            Assert.That(provider.GetService<ILatticeSchemaControl>(), Is.Null);
         });
     }
 
@@ -113,6 +116,38 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
             Assert.That(options.EnableReplicationTools, Is.True);
             Assert.That(options.EnableReplicationControlTools, Is.True);
         });
+    }
+
+    [Test]
+    public void Schema_control_flag_off_advertises_inspect_only()
+    {
+        using var provider = new ServiceCollection()
+            .AddLatticeMcpRemote(o => o.TreeAdmin = Endpoint("https://treeadmin:5006"))
+            .BuildServiceProvider();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(provider.GetService<ILatticeSchemaControl>(), Is.TypeOf<GrpcLatticeSchemaControl>());
+            Assert.That(
+                provider.GetRequiredService<IOptions<LatticeApiMcpOptions>>().Value.EnableTreeAdminSchemaControlTools,
+                Is.False);
+        });
+    }
+
+    [Test]
+    public void Schema_control_flag_on_advertises_mutating_tools()
+    {
+        using var provider = new ServiceCollection()
+            .AddLatticeMcpRemote(o =>
+            {
+                o.TreeAdmin = Endpoint("https://treeadmin:5006");
+                o.EnableSchemaControl = true;
+            })
+            .BuildServiceProvider();
+
+        Assert.That(
+            provider.GetRequiredService<IOptions<LatticeApiMcpOptions>>().Value.EnableTreeAdminSchemaControlTools,
+            Is.True);
     }
 
     [Test]

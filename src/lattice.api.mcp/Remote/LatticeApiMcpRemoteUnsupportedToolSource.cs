@@ -11,8 +11,8 @@ namespace Orleans.Lattice.Api.Mcp;
 /// The three <c>lattice_state_*</c> summaries have no gRPC method
 /// (<c>GetTreeSummary</c> / <c>GetShardSummaries</c> / <c>GetPhysicalShardCount</c>)
 /// and <c>lattice_backup_inventory</c> has no <c>GetInventory</c> binding. When
-/// those gRPC methods are added, remove the corresponding name here and the tool
-/// becomes discoverable remotely with no other change.
+/// those gRPC methods are added and wired, remove the corresponding name here and
+/// the tool becomes discoverable remotely with no other change.
 /// </remarks>
 internal sealed class LatticeApiMcpRemoteUnsupportedToolSource : ILatticeApiMcpUnsupportedToolSource
 {

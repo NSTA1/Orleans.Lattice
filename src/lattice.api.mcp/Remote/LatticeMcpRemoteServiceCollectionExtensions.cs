@@ -12,6 +12,8 @@ using Orleans.Lattice.Api.Data;
 using Orleans.Lattice.Api.Data.Grpc;
 using Orleans.Lattice.Api.Replication;
 using Orleans.Lattice.Api.Replication.Grpc;
+using Orleans.Lattice.Api.Schema;
+using Orleans.Lattice.Api.Schema.Grpc;
 using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Api.State.Grpc;
 using Orleans.Lattice.Api.TreeAdmin;
@@ -161,7 +163,17 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
             services.TryAddSingleton<ILatticeTreeAdmin>(sp =>
                 new GrpcLatticeTreeAdmin(LatticeTreeAdminApiGrpcClient.Create(
                     BuildRoutingInvoker(sp, options, treeAdmin, static r => r.TreeAdmin), sp)));
-            services.AddTreeAdminTools();
+
+            // The tree-administration MCP group's tools are the schema-control
+            // tools, so its backing ILatticeSchemaControl facade is wired off the
+            // same endpoint (the schema-API gRPC service is co-hosted with the
+            // tree-administration gRPC service on the same silo address). The
+            // schema facade is registered exactly when the group is, so removing
+            // the remote deferral never advertises a tool with no backing facade.
+            services.TryAddSingleton<ILatticeSchemaControl>(sp =>
+                new GrpcLatticeSchemaControl(LatticeSchemaApiGrpcClient.Create(
+                    BuildRoutingInvoker(sp, options, treeAdmin, static r => r.TreeAdmin), sp)));
+            services.AddTreeAdminTools(options.EnableSchemaControl);
         }
 
         return services;

@@ -6,22 +6,32 @@ namespace Orleans.Lattice.Api.Mcp;
 /// <summary>
 /// DI extension that adds the <c>Orleans.Lattice.Api.Mcp</c> tree-administration
 /// tool module - the <see cref="LatticeApiMcpGroup.TreeAdmin"/> tool group whose
-/// tools adapt the tree-administration control facade onto the MCP surface.
+/// first surface adapts the schema-management control facade
+/// (<c>ILatticeSchemaControl</c>) onto the MCP surface by delegation.
 /// </summary>
 /// <remarks>
 /// <para>
-/// This foundation module is <b>discoverable but empty</b>: it registers the
-/// tree-administration group so an administrator-granted caller sees it advertised
-/// in <c>lattice_capabilities</c>, but it contributes no tools yet. The whole-tree
-/// lifecycle tools (bulk-load, delete, resize, reshard, and the rest) land in later
-/// work, each a thin adapter that defers to the facade's own fail-closed access
-/// gate. The module adds no authorization path of its own, and the group is
-/// discovered only by a caller granted <see cref="LatticeOperation.Admin"/>.
+/// The module is schema-inspect-only by default: it always contributes the
+/// read-only schema-inspection tools (policy / version-config / dead-letter /
+/// remediation-status / compliance / capability reads), and adds the mutating
+/// schema-management tools (set / clear policy, set / clear version config, advance
+/// / migrate version, remediate) only when schema control is opted in - either by
+/// passing <c>enableSchemaControl: true</c> here or by setting
+/// <see cref="LatticeApiMcpOptions.EnableTreeAdminSchemaControlTools"/>. Every
+/// mutating tool is annotated destructive and non-read-only.
 /// </para>
-/// <para>Add it after <c>AddLatticeMcp</c>:</para>
+/// <para>
+/// The module adds no authorization path of its own and adds no method to the
+/// tree-administration facade: it holds the <c>ILatticeSchemaControl</c> facade,
+/// resolved from the request service provider at call time, and each tool defers to
+/// the facade's own fail-closed schema access gate, so an unauthorized caller is
+/// default-denied on every read and mutation, and the group is discovered only by a
+/// caller granted <see cref="LatticeOperation.Admin"/>.
+/// </para>
+/// <para>Add it after <c>AddLatticeMcp</c> (the host must also register the schema control facade):</para>
 /// <code>
 /// builder.Services.AddLatticeMcp(o =&gt; o.RequireAuthorization = true);
-/// builder.Services.AddTreeAdminTools();
+/// builder.Services.AddTreeAdminTools(enableSchemaControl: true);
 /// </code>
 /// </remarks>
 public static class LatticeMcpTreeAdminServiceCollectionExtensions
@@ -30,18 +40,34 @@ public static class LatticeMcpTreeAdminServiceCollectionExtensions
     /// Registers the tree-administration tool module as a
     /// <see cref="LatticeApiMcpGroup.TreeAdmin"/> tool group. Registering the group
     /// is what makes it discoverable in <c>lattice_capabilities</c> to an
-    /// administrator-granted caller; this foundation module contributes no tools
-    /// yet, so the group is advertised with an empty tool set. The whole-tree
-    /// lifecycle tools - and any opt-in flag that gates the mutating ones, mirroring
-    /// <see cref="LatticeApiMcpOptions.EnableReplicationControlTools"/> - land in
-    /// later work.
+    /// administrator-granted caller. The read-only schema-inspection tools are
+    /// always contributed; when <paramref name="enableSchemaControl"/> is
+    /// <see langword="true"/> this also sets
+    /// <see cref="LatticeApiMcpOptions.EnableTreeAdminSchemaControlTools"/> so the
+    /// mutating schema-management tools are contributed alongside them. Idempotent.
     /// </summary>
     /// <param name="services">The host's service collection.</param>
+    /// <param name="enableSchemaControl">
+    /// When <see langword="true"/>, the mutating schema-management tools (set /
+    /// clear policy, set / clear version config, advance / migrate version,
+    /// remediate) are contributed in addition to the read-only schema-inspection
+    /// tools. Defaults to <see langword="false"/> (schema-inspect-only).
+    /// </param>
     /// <returns>The service collection for chaining.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="services"/> is <c>null</c>.</exception>
-    public static IServiceCollection AddTreeAdminTools(this IServiceCollection services)
+    public static IServiceCollection AddTreeAdminTools(
+        this IServiceCollection services,
+        bool enableSchemaControl = false)
     {
         ArgumentNullException.ThrowIfNull(services);
+
+        services.Configure<LatticeApiMcpOptions>(options =>
+        {
+            if (enableSchemaControl)
+            {
+                options.EnableTreeAdminSchemaControlTools = true;
+            }
+        });
 
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ILatticeApiMcpToolGroup, TreeAdminToolGroup>());
 

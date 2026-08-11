@@ -140,6 +140,20 @@ public sealed class LatticeApiMcpOptions
     public bool EnableReplicationControlTools { get; set; }
 
     /// <summary>
+    /// Whether the tree-administration tool module also contributes its
+    /// <b>mutating</b> schema-management tools (set / clear policy, set / clear
+    /// version config, advance / migrate version, remediate) in addition to the
+    /// read-only schema-inspection tools. Defaults to <see langword="false"/> so a
+    /// registered tree-administration module is schema-inspect-only until the host
+    /// explicitly opts schema control in - either by setting this flag or by
+    /// passing <c>enableSchemaControl: true</c> to <c>AddTreeAdminTools(...)</c>.
+    /// Every mutating tool it then contributes is annotated destructive and
+    /// non-read-only, and remains subject to the same fail-closed schema access
+    /// gate the <c>ILatticeSchemaControl</c> facade enforces.
+    /// </summary>
+    public bool EnableTreeAdminSchemaControlTools { get; set; }
+
+    /// <summary>
     /// Opt-in OAuth 2.0 Protected Resource Metadata (RFC 9728) for the MCP
     /// endpoint. Defaults to <see langword="null"/>, which serves no metadata
     /// document and leaves the <c>WWW-Authenticate</c> challenge untouched. When

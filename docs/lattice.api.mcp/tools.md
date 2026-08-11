@@ -1,6 +1,6 @@
 # Tools
 
-The MCP server exposes its capabilities as **tools**, grouped into five opt-in modules plus a `lattice_capabilities` and a `lattice_list_regions` meta-tool. Every tool is a thin adapter over the matching `Orleans.Lattice.Api.*` facade and is named `lattice_<group>_<verb>`. The server ships with no tools; each module is added explicitly.
+The MCP server exposes its capabilities as **tools**, grouped into six opt-in modules plus a `lattice_capabilities` and a `lattice_list_regions` meta-tool. Every tool is a thin adapter over the matching `Orleans.Lattice.Api.*` facade and is named `lattice_<group>_<verb>`. The server ships with no tools; each module is added explicitly.
 
 ## Opting in
 
@@ -13,6 +13,7 @@ services.AddDataTools(enableWrites: true);
 services.AddBackupTools(enableControl: true);
 services.AddAuthTools(enableAdministration: true);
 services.AddReplicationTools(enableControl: true);
+services.AddTreeAdminTools(enableSchemaControl: true);
 ```
 
 Each module registration is idempotent, and within a module the destructive verbs stay hidden unless the host opts them in:
@@ -24,6 +25,7 @@ Each module registration is idempotent, and within a module the destructive verb
 | Backup | `AddBackupTools(enableControl)` | always | capture / restore / delete, gated by `enableControl` |
 | Auth | `AddAuthTools(enableAdministration)` | always | user / group / rule mutation, gated by `enableAdministration` |
 | Replication | `AddReplicationTools(enableControl)` | always | enable / disable replication, gated by `enableControl` |
+| TreeAdmin | `AddTreeAdminTools(enableSchemaControl)` | always | schema policy / version / remediation mutation, gated by `enableSchemaControl` |
 
 Read tools carry `readOnlyHint = true`; destructive tools carry `destructiveHint = true` and `readOnlyHint = false`, so a well-behaved MCP client can surface the distinction to the operator. Enabling a destructive verb only advertises it - it stays subject to the same fail-closed access gate the facade enforces (see [Security](security.md)).
 
@@ -161,6 +163,34 @@ Runtime per-tree cross-cluster replication control over `ILatticeReplicationCont
 | `lattice_replication_disable` | control | Disable replication for a tree without purging already-replicated peer data. |
 
 The control tools carry `destructiveHint = true`; the inspect tool carries `readOnlyHint = true`. Discovery is permission-scoped by the `LatticeOperation.Replication` grant, so a caller without that grant is not shown the group.
+
+## TreeAdmin schema tools (`lattice_treeadmin_schema_*`)
+
+Schema-management control over `ILatticeSchemaControl`, surfaced under the tree-administration group. Registered by `AddTreeAdminTools(enableSchemaControl)`. The read-only schema-inspection tools are always exposed; the mutating schema-management tools require `enableSchemaControl: true`, and every tool remains subject to the facade's own fail-closed schema access gate regardless (a read authorizes on ordinary read authority; a mutation authorizes on schema-management authority). The group is discovered only by a caller granted `LatticeOperation.Admin`.
+
+The MCP group holds the `ILatticeSchemaControl` facade and delegates to it verbatim - it adds no method to the tree-administration facade and no authorization path of its own. The schema facade and its packages are unchanged.
+
+| Tool | Kind | Purpose |
+|---|---|---|
+| `lattice_treeadmin_schema_get_policy` | inspect | Read a tree's enforcement policy, or none when unset. |
+| `lattice_treeadmin_schema_list_dead_letters` | inspect | Stream a tree's strict-mode dead-letter entries. |
+| `lattice_treeadmin_schema_count_dead_letters` | inspect | Count a tree's strict-mode dead-letter entries. |
+| `lattice_treeadmin_schema_get_version_config` | inspect | Read a tree's envelope-version config, or none when unversioned. |
+| `lattice_treeadmin_schema_get_remediation_status` | inspect | Read a tree's current or last-known remediation status. |
+| `lattice_treeadmin_schema_scan_compliance` | inspect | Scan every current value against the compiled policy and report compliance. |
+| `lattice_treeadmin_schema_probe_capabilities` | inspect | Probe which schema operations the caller may perform, side-effect free. |
+| `lattice_treeadmin_schema_set_policy` | manage | Set or replace a tree's enforcement policy. |
+| `lattice_treeadmin_schema_clear_policy` | manage | Clear a tree's enforcement policy. |
+| `lattice_treeadmin_schema_set_version_config` | manage | Opt a tree in to envelope versioning (or replace its config). |
+| `lattice_treeadmin_schema_clear_version_config` | manage | Opt a tree back out of envelope versioning. |
+| `lattice_treeadmin_schema_advance_target_version` | manage | Advance a tree's target schema version. |
+| `lattice_treeadmin_schema_advance_and_migrate` | manage | Advance a tree's target version and eagerly migrate existing values. |
+| `lattice_treeadmin_schema_migrate_to_target` | manage | Re-stamp every existing value to the current target version. |
+| `lattice_treeadmin_schema_remediate` | manage | Run a per-value remediation transform toward a target policy. |
+
+The manage tools carry `destructiveHint = true` and `readOnlyHint = false`; the inspect tools carry `readOnlyHint = true`. `lattice_treeadmin_schema_set_version_config` takes the version config as scalar `schemaId` / `targetVersion` / `strictIngest` arguments; `lattice_treeadmin_schema_set_policy` and `lattice_treeadmin_schema_remediate` take the schema policy and value-transform model objects directly.
+
+This module is served under both topologies. In-silo it delegates to the co-hosted `ILatticeSchemaControl` facade directly; over the remote (out-of-silo) topology the `AddLatticeMcpRemote` composition wires `GrpcLatticeSchemaControl` - a schema-API gRPC adapter - off the same endpoint as the tree-administration group (`RemoteOptions.TreeAdmin`, since the schema-API and tree-administration gRPC services are co-hosted on the same silo address). The remote host honours the same read-always / write-gated split: the read-only schema-inspection tools are served whenever the tree-administration endpoint is configured, and the mutating schema-management tools additionally require `RemoteOptions.EnableSchemaControl = true` (which maps onto `enableSchemaControl`). Caller credentials are forwarded on every gRPC call by the shared credential-forwarding interceptor, so the remote cluster re-runs the facade's own fail-closed access gate.
 
 ## Error handling
 
