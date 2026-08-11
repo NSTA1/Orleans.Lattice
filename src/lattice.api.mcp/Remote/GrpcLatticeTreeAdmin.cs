@@ -75,4 +75,51 @@ internal sealed class GrpcLatticeTreeAdmin : ILatticeTreeAdmin
         bool deep = false,
         CancellationToken cancellationToken = default)
         => _client.GetStorageUsageAsync(deep, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TreeCreationResult> CreateTreeAsync(
+        string treeId,
+        int? shardCount = null,
+        int? maxLeafKeys = null,
+        int? maxInternalChildren = null,
+        CancellationToken cancellationToken = default)
+        => _client.CreateTreeAsync(treeId, shardCount, maxLeafKeys, maxInternalChildren, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TreeExistenceResult> CheckTreeExistsAsync(
+        string treeId,
+        CancellationToken cancellationToken = default)
+        => _client.CheckTreeExistsAsync(treeId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TreeAliasResolution> SetTreeAliasAsync(
+        string treeId,
+        string physicalTreeId,
+        CancellationToken cancellationToken = default)
+        => _client.SetTreeAliasAsync(treeId, physicalTreeId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TreeAliasResolution> ResolveTreeAliasAsync(
+        string treeId,
+        CancellationToken cancellationToken = default)
+        => _client.ResolveTreeAliasAsync(treeId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TreeConfigurationReport> GetTreeConfigAsync(
+        string treeId,
+        CancellationToken cancellationToken = default)
+        => _client.GetTreeConfigAsync(treeId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TreeConfigurationReport> SetTreeConfigAsync(
+        string treeId,
+        TreeConfigurationUpdate update,
+        CancellationToken cancellationToken = default)
+        => _client.SetTreeConfigAsync(treeId, update, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TreeShardMapView> GetShardMapAsync(
+        string treeId,
+        CancellationToken cancellationToken = default)
+        => _client.GetShardMapAsync(treeId, cancellationToken);
 }

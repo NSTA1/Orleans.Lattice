@@ -125,6 +125,13 @@ internal sealed class LatticeTreeAdminApiGrpcAuthInterceptor : Interceptor
             LatticeTreeAdminGrpcMethods.GetProjectionDigestMethodName => LatticeTreeAdminApiOperation.GetProjectionDigest,
             LatticeTreeAdminGrpcMethods.GetTreeStatsMethodName => LatticeTreeAdminApiOperation.GetTreeStats,
             LatticeTreeAdminGrpcMethods.GetStorageUsageMethodName => LatticeTreeAdminApiOperation.GetStorageUsage,
+            LatticeTreeAdminGrpcMethods.CreateTreeMethodName => LatticeTreeAdminApiOperation.CreateTree,
+            LatticeTreeAdminGrpcMethods.CheckTreeExistsMethodName => LatticeTreeAdminApiOperation.CheckTreeExists,
+            LatticeTreeAdminGrpcMethods.SetTreeAliasMethodName => LatticeTreeAdminApiOperation.SetTreeAlias,
+            LatticeTreeAdminGrpcMethods.ResolveTreeAliasMethodName => LatticeTreeAdminApiOperation.ResolveTreeAlias,
+            LatticeTreeAdminGrpcMethods.GetTreeConfigMethodName => LatticeTreeAdminApiOperation.GetTreeConfig,
+            LatticeTreeAdminGrpcMethods.SetTreeConfigMethodName => LatticeTreeAdminApiOperation.SetTreeConfig,
+            LatticeTreeAdminGrpcMethods.GetShardMapMethodName => LatticeTreeAdminApiOperation.GetShardMap,
             _ => LatticeTreeAdminApiOperation.Unknown,
         };
 
@@ -133,6 +140,9 @@ internal sealed class LatticeTreeAdminApiGrpcAuthInterceptor : Interceptor
             TreeAdminTreeRequest t => t.TreeId,
             TreeAdminShardRequest s => s.TreeId,
             TreeAdminDiagnosticsRequest d => d.TreeId,
+            TreeAdminCreateRequest c => c.TreeId,
+            TreeAdminSetAliasRequest a => a.TreeId,
+            TreeAdminSetConfigRequest cfg => cfg.TreeId,
             _ => null,
         };
 

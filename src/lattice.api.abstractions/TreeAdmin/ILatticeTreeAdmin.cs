@@ -144,4 +144,122 @@ public interface ILatticeTreeAdmin
     /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized for cluster telemetry.</exception>
     Task<ClusterStorageUsageSummary> GetStorageUsageAsync(
         bool deep = false, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Explicitly creates (registers) <paramref name="treeId"/> with an optional
+    /// initial structural sizing, after authorizing whole-tree administration on the
+    /// tree fail-closed. Registration is <b>idempotent</b>: creating a tree that is
+    /// already registered is a no-op that preserves the existing configuration (the
+    /// supplied sizing is ignored) and reports
+    /// <see cref="TreeCreationResult.Created"/> <see langword="false"/>. Reserved
+    /// system tree ids (the <c>_lattice_</c> namespace) are rejected.
+    /// </summary>
+    /// <param name="treeId">The tree to create. Must not be <c>null</c>, empty, or reserved.</param>
+    /// <param name="shardCount">The initial physical shard count, or <c>null</c> for the library default.</param>
+    /// <param name="maxLeafKeys">The initial maximum keys per leaf node, or <c>null</c> for the library default.</param>
+    /// <param name="maxInternalChildren">The initial maximum children per internal node, or <c>null</c> for the library default.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The creation result, including whether a new tree was registered and its effective sizing.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">A supplied sizing value is not strictly positive.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to administer the tree.</exception>
+    Task<TreeCreationResult> CreateTreeAsync(
+        string treeId,
+        int? shardCount = null,
+        int? maxLeafKeys = null,
+        int? maxInternalChildren = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reports whether <paramref name="treeId"/> is registered in the tree registry,
+    /// after authorizing whole-tree read on the tree fail-closed. A pure read with no
+    /// side effects.
+    /// </summary>
+    /// <param name="treeId">The tree to check. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The existence result.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the tree.</exception>
+    Task<TreeExistenceResult> CheckTreeExistsAsync(
+        string treeId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Points the logical <paramref name="treeId"/> at
+    /// <paramref name="physicalTreeId"/> so subsequent reads and writes routed
+    /// through the tree target the physical tree, after authorizing whole-tree
+    /// administration on the tree fail-closed. Only a single level of indirection is
+    /// allowed - the physical target must not itself be aliased. Reserved system tree
+    /// ids are rejected.
+    /// </summary>
+    /// <param name="treeId">The logical tree to alias. Must not be <c>null</c>, empty, or reserved.</param>
+    /// <param name="physicalTreeId">The physical tree to point at. Must not be <c>null</c> or empty, and must differ from <paramref name="treeId"/>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The resulting alias state.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved, or <paramref name="physicalTreeId"/> is <c>null</c>, empty, or equal to <paramref name="treeId"/>.</exception>
+    /// <exception cref="InvalidOperationException">The physical target is itself aliased (multi-level indirection).</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to administer the tree.</exception>
+    Task<TreeAliasResolution> SetTreeAliasAsync(
+        string treeId, string physicalTreeId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Resolves the physical tree id the logical <paramref name="treeId"/> currently
+    /// maps to, after authorizing whole-tree read on the tree fail-closed. Returns the
+    /// logical id itself when no alias is in effect. A pure read with no side effects.
+    /// </summary>
+    /// <param name="treeId">The logical tree to resolve. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The current alias state.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the tree.</exception>
+    Task<TreeAliasResolution> ResolveTreeAliasAsync(
+        string treeId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads the registry-backed configuration for <paramref name="treeId"/> - its
+    /// structural sizing pins, alias target, and per-tree runtime overrides - after
+    /// authorizing whole-tree read on the tree fail-closed. An unregistered tree
+    /// reports <see cref="TreeConfigurationReport.Exists"/> <see langword="false"/>. A
+    /// pure read with no side effects.
+    /// </summary>
+    /// <param name="treeId">The tree to read. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The configuration snapshot.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the tree.</exception>
+    Task<TreeConfigurationReport> GetTreeConfigAsync(
+        string treeId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Applies a partial update to <paramref name="treeId"/>'s per-tree runtime
+    /// configuration (publish-events, projection-digest maintenance, durable-history
+    /// retention), after authorizing whole-tree administration on the tree
+    /// fail-closed. Each dimension is written only when its <c>Apply*</c> flag is set;
+    /// a <see langword="null"/> value on an applied dimension clears that override.
+    /// Reserved system tree ids are rejected. Returns the resulting configuration.
+    /// </summary>
+    /// <param name="treeId">The tree to configure. Must not be <c>null</c>, empty, or reserved.</param>
+    /// <param name="update">The partial configuration update. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The configuration snapshot after the update.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="update"/> is <c>null</c>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">An applied history-retention window is not strictly positive.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to administer the tree.</exception>
+    Task<TreeConfigurationReport> SetTreeConfigAsync(
+        string treeId, TreeConfigurationUpdate update, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads the registry-persisted shard map for <paramref name="treeId"/>, after
+    /// authorizing whole-tree read on the tree fail-closed. Reports whether a custom
+    /// map has been persisted (versus the default identity map) and, when it has, the
+    /// persisted slot topology. A pure read with no side effects; shard-map mutation
+    /// is driven by the resize / reshard operations, not here.
+    /// </summary>
+    /// <param name="treeId">The tree to read. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The persisted shard-map view.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the tree.</exception>
+    Task<TreeShardMapView> GetShardMapAsync(
+        string treeId, CancellationToken cancellationToken = default);
 }

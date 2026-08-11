@@ -57,7 +57,7 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(options);
-        Tools = Build(services, options.Value.EnableTreeAdminSchemaControlTools);
+        Tools = Build(services, options.Value.EnableTreeAdminSchemaControlTools, options.Value.EnableTreeAdminLifecycleTools);
     }
 
     /// <inheritdoc />
@@ -66,7 +66,7 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
     /// <inheritdoc />
     public IReadOnlyList<McpServerTool> Tools { get; }
 
-    private static IReadOnlyList<McpServerTool> Build(IServiceProvider services, bool enableSchemaControl)
+    private static IReadOnlyList<McpServerTool> Build(IServiceProvider services, bool enableSchemaControl, bool enableLifecycle)
     {
         var tools = new List<McpServerTool>
         {
@@ -143,6 +143,29 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "log, snapshots, leaf state) with per-tree breakdowns. The default returns the cheap cached "
                 + "WAL-poll aggregate; the deep flag forces an expensive fresh leaf-walk that re-measures every "
                 + "shard. Requires cluster telemetry authority. Read-only."),
+
+            // ----- Tree lifecycle and registry config (read-only) -----
+            Read(services, TreeAdminLifecycleToolHandlers.CheckTreeExistsAsync, "lattice_treeadmin_tree_exists",
+                "Check whether a tree exists",
+                "Reports whether a tree is registered in the tree registry. A pure existence check with no side "
+                + "effects. Requires whole-tree read authority. Read-only."),
+            Read(services, TreeAdminLifecycleToolHandlers.ResolveTreeAliasAsync, "lattice_treeadmin_tree_resolve_alias",
+                "Resolve a tree's alias target",
+                "Resolves the physical tree id a logical tree currently maps to, returning the logical id itself "
+                + "when no alias is in effect. A pure read with no side effects. Requires whole-tree read authority. "
+                + "Read-only."),
+            Read(services, TreeAdminLifecycleToolHandlers.GetTreeConfigAsync, "lattice_treeadmin_tree_get_config",
+                "Read a tree's registry configuration",
+                "Reads a tree's registry-backed configuration: its structural sizing pins (shard count, node "
+                + "fan-out), alias target, and per-tree runtime overrides (publish-events, projection-digest "
+                + "maintenance, durable-history retention). An unregistered tree reports exists=false. Requires "
+                + "whole-tree read authority. Read-only."),
+            Read(services, TreeAdminLifecycleToolHandlers.GetShardMapAsync, "lattice_treeadmin_tree_get_shard_map",
+                "Read a tree's persisted shard map",
+                "Reads the registry-persisted shard map for a tree: whether a custom map has been persisted (versus "
+                + "the default identity map) and, when it has, the persisted slot topology and map version. Distinct "
+                + "from the live-routing shard-map inspection - this reflects durable registry truth. Requires "
+                + "whole-tree read authority. Read-only."),
         };
 
         if (enableSchemaControl)
@@ -189,6 +212,29 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "tree through a value transform and cuts the tree over once the transformed values satisfy a "
                 + "target policy, returning the terminal report. Aborts without cutover on the first value the "
                 + "transform cannot make compliant. Schema-admin-gated and destructive."));
+        }
+
+        if (enableLifecycle)
+        {
+            // ----- Tree lifecycle and registry config (destructive) -----
+            tools.Add(Write(services, TreeAdminLifecycleToolHandlers.CreateTreeAsync, "lattice_treeadmin_tree_create",
+                "Explicitly create a tree",
+                "Explicitly creates (registers) a tree with an optional initial structural sizing (shard count, "
+                + "leaf fan-out, internal fan-out), returning whether a new tree was registered and its effective "
+                + "sizing. Idempotent: creating an existing tree preserves its configuration and reports "
+                + "created=false. Rejected for a reserved system tree id. Admin-gated and destructive."));
+            tools.Add(Write(services, TreeAdminLifecycleToolHandlers.SetTreeAliasAsync, "lattice_treeadmin_tree_set_alias",
+                "Point a logical tree at a physical tree",
+                "Points a logical tree at a physical tree so subsequent reads and writes routed through it target "
+                + "the physical tree, returning the resulting alias state. Only a single level of indirection is "
+                + "allowed - the physical target must not itself be aliased. Rejected for a reserved system tree id. "
+                + "Admin-gated and destructive."));
+            tools.Add(Write(services, TreeAdminLifecycleToolHandlers.SetTreeConfigAsync, "lattice_treeadmin_tree_set_config",
+                "Update a tree's registry configuration",
+                "Applies a partial update to a tree's per-tree runtime configuration (publish-events, "
+                + "projection-digest maintenance, durable-history retention), returning the resulting config. Each "
+                + "dimension is written only when its apply flag is set; a null value on an applied dimension clears "
+                + "that override. Rejected for a reserved system tree id. Admin-gated and destructive."));
         }
 
         return tools;

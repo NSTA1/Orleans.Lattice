@@ -156,4 +156,121 @@ public sealed class GrpcLatticeTreeAdminTests
             Assert.That(result.Deep, Is.True);
         });
     }
+
+    [Test]
+    public async Task CreateTreeAsync_forwards_the_sizing_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeCreationResult { TreeId = "orders", Created = true, ShardCount = 8 });
+
+        var result = await Adapter(invoker).CreateTreeAsync("orders", shardCount: 8, maxLeafKeys: 64, maxInternalChildren: 32);
+
+        var sent = (TreeAdminCreateRequest)invoker.LastRequest!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(sent.TreeId, Is.EqualTo("orders"));
+            Assert.That(sent.ShardCount, Is.EqualTo(8));
+            Assert.That(sent.MaxLeafKeys, Is.EqualTo(64));
+            Assert.That(sent.MaxInternalChildren, Is.EqualTo(32));
+            Assert.That(result.Created, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task CheckTreeExistsAsync_forwards_request_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeExistenceResult { TreeId = "orders", Exists = true });
+
+        var result = await Adapter(invoker).CheckTreeExistsAsync("orders");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(((TreeAdminTreeRequest)invoker.LastRequest!).TreeId, Is.EqualTo("orders"));
+            Assert.That(result.Exists, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task SetTreeAliasAsync_forwards_both_ids_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeAliasResolution { TreeId = "orders", PhysicalTreeId = "phys", IsAliased = true });
+
+        var result = await Adapter(invoker).SetTreeAliasAsync("orders", "phys");
+
+        var sent = (TreeAdminSetAliasRequest)invoker.LastRequest!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(sent.TreeId, Is.EqualTo("orders"));
+            Assert.That(sent.PhysicalTreeId, Is.EqualTo("phys"));
+            Assert.That(result.IsAliased, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task ResolveTreeAliasAsync_forwards_request_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeAliasResolution { TreeId = "orders", PhysicalTreeId = "phys", IsAliased = true });
+
+        var result = await Adapter(invoker).ResolveTreeAliasAsync("orders");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(((TreeAdminTreeRequest)invoker.LastRequest!).TreeId, Is.EqualTo("orders"));
+            Assert.That(result.PhysicalTreeId, Is.EqualTo("phys"));
+        });
+    }
+
+    [Test]
+    public async Task GetTreeConfigAsync_forwards_request_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeConfigurationReport { TreeId = "orders", Exists = true });
+
+        var result = await Adapter(invoker).GetTreeConfigAsync("orders");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(((TreeAdminTreeRequest)invoker.LastRequest!).TreeId, Is.EqualTo("orders"));
+            Assert.That(result.Exists, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task SetTreeConfigAsync_forwards_the_update_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeConfigurationReport { TreeId = "orders", Exists = true, PublishEvents = false });
+
+        var result = await Adapter(invoker).SetTreeConfigAsync("orders", new TreeConfigurationUpdate
+        {
+            ApplyPublishEvents = true,
+            PublishEvents = false,
+        });
+
+        var sent = (TreeAdminSetConfigRequest)invoker.LastRequest!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(sent.TreeId, Is.EqualTo("orders"));
+            Assert.That(sent.Update.ApplyPublishEvents, Is.True);
+            Assert.That(sent.Update.PublishEvents, Is.False);
+            Assert.That(result.PublishEvents, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task GetShardMapAsync_forwards_request_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeShardMapView
+        {
+            TreeId = "orders",
+            HasCustomMap = true,
+            PhysicalShardIndices = System.Collections.Immutable.ImmutableArray.Create(0, 1),
+        });
+
+        var result = await Adapter(invoker).GetShardMapAsync("orders");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(((TreeAdminTreeRequest)invoker.LastRequest!).TreeId, Is.EqualTo("orders"));
+            Assert.That(result.HasCustomMap, Is.True);
+            Assert.That(result.PhysicalShardIndices, Is.EqualTo(new[] { 0, 1 }));
+        });
+    }
 }

@@ -55,17 +55,37 @@ public sealed class TreeAdminToolGroupTests
         "lattice_treeadmin_storage_usage",
     };
 
-    /// <summary>The read-only tools always contributed regardless of the schema-control opt-in.</summary>
-    private static IEnumerable<string> ReadOnlyToolNames => InspectionToolNames.Concat(DiagnosticsToolNames);
+    private static readonly string[] LifecycleReadToolNames =
+    {
+        "lattice_treeadmin_tree_exists",
+        "lattice_treeadmin_tree_resolve_alias",
+        "lattice_treeadmin_tree_get_config",
+        "lattice_treeadmin_tree_get_shard_map",
+    };
+
+    private static readonly string[] LifecycleWriteToolNames =
+    {
+        "lattice_treeadmin_tree_create",
+        "lattice_treeadmin_tree_set_alias",
+        "lattice_treeadmin_tree_set_config",
+    };
+
+    /// <summary>The read-only tools always contributed regardless of any opt-in.</summary>
+    private static IEnumerable<string> ReadOnlyToolNames =>
+        InspectionToolNames.Concat(DiagnosticsToolNames).Concat(LifecycleReadToolNames);
 
 
-    private static TreeAdminToolGroup CreateGroup(bool enableSchemaControl)
+    private static TreeAdminToolGroup CreateGroup(bool enableSchemaControl, bool enableLifecycle = false)
     {
         var services = new ServiceCollection();
         services.AddSingleton(Substitute.For<ILatticeSchemaControl>());
         var provider = services.BuildServiceProvider();
         var options = Options.Create(
-            new LatticeApiMcpOptions { EnableTreeAdminSchemaControlTools = enableSchemaControl });
+            new LatticeApiMcpOptions
+            {
+                EnableTreeAdminSchemaControlTools = enableSchemaControl,
+                EnableTreeAdminLifecycleTools = enableLifecycle,
+            });
         return new TreeAdminToolGroup(provider, options);
     }
 
@@ -143,6 +163,78 @@ public sealed class TreeAdminToolGroupTests
     }
 
     [Test]
+    public void Lifecycle_read_tools_are_always_present_even_without_the_opt_in()
+    {
+        var group = CreateGroup(enableSchemaControl: false, enableLifecycle: false);
+
+        Assert.That(Names(group), Is.SupersetOf(LifecycleReadToolNames));
+    }
+
+    [Test]
+    public void Lifecycle_write_tools_are_hidden_until_the_lifecycle_opt_in()
+    {
+        var group = CreateGroup(enableSchemaControl: false, enableLifecycle: false);
+
+        Assert.Multiple(() =>
+        {
+            foreach (var write in LifecycleWriteToolNames)
+            {
+                Assert.That(Names(group), Does.Not.Contain(write),
+                    "The mutating lifecycle tools must be hidden until lifecycle control is opted in.");
+            }
+        });
+    }
+
+    [Test]
+    public void Lifecycle_write_tools_appear_when_the_lifecycle_opt_in_is_enabled()
+    {
+        var group = CreateGroup(enableSchemaControl: false, enableLifecycle: true);
+
+        Assert.That(Names(group), Is.EquivalentTo(ReadOnlyToolNames.Concat(LifecycleWriteToolNames)));
+    }
+
+    [Test]
+    public void Lifecycle_write_tools_are_annotated_destructive()
+    {
+        var group = CreateGroup(enableSchemaControl: false, enableLifecycle: true);
+
+        Assert.Multiple(() =>
+        {
+            foreach (var name in LifecycleWriteToolNames)
+            {
+                var annotations = ServerTool(group, name).ProtocolTool.Annotations;
+                Assert.That(annotations?.DestructiveHint, Is.True, $"{name} must be destructive.");
+                Assert.That(annotations?.ReadOnlyHint, Is.False, $"{name} must not be read-only.");
+            }
+        });
+    }
+
+    [Test]
+    public void The_two_opt_ins_are_independent()
+    {
+        var group = CreateGroup(enableSchemaControl: true, enableLifecycle: true);
+
+        Assert.That(
+            Names(group),
+            Is.EquivalentTo(ReadOnlyToolNames.Concat(ManagementToolNames).Concat(LifecycleWriteToolNames)));
+    }
+
+    [Test]
+    public void AddTreeAdminTools_with_lifecycle_adds_the_lifecycle_write_tools()
+    {
+        var provider = new ServiceCollection()
+            .AddSingleton(Substitute.For<ILatticeSchemaControl>())
+            .AddTreeAdminTools(enableLifecycle: true)
+            .BuildServiceProvider();
+
+        var group = provider.GetServices<ILatticeApiMcpToolGroup>().OfType<TreeAdminToolGroup>().Single();
+
+        Assert.That(
+            group.Tools.Select(t => t.ProtocolTool.Name),
+            Is.EquivalentTo(ReadOnlyToolNames.Concat(LifecycleWriteToolNames)));
+    }
+
+    [Test]
     public void The_facade_parameter_is_bound_from_services_not_the_input_schema()
     {
         var group = CreateGroup(enableSchemaControl: true);
@@ -177,6 +269,22 @@ public sealed class TreeAdminToolGroupTests
             Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_shard_diagnostics"), "deep"), Is.True);
             Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_projection_digest"), "shardIndex"), Is.True);
             Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_storage_usage"), "deep"), Is.True);
+        });
+    }
+
+    [Test]
+    public void Lifecycle_business_arguments_stay_in_the_input_schema()
+    {
+        var group = CreateGroup(enableSchemaControl: false, enableLifecycle: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_tree_create"), "treeId"), Is.True);
+            Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_tree_create"), "shardCount"), Is.True);
+            Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_tree_set_alias"), "physicalTreeId"), Is.True);
+            Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_tree_set_config"), "applyPublishEvents"), Is.True);
+            Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_tree_set_config"), "historyRetentionWindowTicks"), Is.True);
+            Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_tree_get_shard_map"), "treeId"), Is.True);
         });
     }
 

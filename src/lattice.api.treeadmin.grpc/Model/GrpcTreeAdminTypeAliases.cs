@@ -41,4 +41,13 @@ public static class GrpcTreeAdminTypeAliases
 
     /// <summary>Alias for <see cref="AuthSchemeAdvertisement"/>.</summary>
     public const string AuthSchemeAdvertisement = "oitg.asadv";
+
+    /// <summary>Alias for <see cref="TreeAdminCreateRequest"/>.</summary>
+    public const string TreeAdminCreateRequest = "oitg.createq";
+
+    /// <summary>Alias for <see cref="TreeAdminSetAliasRequest"/>.</summary>
+    public const string TreeAdminSetAliasRequest = "oitg.aliasreq";
+
+    /// <summary>Alias for <see cref="TreeAdminSetConfigRequest"/>.</summary>
+    public const string TreeAdminSetConfigRequest = "oitg.cfgreq";
 }

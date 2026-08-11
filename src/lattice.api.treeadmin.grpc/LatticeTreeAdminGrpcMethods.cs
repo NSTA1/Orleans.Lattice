@@ -50,6 +50,27 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary cluster-wide storage-usage RPC method name.</summary>
     public const string GetStorageUsageMethodName = "GetStorageUsage";
 
+    /// <summary>The unary explicit tree-creation RPC method name.</summary>
+    public const string CreateTreeMethodName = "CreateTree";
+
+    /// <summary>The unary tree-existence RPC method name.</summary>
+    public const string CheckTreeExistsMethodName = "CheckTreeExists";
+
+    /// <summary>The unary set-alias RPC method name.</summary>
+    public const string SetTreeAliasMethodName = "SetTreeAlias";
+
+    /// <summary>The unary resolve-alias RPC method name.</summary>
+    public const string ResolveTreeAliasMethodName = "ResolveTreeAlias";
+
+    /// <summary>The unary get-config RPC method name.</summary>
+    public const string GetTreeConfigMethodName = "GetTreeConfig";
+
+    /// <summary>The unary set-config RPC method name.</summary>
+    public const string SetTreeConfigMethodName = "SetTreeConfig";
+
+    /// <summary>The unary registry-persisted shard-map RPC method name.</summary>
+    public const string GetShardMapMethodName = "GetShardMap";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeTreeAdminGrpcMethods(
         Serializer<TreeAdminTreeRequest> treeRequestSerializer,
@@ -64,7 +85,15 @@ internal sealed class LatticeTreeAdminGrpcMethods
         Serializer<ShardMapInspection> shardMapInspectionSerializer,
         Serializer<ShardProjectionDigestReport> projectionDigestSerializer,
         Serializer<TreeStatsReport> treeStatsSerializer,
-        Serializer<ClusterStorageUsageSummary> storageUsageSummarySerializer)
+        Serializer<ClusterStorageUsageSummary> storageUsageSummarySerializer,
+        Serializer<TreeAdminCreateRequest> createRequestSerializer,
+        Serializer<TreeAdminSetAliasRequest> setAliasRequestSerializer,
+        Serializer<TreeAdminSetConfigRequest> setConfigRequestSerializer,
+        Serializer<TreeCreationResult> creationResultSerializer,
+        Serializer<TreeExistenceResult> existenceResultSerializer,
+        Serializer<TreeAliasResolution> aliasResolutionSerializer,
+        Serializer<TreeConfigurationReport> configurationReportSerializer,
+        Serializer<TreeShardMapView> shardMapViewSerializer)
     {
         ArgumentNullException.ThrowIfNull(treeRequestSerializer);
         ArgumentNullException.ThrowIfNull(capabilitiesSerializer);
@@ -79,6 +108,14 @@ internal sealed class LatticeTreeAdminGrpcMethods
         ArgumentNullException.ThrowIfNull(projectionDigestSerializer);
         ArgumentNullException.ThrowIfNull(treeStatsSerializer);
         ArgumentNullException.ThrowIfNull(storageUsageSummarySerializer);
+        ArgumentNullException.ThrowIfNull(createRequestSerializer);
+        ArgumentNullException.ThrowIfNull(setAliasRequestSerializer);
+        ArgumentNullException.ThrowIfNull(setConfigRequestSerializer);
+        ArgumentNullException.ThrowIfNull(creationResultSerializer);
+        ArgumentNullException.ThrowIfNull(existenceResultSerializer);
+        ArgumentNullException.ThrowIfNull(aliasResolutionSerializer);
+        ArgumentNullException.ThrowIfNull(configurationReportSerializer);
+        ArgumentNullException.ThrowIfNull(shardMapViewSerializer);
 
         ProbeCapabilities = new Method<TreeAdminTreeRequest, LatticeTreeAdminCapabilities>(
             type: MethodType.Unary,
@@ -135,6 +172,55 @@ internal sealed class LatticeTreeAdminGrpcMethods
             name: GetStorageUsageMethodName,
             requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(storageUsageRequestSerializer),
             responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(storageUsageSummarySerializer));
+
+        CreateTree = new Method<TreeAdminCreateRequest, TreeCreationResult>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: CreateTreeMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(createRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(creationResultSerializer));
+
+        CheckTreeExists = new Method<TreeAdminTreeRequest, TreeExistenceResult>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: CheckTreeExistsMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(treeRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(existenceResultSerializer));
+
+        SetTreeAlias = new Method<TreeAdminSetAliasRequest, TreeAliasResolution>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: SetTreeAliasMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(setAliasRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(aliasResolutionSerializer));
+
+        ResolveTreeAlias = new Method<TreeAdminTreeRequest, TreeAliasResolution>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: ResolveTreeAliasMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(treeRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(aliasResolutionSerializer));
+
+        GetTreeConfig = new Method<TreeAdminTreeRequest, TreeConfigurationReport>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: GetTreeConfigMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(treeRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(configurationReportSerializer));
+
+        SetTreeConfig = new Method<TreeAdminSetConfigRequest, TreeConfigurationReport>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: SetTreeConfigMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(setConfigRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(configurationReportSerializer));
+
+        GetShardMap = new Method<TreeAdminTreeRequest, TreeShardMapView>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: GetShardMapMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(treeRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(shardMapViewSerializer));
     }
 
     /// <summary>The unary <c>ProbeCapabilities</c> capability-probe RPC.</summary>
@@ -161,6 +247,27 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary <c>GetStorageUsage</c> read-only cluster-storage RPC.</summary>
     public Method<TreeAdminStorageUsageRequest, ClusterStorageUsageSummary> GetStorageUsage { get; }
 
+    /// <summary>The unary <c>CreateTree</c> explicit-creation lifecycle RPC.</summary>
+    public Method<TreeAdminCreateRequest, TreeCreationResult> CreateTree { get; }
+
+    /// <summary>The unary <c>CheckTreeExists</c> read-only existence RPC.</summary>
+    public Method<TreeAdminTreeRequest, TreeExistenceResult> CheckTreeExists { get; }
+
+    /// <summary>The unary <c>SetTreeAlias</c> alias-assignment lifecycle RPC.</summary>
+    public Method<TreeAdminSetAliasRequest, TreeAliasResolution> SetTreeAlias { get; }
+
+    /// <summary>The unary <c>ResolveTreeAlias</c> read-only alias-resolution RPC.</summary>
+    public Method<TreeAdminTreeRequest, TreeAliasResolution> ResolveTreeAlias { get; }
+
+    /// <summary>The unary <c>GetTreeConfig</c> read-only configuration RPC.</summary>
+    public Method<TreeAdminTreeRequest, TreeConfigurationReport> GetTreeConfig { get; }
+
+    /// <summary>The unary <c>SetTreeConfig</c> configuration-update lifecycle RPC.</summary>
+    public Method<TreeAdminSetConfigRequest, TreeConfigurationReport> SetTreeConfig { get; }
+
+    /// <summary>The unary <c>GetShardMap</c> read-only registry-persisted shard-map RPC.</summary>
+    public Method<TreeAdminTreeRequest, TreeShardMapView> GetShardMap { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out of
     /// <paramref name="serializerProvider"/>. Shared by the server-side DI factory
@@ -183,7 +290,15 @@ internal sealed class LatticeTreeAdminGrpcMethods
             serializerProvider.GetRequiredService<Serializer<ShardMapInspection>>(),
             serializerProvider.GetRequiredService<Serializer<ShardProjectionDigestReport>>(),
             serializerProvider.GetRequiredService<Serializer<TreeStatsReport>>(),
-            serializerProvider.GetRequiredService<Serializer<ClusterStorageUsageSummary>>());
+            serializerProvider.GetRequiredService<Serializer<ClusterStorageUsageSummary>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAdminCreateRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAdminSetAliasRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAdminSetConfigRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeCreationResult>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeExistenceResult>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAliasResolution>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeConfigurationReport>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeShardMapView>>());
     }
 }
 

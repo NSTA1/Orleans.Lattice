@@ -90,6 +90,62 @@ public sealed class TreeAdminGrpcInterceptorMappingTests
     }
 
     [Test]
+    public void DescribeCall_maps_the_lifecycle_rpcs_to_their_operations()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.CreateTreeMethodName),
+                new TreeAdminCreateRequest { TreeId = "orders", ShardCount = 8 }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.CreateTree, "orders")));
+
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.CheckTreeExistsMethodName),
+                new TreeAdminTreeRequest { TreeId = "orders" }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.CheckTreeExists, "orders")));
+
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.SetTreeAliasMethodName),
+                new TreeAdminSetAliasRequest { TreeId = "orders", PhysicalTreeId = "phys" }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.SetTreeAlias, "orders")));
+
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.ResolveTreeAliasMethodName),
+                new TreeAdminTreeRequest { TreeId = "orders" }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.ResolveTreeAlias, "orders")));
+
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.GetTreeConfigMethodName),
+                new TreeAdminTreeRequest { TreeId = "orders" }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.GetTreeConfig, "orders")));
+
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.SetTreeConfigMethodName),
+                new TreeAdminSetConfigRequest { TreeId = "orders", Update = new TreeConfigurationUpdate() }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.SetTreeConfig, "orders")));
+
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.GetShardMapMethodName),
+                new TreeAdminTreeRequest { TreeId = "orders" }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.GetShardMap, "orders")));
+        });
+    }
+
+    [Test]
+    public void IsUnauthenticatedMethod_does_not_exempt_the_mutating_lifecycle_rpcs()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.IsUnauthenticatedMethod(
+                Method(LatticeTreeAdminGrpcMethods.CreateTreeMethodName)), Is.False);
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.IsUnauthenticatedMethod(
+                Method(LatticeTreeAdminGrpcMethods.SetTreeAliasMethodName)), Is.False);
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.IsUnauthenticatedMethod(
+                Method(LatticeTreeAdminGrpcMethods.SetTreeConfigMethodName)), Is.False);
+        });
+    }
+
+    [Test]
     public void DescribeCall_unrecognised_method_maps_to_unknown()
     {
         var (operation, _) = LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(

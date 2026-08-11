@@ -173,7 +173,7 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
             services.TryAddSingleton<ILatticeSchemaControl>(sp =>
                 new GrpcLatticeSchemaControl(LatticeSchemaApiGrpcClient.Create(
                     BuildRoutingInvoker(sp, options, treeAdmin, static r => r.TreeAdmin), sp)));
-            services.AddTreeAdminTools(options.EnableSchemaControl);
+            services.AddTreeAdminTools(options.EnableSchemaControl, options.EnableLifecycleControl);
         }
 
         return services;

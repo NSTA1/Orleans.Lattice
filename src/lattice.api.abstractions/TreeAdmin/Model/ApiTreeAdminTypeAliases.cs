@@ -50,4 +50,22 @@ public static class ApiTreeAdminTypeAliases
 
     /// <summary>Alias for <see cref="ClusterStorageUsageSummary"/>.</summary>
     public const string ClusterStorageUsageSummary = "oit.cs";
+
+    /// <summary>Alias for <see cref="TreeCreationResult"/>.</summary>
+    public const string TreeCreationResult = "oit.cr";
+
+    /// <summary>Alias for <see cref="TreeExistenceResult"/>.</summary>
+    public const string TreeExistenceResult = "oit.ex";
+
+    /// <summary>Alias for <see cref="TreeAliasResolution"/>.</summary>
+    public const string TreeAliasResolution = "oit.al";
+
+    /// <summary>Alias for <see cref="TreeConfigurationReport"/>.</summary>
+    public const string TreeConfigurationReport = "oit.cg";
+
+    /// <summary>Alias for <see cref="TreeConfigurationUpdate"/>.</summary>
+    public const string TreeConfigurationUpdate = "oit.cu";
+
+    /// <summary>Alias for <see cref="TreeShardMapView"/>.</summary>
+    public const string TreeShardMapView = "oit.sm";
 }

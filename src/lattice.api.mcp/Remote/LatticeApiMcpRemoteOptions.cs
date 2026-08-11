@@ -196,4 +196,14 @@ public sealed class LatticeApiMcpRemoteOptions
     /// only). Ignored when <see cref="TreeAdmin"/> is unset.
     /// </summary>
     public bool EnableSchemaControl { get; set; }
+
+    /// <summary>
+    /// Whether the tree-administration group's mutating tree-lifecycle tools
+    /// (explicit tree creation, alias assignment, per-tree configuration update) are
+    /// advertised. Forwarded to <c>AddTreeAdminTools</c> and mapped onto
+    /// <see cref="LatticeApiMcpOptions.EnableTreeAdminLifecycleTools"/>. Defaults to
+    /// <see langword="false"/> (the read-only lifecycle tools only). Ignored when
+    /// <see cref="TreeAdmin"/> is unset.
+    /// </summary>
+    public bool EnableLifecycleControl { get; set; }
 }

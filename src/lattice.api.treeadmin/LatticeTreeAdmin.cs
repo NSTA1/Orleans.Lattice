@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using Orleans.Lattice;
 using Orleans.Lattice.Api.Schema;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.State;
 
 namespace Orleans.Lattice.Api.TreeAdmin;
 
@@ -83,10 +84,16 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             .IsTreeReadAuthorizedAsync(treeId, cancellationToken)
             .ConfigureAwait(false);
 
+        // The lifecycle administration capability is probed through the same
+        // fail-closed Admin gate the mutating lifecycle verbs use, with no side effects.
+        var canAdministerTree = await _authorizer
+            .IsTreeAdminAuthorizedAsync(treeId, cancellationToken)
+            .ConfigureAwait(false);
+
         return new LatticeTreeAdminCapabilities
         {
             TreeId = treeId,
-            CanAdministerTree = false,
+            CanAdministerTree = canAdministerTree,
             CanViewDiagnostics = canViewDiagnostics,
             Schema = schema,
         };
@@ -302,4 +309,243 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             Trees = trees.MoveToImmutable(),
         };
     }
+
+    /// <inheritdoc />
+    public async Task<TreeCreationResult> CreateTreeAsync(
+        string treeId,
+        int? shardCount = null,
+        int? maxLeafKeys = null,
+        int? maxInternalChildren = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ThrowIfReserved(treeId);
+        if (shardCount is { } sc)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(sc);
+        }
+        if (maxLeafKeys is { } mlk)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(mlk);
+        }
+        if (maxInternalChildren is { } mic)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(mic);
+        }
+        await _authorizer.AuthorizeTreeAdminAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        var registry = _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+
+        // Idempotent create: registering a tree that already exists is a registry
+        // no-op that preserves the existing configuration, so the caller-supplied
+        // sizing is honoured only on first registration. Probe existence first so the
+        // result can report whether a new tree was actually registered.
+        var existedBefore = await registry.ExistsAsync(treeId).ConfigureAwait(false);
+
+        var entry = (shardCount is null && maxLeafKeys is null && maxInternalChildren is null)
+            ? null
+            : new TreeRegistryEntry
+            {
+                ShardCount = shardCount,
+                MaxLeafKeys = maxLeafKeys,
+                MaxInternalChildren = maxInternalChildren,
+            };
+
+        await registry.RegisterAsync(treeId, entry).ConfigureAwait(false);
+
+        // Re-read for the effective (default-seeded) sizing values.
+        var effective = await registry.GetEntryAsync(treeId).ConfigureAwait(false);
+
+        return new TreeCreationResult
+        {
+            TreeId = treeId,
+            Created = !existedBefore,
+            ShardCount = effective?.ShardCount ?? LatticeConstants.DefaultShardCount,
+            MaxLeafKeys = effective?.MaxLeafKeys ?? LatticeConstants.DefaultMaxLeafKeys,
+            MaxInternalChildren = effective?.MaxInternalChildren ?? LatticeConstants.DefaultMaxInternalChildren,
+        };
+    }
+
+    /// <inheritdoc />
+    public async Task<TreeExistenceResult> CheckTreeExistsAsync(
+        string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        await _authorizer.AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        var exists = await _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId)
+            .ExistsAsync(treeId)
+            .ConfigureAwait(false);
+
+        return new TreeExistenceResult
+        {
+            TreeId = treeId,
+            Exists = exists,
+        };
+    }
+
+    /// <inheritdoc />
+    public async Task<TreeAliasResolution> SetTreeAliasAsync(
+        string treeId, string physicalTreeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentException.ThrowIfNullOrEmpty(physicalTreeId);
+        ThrowIfReserved(treeId);
+        if (string.Equals(treeId, physicalTreeId, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "The physical tree id must differ from the logical tree id.", nameof(physicalTreeId));
+        }
+        await _authorizer.AuthorizeTreeAdminAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        var registry = _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        await registry.SetAliasAsync(treeId, physicalTreeId).ConfigureAwait(false);
+
+        var resolved = await registry.ResolveAsync(treeId).ConfigureAwait(false);
+        return new TreeAliasResolution
+        {
+            TreeId = treeId,
+            PhysicalTreeId = resolved,
+            IsAliased = !string.Equals(treeId, resolved, StringComparison.Ordinal),
+        };
+    }
+
+    /// <inheritdoc />
+    public async Task<TreeAliasResolution> ResolveTreeAliasAsync(
+        string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        await _authorizer.AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        var resolved = await _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId)
+            .ResolveAsync(treeId)
+            .ConfigureAwait(false);
+
+        return new TreeAliasResolution
+        {
+            TreeId = treeId,
+            PhysicalTreeId = resolved,
+            IsAliased = !string.Equals(treeId, resolved, StringComparison.Ordinal),
+        };
+    }
+
+    /// <inheritdoc />
+    public async Task<TreeConfigurationReport> GetTreeConfigAsync(
+        string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        await _authorizer.AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        var entry = await _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId)
+            .GetEntryAsync(treeId)
+            .ConfigureAwait(false);
+
+        return ProjectConfig(treeId, entry);
+    }
+
+    /// <inheritdoc />
+    public async Task<TreeConfigurationReport> SetTreeConfigAsync(
+        string treeId, TreeConfigurationUpdate update, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentNullException.ThrowIfNull(update);
+        ThrowIfReserved(treeId);
+        if (update.ApplyHistoryRetention && update.HistoryRetentionWindowTicks is { } ticks)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ticks);
+        }
+        await _authorizer.AuthorizeTreeAdminAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        var registry = _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+
+        if (update.ApplyPublishEvents)
+        {
+            await registry.SetPublishEventsAsync(treeId, update.PublishEvents).ConfigureAwait(false);
+        }
+        if (update.ApplyMaintainProjectionDigest)
+        {
+            await registry.SetMaintainProjectionDigestAsync(treeId, update.MaintainProjectionDigest).ConfigureAwait(false);
+        }
+        if (update.ApplyHistoryRetention)
+        {
+            var window = update.HistoryRetentionWindowTicks is { } t ? TimeSpan.FromTicks(t) : (TimeSpan?)null;
+            await registry.SetHistoryRetentionAsync(treeId, update.HistoryRetentionMode, window).ConfigureAwait(false);
+        }
+
+        var entry = await registry.GetEntryAsync(treeId).ConfigureAwait(false);
+        return ProjectConfig(treeId, entry);
+    }
+
+    /// <inheritdoc />
+    public async Task<TreeShardMapView> GetShardMapAsync(
+        string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        await _authorizer.AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        var map = await _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId)
+            .GetShardMapAsync(treeId)
+            .ConfigureAwait(false);
+
+        if (map is null)
+        {
+            return new TreeShardMapView { TreeId = treeId, HasCustomMap = false };
+        }
+
+        var physical = map.GetPhysicalShardIndices();
+        var indices = ImmutableArray.CreateBuilder<int>(physical.Count);
+        // Indexed loop over IReadOnlyList<int> avoids boxing an interface enumerator.
+        for (var i = 0; i < physical.Count; i++)
+        {
+            indices.Add(physical[i]);
+        }
+        indices.Sort();
+
+        return new TreeShardMapView
+        {
+            TreeId = treeId,
+            HasCustomMap = true,
+            MapVersion = map.Version,
+            VirtualShardCount = map.VirtualShardCount,
+            PhysicalShardCount = physical.Count,
+            PhysicalShardIndices = indices.MoveToImmutable(),
+        };
+    }
+
+    /// <summary>
+    /// Rejects a reserved system tree id (the <see cref="LatticeConstants.SystemTreePrefix"/>
+    /// namespace) fail-closed at the facade boundary, so a reserved-id mutation is
+    /// refused before any grain is dialed. The registry enforces the same guard, but
+    /// asserting it here keeps the rejection unit-testable without a throwing registry.
+    /// </summary>
+    private static void ThrowIfReserved(string treeId)
+    {
+        if (treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"Tree id '{treeId}' is reserved: the '{LatticeConstants.SystemTreePrefix}' namespace is managed by the library.",
+                nameof(treeId));
+        }
+    }
+
+    /// <summary>
+    /// Projects a nullable <see cref="TreeRegistryEntry"/> into the transport-agnostic
+    /// <see cref="TreeConfigurationReport"/>. A <c>null</c> entry reports the tree as
+    /// not existing with every other field at its unset default.
+    /// </summary>
+    private static TreeConfigurationReport ProjectConfig(string treeId, TreeRegistryEntry? entry) =>
+        new()
+        {
+            TreeId = treeId,
+            Exists = entry is not null,
+            PhysicalTreeId = entry?.PhysicalTreeId,
+            ShardCount = entry?.ShardCount,
+            MaxLeafKeys = entry?.MaxLeafKeys,
+            MaxInternalChildren = entry?.MaxInternalChildren,
+            PublishEvents = entry?.PublishEvents,
+            MaintainProjectionDigest = entry?.MaintainProjectionDigest,
+            ProjectionDigestPermanentlyDisabled = entry?.ProjectionDigestPermanentlyDisabled ?? false,
+            HistoryRetentionMode = entry?.HistoryRetentionMode,
+            HistoryRetentionWindowTicks = entry?.HistoryRetentionWindowTicks,
+        };
 }

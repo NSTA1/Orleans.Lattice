@@ -50,6 +50,27 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
     /// <summary>Reads the cluster-wide storage accounting summary. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
     public abstract Task<ClusterStorageUsageSummary> GetStorageUsage(TreeAdminStorageUsageRequest request, ServerCallContext context);
 
+    /// <summary>Explicitly creates (registers) a tree. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
+    public abstract Task<TreeCreationResult> CreateTree(TreeAdminCreateRequest request, ServerCallContext context);
+
+    /// <summary>Reports whether a tree is registered. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
+    public abstract Task<TreeExistenceResult> CheckTreeExists(TreeAdminTreeRequest request, ServerCallContext context);
+
+    /// <summary>Points a logical tree at a physical tree. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
+    public abstract Task<TreeAliasResolution> SetTreeAlias(TreeAdminSetAliasRequest request, ServerCallContext context);
+
+    /// <summary>Resolves a logical tree's physical target. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
+    public abstract Task<TreeAliasResolution> ResolveTreeAlias(TreeAdminTreeRequest request, ServerCallContext context);
+
+    /// <summary>Reads a tree's registry-backed configuration. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
+    public abstract Task<TreeConfigurationReport> GetTreeConfig(TreeAdminTreeRequest request, ServerCallContext context);
+
+    /// <summary>Applies a partial per-tree configuration update. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
+    public abstract Task<TreeConfigurationReport> SetTreeConfig(TreeAdminSetConfigRequest request, ServerCallContext context);
+
+    /// <summary>Reads a tree's registry-persisted shard map. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
+    public abstract Task<TreeShardMapView> GetShardMap(TreeAdminTreeRequest request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at startup
     /// with <paramref name="serviceImpl"/> set to <see langword="null"/> to record
@@ -77,6 +98,13 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
             binder.AddMethod(methods.GetProjectionDigest, (UnaryServerMethod<TreeAdminShardRequest, ShardProjectionDigestReport>?)null);
             binder.AddMethod(methods.GetTreeStats, (UnaryServerMethod<TreeAdminTreeRequest, TreeStatsReport>?)null);
             binder.AddMethod(methods.GetStorageUsage, (UnaryServerMethod<TreeAdminStorageUsageRequest, ClusterStorageUsageSummary>?)null);
+            binder.AddMethod(methods.CreateTree, (UnaryServerMethod<TreeAdminCreateRequest, TreeCreationResult>?)null);
+            binder.AddMethod(methods.CheckTreeExists, (UnaryServerMethod<TreeAdminTreeRequest, TreeExistenceResult>?)null);
+            binder.AddMethod(methods.SetTreeAlias, (UnaryServerMethod<TreeAdminSetAliasRequest, TreeAliasResolution>?)null);
+            binder.AddMethod(methods.ResolveTreeAlias, (UnaryServerMethod<TreeAdminTreeRequest, TreeAliasResolution>?)null);
+            binder.AddMethod(methods.GetTreeConfig, (UnaryServerMethod<TreeAdminTreeRequest, TreeConfigurationReport>?)null);
+            binder.AddMethod(methods.SetTreeConfig, (UnaryServerMethod<TreeAdminSetConfigRequest, TreeConfigurationReport>?)null);
+            binder.AddMethod(methods.GetShardMap, (UnaryServerMethod<TreeAdminTreeRequest, TreeShardMapView>?)null);
             return;
         }
 
@@ -88,6 +116,13 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
         binder.AddMethod(methods.GetProjectionDigest, new UnaryServerMethod<TreeAdminShardRequest, ShardProjectionDigestReport>(serviceImpl.GetProjectionDigest));
         binder.AddMethod(methods.GetTreeStats, new UnaryServerMethod<TreeAdminTreeRequest, TreeStatsReport>(serviceImpl.GetTreeStats));
         binder.AddMethod(methods.GetStorageUsage, new UnaryServerMethod<TreeAdminStorageUsageRequest, ClusterStorageUsageSummary>(serviceImpl.GetStorageUsage));
+        binder.AddMethod(methods.CreateTree, new UnaryServerMethod<TreeAdminCreateRequest, TreeCreationResult>(serviceImpl.CreateTree));
+        binder.AddMethod(methods.CheckTreeExists, new UnaryServerMethod<TreeAdminTreeRequest, TreeExistenceResult>(serviceImpl.CheckTreeExists));
+        binder.AddMethod(methods.SetTreeAlias, new UnaryServerMethod<TreeAdminSetAliasRequest, TreeAliasResolution>(serviceImpl.SetTreeAlias));
+        binder.AddMethod(methods.ResolveTreeAlias, new UnaryServerMethod<TreeAdminTreeRequest, TreeAliasResolution>(serviceImpl.ResolveTreeAlias));
+        binder.AddMethod(methods.GetTreeConfig, new UnaryServerMethod<TreeAdminTreeRequest, TreeConfigurationReport>(serviceImpl.GetTreeConfig));
+        binder.AddMethod(methods.SetTreeConfig, new UnaryServerMethod<TreeAdminSetConfigRequest, TreeConfigurationReport>(serviceImpl.SetTreeConfig));
+        binder.AddMethod(methods.GetShardMap, new UnaryServerMethod<TreeAdminTreeRequest, TreeShardMapView>(serviceImpl.GetShardMap));
     }
 }
 
@@ -176,6 +211,34 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
     /// <inheritdoc />
     public override Task<ClusterStorageUsageSummary> GetStorageUsage(TreeAdminStorageUsageRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (control, req, ct) => control.GetStorageUsageAsync(req.Deep, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeCreationResult> CreateTree(TreeAdminCreateRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.CreateTreeAsync(req.TreeId, req.ShardCount, req.MaxLeafKeys, req.MaxInternalChildren, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeExistenceResult> CheckTreeExists(TreeAdminTreeRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.CheckTreeExistsAsync(req.TreeId, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeAliasResolution> SetTreeAlias(TreeAdminSetAliasRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.SetTreeAliasAsync(req.TreeId, req.PhysicalTreeId, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeAliasResolution> ResolveTreeAlias(TreeAdminTreeRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.ResolveTreeAliasAsync(req.TreeId, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeConfigurationReport> GetTreeConfig(TreeAdminTreeRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.GetTreeConfigAsync(req.TreeId, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeConfigurationReport> SetTreeConfig(TreeAdminSetConfigRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.SetTreeConfigAsync(req.TreeId, req.Update, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeShardMapView> GetShardMap(TreeAdminTreeRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.GetShardMapAsync(req.TreeId, ct));
 
     /// <inheritdoc />
     public override Task<AuthSchemeAdvertisement> GetAuthScheme(AuthSchemeAdvertisementRequest request, ServerCallContext context)

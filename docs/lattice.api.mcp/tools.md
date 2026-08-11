@@ -13,7 +13,7 @@ services.AddDataTools(enableWrites: true);
 services.AddBackupTools(enableControl: true);
 services.AddAuthTools(enableAdministration: true);
 services.AddReplicationTools(enableControl: true);
-services.AddTreeAdminTools(enableSchemaControl: true);
+services.AddTreeAdminTools(enableSchemaControl: true, enableLifecycle: true);
 ```
 
 Each module registration is idempotent, and within a module the destructive verbs stay hidden unless the host opts them in:
@@ -25,7 +25,7 @@ Each module registration is idempotent, and within a module the destructive verb
 | Backup | `AddBackupTools(enableControl)` | always | capture / restore / delete, gated by `enableControl` |
 | Auth | `AddAuthTools(enableAdministration)` | always | user / group / rule mutation, gated by `enableAdministration` |
 | Replication | `AddReplicationTools(enableControl)` | always | enable / disable replication, gated by `enableControl` |
-| TreeAdmin | `AddTreeAdminTools(enableSchemaControl)` | always | schema policy / version / remediation mutation, gated by `enableSchemaControl` |
+| TreeAdmin | `AddTreeAdminTools(enableSchemaControl, enableLifecycle)` | always | schema policy / version / remediation mutation, gated by `enableSchemaControl`; tree create / set-alias / set-config, gated by `enableLifecycle` |
 
 Read tools carry `readOnlyHint = true`; destructive tools carry `destructiveHint = true` and `readOnlyHint = false`, so a well-behaved MCP client can surface the distinction to the operator. Enabling a destructive verb only advertises it - it stays subject to the same fail-closed access gate the facade enforces (see [Security](security.md)).
 
@@ -208,6 +208,24 @@ Read-only administrative diagnostics and storage accounting over `ILatticeTreeAd
 Every tool carries `readOnlyHint = true` and `destructiveHint = false`. `lattice_treeadmin_shard_diagnostics` and `lattice_treeadmin_storage_usage` take an optional `deep` flag (default `false`, the cheap path); `lattice_treeadmin_projection_digest` takes a `treeId` and a non-negative `shardIndex`; the remaining per-tree tools take a `treeId`. `lattice_treeadmin_storage_usage` is cluster-wide and takes no tree id.
 
 This module is served under both topologies. In-silo it delegates to the co-hosted `ILatticeTreeAdmin` facade directly; over the remote (out-of-silo) topology the `AddLatticeMcpRemote` composition wires `GrpcLatticeTreeAdmin` - a tree-administration-API gRPC adapter - off the `RemoteOptions.TreeAdmin` endpoint. Caller credentials are forwarded on every gRPC call by the shared credential-forwarding interceptor, so the remote cluster re-runs the facade's own fail-closed access gate.
+
+## TreeAdmin lifecycle tools (`lattice_treeadmin_tree_*`)
+
+Explicit tree lifecycle and per-tree registry configuration over `ILatticeTreeAdmin`, surfaced under the tree-administration group. Registered by `AddTreeAdminTools(enableLifecycle: true)`. The read-only lifecycle tools are always exposed; the mutating lifecycle tools require `enableLifecycle: true`. Each tool wraps the existing internal tree registry (`ILatticeRegistry`) rather than re-implementing registration or per-tree config, and every tool remains subject to the facade's own fail-closed access gate: the read verbs authorize on whole-tree `LatticeOperation.Read` authority, and the mutating verbs authorize on whole-tree `LatticeOperation.Admin` authority. Registration is idempotent under matching parameters, and a reserved system tree id (the `_lattice_` namespace) is rejected for the mutating verbs. The group is discovered only by a caller granted `LatticeOperation.Admin`.
+
+| Tool | Kind | Purpose |
+|---|---|---|
+| `lattice_treeadmin_tree_exists` | read | Report whether a tree is registered. |
+| `lattice_treeadmin_tree_resolve_alias` | read | Resolve the physical tree a logical tree maps to. |
+| `lattice_treeadmin_tree_get_config` | read | Read a tree's registry-backed configuration (sizing, alias, per-tree overrides). |
+| `lattice_treeadmin_tree_get_shard_map` | read | Read a tree's registry-persisted shard map (custom-map flag, version, virtual/physical shard counts). |
+| `lattice_treeadmin_tree_create` | manage | Explicitly create (register) a tree with an optional initial sizing. Idempotent; reserved ids rejected. |
+| `lattice_treeadmin_tree_set_alias` | manage | Point a logical tree at a physical tree. Reserved ids rejected. |
+| `lattice_treeadmin_tree_set_config` | manage | Apply a partial per-tree configuration update (publish-events, projection-digest, history-retention), each override written only when its apply flag is set. Reserved ids rejected. |
+
+The read tools carry `readOnlyHint = true` and `destructiveHint = false`; the manage tools carry `destructiveHint = true` and `readOnlyHint = false`. `lattice_treeadmin_tree_create` takes a `treeId` and optional `shardCount` / `maxLeafKeys` / `maxInternalChildren` sizing (honoured only on first creation); `lattice_treeadmin_tree_set_alias` takes a `treeId` and `physicalTreeId`; `lattice_treeadmin_tree_set_config` exposes the update as flat `apply*` / value parameter pairs; the remaining tools take a `treeId`. The registry-persisted shard-map read is distinct from the diagnostics `lattice_treeadmin_shard_map_inspect` tool, which inspects live routing rather than the durable registry map. Shard-map mutation is out of scope here (it is driven by the reshard / resize operations); only the read is exposed.
+
+This module is served under both topologies. In-silo it delegates to the co-hosted `ILatticeTreeAdmin` facade directly; over the remote (out-of-silo) topology the `AddLatticeMcpRemote` composition wires `GrpcLatticeTreeAdmin` off the `RemoteOptions.TreeAdmin` endpoint, with the mutating lifecycle tools additionally requiring `RemoteOptions.EnableLifecycleControl = true` (which maps onto `enableLifecycle`). Caller credentials are forwarded on every gRPC call by the shared credential-forwarding interceptor, so the remote cluster re-runs the facade's own fail-closed access gate.
 
 ## Error handling
 

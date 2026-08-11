@@ -154,6 +154,21 @@ public sealed class LatticeApiMcpOptions
     public bool EnableTreeAdminSchemaControlTools { get; set; }
 
     /// <summary>
+    /// Whether the tree-administration tool module also contributes its
+    /// <b>mutating</b> tree-lifecycle tools (explicit tree creation, alias
+    /// assignment, per-tree configuration update) in addition to the read-only
+    /// lifecycle tools (existence, alias resolution, config read, shard-map read).
+    /// Defaults to <see langword="false"/> so a registered tree-administration module
+    /// is lifecycle-read-only until the host explicitly opts lifecycle control in -
+    /// either by setting this flag or by passing <c>enableLifecycle: true</c> to
+    /// <c>AddTreeAdminTools(...)</c>. Every mutating tool it then contributes is
+    /// annotated destructive and non-read-only, and remains subject to the same
+    /// fail-closed whole-tree <c>Admin</c> access gate the <c>ILatticeTreeAdmin</c>
+    /// facade enforces.
+    /// </summary>
+    public bool EnableTreeAdminLifecycleTools { get; set; }
+
+    /// <summary>
     /// Opt-in OAuth 2.0 Protected Resource Metadata (RFC 9728) for the MCP
     /// endpoint. Defaults to <see langword="null"/>, which serves no metadata
     /// document and leaves the <c>WWW-Authenticate</c> challenge untouched. When

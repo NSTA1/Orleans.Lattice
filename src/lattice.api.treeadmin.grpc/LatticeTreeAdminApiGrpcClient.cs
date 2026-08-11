@@ -203,6 +203,153 @@ public sealed class LatticeTreeAdminApiGrpcClient
             cancellationToken);
     }
 
+    /// <summary>
+    /// Explicitly creates (registers) <paramref name="treeId"/> with an optional
+    /// initial structural sizing. Idempotent: creating an existing tree preserves its
+    /// configuration and reports <see cref="TreeCreationResult.Created"/>
+    /// <see langword="false"/>. Requires whole-tree administration authority.
+    /// </summary>
+    /// <param name="treeId">The tree to create. Must not be <c>null</c> or empty.</param>
+    /// <param name="shardCount">The initial physical shard count, or <c>null</c> for the library default.</param>
+    /// <param name="maxLeafKeys">The initial maximum keys per leaf node, or <c>null</c> for the library default.</param>
+    /// <param name="maxInternalChildren">The initial maximum children per internal node, or <c>null</c> for the library default.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The creation result.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    public Task<TreeCreationResult> CreateTreeAsync(
+        string treeId,
+        int? shardCount = null,
+        int? maxLeafKeys = null,
+        int? maxInternalChildren = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return UnaryAsync(
+            _methods.CreateTree,
+            new TreeAdminCreateRequest
+            {
+                TreeId = treeId,
+                ShardCount = shardCount,
+                MaxLeafKeys = maxLeafKeys,
+                MaxInternalChildren = maxInternalChildren,
+            },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Reports whether <paramref name="treeId"/> is registered, with no side effects.
+    /// Requires whole-tree read authority.
+    /// </summary>
+    /// <param name="treeId">The tree to check. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The existence result.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    public Task<TreeExistenceResult> CheckTreeExistsAsync(
+        string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return UnaryAsync(
+            _methods.CheckTreeExists,
+            new TreeAdminTreeRequest { TreeId = treeId },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Points the logical <paramref name="treeId"/> at
+    /// <paramref name="physicalTreeId"/>. Requires whole-tree administration
+    /// authority.
+    /// </summary>
+    /// <param name="treeId">The logical tree to alias. Must not be <c>null</c> or empty.</param>
+    /// <param name="physicalTreeId">The physical tree to point at. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The resulting alias state.</returns>
+    /// <exception cref="ArgumentException">A tree id argument is <c>null</c> or empty.</exception>
+    public Task<TreeAliasResolution> SetTreeAliasAsync(
+        string treeId, string physicalTreeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentException.ThrowIfNullOrEmpty(physicalTreeId);
+        return UnaryAsync(
+            _methods.SetTreeAlias,
+            new TreeAdminSetAliasRequest { TreeId = treeId, PhysicalTreeId = physicalTreeId },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Resolves the physical tree id the logical <paramref name="treeId"/> maps to,
+    /// with no side effects. Requires whole-tree read authority.
+    /// </summary>
+    /// <param name="treeId">The logical tree to resolve. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The current alias state.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    public Task<TreeAliasResolution> ResolveTreeAliasAsync(
+        string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return UnaryAsync(
+            _methods.ResolveTreeAlias,
+            new TreeAdminTreeRequest { TreeId = treeId },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Reads the registry-backed configuration for <paramref name="treeId"/>, with no
+    /// side effects. Requires whole-tree read authority.
+    /// </summary>
+    /// <param name="treeId">The tree to read. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The configuration snapshot.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    public Task<TreeConfigurationReport> GetTreeConfigAsync(
+        string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return UnaryAsync(
+            _methods.GetTreeConfig,
+            new TreeAdminTreeRequest { TreeId = treeId },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Applies a partial <paramref name="update"/> to <paramref name="treeId"/>'s
+    /// per-tree configuration. Requires whole-tree administration authority.
+    /// </summary>
+    /// <param name="treeId">The tree to configure. Must not be <c>null</c> or empty.</param>
+    /// <param name="update">The partial configuration update. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The configuration snapshot after the update.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="update"/> is <c>null</c>.</exception>
+    public Task<TreeConfigurationReport> SetTreeConfigAsync(
+        string treeId, TreeConfigurationUpdate update, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentNullException.ThrowIfNull(update);
+        return UnaryAsync(
+            _methods.SetTreeConfig,
+            new TreeAdminSetConfigRequest { TreeId = treeId, Update = update },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Reads the registry-persisted shard map for <paramref name="treeId"/>, with no
+    /// side effects. Requires whole-tree read authority.
+    /// </summary>
+    /// <param name="treeId">The tree to read. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The persisted shard-map view.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    public Task<TreeShardMapView> GetShardMapAsync(
+        string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return UnaryAsync(
+            _methods.GetShardMap,
+            new TreeAdminTreeRequest { TreeId = treeId },
+            cancellationToken);
+    }
+
     private async Task<TResponse> UnaryAsync<TRequest, TResponse>(
         Method<TRequest, TResponse> method,
         TRequest request,

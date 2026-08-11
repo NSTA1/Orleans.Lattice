@@ -55,8 +55,9 @@ public sealed class LatticeTreeAdminGrpcClientE2ETests
             // Composed schema capabilities ride along, keyed to the same tree.
             Assert.That(capabilities.Schema, Is.Not.Null);
             Assert.That(capabilities.Schema.TreeId, Is.EqualTo(Tree));
-            // Scaffolding stage: no whole-tree admin gate exists yet.
-            Assert.That(capabilities.CanAdministerTree, Is.False);
+            // The test cluster registers no auth add-on, so the no-op gate allows the
+            // whole-tree admin probe.
+            Assert.That(capabilities.CanAdministerTree, Is.True);
         });
     }
 
@@ -143,5 +144,49 @@ public sealed class LatticeTreeAdminGrpcClientE2ETests
             Assert.That(summary.Deep, Is.False);
             Assert.That(summary.Trees, Is.Not.Null);
         });
+    }
+
+    [Test]
+    public async Task tree_lifecycle_round_trips_over_the_client()
+    {
+        const string lifecycleTree = "lifecycle-e2e";
+
+        var created = await _host.Client.CreateTreeAsync(lifecycleTree, shardCount: 4, maxLeafKeys: 32);
+        Assert.Multiple(() =>
+        {
+            Assert.That(created.TreeId, Is.EqualTo(lifecycleTree));
+            Assert.That(created.Created, Is.True);
+            Assert.That(created.ShardCount, Is.EqualTo(4));
+        });
+
+        // Idempotent re-create reports Created=false.
+        var recreated = await _host.Client.CreateTreeAsync(lifecycleTree);
+        Assert.That(recreated.Created, Is.False);
+
+        var exists = await _host.Client.CheckTreeExistsAsync(lifecycleTree);
+        Assert.That(exists.Exists, Is.True);
+
+        var config = await _host.Client.SetTreeConfigAsync(lifecycleTree, new TreeConfigurationUpdate
+        {
+            ApplyPublishEvents = true,
+            PublishEvents = false,
+        });
+        Assert.That(config.PublishEvents, Is.False);
+
+        var readBack = await _host.Client.GetTreeConfigAsync(lifecycleTree);
+        Assert.Multiple(() =>
+        {
+            Assert.That(readBack.Exists, Is.True);
+            Assert.That(readBack.PublishEvents, Is.False);
+        });
+
+        var alias = await _host.Client.SetTreeAliasAsync(lifecycleTree, "phys-" + lifecycleTree);
+        Assert.That(alias.IsAliased, Is.True);
+
+        var resolved = await _host.Client.ResolveTreeAliasAsync(lifecycleTree);
+        Assert.That(resolved.PhysicalTreeId, Is.EqualTo("phys-" + lifecycleTree));
+
+        var shardMap = await _host.Client.GetShardMapAsync(lifecycleTree);
+        Assert.That(shardMap.TreeId, Is.EqualTo(lifecycleTree));
     }
 }
