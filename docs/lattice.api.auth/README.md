@@ -56,6 +56,20 @@ It is the authorization sibling of the read-only [`Orleans.Lattice.Api.State`](.
 | Explain a verdict | `ExplainAsync` | Returns the gate's allow/deny verdict for a subject / operation / scope, plus the authored rules that apply (including cluster-wide `Tree:*` wildcard rules that govern the target tree) - for debugging policy. Pass `subjectKind: LatticeSubjectSelectorKind.Group` to explain the decision for a *group* (evaluated as a member of that group and its ancestors); the default is `User`. |
 | Resolve effective permissions | `EffectivePermissionsAsync` | Returns the rules currently in effect for a subject (matched directly or through a group) - for dashboards and UX. Pass `subjectKind: LatticeSubjectSelectorKind.Group` to resolve a group's own rules; the default is `User`. |
 
+### Access administration delegation
+
+By default the only subjects who can administer access (manage groups, membership, and policy rules) are the cluster's **bootstrap administrators** - the statically-configured `LatticeAuthOptions.BootstrapAdministrators` root of trust. "Access administration" is the `Admin` capability on the reserved policy tree `sys-auth-policy` (its id is the public constant `LatticeAuthReservedTrees.PolicyTreeId`); the enforcement gate requires whole-tree `Admin` on that tree to authorize every control-plane call.
+
+You can **delegate** access administration to another user or group by authoring one narrow rule: a whole-tree `Admin` `Allow` rule on the `sys-auth-policy` tree for that subject. This is off by default and must be enabled per deployment:
+
+- Set `AccessAdministrationDelegationEnabled = true` in the `AddLatticeAuth(options => ...)` configuration. Existing clusters are unchanged until they opt in.
+- With the flag on, an existing access administrator (a bootstrap administrator, or a subject who already holds the delegated grant) may author **exactly** the whole-tree `Admin` grant on `sys-auth-policy`. No other rule shape on the reserved `sys-auth-*` namespace becomes authorable: another reserved tree, a key/prefix scope, or any other operation set is still rejected fail-closed by the policy store. With the flag off, authoring any rule on the reserved namespace is rejected, exactly as before.
+- The subject then satisfies the same administrator check every facade call makes (`PutRuleAsync`, `ListRulesAsync`, membership CRUD, and the rest), because the gate honours the matched `Allow` on the reserved namespace. Bootstrap administrators remain the root of trust and are never affected by policy.
+
+From the Explorer Access tab, the rule form has an **Access administration (delegate)** option: pick the target user or group, tick the option, and save. The form supplies the reserved `sys-auth-policy` tree, whole-tree scope, and `Admin` operation automatically, so you never pick the reserved tree from the catalog. Delegated grants are labelled `access administration` in the ranked rule table so they are easy to tell apart from an ordinary whole-tree rule.
+
+**Security caveat.** A delegated access-administration grant confers full authority over membership and policy, including the ability to delegate further. Grant it sparingly. Turning `AccessAdministrationDelegationEnabled` back off stops **new** delegations from being authored but does **not** revoke a grant that already exists - remove that rule (via `RemoveRuleAsync`, or the Explorer rule list) to revoke the delegation.
+
 ## Wire model
 
 Every request / response record is Orleans-serialized with a stable, compact alias (the `oli.` prefix). Group records are the package's own serializable DTOs (`AuthGroup`); rules are surfaced as the durable `LatticeAuthorizationRule` policy model directly, so a binding sees the same rule shape the store persists. List endpoints page with an exclusive continuation-token cursor (`AuthPageRequest` / `Auth*Page`), mirroring the `Orleans.Lattice.Api.State` catalog paging convention.

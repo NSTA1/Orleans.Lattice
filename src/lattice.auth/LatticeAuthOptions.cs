@@ -40,6 +40,38 @@ public sealed class LatticeAuthOptions
     public bool UserRuleBeatsGroupRuleAtEqualScope { get; set; } = true;
 
     /// <summary>
+    /// Whether an access administrator may <b>delegate</b> access administration
+    /// to another subject by authoring a rule on the reserved policy tree.
+    /// Defaults to <c>false</c>, in which case the behaviour is byte-for-byte as
+    /// before: no rule may be scoped at the reserved <c>sys-auth-*</c> namespace,
+    /// so the only access administrators are the
+    /// <see cref="BootstrapAdministrators"/>.
+    /// <para>
+    /// When set to <c>true</c>, a caller who is already an access administrator (a
+    /// bootstrap administrator, or a subject who already holds the delegated grant)
+    /// may author <b>exactly one</b> narrow rule shape on the reserved policy tree
+    /// (<c>LatticeAuthReservedTrees.PolicyTreeId</c>, <c>"sys-auth-policy"</c>): a
+    /// <b>whole-tree</b> rule whose operation set is exactly
+    /// <see cref="LatticeOperation.Admin"/>. Such a rule delegates access
+    /// administration to its subject (a chosen user or group), because the
+    /// enforcement gate honours a matched allow on the reserved namespace and the
+    /// admin facade authorizes callers by requiring whole-tree
+    /// <see cref="LatticeOperation.Admin"/> on that same policy tree. No other rule
+    /// shape on the reserved namespace becomes authorable: any other
+    /// <c>sys-auth-*</c> tree, a key/prefix scope, or any other operation set is
+    /// still rejected fail-closed by the policy store.
+    /// </para>
+    /// <para>
+    /// This is an opt-in delegation switch, not an enforcement relaxation: turning
+    /// it on only makes the delegation rule <i>authorable</i>; the gate still
+    /// authorizes every real operation. Turning it back off stops <b>new</b>
+    /// delegations from being authored but does not revoke a delegation grant that
+    /// already exists - remove that rule to revoke it.
+    /// </para>
+    /// </summary>
+    public bool AccessAdministrationDelegationEnabled { get; set; }
+
+    /// <summary>
     /// The retention mode for the durable per-key history captured on the
     /// <c>sys-auth-policy</c> tree. Defaults to
     /// <see cref="HistoryRetentionMode.MetadataOnly"/>; history is never disabled

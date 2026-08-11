@@ -113,4 +113,25 @@ public sealed class AuthAdminControlPlaneIsolationTests
             Assert.That(value, Is.EqualTo(new byte[] { 7 }));
         }
     }
+
+    [Test]
+    public void Authoring_an_access_administration_delegation_rule_fails_closed_when_delegation_is_disabled()
+    {
+        // Delegation is off on this fixture. Even the bootstrap administrator (who
+        // passes admin authorization) cannot author the delegation grant on the
+        // reserved policy tree: the store rejects the reserved-namespace write
+        // fail-closed.
+        using (AuthAdminControlPlaneClusterFixture.AsSubject(AuthAdminControlPlaneClusterFixture.BootstrapAdmin))
+        {
+            Assert.That(
+                async () => await _fixture.Admin.PutRuleAsync(new LatticeAuthorizationRule(
+                    "delegate-off",
+                    LatticeSubjectSelector.User("would-be-admin"),
+                    LatticeScope.Tree("sys-auth-policy"),
+                    LatticeOperation.Admin,
+                    LatticeEffect.Allow)),
+                Throws.ArgumentException,
+                "no delegation rule may be authored on the reserved namespace while delegation is off");
+        }
+    }
 }
