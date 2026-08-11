@@ -10,6 +10,10 @@ This changelog covers the whole **package family** - every published `Orleans.La
 
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), labelled `lattice` or `lattice.replication`. See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
 
+### Changed
+
+- **Orleans.Lattice: the `OrSet` liveness and read paths no longer probe the tombstone map per element on an append-only set (`Orleans.Lattice` 8.0.8).** `OrSet.Count`, `IsEmpty`, `Elements()`, and `Contains` walked their elements calling `Tombstones.TryGetValue` (or the span-keyed alternate lookup) once per element to subtract observed-removed dots, even when the set has never had a remove and `Tombstones` is therefore globally empty - the whole-life state of an append-only membership set or secondary index. All four now take a single `Tombstones.Count == 0` fast path that skips the per-element probe entirely and reads each key's dot-list length directly; the `LiveDotCount` tombstone-subtraction walk is entered only once a remove has actually tombstoned a dot. The convergence and enumeration semantics (live-element identity, deterministic ordinal `Elements()` order, commutative / associative / idempotent membership) are byte-identical; only the redundant lookups are removed. Measured on the new `OrSet count (append-only)` microbenchmark (1024-element append-only set, BenchmarkDotNet ShortRun, in-process), the liveness scan drops from **2.888 us to 809 ns** (about a 3.6x speed-up) with allocation unchanged at 0 B. ([#1406](https://github.com/NSTA1/Orleans.Lattice/pull/1406))
+
 ## Released
 
 Published releases, newest first. Each section is keyed by its publish date; within a date, packages advance on their own patch digits per [`docs/RELEASING.md`](docs/RELEASING.md).

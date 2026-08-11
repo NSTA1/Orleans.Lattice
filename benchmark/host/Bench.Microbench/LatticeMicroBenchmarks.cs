@@ -3228,6 +3228,13 @@ public class LatticeMicroBenchmarks
     private byte[][] _orSetProbeElements = null!;
     private int _orSetProbeCursor;
 
+    // A large append-only OR-set (no tombstones) for the OrSet_Count liveness
+    // scan. Sized by BENCH_MICROBENCH_ORSET_COUNT_KEYS (default 1024) so the
+    // per-element cost of the liveness walk dominates the measurement, making
+    // the removed per-element tombstone probe visible above the ShortRun noise
+    // floor that a single-op read (OrSet_Contains) sits inside.
+    private OrSet _orSetCountTarget = null!;
+
     // ===== OrMap bulk-load micro-suite operands =====
     // Pre-built key strings and a shared alloc-free value so OrMap_BulkSet
     // isolates the per-Set NextCounter cost (O(1) counter cache) from key
@@ -3728,6 +3735,21 @@ public class LatticeMicroBenchmarks
             _orSetProbeElements[i] = element;
             _orSetContainsTarget.Add(element, "replica", i + 1);
         }
+
+        // A large append-only set (no removes, so Tombstones stays empty) for
+        // the OrSet_Count liveness scan.
+        var countKeys = ReadIntEnv("BENCH_MICROBENCH_ORSET_COUNT_KEYS", 1024);
+        if (countKeys < 1) countKeys = 1;
+        _orSetCountTarget = new OrSet();
+        for (var i = 0; i < countKeys; i++)
+        {
+            var element = new byte[24];
+            element[0] = (byte)i;
+            element[1] = (byte)(i >> 8);
+            element[2] = (byte)(i >> 16);
+            element[3] = (byte)(i >> 24);
+            _orSetCountTarget.Add(element, "replica", i + 1);
+        }
     }
 
     /// <summary>
@@ -3819,6 +3841,19 @@ public class LatticeMicroBenchmarks
         var i = unchecked(_orSetProbeCursor++) & int.MaxValue;
         return _orSetContainsTarget.Contains(elements[i % elements.Length]);
     }
+
+    /// <summary>
+    /// Liveness-scan instrument: <see cref="OrSet.Count"/> over a large
+    /// append-only set (no removes, so <c>Tombstones</c> is empty). The count
+    /// walks every element; with an empty tombstone map the walk now skips the
+    /// per-element tombstone dictionary probe entirely and reads each key's dot
+    /// list length directly, so the per-element cost drops across the whole
+    /// scan. The same empty-tombstone fast path serves <c>IsEmpty</c>,
+    /// <c>Contains</c>, and <c>Elements</c> - the read surface an append-only
+    /// membership set or secondary index exercises on every enumeration.
+    /// </summary>
+    [Benchmark(Description = "OrSet count (append-only)")]
+    public int OrSet_Count() => _orSetCountTarget.Count;
 
     /// <summary>
     /// Write-path instrument: bulk <see cref="OrSet.Add(byte[], string, long)"/>
