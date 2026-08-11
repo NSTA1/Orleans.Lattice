@@ -40,7 +40,9 @@ internal sealed class LatticeAuthorizationPolicyStore(
         // sys-auth-* namespace is rejected fail-closed except for the whole-tree Admin
         // delegation grant on the policy tree, and only when the operator has opted in.
         AuthConstants.EnsureAuthorableRuleScope(
-            rule, options.CurrentValue.AccessAdministrationDelegationEnabled);
+            rule,
+            options.CurrentValue.AccessAdministrationDelegationEnabled,
+            options.CurrentValue.AllTreesGrantsEnabled);
 
         await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
         using (LatticeAccessGateContext.EnterSystemOrigin())

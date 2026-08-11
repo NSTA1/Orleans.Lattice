@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Orleans.Hosting;
 using Orleans.Lattice.Membership;
@@ -169,6 +170,14 @@ public static class LatticeAuthServiceCollectionExtensions
         // access gate, so a cluster with a custom gate but no filter is never
         // rejected on its own legitimate facade-to-shard hops.
         builder.Services.TryAddSingleton<LatticeInternalOriginEnforcementMarker>();
+
+        // Discoverability (issue #1349 / #1342 follow-on): log the authorization
+        // posture - default effect and the two opt-in tier flags - once at
+        // start-up so a disabled-by-default tier is visible in the silo log rather
+        // than only inferrable from a silently inert rule. Registered enumerable so
+        // it never displaces a host-supplied hosted service.
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, AuthPostureLogger>());
 
         return builder;
     }

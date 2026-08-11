@@ -144,6 +144,19 @@
         <p class="explorer-access-authmode" role="status">
             Authentication mode: <strong>@_accessModel.AuthenticationModeLabel</strong>
         </p>
+        @if (_accessModel.ShowPosture)
+        {
+            <p class="explorer-access-posture" role="status">
+                <span class="explorer-badge @(_accessModel.AllTreesGrantsEnabled ? "is-on" : "is-off")"
+                      title="When off, an all-trees ('*') data grant is recorded but inert - the decision engine never consults it for an ordinary tree. Enable LatticeAuthOptions.AllTreesGrantsEnabled on the silo.">
+                    @_accessModel.AllTreesGrantsLabel
+                </span>
+                <span class="explorer-badge @(_accessModel.AccessAdministrationDelegationEnabled ? "is-on" : "is-off")"
+                      title="When off, a whole-tree Admin delegation rule on the policy tree is unauthorable - the server rejects it. Enable LatticeAuthOptions.AccessAdministrationDelegationEnabled on the silo.">
+                    @_accessModel.AccessAdministrationDelegationLabel
+                </span>
+            </p>
+        }
         @if (_accessModel.ShowEnforcementNotice)
         {
             <p class="explorer-access-enforcement is-warning" role="status">

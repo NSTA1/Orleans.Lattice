@@ -89,6 +89,33 @@ public sealed class AuthAdminDelegationTests
     }
 
     [Test]
+    public async Task Explain_surfaces_the_enabled_delegation_posture()
+    {
+        using (AuthAdminDelegationClusterFixture.AsSubject(AuthAdminDelegationClusterFixture.BootstrapAdmin))
+        {
+            var explanation = await _fixture.Admin.ExplainAsync(
+                DelegatedAdmin,
+                LatticeOperation.Admin,
+                LatticeScope.Tree(PolicyTree));
+
+            Assert.That(explanation.Posture.AccessAdministrationDelegationEnabled, Is.True,
+                "explain must report delegation as enabled on a cluster where the flag is set");
+        }
+    }
+
+    [Test]
+    public async Task Access_model_surfaces_the_enabled_delegation_posture()
+    {
+        using (AuthAdminDelegationClusterFixture.AsSubject(AuthAdminDelegationClusterFixture.BootstrapAdmin))
+        {
+            var model = await _fixture.Admin.GetAccessModelAsync();
+
+            Assert.That(model.AccessAdministrationDelegationEnabled, Is.True,
+                "the access model must report delegation as enabled so the Explorer can badge it");
+        }
+    }
+
+    [Test]
     public void A_non_delegated_subject_is_denied_admin_through_the_facade()
     {
         using (AuthAdminDelegationClusterFixture.AsSubject("outsider"))

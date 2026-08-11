@@ -23,7 +23,9 @@ public sealed class AccessCreateModelTests
         bool rulesEnforced = true,
         bool directoryAvailable = true,
         string explanation = "",
-        bool localMembershipEffective = true) =>
+        bool localMembershipEffective = true,
+        bool allTreesGrantsEnabled = false,
+        bool accessAdministrationDelegationEnabled = false) =>
         AccessModelView.FromDescriptor(new AccessModelDescriptor
         {
             AuthenticationMode = mode,
@@ -32,6 +34,8 @@ public sealed class AccessCreateModelTests
             DirectoryProviderId = "provider",
             DirectoryExplanation = explanation,
             LocalMembershipEffective = localMembershipEffective,
+            AllTreesGrantsEnabled = allTreesGrantsEnabled,
+            AccessAdministrationDelegationEnabled = accessAdministrationDelegationEnabled,
         });
 
     private static DirectoryPrincipalDescriptor Principal(string id, DirectoryPrincipalKind kind) =>
@@ -175,6 +179,70 @@ public sealed class AccessCreateModelTests
     public void DescribeAuthenticationMode_maps_each_mode(AccessAuthenticationMode mode, string expected)
     {
         Assert.That(AccessCreateModel.DescribeAuthenticationMode(mode), Is.EqualTo(expected));
+    }
+
+    // ----- Posture badges (all-trees grants + access-admin delegation) -----
+
+    [Test]
+    public void Posture_is_hidden_before_a_model_is_read()
+    {
+        var model = Create(new FakeDirectory());
+
+        Assert.That(model.ShowPosture, Is.False, "an unread model has an unknown posture and must not badge it");
+    }
+
+    [Test]
+    public void Posture_is_hidden_when_the_read_failed()
+    {
+        var model = Create(new FakeDirectory());
+        model.Apply(AccessModelView.Unavailable);
+
+        Assert.That(model.ShowPosture, Is.False);
+    }
+
+    [Test]
+    public void Posture_badges_reflect_both_tiers_enabled()
+    {
+        var model = Create(new FakeDirectory());
+        model.Apply(Model(allTreesGrantsEnabled: true, accessAdministrationDelegationEnabled: true));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(model.ShowPosture, Is.True);
+            Assert.That(model.AllTreesGrantsEnabled, Is.True);
+            Assert.That(model.AccessAdministrationDelegationEnabled, Is.True);
+            Assert.That(model.AllTreesGrantsLabel, Is.EqualTo("All-trees grants: on"));
+            Assert.That(model.AccessAdministrationDelegationLabel, Is.EqualTo("Access-admin delegation: on"));
+        });
+    }
+
+    [Test]
+    public void Posture_badges_reflect_both_tiers_disabled()
+    {
+        var model = Create(new FakeDirectory());
+        model.Apply(Model(allTreesGrantsEnabled: false, accessAdministrationDelegationEnabled: false));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(model.ShowPosture, Is.True);
+            Assert.That(model.AllTreesGrantsEnabled, Is.False);
+            Assert.That(model.AccessAdministrationDelegationEnabled, Is.False);
+            Assert.That(model.AllTreesGrantsLabel, Is.EqualTo("All-trees grants: off"));
+            Assert.That(model.AccessAdministrationDelegationLabel, Is.EqualTo("Access-admin delegation: off"));
+        });
+    }
+
+    [Test]
+    public void Posture_flags_are_false_when_the_read_failed_even_though_the_descriptor_defaults_off()
+    {
+        var model = Create(new FakeDirectory());
+        model.Apply(AccessModelView.Unavailable);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(model.AllTreesGrantsEnabled, Is.False);
+            Assert.That(model.AccessAdministrationDelegationEnabled, Is.False);
+        });
     }
 
     // ----- Fail-closed create validation -----

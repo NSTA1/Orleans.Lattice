@@ -43,6 +43,23 @@ public sealed record AccessModelView
     /// </summary>
     public bool LocalMembershipEffective { get; init; }
 
+    /// <summary>
+    /// <see langword="true"/> when the cluster-wide all-trees grant tier is
+    /// enabled, so a <c>Tree:*</c> data-plane rule is enforced across every
+    /// non-system tree; <see langword="false"/> when such a rule is
+    /// authored-but-inert. Surfaced so the Access area can badge the live tier
+    /// state rather than only warning it "might" be off.
+    /// </summary>
+    public bool AllTreesGrantsEnabled { get; init; }
+
+    /// <summary>
+    /// <see langword="true"/> when access-administration delegation is enabled, so
+    /// a whole-tree <c>Admin</c> rule on the policy tree may be authored to delegate
+    /// access administration; <see langword="false"/> when such a rule is
+    /// unauthorable and the server rejects it.
+    /// </summary>
+    public bool AccessAdministrationDelegationEnabled { get; init; }
+
     /// <summary><see langword="true"/> when the read succeeded.</summary>
     public bool IsSuccess => Status == AccessOperationStatus.Succeeded;
 
@@ -60,6 +77,8 @@ public sealed record AccessModelView
             DirectoryProviderId = descriptor.DirectoryProviderId,
             DirectoryExplanation = descriptor.DirectoryExplanation,
             LocalMembershipEffective = descriptor.LocalMembershipEffective,
+            AllTreesGrantsEnabled = descriptor.AllTreesGrantsEnabled,
+            AccessAdministrationDelegationEnabled = descriptor.AccessAdministrationDelegationEnabled,
         };
     }
 

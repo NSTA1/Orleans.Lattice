@@ -64,4 +64,12 @@ public sealed record AuthExplanation
     /// <see cref="DefaultEffect"/> or a bootstrap-administrator bypass.
     /// </summary>
     [Id(8)] public IReadOnlyList<LatticeAuthorizationRule> MatchedRules { get; init; } = Array.Empty<LatticeAuthorizationRule>();
+
+    /// <summary>
+    /// The cluster's opt-in authorization posture (the two tier flags). Lets a
+    /// caller tell whether a matched all-trees rule is actually in force or
+    /// authored-but-inert, and whether delegation is enabled - the disabled-tier
+    /// state that is otherwise invisible. Defaults to both-off.
+    /// </summary>
+    [Id(9)] public AuthPolicyPosture Posture { get; init; } = new();
 }

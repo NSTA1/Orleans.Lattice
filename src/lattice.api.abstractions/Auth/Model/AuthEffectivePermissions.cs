@@ -37,4 +37,13 @@ public sealed record AuthEffectivePermissions
     /// ordered by <c>(governed tree id, rule id)</c>.
     /// </summary>
     [Id(2)] public IReadOnlyList<LatticeAuthorizationRule> Rules { get; init; } = Array.Empty<LatticeAuthorizationRule>();
+
+    /// <summary>
+    /// The cluster's opt-in authorization posture (the two tier flags). Lets a
+    /// caller tell whether a listed all-trees (<c>Tree:*</c>) rule is actually in
+    /// force or authored-but-inert (when
+    /// <see cref="AuthPolicyPosture.AllTreesGrantsEnabled"/> is <c>false</c>), so
+    /// the rule list does not mislead by omission. Defaults to both-off.
+    /// </summary>
+    [Id(3)] public AuthPolicyPosture Posture { get; init; } = new();
 }

@@ -367,6 +367,7 @@ internal sealed class LatticeAuthAdmin(
             Reason = decision.Reason,
             DefaultEffect = _authOptions.CurrentValue.DefaultEffect,
             MatchedRules = matched,
+            Posture = CurrentPosture(),
         };
     }
 
@@ -406,6 +407,7 @@ internal sealed class LatticeAuthAdmin(
             SubjectId = subjectId,
             GroupIds = Sorted(subject.GroupIds),
             Rules = rules,
+            Posture = CurrentPosture(),
         };
     }
 
@@ -486,6 +488,9 @@ internal sealed class LatticeAuthAdmin(
             // solely from the identity-provider token (TokenOnly merge mode).
             LocalMembershipEffective =
                 _membershipOptions.CurrentValue.GroupMergeMode != SubjectGroupMergeMode.TokenOnly,
+            AllTreesGrantsEnabled = _authOptions.CurrentValue.AllTreesGrantsEnabled,
+            AccessAdministrationDelegationEnabled =
+                _authOptions.CurrentValue.AccessAdministrationDelegationEnabled,
         };
     }
 
@@ -501,6 +506,21 @@ internal sealed class LatticeAuthAdmin(
     private ValueTask AuthorizeAdminAsync(CancellationToken cancellationToken) =>
         LatticeAccessGateEnforcement.EnforceWholeTreeAsync(
             _gate, _membership, AdminScopeTreeId, LatticeOperation.Admin, cancellationToken);
+
+    /// <summary>
+    /// Snapshots the cluster's opt-in authorization posture (the two tier flags)
+    /// from the live options, for surfacing on the policy-introspection results so
+    /// a caller can tell an in-force rule from an authored-but-inert one.
+    /// </summary>
+    private AuthPolicyPosture CurrentPosture()
+    {
+        var o = _authOptions.CurrentValue;
+        return new AuthPolicyPosture
+        {
+            AllTreesGrantsEnabled = o.AllTreesGrantsEnabled,
+            AccessAdministrationDelegationEnabled = o.AccessAdministrationDelegationEnabled,
+        };
+    }
 
     /// <summary>
     /// Resolves a named subject id into a <see cref="LatticeSubject"/> carrying
