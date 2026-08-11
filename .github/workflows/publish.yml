@@ -32,6 +32,8 @@ on:
       #   lattice.api.mcp.telemetry.azure-v8.0.0
       #   lattice.api.schema-v7.9.1
       #   lattice.api.schema.grpc-v7.9.1
+      #   lattice.api.treeadmin-v8.0.0
+      #   lattice.api.treeadmin.grpc-v8.0.0
       #   lattice.schema-v7.9.0
       #   lattice.scaling-v7.9.0
       #   lattice.explorer.core-v7.9.1
@@ -75,6 +77,8 @@ on:
       - 'lattice.api.mcp.telemetry.azure-v*'
       - 'lattice.api.schema-v*'
       - 'lattice.api.schema.grpc-v*'
+      - 'lattice.api.treeadmin-v*'
+      - 'lattice.api.treeadmin.grpc-v*'
       - 'lattice.schema-v*'
       - 'lattice.scaling-v*'
       - 'lattice.explorer.core-v*'
