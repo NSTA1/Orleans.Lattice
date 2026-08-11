@@ -3242,6 +3242,12 @@ public class LatticeMicroBenchmarks
     private string[] _orMapBulkSetKeys = null!;
     private readonly PnCounter _orMapBulkSetValue = new();
 
+    // A large append-only OR-map (no tombstones) for the OrMap_Count liveness
+    // scan. Sized by BENCH_MICROBENCH_ORMAP_COUNT_KEYS (default 1024) so the
+    // per-key cost of the liveness walk dominates the measurement, making the
+    // removed per-key tombstone probe visible above the ShortRun noise floor.
+    private OrMap<string, PnCounter> _orMapCountTarget = null!;
+
     // ===== Rga micro-suite operands =====
     // Pre-built value bytes and a pre-materialised sequence so the two Rga
     // benchmarks isolate, respectively, the O(1)-per-insert counter cache
@@ -3259,6 +3265,12 @@ public class LatticeMicroBenchmarks
     // BENCH_MICROBENCH_RGA_KEYS.
     private Rga _rgaMergeDeltaFixture = null!;
     private RgaDelta _rgaMergeDelta;
+
+    // A large append-only sequence (no removes) for the Rga_Count liveness
+    // query. Sized by BENCH_MICROBENCH_RGA_COUNT_KEYS (default 1024). The
+    // maintained live-node counter serves Count/IsEmpty in O(1); before it,
+    // every query rescanned all N nodes testing IsTombstone.
+    private Rga _rgaCountTarget = null!;
 
     // ===== OrFlag / RwFlag membership micro-suite operands =====
     // The two flag CRDTs are the tag-index membership primitives (one flag
@@ -3769,6 +3781,16 @@ public class LatticeMicroBenchmarks
         {
             _orMapBulkSetKeys[i] = $"key-{i:D6}";
         }
+
+        // A large append-only map (no removes, so Tombstones stays empty) for
+        // the OrMap_Count liveness scan.
+        var countKeys = ReadIntEnv("BENCH_MICROBENCH_ORMAP_COUNT_KEYS", 1024);
+        if (countKeys < 1) countKeys = 1;
+        _orMapCountTarget = new OrMap<string, PnCounter>();
+        for (var i = 0; i < countKeys; i++)
+        {
+            _orMapCountTarget.Set($"key-{i:D6}", "replica", _orMapBulkSetValue);
+        }
     }
 
     /// <summary>
@@ -3825,6 +3847,18 @@ public class LatticeMicroBenchmarks
             },
             Tombstones = Array.Empty<OrSetDot>(),
         };
+
+        // A large append-only sequence (no removes) for the Rga_Count liveness
+        // query. Chained so every node is live; the maintained counter serves
+        // Count/IsEmpty in O(1) after the first read.
+        var countKeys = ReadIntEnv("BENCH_MICROBENCH_RGA_COUNT_KEYS", 1024);
+        if (countKeys < 1) countKeys = 1;
+        _rgaCountTarget = new Rga();
+        var countParent = Rga.Root;
+        for (var i = 0; i < countKeys; i++)
+        {
+            countParent = _rgaCountTarget.InsertAfter(countParent, "replica", _rgaValue);
+        }
     }
 
     /// <summary>
@@ -3896,8 +3930,16 @@ public class LatticeMicroBenchmarks
     }
 
     /// <summary>
-    /// Bulk-build instrument: <c>N</c> sequential
-    /// <see cref="Rga.InsertAfter(OrSetDot, string, byte[])"/> calls chaining
+    /// Liveness-scan instrument: <see cref="OrMap{TKey, TValue}.Count"/> over a
+    /// large append-only map (no removes, so <c>Tombstones</c> is empty). The
+    /// count walks every key; with an empty tombstone map the walk now skips
+    /// the per-key tombstone dictionary probe entirely and reads each key's
+    /// entry-list length directly. The same empty-tombstone fast path serves
+    /// <c>IsEmpty</c>, <c>ContainsKey</c>, and <c>Keys</c> - the read surface an
+    /// append-only map exercises on every enumeration.
+    /// </summary>
+    [Benchmark(Description = "OrMap count (append-only)")]
+    public int OrMap_Count() => _orMapCountTarget.Count;
     /// each new node under the previous one, into a fresh sequence. With the
     /// per-replica dot-context cache each insert mints its counter in O(1), so
     /// the whole build is O(N); before the cache every insert rescanned every
@@ -3949,6 +3991,18 @@ public class LatticeMicroBenchmarks
         _rgaMergeDeltaFixture.MergeDelta(_rgaMergeDelta);
         return _rgaMergeDeltaFixture;
     }
+
+    /// <summary>
+    /// Liveness-query instrument: repeated <see cref="Rga.Count"/> over a large,
+    /// unmutated append-only sequence. The maintained live-node counter returns
+    /// in O(1) after the first read rebuilds it; before the counter every call
+    /// rescanned all N nodes testing <see cref="RgaNode.IsTombstone"/>, an O(N)
+    /// cost paid on every <c>Count</c> / <c>IsEmpty</c> / <c>IsBottom</c> query
+    /// (including the <c>IsBottom</c> check a containing <see cref="OrMap{TKey,
+    /// TValue}"/> composite makes when it materialises a slot's merged value).
+    /// </summary>
+    [Benchmark(Description = "Rga count (append-only)")]
+    public int Rga_Count() => _rgaCountTarget.Count;
 
     /// <summary>
     /// Builds the operands for the four flag-CRDT benchmarks. The read

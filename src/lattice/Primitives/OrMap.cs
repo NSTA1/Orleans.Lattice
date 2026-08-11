@@ -85,6 +85,18 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
     {
         get
         {
+            // No key has ever been removed: every stored entry is live, so the
+            // emptiness check reduces to "does any key hold an entry" without a
+            // per-key tombstone probe. Append-only maps stay in this branch for
+            // their whole lifetime.
+            if (Tombstones.Count == 0)
+            {
+                foreach (var entries in Adds.Values)
+                {
+                    if (entries.Count > 0) return false;
+                }
+                return true;
+            }
             foreach (var (key, entries) in Adds)
             {
                 if (LiveEntryCount(key, entries) > 0) return false;
@@ -107,6 +119,16 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
         get
         {
             var n = 0;
+            // No key has ever been removed: every non-empty key is live, so
+            // count them without a per-key tombstone probe.
+            if (Tombstones.Count == 0)
+            {
+                foreach (var entries in Adds.Values)
+                {
+                    if (entries.Count > 0) n++;
+                }
+                return n;
+            }
             foreach (var (key, entries) in Adds)
             {
                 if (LiveEntryCount(key, entries) > 0) n++;
@@ -230,7 +252,11 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
     public bool ContainsKey(TKey key)
     {
         ArgumentNullException.ThrowIfNull(key);
-        return Adds.TryGetValue(key, out var entries) && LiveEntryCount(key, entries) > 0;
+        if (!Adds.TryGetValue(key, out var entries)) return false;
+        // No key has ever been removed: the stored entries are all live, so
+        // skip the per-key tombstone probe entirely.
+        if (Tombstones.Count == 0) return entries.Count > 0;
+        return LiveEntryCount(key, entries) > 0;
     }
 
     /// <summary>
@@ -304,9 +330,17 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
     {
         if (Adds.Count == 0) return Array.Empty<TKey>();
 
+        var noTombstones = Tombstones.Count == 0;
         var live = new List<TKey>(Adds.Count);
         foreach (var (key, entries) in Adds)
         {
+            // No removes anywhere: every non-empty key is live, so skip the
+            // per-key tombstone probe.
+            if (noTombstones)
+            {
+                if (entries.Count > 0) live.Add(key);
+                continue;
+            }
             if (LiveEntryCount(key, entries) > 0) live.Add(key);
         }
         if (live.Count == 0) return Array.Empty<TKey>();
