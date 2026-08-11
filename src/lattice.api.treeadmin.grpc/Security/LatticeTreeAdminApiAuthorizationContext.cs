@@ -32,6 +32,27 @@ public enum LatticeTreeAdminApiOperation
     /// <summary>The read-only <c>GetStorageUsage</c> cluster-storage RPC.</summary>
     GetStorageUsage,
 
+    /// <summary>The mutating <c>CreateTree</c> explicit-creation lifecycle RPC.</summary>
+    CreateTree,
+
+    /// <summary>The read-only <c>CheckTreeExists</c> existence RPC.</summary>
+    CheckTreeExists,
+
+    /// <summary>The mutating <c>SetTreeAlias</c> alias-assignment lifecycle RPC.</summary>
+    SetTreeAlias,
+
+    /// <summary>The read-only <c>ResolveTreeAlias</c> alias-resolution RPC.</summary>
+    ResolveTreeAlias,
+
+    /// <summary>The read-only <c>GetTreeConfig</c> configuration RPC.</summary>
+    GetTreeConfig,
+
+    /// <summary>The mutating <c>SetTreeConfig</c> configuration-update lifecycle RPC.</summary>
+    SetTreeConfig,
+
+    /// <summary>The read-only <c>GetShardMap</c> registry-persisted shard-map RPC.</summary>
+    GetShardMap,
+
     /// <summary>
     /// A tree-administration control-API method the interceptor does not recognise
     /// (for example a future RPC added without updating the operation map).

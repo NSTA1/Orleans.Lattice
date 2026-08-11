@@ -120,7 +120,7 @@ public sealed class LatticeTreeAdminTests
         {
             Assert.That(caps.TreeId, Is.EqualTo(Tree));
             Assert.That(caps.Schema, Is.SameAs(schemaCaps));
-            Assert.That(caps.CanAdministerTree, Is.False);
+            Assert.That(caps.CanAdministerTree, Is.True);
             // The read gate allows, so the diagnostics capability probe reports true.
             Assert.That(caps.CanViewDiagnostics, Is.True);
         });

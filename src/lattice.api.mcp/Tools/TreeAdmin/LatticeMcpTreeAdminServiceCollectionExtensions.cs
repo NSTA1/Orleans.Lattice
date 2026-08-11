@@ -53,11 +53,19 @@ public static class LatticeMcpTreeAdminServiceCollectionExtensions
     /// remediate) are contributed in addition to the read-only schema-inspection
     /// tools. Defaults to <see langword="false"/> (schema-inspect-only).
     /// </param>
+    /// <param name="enableLifecycle">
+    /// When <see langword="true"/>, the mutating tree-lifecycle tools (explicit tree
+    /// creation, alias assignment, per-tree configuration update) are contributed in
+    /// addition to the read-only lifecycle tools (existence, alias resolution, config
+    /// read, shard-map read). Defaults to <see langword="false"/>
+    /// (lifecycle-read-only).
+    /// </param>
     /// <returns>The service collection for chaining.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="services"/> is <c>null</c>.</exception>
     public static IServiceCollection AddTreeAdminTools(
         this IServiceCollection services,
-        bool enableSchemaControl = false)
+        bool enableSchemaControl = false,
+        bool enableLifecycle = false)
     {
         ArgumentNullException.ThrowIfNull(services);
 
@@ -66,6 +74,11 @@ public static class LatticeMcpTreeAdminServiceCollectionExtensions
             if (enableSchemaControl)
             {
                 options.EnableTreeAdminSchemaControlTools = true;
+            }
+
+            if (enableLifecycle)
+            {
+                options.EnableTreeAdminLifecycleTools = true;
             }
         });
 

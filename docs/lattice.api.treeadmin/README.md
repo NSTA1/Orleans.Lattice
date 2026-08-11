@@ -17,16 +17,17 @@ It is built the same way as the other API facades:
 
 The facade is discoverable and now surfaces its first operations:
 
-- The read-only **capability probe** composes the wrapped schema facade's own probe, reports whole-tree administration authority as a default-deny flag, and reports a `CanViewDiagnostics` flag from the caller's whole-tree read authority.
+- The read-only **capability probe** composes the wrapped schema facade's own probe, reports whole-tree administration authority from the caller's whole-tree `Admin` authority, and reports a `CanViewDiagnostics` flag from the caller's whole-tree read authority.
 - Six read-only **diagnostics and storage-accounting operations** wrap the existing public grain surface (`ILattice`, `ILatticeAdmin`) rather than re-implementing shard fan-out: per-shard hotness, whole-tree diagnostics, shard-map topology inspection, per-shard leaf-projection digest, rolled-up tree statistics, and cluster-wide storage accounting. Each authorizes through the shared core fail-closed access gate before dialing the grain - the per-tree verbs on whole-tree `Read` authority and the cluster-wide storage summary on the distinct `Telemetry` capability.
+- Seven **tree lifecycle and per-tree registry configuration operations** wrap the existing internal tree registry (`ILatticeRegistry`) rather than re-implementing registration or config: explicit tree creation (idempotent, with optional initial sizing), existence checks, alias assignment / resolution, per-tree configuration read / update (publish-events, projection-digest, history-retention), and the registry-persisted shard-map read. The mutating verbs (create, set-alias, set-config) authorize on whole-tree `Admin` authority and reject reserved system tree ids (the `_lattice_` namespace); the read verbs (exists, resolve-alias, get-config, get-shard-map) authorize on whole-tree `Read` authority.
 - The **schema-management tools** (from the sibling schema facade) are surfaced under the tree-administration MCP group by delegation.
-- The whole-tree lifecycle operations (bulk-load, delete, resize, reshard, and the rest) land in later releases, each delegating to (or composing) the appropriate single-responsibility facade rather than re-implementing it here.
+- The remaining whole-tree lifecycle operations (bulk-load, delete, resize, reshard, and the rest) land in later releases, each delegating to (or composing) the appropriate single-responsibility facade rather than re-implementing it here.
 
 ## Core properties
 
 - **Opt-in and absent by default.** Nothing registers unless the host calls `AddLatticeTreeAdminApi()` on the silo, and once added the facade does no background work until a method is called.
-- **Composition, not absorption.** The facade owns no admin plane of its own; it wraps the schema control facade by delegation and reaches the existing public grain surface for read-only diagnostics. It introduces no wire or alias change to any composed facade or grain.
-- **Fail-closed by construction.** Every operation authorizes through the shared core access gate (or the wrapped facade's own gate) before doing any work - whole-tree `Read` for the per-tree diagnostics verbs, the distinct cluster-wide `Telemetry` capability for the storage summary, and schema-management authority for a schema mutation. The whole-tree administration authority flag is reported default-deny until the lifecycle operations (and their gate) land.
+- **Composition, not absorption.** The facade owns no admin plane of its own; it wraps the schema control facade by delegation and reaches the existing public grain surface for read-only diagnostics and the internal tree registry for lifecycle and per-tree configuration. It introduces no wire or alias change to any composed facade or grain.
+- **Fail-closed by construction.** Every operation authorizes through the shared core access gate (or the wrapped facade's own gate) before doing any work - whole-tree `Read` for the per-tree diagnostics and lifecycle-read verbs, whole-tree `Admin` for the mutating lifecycle verbs, the distinct cluster-wide `Telemetry` capability for the storage summary, and schema-management authority for a schema mutation.
 - **Read-only capability probe.** A caller can ask, with no side effects, which tree-administration operations it may perform over a given tree. The probe is advisory only: it never replaces the per-operation authorization each real call still performs.
 
 ## Ordering
@@ -46,6 +47,13 @@ The facade operations (each reached over the gRPC binding as one RPC):
 | Get projection digest | Read a single shard's leaf-projection content digest for cheap divergence detection. Requires whole-tree read authority. |
 | Get tree stats | Read a tree's rolled-up topology, live-key counts, and storage byte breakdown in one call. Requires whole-tree read authority. |
 | Get storage usage | Read cluster-wide storage accounting; the `deep` flag forces a fresh leaf-walk instead of the cheap cached WAL-poll aggregate. Requires cluster telemetry authority. |
+| Create tree | Explicitly create (register) a tree with an optional initial sizing (shard count, max leaf keys, max internal children). Idempotent under matching parameters; reserved system tree ids are rejected. Requires whole-tree admin authority. |
+| Check tree exists | Report whether a tree is registered. Requires whole-tree read authority. |
+| Set tree alias | Point a logical tree at a physical tree. Reserved system tree ids are rejected. Requires whole-tree admin authority. |
+| Resolve tree alias | Resolve the physical tree a logical tree maps to. Requires whole-tree read authority. |
+| Get tree config | Read a tree's registry-backed configuration (sizing, alias, and per-tree overrides). Requires whole-tree read authority. |
+| Set tree config | Apply a partial per-tree configuration update (publish-events, projection-digest, history-retention), each override written only when its apply flag is set. Reserved system tree ids are rejected. Requires whole-tree admin authority. |
+| Get shard map | Read a tree's registry-persisted shard map (custom-map flag, version, virtual/physical shard counts, physical shard indices). Distinct from the diagnostics live-routing inspection. Requires whole-tree read authority. |
 
 ## See also
 

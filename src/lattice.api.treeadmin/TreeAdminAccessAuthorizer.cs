@@ -96,6 +96,44 @@ internal sealed class TreeAdminAccessAuthorizer
             _gate, _membership, ClusterWideScope, LatticeOperation.Telemetry, cancellationToken);
 
     /// <summary>
+    /// Authorizes a per-tree lifecycle <b>mutation</b> (tree creation, alias
+    /// assignment, per-tree configuration update) over <paramref name="treeId"/> for
+    /// the current caller, throwing <see cref="LatticeAuthorizationDeniedException"/>
+    /// when <see cref="LatticeOperation.Admin"/> authority is not granted over the
+    /// whole tree. Mirrors the schema facade's manage gate: a partial / filtered allow
+    /// is refused, fail-closed.
+    /// </summary>
+    /// <param name="treeId">The tree being administered. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancels the authorization.</param>
+    /// <returns>A task that completes when the mutation is authorized.</returns>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to administer the tree.</exception>
+    public ValueTask AuthorizeTreeAdminAsync(string treeId, CancellationToken cancellationToken = default) =>
+        LatticeAccessGateEnforcement.EnforceWholeTreeAsync(
+            _gate, _membership, treeId, LatticeOperation.Admin, cancellationToken);
+
+    /// <summary>
+    /// Probes whether the current caller may perform per-tree lifecycle
+    /// <b>mutations</b> over <paramref name="treeId"/>, returning <c>true</c> when
+    /// authorized and <c>false</c> when denied. Never throws for a plain authorization
+    /// denial; other failures propagate. Read-only, no side effects.
+    /// </summary>
+    /// <param name="treeId">The tree being probed. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancels the probe.</param>
+    /// <returns><c>true</c> when the caller may administer the tree; otherwise <c>false</c>.</returns>
+    public async ValueTask<bool> IsTreeAdminAuthorizedAsync(string treeId, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await AuthorizeTreeAdminAsync(treeId, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch (LatticeAuthorizationDeniedException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Probes whether the current caller may perform per-tree diagnostics <b>reads</b>
     /// over <paramref name="treeId"/>, returning <c>true</c> when authorized and
     /// <c>false</c> when denied. Never throws for a plain authorization denial; other

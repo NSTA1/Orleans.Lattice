@@ -147,6 +147,141 @@ public sealed class TreeAdminGrpcDtoSerializationTests
     }
 
     [Test]
+    public void TreeAdminCreateRequest_round_trips_with_optional_sizing()
+    {
+        var copy = RoundTrip(new TreeAdminCreateRequest
+        {
+            TreeId = "orders",
+            ShardCount = 8,
+            MaxLeafKeys = 64,
+            MaxInternalChildren = null,
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TreeId, Is.EqualTo("orders"));
+            Assert.That(copy.ShardCount, Is.EqualTo(8));
+            Assert.That(copy.MaxLeafKeys, Is.EqualTo(64));
+            Assert.That(copy.MaxInternalChildren, Is.Null);
+        });
+    }
+
+    [Test]
+    public void TreeAdminSetAliasRequest_round_trips()
+    {
+        var copy = RoundTrip(new TreeAdminSetAliasRequest { TreeId = "orders", PhysicalTreeId = "phys-orders" });
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TreeId, Is.EqualTo("orders"));
+            Assert.That(copy.PhysicalTreeId, Is.EqualTo("phys-orders"));
+        });
+    }
+
+    [Test]
+    public void TreeAdminSetConfigRequest_round_trips_its_nested_update()
+    {
+        var copy = RoundTrip(new TreeAdminSetConfigRequest
+        {
+            TreeId = "orders",
+            Update = new TreeConfigurationUpdate
+            {
+                ApplyPublishEvents = true,
+                PublishEvents = false,
+                ApplyHistoryRetention = true,
+                HistoryRetentionMode = HistoryRetentionMode.FullValue,
+                HistoryRetentionWindowTicks = 500,
+            },
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TreeId, Is.EqualTo("orders"));
+            Assert.That(copy.Update.ApplyPublishEvents, Is.True);
+            Assert.That(copy.Update.PublishEvents, Is.False);
+            Assert.That(copy.Update.ApplyHistoryRetention, Is.True);
+            Assert.That(copy.Update.HistoryRetentionMode, Is.EqualTo(HistoryRetentionMode.FullValue));
+            Assert.That(copy.Update.HistoryRetentionWindowTicks, Is.EqualTo(500));
+        });
+    }
+
+    [Test]
+    public void TreeCreationResult_response_round_trips()
+    {
+        var copy = RoundTrip(new TreeCreationResult
+        {
+            TreeId = "orders",
+            Created = true,
+            ShardCount = 8,
+            MaxLeafKeys = 64,
+            MaxInternalChildren = 32,
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Created, Is.True);
+            Assert.That(copy.ShardCount, Is.EqualTo(8));
+        });
+    }
+
+    [Test]
+    public void TreeConfigurationReport_response_round_trips()
+    {
+        var copy = RoundTrip(new TreeConfigurationReport
+        {
+            TreeId = "orders",
+            Exists = true,
+            PublishEvents = true,
+            ProjectionDigestPermanentlyDisabled = true,
+            HistoryRetentionMode = HistoryRetentionMode.FullValue,
+            HistoryRetentionWindowTicks = 99,
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Exists, Is.True);
+            Assert.That(copy.PublishEvents, Is.True);
+            Assert.That(copy.ProjectionDigestPermanentlyDisabled, Is.True);
+            Assert.That(copy.HistoryRetentionMode, Is.EqualTo(HistoryRetentionMode.FullValue));
+            Assert.That(copy.HistoryRetentionWindowTicks, Is.EqualTo(99));
+        });
+    }
+
+    [Test]
+    public void TreeShardMapView_response_round_trips()
+    {
+        var copy = RoundTrip(new TreeShardMapView
+        {
+            TreeId = "orders",
+            HasCustomMap = true,
+            MapVersion = 5,
+            VirtualShardCount = 4,
+            PhysicalShardCount = 2,
+            PhysicalShardIndices = System.Collections.Immutable.ImmutableArray.Create(0, 1),
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.HasCustomMap, Is.True);
+            Assert.That(copy.MapVersion, Is.EqualTo(5));
+            Assert.That(copy.PhysicalShardIndices, Is.EqualTo(new[] { 0, 1 }));
+        });
+    }
+
+    [Test]
+    public void TreeExistenceResult_and_TreeAliasResolution_round_trip()
+    {
+        var existence = RoundTrip(new TreeExistenceResult { TreeId = "orders", Exists = true });
+        var alias = RoundTrip(new TreeAliasResolution { TreeId = "orders", PhysicalTreeId = "phys", IsAliased = true });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(existence.Exists, Is.True);
+            Assert.That(alias.PhysicalTreeId, Is.EqualTo("phys"));
+            Assert.That(alias.IsAliased, Is.True);
+        });
+    }
+
+    [Test]
     public void Every_registry_alias_is_unique_and_uses_the_reserved_prefix()
     {
         var aliases = RegistryAliasValues();
