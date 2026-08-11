@@ -283,6 +283,16 @@ public class JwtCredentialAuthenticator : ILatticeCredentialAuthenticator
             parameters.ValidAudiences = options.Audiences.ToArray();
         }
 
+        if (options.Algorithms.Count > 0)
+        {
+            // Pin the accepted signature algorithms so the validator refuses a
+            // token whose header advertises an algorithm outside the configured
+            // allow-list, closing the algorithm-confusion gap (CWE-347) that an
+            // unbounded ValidAlgorithms leaves open. Empty leaves the set
+            // unrestricted (the permissive default).
+            parameters.ValidAlgorithms = options.Algorithms.ToArray();
+        }
+
         return parameters;
     }
 }

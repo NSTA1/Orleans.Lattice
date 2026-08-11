@@ -149,6 +149,14 @@ public class EntraCredentialAuthenticator : JwtCredentialAuthenticator
             ConfigurationManager = _configurationSource.GetOrCreate(_metadataAddress),
         };
 
+        if (_entraOptions.Algorithms.Count > 0)
+        {
+            // Pin the accepted signature algorithms (default RS256) so a token
+            // whose header advertises an unexpected algorithm is rejected before
+            // key validation, closing the algorithm-confusion gap (CWE-347).
+            parameters.ValidAlgorithms = _entraOptions.Algorithms.ToArray();
+        }
+
         return new ValueTask<TokenValidationParameters>(parameters);
     }
 
