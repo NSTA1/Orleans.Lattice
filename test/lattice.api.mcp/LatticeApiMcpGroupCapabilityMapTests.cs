@@ -22,6 +22,7 @@ public sealed class LatticeApiMcpGroupCapabilityMapTests
             LatticeApiMcpGroup.Telemetry,
             LatticeApiMcpGroup.Replication,
             LatticeApiMcpGroup.TreeAdmin,
+            LatticeApiMcpGroup.RepoContext,
         }));
     }
 
@@ -30,8 +31,8 @@ public sealed class LatticeApiMcpGroupCapabilityMapTests
     {
         // The access-set bitmask keys on 1 << (int)group, so the original
         // members must keep their ordinal values; Telemetry appends after Auth,
-        // Replication appends after Telemetry, and TreeAdmin appends after
-        // Replication.
+        // Replication appends after Telemetry, TreeAdmin appends after
+        // Replication, and RepoContext appends after TreeAdmin.
         Assert.Multiple(() =>
         {
             Assert.That((int)LatticeApiMcpGroup.State, Is.EqualTo(0));
@@ -41,6 +42,7 @@ public sealed class LatticeApiMcpGroupCapabilityMapTests
             Assert.That((int)LatticeApiMcpGroup.Telemetry, Is.EqualTo(4));
             Assert.That((int)LatticeApiMcpGroup.Replication, Is.EqualTo(5));
             Assert.That((int)LatticeApiMcpGroup.TreeAdmin, Is.EqualTo(6));
+            Assert.That((int)LatticeApiMcpGroup.RepoContext, Is.EqualTo(7));
         });
     }
 
@@ -161,6 +163,23 @@ public sealed class LatticeApiMcpGroupCapabilityMapTests
             Is.EqualTo(LatticeOperation.Admin));
     }
 
+    [Test]
+    public void RepoContext_mask_matches_the_data_plane_surface()
+    {
+        var expected = LatticeOperation.Read
+            | LatticeOperation.Write
+            | LatticeOperation.Delete
+            | LatticeOperation.RangeRead
+            | LatticeOperation.RangeDelete
+            | LatticeOperation.CrdtApply
+            | LatticeOperation.AtomicWrite
+            | LatticeOperation.BulkLoad;
+
+        Assert.That(
+            LatticeApiMcpGroupCapabilityMap.RequiredOperations(LatticeApiMcpGroup.RepoContext),
+            Is.EqualTo(expected));
+    }
+
     [TestCase(LatticeApiMcpGroup.State, "state")]
     [TestCase(LatticeApiMcpGroup.Data, "data")]
     [TestCase(LatticeApiMcpGroup.Backup, "backup")]
@@ -168,6 +187,7 @@ public sealed class LatticeApiMcpGroupCapabilityMapTests
     [TestCase(LatticeApiMcpGroup.Telemetry, "telemetry")]
     [TestCase(LatticeApiMcpGroup.Replication, "replication")]
     [TestCase(LatticeApiMcpGroup.TreeAdmin, "treeadmin")]
+    [TestCase(LatticeApiMcpGroup.RepoContext, "repocontext")]
     public void DisplayName_is_the_stable_lowercase_name(LatticeApiMcpGroup group, string expected)
     {
         Assert.That(LatticeApiMcpGroupCapabilityMap.DisplayName(group), Is.EqualTo(expected));

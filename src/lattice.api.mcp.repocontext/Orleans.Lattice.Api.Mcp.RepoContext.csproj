@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>Orleans.Lattice.Api.Mcp.RepoContext</PackageId>
+    <Version>8.0.0</Version>
+    <Description>Optional, opt-in repository-context add-on for Orleans.Lattice.Api.Mcp. Gives an AI agent a durable, conflict-free place to capture and maintain detailed context about a codebase - structural facts, notes, and short-lived working memory - served as MCP tools over dedicated Lattice trees. Reuses the Api.Mcp fail-closed credential bridge, authorization gate, and permission-scoped tool discovery. Registered with AddRepoContextTools() alongside AddLatticeMcp(...)/MapLatticeMcp().</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Mcp.RepoContext.Tests" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\lattice.api.mcp\Orleans.Lattice.Api.Mcp.csproj" />
+  </ItemGroup>
+
+</Project>

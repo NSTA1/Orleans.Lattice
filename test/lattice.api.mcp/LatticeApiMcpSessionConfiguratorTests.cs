@@ -309,6 +309,7 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
                 LatticeApiMcpGroup.Telemetry,
                 LatticeApiMcpGroup.Replication,
                 LatticeApiMcpGroup.TreeAdmin,
+                LatticeApiMcpGroup.RepoContext,
             }));
     }
 
