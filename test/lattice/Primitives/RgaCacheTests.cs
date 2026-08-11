@@ -255,4 +255,131 @@ public class RgaCacheTests
             Assert.That(Strings(clone), Is.EqualTo(new[] { "b", "a" }));
         });
     }
+
+    // -- 1408: transient live-node counter (Count / IsEmpty in O(1)) --
+
+    [Test]
+    public void Count_and_IsEmpty_track_inserts_and_removes()
+    {
+        var r = new Rga();
+        Assert.Multiple(() =>
+        {
+            Assert.That(r.Count, Is.EqualTo(0));
+            Assert.That(r.IsEmpty, Is.True);
+            Assert.That(r.IsBottom, Is.True);
+        });
+
+        var a = r.InsertAfter(Rga.Root, "r1", B("a"));
+        r.InsertAfter(Rga.Root, "r1", B("b"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(r.Count, Is.EqualTo(2));
+            Assert.That(r.IsEmpty, Is.False);
+            Assert.That(r.IsBottom, Is.False);
+        });
+
+        // Removing a live node decrements the counter; a repeat remove is a
+        // no-op and must not double-count.
+        Assert.That(r.Remove(a), Is.True);
+        Assert.That(r.Remove(a), Is.False);
+        Assert.That(r.Count, Is.EqualTo(1));
+
+        r.Remove(r.ToList()[0].Dot);
+        Assert.Multiple(() =>
+        {
+            Assert.That(r.Count, Is.EqualTo(0));
+            Assert.That(r.IsEmpty, Is.True);
+        });
+    }
+
+    [Test]
+    public void Count_is_stable_across_repeated_reads_between_mutations()
+    {
+        var r = new Rga();
+        r.InsertAfter(Rga.Root, "r1", B("a"));
+        r.InsertAfter(Rga.Root, "r1", B("b"));
+
+        // Repeated reads hit the cached counter and must agree.
+        Assert.That(r.Count, Is.EqualTo(2));
+        Assert.That(r.Count, Is.EqualTo(2));
+        Assert.That(r.IsEmpty, Is.False);
+    }
+
+    [Test]
+    public void Count_is_rebuilt_lazily_from_nodes_on_a_legacy_payload()
+    {
+        // Nodes present (one live, one tombstoned) but the transient counter
+        // starts unset - the deserialization/legacy shape. The first read must
+        // rebuild it from the node list rather than trust the default.
+        var r = new Rga();
+        r.Nodes.Add(new RgaNode { ReplicaId = "r1", Counter = 1, ParentDot = Rga.Root, Value = B("x") });
+        r.Nodes.Add(new RgaNode { ReplicaId = "r1", Counter = 2, ParentDot = Rga.Root, Value = B("y"), IsTombstone = true });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(r.Count, Is.EqualTo(1));
+            Assert.That(r.IsEmpty, Is.False);
+        });
+    }
+
+    [Test]
+    public void Count_is_rebuilt_after_a_merge_flips_and_adds_nodes()
+    {
+        var local = new Rga();
+        var a = local.InsertAfter(Rga.Root, "r1", B("a"));
+        Assume.That(local.Count, Is.EqualTo(1)); // warm the counter
+
+        // The other side tombstones the shared node and contributes a new live
+        // one, so the post-merge live count must be recomputed, not adjusted.
+        var other = local.Clone();
+        other.Remove(a);
+        other.InsertAfter(Rga.Root, "r2", B("b"));
+
+        local.MergeFrom(other);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(local.Count, Is.EqualTo(1));
+            Assert.That(local.ToList().Select(t => S(t.Value)), Is.EqualTo(new[] { "b" }));
+        });
+    }
+
+    [Test]
+    public void Count_is_rebuilt_after_a_delta_inserts_and_tombstones()
+    {
+        var r = new Rga();
+        r.InsertAfter(Rga.Root, "r1", B("a"));
+        Assume.That(r.Count, Is.EqualTo(1)); // warm the counter
+
+        r.MergeDelta(new RgaDelta
+        {
+            Inserts = new[]
+            {
+                new RgaDeltaNode { ReplicaId = "r2", Counter = 1, ParentDot = Rga.Root, Value = B("b") },
+            },
+            Tombstones = new[] { new OrSetDot { ReplicaId = "r1", Counter = 1 } },
+        });
+
+        Assert.That(r.Count, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void Clone_carries_the_live_counter_independently()
+    {
+        var r = new Rga();
+        r.InsertAfter(Rga.Root, "r1", B("a"));
+        r.InsertAfter(Rga.Root, "r1", B("b"));
+        Assume.That(r.Count, Is.EqualTo(2)); // warm the counter before cloning
+
+        var clone = r.Clone();
+        Assert.That(clone.Count, Is.EqualTo(2));
+
+        // Mutating the clone must not change the original's count.
+        clone.InsertAfter(Rga.Root, "r1", B("c"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(clone.Count, Is.EqualTo(3));
+            Assert.That(r.Count, Is.EqualTo(2));
+        });
+    }
 }

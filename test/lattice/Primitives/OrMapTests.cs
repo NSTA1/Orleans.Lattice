@@ -265,6 +265,43 @@ public class OrMapTests
     }
 
     [Test]
+    public void Append_only_read_surface_matches_the_tombstone_path()
+    {
+        // Issue #1407: with no removes the liveness surface takes the
+        // Tombstones.Count == 0 fast path. It must report exactly what a
+        // per-key probe would - every added key live, in deterministic order.
+        var m = new OrMap<string, OrSet>();
+        for (var i = 0; i < 50; i++)
+        {
+            m.Set($"k{i:D3}", "r1", SetOf("v"));
+        }
+        Assume.That(m.Tombstones, Is.Empty, "no removes: fast path is exercised");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(m.Count, Is.EqualTo(50));
+            Assert.That(m.IsEmpty, Is.False);
+            Assert.That(m.IsBottom, Is.False);
+            Assert.That(m.ContainsKey("k000"), Is.True);
+            Assert.That(m.ContainsKey("k049"), Is.True);
+            Assert.That(m.ContainsKey("absent"), Is.False);
+            Assert.That(m.Keys().Count(), Is.EqualTo(50));
+            Assert.That(m.Keys(), Is.EqualTo(m.Keys().OrderBy(k => k, StringComparer.Ordinal)));
+        });
+
+        // One remove flips the map onto the tombstone-probe path; the live
+        // view must stay consistent.
+        m.Remove("k000");
+        Assert.Multiple(() =>
+        {
+            Assert.That(m.Tombstones, Is.Not.Empty);
+            Assert.That(m.Count, Is.EqualTo(49));
+            Assert.That(m.ContainsKey("k000"), Is.False);
+            Assert.That(m.Keys(), Does.Not.Contain("k000"));
+        });
+    }
+
+    [Test]
     public void IsBottom_is_true_after_every_key_tombstoned()
     {
         var m = new OrMap<string, OrSet>();

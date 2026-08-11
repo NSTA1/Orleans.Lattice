@@ -86,21 +86,28 @@ public sealed class Rga : ICrdt<Rga>
     [NonSerialized]
     private IReadOnlyList<(OrSetDot Dot, byte[] Value)>? _materializedCache;
 
+    /// <summary>
+    /// Transient live-node counter: the number of un-tombstoned nodes, or
+    /// <c>null</c> when it must be rebuilt from <see cref="Nodes"/> on the
+    /// next read. Never serialized (no <c>[Id]</c>): a deserialized or
+    /// cloned sequence starts <c>null</c> and rebuilds on first read - so a
+    /// legacy payload (empty here but non-empty <see cref="Nodes"/>) is
+    /// backward compatible, exactly like <see cref="_materializedCache"/>.
+    /// The simple mutators keep it consistent in O(1)
+    /// (<see cref="InsertAfter(OrSetDot, string, byte[])"/> increments,
+    /// <see cref="Remove(OrSetDot)"/> decrements); the O(N) merge paths
+    /// (<see cref="MergeFrom(Rga)"/>, <see cref="MergeDelta(RgaDelta)"/>)
+    /// null it so the next read rebuilds, adding no asymptotic cost to a
+    /// merge that already walks every node. Derived, never a merge witness.
+    /// </summary>
+    [NonSerialized]
+    private int? _liveCount;
+
     /// <summary>The empty dot used to represent the virtual sequence root (parent of top-level inserts).</summary>
     public static OrSetDot Root => default;
 
     /// <summary>Returns <c>true</c> when no live (un-tombstoned) node remains.</summary>
-    public bool IsEmpty
-    {
-        get
-        {
-            foreach (var n in Nodes)
-            {
-                if (!n.IsTombstone) return false;
-            }
-            return true;
-        }
-    }
+    public bool IsEmpty => LiveCount() == 0;
 
     /// <inheritdoc />
     /// <remarks>
@@ -112,17 +119,23 @@ public sealed class Rga : ICrdt<Rga>
     public bool IsBottom => IsEmpty;
 
     /// <summary>Returns the number of live (un-tombstoned) nodes.</summary>
-    public int Count
+    public int Count => LiveCount();
+
+    /// <summary>
+    /// Returns the live-node count in O(1) from <see cref="_liveCount"/>,
+    /// rebuilding it with a single O(N) scan the first time it is read
+    /// after construction, deserialization, a clone, or a merge.
+    /// </summary>
+    private int LiveCount()
     {
-        get
+        if (_liveCount is { } cached) return cached;
+        var n = 0;
+        foreach (var node in Nodes)
         {
-            var n = 0;
-            foreach (var node in Nodes)
-            {
-                if (!node.IsTombstone) n++;
-            }
-            return n;
+            if (!node.IsTombstone) n++;
         }
+        _liveCount = n;
+        return n;
     }
 
     /// <summary>
@@ -157,6 +170,8 @@ public sealed class Rga : ICrdt<Rga>
         // counter is strictly greater than any prior counter for this
         // replica, so record it as the new per-replica maximum.
         Context[replicaId] = counter;
+        // A fresh insert always adds one live node; keep the counter O(1).
+        if (_liveCount is { } live) _liveCount = live + 1;
         InvalidateMaterializedCache();
         return node.Dot;
     }
@@ -175,6 +190,8 @@ public sealed class Rga : ICrdt<Rga>
             {
                 if (n.IsTombstone) return false;
                 n.IsTombstone = true;
+                // A live node just became tombstoned; keep the counter O(1).
+                if (_liveCount is { } live) _liveCount = live - 1;
                 InvalidateMaterializedCache();
                 return true;
             }
@@ -337,6 +354,10 @@ public sealed class Rga : ICrdt<Rga>
         }
 
         MergeContextFrom(other);
+        // A merge can flip nodes live<->tombstoned and add nodes on either
+        // side; rebuild the counter lazily on the next read rather than
+        // tracking every transition here (the merge is already O(N)).
+        _liveCount = null;
         InvalidateMaterializedCache();
     }
 
@@ -451,6 +472,9 @@ public sealed class Rga : ICrdt<Rga>
             }
         }
 
+        // A delta can add live inserts and tombstone existing nodes;
+        // rebuild the counter lazily on the next read (the fold is O(N)).
+        _liveCount = null;
         InvalidateMaterializedCache();
     }
 
@@ -473,6 +497,8 @@ public sealed class Rga : ICrdt<Rga>
         // Copy the maintained dot-context cache so the clone mints its
         // next counter in O(1) without a rebuild.
         copy.Context = new Dictionary<string, long>(Context);
+        // Carry over the live-node counter (may be null = rebuild on read).
+        copy._liveCount = _liveCount;
         return copy;
     }
 
