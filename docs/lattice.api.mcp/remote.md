@@ -37,7 +37,7 @@ Each `LatticeApiMcpRemoteEndpoint` names the served `Endpoint` (surfaced verbati
 
 | Option | Purpose |
 |---|---|
-| `State` / `Data` / `Auth` / `Backup` / `Replication` / `TreeAdmin` | The per-group remote endpoint, or `null` to not serve that group. The tree-administration endpoint also backs the tree-administration schema tools (`lattice_treeadmin_schema_*`), since the schema-API and tree-administration gRPC services are co-hosted on the same silo address. |
+| `State` / `Data` / `Auth` / `Backup` / `Replication` / `TreeAdmin` | The per-group remote endpoint, or `null` to not serve that group. The tree-administration endpoint also backs the read-only tree-administration diagnostics tools (`lattice_treeadmin_*`) and the tree-administration schema tools (`lattice_treeadmin_schema_*`), since the tree-administration-API, schema-API, and tree-administration gRPC services are co-hosted on the same silo address. |
 | `CredentialHeaderName` | Header the resolved caller credential is stamped onto for the outbound call. Defaults to `authorization`. |
 | `CredentialScheme` | Scheme prefix prepended to the outbound token (`"{scheme} {token}"`). Defaults to `Bearer`; empty sends the bare token. |
 | `AdministratorCredential` | The **static** admin service credential used for trusted, read-only permission introspection of each caller. See [discovery](#discovery-requires-the-auth-endpoint) below. For a long-lived server prefer a self-refreshing managed-identity token (see [Refreshing administrator token](#refreshing-the-administrator-token)). |

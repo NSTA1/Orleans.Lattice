@@ -24,6 +24,15 @@ public static class GrpcTreeAdminTypeAliases
     /// <summary>Alias for <see cref="TreeAdminTreeRequest"/>.</summary>
     public const string TreeAdminTreeRequest = "oitg.treereq";
 
+    /// <summary>Alias for <see cref="TreeAdminShardRequest"/>.</summary>
+    public const string TreeAdminShardRequest = "oitg.shardreq";
+
+    /// <summary>Alias for <see cref="TreeAdminDiagnosticsRequest"/>.</summary>
+    public const string TreeAdminDiagnosticsRequest = "oitg.diagreq";
+
+    /// <summary>Alias for <see cref="TreeAdminStorageUsageRequest"/>.</summary>
+    public const string TreeAdminStorageUsageRequest = "oitg.storeq";
+
     /// <summary>Alias for <see cref="AuthSchemeAdvertisementRequest"/>.</summary>
     public const string AuthSchemeAdvertisementRequest = "oitg.asreq";
 

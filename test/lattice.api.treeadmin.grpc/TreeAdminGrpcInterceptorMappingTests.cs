@@ -32,6 +32,64 @@ public sealed class TreeAdminGrpcInterceptorMappingTests
     }
 
     [Test]
+    public void DescribeCall_maps_the_read_only_diagnostics_rpcs_to_their_operations()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.GetShardHotnessMethodName),
+                new TreeAdminTreeRequest { TreeId = "orders" }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.GetShardHotness, "orders")));
+
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.GetDiagnosticsMethodName),
+                new TreeAdminDiagnosticsRequest { TreeId = "orders", Deep = true }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.GetDiagnostics, "orders")));
+
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.InspectShardMapMethodName),
+                new TreeAdminTreeRequest { TreeId = "orders" }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.InspectShardMap, "orders")));
+
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.GetProjectionDigestMethodName),
+                new TreeAdminShardRequest { TreeId = "orders", ShardIndex = 2 }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.GetProjectionDigest, "orders")));
+
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.GetTreeStatsMethodName),
+                new TreeAdminTreeRequest { TreeId = "orders" }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.GetTreeStats, "orders")));
+        });
+    }
+
+    [Test]
+    public void DescribeCall_cluster_storage_usage_has_no_target_tree()
+    {
+        var (operation, targetId) = LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+            Method(LatticeTreeAdminGrpcMethods.GetStorageUsageMethodName),
+            new TreeAdminStorageUsageRequest { Deep = true });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(operation, Is.EqualTo(LatticeTreeAdminApiOperation.GetStorageUsage));
+            Assert.That(targetId, Is.Null);
+        });
+    }
+
+    [Test]
+    public void IsUnauthenticatedMethod_does_not_exempt_the_diagnostics_rpcs()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.IsUnauthenticatedMethod(
+                Method(LatticeTreeAdminGrpcMethods.GetShardHotnessMethodName)), Is.False);
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.IsUnauthenticatedMethod(
+                Method(LatticeTreeAdminGrpcMethods.GetStorageUsageMethodName)), Is.False);
+        });
+    }
+
+    [Test]
     public void DescribeCall_unrecognised_method_maps_to_unknown()
     {
         var (operation, _) = LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(

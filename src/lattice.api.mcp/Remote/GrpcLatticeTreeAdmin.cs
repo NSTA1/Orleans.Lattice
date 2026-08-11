@@ -37,4 +37,42 @@ internal sealed class GrpcLatticeTreeAdmin : ILatticeTreeAdmin
         string treeId,
         CancellationToken cancellationToken = default)
         => _client.ProbeCapabilitiesAsync(treeId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TreeHotnessReport> GetShardHotnessAsync(
+        string treeId,
+        CancellationToken cancellationToken = default)
+        => _client.GetShardHotnessAsync(treeId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TreeAdminDiagnosticReport> GetDiagnosticsAsync(
+        string treeId,
+        bool deep = false,
+        CancellationToken cancellationToken = default)
+        => _client.GetDiagnosticsAsync(treeId, deep, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<ShardMapInspection> InspectShardMapAsync(
+        string treeId,
+        CancellationToken cancellationToken = default)
+        => _client.InspectShardMapAsync(treeId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<ShardProjectionDigestReport> GetProjectionDigestAsync(
+        string treeId,
+        int shardIndex,
+        CancellationToken cancellationToken = default)
+        => _client.GetProjectionDigestAsync(treeId, shardIndex, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TreeStatsReport> GetTreeStatsAsync(
+        string treeId,
+        CancellationToken cancellationToken = default)
+        => _client.GetTreeStatsAsync(treeId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<ClusterStorageUsageSummary> GetStorageUsageAsync(
+        bool deep = false,
+        CancellationToken cancellationToken = default)
+        => _client.GetStorageUsageAsync(deep, cancellationToken);
 }

@@ -119,12 +119,20 @@ internal sealed class LatticeTreeAdminApiGrpcAuthInterceptor : Interceptor
         var operation = methodName switch
         {
             LatticeTreeAdminGrpcMethods.ProbeCapabilitiesMethodName => LatticeTreeAdminApiOperation.ProbeCapabilities,
+            LatticeTreeAdminGrpcMethods.GetShardHotnessMethodName => LatticeTreeAdminApiOperation.GetShardHotness,
+            LatticeTreeAdminGrpcMethods.GetDiagnosticsMethodName => LatticeTreeAdminApiOperation.GetDiagnostics,
+            LatticeTreeAdminGrpcMethods.InspectShardMapMethodName => LatticeTreeAdminApiOperation.InspectShardMap,
+            LatticeTreeAdminGrpcMethods.GetProjectionDigestMethodName => LatticeTreeAdminApiOperation.GetProjectionDigest,
+            LatticeTreeAdminGrpcMethods.GetTreeStatsMethodName => LatticeTreeAdminApiOperation.GetTreeStats,
+            LatticeTreeAdminGrpcMethods.GetStorageUsageMethodName => LatticeTreeAdminApiOperation.GetStorageUsage,
             _ => LatticeTreeAdminApiOperation.Unknown,
         };
 
         var targetId = request switch
         {
             TreeAdminTreeRequest t => t.TreeId,
+            TreeAdminShardRequest s => s.TreeId,
+            TreeAdminDiagnosticsRequest d => d.TreeId,
             _ => null,
         };
 

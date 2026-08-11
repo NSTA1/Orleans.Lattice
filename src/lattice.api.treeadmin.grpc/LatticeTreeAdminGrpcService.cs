@@ -32,6 +32,24 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
     /// </summary>
     public abstract Task<AuthSchemeAdvertisement> GetAuthScheme(AuthSchemeAdvertisementRequest request, ServerCallContext context);
 
+    /// <summary>Reads a whole-tree shard-hotness report. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
+    public abstract Task<TreeHotnessReport> GetShardHotness(TreeAdminTreeRequest request, ServerCallContext context);
+
+    /// <summary>Reads a whole-tree diagnostic report. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
+    public abstract Task<TreeAdminDiagnosticReport> GetDiagnostics(TreeAdminDiagnosticsRequest request, ServerCallContext context);
+
+    /// <summary>Inspects a tree's shard-map topology. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
+    public abstract Task<ShardMapInspection> InspectShardMap(TreeAdminTreeRequest request, ServerCallContext context);
+
+    /// <summary>Reads a single shard's leaf-projection digest. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
+    public abstract Task<ShardProjectionDigestReport> GetProjectionDigest(TreeAdminShardRequest request, ServerCallContext context);
+
+    /// <summary>Reads a tree's rolled-up statistics. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
+    public abstract Task<TreeStatsReport> GetTreeStats(TreeAdminTreeRequest request, ServerCallContext context);
+
+    /// <summary>Reads the cluster-wide storage accounting summary. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
+    public abstract Task<ClusterStorageUsageSummary> GetStorageUsage(TreeAdminStorageUsageRequest request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at startup
     /// with <paramref name="serviceImpl"/> set to <see langword="null"/> to record
@@ -53,11 +71,23 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
         {
             binder.AddMethod(methods.ProbeCapabilities, (UnaryServerMethod<TreeAdminTreeRequest, LatticeTreeAdminCapabilities>?)null);
             binder.AddMethod(methods.GetAuthScheme, (UnaryServerMethod<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>?)null);
+            binder.AddMethod(methods.GetShardHotness, (UnaryServerMethod<TreeAdminTreeRequest, TreeHotnessReport>?)null);
+            binder.AddMethod(methods.GetDiagnostics, (UnaryServerMethod<TreeAdminDiagnosticsRequest, TreeAdminDiagnosticReport>?)null);
+            binder.AddMethod(methods.InspectShardMap, (UnaryServerMethod<TreeAdminTreeRequest, ShardMapInspection>?)null);
+            binder.AddMethod(methods.GetProjectionDigest, (UnaryServerMethod<TreeAdminShardRequest, ShardProjectionDigestReport>?)null);
+            binder.AddMethod(methods.GetTreeStats, (UnaryServerMethod<TreeAdminTreeRequest, TreeStatsReport>?)null);
+            binder.AddMethod(methods.GetStorageUsage, (UnaryServerMethod<TreeAdminStorageUsageRequest, ClusterStorageUsageSummary>?)null);
             return;
         }
 
         binder.AddMethod(methods.ProbeCapabilities, new UnaryServerMethod<TreeAdminTreeRequest, LatticeTreeAdminCapabilities>(serviceImpl.ProbeCapabilities));
         binder.AddMethod(methods.GetAuthScheme, new UnaryServerMethod<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>(serviceImpl.GetAuthScheme));
+        binder.AddMethod(methods.GetShardHotness, new UnaryServerMethod<TreeAdminTreeRequest, TreeHotnessReport>(serviceImpl.GetShardHotness));
+        binder.AddMethod(methods.GetDiagnostics, new UnaryServerMethod<TreeAdminDiagnosticsRequest, TreeAdminDiagnosticReport>(serviceImpl.GetDiagnostics));
+        binder.AddMethod(methods.InspectShardMap, new UnaryServerMethod<TreeAdminTreeRequest, ShardMapInspection>(serviceImpl.InspectShardMap));
+        binder.AddMethod(methods.GetProjectionDigest, new UnaryServerMethod<TreeAdminShardRequest, ShardProjectionDigestReport>(serviceImpl.GetProjectionDigest));
+        binder.AddMethod(methods.GetTreeStats, new UnaryServerMethod<TreeAdminTreeRequest, TreeStatsReport>(serviceImpl.GetTreeStats));
+        binder.AddMethod(methods.GetStorageUsage, new UnaryServerMethod<TreeAdminStorageUsageRequest, ClusterStorageUsageSummary>(serviceImpl.GetStorageUsage));
     }
 }
 
@@ -122,6 +152,30 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
     /// <inheritdoc />
     public override Task<LatticeTreeAdminCapabilities> ProbeCapabilities(TreeAdminTreeRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (control, req, ct) => control.ProbeCapabilitiesAsync(req.TreeId, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeHotnessReport> GetShardHotness(TreeAdminTreeRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.GetShardHotnessAsync(req.TreeId, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeAdminDiagnosticReport> GetDiagnostics(TreeAdminDiagnosticsRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.GetDiagnosticsAsync(req.TreeId, req.Deep, ct));
+
+    /// <inheritdoc />
+    public override Task<ShardMapInspection> InspectShardMap(TreeAdminTreeRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.InspectShardMapAsync(req.TreeId, ct));
+
+    /// <inheritdoc />
+    public override Task<ShardProjectionDigestReport> GetProjectionDigest(TreeAdminShardRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.GetProjectionDigestAsync(req.TreeId, req.ShardIndex, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeStatsReport> GetTreeStats(TreeAdminTreeRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.GetTreeStatsAsync(req.TreeId, ct));
+
+    /// <inheritdoc />
+    public override Task<ClusterStorageUsageSummary> GetStorageUsage(TreeAdminStorageUsageRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.GetStorageUsageAsync(req.Deep, ct));
 
     /// <inheritdoc />
     public override Task<AuthSchemeAdvertisement> GetAuthScheme(AuthSchemeAdvertisementRequest request, ServerCallContext context)

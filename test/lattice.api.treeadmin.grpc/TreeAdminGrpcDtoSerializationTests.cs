@@ -41,6 +41,78 @@ public sealed class TreeAdminGrpcDtoSerializationTests
     }
 
     [Test]
+    public void TreeAdminShardRequest_round_trips()
+    {
+        var copy = RoundTrip(new TreeAdminShardRequest { TreeId = "orders", ShardIndex = 3 });
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TreeId, Is.EqualTo("orders"));
+            Assert.That(copy.ShardIndex, Is.EqualTo(3));
+        });
+    }
+
+    [Test]
+    public void TreeAdminDiagnosticsRequest_round_trips()
+    {
+        var copy = RoundTrip(new TreeAdminDiagnosticsRequest { TreeId = "orders", Deep = true });
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TreeId, Is.EqualTo("orders"));
+            Assert.That(copy.Deep, Is.True);
+        });
+    }
+
+    [Test]
+    public void TreeAdminStorageUsageRequest_round_trips()
+    {
+        Assert.That(RoundTrip(new TreeAdminStorageUsageRequest { Deep = true }).Deep, Is.True);
+    }
+
+    [Test]
+    public void TreeHotnessReport_response_round_trips_through_the_marshaller()
+    {
+        var copy = RoundTrip(new TreeHotnessReport
+        {
+            TreeId = "orders",
+            ShardCount = 1,
+            TotalReads = 5,
+            TotalWrites = 2,
+            TotalOpsPerSecond = 7,
+            SampledAt = DateTimeOffset.UnixEpoch,
+            Shards = System.Collections.Immutable.ImmutableArray.Create(
+                new ShardHotnessSnapshot { ShardIndex = 0, Reads = 5, Writes = 2, OpsPerSecond = 7, WindowSeconds = 1 }),
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TreeId, Is.EqualTo("orders"));
+            Assert.That(copy.Shards, Has.Length.EqualTo(1));
+            Assert.That(copy.Shards[0].Reads, Is.EqualTo(5));
+        });
+    }
+
+    [Test]
+    public void ClusterStorageUsageSummary_response_round_trips_through_the_marshaller()
+    {
+        var copy = RoundTrip(new ClusterStorageUsageSummary
+        {
+            TreeCount = 1,
+            TotalBytes = 60,
+            Deep = true,
+            SampledAt = DateTimeOffset.UnixEpoch,
+            Trees = System.Collections.Immutable.ImmutableArray.Create(
+                new TreeStorageUsageSnapshot { TreeId = "orders", TotalBytes = 60, LiveKeys = 5, SampledAt = DateTimeOffset.UnixEpoch }),
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Deep, Is.True);
+            Assert.That(copy.Trees, Has.Length.EqualTo(1));
+            Assert.That(copy.Trees[0].TreeId, Is.EqualTo("orders"));
+        });
+    }
+
+    [Test]
     public void AuthSchemeAdvertisementRequest_round_trips() =>
         Assert.That(RoundTrip(new AuthSchemeAdvertisementRequest()), Is.Not.Null);
 

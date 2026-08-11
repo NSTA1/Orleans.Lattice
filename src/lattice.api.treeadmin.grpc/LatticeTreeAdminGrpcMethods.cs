@@ -32,17 +32,53 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary, unauthenticated auth-scheme advertisement RPC method name.</summary>
     public const string GetAuthSchemeMethodName = "GetAuthScheme";
 
+    /// <summary>The unary shard-hotness RPC method name.</summary>
+    public const string GetShardHotnessMethodName = "GetShardHotness";
+
+    /// <summary>The unary shard-diagnostics RPC method name.</summary>
+    public const string GetDiagnosticsMethodName = "GetDiagnostics";
+
+    /// <summary>The unary shard-map inspection RPC method name.</summary>
+    public const string InspectShardMapMethodName = "InspectShardMap";
+
+    /// <summary>The unary projection-digest RPC method name.</summary>
+    public const string GetProjectionDigestMethodName = "GetProjectionDigest";
+
+    /// <summary>The unary tree-statistics RPC method name.</summary>
+    public const string GetTreeStatsMethodName = "GetTreeStats";
+
+    /// <summary>The unary cluster-wide storage-usage RPC method name.</summary>
+    public const string GetStorageUsageMethodName = "GetStorageUsage";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeTreeAdminGrpcMethods(
         Serializer<TreeAdminTreeRequest> treeRequestSerializer,
         Serializer<LatticeTreeAdminCapabilities> capabilitiesSerializer,
         Serializer<AuthSchemeAdvertisementRequest> authSchemeRequestSerializer,
-        Serializer<AuthSchemeAdvertisement> authSchemeAdvertisementSerializer)
+        Serializer<AuthSchemeAdvertisement> authSchemeAdvertisementSerializer,
+        Serializer<TreeAdminShardRequest> shardRequestSerializer,
+        Serializer<TreeAdminDiagnosticsRequest> diagnosticsRequestSerializer,
+        Serializer<TreeAdminStorageUsageRequest> storageUsageRequestSerializer,
+        Serializer<TreeHotnessReport> hotnessReportSerializer,
+        Serializer<TreeAdminDiagnosticReport> diagnosticReportSerializer,
+        Serializer<ShardMapInspection> shardMapInspectionSerializer,
+        Serializer<ShardProjectionDigestReport> projectionDigestSerializer,
+        Serializer<TreeStatsReport> treeStatsSerializer,
+        Serializer<ClusterStorageUsageSummary> storageUsageSummarySerializer)
     {
         ArgumentNullException.ThrowIfNull(treeRequestSerializer);
         ArgumentNullException.ThrowIfNull(capabilitiesSerializer);
         ArgumentNullException.ThrowIfNull(authSchemeRequestSerializer);
         ArgumentNullException.ThrowIfNull(authSchemeAdvertisementSerializer);
+        ArgumentNullException.ThrowIfNull(shardRequestSerializer);
+        ArgumentNullException.ThrowIfNull(diagnosticsRequestSerializer);
+        ArgumentNullException.ThrowIfNull(storageUsageRequestSerializer);
+        ArgumentNullException.ThrowIfNull(hotnessReportSerializer);
+        ArgumentNullException.ThrowIfNull(diagnosticReportSerializer);
+        ArgumentNullException.ThrowIfNull(shardMapInspectionSerializer);
+        ArgumentNullException.ThrowIfNull(projectionDigestSerializer);
+        ArgumentNullException.ThrowIfNull(treeStatsSerializer);
+        ArgumentNullException.ThrowIfNull(storageUsageSummarySerializer);
 
         ProbeCapabilities = new Method<TreeAdminTreeRequest, LatticeTreeAdminCapabilities>(
             type: MethodType.Unary,
@@ -57,6 +93,48 @@ internal sealed class LatticeTreeAdminGrpcMethods
             name: GetAuthSchemeMethodName,
             requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(authSchemeRequestSerializer),
             responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(authSchemeAdvertisementSerializer));
+
+        GetShardHotness = new Method<TreeAdminTreeRequest, TreeHotnessReport>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: GetShardHotnessMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(treeRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(hotnessReportSerializer));
+
+        GetDiagnostics = new Method<TreeAdminDiagnosticsRequest, TreeAdminDiagnosticReport>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: GetDiagnosticsMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(diagnosticsRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(diagnosticReportSerializer));
+
+        InspectShardMap = new Method<TreeAdminTreeRequest, ShardMapInspection>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: InspectShardMapMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(treeRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(shardMapInspectionSerializer));
+
+        GetProjectionDigest = new Method<TreeAdminShardRequest, ShardProjectionDigestReport>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: GetProjectionDigestMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(shardRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(projectionDigestSerializer));
+
+        GetTreeStats = new Method<TreeAdminTreeRequest, TreeStatsReport>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: GetTreeStatsMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(treeRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(treeStatsSerializer));
+
+        GetStorageUsage = new Method<TreeAdminStorageUsageRequest, ClusterStorageUsageSummary>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: GetStorageUsageMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(storageUsageRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(storageUsageSummarySerializer));
     }
 
     /// <summary>The unary <c>ProbeCapabilities</c> capability-probe RPC.</summary>
@@ -64,6 +142,24 @@ internal sealed class LatticeTreeAdminGrpcMethods
 
     /// <summary>The unary, unauthenticated <c>GetAuthScheme</c> advertisement RPC.</summary>
     public Method<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement> GetAuthScheme { get; }
+
+    /// <summary>The unary <c>GetShardHotness</c> read-only hotness RPC.</summary>
+    public Method<TreeAdminTreeRequest, TreeHotnessReport> GetShardHotness { get; }
+
+    /// <summary>The unary <c>GetDiagnostics</c> read-only diagnostics RPC.</summary>
+    public Method<TreeAdminDiagnosticsRequest, TreeAdminDiagnosticReport> GetDiagnostics { get; }
+
+    /// <summary>The unary <c>InspectShardMap</c> read-only topology RPC.</summary>
+    public Method<TreeAdminTreeRequest, ShardMapInspection> InspectShardMap { get; }
+
+    /// <summary>The unary <c>GetProjectionDigest</c> read-only digest RPC.</summary>
+    public Method<TreeAdminShardRequest, ShardProjectionDigestReport> GetProjectionDigest { get; }
+
+    /// <summary>The unary <c>GetTreeStats</c> read-only statistics RPC.</summary>
+    public Method<TreeAdminTreeRequest, TreeStatsReport> GetTreeStats { get; }
+
+    /// <summary>The unary <c>GetStorageUsage</c> read-only cluster-storage RPC.</summary>
+    public Method<TreeAdminStorageUsageRequest, ClusterStorageUsageSummary> GetStorageUsage { get; }
 
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out of
@@ -78,7 +174,16 @@ internal sealed class LatticeTreeAdminGrpcMethods
             serializerProvider.GetRequiredService<Serializer<TreeAdminTreeRequest>>(),
             serializerProvider.GetRequiredService<Serializer<LatticeTreeAdminCapabilities>>(),
             serializerProvider.GetRequiredService<Serializer<AuthSchemeAdvertisementRequest>>(),
-            serializerProvider.GetRequiredService<Serializer<AuthSchemeAdvertisement>>());
+            serializerProvider.GetRequiredService<Serializer<AuthSchemeAdvertisement>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAdminShardRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAdminDiagnosticsRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAdminStorageUsageRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeHotnessReport>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAdminDiagnosticReport>>(),
+            serializerProvider.GetRequiredService<Serializer<ShardMapInspection>>(),
+            serializerProvider.GetRequiredService<Serializer<ShardProjectionDigestReport>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeStatsReport>>(),
+            serializerProvider.GetRequiredService<Serializer<ClusterStorageUsageSummary>>());
     }
 }
 

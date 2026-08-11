@@ -67,4 +67,81 @@ public sealed class LatticeTreeAdminGrpcClientE2ETests
 
         Assert.That(schemes, Is.Not.Null);
     }
+
+    [Test]
+    public async Task get_shard_hotness_round_trips_over_the_client()
+    {
+        var report = await _host.Client.GetShardHotnessAsync(Tree);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.TreeId, Is.EqualTo(Tree));
+            Assert.That(report.ShardCount, Is.GreaterThan(0));
+            Assert.That(report.Shards, Is.Not.Null);
+        });
+    }
+
+    [Test]
+    public async Task get_diagnostics_round_trips_over_the_client()
+    {
+        var report = await _host.Client.GetDiagnosticsAsync(Tree, deep: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.TreeId, Is.EqualTo(Tree));
+            Assert.That(report.Deep, Is.False);
+            Assert.That(report.Shards, Is.Not.Null);
+        });
+    }
+
+    [Test]
+    public async Task inspect_shard_map_round_trips_over_the_client()
+    {
+        var inspection = await _host.Client.InspectShardMapAsync(Tree);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(inspection.TreeId, Is.EqualTo(Tree));
+            Assert.That(inspection.PhysicalTreeId, Is.Not.Empty);
+            Assert.That(inspection.VirtualShardCount, Is.GreaterThan(0));
+        });
+    }
+
+    [Test]
+    public async Task get_projection_digest_round_trips_over_the_client()
+    {
+        var digest = await _host.Client.GetProjectionDigestAsync(Tree, 0);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(digest.TreeId, Is.EqualTo(Tree));
+            Assert.That(digest.ShardIndex, Is.EqualTo(0));
+            Assert.That(digest.HashHex, Is.Not.Null);
+        });
+    }
+
+    [Test]
+    public async Task get_tree_stats_round_trips_over_the_client()
+    {
+        var stats = await _host.Client.GetTreeStatsAsync(Tree);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stats.TreeId, Is.EqualTo(Tree));
+            Assert.That(stats.ShardCount, Is.GreaterThan(0));
+        });
+    }
+
+    [Test]
+    public async Task get_storage_usage_round_trips_over_the_client()
+    {
+        var summary = await _host.Client.GetStorageUsageAsync(deep: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(summary, Is.Not.Null);
+            Assert.That(summary.Deep, Is.False);
+            Assert.That(summary.Trees, Is.Not.Null);
+        });
+    }
 }

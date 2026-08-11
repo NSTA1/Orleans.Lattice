@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Orleans.Lattice;
 using Orleans.Lattice.Api.Schema;
 
 namespace Orleans.Lattice.Api.TreeAdmin;
@@ -67,6 +68,14 @@ public static class LatticeApiTreeAdminServiceCollectionExtensions
         // The transport-agnostic control facade. Registered as a silo singleton that
         // every transport binding (for example gRPC, MCP) adapts over.
         builder.Services.TryAddSingleton<ILatticeTreeAdmin, LatticeTreeAdmin>();
+
+        // The fail-closed diagnostics authorization seam the facade consults before
+        // every read-only diagnostics operation. It resolves the core access gate
+        // (the no-op gate when no auth add-on is registered, so it is zero cost) and
+        // the optional membership context.
+        builder.Services.TryAddSingleton(sp => new TreeAdminAccessAuthorizer(
+            sp.GetRequiredService<ILatticeAccessGate>(),
+            sp.GetService<ILatticeMembershipContext>()));
 
         // Idempotency marker: the structural wiring runs once regardless of how many
         // times the host calls this method. A repeat call still layers any supplied

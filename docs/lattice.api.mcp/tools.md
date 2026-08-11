@@ -192,6 +192,23 @@ The manage tools carry `destructiveHint = true` and `readOnlyHint = false`; the 
 
 This module is served under both topologies. In-silo it delegates to the co-hosted `ILatticeSchemaControl` facade directly; over the remote (out-of-silo) topology the `AddLatticeMcpRemote` composition wires `GrpcLatticeSchemaControl` - a schema-API gRPC adapter - off the same endpoint as the tree-administration group (`RemoteOptions.TreeAdmin`, since the schema-API and tree-administration gRPC services are co-hosted on the same silo address). The remote host honours the same read-always / write-gated split: the read-only schema-inspection tools are served whenever the tree-administration endpoint is configured, and the mutating schema-management tools additionally require `RemoteOptions.EnableSchemaControl = true` (which maps onto `enableSchemaControl`). Caller credentials are forwarded on every gRPC call by the shared credential-forwarding interceptor, so the remote cluster re-runs the facade's own fail-closed access gate.
 
+## TreeAdmin diagnostics tools (`lattice_treeadmin_*`)
+
+Read-only administrative diagnostics and storage accounting over `ILatticeTreeAdmin`, surfaced under the tree-administration group. Registered by `AddTreeAdminTools` and always exposed (no opt-in flag). Each tool wraps the existing public grain surface (`ILattice`, `ILatticeAdmin`) rather than re-implementing shard fan-out, and every tool remains subject to the facade's own fail-closed access gate: the per-tree verbs authorize on whole-tree `LatticeOperation.Read` authority, and `lattice_treeadmin_storage_usage` authorizes on the distinct cluster-wide `LatticeOperation.Telemetry` capability. The group is discovered only by a caller granted `LatticeOperation.Admin`.
+
+| Tool | Kind | Purpose |
+|---|---|---|
+| `lattice_treeadmin_shard_hotness` | inspect | Read a tree's per-shard read/write hotness with tree-level totals. |
+| `lattice_treeadmin_shard_diagnostics` | inspect | Read a whole-tree diagnostic report; the `deep` flag walks leaf state for authoritative counts. |
+| `lattice_treeadmin_shard_map_inspect` | inspect | Inspect a tree's shard-map topology (physical tree id, virtual/physical shard counts, map version). |
+| `lattice_treeadmin_projection_digest` | inspect | Read a single shard's leaf-projection content digest for cheap divergence detection. |
+| `lattice_treeadmin_tree_stats` | inspect | Read a tree's rolled-up topology, live-key counts, and storage byte breakdown in one call. |
+| `lattice_treeadmin_storage_usage` | inspect | Read cluster-wide storage accounting; the `deep` flag forces a fresh leaf-walk instead of the cheap cached WAL-poll aggregate. |
+
+Every tool carries `readOnlyHint = true` and `destructiveHint = false`. `lattice_treeadmin_shard_diagnostics` and `lattice_treeadmin_storage_usage` take an optional `deep` flag (default `false`, the cheap path); `lattice_treeadmin_projection_digest` takes a `treeId` and a non-negative `shardIndex`; the remaining per-tree tools take a `treeId`. `lattice_treeadmin_storage_usage` is cluster-wide and takes no tree id.
+
+This module is served under both topologies. In-silo it delegates to the co-hosted `ILatticeTreeAdmin` facade directly; over the remote (out-of-silo) topology the `AddLatticeMcpRemote` composition wires `GrpcLatticeTreeAdmin` - a tree-administration-API gRPC adapter - off the `RemoteOptions.TreeAdmin` endpoint. Caller credentials are forwarded on every gRPC call by the shared credential-forwarding interceptor, so the remote cluster re-runs the facade's own fail-closed access gate.
+
 ## Error handling
 
 Every facade-backed tool call is routed through a single translation seam, so a fault is surfaced to the client as an actionable error result rather than the SDK's opaque generic mask. The translated message names the failure class:

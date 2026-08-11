@@ -107,6 +107,42 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "through the same fail-closed schema access gate the real operations use but with no side effects. "
                 + "Each flag is default-deny, so a management UI can grey out controls the caller cannot use. The "
                 + "flags are advisory; the server still authorizes every real operation on attempt. Read-only."),
+
+            // ----- Diagnostics and storage accounting (read-only) -----
+            Read(services, TreeAdminDiagnosticsToolHandlers.GetShardHotnessAsync, "lattice_treeadmin_shard_hotness",
+                "Read a tree's per-shard hotness",
+                "Reads a per-shard read/write hotness report for a tree: each physical shard's read and write "
+                + "counters, observed operations-per-second, and the sampling window, plus tree-level totals. A "
+                + "cheap, non-blocking sample used to spot skew (a few hot shards) before deciding on a reshard. "
+                + "Requires whole-tree read authority. Read-only."),
+            Read(services, TreeAdminDiagnosticsToolHandlers.GetDiagnosticsAsync, "lattice_treeadmin_shard_diagnostics",
+                "Read a tree's shard diagnostics",
+                "Reads a whole-tree diagnostic report: per-shard depth, root shape, live-key and tombstone counts, "
+                + "tombstone ratio, activity counters, and in-flight maintenance flags, plus tree-level roll-ups. "
+                + "The deep flag walks leaf state for authoritative counts (more expensive); the default reads the "
+                + "cheap shard-root projection. Requires whole-tree read authority. Read-only."),
+            Read(services, TreeAdminDiagnosticsToolHandlers.InspectShardMapAsync, "lattice_treeadmin_shard_map_inspect",
+                "Inspect a tree's shard-map topology",
+                "Inspects a tree's shard-map topology: the physical tree id it resolves to, the virtual routing "
+                + "space size, the distinct physical shards the virtual slots map onto, and the map version (which "
+                + "increments on every reshard). Requires whole-tree read authority. Read-only."),
+            Read(services, TreeAdminDiagnosticsToolHandlers.GetProjectionDigestAsync, "lattice_treeadmin_projection_digest",
+                "Read a shard's leaf-projection digest",
+                "Reads a leaf-projection digest for a single physical shard of a tree: a lowercase-hex content hash "
+                + "plus entry count, checkpoint offset, and version that identify the shard's committed state, for "
+                + "cheap divergence detection without shipping the data. Requires whole-tree read authority. "
+                + "Read-only."),
+            Read(services, TreeAdminDiagnosticsToolHandlers.GetTreeStatsAsync, "lattice_treeadmin_tree_stats",
+                "Read a tree's rolled-up statistics",
+                "Reads a rolled-up statistics snapshot for a tree: shard and virtual-shard counts, live-key and "
+                + "tombstone totals, and the storage byte breakdown (leaf state, snapshots, retained write-ahead "
+                + "log, and total), in one call. Requires whole-tree read authority. Read-only."),
+            Read(services, TreeAdminDiagnosticsToolHandlers.GetStorageUsageAsync, "lattice_treeadmin_storage_usage",
+                "Read cluster-wide storage accounting",
+                "Reads a cluster-wide storage accounting summary across every tree, split by surface (write-ahead "
+                + "log, snapshots, leaf state) with per-tree breakdowns. The default returns the cheap cached "
+                + "WAL-poll aggregate; the deep flag forces an expensive fresh leaf-walk that re-measures every "
+                + "shard. Requires cluster telemetry authority. Read-only."),
         };
 
         if (enableSchemaControl)
