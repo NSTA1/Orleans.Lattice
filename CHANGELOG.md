@@ -10,6 +10,10 @@ This changelog covers the whole **package family** - every published `Orleans.La
 
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), labelled `lattice` or `lattice.replication`. See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
 
+### Security
+
+- **Orleans.Lattice.Membership / Orleans.Lattice.Membership.Entra: JWT authenticators can now pin the accepted token signature algorithms.** `JwtAuthenticatorOptions` and `LatticeEntraAuthenticatorOptions` gain an `Algorithms` collection that, when populated, sets `TokenValidationParameters.ValidAlgorithms` so the validator refuses a token whose header advertises an algorithm outside the allow-list - a defense-in-depth measure against algorithm-confusion attacks (CWE-347). The generic base stays permissive by default (empty = current behaviour, no API/behaviour break); the Entra authenticator defaults its allow-list to `RS256`, the algorithm Entra issues v2.0 tokens with. ([#1154](https://github.com/NSTA1/Orleans.Lattice/issues/1154))
+
 ## Released
 
 Published releases, newest first. Each section is keyed by its publish date; within a date, packages advance on their own patch digits per [`docs/RELEASING.md`](docs/RELEASING.md).

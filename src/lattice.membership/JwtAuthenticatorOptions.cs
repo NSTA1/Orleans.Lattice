@@ -51,6 +51,17 @@ public sealed class JwtAuthenticatorOptions
     /// </summary>
     public IList<string> GroupClaimTypes { get; } = new List<string> { "groups", "roles", "role" };
 
+    /// <summary>
+    /// The token signature algorithms this authenticator accepts, pinned via
+    /// <see cref="TokenValidationParameters.ValidAlgorithms"/> (the JWT header
+    /// <c>alg</c>, for example <c>RS256</c> or <c>HS256</c>). When empty (the
+    /// default) no algorithm allow-list is enforced and any algorithm the trusted
+    /// signing keys can satisfy is accepted; populate it to restrict acceptance to
+    /// a specific set as a defense-in-depth measure against algorithm-confusion
+    /// attacks (CWE-347). Populate the collection in place.
+    /// </summary>
+    public IList<string> Algorithms { get; } = new List<string>();
+
     /// <summary>Whether to validate the token audience. Defaults to <c>true</c>.</summary>
     public bool ValidateAudience { get; set; } = true;
 

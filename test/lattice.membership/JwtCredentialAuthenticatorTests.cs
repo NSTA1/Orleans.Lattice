@@ -244,6 +244,40 @@ public class JwtCredentialAuthenticatorTests
     }
 
     [Test]
+    public async Task AuthenticateAsync_token_signed_with_unpinned_algorithm_returns_null()
+    {
+        // Pinning the accepted algorithm set to RS256 must reject an otherwise
+        // valid HS256-signed token: the header advertises an algorithm outside
+        // the allow-list (CWE-347 algorithm confusion).
+        var options = new JwtAuthenticatorOptions { Issuer = Issuer };
+        options.Audiences.Add(Audience);
+        options.SigningKeys.Add(SigningKey);
+        options.Algorithms.Add(SecurityAlgorithms.RsaSha256);
+        var authenticator = new JwtCredentialAuthenticator(options);
+        var credential = new LatticeCredential(MintToken());
+
+        var principal = await authenticator.AuthenticateAsync(credential);
+
+        Assert.That(principal, Is.Null);
+    }
+
+    [Test]
+    public async Task AuthenticateAsync_token_signed_with_pinned_algorithm_authenticates()
+    {
+        // A token whose algorithm is on the pinned allow-list still authenticates.
+        var options = new JwtAuthenticatorOptions { Issuer = Issuer };
+        options.Audiences.Add(Audience);
+        options.SigningKeys.Add(SigningKey);
+        options.Algorithms.Add(SecurityAlgorithms.HmacSha256);
+        var authenticator = new JwtCredentialAuthenticator(options);
+        var credential = new LatticeCredential(MintToken());
+
+        var principal = await authenticator.AuthenticateAsync(credential);
+
+        Assert.That(principal, Is.Not.Null);
+    }
+
+    [Test]
     public async Task AuthenticateAsync_wrong_issuer_token_returns_null()
     {
         // A validly-signed token from an untrusted issuer must be rejected: the
