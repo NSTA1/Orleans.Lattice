@@ -27,8 +27,10 @@ public sealed class JwtAuthenticatorOptions
     public string? SchemeHint { get; set; }
 
     /// <summary>
-    /// The audiences this authenticator accepts (the JWT <c>aud</c> claim). When
-    /// empty, audience validation is disabled.
+    /// The audiences this authenticator accepts (the JWT <c>aud</c> claim). Must
+    /// be non-empty when <see cref="ValidateAudience"/> is <c>true</c>; otherwise
+    /// construction throws so audience validation is never silently disabled. Set
+    /// <see cref="ValidateAudience"/> to <c>false</c> to accept any audience.
     /// </summary>
     public IList<string> Audiences { get; } = new List<string>();
 

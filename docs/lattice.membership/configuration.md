@@ -33,12 +33,12 @@ Configuration for a single JWT credential authenticator instance: the issuer it 
 |---|---|---|---|
 | `Issuer` | `string` | `""` (empty) | The token issuer this authenticator owns (the JWT `iss` claim). Used both to validate the token and to select this authenticator when the credential's scheme / issuer hint matches. Must be set. |
 | `SchemeHint` | `string?` | `null` | Optional scheme hint (for example `Bearer` or a short provider name). When set, a credential whose scheme equals this value selects this authenticator without the token being parsed. `null` selects solely by issuer. |
-| `Audiences` | `IList<string>` | empty list | The audiences this authenticator accepts (the JWT `aud` claim). When empty, audience validation is disabled. Populate the collection in place. |
+| `Audiences` | `IList<string>` | empty list | The audiences this authenticator accepts (the JWT `aud` claim). Must be non-empty when `ValidateAudience` is `true` (construction fails closed otherwise, so audience validation is never silently disabled). Populate the collection in place. |
 | `SigningKeys` | `IList<SecurityKey>` | empty list | The signing keys trusted for token-signature validation. Ignored when an explicit `ValidationParameters` is supplied or a subclass overrides key resolution (for example via JWKS discovery). Populate the collection in place. |
 | `Algorithms` | `IList<string>` | empty list | The token signature algorithms accepted (the JWT header `alg`), pinned via `ValidAlgorithms`. When empty, no algorithm allow-list is enforced; populate it (for example `["RS256"]`) to restrict acceptance as a defense-in-depth measure against algorithm-confusion attacks. Populate the collection in place. |
 | `SubjectClaimTypes` | `IList<string>` | `["sub", "nameid"]` | The claim types consulted, in order, to resolve the subject id. The first present claim wins. Populate the collection in place. |
 | `GroupClaimTypes` | `IList<string>` | `["groups", "roles", "role"]` | The claim types whose values are collected as token-asserted group ids. Populate the collection in place. |
-| `ValidateAudience` | `bool` | `true` | Whether to validate the token audience. |
+| `ValidateAudience` | `bool` | `true` | Whether to validate the token audience. When `true`, at least one entry in `Audiences` is required or construction throws (audience validation is never silently disabled); set to `false` to accept any audience explicitly. |
 | `ValidateLifetime` | `bool` | `true` | Whether to validate the token lifetime (`exp` / `nbf`). |
 | `ClockSkew` | `TimeSpan` | `5 minutes` | The permitted clock skew during lifetime validation. |
 | `ValidationParameters` | `TokenValidationParameters?` | `null` | An explicit validation-parameters override. When set it is used verbatim and the issuer / audience / signing-key fields above are ignored. Provided as an extension point for OIDC / JWKS discovery and signing-key rotation. |
