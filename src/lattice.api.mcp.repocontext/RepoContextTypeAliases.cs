@@ -45,4 +45,19 @@ internal static class RepoContextTypeAliases
 
     /// <summary>Alias for <see cref="RepoContextRemainingLife"/>.</summary>
     internal const string RemainingLife = "ol.rcl";
+
+    /// <summary>Alias for <see cref="RepoContext.VectorNormalization"/>.</summary>
+    internal const string VectorNormalization = "ol.vn";
+
+    /// <summary>Alias for <see cref="EmbeddingSpaceTag"/>.</summary>
+    internal const string EmbeddingSpaceTag = "ol.vsp";
+
+    /// <summary>Alias for <see cref="VectorMetadataRecord"/>.</summary>
+    internal const string VectorMetadataRecord = "ol.vmd";
+
+    /// <summary>Alias for <see cref="VectorPayloadRecord"/>.</summary>
+    internal const string VectorPayloadRecord = "ol.vpl";
+
+    /// <summary>Alias for <see cref="VectorMembershipRecord"/>.</summary>
+    internal const string VectorMembershipRecord = "ol.vmb";
 }

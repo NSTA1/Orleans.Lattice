@@ -17,6 +17,9 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 ///   <item><description><c>repo/{repoId}/file/{path}</c> - a source-file node.</description></item>
 ///   <item><description><c>repo/{repoId}/symbol/{fqName}</c> - a symbol record.</description></item>
 ///   <item><description><c>repo/{repoId}/mem/{topic}/{id}</c> - an agent memory record.</description></item>
+///   <item><description><c>repo/{repoId}/vec/{vectorId}</c> - a vector metadata record.</description></item>
+///   <item><description><c>repo/{repoId}/vpay/{contentAddress}</c> - a content-addressed vector payload.</description></item>
+///   <item><description><c>repo/{repoId}/vmem/{collection}</c> - a vector collection membership record.</description></item>
 /// </list>
 /// <para>
 /// <b>Encoding.</b> Opaque single components (<c>repoId</c>, <c>topic</c>, and
@@ -50,6 +53,15 @@ internal static class RepoContextKeys
 
     /// <summary>The memory segment token.</summary>
     internal const string MemorySegment = "mem";
+
+    /// <summary>The vector-metadata segment token.</summary>
+    internal const string VectorSegment = "vec";
+
+    /// <summary>The vector-payload segment token.</summary>
+    internal const string VectorPayloadSegment = "vpay";
+
+    /// <summary>The vector-membership segment token.</summary>
+    internal const string VectorMembershipSegment = "vmem";
 
     private const char Separator = '/';
 
@@ -110,6 +122,33 @@ internal static class RepoContextKeys
         return $"{RepoScanPrefix(repoId)}{MemorySegment}{Separator}{EncodeComponent(topic)}{Separator}{EncodeComponent(id)}";
     }
 
+    /// <summary>Builds the key for a vector metadata record: <c>repo/{repoId}/vec/{vectorId}</c>.</summary>
+    /// <param name="repoId">The repository identifier. Must not be <see langword="null"/>.</param>
+    /// <param name="vectorId">The per-repository vector identifier. Must not be <see langword="null"/>.</param>
+    internal static string Vector(string repoId, string vectorId)
+    {
+        ArgumentNullException.ThrowIfNull(vectorId);
+        return $"{RepoScanPrefix(repoId)}{VectorSegment}{Separator}{EncodeComponent(vectorId)}";
+    }
+
+    /// <summary>Builds the key for a content-addressed vector payload: <c>repo/{repoId}/vpay/{contentAddress}</c>.</summary>
+    /// <param name="repoId">The repository identifier. Must not be <see langword="null"/>.</param>
+    /// <param name="contentAddress">The payload content address. Must not be <see langword="null"/>.</param>
+    internal static string VectorPayload(string repoId, string contentAddress)
+    {
+        ArgumentNullException.ThrowIfNull(contentAddress);
+        return $"{RepoScanPrefix(repoId)}{VectorPayloadSegment}{Separator}{EncodeComponent(contentAddress)}";
+    }
+
+    /// <summary>Builds the key for a vector membership record: <c>repo/{repoId}/vmem/{collection}</c>.</summary>
+    /// <param name="repoId">The repository identifier. Must not be <see langword="null"/>.</param>
+    /// <param name="collection">The vector collection name. Must not be <see langword="null"/>.</param>
+    internal static string VectorMembership(string repoId, string collection)
+    {
+        ArgumentNullException.ThrowIfNull(collection);
+        return $"{RepoScanPrefix(repoId)}{VectorMembershipSegment}{Separator}{EncodeComponent(collection)}";
+    }
+
     /// <summary>Builds the range-scan prefix for all file nodes in a repository: <c>repo/{repoId}/file/</c>.</summary>
     /// <param name="repoId">The repository identifier. Must not be <see langword="null"/>.</param>
     internal static string FilesPrefix(string repoId) =>
@@ -129,6 +168,21 @@ internal static class RepoContextKeys
     /// <param name="repoId">The repository identifier. Must not be <see langword="null"/>.</param>
     internal static string MemoryPrefix(string repoId) =>
         $"{RepoScanPrefix(repoId)}{MemorySegment}{Separator}";
+
+    /// <summary>Builds the range-scan prefix for all vector metadata records in a repository: <c>repo/{repoId}/vec/</c>.</summary>
+    /// <param name="repoId">The repository identifier. Must not be <see langword="null"/>.</param>
+    internal static string VectorsPrefix(string repoId) =>
+        $"{RepoScanPrefix(repoId)}{VectorSegment}{Separator}";
+
+    /// <summary>Builds the range-scan prefix for all vector payloads in a repository: <c>repo/{repoId}/vpay/</c>.</summary>
+    /// <param name="repoId">The repository identifier. Must not be <see langword="null"/>.</param>
+    internal static string VectorPayloadsPrefix(string repoId) =>
+        $"{RepoScanPrefix(repoId)}{VectorPayloadSegment}{Separator}";
+
+    /// <summary>Builds the range-scan prefix for all vector membership records in a repository: <c>repo/{repoId}/vmem/</c>.</summary>
+    /// <param name="repoId">The repository identifier. Must not be <see langword="null"/>.</param>
+    internal static string VectorMembershipsPrefix(string repoId) =>
+        $"{RepoScanPrefix(repoId)}{VectorMembershipSegment}{Separator}";
 
     /// <summary>
     /// Builds the range-scan prefix for all memory records under a topic:
@@ -241,6 +295,33 @@ internal static class RepoContextKeys
                     Kind = RepoContextRecordKind.Symbol,
                     RepoId = repoId,
                     FullyQualifiedName = DecodeComponent(payload),
+                };
+                return true;
+
+            case VectorSegment:
+                result = new RepoContextKey
+                {
+                    Kind = RepoContextRecordKind.VectorMetadata,
+                    RepoId = repoId,
+                    VectorId = DecodeComponent(payload),
+                };
+                return true;
+
+            case VectorPayloadSegment:
+                result = new RepoContextKey
+                {
+                    Kind = RepoContextRecordKind.VectorPayload,
+                    RepoId = repoId,
+                    ContentAddress = DecodeComponent(payload),
+                };
+                return true;
+
+            case VectorMembershipSegment:
+                result = new RepoContextKey
+                {
+                    Kind = RepoContextRecordKind.VectorMembership,
+                    RepoId = repoId,
+                    Collection = DecodeComponent(payload),
                 };
                 return true;
 

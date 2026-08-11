@@ -58,7 +58,8 @@ internal static class RepoContextTrees
     /// Resolves the named tree that stores records of the given
     /// <paramref name="kind"/>. Structural kinds (repo, package, file, symbol)
     /// map to <see cref="Structural"/>; <see cref="RepoContextRecordKind.Memory"/>
-    /// maps to <see cref="Memory"/>.
+    /// maps to <see cref="Memory"/>; and the vector kinds map to their dedicated
+    /// vector trees.
     /// </summary>
     /// <param name="kind">The record family to route.</param>
     /// <exception cref="ArgumentOutOfRangeException">The kind is not a known record kind.</exception>
@@ -69,6 +70,9 @@ internal static class RepoContextTrees
             or RepoContextRecordKind.File
             or RepoContextRecordKind.Symbol => Structural,
         RepoContextRecordKind.Memory => Memory,
+        RepoContextRecordKind.VectorMetadata => VectorMetadata,
+        RepoContextRecordKind.VectorPayload => VectorPayload,
+        RepoContextRecordKind.VectorMembership => VectorMembership,
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown repo-context record kind."),
     };
 }

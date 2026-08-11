@@ -9,6 +9,9 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 ///   <item><description><see cref="RepoContextRecordKind.Package"/> / <see cref="RepoContextRecordKind.File"/>: <see cref="RepoId"/> and <see cref="Path"/>.</description></item>
 ///   <item><description><see cref="RepoContextRecordKind.Symbol"/>: <see cref="RepoId"/> and <see cref="FullyQualifiedName"/>.</description></item>
 ///   <item><description><see cref="RepoContextRecordKind.Memory"/>: <see cref="RepoId"/>, <see cref="Topic"/>, and <see cref="Id"/>.</description></item>
+///   <item><description><see cref="RepoContextRecordKind.VectorMetadata"/>: <see cref="RepoId"/> and <see cref="VectorId"/>.</description></item>
+///   <item><description><see cref="RepoContextRecordKind.VectorPayload"/>: <see cref="RepoId"/> and <see cref="ContentAddress"/>.</description></item>
+///   <item><description><see cref="RepoContextRecordKind.VectorMembership"/>: <see cref="RepoId"/> and <see cref="Collection"/>.</description></item>
 /// </list>
 /// </summary>
 internal readonly record struct RepoContextKey
@@ -30,4 +33,13 @@ internal readonly record struct RepoContextKey
 
     /// <summary>The per-topic identifier, for memory keys; otherwise <see langword="null"/>.</summary>
     public string? Id { get; init; }
+
+    /// <summary>The vector identifier, for vector-metadata keys; otherwise <see langword="null"/>.</summary>
+    public string? VectorId { get; init; }
+
+    /// <summary>The payload content address, for vector-payload keys; otherwise <see langword="null"/>.</summary>
+    public string? ContentAddress { get; init; }
+
+    /// <summary>The vector collection name, for vector-membership keys; otherwise <see langword="null"/>.</summary>
+    public string? Collection { get; init; }
 }
