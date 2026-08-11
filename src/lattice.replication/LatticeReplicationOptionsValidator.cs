@@ -554,8 +554,13 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                         + $"{nameof(LatticeMergeMode.VersionVector)}, "
                         + $"{nameof(LatticeMergeMode.MvRegister)}, "
                         + $"{nameof(LatticeMergeMode.Sequence)}, "
-                        + $"{nameof(LatticeMergeMode.OrFlag)}, or "
-                        + $"{nameof(LatticeMergeMode.RwFlag)}.");
+                        + $"{nameof(LatticeMergeMode.OrFlag)}, "
+                        + $"{nameof(LatticeMergeMode.RwFlag)}, "
+                        + $"{nameof(LatticeMergeMode.GCounter)}, "
+                        + $"{nameof(LatticeMergeMode.GSet)}, "
+                        + $"{nameof(LatticeMergeMode.RwSet)}, "
+                        + $"{nameof(LatticeMergeMode.MaxRegister)}, or "
+                        + $"{nameof(LatticeMergeMode.MinRegister)}.");
                 }
             }
         }

@@ -237,6 +237,12 @@ internal sealed class LatticeDataApiGrpcService : LatticeDataApiGrpcServiceBase
             CrdtWriteOp.SequenceRemoveAt => api.SequenceRemoveAtAsync(req.TreeId, req.Key, req.Index, ct),
             CrdtWriteOp.MapSet => api.MapSetAsync(req.TreeId, req.Key, req.Field, req.ReplicaId, req.Element, ct),
             CrdtWriteOp.MapRemove => api.MapRemoveAsync(req.TreeId, req.Key, req.Field, ct),
+            CrdtWriteOp.GCounterIncrement => api.GCounterIncrementAsync(req.TreeId, req.Key, req.ReplicaId, req.Amount, ct),
+            CrdtWriteOp.GSetAdd => api.GSetAddAsync(req.TreeId, req.Key, req.Element, ct),
+            CrdtWriteOp.RwSetAdd => api.RwSetAddAsync(req.TreeId, req.Key, req.Element, req.ReplicaId, ct),
+            CrdtWriteOp.RwSetRemove => api.RwSetRemoveAsync(req.TreeId, req.Key, req.Element, req.ReplicaId, ct),
+            CrdtWriteOp.MaxRegisterSet => api.MaxRegisterSetAsync(req.TreeId, req.Key, req.Element, ct),
+            CrdtWriteOp.MinRegisterSet => api.MinRegisterSetAsync(req.TreeId, req.Key, req.Element, ct),
             _ => throw new ArgumentException($"Unknown CRDT write op '{req.Op}'.", nameof(req)),
         };
 
@@ -246,14 +252,24 @@ internal sealed class LatticeDataApiGrpcService : LatticeDataApiGrpcServiceBase
         {
             case CrdtKind.PnCounter:
                 return new CrdtReadResponse { CounterValue = await api.CounterGetAsync(req.TreeId, req.Key, ct).ConfigureAwait(false) };
+            case CrdtKind.GCounter:
+                return new CrdtReadResponse { CounterValue = await api.GCounterGetAsync(req.TreeId, req.Key, ct).ConfigureAwait(false) };
             case CrdtKind.OrSet:
                 return new CrdtReadResponse { Elements = ToList(await api.SetGetAsync(req.TreeId, req.Key, ct).ConfigureAwait(false)) };
+            case CrdtKind.GSet:
+                return new CrdtReadResponse { Elements = ToList(await api.GSetGetAsync(req.TreeId, req.Key, ct).ConfigureAwait(false)) };
+            case CrdtKind.RwSet:
+                return new CrdtReadResponse { Elements = ToList(await api.RwSetGetAsync(req.TreeId, req.Key, ct).ConfigureAwait(false)) };
             case CrdtKind.OrFlag:
                 return new CrdtReadResponse { FlagValue = await api.OrFlagGetAsync(req.TreeId, req.Key, ct).ConfigureAwait(false) };
             case CrdtKind.RwFlag:
                 return new CrdtReadResponse { FlagValue = await api.RwFlagGetAsync(req.TreeId, req.Key, ct).ConfigureAwait(false) };
             case CrdtKind.MvRegister:
                 return new CrdtReadResponse { Elements = ToList(await api.RegisterGetAsync(req.TreeId, req.Key, ct).ConfigureAwait(false)) };
+            case CrdtKind.MaxRegister:
+                return new CrdtReadResponse { Elements = ToSingletonOrEmpty(await api.MaxRegisterGetAsync(req.TreeId, req.Key, ct).ConfigureAwait(false)) };
+            case CrdtKind.MinRegister:
+                return new CrdtReadResponse { Elements = ToSingletonOrEmpty(await api.MinRegisterGetAsync(req.TreeId, req.Key, ct).ConfigureAwait(false)) };
             case CrdtKind.Sequence:
                 return new CrdtReadResponse { Elements = ToList(await api.SequenceGetAsync(req.TreeId, req.Key, ct).ConfigureAwait(false)) };
             case CrdtKind.VersionVector:
@@ -287,6 +303,9 @@ internal sealed class LatticeDataApiGrpcService : LatticeDataApiGrpcServiceBase
 
     private static List<byte[]> ToList(IReadOnlyList<byte[]> values)
         => values as List<byte[]> ?? [.. values];
+
+    private static List<byte[]> ToSingletonOrEmpty(byte[]? value)
+        => value is null ? [] : [value];
 
     private async Task<TResponse> InvokeAsync<TRequest, TResponse>(
         TRequest request,

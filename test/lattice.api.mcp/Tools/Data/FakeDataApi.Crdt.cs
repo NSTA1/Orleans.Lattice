@@ -14,11 +14,15 @@ internal sealed partial class FakeDataApi
     private static readonly ByteArrayComparer ByteComparer = new();
 
     private readonly Dictionary<(string, string), Dictionary<string, long>> _counters = new();
+    private readonly Dictionary<(string, string), Dictionary<string, long>> _gcounters = new();
     private readonly Dictionary<(string, string), HashSet<byte[]>> _sets = new();
+    private readonly Dictionary<(string, string), HashSet<byte[]>> _rwSets = new();
     private readonly Dictionary<(string, string), bool> _orFlags = new();
     private readonly Dictionary<(string, string), bool> _rwFlags = new();
     private readonly Dictionary<(string, string), Dictionary<string, int>> _vectors = new();
     private readonly Dictionary<(string, string), List<byte[]>> _registers = new();
+    private readonly Dictionary<(string, string), byte[]> _maxRegisters = new();
+    private readonly Dictionary<(string, string), byte[]> _minRegisters = new();
     private readonly Dictionary<(string, string), List<byte[]>> _sequences = new();
     private readonly Dictionary<(string, string), Dictionary<string, List<byte[]>>> _maps = new();
 
@@ -36,6 +40,24 @@ internal sealed partial class FakeDataApi
     public Task<long> CounterGetAsync(string treeId, string key, CancellationToken cancellationToken = default)
     {
         if (Denied.Contains((treeId, key)) || !_counters.TryGetValue((treeId, key), out var replicas))
+        {
+            return Task.FromResult(0L);
+        }
+
+        return Task.FromResult(replicas.Values.Sum());
+    }
+
+    public Task GCounterIncrementAsync(string treeId, string key, string replicaId, long amount, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDenied(treeId, key);
+        var replicas = _gcounters.TryGetValue((treeId, key), out var r) ? r : _gcounters[(treeId, key)] = new();
+        replicas[replicaId] = replicas.GetValueOrDefault(replicaId) + amount;
+        return Task.CompletedTask;
+    }
+
+    public Task<long> GCounterGetAsync(string treeId, string key, CancellationToken cancellationToken = default)
+    {
+        if (Denied.Contains((treeId, key)) || !_gcounters.TryGetValue((treeId, key), out var replicas))
         {
             return Task.FromResult(0L);
         }
@@ -106,6 +128,35 @@ internal sealed partial class FakeDataApi
     public Task<bool> RwFlagGetAsync(string treeId, string key, CancellationToken cancellationToken = default)
         => Task.FromResult(!Denied.Contains((treeId, key)) && _rwFlags.GetValueOrDefault((treeId, key)));
 
+    public Task RwSetAddAsync(string treeId, string key, byte[] element, string replicaId, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDenied(treeId, key);
+        var set = _rwSets.TryGetValue((treeId, key), out var s) ? s : _rwSets[(treeId, key)] = new(ByteComparer);
+        set.Add(element);
+        return Task.CompletedTask;
+    }
+
+    public Task RwSetRemoveAsync(string treeId, string key, byte[] element, string replicaId, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDenied(treeId, key);
+        if (_rwSets.TryGetValue((treeId, key), out var set))
+        {
+            set.Remove(element);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<byte[]>> RwSetGetAsync(string treeId, string key, CancellationToken cancellationToken = default)
+    {
+        if (Denied.Contains((treeId, key)) || !_rwSets.TryGetValue((treeId, key), out var set))
+        {
+            return Task.FromResult<IReadOnlyList<byte[]>>([]);
+        }
+
+        return Task.FromResult<IReadOnlyList<byte[]>>([.. set]);
+    }
+
     public Task VersionVectorTickAsync(string treeId, string key, string replicaId, CancellationToken cancellationToken = default)
     {
         ThrowIfDenied(treeId, key);
@@ -145,6 +196,50 @@ internal sealed partial class FakeDataApi
         }
 
         return Task.FromResult<IReadOnlyList<byte[]>>([.. values]);
+    }
+
+    public Task MaxRegisterSetAsync(string treeId, string key, byte[] value, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDenied(treeId, key);
+        if (!_maxRegisters.TryGetValue((treeId, key), out var current)
+            || ((ReadOnlySpan<byte>)value).SequenceCompareTo(current) > 0)
+        {
+            _maxRegisters[(treeId, key)] = value;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task<byte[]?> MaxRegisterGetAsync(string treeId, string key, CancellationToken cancellationToken = default)
+    {
+        if (Denied.Contains((treeId, key)) || !_maxRegisters.TryGetValue((treeId, key), out var value))
+        {
+            return Task.FromResult<byte[]?>(null);
+        }
+
+        return Task.FromResult<byte[]?>(value);
+    }
+
+    public Task MinRegisterSetAsync(string treeId, string key, byte[] value, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDenied(treeId, key);
+        if (!_minRegisters.TryGetValue((treeId, key), out var current)
+            || ((ReadOnlySpan<byte>)value).SequenceCompareTo(current) < 0)
+        {
+            _minRegisters[(treeId, key)] = value;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task<byte[]?> MinRegisterGetAsync(string treeId, string key, CancellationToken cancellationToken = default)
+    {
+        if (Denied.Contains((treeId, key)) || !_minRegisters.TryGetValue((treeId, key), out var value))
+        {
+            return Task.FromResult<byte[]?>(null);
+        }
+
+        return Task.FromResult<byte[]?>(value);
     }
 
     public Task SequenceInsertAtAsync(string treeId, string key, int index, string replicaId, byte[] value, CancellationToken cancellationToken = default)
@@ -210,6 +305,26 @@ internal sealed partial class FakeDataApi
         }
 
         return Task.FromResult<IReadOnlyDictionary<string, IReadOnlyList<byte[]>>>(result);
+    }
+
+    private readonly Dictionary<(string, string), HashSet<byte[]>> _gsets = new();
+
+    public Task GSetAddAsync(string treeId, string key, byte[] element, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDenied(treeId, key);
+        var set = _gsets.TryGetValue((treeId, key), out var s) ? s : _gsets[(treeId, key)] = new(ByteComparer);
+        set.Add(element);
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<byte[]>> GSetGetAsync(string treeId, string key, CancellationToken cancellationToken = default)
+    {
+        if (Denied.Contains((treeId, key)) || !_gsets.TryGetValue((treeId, key), out var set))
+        {
+            return Task.FromResult<IReadOnlyList<byte[]>>([]);
+        }
+
+        return Task.FromResult<IReadOnlyList<byte[]>>([.. set]);
     }
 
     private sealed class ByteArrayComparer : IEqualityComparer<byte[]>

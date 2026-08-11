@@ -11,9 +11,9 @@ concurrently, the values are not overwritten - they are folded together through
 the value type's own merge.
 
 `TValue` must implement `ICrdt<TValue>` and have a parameterless constructor;
-use any built-in primitive (`PnCounter`, `OrSet`, `VersionVector`, `MvRegister`)
-or your own. Because the wire shape is generic, the map's `(TKey, TValue)` pair
-must be registered on the host once via `AddOrMapShape` before the silo starts.
+use any built-in primitive or your own. Because the wire shape is generic, the
+map's `(TKey, TValue)` pair must be registered on the host once via
+`AddOrMapShape` before the silo starts.
 
 Use it for: per-user scores, per-shard aggregates, per-item metadata - a keyed
 collection where each entry must converge, not just the key set.

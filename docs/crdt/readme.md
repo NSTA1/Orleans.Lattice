@@ -45,9 +45,14 @@ primitive whose built-in resolution rule matches what your data means.
 
 | Primitive | Accessor | Converges by | Reach for it when... |
 | --- | --- | --- | --- |
-| [OR-Set](orset.md) | `tree.OrSet(key)` | add-wins observed-remove | you need a distributed set where a concurrent add and remove should keep the element |
+| [G-Counter](gcounter.md) | `tree.GCounter(key)` | per-replica sum (grow-only) | you need a counter that only goes up (views, totals) and want the minimal, tombstone-free counter |
 | [PN-Counter](pncounter.md) | `tree.PnCounter(key)` | per-replica sum | you need a counter that many clusters increment and decrement at once (likes, stock, quotas) |
+| [G-Set](gset.md) | `tree.GSet(key)` | set union (grow-only) | you need an append-only set (tag sets, seen-ids) and never remove elements |
+| [OR-Set](orset.md) | `tree.OrSet(key)` | add-wins observed-remove | you need a distributed set where a concurrent add and remove should keep the element |
+| [RW-Set](rwset.md) | `tree.RwSet(key)` | remove-wins observed-remove | you need a set where a removal must win the tie (revocation lists, blocklists) |
 | [MV-Register](mvregister.md) | `tree.MvRegister<T>(key)` | keep concurrent values | you hold a single typed value but want to *see* concurrent writes instead of silently dropping one |
+| [Max-Register](maxregister.md) | `tree.MaxRegister<T>(key, orderKey)` | directional max (monotone) | a value only moves up (high-water mark, version ceiling, max-seen reading) |
+| [Min-Register](minregister.md) | `tree.MinRegister<T>(key, orderKey)` | directional min (monotone) | a value only moves down (latency floor, first-seen timestamp) |
 | [Version Vector](versionvector.md) | `tree.VersionVector(key)` | per-replica max | you track causal history / "who has seen what" to detect concurrency |
 | [OR-Flag](orflag.md) | `tree.OrFlag(key)` | enable-wins | you track a boolean presence bit where a concurrent enable should beat a disable |
 | [RW-Flag](rwflag.md) | `tree.RwFlag(key)` | disable-wins | you track presence where a removal must win the tie (revocation lists, blocklists) |
@@ -56,6 +61,30 @@ primitive whose built-in resolution rule matches what your data means.
 
 Each linked page has a diagram of the convergence behaviour and a short,
 runnable `ILattice` example.
+
+## The catalogue at a glance
+
+The catalogue is organised by data-structure family; each family offers the
+variants whose built-in conflict resolution differs. Pick the family that matches
+your data, then the variant whose resolution rule matches what a concurrent edit
+should mean.
+
+| Family | Variants |
+| --- | --- |
+| Counter | grow-only [`GCounter`](gcounter.md), positive-negative [`PnCounter`](pncounter.md) |
+| Set | grow-only [`GSet`](gset.md), add-wins [`OrSet`](orset.md), remove-wins [`RwSet`](rwset.md) |
+| Flag | enable-wins [`OrFlag`](orflag.md), disable-wins [`RwFlag`](rwflag.md) |
+| Register | monotone [`MaxRegister`](maxregister.md) / [`MinRegister`](minregister.md), multi-value [`MvRegister`](mvregister.md), last-writer-wins mode |
+| Map | [`OrMap`](ormap.md) |
+| Sequence | [`Rga`](sequence.md) |
+| Causality | [`VersionVector`](versionvector.md) |
+
+> **Deliberate non-goals.** The sequence family ships only RGA; an
+> interleaving-correct list variant (LSEQ / Fugue-style) is intentionally out of
+> scope because RGA covers the collaborative-list workload and the
+> interleaving-anomaly fix carries a cost the catalogue does not yet need. If your
+> workload hits concurrent-insert interleaving, raise an issue and we will
+> revisit.
 
 > Not a CRDT: `LatticeMergeMode.LwwRegister` is plain last-writer-wins on the
 > value bytes. It is safe only when a single cluster owns each key at a time; use
@@ -71,9 +100,9 @@ the delta for you, and exposes natural methods (`AddAsync`, `IncrementAsync`,
 `SetAsync`) so you never hand-build byte arrays.
 
 Each key records its own merge mode, so a single tree can **mix** CRDT types
-freely: an OR-Set under one key, a PN-Counter under another, and plain
-last-writer-wins values alongside them. There is nothing to configure per tree
-for local (single-cluster) use.
+freely, with different CRDT primitives and plain last-writer-wins values
+alongside one another. There is nothing to configure per tree for local
+(single-cluster) use.
 
 > [!NOTE]
 > The one exception is **cross-cluster replication**. An enrolled tree declares a

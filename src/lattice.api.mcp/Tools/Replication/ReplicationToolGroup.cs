@@ -102,7 +102,7 @@ internal sealed class ReplicationToolGroup : ILatticeApiMcpToolGroup
             (
                 RequestContext<CallToolRequestParams> context,
                 [Description("The target tree id to enable replication for.")] string treeId,
-                [Description("The wire merge mode to fix for the tree: LwwRegister, OrSet, PnCounter, VersionVector, MvRegister, OrMap, Sequence, OrFlag, or RwFlag.")] string mode,
+                [Description("The wire merge mode to fix for the tree: LwwRegister, OrSet, PnCounter, VersionVector, MvRegister, OrMap, Sequence, OrFlag, RwFlag, or RwSet.")] string mode,
                 CancellationToken cancellationToken,
                 [Description("Optional cluster id to pull an initial snapshot from when the tree already holds data; null skips the bootstrap.")] string? bootstrapSourceClusterId = null) =>
             {

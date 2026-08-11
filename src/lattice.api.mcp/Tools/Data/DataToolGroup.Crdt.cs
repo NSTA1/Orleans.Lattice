@@ -62,6 +62,42 @@ internal sealed partial class DataToolGroup
                 UseStructuredContent = true,
             });
 
+    private static McpServerTool BuildGCounterWriteTool()
+        => McpServerTool.Create(
+            GCounterWriteToolAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_data_gcounter",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Increment a G-counter",
+                Description =
+                    "Applies an increment to a grow-only G-Counter at a key. A G-Counter only ever increases and "
+                    + "converges by per-replica sum: every writer's increments are tracked independently and summed, "
+                    + "so concurrent increments from many clusters all count (monotone metrics, event / sequence "
+                    + "counters, quota consumption). Pass a non-negative amount; the replicaId names the writer whose "
+                    + "running tally is advanced. Unlike a PN-Counter it cannot decrement. Fails closed: a caller who "
+                    + "may not write the key is denied." + CrdtModeNote + " Destructive.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildGCounterGetTool()
+        => McpServerTool.Create(
+            GCounterGetToolAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_data_gcounter_get",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Read a G-counter total",
+                Description =
+                    "Reads the converged total of a grow-only G-Counter: the sum across every replica's increments. "
+                    + "An absent or unreadable key reads as zero, never a fault. Read-only.",
+                ReadOnly = true,
+                Destructive = false,
+                UseStructuredContent = true,
+            });
+
     private static McpServerTool BuildSetWriteTool()
         => McpServerTool.Create(
             SetWriteToolAsync,
@@ -165,6 +201,42 @@ internal sealed partial class DataToolGroup
                 UseStructuredContent = true,
             });
 
+    private static McpServerTool BuildRwSetWriteTool()
+        => McpServerTool.Create(
+            RwSetWriteToolAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_data_rwset",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Add or remove an RW-Set element",
+                Description =
+                    "Adds or removes a base64-encoded element in an RW-Set (remove-wins observed-remove set) at a "
+                    + "key. An RW-Set converges remove-wins: a concurrent add and remove of the same element keeps "
+                    + "the element out, so a revoke is never silently resurrected by a concurrent re-add (membership "
+                    + "revocation lists, blocklists). Choose add or remove; both name the writer via replicaId. "
+                    + "Supply the element bytes as base64. Fails closed: a caller who may not write the key is "
+                    + "denied. Invalid base64 is a caller error." + CrdtModeNote + " Destructive.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildRwSetGetTool()
+        => McpServerTool.Create(
+            RwSetGetToolAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_data_rwset_get",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Read RW-Set members",
+                Description =
+                    "Reads the current members of an RW-Set (remove-wins) as an unordered list of base64-encoded "
+                    + "element bytes. An absent or unreadable key yields an empty list, never a fault. Read-only.",
+                ReadOnly = true,
+                Destructive = false,
+                UseStructuredContent = true,
+            });
+
     private static McpServerTool BuildVersionVectorTickTool()
         => McpServerTool.Create(
             VersionVectorTickToolAsync,
@@ -231,6 +303,80 @@ internal sealed partial class DataToolGroup
                     "Reads an MV-Register's current values as a list of base64-encoded byte strings: one value "
                     + "normally, more than one only while concurrent writes are unresolved (the application picks). "
                     + "An absent or unreadable key yields an empty list, never a fault. Read-only.",
+                ReadOnly = true,
+                Destructive = false,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildMaxRegisterSetTool()
+        => McpServerTool.Create(
+            MaxRegisterSetToolAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_data_maxregister_set",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Advance a max-register",
+                Description =
+                    "Advances a monotone Max-Register at a key towards a base64-encoded value - the high-water-mark "
+                    + "primitive that keeps the greatest value ever seen. Candidates are ordered by their raw value "
+                    + "bytes (unsigned lexicographic), so a write that is not strictly greater than the current value "
+                    + "is a durable no-op; concurrent writers from many clusters converge on the single greatest value. "
+                    + "Fails closed: a caller who may not write the key is denied. Invalid base64 is a caller error."
+                    + CrdtModeNote + " Destructive.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildMaxRegisterGetTool()
+        => McpServerTool.Create(
+            MaxRegisterGetToolAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_data_maxregister_get",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Read a max-register",
+                Description =
+                    "Reads a monotone Max-Register's current value as a list holding zero or one base64-encoded byte "
+                    + "string (empty when the register has never been written). An absent or unreadable key yields an "
+                    + "empty list, never a fault. Read-only.",
+                ReadOnly = true,
+                Destructive = false,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildMinRegisterSetTool()
+        => McpServerTool.Create(
+            MinRegisterSetToolAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_data_minregister_set",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Advance a min-register",
+                Description =
+                    "Advances a monotone Min-Register at a key towards a base64-encoded value - the low-water-mark "
+                    + "primitive that keeps the smallest value ever seen. Candidates are ordered by their raw value "
+                    + "bytes (unsigned lexicographic), so a write that is not strictly smaller than the current value "
+                    + "is a durable no-op; concurrent writers from many clusters converge on the single smallest value. "
+                    + "Fails closed: a caller who may not write the key is denied. Invalid base64 is a caller error."
+                    + CrdtModeNote + " Destructive.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildMinRegisterGetTool()
+        => McpServerTool.Create(
+            MinRegisterGetToolAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_data_minregister_get",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Read a min-register",
+                Description =
+                    "Reads a monotone Min-Register's current value as a list holding zero or one base64-encoded byte "
+                    + "string (empty when the register has never been written). An absent or unreadable key yields an "
+                    + "empty list, never a fault. Read-only.",
                 ReadOnly = true,
                 Destructive = false,
                 UseStructuredContent = true,
@@ -321,6 +467,44 @@ internal sealed partial class DataToolGroup
                 UseStructuredContent = true,
             });
 
+    private static McpServerTool BuildGSetWriteTool()
+        => McpServerTool.Create(
+            GSetWriteToolAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_data_gset",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Add a G-Set element",
+                Description =
+                    "Adds a base64-encoded element to a grow-only (G) set at a key. A G-Set converges by set "
+                    + "union: every add survives and the add is idempotent, so concurrent adds from many writers "
+                    + "all count and re-adding an element is a harmless no-op. It needs no replicaId - a grow-only "
+                    + "set carries no causal context. There is no remove operation by design; use lattice_data_orset "
+                    + "when elements must ever be removed. Supply the element bytes as base64. Fails closed: a caller "
+                    + "who may not write the key is denied. Invalid base64 is a caller error." + CrdtModeNote
+                    + " Destructive.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildGSetGetTool()
+        => McpServerTool.Create(
+            GSetGetToolAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_data_gset_get",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Read G-Set members",
+                Description =
+                    "Reads the current members of a grow-only (G) set as a list of base64-encoded element bytes in "
+                    + "the set's deterministic order. An absent or unreadable key yields an empty list, never a "
+                    + "fault. Read-only.",
+                ReadOnly = true,
+                Destructive = false,
+                UseStructuredContent = true,
+            });
+
     private static Task<CrdtWriteToolResult> CounterWriteToolAsync(
         RequestContext<CallToolRequestParams> context,
         [Description("Logical tree identifier.")] string treeId,
@@ -337,6 +521,22 @@ internal sealed partial class DataToolGroup
         [Description("The counter key.")] string key,
         CancellationToken cancellationToken)
         => DataToolCore.CounterGetAsync(ResolveApi(context), treeId, key, cancellationToken);
+
+    private static Task<CrdtWriteToolResult> GCounterWriteToolAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("Logical tree identifier.")] string treeId,
+        [Description("The counter key.")] string key,
+        [Description(ReplicaIdDescription)] string replicaId,
+        [Description("The non-negative amount to add.")] long amount,
+        CancellationToken cancellationToken)
+        => DataToolCore.GCounterIncrementAsync(ResolveApi(context), treeId, key, replicaId, amount, cancellationToken);
+
+    private static Task<CrdtCounterToolResult> GCounterGetToolAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("Logical tree identifier.")] string treeId,
+        [Description("The counter key.")] string key,
+        CancellationToken cancellationToken)
+        => DataToolCore.GCounterGetAsync(ResolveApi(context), treeId, key, cancellationToken);
 
     private static Task<CrdtWriteToolResult> SetWriteToolAsync(
         RequestContext<CallToolRequestParams> context,
@@ -388,6 +588,24 @@ internal sealed partial class DataToolGroup
         CancellationToken cancellationToken)
         => DataToolCore.RwFlagGetAsync(ResolveApi(context), treeId, key, cancellationToken);
 
+    private static Task<CrdtWriteToolResult> RwSetWriteToolAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("Logical tree identifier.")] string treeId,
+        [Description("The set key.")] string key,
+        [Description("Whether to add or remove-wins remove the element.")] CrdtRwSetOp operation,
+        [Description("The element bytes, base64-encoded. Invalid base64 is rejected as a caller error.")] string element,
+        [Description(ReplicaIdDescription)] string replicaId,
+        CancellationToken cancellationToken)
+        => DataToolCore.RwSetWriteAsync(
+            ResolveApi(context), treeId, key, operation, DecodeBase64Value(element), replicaId, cancellationToken);
+
+    private static Task<CrdtElementsToolResult> RwSetGetToolAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("Logical tree identifier.")] string treeId,
+        [Description("The set key.")] string key,
+        CancellationToken cancellationToken)
+        => DataToolCore.RwSetGetAsync(ResolveApi(context), treeId, key, cancellationToken);
+
     private static Task<CrdtWriteToolResult> VersionVectorTickToolAsync(
         RequestContext<CallToolRequestParams> context,
         [Description("Logical tree identifier.")] string treeId,
@@ -419,6 +637,38 @@ internal sealed partial class DataToolGroup
         [Description("The register key.")] string key,
         CancellationToken cancellationToken)
         => DataToolCore.RegisterGetAsync(ResolveApi(context), treeId, key, cancellationToken);
+
+    private static Task<CrdtWriteToolResult> MaxRegisterSetToolAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("Logical tree identifier.")] string treeId,
+        [Description("The register key.")] string key,
+        [Description("The candidate value bytes, base64-encoded. Invalid base64 is rejected as a caller error.")] string value,
+        CancellationToken cancellationToken)
+        => DataToolCore.MaxRegisterSetAsync(
+            ResolveApi(context), treeId, key, DecodeBase64Value(value), cancellationToken);
+
+    private static Task<CrdtElementsToolResult> MaxRegisterGetToolAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("Logical tree identifier.")] string treeId,
+        [Description("The register key.")] string key,
+        CancellationToken cancellationToken)
+        => DataToolCore.MaxRegisterGetAsync(ResolveApi(context), treeId, key, cancellationToken);
+
+    private static Task<CrdtWriteToolResult> MinRegisterSetToolAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("Logical tree identifier.")] string treeId,
+        [Description("The register key.")] string key,
+        [Description("The candidate value bytes, base64-encoded. Invalid base64 is rejected as a caller error.")] string value,
+        CancellationToken cancellationToken)
+        => DataToolCore.MinRegisterSetAsync(
+            ResolveApi(context), treeId, key, DecodeBase64Value(value), cancellationToken);
+
+    private static Task<CrdtElementsToolResult> MinRegisterGetToolAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("Logical tree identifier.")] string treeId,
+        [Description("The register key.")] string key,
+        CancellationToken cancellationToken)
+        => DataToolCore.MinRegisterGetAsync(ResolveApi(context), treeId, key, cancellationToken);
 
     private static Task<CrdtWriteToolResult> SequenceWriteToolAsync(
         RequestContext<CallToolRequestParams> context,
@@ -459,6 +709,22 @@ internal sealed partial class DataToolGroup
         [Description("The map key.")] string key,
         CancellationToken cancellationToken)
         => DataToolCore.MapGetAsync(ResolveApi(context), treeId, key, cancellationToken);
+
+    private static Task<CrdtWriteToolResult> GSetWriteToolAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("Logical tree identifier.")] string treeId,
+        [Description("The set key.")] string key,
+        [Description("The element bytes, base64-encoded. Invalid base64 is rejected as a caller error.")] string element,
+        CancellationToken cancellationToken)
+        => DataToolCore.GSetAddAsync(
+            ResolveApi(context), treeId, key, DecodeBase64Value(element), cancellationToken);
+
+    private static Task<CrdtElementsToolResult> GSetGetToolAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("Logical tree identifier.")] string treeId,
+        [Description("The set key.")] string key,
+        CancellationToken cancellationToken)
+        => DataToolCore.GSetGetAsync(ResolveApi(context), treeId, key, cancellationToken);
 
     private static byte[]? DecodeOptionalBase64Value(string? value)
         => value is null ? null : DecodeBase64Value(value);

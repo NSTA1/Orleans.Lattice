@@ -50,4 +50,19 @@ public enum CrdtWriteOp
 
     /// <summary>OR-Map observed-remove of <c>Field</c>.</summary>
     MapRemove = 13,
+
+    /// <summary>G-counter increment by <c>Amount</c> for <c>ReplicaId</c>.</summary>
+    GCounterIncrement = 14,
+    /// <summary>G-Set add of <c>Element</c> (grow-only; no replica context).</summary>
+    GSetAdd = 15,
+    /// <summary>RW-Set add of <c>Element</c> for <c>ReplicaId</c>.</summary>
+    RwSetAdd = 16,
+
+    /// <summary>RW-Set remove-wins remove of <c>Element</c> for <c>ReplicaId</c>.</summary>
+    RwSetRemove = 17,
+    /// <summary>Max-register advance towards <c>Element</c>.</summary>
+    MaxRegisterSet = 18,
+
+    /// <summary>Min-register advance towards <c>Element</c>.</summary>
+    MinRegisterSet = 19,
 }

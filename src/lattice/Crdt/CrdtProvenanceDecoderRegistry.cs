@@ -58,6 +58,11 @@ public sealed class CrdtProvenanceDecoderRegistry
             SequenceProvenanceDecoder.Instance,
             OrFlagProvenanceDecoder.Instance,
             RwFlagProvenanceDecoder.Instance,
+            GCounterProvenanceDecoder.Instance,
+            GSetProvenanceDecoder.Instance,
+            RwSetProvenanceDecoder.Instance,
+            MaxRegisterProvenanceDecoder.Instance,
+            MinRegisterProvenanceDecoder.Instance,
         });
 
     /// <summary>

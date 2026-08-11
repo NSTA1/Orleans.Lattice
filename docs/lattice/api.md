@@ -732,11 +732,10 @@ using (LatticeDeltaContext.With(new byte[] { 1, 2, 3 }))
 }
 ```
 
-The CRDT value-surface accessors (`OrSet`, `PnCounter`,
-`VersionVector`, `MvRegister`, `OrMap<TKey, TValue>`, `Sequence<T>`, `OrFlag`, `RwFlag`) and the
-atomic-write saga set the context on the caller's behalf - the
-replication package's typed-delta receiver dispatch reads the
-stamped slot and applies via `MergeDelta` automatically.
+The typed CRDT value-surface accessors and the atomic-write saga set the
+context on the caller's behalf - the replication package's typed-delta
+receiver dispatch reads the stamped slot and applies via `MergeDelta`
+automatically.
 
 ### Atomic-batch metadata (`AtomicBatchSize` / `AtomicBatchIndex`)
 
@@ -1239,16 +1238,16 @@ clusters), identical to the live accessor path. See
 
 ## CRDT value-surface accessors
 
-`ILattice.OrSet(key)`, `ILattice.PnCounter(key)`,
-`ILattice.VersionVector(key)`, `ILattice.MvRegister<T>(key)`,
-`ILattice.OrMap<TKey, TValue>(key)`, `ILattice.OrFlag(key)`, and `ILattice.RwFlag(key)` return lightweight,
+The CRDT value-surface methods on `ILattice` return lightweight,
 allocation-free accessors that read and write a single key under
-optimistic concurrency. Each accessor exposes the primitive's
-natural mutation API - add/remove, increment/decrement, tick/merge,
-set/values - instead of forcing callers to hand-roll byte arrays
-and CAS retry loops. The underlying state types are CRDTs whose
-`Merge` is commutative, associative, and idempotent, so concurrent
-updates from multiple replicas converge without coordination. Each accessor writes through `ApplyCrdtDeltaAsync`, so writing through an accessor whose mode differs from a tree's declared cross-cluster replication mode throws `LatticeReplicationModeMismatchException` (see [Replication modes - Single shape per tree](../lattice.replication/replication-modes.md#single-shape-per-tree)).
+optimistic concurrency. Each accessor exposes the primitive's natural
+mutation API instead of forcing callers to hand-roll byte arrays and CAS
+retry loops. The underlying state types are CRDTs whose `Merge` is
+commutative, associative, and idempotent, so concurrent updates from
+multiple replicas converge without coordination. Each accessor writes
+through `ApplyCrdtDeltaAsync`, so writing through an accessor whose mode
+differs from a tree's declared cross-cluster replication mode throws
+`LatticeReplicationModeMismatchException` (see [Replication modes - Single shape per tree](../lattice.replication/replication-modes.md#single-shape-per-tree)).
 
 `ILattice.Sequence<T>(key)` adds a Replicated Growable Array (RGA)
 sequence accessor for collaborative ordered lists and text;
@@ -1273,9 +1272,8 @@ of a race is the withdrawn state - a revocation, kill-switch, or
 opt-out bit.
 
 > See [`state-primitives.md`](state-primitives.md) for the
-> convergence semantics, merge rules, and example use cases of each
-> primitive (`OrSet`, `OrFlag`, `RwFlag`, `PnCounter`, `VersionVector`, `MvRegister`,
-> `OrMap`, `Rga`) - including when to prefer one primitive over
+> convergence semantics, merge rules, and example use cases of the
+> CRDT primitives - including when to prefer one primitive over
 > another and the recursive `ICrdt<TSelf>` contract that lets `OrMap`
 > nest other CRDTs as values.
 
@@ -1408,17 +1406,10 @@ See [Atomic Writes - Coupling a CRDT mutation into an atomic write](atomic-write
 `Value`, `Delta`) consumed synchronously by the atomic-write builder. It
 never crosses the wire and is not an Orleans-serializable type.
 
-Mutating methods retry on CAS failure up to a per-call budget
-(default `OrSetAccessor.DefaultMaxAttempts` /
-`PnCounterAccessor.DefaultMaxAttempts` /
-`VersionVectorAccessor.DefaultMaxAttempts` /
-`MvRegisterAccessor<T>.DefaultMaxAttempts` /
-`OrMapAccessor<TKey, TValue>.DefaultMaxAttempts` /
-`RgaAccessor<T>.DefaultMaxAttempts` /
-`OrFlagAccessor.DefaultMaxAttempts` /
-`RwFlagAccessor.DefaultMaxAttempts` = 16). When the budget is
-exhausted the accessor throws `InvalidOperationException`; raise the
-budget or reduce contention. Values are JSON-serialized via
+Mutating methods retry on CAS failure up to the accessor's per-call budget
+(default 16). When the budget is exhausted the accessor throws
+`InvalidOperationException`; raise the budget or reduce contention. Values
+are JSON-serialized via
 `JsonLatticeSerializer<T>`, so the bytes are inspectable through
 `ILattice.GetAsync`.
 

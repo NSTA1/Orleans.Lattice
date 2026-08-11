@@ -94,7 +94,7 @@ Read/write access over `ILatticeDataApi`. Registered by `AddDataTools(enableWrit
 
 ### Typed CRDT tools
 
-These surface the eight replicated primitives directly, so a caller reads and writes a value's convergent type without hand-encoding CRDT state. Element and value bytes are base64-encoded; a write attributes its mutation to a `replicaId`. Each write tool takes an `operation` discriminator; each type also has a paired read. See [CRDT primitives](../crdt/readme.md) for the merge rules summarised below.
+These surface the replicated CRDT primitives directly, so a caller reads and writes a value's convergent type without hand-encoding CRDT state. Element and value bytes are base64-encoded; a write attributes its mutation to a `replicaId`. Each write tool takes an `operation` discriminator; each type also has a paired read. See [CRDT primitives](../crdt/readme.md) for the merge rules summarised below.
 
 | Type | Write tool | Read tool | Merge rule |
 |---|---|---|---|

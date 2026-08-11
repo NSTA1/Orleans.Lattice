@@ -37,25 +37,30 @@ internal sealed partial class DataToolGroup : ILatticeApiMcpToolGroup
     /// <summary>
     /// Builds the data tool module. When <paramref name="enableWrites"/> is
     /// <see langword="false"/> (the default) only the read tools are contributed
-    /// (the two point / range reads plus the eight typed-CRDT reads); when
+    /// (the two point / range reads plus the thirteen typed-CRDT reads); when
     /// <see langword="true"/> the mutating tools (five point / batch writes plus
-    /// the eight typed-CRDT writes) are added.
+    /// the thirteen typed-CRDT writes) are added.
     /// </summary>
     /// <param name="enableWrites">Whether the mutating data tools are contributed.</param>
     public DataToolGroup(bool enableWrites)
     {
-        var tools = new List<McpServerTool>(enableWrites ? 23 : 10)
+        var tools = new List<McpServerTool>(enableWrites ? 33 : 15)
         {
             BuildGetTool(),
             BuildReadRangeTool(),
             BuildCounterGetTool(),
+            BuildGCounterGetTool(),
             BuildSetGetTool(),
             BuildOrFlagGetTool(),
             BuildRwFlagGetTool(),
+            BuildRwSetGetTool(),
             BuildVersionVectorGetTool(),
             BuildRegisterGetTool(),
+            BuildMaxRegisterGetTool(),
+            BuildMinRegisterGetTool(),
             BuildSequenceGetTool(),
             BuildMapGetTool(),
+            BuildGSetGetTool(),
         };
 
         if (enableWrites)
@@ -66,13 +71,18 @@ internal sealed partial class DataToolGroup : ILatticeApiMcpToolGroup
             tools.Add(BuildSetManyAtomicTool());
             tools.Add(BuildSetManyAtomicCrossTreeTool());
             tools.Add(BuildCounterWriteTool());
+            tools.Add(BuildGCounterWriteTool());
             tools.Add(BuildSetWriteTool());
             tools.Add(BuildOrFlagWriteTool());
             tools.Add(BuildRwFlagWriteTool());
+            tools.Add(BuildRwSetWriteTool());
             tools.Add(BuildVersionVectorTickTool());
             tools.Add(BuildRegisterSetTool());
+            tools.Add(BuildMaxRegisterSetTool());
+            tools.Add(BuildMinRegisterSetTool());
             tools.Add(BuildSequenceWriteTool());
             tools.Add(BuildMapWriteTool());
+            tools.Add(BuildGSetWriteTool());
         }
 
         _tools = tools;

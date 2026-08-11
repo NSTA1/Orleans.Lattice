@@ -62,6 +62,16 @@ public sealed class LatticeReplicationPreconditionValidatorTests
     }
 
     [Test]
+    public void Validate_accepts_bounded_register_modes_without_a_local_replica_id()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(Validator(string.Empty).Validate("gauge", LatticeMergeMode.MaxRegister).IsSatisfied, Is.True);
+            Assert.That(Validator(string.Empty).Validate("floor", LatticeMergeMode.MinRegister).IsSatisfied, Is.True);
+        });
+    }
+
+    [Test]
     public void Validate_throws_on_null_or_empty_tree_id()
     {
         var validator = Validator("site-a");

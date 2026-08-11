@@ -585,18 +585,13 @@ last occurrence of a key is the highest-HLC one - the version the receiver
 converges to. The LWW path therefore keeps only that last version and
 drops the earlier ones outright.
 
-For a recognised CRDT tree (`OrSet`, `PnCounter`, `VersionVector`,
-`MvRegister`, `Sequence`, and a registered `OrMap`) the receiver applies
-each entry by folding its per-entry typed delta into the loaded state, so
-dropping an intermediate version would lose its contribution rather than
-merely hide it. The CRDT path instead **folds** a same-key run's typed
-deltas into a single combined delta - a join over the primitive's own
-semilattice (union for OR-Set adds / removes, pointwise-max for PN-Counter
-and version-vector components, dot-dominance merge for the multi-value
-register, grow-only union for the sequence CRDT, and for the OR-Map a
-union of the dot-tagged adds and tombstones with same-dot value snapshots
-lattice-merged through the value CRDT's own `ICrdt<TValue>.MergeFrom`) -
-re-encodes it onto the kept (highest-HLC) entry, and elides the earlier
+For a recognised CRDT tree, the receiver applies each entry by folding its
+per-entry typed delta into the loaded state, so dropping an intermediate
+version would lose its contribution rather than merely hide it. The CRDT
+path instead **folds** a same-key run's typed deltas into a single combined
+delta - a join over the primitive's own semilattice using the registered
+combine semantics for that tree shape - re-encodes it onto the kept
+(highest-HLC) entry, and elides the earlier
 same-key entries. Each combine is commutative, associative, and
 idempotent, so the combined delta's receiver-side apply effect is
 identical to applying the source deltas in sequence: a coalesced CRDT run

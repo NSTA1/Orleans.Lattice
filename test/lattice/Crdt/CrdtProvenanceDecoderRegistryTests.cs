@@ -40,6 +40,11 @@ public class CrdtProvenanceDecoderRegistryTests
         LatticeMergeMode.Sequence,
         LatticeMergeMode.OrFlag,
         LatticeMergeMode.RwFlag,
+        LatticeMergeMode.GCounter,
+        LatticeMergeMode.GSet,
+        LatticeMergeMode.RwSet,
+        LatticeMergeMode.MaxRegister,
+        LatticeMergeMode.MinRegister,
     };
 
     [Test]

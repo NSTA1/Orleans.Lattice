@@ -161,4 +161,101 @@ public enum LatticeMergeMode
     /// so no per-tree registration is required.
     /// </summary>
     RwFlag = 8,
+
+    /// <summary>
+    /// Grow-only counter. Receivers fold the typed <see cref="GCounterDelta"/>
+    /// carried in <see cref="WalRecord.Delta"/> into the loaded
+    /// <see cref="Orleans.Lattice.GCounter"/> via its instance
+    /// <c>MergeDelta</c> method (the producer authored the delta through
+    /// <see cref="CrdtLatticeExtensions.GCounter(ILattice, string)"/>) by
+    /// pointwise-max on each replica's cumulative component. This is the
+    /// monotonic-only counter that <see cref="PnCounter"/> is built from - the
+    /// natural primitive for monotone metrics, sequence / event counters, and
+    /// quota consumption where decrement never happens. Concurrent active-active
+    /// increments from multiple clusters sum correctly without per-replica
+    /// rendezvous, and late or duplicate delivery is an idempotent no-op. The
+    /// descriptor is a global closed shape, so no per-tree registration is
+    /// required.
+    /// </summary>
+    GCounter = 9,
+
+    /// <summary>
+    /// Grow-only (G) set. Each key carries a <see cref="Orleans.Lattice.GSet"/>
+    /// whose state is a set of opaque element byte arrays with value-equality
+    /// by content. Receivers fold the typed <see cref="GSetDelta"/> carried in
+    /// <see cref="WalRecord.Delta"/> into the loaded
+    /// <see cref="Orleans.Lattice.GSet"/> via its instance <c>MergeDelta</c>
+    /// method (the producer authored the delta through
+    /// <see cref="CrdtLatticeExtensions.GSet(ILattice, string)"/>). The merge
+    /// is set union, which is trivially commutative, associative, and
+    /// idempotent, so concurrent active-active adds from multiple clusters all
+    /// survive convergence. The set is grow-only by design - it carries no
+    /// dots and no tombstones and has no remove operation, so it is the minimal
+    /// set primitive for append-only workloads (tag sets, seen-ids,
+    /// accumulating audiences); reach for <see cref="OrSet"/> when removal is
+    /// needed. The descriptor is a global closed shape, so no per-tree
+    /// registration is required.
+    /// </summary>
+    GSet = 10,
+
+    /// <summary>
+    /// Remove-wins observed-remove set - the set-granularity generalisation
+    /// of <see cref="RwFlag"/> (an <see cref="RwFlag"/> is a single-element
+    /// <see cref="RwSet"/>, exactly as <see cref="OrFlag"/> is to
+    /// <see cref="OrSet"/>). Each key carries a
+    /// <see cref="Orleans.Lattice.RwSet"/> whose state keeps, per element, a
+    /// set of add dots, a set of remove dots, and a set of observed-add
+    /// tombstones cancelling removes; an element is a member only when it
+    /// carries an add dot and no remove dot survives. Receivers fold the
+    /// typed <see cref="RwSetDelta"/> carried in
+    /// <see cref="WalRecord.Delta"/> into the loaded
+    /// <see cref="Orleans.Lattice.RwSet"/> via its instance
+    /// <c>MergeDelta</c> method (the producer authored the delta through
+    /// <see cref="CrdtLatticeExtensions.RwSet(ILattice, string)"/>).
+    /// Concurrent active-active add and remove of the same element from
+    /// different clusters converge remove-wins with their causal dot context
+    /// preserved - a remove an add has not observed survives and keeps the
+    /// element out, so a revoke is never silently resurrected by a concurrent
+    /// re-add. This is the remove-wins counterpart of the add-wins
+    /// <see cref="OrSet"/>, the natural primitive for membership revocation
+    /// lists and blocklists where a removal must win the tie. The descriptor
+    /// is a global closed shape, so no per-tree registration is required.
+    /// </summary>
+    RwSet = 11,
+    /// Monotone max register - keeps the greatest totally-ordered value ever
+    /// seen. Each key carries a <see cref="Orleans.Lattice.BoundedRegister"/>
+    /// whose state is a single value paired with an explicit total-order key;
+    /// receivers fold the typed <see cref="BoundedRegisterDelta"/> carried in
+    /// <see cref="WalRecord.Delta"/> into the loaded register via its instance
+    /// <c>MergeDelta</c> method (the producer authored the delta through
+    /// <see cref="CrdtLatticeExtensions.MaxRegister{T}(ILattice, string, System.Func{T, byte[]}, ILatticeSerializer{T}?)"/>).
+    /// The fold is directional max over the total order carried on the wire, so
+    /// it is commutative, associative, and idempotent - a backwards write or a
+    /// duplicate delivery is a no-op, and concurrent active-active writes from
+    /// different clusters converge on the single greatest value without needing
+    /// the domain comparer on the receiver. This is the high-water-mark
+    /// primitive (a monotone gauge, a version ceiling, a max-seen reading). The
+    /// descriptor is a global closed shape, so no per-tree registration is
+    /// required.
+    /// </summary>
+    MaxRegister = 12,
+
+    /// <summary>
+    /// Monotone min register - the inverse of <see cref="MaxRegister"/>, keeping
+    /// the smallest totally-ordered value ever seen. Each key carries a
+    /// <see cref="Orleans.Lattice.BoundedRegister"/> whose state is a single
+    /// value paired with an explicit total-order key; receivers fold the typed
+    /// <see cref="BoundedRegisterDelta"/> carried in
+    /// <see cref="WalRecord.Delta"/> into the loaded register via its instance
+    /// <c>MergeDelta</c> method (the producer authored the delta through
+    /// <see cref="CrdtLatticeExtensions.MinRegister{T}(ILattice, string, System.Func{T, byte[]}, ILatticeSerializer{T}?)"/>).
+    /// The fold is directional min over the total order carried on the wire, so
+    /// it is commutative, associative, and idempotent - a backwards write or a
+    /// duplicate delivery is a no-op, and concurrent active-active writes from
+    /// different clusters converge on the single smallest value without needing
+    /// the domain comparer on the receiver. This is the low-water-mark primitive
+    /// (a min-seen latency floor, a first-seen timestamp). The descriptor is a
+    /// global closed shape, so no per-tree registration is required.
+    /// </summary>
+    MinRegister = 13,
 }

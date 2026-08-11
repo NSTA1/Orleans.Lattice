@@ -53,7 +53,7 @@ Forward-compatible additions (new `[Id(n)]` slots on `WalRecord` with stable def
 
 The canonical `OrleansBinaryWalRecordEncoder` strips the `[Id(4)] Value` slot on `MutationKind.Set` entries that satisfy both of the following at encode time:
 
-- `Mode` is a typed CRDT mode (`OrSet`, `PnCounter`, `VersionVector`, `MvRegister`, or `OrMap`), i.e. not `LwwRegister`.
+- `Mode` is any typed CRDT mode, i.e. not `LwwRegister`.
 - `Delta` is non-`null`.
 
 The receiver-side apply path dispatches every typed CRDT mode through `WalRecord.Delta` and the primitive's `MergeDelta` operation, so the full-state `Value` byte payload is pure overhead on both the storage WAL and the cross-cluster wire (a single encode-at-append seam feeds both). For non-prepared CRDT-delta records the producer no longer materialises `Value` at all - `WalRecordBuilder.ForCrdtDelta` leaves the in-grain slot `null`, so the durable writer path pays no O(state) post-merge serialisation to feed a slot the encoder drops anyway. The leaf store still holds the canonical post-merge state (materialised lazily from the typed shadow), but the WAL record itself is delta-only. The activation-time cold-rebuild replay therefore reconstructs the post-fold state by folding `Delta` into the prior visible state rather than reading `Value` back. Prepared saga entries (`IsPrepared`) are the exception and retain `Value` at both layers (see below).

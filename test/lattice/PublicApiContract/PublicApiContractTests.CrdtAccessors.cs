@@ -4,7 +4,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.PublicApiContract;
 
 public partial class PublicApiContractTests
 {
-    // ── CrdtLatticeExtensions factory methods ───────────────────────────
+    // ?? CrdtLatticeExtensions factory methods ???????????????????????????
 
     [Test]
     public void OrSet_with_null_lattice_throws()
@@ -38,7 +38,7 @@ public partial class PublicApiContractTests
             Throws.InstanceOf<ArgumentNullException>());
     }
 
-    // ── OrSetAccessor ───────────────────────────────────────────────────
+    // ?? OrSetAccessor ???????????????????????????????????????????????????
 
     [Test]
     public async Task OrSet_GetAsync_on_missing_key_returns_empty_set()
@@ -134,7 +134,7 @@ public partial class PublicApiContractTests
         Assert.That(await accessor.ContainsAsync(Bytes("b")), Is.True);
     }
 
-    // ── PnCounterAccessor ───────────────────────────────────────────────
+    // ?? PnCounterAccessor ???????????????????????????????????????????????
 
     [Test]
     public async Task PnCounter_ValueAsync_on_missing_key_returns_zero()
@@ -220,7 +220,7 @@ public partial class PublicApiContractTests
         Assert.That(underlying.Value, Is.EqualTo(3));
     }
 
-    // ── VersionVectorAccessor ───────────────────────────────────────────
+    // ?? VersionVectorAccessor ???????????????????????????????????????????
 
     [Test]
     public async Task VersionVector_GetAsync_on_missing_key_returns_empty_vector()
@@ -285,7 +285,7 @@ public partial class PublicApiContractTests
         Assert.That(read.Entries.ContainsKey("r2"), Is.True);
     }
 
-    // ── Default-constructed accessor guard ──────────────────────────────
+    // ?? Default-constructed accessor guard ??????????????????????????????
 
     [Test]
     public void OrSetAccessor_default_throws_on_use()
@@ -314,7 +314,7 @@ public partial class PublicApiContractTests
             Throws.InstanceOf<InvalidOperationException>());
     }
 
-    // ── MvRegisterAccessor ──────────────────────────────────────────────
+    // ?? MvRegisterAccessor ??????????????????????????????????????????????
 
     [Test]
     public async Task MvRegister_GetAsync_on_missing_key_returns_empty_register()
@@ -386,7 +386,7 @@ public partial class PublicApiContractTests
             Throws.InstanceOf<InvalidOperationException>());
     }
 
-    // ── OrFlag factory + accessor ───────────────────────────────────────
+    // ?? OrFlag factory + accessor ???????????????????????????????????????
 
     [Test]
     public void OrFlag_with_null_lattice_throws()
@@ -483,7 +483,7 @@ public partial class PublicApiContractTests
             Throws.InstanceOf<InvalidOperationException>());
     }
 
-    // ── RwFlag factory + accessor ───────────────────────────────────────
+    // ?? RwFlag factory + accessor ???????????????????????????????????????
 
     [Test]
     public void RwFlag_with_null_lattice_throws()
@@ -587,5 +587,274 @@ public partial class PublicApiContractTests
         Assert.That(
             async () => await accessor.GetAsync(),
             Throws.InstanceOf<InvalidOperationException>());
+    }
+
+    // ?? GCounter factory + accessor ?????????????????????????????????????
+
+    [Test]
+    public void GCounter_with_null_lattice_throws()
+    {
+        Assert.That(
+            () => CrdtLatticeExtensions.GCounter(null!, "k"),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public async Task GCounter_with_empty_key_throws()
+    {
+        var tree = await _fixture.CreateSmallTreeAsync(
+            "pac-crdt-gcounter-emptykey-" + Guid.NewGuid().ToString("N")[..8], shardCount: 1);
+        Assert.That(() => tree.GCounter(string.Empty), Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public async Task GCounter_ValueAsync_on_missing_key_returns_zero()
+    {
+        var treeId = "pac-crdt-gc-zero-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+
+        Assert.That(await tree.GCounter("absent").ValueAsync(), Is.EqualTo(0));
+    }
+
+    [Test]
+    public async Task GCounter_IncrementAsync_then_ValueAsync_returns_increment()
+    {
+        var treeId = "pac-crdt-gc-inc-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+
+        var counter = tree.GCounter("c");
+        await counter.IncrementAsync(replicaId: "r1", amount: 5);
+
+        Assert.That(await counter.ValueAsync(), Is.EqualTo(5));
+    }
+
+    [Test]
+    public async Task GCounter_IncrementAsync_accumulates_across_calls()
+    {
+        var treeId = "pac-crdt-gc-acc-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+
+        var counter = tree.GCounter("c");
+        await counter.IncrementAsync("r1", amount: 4);
+        await counter.IncrementAsync("r1", amount: 6);
+
+        Assert.That(await counter.ValueAsync(), Is.EqualTo(10));
+    }
+
+    [Test]
+    public async Task GCounter_IncrementAsync_with_negative_amount_throws()
+    {
+        var treeId = "pac-crdt-gc-neginc-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+        Assert.That(
+            async () => await tree.GCounter("c").IncrementAsync("r1", amount: -1),
+            Throws.InstanceOf<ArgumentOutOfRangeException>());
+    }
+
+    [Test]
+    public async Task GCounter_IncrementAsync_with_empty_replica_throws()
+    {
+        var treeId = "pac-crdt-gc-emptyrep-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+        Assert.That(
+            async () => await tree.GCounter("c").IncrementAsync(replicaId: string.Empty),
+            Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public async Task GCounter_MergeAsync_with_null_other_throws()
+    {
+        var treeId = "pac-crdt-gc-mergenull-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+        Assert.That(
+            async () => await tree.GCounter("c").MergeAsync(null!),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public async Task GCounter_MergeAsync_unions_per_replica_components()
+    {
+        var treeId = "pac-crdt-gc-merge-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+
+        var counter = tree.GCounter("c");
+        await counter.IncrementAsync("r1", amount: 4);
+
+        var other = new GCounter();
+        other.Increment("r2", 6);
+        await counter.MergeAsync(other);
+
+        Assert.That(await counter.ValueAsync(), Is.EqualTo(10));
+    }
+
+    [Test]
+    public async Task GCounter_GetAsync_returns_underlying_GCounter()
+    {
+        var treeId = "pac-crdt-gc-get-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+
+        var counter = tree.GCounter("c");
+        await counter.IncrementAsync("r1", 3);
+
+        var underlying = await counter.GetAsync();
+        Assert.That(underlying, Is.Not.Null);
+        Assert.That(underlying.Value, Is.EqualTo(3));
+    }
+
+    [Test]
+    public void GCounterAccessor_default_throws_on_use()
+    {
+        var accessor = default(GCounterAccessor);
+        Assert.That(
+            async () => await accessor.GetAsync(),
+            Throws.InstanceOf<InvalidOperationException>());
+    }
+
+    // ?? RwSet factory + accessor ????????????????????????????????????????
+
+    [Test]
+    public void RwSet_with_null_lattice_throws()
+    {
+        Assert.That(
+            () => CrdtLatticeExtensions.RwSet(null!, "k"),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public async Task RwSet_with_empty_key_throws()
+    {
+        var tree = await _fixture.CreateSmallTreeAsync(
+            "pac-crdt-rwset-emptykey-" + Guid.NewGuid().ToString("N")[..8], shardCount: 1);
+        Assert.That(() => tree.RwSet(string.Empty), Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public async Task RwSet_ContainsAsync_on_missing_key_returns_false()
+    {
+        var treeId = "pac-crdt-rwset-empty-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+
+        Assert.That(await tree.RwSet("absent").ContainsAsync(Bytes("x")), Is.False);
+    }
+
+    [Test]
+    public async Task RwSet_AddAsync_makes_element_a_member()
+    {
+        var treeId = "pac-crdt-rwset-add-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+
+        var accessor = tree.RwSet("set");
+        await accessor.AddAsync(Bytes("x"), replicaId: "r1");
+
+        Assert.That(await accessor.ContainsAsync(Bytes("x")), Is.True);
+    }
+
+    [Test]
+    public async Task RwSet_RemoveAsync_removes_membership()
+    {
+        var treeId = "pac-crdt-rwset-remove-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+
+        var accessor = tree.RwSet("set");
+        await accessor.AddAsync(Bytes("x"), replicaId: "r1");
+        await accessor.RemoveAsync(Bytes("x"), replicaId: "r1");
+
+        Assert.That(await accessor.ContainsAsync(Bytes("x")), Is.False);
+    }
+
+    [Test]
+    public async Task RwSet_ToListAsync_returns_live_members()
+    {
+        var treeId = "pac-crdt-rwset-tolist-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+
+        var accessor = tree.RwSet("set");
+        await accessor.AddAsync(Bytes("a"), replicaId: "r1");
+        await accessor.AddAsync(Bytes("b"), replicaId: "r1");
+        await accessor.RemoveAsync(Bytes("a"), replicaId: "r1");
+
+        var members = (await accessor.ToListAsync()).Select(b => System.Text.Encoding.UTF8.GetString(b));
+        Assert.That(members, Is.EquivalentTo(new[] { "b" }));
+    }
+
+    [Test]
+    public async Task RwSet_AddAsync_with_empty_replica_throws()
+    {
+        var treeId = "pac-crdt-rwset-emptyrep-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+        Assert.That(
+            async () => await tree.RwSet("set").AddAsync(Bytes("x"), replicaId: string.Empty),
+            Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public async Task RwSet_RemoveAsync_with_empty_replica_throws()
+    {
+        var treeId = "pac-crdt-rwset-removeemptyrep-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+        Assert.That(
+            async () => await tree.RwSet("set").RemoveAsync(Bytes("x"), replicaId: string.Empty),
+            Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public async Task RwSet_AddAsync_with_null_element_throws()
+    {
+        var treeId = "pac-crdt-rwset-addnull-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+        Assert.That(
+            async () => await tree.RwSet("set").AddAsync(null!, replicaId: "r1"),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public async Task RwSet_MergeAsync_with_null_other_throws()
+    {
+        var treeId = "pac-crdt-rwset-mergenull-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+        Assert.That(
+            async () => await tree.RwSet("set").MergeAsync(null!),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public async Task RwSet_MergeAsync_unions_state_remove_wins()
+    {
+        var treeId = "pac-crdt-rwset-merge-" + Guid.NewGuid().ToString("N")[..8];
+        var tree = await _fixture.CreateSmallTreeAsync(treeId, shardCount: 1);
+        var accessor = tree.RwSet("set");
+        await accessor.AddAsync(Bytes("x"), replicaId: "r1");
+
+        // A concurrent remove that our add never observed keeps x out.
+        var other = new RwSet();
+        other.Remove(Bytes("x"), "r2", 1);
+        await accessor.MergeAsync(other);
+
+        Assert.That(await accessor.ContainsAsync(Bytes("x")), Is.False);
+    }
+
+    [Test]
+    public void RwSetAccessor_default_throws_on_use()
+    {
+        var accessor = default(RwSetAccessor);
+        Assert.That(
+            async () => await accessor.GetAsync(),
+            Throws.InstanceOf<InvalidOperationException>());
+    }
+
+    [Test]
+    public void MaxRegister_with_null_lattice_throws()
+    {
+        Assert.That(
+            () => CrdtLatticeExtensions.MaxRegister<int>(null!, "k", static v => BitConverter.GetBytes(v)),
+            Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public void MinRegister_with_null_lattice_throws()
+    {
+        Assert.That(
+            () => CrdtLatticeExtensions.MinRegister<int>(null!, "k", static v => BitConverter.GetBytes(v)),
+            Throws.InstanceOf<ArgumentNullException>());
     }
 }

@@ -567,6 +567,54 @@ public sealed class AuthGrpcDataTests
     }
 
     [Test]
+    public async Task crdt_max_register_write_then_read_over_the_wire_round_trips()
+    {
+        const string tree = "grpc-crdt-maxregister";
+        await _fixture.RegisterTreeAsync(tree);
+        await _fixture.GrantAsync(AllowTree(Writer, tree, CrdtOps));
+
+        await CallAsync(
+            _host.Methods.CrdtWrite,
+            new CrdtWriteRequest { TreeId = tree, Key = "r", Op = CrdtWriteOp.MaxRegisterSet, Element = new byte[] { 0x02 } },
+            Writer);
+        await CallAsync(
+            _host.Methods.CrdtWrite,
+            new CrdtWriteRequest { TreeId = tree, Key = "r", Op = CrdtWriteOp.MaxRegisterSet, Element = new byte[] { 0x08 } },
+            Writer);
+
+        var read = await CallAsync(
+            _host.Methods.CrdtRead,
+            new CrdtReadRequest { TreeId = tree, Key = "r", Kind = CrdtKind.MaxRegister },
+            Writer);
+
+        Assert.That(read.Elements, Has.Count.EqualTo(1).And.ItemAt(0).EqualTo(new byte[] { 0x08 }));
+    }
+
+    [Test]
+    public async Task crdt_min_register_write_then_read_over_the_wire_round_trips()
+    {
+        const string tree = "grpc-crdt-minregister";
+        await _fixture.RegisterTreeAsync(tree);
+        await _fixture.GrantAsync(AllowTree(Writer, tree, CrdtOps));
+
+        await CallAsync(
+            _host.Methods.CrdtWrite,
+            new CrdtWriteRequest { TreeId = tree, Key = "r", Op = CrdtWriteOp.MinRegisterSet, Element = new byte[] { 0x08 } },
+            Writer);
+        await CallAsync(
+            _host.Methods.CrdtWrite,
+            new CrdtWriteRequest { TreeId = tree, Key = "r", Op = CrdtWriteOp.MinRegisterSet, Element = new byte[] { 0x02 } },
+            Writer);
+
+        var read = await CallAsync(
+            _host.Methods.CrdtRead,
+            new CrdtReadRequest { TreeId = tree, Key = "r", Kind = CrdtKind.MinRegister },
+            Writer);
+
+        Assert.That(read.Elements, Has.Count.EqualTo(1).And.ItemAt(0).EqualTo(new byte[] { 0x02 }));
+    }
+
+    [Test]
     public async Task crdt_write_over_the_wire_on_a_denied_key_is_permission_denied()
     {
         const string tree = "grpc-crdt-denied";

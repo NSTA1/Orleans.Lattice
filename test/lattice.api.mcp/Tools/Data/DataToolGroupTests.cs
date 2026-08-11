@@ -7,8 +7,8 @@ namespace Orleans.Lattice.Api.Mcp.Tests;
 /// <summary>
 /// Unit tests for <see cref="DataToolGroup"/>, the data tool module. Proves the
 /// write opt-in (writes disabled offers only the read tools - the two point /
-/// range reads and the eight typed-CRDT reads; writes enabled adds the mutating
-/// tools - five point / batch writes and the eight typed-CRDT writes), that the
+/// range reads and the nine typed-CRDT reads; writes enabled adds the mutating
+/// tools - five point / batch writes and the nine typed-CRDT writes), that the
 /// module serves the data group, and that the read tools carry <c>readOnlyHint</c>
 /// while the write tools carry <c>destructiveHint</c> and are non-<c>readOnlyHint</c>.
 /// Deterministic - the tools are inspected, never invoked.
@@ -19,18 +19,20 @@ public sealed class DataToolGroupTests
     private static readonly string[] ReadToolNames =
     {
         "lattice_data_get", "lattice_data_read_range",
-        "lattice_data_pncounter_get", "lattice_data_orset_get", "lattice_data_orflag_get",
-        "lattice_data_rwflag_get", "lattice_data_version_vector_get", "lattice_data_mvregister_get",
-        "lattice_data_sequence_get", "lattice_data_ormap_get",
+        "lattice_data_pncounter_get", "lattice_data_gcounter_get", "lattice_data_orset_get", "lattice_data_orflag_get",
+        "lattice_data_rwflag_get", "lattice_data_rwset_get", "lattice_data_version_vector_get", "lattice_data_mvregister_get",
+        "lattice_data_sequence_get", "lattice_data_ormap_get", "lattice_data_gset_get",
+        "lattice_data_maxregister_get", "lattice_data_minregister_get",
     };
 
     private static readonly string[] WriteToolNames =
     {
         "lattice_data_set", "lattice_data_delete", "lattice_data_set_many",
         "lattice_data_set_many_atomic", "lattice_data_set_many_atomic_cross_tree",
-        "lattice_data_pncounter", "lattice_data_orset", "lattice_data_orflag", "lattice_data_rwflag",
+        "lattice_data_pncounter", "lattice_data_gcounter", "lattice_data_orset", "lattice_data_orflag", "lattice_data_rwflag", "lattice_data_rwset",
         "lattice_data_version_vector_tick", "lattice_data_mvregister_set", "lattice_data_sequence",
-        "lattice_data_ormap",
+        "lattice_data_ormap", "lattice_data_gset",
+        "lattice_data_maxregister_set", "lattice_data_minregister_set",
     };
 
     private static HashSet<string> ToolNames(DataToolGroup group)

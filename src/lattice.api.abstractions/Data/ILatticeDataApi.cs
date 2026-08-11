@@ -255,6 +255,73 @@ public interface ILatticeDataApi
     Task<bool> RwFlagGetAsync(string treeId, string key, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Increments the grow-only (G) counter at <paramref name="key"/> by
+    /// <paramref name="amount"/> on behalf of <paramref name="replicaId"/>. A
+    /// G-counter only ever increases and converges by summing every replica's
+    /// own increments, so concurrent counts from many clusters all survive the
+    /// merge.
+    /// </summary>
+    /// <param name="treeId">Logical tree identifier.</param>
+    /// <param name="key">The key the counter is stored under.</param>
+    /// <param name="replicaId">Stable id of the writer whose per-replica tally this increment lands on.</param>
+    /// <param name="amount">The non-negative amount to add.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task GCounterIncrementAsync(string treeId, string key, string replicaId, long amount, CancellationToken cancellationToken = default);
+
+    /// <summary>Reads the converged total of the grow-only (G) counter at <paramref name="key"/> (0 when absent or unreadable).</summary>
+    /// <param name="treeId">Logical tree identifier.</param>
+    /// <param name="key">The key the counter is stored under.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<long> GCounterGetAsync(string treeId, string key, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Adds <paramref name="element"/> to the grow-only (G) set at
+    /// <paramref name="key"/>. A G-Set is add-only and converges by set union:
+    /// the add is idempotent and needs no replica context, so concurrent adds
+    /// from any number of writers all survive the merge. There is no remove
+    /// operation by design - use an OR-Set when removal is required.
+    /// Adds <paramref name="element"/> to the remove-wins (RW) set at
+    /// <paramref name="key"/> on behalf of <paramref name="replicaId"/>. An
+    /// RW-Set converges remove-wins: a concurrent add and remove of the same
+    /// element keeps it out, so a revoke is never silently resurrected by a
+    /// concurrent re-add.
+    /// </summary>
+    /// <param name="treeId">Logical tree identifier.</param>
+    /// <param name="key">The key the set is stored under.</param>
+    /// <param name="element">The opaque element bytes to add.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task GSetAddAsync(string treeId, string key, byte[] element, CancellationToken cancellationToken = default);
+
+    /// <summary>Reads the members of the grow-only (G) set at <paramref name="key"/> (empty when absent or unreadable).</summary>
+    /// <param name="treeId">Logical tree identifier.</param>
+    /// <param name="key">The key the set is stored under.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<IReadOnlyList<byte[]>> GSetGetAsync(string treeId, string key, CancellationToken cancellationToken = default);
+    /// <param name="replicaId">Stable id of the writer performing the add.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task RwSetAddAsync(string treeId, string key, byte[] element, string replicaId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Removes <paramref name="element"/> from the remove-wins (RW) set at
+    /// <paramref name="key"/> on behalf of <paramref name="replicaId"/>. A
+    /// remove-wins remove mints a fresh surviving dot, so it requires
+    /// <paramref name="replicaId"/> just as the add does; the remove dominates
+    /// any concurrent add that has not observed it.
+    /// </summary>
+    /// <param name="treeId">Logical tree identifier.</param>
+    /// <param name="key">The key the set is stored under.</param>
+    /// <param name="element">The opaque element bytes to remove.</param>
+    /// <param name="replicaId">Stable id of the writer performing the remove.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task RwSetRemoveAsync(string treeId, string key, byte[] element, string replicaId, CancellationToken cancellationToken = default);
+
+    /// <summary>Reads the live members of the remove-wins (RW) set at <paramref name="key"/> (empty when absent or unreadable).</summary>
+    /// <param name="treeId">Logical tree identifier.</param>
+    /// <param name="key">The key the set is stored under.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<IReadOnlyList<byte[]>> RwSetGetAsync(string treeId, string key, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Advances the version vector at <paramref name="key"/> for
     /// <paramref name="replicaId"/> (a causal "tick"). The vector converges by
     /// per-replica maximum, tracking who has seen what so concurrency is
@@ -299,6 +366,46 @@ public interface ILatticeDataApi
     /// <param name="key">The key the register is stored under.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task<IReadOnlyList<byte[]>> RegisterGetAsync(string treeId, string key, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Advances the monotone max register at <paramref name="key"/> towards
+    /// <paramref name="value"/> - the high-water-mark primitive that keeps the
+    /// greatest value ever seen. The opaque data API orders candidates by their
+    /// raw value bytes (unsigned lexicographic), so a write that is not strictly
+    /// greater than the current value is a durable no-op. Concurrent writes from
+    /// different clusters converge on the single greatest value.
+    /// </summary>
+    /// <param name="treeId">Logical tree identifier.</param>
+    /// <param name="key">The key the register is stored under.</param>
+    /// <param name="value">The opaque candidate value bytes.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task MaxRegisterSetAsync(string treeId, string key, byte[] value, CancellationToken cancellationToken = default);
+
+    /// <summary>Reads the current value of the monotone max register at <paramref name="key"/> (null when absent or unreadable).</summary>
+    /// <param name="treeId">Logical tree identifier.</param>
+    /// <param name="key">The key the register is stored under.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<byte[]?> MaxRegisterGetAsync(string treeId, string key, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Advances the monotone min register at <paramref name="key"/> towards
+    /// <paramref name="value"/> - the low-water-mark primitive that keeps the
+    /// smallest value ever seen. The opaque data API orders candidates by their
+    /// raw value bytes (unsigned lexicographic), so a write that is not strictly
+    /// smaller than the current value is a durable no-op. Concurrent writes from
+    /// different clusters converge on the single smallest value.
+    /// </summary>
+    /// <param name="treeId">Logical tree identifier.</param>
+    /// <param name="key">The key the register is stored under.</param>
+    /// <param name="value">The opaque candidate value bytes.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task MinRegisterSetAsync(string treeId, string key, byte[] value, CancellationToken cancellationToken = default);
+
+    /// <summary>Reads the current value of the monotone min register at <paramref name="key"/> (null when absent or unreadable).</summary>
+    /// <param name="treeId">Logical tree identifier.</param>
+    /// <param name="key">The key the register is stored under.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<byte[]?> MinRegisterGetAsync(string treeId, string key, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Inserts <paramref name="value"/> at zero-based <paramref name="index"/> in

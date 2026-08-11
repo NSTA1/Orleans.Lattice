@@ -114,7 +114,7 @@ Because both `LwwValue.Merge` and `VersionVector.Merge` are lattice operations, 
 
 ## :warning: Opt-in CRDT values
 
-The primitives that follow (`OrSet`, `OrFlag`, `RwFlag`, `PnCounter`, `MvRegister`, `OrMap`, `Rga`) are **opt-in**. Plain writes - `SetAsync`, `SetManyAsync`, and friends - are last-writer-wins: a later timestamp silently overwrites a concurrent write. To get convergent, no-lost-update behaviour you write through the typed CRDT accessors on `ILattice` (`tree.PnCounter(key)`, `tree.OrSet(key)`, ...), which pick the right merge mode for the key.
+The CRDT primitives described below are **opt-in**. Plain writes - `SetAsync`, `SetManyAsync`, and friends - are last-writer-wins: a later timestamp silently overwrites a concurrent write. To get convergent, no-lost-update behaviour you write through the typed CRDT accessors on `ILattice`, which pick the right merge mode for the key.
 
 The [Conflict-Free Merges sample](../../samples/ConflictFreeMerges/README.md) is a runnable tour of every accessor, including convergence under concurrent threads.
 
@@ -223,7 +223,7 @@ Use the multi-value register when **losing a concurrent write is unacceptable** 
 
 ## Recursive CRDT Composition (`ICrdt<TSelf>`)
 
-The primitives above (`OrSet`, `PnCounter`, `VersionVector`, `MvRegister`) all share the same merge contract: an in-place `MergeFrom(other)` that is commutative, associative, and idempotent, plus an `IsBottom` predicate that distinguishes a truly empty value from one that merely happens to evaluate to a neutral element (e.g. a `PnCounter` whose increments equal its decrements is **not** bottom because it still carries replica history).
+The CRDT primitives above all share the same merge contract: an in-place `MergeFrom(other)` that is commutative, associative, and idempotent, plus an `IsBottom` predicate that distinguishes a truly empty value from one that merely happens to evaluate to a neutral element (e.g. a `PnCounter` whose increments equal its decrements is **not** bottom because it still carries replica history).
 
 This contract is captured by the generic interface `ICrdt<TSelf>`:
 

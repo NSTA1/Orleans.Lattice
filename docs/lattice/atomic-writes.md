@@ -724,11 +724,9 @@ CrossTreeAtomicWriteOutcome result =
 
 ### Coupling a CRDT mutation into an atomic write
 
-A staged CRDT write lets a typed CRDT mutation (an `OrSet` add, an
-`OrFlag` / `RwFlag` enable, a `PnCounter` increment, an `MvRegister`
-assign, an `Rga` insert, or a `VersionVector` tick) ride a cross-tree
-atomic write so it commits all-or-nothing alongside sibling
-last-writer-wins (LWW) writes on other trees.
+A staged CRDT write lets a typed CRDT mutation ride a cross-tree atomic
+write so it commits all-or-nothing alongside sibling last-writer-wins
+(LWW) writes on other trees.
 
 Each CRDT accessor exposes a `Stage*` counterpart for every live
 mutator. A `Stage*` call:
