@@ -191,6 +191,28 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
     }
 
     [Test]
+    public async Task TreeAdmin_group_is_discoverable_but_contributes_no_tools()
+    {
+        // The foundation TreeAdmin module is registered and the caller is granted
+        // TreeAdmin, so the group must report Available - proving the capability
+        // wiring end to end - while contributing no tools yet (scaffolding stage).
+        var configurator = CreateConfigurator(
+            new LatticeCredential("alice"),
+            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.TreeAdmin),
+            new TreeAdminToolGroup());
+
+        var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(GroupAvailable(plan.Capabilities, LatticeApiMcpGroup.TreeAdmin), Is.True,
+                "A granted-and-registered TreeAdmin group must report available.");
+            Assert.That(ToolNames(plan.Tools), Is.EquivalentTo(new[] { "lattice_capabilities", "lattice_list_regions" }),
+                "The scaffolding TreeAdmin group is discoverable but adds no tools.");
+        });
+    }
+
+    [Test]
     public async Task Capabilities_carry_the_cluster_identity()
     {
         var configurator = CreateConfigurator(
@@ -277,6 +299,7 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
                 LatticeApiMcpGroup.Auth,
                 LatticeApiMcpGroup.Telemetry,
                 LatticeApiMcpGroup.Replication,
+                LatticeApiMcpGroup.TreeAdmin,
             }));
     }
 

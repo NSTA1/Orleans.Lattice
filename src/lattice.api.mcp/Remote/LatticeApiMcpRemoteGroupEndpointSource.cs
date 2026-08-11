@@ -16,6 +16,7 @@ internal sealed class LatticeApiMcpRemoteGroupEndpointSource : ILatticeApiMcpGro
     private readonly string? _auth;
     private readonly string? _backup;
     private readonly string? _replication;
+    private readonly string? _treeAdmin;
 
     /// <summary>Captures the per-group endpoints from the resolved remote options.</summary>
     public LatticeApiMcpRemoteGroupEndpointSource(IOptions<LatticeApiMcpRemoteOptions> options)
@@ -27,6 +28,7 @@ internal sealed class LatticeApiMcpRemoteGroupEndpointSource : ILatticeApiMcpGro
         _auth = value.Auth?.Endpoint;
         _backup = value.Backup?.Endpoint;
         _replication = value.Replication?.Endpoint;
+        _treeAdmin = value.TreeAdmin?.Endpoint;
     }
 
     /// <inheritdoc />
@@ -37,6 +39,7 @@ internal sealed class LatticeApiMcpRemoteGroupEndpointSource : ILatticeApiMcpGro
         LatticeApiMcpGroup.Auth => _auth,
         LatticeApiMcpGroup.Backup => _backup,
         LatticeApiMcpGroup.Replication => _replication,
+        LatticeApiMcpGroup.TreeAdmin => _treeAdmin,
         // Telemetry has no per-region gRPC endpoint by design: it is served by a
         // head-local PromQL proxy co-located with the MCP server rather than a
         // routable per-region facade, so its endpoint is intentionally null.

@@ -23,6 +23,7 @@ internal static class LatticeApiMcpGroupCapabilityMap
         LatticeApiMcpGroup.Auth,
         LatticeApiMcpGroup.Telemetry,
         LatticeApiMcpGroup.Replication,
+        LatticeApiMcpGroup.TreeAdmin,
     };
 
     /// <summary>
@@ -57,6 +58,9 @@ internal static class LatticeApiMcpGroupCapabilityMap
         // Runtime per-tree replication configuration.
         LatticeApiMcpGroup.Replication => LatticeOperation.Replication,
 
+        // Whole-tree administration control plane.
+        LatticeApiMcpGroup.TreeAdmin => LatticeOperation.Admin,
+
         _ => LatticeOperation.None,
     };
 
@@ -69,6 +73,7 @@ internal static class LatticeApiMcpGroupCapabilityMap
         LatticeApiMcpGroup.Auth => "auth",
         LatticeApiMcpGroup.Telemetry => "telemetry",
         LatticeApiMcpGroup.Replication => "replication",
+        LatticeApiMcpGroup.TreeAdmin => "treeadmin",
         _ => group.ToString().ToLowerInvariant(),
     };
 }

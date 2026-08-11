@@ -64,4 +64,11 @@ public sealed class LatticeApiMcpRemoteRegionOptions
     /// the replication group in this region.
     /// </summary>
     public LatticeApiMcpRemoteEndpoint? Replication { get; set; }
+
+    /// <summary>
+    /// The region's endpoint for the tree-administration control facade
+    /// (<c>ILatticeTreeAdmin</c>), or <see langword="null"/> to not serve the
+    /// tree-administration group in this region.
+    /// </summary>
+    public LatticeApiMcpRemoteEndpoint? TreeAdmin { get; set; }
 }

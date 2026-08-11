@@ -1,0 +1,122 @@
+using System.Reflection;
+using Microsoft.Extensions.DependencyInjection;
+using Orleans;
+using Orleans.Serialization;
+
+namespace Orleans.Lattice.Api.TreeAdmin.Grpc.Tests;
+
+/// <summary>
+/// Round-trips the gRPC-layer wire messages (the <c>Model</c> request / response
+/// records the binding marshals with the Orleans serializer) to prove the transport
+/// contract is coherent across the wire, and asserts alias hygiene: every gRPC wire
+/// message carries a unique <c>[Alias]</c> drawn from the
+/// <see cref="GrpcTreeAdminTypeAliases"/> registry under the reserved <c>oitg.</c>
+/// prefix. The transport-agnostic facade DTOs (such as
+/// <c>LatticeTreeAdminCapabilities</c>) are covered in the
+/// <c>Orleans.Lattice.Api.TreeAdmin</c> test project; this fixture covers the
+/// gRPC-only envelopes.
+/// </summary>
+[TestFixture]
+public sealed class TreeAdminGrpcDtoSerializationTests
+{
+    private ServiceProvider _services = null!;
+
+    [OneTimeSetUp]
+    public void OneTimeSetUp() =>
+        _services = new ServiceCollection().AddSerializer().BuildServiceProvider();
+
+    [OneTimeTearDown]
+    public void OneTimeTearDown() => _services.Dispose();
+
+    private T RoundTrip<T>(T value)
+    {
+        var serializer = _services.GetRequiredService<Serializer<T>>();
+        return serializer.Deserialize(serializer.SerializeToArray(value));
+    }
+
+    [Test]
+    public void TreeAdminTreeRequest_round_trips()
+    {
+        Assert.That(RoundTrip(new TreeAdminTreeRequest { TreeId = "orders" }).TreeId, Is.EqualTo("orders"));
+    }
+
+    [Test]
+    public void AuthSchemeAdvertisementRequest_round_trips() =>
+        Assert.That(RoundTrip(new AuthSchemeAdvertisementRequest()), Is.Not.Null);
+
+    [Test]
+    public void AuthSchemeDescriptor_round_trips_with_parameters()
+    {
+        var copy = RoundTrip(new AuthSchemeDescriptor
+        {
+            SchemeId = "entra",
+            DisplayName = "Microsoft Entra",
+            Parameters = new Dictionary<string, string>(StringComparer.Ordinal) { ["authority"] = "https://login" },
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.SchemeId, Is.EqualTo("entra"));
+            Assert.That(copy.DisplayName, Is.EqualTo("Microsoft Entra"));
+            Assert.That(copy.Parameters["authority"], Is.EqualTo("https://login"));
+        });
+    }
+
+    [Test]
+    public void AuthSchemeAdvertisement_round_trips_its_schemes()
+    {
+        var copy = RoundTrip(new AuthSchemeAdvertisement
+        {
+            Schemes = new[] { new AuthSchemeDescriptor { SchemeId = "basic" } },
+        });
+
+        Assert.That(copy.Schemes, Has.Count.EqualTo(1));
+        Assert.That(copy.Schemes[0].SchemeId, Is.EqualTo("basic"));
+    }
+
+    [Test]
+    public void Every_registry_alias_is_unique_and_uses_the_reserved_prefix()
+    {
+        var aliases = RegistryAliasValues();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(GrpcTreeAdminTypeAliases.AliasPrefix, Is.EqualTo("oitg."));
+            Assert.That(aliases, Is.Unique);
+            Assert.That(aliases, Is.All.StartsWith(GrpcTreeAdminTypeAliases.AliasPrefix));
+        });
+    }
+
+    [Test]
+    public void Every_grpc_wire_message_carries_a_unique_registry_alias()
+    {
+        var registry = new HashSet<string>(RegistryAliasValues(), StringComparer.Ordinal);
+
+        var wireMessages = typeof(GrpcTreeAdminTypeAliases).Assembly
+            .GetTypes()
+            .Where(t => t.GetCustomAttribute<GenerateSerializerAttribute>() is not null)
+            .Where(t => t.GetCustomAttribute<AliasAttribute>()?.Alias
+                is { } alias && alias.StartsWith(GrpcTreeAdminTypeAliases.AliasPrefix, StringComparison.Ordinal))
+            .ToList();
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        Assert.That(wireMessages, Is.Not.Empty);
+        foreach (var type in wireMessages)
+        {
+            var alias = type.GetCustomAttribute<AliasAttribute>()!.Alias;
+            Assert.Multiple(() =>
+            {
+                Assert.That(registry, Does.Contain(alias), $"{type.Name} alias '{alias}' is not in GrpcTreeAdminTypeAliases.");
+                Assert.That(seen.Add(alias), Is.True, $"Alias '{alias}' is used by more than one wire message.");
+            });
+        }
+    }
+
+    private static IReadOnlyList<string> RegistryAliasValues() =>
+        typeof(GrpcTreeAdminTypeAliases)
+            .GetFields(BindingFlags.Public | BindingFlags.Static)
+            .Where(f => f is { IsLiteral: true, IsInitOnly: false } && f.FieldType == typeof(string))
+            .Where(f => f.Name != nameof(GrpcTreeAdminTypeAliases.AliasPrefix))
+            .Select(f => (string)f.GetRawConstantValue()!)
+            .ToList();
+}

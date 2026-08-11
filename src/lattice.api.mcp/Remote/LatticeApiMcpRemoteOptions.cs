@@ -114,6 +114,15 @@ public sealed class LatticeApiMcpRemoteOptions
     public LatticeApiMcpRemoteEndpoint? Replication { get; set; }
 
     /// <summary>
+    /// The remote endpoint for the tree-administration control facade
+    /// (<c>ILatticeTreeAdmin</c>), or <see langword="null"/> to not serve the
+    /// tree-administration group remotely. This foundation group is discoverable
+    /// but ships no operations yet, so wiring an endpoint advertises the group (to
+    /// an administrator-granted caller) with an empty tool set.
+    /// </summary>
+    public LatticeApiMcpRemoteEndpoint? TreeAdmin { get; set; }
+
+    /// <summary>
     /// The request header the resolved caller credential is stamped onto for the
     /// outbound gRPC call. Defaults to <c>authorization</c>, matching the gRPC
     /// bindings' default credential header.
