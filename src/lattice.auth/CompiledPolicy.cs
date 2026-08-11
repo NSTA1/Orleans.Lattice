@@ -19,11 +19,24 @@ internal sealed class CompiledPolicy
     {
         _trees = trees;
         DistinctSubjectCount = distinctSubjectCount;
+        AllTrees = trees.TryGetValue(LatticeScope.ClusterWideTreeId, out var allTrees) ? allTrees : null;
     }
 
     /// <summary>The empty snapshot: no rules for any tree. Used before the first compile.</summary>
     public static CompiledPolicy Empty { get; } =
         new(new Dictionary<string, CompiledTree>(0, StringComparer.Ordinal), 0);
+
+    /// <summary>
+    /// The compiled all-trees (<c>Tree:*</c>) bucket - the rules scoped over
+    /// <see cref="LatticeScope.ClusterWideTreeId"/> - resolved once at compile
+    /// time so the decision engine's all-trees tier never does a per-evaluate
+    /// dictionary lookup by the <c>"*"</c> string. <c>null</c> when no rule is
+    /// scoped cluster-wide. Consulted by <see cref="PolicyEvaluator"/> only when
+    /// <see cref="LatticeAuthOptions.AllTreesGrantsEnabled"/> is set and the target
+    /// tree is neither the reserved authorization namespace nor the sentinel id
+    /// itself.
+    /// </summary>
+    public CompiledTree? AllTrees { get; }
 
     /// <summary>Attempts to get the compiled rules governing <paramref name="treeId"/>.</summary>
     /// <param name="treeId">The governed tree id.</param>

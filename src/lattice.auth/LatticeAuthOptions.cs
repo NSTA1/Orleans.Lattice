@@ -72,6 +72,53 @@ public sealed class LatticeAuthOptions
     public bool AccessAdministrationDelegationEnabled { get; set; }
 
     /// <summary>
+    /// Whether a cluster-wide <b>all-trees</b> grant is enforced on the data plane.
+    /// Defaults to <c>false</c>, in which case behaviour is byte-for-byte as before:
+    /// a rule scoped over the all-trees sentinel
+    /// (<see cref="LatticeScope.ClusterWideTreeId"/>, <c>"*"</c>) that carries
+    /// data-plane operations is <b>inert</b> - the decision engine keys strictly on
+    /// the request's exact tree id and never consults the <c>"*"</c> bucket for an
+    /// ordinary tree. Telemetry (and any other scopeless capability) is unaffected
+    /// either way, because a telemetry request literally targets <c>"*"</c> and
+    /// resolves against that bucket exactly as today.
+    /// <para>
+    /// When set to <c>true</c>, the <c>"*"</c> bucket is promoted into a genuine
+    /// all-trees tier that the decision engine consults for every <b>non-system</b>
+    /// tree, reusing the existing sentinel rather than a new scope kind. A
+    /// point request on a non-system tree <c>T</c> is then decided in four tiers,
+    /// stopping at the first that decides:
+    /// <list type="number">
+    /// <item>an all-trees <b>Deny</b> matching the subject and operation wins
+    /// outright (a global deny is never overridden by a specific-tree allow);</item>
+    /// <item>otherwise <c>T</c>'s own bucket decides with the usual
+    /// most-specific-wins algorithm (this is where a specific deny overrides a
+    /// global allow, and a specific allow stands);</item>
+    /// <item>otherwise an all-trees <b>Allow</b> grants the request;</item>
+    /// <item>otherwise the <see cref="DefaultEffect"/> applies.</item>
+    /// </list>
+    /// A range / collection request applies the identical tiered algorithm per
+    /// candidate key, so an all-trees grant or deny is honoured uniformly across a
+    /// range exactly as for a point read.
+    /// </para>
+    /// <para>
+    /// The all-trees tier is <b>never</b> consulted for the reserved authorization
+    /// namespace (<c>sys-auth-*</c>, per
+    /// <see cref="LatticeAuthReservedTrees.IsReserved(string)"/>) nor for the
+    /// sentinel id <c>"*"</c> itself, so a wildcard data grant can never reach the
+    /// control plane and a literal telemetry request on <c>"*"</c> resolves exactly
+    /// as before. The operation-bit separation guarantee still holds: a widened
+    /// data-plane <c>Tree:*</c> grant never confers telemetry and a telemetry
+    /// <c>Tree:*</c> grant never confers a data-plane operation.
+    /// </para>
+    /// <para>
+    /// This is an opt-in enforcement switch. Turning it back off stops <b>new</b>
+    /// all-trees evaluation but does not remove any authored <c>Tree:*</c> rule -
+    /// delete that rule to remove it.
+    /// </para>
+    /// </summary>
+    public bool AllTreesGrantsEnabled { get; set; }
+
+    /// <summary>
     /// The retention mode for the durable per-key history captured on the
     /// <c>sys-auth-policy</c> tree. Defaults to
     /// <see cref="HistoryRetentionMode.MetadataOnly"/>; history is never disabled

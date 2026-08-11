@@ -86,6 +86,19 @@ public sealed class AccessRuleFormatOperationsTests
     }
 
     [Test]
+    public void ScopeLabel_all_trees_sentinel_renders_all_trees()
+    {
+        // A whole-tree scope over the "*" sentinel is the cluster-wide, all-trees tier.
+        Assert.That(AccessRuleFormat.ScopeLabel(LatticeScope.ClusterWide()), Is.EqualTo("all trees"));
+    }
+
+    [Test]
+    public void ScopeLabel_all_trees_sentinel_tree_id_matches_the_constant()
+    {
+        Assert.That(AccessRuleFormat.ScopeLabel(LatticeScope.Tree(LatticeScope.ClusterWideTreeId)), Is.EqualTo("all trees"));
+    }
+
+    [Test]
     public void ScopeLabel_other_reserved_tree_still_renders_tree()
     {
         // Only the policy tree is special-cased; a different reserved tree must not

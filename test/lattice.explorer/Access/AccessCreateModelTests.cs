@@ -347,6 +347,62 @@ public sealed class AccessCreateModelTests
             Throws.ArgumentNullException);
     }
 
+    // ----- All-trees (cluster-wide) rule builder -----
+
+    [Test]
+    public void BuildAllTreesRule_targets_the_cluster_wide_sentinel_with_a_whole_tree_scope()
+    {
+        var rule = AccessCreateModel.BuildAllTreesRule(
+            "all-1", LatticeSubjectSelector.User("alice"), LatticeOperation.Read, LatticeEffect.Allow);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rule.RuleId, Is.EqualTo("all-1"));
+            Assert.That(rule.Subject.Kind, Is.EqualTo(LatticeSubjectSelectorKind.User));
+            Assert.That(rule.Subject.Id, Is.EqualTo("alice"));
+            Assert.That(rule.Scope.TreeId, Is.EqualTo(LatticeScope.ClusterWideTreeId));
+            Assert.That(rule.Scope.TreeId, Is.EqualTo("*"));
+            Assert.That(rule.Scope.Kind, Is.EqualTo(LatticeScopeKind.Tree));
+            Assert.That(rule.Operations, Is.EqualTo(LatticeOperation.Read));
+            Assert.That(rule.Effect, Is.EqualTo(LatticeEffect.Allow));
+        });
+    }
+
+    [Test]
+    public void BuildAllTreesRule_supports_a_group_deny()
+    {
+        var rule = AccessCreateModel.BuildAllTreesRule(
+            "all-2", LatticeSubjectSelector.Group("admins"), LatticeOperation.Write, LatticeEffect.Deny);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rule.Subject.Kind, Is.EqualTo(LatticeSubjectSelectorKind.Group));
+            Assert.That(rule.Subject.Id, Is.EqualTo("admins"));
+            Assert.That(rule.Scope.TreeId, Is.EqualTo(LatticeScope.ClusterWideTreeId));
+            Assert.That(rule.Operations, Is.EqualTo(LatticeOperation.Write));
+            Assert.That(rule.Effect, Is.EqualTo(LatticeEffect.Deny));
+        });
+    }
+
+    [Test]
+    public void BuildAllTreesRule_null_or_empty_rule_id_throws()
+    {
+        Assert.That(
+            () => AccessCreateModel.BuildAllTreesRule(null!, LatticeSubjectSelector.User("alice"), LatticeOperation.Read, LatticeEffect.Allow),
+            Throws.InstanceOf<ArgumentException>());
+        Assert.That(
+            () => AccessCreateModel.BuildAllTreesRule("", LatticeSubjectSelector.User("alice"), LatticeOperation.Read, LatticeEffect.Allow),
+            Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public void BuildAllTreesRule_null_subject_throws()
+    {
+        Assert.That(
+            () => AccessCreateModel.BuildAllTreesRule("all-3", null!, LatticeOperation.Read, LatticeEffect.Allow),
+            Throws.ArgumentNullException);
+    }
+
     // ----- Decision value type -----
 
     [Test]

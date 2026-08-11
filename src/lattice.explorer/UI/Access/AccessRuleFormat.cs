@@ -114,12 +114,15 @@ internal static class AccessRuleFormat
     }
 
     /// <summary>
-    /// Formats a scope as, for example, <c>tree</c>, <c>prefix 'foo'</c>, or
-    /// <c>key 'bar'</c>. A whole-tree scope on the reserved policy tree
+    /// Formats a scope as, for example, <c>tree</c>, <c>all trees</c>,
+    /// <c>prefix 'foo'</c>, or <c>key 'bar'</c>. A whole-tree scope on the all-trees
+    /// sentinel (<see cref="LatticeScope.ClusterWideTreeId"/>, <c>"*"</c>) renders
+    /// as <c>all trees</c> so a cluster-wide grant is distinguishable from an
+    /// exact-tree rule. A whole-tree scope on the reserved policy tree
     /// (<see cref="LatticeAuthReservedTrees.PolicyTreeId"/>) renders as
     /// <c>access administration</c> so a delegated access-administration grant is
     /// distinguishable from an ordinary whole-tree rule in the ranked rule table
-    /// and rule lists. Only the policy tree is special-cased; every other tree,
+    /// and rule lists. Only those two trees are special-cased; every other tree,
     /// including other reserved trees, renders as <c>tree</c>.
     /// </summary>
     /// <param name="scope">The scope. Must not be <see langword="null"/>.</param>
@@ -127,10 +130,17 @@ internal static class AccessRuleFormat
     internal static string ScopeLabel(LatticeScope scope)
     {
         ArgumentNullException.ThrowIfNull(scope);
-        if (scope.Kind == LatticeScopeKind.Tree
-            && string.Equals(scope.TreeId, LatticeAuthReservedTrees.PolicyTreeId, StringComparison.Ordinal))
+        if (scope.Kind == LatticeScopeKind.Tree)
         {
-            return "access administration";
+            if (string.Equals(scope.TreeId, LatticeScope.ClusterWideTreeId, StringComparison.Ordinal))
+            {
+                return "all trees";
+            }
+
+            if (string.Equals(scope.TreeId, LatticeAuthReservedTrees.PolicyTreeId, StringComparison.Ordinal))
+            {
+                return "access administration";
+            }
         }
 
         return scope.Kind switch

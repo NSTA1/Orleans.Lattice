@@ -69,37 +69,153 @@ internal static class PolicyEvaluator
         var hasTree = policy.TryGetTree(treeId, out var tree);
         var userBeatsGroup = options.UserRuleBeatsGroupRuleAtEqualScope;
 
+        // All-trees tier participation. Cheap early-out: when the flag is off, no
+        // "*" bucket exists, or the target is the reserved namespace / sentinel
+        // itself, this is null and every path below takes the exact byte-for-byte
+        // existing behaviour with no added lookup or allocation. Only when the flag
+        // is on AND a "*" bucket exists AND the tree is a genuine application tree
+        // is the extra whole-tree resolution done.
+        var allTreesBucket = ShouldConsultAllTrees(policy, options, treeId) ? policy.AllTrees : null;
+
         // Point request: resolve the single key.
         if (key is not null)
         {
-            match = hasTree ? tree!.ResolvePoint(subject, operation, key, userBeatsGroup) : default;
+            var specific = hasTree ? tree!.ResolvePoint(subject, operation, key, userBeatsGroup) : default;
+            if (allTreesBucket is null)
+            {
+                match = specific;
+                return FromMatch(match, options.DefaultEffect, subject, treeId);
+            }
+
+            var allTrees = ResolveAllTrees(allTreesBucket, subject, operation, userBeatsGroup);
+            match = ResolveTiered(specific, allTrees);
             return FromMatch(match, options.DefaultEffect, subject, treeId);
         }
 
         // Collection request (range read / whole-tree). When the tree carries no
         // per-key (exact/prefix) rules the decision is uniform, so return a plain
-        // allow/deny. Otherwise the decision can vary key-by-key, so return a
-        // Filtered decision whose predicate admits a key iff its point decision
-        // is an allow.
+        // allow/deny. The all-trees verdict is itself whole-tree (uniform across
+        // keys), so it folds cleanly into this uniform branch.
         if (!hasTree || !tree!.HasPerKeyRules)
         {
             var uniform = hasTree ? tree!.ResolvePoint(subject, operation, key: null, userBeatsGroup) : default;
+            if (allTreesBucket is not null)
+            {
+                var allTrees = ResolveAllTrees(allTreesBucket, subject, operation, userBeatsGroup);
+                uniform = ResolveTiered(uniform, allTrees);
+            }
+
             match = uniform;
             return FromMatch(uniform, options.DefaultEffect, subject, treeId);
         }
 
+        // The tree carries per-key rules, so the decision can vary key-by-key.
+        // Return a Filtered decision whose predicate applies the identical tiered
+        // algorithm per candidate key. The all-trees verdict is whole-tree, hence
+        // uniform across keys, so it is resolved once outside the closure alongside
+        // the existing captures and folded into each per-key decision.
         var defaultEffect = options.DefaultEffect;
         var reason = BuildRangeReason(treeId, rangeStart, rangeEnd);
         var capturedSubject = subject;
         var capturedTree = tree!;
+        var allTreesMatch = allTreesBucket is null
+            ? default
+            : ResolveAllTrees(allTreesBucket, subject, operation, userBeatsGroup);
         return LatticeAccessDecision.Filtered(
             candidateKey =>
             {
                 var m = capturedTree.ResolvePoint(capturedSubject, operation, candidateKey, userBeatsGroup);
-                var effect = m.Matched ? m.Effect : defaultEffect;
+                var effect = TieredEffect(m, allTreesMatch, defaultEffect);
                 return effect == LatticeEffect.Allow;
             },
             reason);
+    }
+
+    /// <summary>
+    /// Whether the all-trees (<c>Tree:*</c>) tier participates in this evaluation:
+    /// the opt-in flag is set, a compiled <c>"*"</c> bucket exists, and the target
+    /// tree is a genuine application tree - neither the reserved authorization
+    /// namespace (<c>sys-auth-*</c>) nor the sentinel id <c>"*"</c> itself. The
+    /// reserved-namespace exclusion is the fail-closed guard that keeps a wildcard
+    /// data grant from ever reaching the control plane; the sentinel exclusion
+    /// keeps a literal telemetry request on <c>"*"</c> resolving against its own
+    /// bucket exactly as before, with no second all-trees fold.
+    /// </summary>
+    private static bool ShouldConsultAllTrees(CompiledPolicy policy, LatticeAuthOptions options, string treeId)
+    {
+        if (!options.AllTreesGrantsEnabled || policy.AllTrees is null)
+        {
+            return false;
+        }
+
+        if (string.Equals(treeId, LatticeScope.ClusterWideTreeId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return !LatticeAuthReservedTrees.IsReserved(treeId);
+    }
+
+    /// <summary>
+    /// Resolves the all-trees verdict: the whole-tree resolution of the <c>"*"</c>
+    /// bucket for the subject and operation, marked as originating from the
+    /// all-trees tier so a decision reason can render "all trees".
+    /// </summary>
+    private static PolicyMatch ResolveAllTrees(
+        CompiledTree allTreesBucket,
+        in LatticeSubject subject,
+        LatticeOperation operation,
+        bool userBeatsGroup)
+    {
+        var m = allTreesBucket.ResolvePoint(subject, operation, key: null, userBeatsGroup);
+        return m.Matched
+            ? new PolicyMatch(m.Effect, m.RuleId!, m.ScopeKind, m.ScopeValue, allTrees: true)
+            : default;
+    }
+
+    /// <summary>
+    /// Applies the four-tier precedence to a specific-tree match and an all-trees
+    /// match and returns the winning <see cref="PolicyMatch"/> (a default, unmatched
+    /// value means the caller applies its default effect). See
+    /// <see cref="LatticeAuthOptions.AllTreesGrantsEnabled"/> for the tier rules.
+    /// </summary>
+    private static PolicyMatch ResolveTiered(in PolicyMatch specific, in PolicyMatch allTrees)
+    {
+        // Tier 1: an all-trees deny wins outright.
+        if (allTrees.Matched && allTrees.Effect == LatticeEffect.Deny)
+        {
+            return allTrees;
+        }
+
+        // Tier 2: the specific tree's own most-specific-wins verdict.
+        if (specific.Matched)
+        {
+            return specific;
+        }
+
+        // Tier 3: an all-trees allow (the only remaining matched all-trees effect).
+        // Tier 4 (default effect) is signalled by the default, unmatched value.
+        return allTrees;
+    }
+
+    /// <summary>
+    /// The effect form of <see cref="ResolveTiered"/> for the per-key range
+    /// predicate: returns the winning effect, folding in the caller's default
+    /// effect for Tier 4 so the predicate never allocates a <see cref="PolicyMatch"/>.
+    /// </summary>
+    private static LatticeEffect TieredEffect(in PolicyMatch specific, in PolicyMatch allTrees, LatticeEffect defaultEffect)
+    {
+        if (allTrees.Matched && allTrees.Effect == LatticeEffect.Deny)
+        {
+            return LatticeEffect.Deny;
+        }
+
+        if (specific.Matched)
+        {
+            return specific.Effect;
+        }
+
+        return allTrees.Matched ? LatticeEffect.Allow : defaultEffect;
     }
 
     /// <summary>
@@ -129,10 +245,43 @@ internal static class PolicyEvaluator
 
         if (!policy.TryGetTree(treeId, out var tree) || tree is null)
         {
+            // No specific-tree rules; the all-trees tier may still grant.
+            return HasAllTreesAllow(policy, options, subject, treeId, operation);
+        }
+
+        if (tree.HasAnyResolvedAllow(subject, operation, options.UserRuleBeatsGroupRuleAtEqualScope))
+        {
+            return true;
+        }
+
+        return HasAllTreesAllow(policy, options, subject, treeId, operation);
+    }
+
+    /// <summary>
+    /// <c>true</c> when the all-trees (<c>Tree:*</c>) tier grants
+    /// <paramref name="operation"/> to <paramref name="subject"/> on
+    /// <paramref name="treeId"/> - a whole-tree allow on the <c>"*"</c> bucket -
+    /// so a tree reachable only through a wildcard grant is not hidden from
+    /// listings while being readable. Gated exactly as enforcement: skipped when
+    /// the flag is off, no <c>"*"</c> bucket exists, or the tree is the reserved
+    /// namespace / sentinel. A wildcard <b>deny</b> is deliberately not consulted
+    /// here: existence-hiding is a pure "any resolved allow" signal, so a wildcard
+    /// deny never hides a tree the subject can otherwise read.
+    /// </summary>
+    private static bool HasAllTreesAllow(
+        CompiledPolicy policy,
+        LatticeAuthOptions options,
+        in LatticeSubject subject,
+        string treeId,
+        LatticeOperation operation)
+    {
+        if (!ShouldConsultAllTrees(policy, options, treeId))
+        {
             return false;
         }
 
-        return tree.HasAnyResolvedAllow(subject, operation, options.UserRuleBeatsGroupRuleAtEqualScope);
+        var all = policy.AllTrees!.ResolvePoint(subject, operation, key: null, options.UserRuleBeatsGroupRuleAtEqualScope);
+        return all.Matched && all.Effect == LatticeEffect.Allow;
     }
 
     private static LatticeAccessDecision FromMatch(
@@ -156,12 +305,14 @@ internal static class PolicyEvaluator
 
     private static string BuildDenyReason(in PolicyMatch match, in LatticeSubject subject, string treeId)
     {
-        var scope = match.ScopeKind switch
-        {
-            LatticeScopeKind.Key => $"key '{match.ScopeValue}'",
-            LatticeScopeKind.Prefix => $"prefix '{match.ScopeValue}'",
-            _ => "tree",
-        };
+        var scope = match.AllTrees
+            ? "all trees"
+            : match.ScopeKind switch
+            {
+                LatticeScopeKind.Key => $"key '{match.ScopeValue}'",
+                LatticeScopeKind.Prefix => $"prefix '{match.ScopeValue}'",
+                _ => "tree",
+            };
 
         return $"Denied by rule '{match.RuleId}' ({scope} scope) for subject '{subject.SubjectId}' on tree '{treeId}'.";
     }

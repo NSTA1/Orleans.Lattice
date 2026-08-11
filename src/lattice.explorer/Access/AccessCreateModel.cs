@@ -80,6 +80,49 @@ public sealed class AccessCreateModel
             LatticeEffect.Allow);
     }
 
+    /// <summary>
+    /// The operator-facing helper text shown beside the all-trees (cluster-wide)
+    /// grant affordance. States that the grant governs every application tree and
+    /// that the cluster must have all-trees grants enabled for the server to
+    /// enforce it, since the UI cannot read the server-side flag.
+    /// </summary>
+    public const string AllTreesHelpText =
+        "Grants the chosen operations on every application tree in the cluster (the reserved " +
+        "authorization and system trees are always excluded). Takes effect only when the cluster's " +
+        "all-trees grants option is enabled; if it is off, the rule is recorded but stays inert.";
+
+    /// <summary>
+    /// Builds an all-trees (cluster-wide) grant: a <b>whole-tree</b> rule over the
+    /// all-trees sentinel (<see cref="LatticeScope.ClusterWide()"/>,
+    /// <see cref="LatticeScope.ClusterWideTreeId"/> <c>"*"</c>) for
+    /// <paramref name="subject"/>, carrying <paramref name="operations"/> with
+    /// <paramref name="effect"/>. When the cluster has all-trees grants enabled the
+    /// decision engine consults this rule for every non-system tree, per the
+    /// four-tier precedence; when it is off the rule is inert.
+    /// </summary>
+    /// <param name="ruleId">A stable id for the rule. Must not be <see langword="null"/> or empty.</param>
+    /// <param name="subject">The user or group to grant to. Must not be <see langword="null"/>.</param>
+    /// <param name="operations">The operations the grant covers.</param>
+    /// <param name="effect">Whether the rule allows or denies.</param>
+    /// <returns>The whole-tree rule over the all-trees sentinel.</returns>
+    /// <exception cref="ArgumentException"><paramref name="ruleId"/> is <see langword="null"/> or empty.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="subject"/> is <see langword="null"/>.</exception>
+    public static LatticeAuthorizationRule BuildAllTreesRule(
+        string ruleId,
+        LatticeSubjectSelector subject,
+        LatticeOperation operations,
+        LatticeEffect effect)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(ruleId);
+        ArgumentNullException.ThrowIfNull(subject);
+        return new LatticeAuthorizationRule(
+            ruleId,
+            subject,
+            LatticeScope.ClusterWide(),
+            operations,
+            effect);
+    }
+
     /// <summary>Creates a model over the membership admin service the resolve runs over.</summary>
     /// <param name="membership">The membership admin service. Must not be <see langword="null"/>.</param>
     public AccessCreateModel(IMembershipAdminService membership)

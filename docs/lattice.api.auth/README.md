@@ -47,7 +47,7 @@ It is the authorization sibling of the read-only [`Orleans.Lattice.Api.State`](.
 | List all rules (paged) | `ListRulesAsync` |
 | List a tree's rules (paged) | `ListRulesForTreeAsync` |
 
-> `ListRulesForTreeAsync` (MCP tool `lattice_auth_list_rules_for_tree`) returns a tree's own rules **and** the cluster-wide wildcard rules (scope `Tree:*`, authored with `LatticeScope.ClusterWide()`) that effectively govern it. Wildcard rules are stored under the reserved `*` tree id and carry `Scope.TreeId == "*"`, so you can tell them apart from exact-tree rules; listing the reserved `*` tree itself returns only its own bucket. Use `ExplainAsync` / `EffectivePermissionsAsync` for the resolved verdict a subject's access actually receives.
+> `ListRulesForTreeAsync` (MCP tool `lattice_auth_list_rules_for_tree`) returns a tree's own rules **and** the cluster-wide all-trees rules (scope `Tree:*`, authored with `LatticeScope.ClusterWide()`) that govern it. All-trees rules are stored under the reserved `*` tree id and carry `Scope.TreeId == "*"`, so you can tell them apart from exact-tree rules; listing the reserved `*` tree itself returns only its own bucket. When `AllTreesGrantsEnabled` is on (see [All-trees grants](#all-trees-grants) below) these rules actively grant or deny across every application tree; with the flag off a data-plane `Tree:*` rule is inert and listed for visibility only. Use `ExplainAsync` / `EffectivePermissionsAsync` for the resolved verdict a subject's access actually receives.
 
 ### Policy introspection
 
@@ -69,6 +69,24 @@ You can **delegate** access administration to another user or group by authoring
 From the Explorer Access tab, the rule form has an **Access administration (delegate)** option: pick the target user or group, tick the option, and save. The form supplies the reserved `sys-auth-policy` tree, whole-tree scope, and `Admin` operation automatically, so you never pick the reserved tree from the catalog. Delegated grants are labelled `access administration` in the ranked rule table so they are easy to tell apart from an ordinary whole-tree rule.
 
 **Security caveat.** A delegated access-administration grant confers full authority over membership and policy, including the ability to delegate further. Grant it sparingly. Turning `AccessAdministrationDelegationEnabled` back off stops **new** delegations from being authored but does **not** revoke a grant that already exists - remove that rule (via `RemoveRuleAsync`, or the Explorer rule list) to revoke the delegation.
+
+### All-trees grants
+
+An **all-trees grant** is a rule whose scope is the cluster-wide sentinel `Tree:*` (authored with `LatticeScope.ClusterWide()`). When enabled, it governs **every** ordinary application tree at once, so an operator can grant (or deny) a subject a capability across the whole cluster without authoring one rule per tree. This reuses the existing `*` sentinel and is off by default:
+
+- Set `AllTreesGrantsEnabled = true` in the `AddLatticeAuth(options => ...)` configuration. Existing clusters are byte-for-byte unchanged until they opt in: with the flag off, a data-plane `Tree:*` rule stays inert (it is listed for visibility but never grants or denies), exactly as before.
+- With the flag on, the decision engine consults the `Tree:*` bucket for every non-system tree using a **four-tier precedence** (most authoritative first):
+  1. **All-trees deny** - a matched `Tree:*` deny is returned outright; a global deny is never overridden by a specific-tree allow.
+  2. **Specific-tree verdict** - the target tree's own most-specific-wins verdict (a specific deny overrides a global allow, and a specific allow stands).
+  3. **All-trees allow** - a matched `Tree:*` allow grants access when the target tree has no matching rule of its own.
+  4. **Default effect** - otherwise the cluster's `DefaultEffect` applies.
+- **System-tree exclusion (fail-closed).** The all-trees tier is **never** consulted for the reserved authorization namespace (`sys-auth-*`, `LatticeAuthReservedTrees.IsReserved`) or for a literal request targeting the sentinel id `*` itself. A `Tree:*` allow therefore can never satisfy a control-plane admin check or leak into access administration.
+- **Operation-bit separation is preserved.** A widened data-plane `Tree:*` grant never confers `Telemetry`, and a telemetry `Tree:*` grant never confers a data-plane operation; the operation mask semantics are unchanged.
+- A real tree literally named `*` is never creatable: the core lattice grain rejects user-origin creation or mutation of a tree whose id is exactly `*`, so the sentinel can only ever be an authorization scope.
+
+From the Explorer Access tab, the rule form has an **All trees (cluster-wide)** option: pick the target user or group, tick the option, choose the operations and effect, and save. The form supplies the `Tree:*` scope automatically. The help text notes that the grant only takes effect once an operator has enabled all-trees grants on the silo; all-trees rules are labelled `all trees` in the ranked rule table so they are easy to tell apart from an ordinary whole-tree rule.
+
+**Security caveat.** An all-trees grant is broad by design - it applies to every application tree, including trees created after the rule was authored. Grant it sparingly, and prefer a specific-tree deny to carve out an exception. Turning `AllTreesGrantsEnabled` back off stops **new** all-trees evaluation but does **not** delete existing `Tree:*` rules - remove the rule to retire it.
 
 ## Wire model
 

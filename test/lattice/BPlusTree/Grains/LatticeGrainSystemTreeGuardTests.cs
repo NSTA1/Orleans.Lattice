@@ -291,4 +291,57 @@ public class LatticeGrainSystemTreeGuardTests
 
         Assert.DoesNotThrowAsync(() => grain.GetAsync("k"));
     }
+
+    // ----- All-trees authorization sentinel ("*") reservation -----
+    // The authorization decision engine promotes tree id "*" into a cluster-wide,
+    // all-trees grant tier (LatticeAuthOptions.AllTreesGrantsEnabled), so a real
+    // application tree literally named "*" must never be creatable. The guard sits
+    // on the user-origin data-mutation surface, mirroring the sys- data-tree guard.
+
+    [Test]
+    public void SetAsync_rejects_the_all_trees_sentinel_id()
+        => Assert.ThrowsAsync<InvalidOperationException>(
+            () => CreateGrainFor("*").SetAsync("k", [1]));
+
+    [Test]
+    public void SetManyAsync_rejects_the_all_trees_sentinel_id()
+        => Assert.ThrowsAsync<InvalidOperationException>(
+            () => CreateGrainFor("*").SetManyAsync([new("k", [1])]));
+
+    [Test]
+    public void SetManyAtomicAsync_rejects_the_all_trees_sentinel_id()
+        => Assert.ThrowsAsync<InvalidOperationException>(
+            () => CreateGrainFor("*").SetManyAtomicAsync([new("k", [1])]));
+
+    [Test]
+    public void DeleteAsync_rejects_the_all_trees_sentinel_id()
+        => Assert.ThrowsAsync<InvalidOperationException>(
+            () => CreateGrainFor("*").DeleteAsync("k"));
+
+    [Test]
+    public void BulkLoadAsync_rejects_the_all_trees_sentinel_id()
+        => Assert.ThrowsAsync<InvalidOperationException>(
+            () => CreateGrainFor("*").BulkLoadAsync([new("k", [1])]));
+
+    [Test]
+    public void SetAsync_sentinel_rejection_names_the_sentinel()
+    {
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(
+            () => CreateGrainFor("*").SetAsync("k", [1]));
+
+        Assert.That(ex!.Message, Does.Contain("all-trees authorization sentinel"));
+    }
+
+    [Test]
+    public void GetAsync_allows_the_all_trees_sentinel_id()
+    {
+        // Reads are never gated by the data-mutation sentinel guard, so a read of
+        // "*" is not rejected (the sentinel simply has no data behind it).
+        var (grain, factory) = CreateGrain("*");
+        var shardRoot = Substitute.For<IShardRootGrain>();
+        factory.GetGrain<IShardRootGrain>(Arg.Any<string>(), Arg.Any<string>())
+            .Returns(shardRoot);
+
+        Assert.DoesNotThrowAsync(() => grain.GetAsync("k"));
+    }
 }
