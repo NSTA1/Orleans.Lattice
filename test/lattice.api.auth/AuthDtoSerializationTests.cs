@@ -99,6 +99,11 @@ public sealed class AuthDtoSerializationTests
             Reason = "matched rule r1",
             DefaultEffect = LatticeEffect.Deny,
             MatchedRules = [SampleRule("r1")],
+            Posture = new AuthPolicyPosture
+            {
+                AllTreesGrantsEnabled = true,
+                AccessAdministrationDelegationEnabled = true,
+            },
         };
 
         var copy = RoundTrip(original);
@@ -113,6 +118,31 @@ public sealed class AuthDtoSerializationTests
             Assert.That(copy.Reason, Is.EqualTo("matched rule r1"));
             Assert.That(copy.DefaultEffect, Is.EqualTo(LatticeEffect.Deny));
             Assert.That(copy.MatchedRules.Select(r => r.RuleId), Is.EqualTo(new[] { "r1" }));
+            Assert.That(copy.Posture.AllTreesGrantsEnabled, Is.True);
+            Assert.That(copy.Posture.AccessAdministrationDelegationEnabled, Is.True);
+        });
+    }
+
+    [Test]
+    public void AuthPolicyPosture_round_trips()
+    {
+        var original = new AuthPolicyPosture
+        {
+            AllTreesGrantsEnabled = true,
+            AccessAdministrationDelegationEnabled = false,
+        };
+
+        Assert.That(RoundTrip(original), Is.EqualTo(original));
+    }
+
+    [Test]
+    public void AuthPolicyPosture_defaults_to_both_flags_off()
+    {
+        var posture = new AuthPolicyPosture();
+        Assert.Multiple(() =>
+        {
+            Assert.That(posture.AllTreesGrantsEnabled, Is.False);
+            Assert.That(posture.AccessAdministrationDelegationEnabled, Is.False);
         });
     }
 
@@ -124,6 +154,7 @@ public sealed class AuthDtoSerializationTests
             SubjectId = "u1",
             GroupIds = ["g1"],
             Rules = [SampleRule("r1"), SampleRule("r2", "tree-b")],
+            Posture = new AuthPolicyPosture { AllTreesGrantsEnabled = true },
         };
 
         var copy = RoundTrip(original);
@@ -132,6 +163,8 @@ public sealed class AuthDtoSerializationTests
             Assert.That(copy.SubjectId, Is.EqualTo("u1"));
             Assert.That(copy.GroupIds, Is.EqualTo(new[] { "g1" }));
             Assert.That(copy.Rules.Select(r => r.RuleId), Is.EqualTo(new[] { "r1", "r2" }));
+            Assert.That(copy.Posture.AllTreesGrantsEnabled, Is.True);
+            Assert.That(copy.Posture.AccessAdministrationDelegationEnabled, Is.False);
         });
     }
 
@@ -242,6 +275,8 @@ public sealed class AuthDtoSerializationTests
             DirectoryProviderId = "entra",
             DirectoryExplanation = "Enter an Entra object id.",
             LocalMembershipEffective = true,
+            AllTreesGrantsEnabled = true,
+            AccessAdministrationDelegationEnabled = true,
         };
 
         Assert.That(RoundTrip(original), Is.EqualTo(original));

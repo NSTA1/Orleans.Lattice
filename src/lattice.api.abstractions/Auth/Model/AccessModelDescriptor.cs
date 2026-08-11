@@ -65,4 +65,23 @@ public sealed record AccessModelDescriptor
     /// matches a token-asserted group.
     /// </summary>
     [Id(5)] public bool LocalMembershipEffective { get; init; }
+
+    /// <summary>
+    /// <see langword="true"/> when the cluster-wide all-trees grant tier is
+    /// enabled, so a <c>Tree:*</c> data-plane rule is enforced across every
+    /// non-system tree; <see langword="false"/> (the default) when such a rule is
+    /// authored-but-inert. Surfaced so the Access UI can badge the opt-in tier
+    /// state that is otherwise invisible. Maps to
+    /// <c>LatticeAuthOptions.AllTreesGrantsEnabled</c>.
+    /// </summary>
+    [Id(6)] public bool AllTreesGrantsEnabled { get; init; }
+
+    /// <summary>
+    /// <see langword="true"/> when access-administration delegation is enabled, so
+    /// a whole-tree <c>Admin</c> rule on the policy tree may be authored to
+    /// delegate access administration; <see langword="false"/> (the default) when
+    /// such a rule is unauthorable. Maps to
+    /// <c>LatticeAuthOptions.AccessAdministrationDelegationEnabled</c>.
+    /// </summary>
+    [Id(7)] public bool AccessAdministrationDelegationEnabled { get; init; }
 }

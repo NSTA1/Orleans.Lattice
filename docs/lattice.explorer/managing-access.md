@@ -94,6 +94,23 @@ enforcement posture, read from the server, so an operator is never guessing:
   them - so an operator does not mistake an advisory rule set for a live gate. A
   failed or denied read is never rendered as "unenforced".
 
+### Authorization-tier posture badges
+
+Beside the authentication mode, the banner renders two live **posture badges**
+read from the server's access model, so the two opt-in authorization tiers are
+discoverable at a glance rather than only by inspecting silo configuration:
+
+- **All-trees grants: on / off** - whether `LatticeAuthOptions.AllTreesGrantsEnabled`
+  is set, so a `Tree:*` data-plane rule is enforced across every ordinary tree.
+  While off, such a rule is inert and the server rejects authoring a new one.
+- **Access-admin delegation: on / off** - whether
+  `LatticeAuthOptions.AccessAdministrationDelegationEnabled` is set, so a whole-tree
+  `Admin` rule on the policy tree may be authored to delegate access administration.
+  While off, that rule is unauthorable.
+
+Both tiers are off by default. The badges only render once the access model has
+been read successfully; a failed read leaves the posture unknown and hides them.
+
 ## Merge-mode-aware membership editing
 
 Whether locally-defined group membership actually affects authorization depends

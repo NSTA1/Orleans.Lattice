@@ -33,6 +33,9 @@ public static class ApiAuthTypeAliases
     /// <summary>Alias for <see cref="AuthEffectivePermissions"/>.</summary>
     public const string AuthEffectivePermissions = "oli.ep";
 
+    /// <summary>Alias for <see cref="AuthPolicyPosture"/>.</summary>
+    public const string AuthPolicyPosture = "oli.pp";
+
     /// <summary>Alias for <see cref="DirectorySearchRequest"/>.</summary>
     public const string DirectorySearchRequest = "oli.dq";
 

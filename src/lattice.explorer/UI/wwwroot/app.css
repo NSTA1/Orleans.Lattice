@@ -631,6 +631,25 @@ code, .explorer-mono {
     color: var(--text-dim);
 }
 
+.explorer-access-posture {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin: 0.15rem 0 0.35rem;
+}
+
+.explorer-badge.is-on {
+    border-color: var(--ok);
+    color: var(--ok);
+    text-transform: none;
+}
+
+.explorer-badge.is-off {
+    border-color: var(--warn);
+    color: var(--warn);
+    text-transform: none;
+}
+
 .explorer-nav-more {
     width: 100%;
     margin-top: 0.4rem;

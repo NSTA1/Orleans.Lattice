@@ -74,23 +74,58 @@ internal static class AuthConstants
     /// <paramref name="delegationEnabled"/> is set. This is the one seam that
     /// decides whether a reserved-namespace rule may be written; the enforcement
     /// gate independently honours a matched allow on that namespace, so no gate
-    /// change is needed for the delegation to take effect.
+    /// change is needed for the delegation to take effect. The same seam also
+    /// rejects an all-trees (<c>Tree:*</c>) data-plane rule when the all-trees tier
+    /// is disabled (<paramref name="allTreesGrantsEnabled"/> is <c>false</c>), so
+    /// an inert wildcard grant is refused at authoring time instead of persisted
+    /// silently.
     /// </summary>
     /// <param name="rule">The candidate rule. Must not be <c>null</c>.</param>
     /// <param name="delegationEnabled">
     /// Whether access-administration delegation is enabled for this deployment
     /// (<c>LatticeAuthOptions.AccessAdministrationDelegationEnabled</c>).
     /// </param>
+    /// <param name="allTreesGrantsEnabled">
+    /// Whether the cluster-wide all-trees grant tier is enabled for this
+    /// deployment (<c>LatticeAuthOptions.AllTreesGrantsEnabled</c>). When
+    /// <c>false</c>, an all-trees (<c>Tree:*</c>) rule carrying any data-plane
+    /// operation is rejected at authoring time rather than persisted inert, so the
+    /// operator learns the tier must be enabled first.
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="rule"/> is <c>null</c>.</exception>
     /// <exception cref="ArgumentException">
     /// <paramref name="rule"/> targets the reserved namespace and is not the
     /// permitted delegation shape, or is the delegation shape while
-    /// <paramref name="delegationEnabled"/> is <c>false</c>.
+    /// <paramref name="delegationEnabled"/> is <c>false</c>; or is an all-trees
+    /// data-plane grant while <paramref name="allTreesGrantsEnabled"/> is
+    /// <c>false</c>.
     /// </exception>
-    internal static void EnsureAuthorableRuleScope(LatticeAuthorizationRule rule, bool delegationEnabled)
+    internal static void EnsureAuthorableRuleScope(
+        LatticeAuthorizationRule rule,
+        bool delegationEnabled,
+        bool allTreesGrantsEnabled)
     {
         ArgumentNullException.ThrowIfNull(rule);
         var treeId = rule.Scope.TreeId;
+
+        // All-trees (Tree:* sentinel) authoring guard: a wildcard rule carrying a
+        // data-plane operation is inert unless the all-trees tier is enabled, so
+        // reject it at authoring time rather than silently persisting a rule that
+        // does nothing. A pure Telemetry wildcard rule is unaffected - telemetry is
+        // a scopeless capability that resolves against the "*" bucket regardless of
+        // the tier flag - so only rules that intersect the data-plane mask are
+        // gated here.
+        if (string.Equals(treeId, LatticeScope.ClusterWideTreeId, StringComparison.Ordinal)
+            && (rule.Operations & LatticeAuthOperations.All) != LatticeOperation.None
+            && !allTreesGrantsEnabled)
+        {
+            throw new ArgumentException(
+                $"Authoring an all-trees ('{LatticeScope.ClusterWideTreeId}'-scoped) data-plane rule requires the " +
+                "all-trees grant tier to be enabled (LatticeAuthOptions.AllTreesGrantsEnabled). It is off by " +
+                "default, and while off such a rule is inert (the decision engine never consults the all-trees " +
+                "bucket for an ordinary tree). Enable the tier on the silo first, then author the rule.",
+                nameof(rule));
+        }
 
         // Ordinary application tree: always authorable, byte-for-byte unchanged.
         if (!treeId.StartsWith(ReservedTreePrefix, StringComparison.Ordinal))

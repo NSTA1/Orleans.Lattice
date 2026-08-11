@@ -31,7 +31,7 @@ public sealed class AuthConstantsAuthorableRuleScopeTests
     {
         var rule = Rule(LatticeScope.Tree("orders"), LatticeOperation.Read | LatticeOperation.Write);
 
-        Assert.That(() => AuthConstants.EnsureAuthorableRuleScope(rule, delegationEnabled: false), Throws.Nothing);
+        Assert.That(() => AuthConstants.EnsureAuthorableRuleScope(rule, delegationEnabled: false, allTreesGrantsEnabled: true), Throws.Nothing);
     }
 
     [Test]
@@ -39,7 +39,7 @@ public sealed class AuthConstantsAuthorableRuleScopeTests
     {
         var rule = Rule(LatticeScope.Key("orders", "k1"), LatticeOperation.Read);
 
-        Assert.That(() => AuthConstants.EnsureAuthorableRuleScope(rule, delegationEnabled: true), Throws.Nothing);
+        Assert.That(() => AuthConstants.EnsureAuthorableRuleScope(rule, delegationEnabled: true, allTreesGrantsEnabled: true), Throws.Nothing);
     }
 
     // ---- The delegation shape on the policy tree -------------------------
@@ -49,7 +49,7 @@ public sealed class AuthConstantsAuthorableRuleScopeTests
     {
         var rule = Rule(LatticeScope.Tree(PolicyTree), LatticeOperation.Admin);
 
-        Assert.That(() => AuthConstants.EnsureAuthorableRuleScope(rule, delegationEnabled: true), Throws.Nothing);
+        Assert.That(() => AuthConstants.EnsureAuthorableRuleScope(rule, delegationEnabled: true, allTreesGrantsEnabled: true), Throws.Nothing);
     }
 
     [Test]
@@ -59,7 +59,7 @@ public sealed class AuthConstantsAuthorableRuleScopeTests
         // way to author a negative access-administration rule.
         var rule = Rule(LatticeScope.Tree(PolicyTree), LatticeOperation.Admin, LatticeEffect.Deny);
 
-        Assert.That(() => AuthConstants.EnsureAuthorableRuleScope(rule, delegationEnabled: true), Throws.Nothing);
+        Assert.That(() => AuthConstants.EnsureAuthorableRuleScope(rule, delegationEnabled: true, allTreesGrantsEnabled: true), Throws.Nothing);
     }
 
     [Test]
@@ -68,7 +68,7 @@ public sealed class AuthConstantsAuthorableRuleScopeTests
         var rule = Rule(LatticeScope.Tree(PolicyTree), LatticeOperation.Admin);
 
         Assert.That(
-            () => AuthConstants.EnsureAuthorableRuleScope(rule, delegationEnabled: false),
+            () => AuthConstants.EnsureAuthorableRuleScope(rule, delegationEnabled: false, allTreesGrantsEnabled: true),
             Throws.ArgumentException,
             "the delegation grant must be rejected fail-closed while the delegation option is off");
     }
@@ -81,7 +81,7 @@ public sealed class AuthConstantsAuthorableRuleScopeTests
         var rule = Rule(LatticeScope.Tree(PolicyTree), LatticeOperation.Admin | LatticeOperation.Read);
 
         Assert.That(
-            () => AuthConstants.EnsureAuthorableRuleScope(rule, delegationEnabled: true),
+            () => AuthConstants.EnsureAuthorableRuleScope(rule, delegationEnabled: true, allTreesGrantsEnabled: true),
             Throws.ArgumentException,
             "only an exactly-Admin operation set is the authorable delegation shape");
     }
@@ -92,7 +92,7 @@ public sealed class AuthConstantsAuthorableRuleScopeTests
         var rule = Rule(LatticeScope.Tree(PolicyTree), LatticeOperation.Read);
 
         Assert.That(
-            () => AuthConstants.EnsureAuthorableRuleScope(rule, delegationEnabled: true),
+            () => AuthConstants.EnsureAuthorableRuleScope(rule, delegationEnabled: true, allTreesGrantsEnabled: true),
             Throws.ArgumentException);
     }
 
@@ -102,7 +102,7 @@ public sealed class AuthConstantsAuthorableRuleScopeTests
         var rule = Rule(LatticeScope.Key(PolicyTree, "k1"), LatticeOperation.Admin);
 
         Assert.That(
-            () => AuthConstants.EnsureAuthorableRuleScope(rule, delegationEnabled: true),
+            () => AuthConstants.EnsureAuthorableRuleScope(rule, delegationEnabled: true, allTreesGrantsEnabled: true),
             Throws.ArgumentException,
             "a key scope is never the authorable delegation shape");
     }
@@ -113,7 +113,7 @@ public sealed class AuthConstantsAuthorableRuleScopeTests
         var rule = Rule(LatticeScope.Prefix(PolicyTree, "p/"), LatticeOperation.Admin);
 
         Assert.That(
-            () => AuthConstants.EnsureAuthorableRuleScope(rule, delegationEnabled: true),
+            () => AuthConstants.EnsureAuthorableRuleScope(rule, delegationEnabled: true, allTreesGrantsEnabled: true),
             Throws.ArgumentException,
             "a prefix scope is never the authorable delegation shape");
     }
@@ -125,16 +125,73 @@ public sealed class AuthConstantsAuthorableRuleScopeTests
     {
         var rule = Rule(LatticeScope.Tree("sys-auth-audit"), LatticeOperation.Admin);
 
-        Assert.That(() => AuthConstants.EnsureAuthorableRuleScope(rule, delegationEnabled: false), Throws.ArgumentException);
-        Assert.That(() => AuthConstants.EnsureAuthorableRuleScope(rule, delegationEnabled: true), Throws.ArgumentException);
+        Assert.That(() => AuthConstants.EnsureAuthorableRuleScope(rule, delegationEnabled: false, allTreesGrantsEnabled: true), Throws.ArgumentException);
+        Assert.That(() => AuthConstants.EnsureAuthorableRuleScope(rule, delegationEnabled: true, allTreesGrantsEnabled: true), Throws.ArgumentException);
     }
 
     [Test]
     public void EnsureAuthorableRuleScope_null_rule_throws()
     {
         Assert.That(
-            () => AuthConstants.EnsureAuthorableRuleScope(null!, delegationEnabled: true),
+            () => AuthConstants.EnsureAuthorableRuleScope(null!, delegationEnabled: true, allTreesGrantsEnabled: true),
             Throws.ArgumentNullException);
+    }
+
+    // ---- The all-trees (Tree:*) data-plane authoring guard ---------------
+
+    private static LatticeAuthorizationRule ClusterWideRule(
+        LatticeOperation operations,
+        LatticeEffect effect = LatticeEffect.Allow) =>
+        new("r", LatticeSubjectSelector.User("alice"), LatticeScope.ClusterWide(), operations, effect);
+
+    [Test]
+    public void EnsureAuthorableRuleScope_all_trees_data_rule_is_rejected_when_all_trees_grants_off()
+    {
+        var rule = ClusterWideRule(LatticeOperation.Read | LatticeOperation.Write);
+
+        Assert.That(
+            () => AuthConstants.EnsureAuthorableRuleScope(
+                rule, delegationEnabled: true, allTreesGrantsEnabled: false),
+            Throws.ArgumentException,
+            "an inert Tree:* data-plane grant must be refused at authoring time while the tier is off");
+    }
+
+    [Test]
+    public void EnsureAuthorableRuleScope_all_trees_data_rule_is_authorable_when_all_trees_grants_on()
+    {
+        var rule = ClusterWideRule(LatticeOperation.Read | LatticeOperation.Write);
+
+        Assert.That(
+            () => AuthConstants.EnsureAuthorableRuleScope(
+                rule, delegationEnabled: true, allTreesGrantsEnabled: true),
+            Throws.Nothing);
+    }
+
+    [Test]
+    public void EnsureAuthorableRuleScope_all_trees_pure_telemetry_rule_is_authorable_even_when_all_trees_grants_off()
+    {
+        // Telemetry is a scopeless capability resolved against the "*" bucket
+        // regardless of the tier flag, so a pure-Telemetry wildcard rule is never
+        // inert and must remain authorable with the tier off.
+        var rule = ClusterWideRule(LatticeOperation.Telemetry);
+
+        Assert.That(
+            () => AuthConstants.EnsureAuthorableRuleScope(
+                rule, delegationEnabled: true, allTreesGrantsEnabled: false),
+            Throws.Nothing);
+    }
+
+    [Test]
+    public void EnsureAuthorableRuleScope_all_trees_mixed_data_and_telemetry_rule_is_rejected_when_off()
+    {
+        // Any intersection with the data-plane mask makes the rule partly inert
+        // while the tier is off, so the mixed rule is gated too.
+        var rule = ClusterWideRule(LatticeOperation.Telemetry | LatticeOperation.Read);
+
+        Assert.That(
+            () => AuthConstants.EnsureAuthorableRuleScope(
+                rule, delegationEnabled: true, allTreesGrantsEnabled: false),
+            Throws.ArgumentException);
     }
 
     // ---- The shape predicate --------------------------------------------

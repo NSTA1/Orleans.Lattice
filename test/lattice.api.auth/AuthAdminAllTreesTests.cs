@@ -162,4 +162,39 @@ public sealed class AuthAdminAllTreesTests
         Assert.That(permissions.Rules.Select(r => r.RuleId), Does.Contain("all-alice-read"),
             "a subject's cluster-wide grant appears in its effective permissions");
     }
+
+    [Test]
+    public async Task Explain_surfaces_the_enabled_all_trees_posture()
+    {
+        var explanation = await ExplainAsync("alice", LatticeOperation.Read, LatticeScope.Tree(AppTree));
+
+        Assert.That(explanation.Posture.AllTreesGrantsEnabled, Is.True,
+            "explain must report the all-trees tier as enabled on a cluster where the flag is set");
+    }
+
+    [Test]
+    public async Task Effective_permissions_surface_the_enabled_all_trees_posture()
+    {
+        AuthEffectivePermissions permissions;
+        using (AuthAdminAllTreesClusterFixture.AsSubject(AuthAdminAllTreesClusterFixture.BootstrapAdmin))
+        {
+            permissions = await _fixture.Admin.EffectivePermissionsAsync("alice");
+        }
+
+        Assert.That(permissions.Posture.AllTreesGrantsEnabled, Is.True,
+            "effective-permissions must report the all-trees tier as enabled");
+    }
+
+    [Test]
+    public async Task Access_model_surfaces_the_enabled_all_trees_posture()
+    {
+        AccessModelDescriptor model;
+        using (AuthAdminAllTreesClusterFixture.AsSubject(AuthAdminAllTreesClusterFixture.BootstrapAdmin))
+        {
+            model = await _fixture.Admin.GetAccessModelAsync();
+        }
+
+        Assert.That(model.AllTreesGrantsEnabled, Is.True,
+            "the access model must report the all-trees tier as enabled so the Explorer can badge it");
+    }
 }

@@ -174,6 +174,40 @@ public sealed class AccessCreateModel
     /// </summary>
     public bool MembershipEditingEnabled => !ShowMembershipInertNotice;
 
+    /// <summary>
+    /// <see langword="true"/> when the access model was read successfully and the
+    /// cluster-wide all-trees grant tier is enabled, so a <c>Tree:*</c> data-plane
+    /// rule is enforced. When the read failed the state is unknown and this is
+    /// <see langword="false"/>. Drives the live posture badge.
+    /// </summary>
+    public bool AllTreesGrantsEnabled => Model.IsSuccess && Model.AllTreesGrantsEnabled;
+
+    /// <summary>
+    /// <see langword="true"/> when the access model was read successfully and
+    /// access-administration delegation is enabled, so a whole-tree <c>Admin</c>
+    /// rule on the policy tree may be authored. When the read failed the state is
+    /// unknown and this is <see langword="false"/>. Drives the live posture badge.
+    /// </summary>
+    public bool AccessAdministrationDelegationEnabled =>
+        Model.IsSuccess && Model.AccessAdministrationDelegationEnabled;
+
+    /// <summary>
+    /// <see langword="true"/> when the posture badges should render: the access
+    /// model was read successfully, so the two tier flags reflect the live
+    /// server-side state rather than an unknown default.
+    /// </summary>
+    public bool ShowPosture => Model.IsSuccess;
+
+    /// <summary>The posture badge label for the all-trees grant tier.</summary>
+    public string AllTreesGrantsLabel =>
+        AllTreesGrantsEnabled ? "All-trees grants: on" : "All-trees grants: off";
+
+    /// <summary>The posture badge label for the access-administration delegation tier.</summary>
+    public string AccessAdministrationDelegationLabel =>
+        AccessAdministrationDelegationEnabled
+            ? "Access-admin delegation: on"
+            : "Access-admin delegation: off";
+
     /// <summary>Applies a freshly read access-model snapshot.</summary>
     /// <param name="model">The snapshot to apply. Must not be <see langword="null"/>.</param>
     public void Apply(AccessModelView model)
