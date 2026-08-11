@@ -466,6 +466,16 @@ public partial class ReplicationApplierTests
         });
     }
 
+    private static byte[] EncodeGCounterDelta(Action<Dictionary<string, long>>? configureIncrements = null)
+    {
+        var incs = new Dictionary<string, long>(StringComparer.Ordinal);
+        configureIncrements?.Invoke(incs);
+        return JsonLatticeSerializer<GCounterDelta>.Default.Serialize(new GCounterDelta
+        {
+            Increments = incs,
+        });
+    }
+
     private static byte[] EncodeVersionVectorDelta(Action<Dictionary<string, HybridLogicalClock>>? configure = null)
     {
         var entries = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
@@ -527,6 +537,24 @@ public partial class ReplicationApplierTests
 
         Assert.That(result.Applied, Is.True);
         await lattice.Received(1).ApplyCrdtDeltaAsync("k", LatticeMergeMode.PnCounter, Arg.Any<byte[]>(), Arg.Any<CancellationToken>());
+        await lattice.DidNotReceiveWithAnyArgs().SetIfVersionAsync(default!, default!, default, default);
+    }
+
+    [Test]
+    public async Task ApplyAsync_dispatches_g_counter_delta_through_crdt_delta_grain_seam()
+    {
+        var (applier, lattice, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.GCounter);
+        var entry = SetEntry("k", Hlc(11)) with
+        {
+            Mode = LatticeMergeMode.GCounter,
+            Value = null,
+            Delta = EncodeGCounterDelta(d => d["site-b"] = 5),
+        };
+
+        var result = await applier.ApplyAsync(entry);
+
+        Assert.That(result.Applied, Is.True);
+        await lattice.Received(1).ApplyCrdtDeltaAsync("k", LatticeMergeMode.GCounter, Arg.Any<byte[]>(), Arg.Any<CancellationToken>());
         await lattice.DidNotReceiveWithAnyArgs().SetIfVersionAsync(default!, default!, default, default);
     }
 

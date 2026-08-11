@@ -134,6 +134,51 @@ public class DeltaSerializerRoundTripTests
     }
 
     [Test]
+    public void RwSetDelta_round_trips()
+    {
+        var add = new OrSetDeltaDot { Element = new byte[] { 1 }, ReplicaId = "r1", Counter = 1 };
+        var remove = new OrSetDeltaDot { Element = new byte[] { 1 }, ReplicaId = "r2", Counter = 7 };
+        var tombstone = new OrSetDeltaDot { Element = new byte[] { 1 }, ReplicaId = "r3", Counter = 5 };
+        var original = new RwSetDelta
+        {
+            Adds = new[] { add },
+            Removes = new[] { remove },
+            Tombstones = new[] { tombstone },
+        };
+
+        var copy = RoundTrip(original);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Adds, Has.Count.EqualTo(1));
+            Assert.That(copy.Adds[0].Element, Is.EqualTo(add.Element));
+            Assert.That(copy.Adds[0].ReplicaId, Is.EqualTo(add.ReplicaId));
+            Assert.That(copy.Adds[0].Counter, Is.EqualTo(add.Counter));
+            Assert.That(copy.Removes, Has.Count.EqualTo(1));
+            Assert.That(copy.Removes[0].ReplicaId, Is.EqualTo(remove.ReplicaId));
+            Assert.That(copy.Tombstones, Has.Count.EqualTo(1));
+            Assert.That(copy.Tombstones[0].ReplicaId, Is.EqualTo(tombstone.ReplicaId));
+            Assert.That(copy.Tombstones[0].Counter, Is.EqualTo(tombstone.Counter));
+        });
+    }
+
+    [Test]
+    public void RwSetDelta_empty_round_trips()
+    {
+        var copy = RoundTrip(RwSetDelta.Empty);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Adds, Is.Not.Null);
+            Assert.That(copy.Adds, Is.Empty);
+            Assert.That(copy.Removes, Is.Not.Null);
+            Assert.That(copy.Removes, Is.Empty);
+            Assert.That(copy.Tombstones, Is.Not.Null);
+            Assert.That(copy.Tombstones, Is.Empty);
+        });
+    }
+
+    [Test]
     public void PnCounterDelta_round_trips()
     {
         var original = new PnCounterDelta
@@ -165,6 +210,36 @@ public class DeltaSerializerRoundTripTests
             Assert.That(copy.Increments, Is.Empty);
             Assert.That(copy.Decrements, Is.Not.Null);
             Assert.That(copy.Decrements, Is.Empty);
+        });
+    }
+
+    [Test]
+    public void GCounterDelta_round_trips()
+    {
+        var original = new GCounterDelta
+        {
+            Increments = new Dictionary<string, long> { ["r1"] = 5, ["r2"] = 100 },
+        };
+
+        var copy = RoundTrip(original);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Increments, Has.Count.EqualTo(2));
+            Assert.That(copy.Increments["r1"], Is.EqualTo(5L));
+            Assert.That(copy.Increments["r2"], Is.EqualTo(100L));
+        });
+    }
+
+    [Test]
+    public void GCounterDelta_empty_round_trips()
+    {
+        var copy = RoundTrip(GCounterDelta.Empty);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Increments, Is.Not.Null);
+            Assert.That(copy.Increments, Is.Empty);
         });
     }
 
@@ -277,6 +352,69 @@ public class DeltaSerializerRoundTripTests
             Assert.That(copy.Inserts, Is.Empty);
             Assert.That(copy.Tombstones, Is.Not.Null);
             Assert.That(copy.Tombstones, Is.Empty);
+        });
+    }
+
+    [Test]
+    public void GSetDelta_round_trips()
+    {
+        var original = new GSetDelta
+        {
+            Adds = new[] { new byte[] { 1, 2 }, new byte[] { 3, 4, 5 } },
+        };
+
+        var copy = RoundTrip(original);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Adds, Has.Count.EqualTo(2));
+            Assert.That(copy.Adds[0], Is.EqualTo(original.Adds[0]));
+            Assert.That(copy.Adds[1], Is.EqualTo(original.Adds[1]));
+        });
+    }
+
+    [Test]
+    public void GSetDelta_empty_round_trips()
+    {
+        var copy = RoundTrip(GSetDelta.Empty);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Adds, Is.Not.Null);
+            Assert.That(copy.Adds, Is.Empty);
+        });
+    }
+
+    [Test]
+    public void BoundedRegisterDelta_round_trips_candidate()
+    {
+        var original = new BoundedRegisterDelta
+        {
+            Value = new byte[] { 0xBE, 0xEF },
+            OrderKey = new byte[] { 0x00, 0x01, 0x02 },
+            HasValue = true,
+        };
+
+        var copy = RoundTrip(original);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Value, Is.EqualTo(original.Value));
+            Assert.That(copy.OrderKey, Is.EqualTo(original.OrderKey));
+            Assert.That(copy.HasValue, Is.True);
+        });
+    }
+
+    [Test]
+    public void BoundedRegisterDelta_empty_round_trips()
+    {
+        var copy = RoundTrip(BoundedRegisterDelta.Empty);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.HasValue, Is.False);
+            Assert.That(copy.Value, Is.Null);
+            Assert.That(copy.OrderKey, Is.Null);
         });
     }
 }

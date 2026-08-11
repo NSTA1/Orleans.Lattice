@@ -15,9 +15,7 @@ remains atomically visible (zero-or-all keys per poll) on the
 authoring site and on every receiver site; that
 `SetManyAtomicAsync` keeps a multi-tree saga's keys
 all-or-nothing across every participating tree under concurrent shard
-splits; and that the per-merge-mode
-CRDT dispatch paths (`LwwRegister`, `OrSet`, `PnCounter`, `MvRegister`,
-and `OrMap`) converge across
+splits; and that the per-merge-mode CRDT dispatch paths converge across
 partitioned sites. The single-cluster suite also exercises the
 recovery protocols (resumable splits, two-phase root promotion,
 shadow-write atomicity, shadow-forwarding, registry version stamping,

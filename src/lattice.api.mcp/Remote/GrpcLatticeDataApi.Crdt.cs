@@ -62,6 +62,26 @@ internal sealed partial class GrpcLatticeDataApi
         => (await ReadAsync(treeId, key, CrdtKind.RwFlag, cancellationToken).ConfigureAwait(false)).FlagValue;
 
     /// <inheritdoc />
+    public Task GCounterIncrementAsync(string treeId, string key, string replicaId, long amount, CancellationToken cancellationToken = default)
+        => WriteAsync(new CrdtWriteRequest { TreeId = treeId, Key = key, Op = CrdtWriteOp.GCounterIncrement, ReplicaId = replicaId, Amount = amount }, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<long> GCounterGetAsync(string treeId, string key, CancellationToken cancellationToken = default)
+        => (await ReadAsync(treeId, key, CrdtKind.GCounter, cancellationToken).ConfigureAwait(false)).CounterValue;
+
+    /// <inheritdoc />
+    public Task RwSetAddAsync(string treeId, string key, byte[] element, string replicaId, CancellationToken cancellationToken = default)
+        => WriteAsync(new CrdtWriteRequest { TreeId = treeId, Key = key, Op = CrdtWriteOp.RwSetAdd, ReplicaId = replicaId, Element = element }, cancellationToken);
+
+    /// <inheritdoc />
+    public Task RwSetRemoveAsync(string treeId, string key, byte[] element, string replicaId, CancellationToken cancellationToken = default)
+        => WriteAsync(new CrdtWriteRequest { TreeId = treeId, Key = key, Op = CrdtWriteOp.RwSetRemove, ReplicaId = replicaId, Element = element }, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<byte[]>> RwSetGetAsync(string treeId, string key, CancellationToken cancellationToken = default)
+        => (await ReadAsync(treeId, key, CrdtKind.RwSet, cancellationToken).ConfigureAwait(false)).Elements;
+
+    /// <inheritdoc />
     public Task VersionVectorTickAsync(string treeId, string key, string replicaId, CancellationToken cancellationToken = default)
         => WriteAsync(new CrdtWriteRequest { TreeId = treeId, Key = key, Op = CrdtWriteOp.VersionVectorTick, ReplicaId = replicaId }, cancellationToken);
 
@@ -85,6 +105,28 @@ internal sealed partial class GrpcLatticeDataApi
     /// <inheritdoc />
     public async Task<IReadOnlyList<byte[]>> RegisterGetAsync(string treeId, string key, CancellationToken cancellationToken = default)
         => (await ReadAsync(treeId, key, CrdtKind.MvRegister, cancellationToken).ConfigureAwait(false)).Elements;
+
+    /// <inheritdoc />
+    public Task MaxRegisterSetAsync(string treeId, string key, byte[] value, CancellationToken cancellationToken = default)
+        => WriteAsync(new CrdtWriteRequest { TreeId = treeId, Key = key, Op = CrdtWriteOp.MaxRegisterSet, Element = value }, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<byte[]?> MaxRegisterGetAsync(string treeId, string key, CancellationToken cancellationToken = default)
+    {
+        var elements = (await ReadAsync(treeId, key, CrdtKind.MaxRegister, cancellationToken).ConfigureAwait(false)).Elements;
+        return elements.Count > 0 ? elements[0] : null;
+    }
+
+    /// <inheritdoc />
+    public Task MinRegisterSetAsync(string treeId, string key, byte[] value, CancellationToken cancellationToken = default)
+        => WriteAsync(new CrdtWriteRequest { TreeId = treeId, Key = key, Op = CrdtWriteOp.MinRegisterSet, Element = value }, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<byte[]?> MinRegisterGetAsync(string treeId, string key, CancellationToken cancellationToken = default)
+    {
+        var elements = (await ReadAsync(treeId, key, CrdtKind.MinRegister, cancellationToken).ConfigureAwait(false)).Elements;
+        return elements.Count > 0 ? elements[0] : null;
+    }
 
     /// <inheritdoc />
     public Task SequenceInsertAtAsync(string treeId, string key, int index, string replicaId, byte[] value, CancellationToken cancellationToken = default)
@@ -118,6 +160,14 @@ internal sealed partial class GrpcLatticeDataApi
 
         return result;
     }
+
+    /// <inheritdoc />
+    public Task GSetAddAsync(string treeId, string key, byte[] element, CancellationToken cancellationToken = default)
+        => WriteAsync(new CrdtWriteRequest { TreeId = treeId, Key = key, Op = CrdtWriteOp.GSetAdd, Element = element }, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<byte[]>> GSetGetAsync(string treeId, string key, CancellationToken cancellationToken = default)
+        => (await ReadAsync(treeId, key, CrdtKind.GSet, cancellationToken).ConfigureAwait(false)).Elements;
 
     private async Task WriteAsync(CrdtWriteRequest request, CancellationToken cancellationToken)
     {

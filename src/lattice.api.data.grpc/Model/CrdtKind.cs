@@ -33,4 +33,16 @@ public enum CrdtKind
 
     /// <summary>Observed-remove map; read yields per-field concurrent values.</summary>
     OrMap = 7,
+
+    /// <summary>Grow-only counter; read yields the converged total.</summary>
+    GCounter = 8,
+    /// <summary>Grow-only set; read yields the members.</summary>
+    GSet = 9,
+    /// <summary>Remove-wins observed-remove set; read yields the live members.</summary>
+    RwSet = 10,
+    /// <summary>Monotone max register; read yields the current high-water value.</summary>
+    MaxRegister = 11,
+
+    /// <summary>Monotone min register; read yields the current low-water value.</summary>
+    MinRegister = 12,
 }

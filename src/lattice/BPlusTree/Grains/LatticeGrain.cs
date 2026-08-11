@@ -436,10 +436,12 @@ internal sealed partial class LatticeGrain(
         LatticeMergeMode.PnCounter => "PnCounter(key)",
         LatticeMergeMode.OrFlag => "OrFlag(key)",
         LatticeMergeMode.RwFlag => "RwFlag(key)",
+        LatticeMergeMode.RwSet => "RwSet(key)",
         LatticeMergeMode.VersionVector => "VersionVector(key)",
         LatticeMergeMode.MvRegister => "MvRegister<T>(key)",
         LatticeMergeMode.OrMap => "OrMap<TKey, TValue>(key)",
         LatticeMergeMode.Sequence => "Sequence<T>(key)",
+        LatticeMergeMode.GSet => "GSet(key)",
         _ => "the matching CRDT accessor",
     };
 

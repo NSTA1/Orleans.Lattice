@@ -62,6 +62,104 @@ public static class CrdtLatticeExtensions
     }
 
     /// <summary>
+    /// Returns a typed accessor for a grow-only (G) set stored under
+    /// <paramref name="key"/> in <paramref name="lattice"/>. Elements can only
+    /// be added; the set converges by union under concurrent active-active
+    /// adds. It is the minimal, tombstone-free set primitive for append-only
+    /// workloads (tag sets, seen-ids, accumulating audiences); reach for
+    /// <see cref="OrSet(ILattice, string)"/> when removal is needed.
+    /// </summary>
+    /// <param name="lattice">The tree containing the set.</param>
+    /// <param name="key">The key the set is stored under.</param>
+    public static GSetAccessor GSet(this ILattice lattice, string key)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        ArgumentException.ThrowIfNullOrEmpty(key);
+        return new GSetAccessor(lattice, key);
+    }
+
+    /// <summary>
+    /// Returns a typed accessor for a remove-wins observed-remove set stored
+    /// under <paramref name="key"/> in <paramref name="lattice"/> - the
+    /// set-granularity generalisation of <see cref="RwFlag(ILattice, string)"/>.
+    /// Concurrent active-active add and remove of the same element converge
+    /// remove-wins: a remove an add has not observed survives and keeps the
+    /// element out, so a revoke is never silently resurrected by a concurrent
+    /// re-add. It is the remove-wins counterpart of the add-wins
+    /// <see cref="OrSet(ILattice, string)"/> - the natural primitive for
+    /// membership revocation lists and blocklists where a removal must win the
+    /// tie.
+    /// </summary>
+    /// <param name="lattice">The tree containing the set.</param>
+    /// <param name="key">The key the set is stored under.</param>
+    public static RwSetAccessor RwSet(this ILattice lattice, string key)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        ArgumentException.ThrowIfNullOrEmpty(key);
+        return new RwSetAccessor(lattice, key);
+    }
+
+    /// <summary>
+    /// Returns a typed accessor for a monotone <em>max</em> register stored
+    /// under <paramref name="key"/> in <paramref name="lattice"/> - the
+    /// high-water-mark primitive that keeps the greatest totally-ordered value
+    /// ever written (a monotone gauge, a version ceiling, a max-seen reading).
+    /// A write advances the register only when the candidate beats the current
+    /// value under the total order; concurrent active-active writes from
+    /// different clusters converge on the single greatest value because the fold
+    /// is a directional max over the total order - commutative, associative, and
+    /// idempotent.
+    /// </summary>
+    /// <typeparam name="T">The user-facing value type. Serialised to and from <see cref="byte"/>[] through the supplied <paramref name="serializer"/> or <see cref="JsonLatticeSerializer{T}"/>.</typeparam>
+    /// <param name="lattice">The tree containing the register.</param>
+    /// <param name="key">The key the register is stored under.</param>
+    /// <param name="orderKeySelector">
+    /// Produces the order-preserving total-order key for a value. The key is
+    /// carried on the wire alongside the value so the receiver folds without the
+    /// domain comparer; the caller is responsible for authoring a key whose
+    /// unsigned lexicographic byte order matches the intended value order (e.g.
+    /// big-endian encoding of a numeric height).
+    /// </param>
+    /// <param name="serializer">Optional serializer for <typeparamref name="T"/>. Defaults to <see cref="JsonLatticeSerializer{T}.Default"/>.</param>
+    public static MaxRegisterAccessor<T> MaxRegister<T>(this ILattice lattice, string key, Func<T, byte[]> orderKeySelector, ILatticeSerializer<T>? serializer = null)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        ArgumentException.ThrowIfNullOrEmpty(key);
+        ArgumentNullException.ThrowIfNull(orderKeySelector);
+        return new MaxRegisterAccessor<T>(lattice, key, orderKeySelector, serializer ?? JsonLatticeSerializer<T>.Default);
+    }
+
+    /// <summary>
+    /// Returns a typed accessor for a monotone <em>min</em> register stored
+    /// under <paramref name="key"/> in <paramref name="lattice"/> - the
+    /// low-water-mark primitive that keeps the smallest totally-ordered value
+    /// ever written (a min-seen latency floor, a first-seen timestamp). A write
+    /// advances the register only when the candidate beats the current value
+    /// under the total order; concurrent active-active writes from different
+    /// clusters converge on the single smallest value because the fold is a
+    /// directional min over the total order - commutative, associative, and
+    /// idempotent.
+    /// </summary>
+    /// <typeparam name="T">The user-facing value type. Serialised to and from <see cref="byte"/>[] through the supplied <paramref name="serializer"/> or <see cref="JsonLatticeSerializer{T}"/>.</typeparam>
+    /// <param name="lattice">The tree containing the register.</param>
+    /// <param name="key">The key the register is stored under.</param>
+    /// <param name="orderKeySelector">
+    /// Produces the order-preserving total-order key for a value. The key is
+    /// carried on the wire alongside the value so the receiver folds without the
+    /// domain comparer; the caller is responsible for authoring a key whose
+    /// unsigned lexicographic byte order matches the intended value order (e.g.
+    /// big-endian encoding of a numeric reading).
+    /// </param>
+    /// <param name="serializer">Optional serializer for <typeparamref name="T"/>. Defaults to <see cref="JsonLatticeSerializer{T}.Default"/>.</param>
+    public static MinRegisterAccessor<T> MinRegister<T>(this ILattice lattice, string key, Func<T, byte[]> orderKeySelector, ILatticeSerializer<T>? serializer = null)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        ArgumentException.ThrowIfNullOrEmpty(key);
+        ArgumentNullException.ThrowIfNull(orderKeySelector);
+        return new MinRegisterAccessor<T>(lattice, key, orderKeySelector, serializer ?? JsonLatticeSerializer<T>.Default);
+    }
+
+    /// <summary>
     /// Returns a typed accessor for a positive-negative (PN) counter
     /// stored under <paramref name="key"/> in <paramref name="lattice"/>.
     /// </summary>
@@ -72,6 +170,25 @@ public static class CrdtLatticeExtensions
         ArgumentNullException.ThrowIfNull(lattice);
         ArgumentException.ThrowIfNullOrEmpty(key);
         return new PnCounterAccessor(lattice, key);
+    }
+
+    /// <summary>
+    /// Returns a typed accessor for a grow-only (G) counter stored under
+    /// <paramref name="key"/> in <paramref name="lattice"/>. The counter only
+    /// ever increments and converges by pointwise-max per replica, so
+    /// concurrent active-active increments from multiple clusters all count.
+    /// It is the monotonic-only counter that
+    /// <see cref="PnCounter(ILattice, string)"/> is built from - the natural
+    /// choice for monotone metrics, sequence / event counters, and quota
+    /// consumption where decrement never happens.
+    /// </summary>
+    /// <param name="lattice">The tree containing the counter.</param>
+    /// <param name="key">The key the counter is stored under.</param>
+    public static GCounterAccessor GCounter(this ILattice lattice, string key)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        ArgumentException.ThrowIfNullOrEmpty(key);
+        return new GCounterAccessor(lattice, key);
     }
 
     /// <summary>

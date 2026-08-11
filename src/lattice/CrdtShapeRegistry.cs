@@ -204,6 +204,29 @@ public sealed class CrdtShape
         };
     }
 
+    /// <summary>Factory for the <see cref="LatticeMergeMode.GCounter"/> shape.</summary>
+    public static CrdtShape ForGCounter()
+    {
+        var ctx = CrdtJsonSerializerContext.Default;
+        return new CrdtShape(
+            LatticeMergeMode.GCounter,
+            bytes => JsonSerializer.Deserialize(bytes, ctx.GCounter)!,
+            bytes => JsonSerializer.Deserialize(bytes, ctx.GCounterDelta),
+            (state, delta) => ((GCounter)state).MergeDelta((GCounterDelta)delta),
+            (state, other) => ((GCounter)state).MergeFrom((GCounter)other),
+            () => new GCounter(),
+            state => JsonSerializer.SerializeToUtf8Bytes((GCounter)state, ctx.GCounter),
+            delta => JsonSerializer.SerializeToUtf8Bytes((GCounterDelta)delta, ctx.GCounterDelta),
+            static (a, b) => CombineGCounterDelta((GCounterDelta)a, (GCounterDelta)b))
+        {
+            SerializeStateInto = static (state, writer) =>
+            {
+                using var w = new Utf8JsonWriter(writer);
+                JsonSerializer.Serialize(w, (GCounter)state, CrdtJsonSerializerContext.Default.GCounter);
+            },
+        };
+    }
+
     /// <summary>Factory for the <see cref="LatticeMergeMode.OrFlag"/> shape.</summary>
     public static CrdtShape ForOrFlag()
     {
@@ -246,6 +269,80 @@ public sealed class CrdtShape
             {
                 using var w = new Utf8JsonWriter(writer);
                 JsonSerializer.Serialize(w, (RwFlag)state, CrdtJsonSerializerContext.Default.RwFlag);
+            },
+        };
+    }
+
+    /// <summary>Factory for the <see cref="LatticeMergeMode.GSet"/> shape.</summary>
+    public static CrdtShape ForGSet()
+    {
+        var ctx = CrdtJsonSerializerContext.Default;
+        return new CrdtShape(
+            LatticeMergeMode.GSet,
+            bytes => JsonSerializer.Deserialize(bytes, ctx.GSet)!,
+            bytes => JsonSerializer.Deserialize(bytes, ctx.GSetDelta),
+            (state, delta) => ((GSet)state).MergeDelta((GSetDelta)delta),
+            (state, other) => ((GSet)state).MergeFrom((GSet)other),
+            () => new GSet(),
+            state => JsonSerializer.SerializeToUtf8Bytes((GSet)state, ctx.GSet),
+            delta => JsonSerializer.SerializeToUtf8Bytes((GSetDelta)delta, ctx.GSetDelta),
+            static (a, b) => CombineGSetDelta((GSetDelta)a, (GSetDelta)b))
+        {
+            SerializeStateInto = static (state, writer) =>
+            {
+                using var w = new Utf8JsonWriter(writer);
+                JsonSerializer.Serialize(w, (GSet)state, CrdtJsonSerializerContext.Default.GSet);
+            },
+        };
+    }
+
+    /// <summary>Factory for the <see cref="LatticeMergeMode.MaxRegister"/> shape.</summary>
+    public static CrdtShape ForMaxRegister() => ForBoundedRegister(LatticeMergeMode.MaxRegister, isMin: false);
+
+    /// <summary>Factory for the <see cref="LatticeMergeMode.MinRegister"/> shape.</summary>
+    public static CrdtShape ForMinRegister() => ForBoundedRegister(LatticeMergeMode.MinRegister, isMin: true);
+
+    private static CrdtShape ForBoundedRegister(LatticeMergeMode mode, bool isMin)
+    {
+        var ctx = CrdtJsonSerializerContext.Default;
+        return new CrdtShape(
+            mode,
+            bytes => JsonSerializer.Deserialize(bytes, ctx.BoundedRegister)!,
+            bytes => JsonSerializer.Deserialize(bytes, ctx.BoundedRegisterDelta),
+            (state, delta) => ((BoundedRegister)state).MergeDelta((BoundedRegisterDelta)delta),
+            (state, other) => ((BoundedRegister)state).MergeFrom((BoundedRegister)other),
+            () => BoundedRegister.CreateEmpty(isMin),
+            state => JsonSerializer.SerializeToUtf8Bytes((BoundedRegister)state, ctx.BoundedRegister),
+            delta => JsonSerializer.SerializeToUtf8Bytes((BoundedRegisterDelta)delta, ctx.BoundedRegisterDelta),
+            (a, b) => CombineBoundedRegisterDelta((BoundedRegisterDelta)a, (BoundedRegisterDelta)b, isMin))
+        {
+            SerializeStateInto = static (state, writer) =>
+            {
+                using var w = new Utf8JsonWriter(writer);
+                JsonSerializer.Serialize(w, (BoundedRegister)state, CrdtJsonSerializerContext.Default.BoundedRegister);
+            },
+        };
+    }
+
+    /// <summary>Factory for the <see cref="LatticeMergeMode.RwSet"/> shape.</summary>
+    public static CrdtShape ForRwSet()
+    {
+        var ctx = CrdtJsonSerializerContext.Default;
+        return new CrdtShape(
+            LatticeMergeMode.RwSet,
+            bytes => JsonSerializer.Deserialize(bytes, ctx.RwSet)!,
+            bytes => JsonSerializer.Deserialize(bytes, ctx.RwSetDelta),
+            (state, delta) => ((RwSet)state).MergeDelta((RwSetDelta)delta),
+            (state, other) => ((RwSet)state).MergeFrom((RwSet)other),
+            () => new RwSet(),
+            state => JsonSerializer.SerializeToUtf8Bytes((RwSet)state, ctx.RwSet),
+            delta => JsonSerializer.SerializeToUtf8Bytes((RwSetDelta)delta, ctx.RwSetDelta),
+            static (a, b) => CombineRwSetDelta((RwSetDelta)a, (RwSetDelta)b))
+        {
+            SerializeStateInto = static (state, writer) =>
+            {
+                using var w = new Utf8JsonWriter(writer);
+                JsonSerializer.Serialize(w, (RwSet)state, CrdtJsonSerializerContext.Default.RwSet);
             },
         };
     }
@@ -337,6 +434,14 @@ public sealed class CrdtShape
         Decrements = PointwiseMaxLong(a.Decrements, b.Decrements),
     };
 
+    private static GCounterDelta CombineGCounterDelta(GCounterDelta a, GCounterDelta b) => new()
+    {
+        // Per-replica cumulative components merge by pointwise-max: each delta
+        // carries the highest count observed from a replica, never an increment
+        // to sum.
+        Increments = PointwiseMaxLong(a.Increments, b.Increments),
+    };
+
     private static VersionVectorDelta CombineVersionVectorDelta(VersionVectorDelta a, VersionVectorDelta b) => new()
     {
         // Version vectors merge by pointwise-max per replica entry.
@@ -388,6 +493,39 @@ public sealed class CrdtShape
         Disables = UnionOrSetDots(a.Disables, b.Disables),
         Tombstones = UnionOrSetDots(a.Tombstones, b.Tombstones),
     };
+
+    private static GSetDelta CombineGSetDelta(GSetDelta a, GSetDelta b) => new()
+    {
+        // A grow-only set's added elements form a grow-only set; the union of
+        // the two deltas' element sets reproduces applying both in sequence.
+        Adds = UnionGSetElements(a.Adds, b.Adds),
+    };
+
+    private static RwSetDelta CombineRwSetDelta(RwSetDelta a, RwSetDelta b) => new()
+    {
+        // Per-element add / remove / tombstone dot sets are grow-only; the
+        // union of the two deltas' dot sets reproduces applying both in
+        // sequence, so a concurrent add and remove of the same element still
+        // converge remove-wins.
+        Adds = UnionOrSetDeltaDots(a.Adds, b.Adds),
+        Removes = UnionOrSetDeltaDots(a.Removes, b.Removes),
+        Tombstones = UnionOrSetDeltaDots(a.Tombstones, b.Tombstones),
+    };
+    private static BoundedRegisterDelta CombineBoundedRegisterDelta(BoundedRegisterDelta a, BoundedRegisterDelta b, bool isMin)
+    {
+        // Coalescing two candidate deltas keeps the one that wins under the
+        // register's direction, mirroring the receiver-side directional fold:
+        // max/min over the total order carried on the wire, so the combine is
+        // commutative, associative, and idempotent.
+        if (!b.HasValue) return a;
+        if (!a.HasValue) return b;
+        var byKey = ((ReadOnlySpan<byte>)(a.OrderKey ?? Array.Empty<byte>())).SequenceCompareTo(b.OrderKey ?? Array.Empty<byte>());
+        var cmp = byKey != 0
+            ? byKey
+            : ((ReadOnlySpan<byte>)(a.Value ?? Array.Empty<byte>())).SequenceCompareTo(b.Value ?? Array.Empty<byte>());
+        var aWins = isMin ? cmp <= 0 : cmp >= 0;
+        return aWins ? a : b;
+    }
 
     private static OrMapDelta<TKey, TValue> CombineOrMapDelta<TKey, TValue>(
         OrMapDelta<TKey, TValue> a, OrMapDelta<TKey, TValue> b)
@@ -520,6 +658,39 @@ public sealed class CrdtShape
             }
         }
         return register;
+    }
+
+    private static IReadOnlyList<byte[]> UnionGSetElements(
+        IReadOnlyList<byte[]>? a,
+        IReadOnlyList<byte[]>? b)
+    {
+        var result = new List<byte[]>((a?.Count ?? 0) + (b?.Count ?? 0));
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        AppendGSetElements(a, result, seen);
+        AppendGSetElements(b, result, seen);
+        return result;
+    }
+
+    private static void AppendGSetElements(
+        IReadOnlyList<byte[]>? source,
+        List<byte[]> result,
+        HashSet<string> seen)
+    {
+        if (source is null)
+        {
+            return;
+        }
+        foreach (var element in source)
+        {
+            if (element is null)
+            {
+                continue;
+            }
+            if (seen.Add(Convert.ToBase64String(element)))
+            {
+                result.Add(element);
+            }
+        }
     }
 
     private static IReadOnlyList<OrSetDeltaDot> UnionOrSetDeltaDots(
@@ -688,6 +859,11 @@ public sealed class CrdtShapeRegistry
         _global[LatticeMergeMode.Sequence] = CrdtShape.ForRga();
         _global[LatticeMergeMode.OrFlag] = CrdtShape.ForOrFlag();
         _global[LatticeMergeMode.RwFlag] = CrdtShape.ForRwFlag();
+        _global[LatticeMergeMode.GCounter] = CrdtShape.ForGCounter();
+        _global[LatticeMergeMode.GSet] = CrdtShape.ForGSet();
+        _global[LatticeMergeMode.RwSet] = CrdtShape.ForRwSet();
+        _global[LatticeMergeMode.MaxRegister] = CrdtShape.ForMaxRegister();
+        _global[LatticeMergeMode.MinRegister] = CrdtShape.ForMinRegister();
     }
 
     /// <summary>

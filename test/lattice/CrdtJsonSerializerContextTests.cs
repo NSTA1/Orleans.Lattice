@@ -74,10 +74,59 @@ public class CrdtJsonSerializerContextTests
         return f;
     }
 
+    private static GSet SampleGSet()
+    {
+        var s = new GSet();
+        s.Add([1, 2, 3]);
+        s.Add([4, 5]);
+        s.Add([6]);
+        return s;
+    }
+
+    private static RwSet SampleRwSet()
+    {
+        var s = new RwSet();
+        s.Add([1, 2, 3], "replica-a", 1);
+        s.Add([4, 5], "replica-b", 2);
+        s.Remove([4, 5], "replica-b", 3);
+        s.Add([1, 2, 3], "replica-a", 4);
+        return s;
+    }
+
+    private static RwSetDelta SampleRwSetDelta() => new()
+    {
+        Adds = new[]
+        {
+            new OrSetDeltaDot { Element = [1, 2, 3], ReplicaId = "replica-a", Counter = 1 },
+            new OrSetDeltaDot { Element = [4, 5], ReplicaId = "replica-b", Counter = 2 },
+        },
+        Removes = new[]
+        {
+            new OrSetDeltaDot { Element = [4, 5], ReplicaId = "replica-c", Counter = 4 },
+        },
+        Tombstones = new[]
+        {
+            new OrSetDeltaDot { Element = [1, 2, 3], ReplicaId = "replica-d", Counter = 3 },
+        },
+    };
+
     private static PnCounterDelta SamplePnCounterDelta() => new()
     {
         Increments = new Dictionary<string, long> { ["replica-a"] = 7, ["replica-b"] = 2 },
         Decrements = new Dictionary<string, long> { ["replica-a"] = 3 },
+    };
+
+    private static GCounter SampleGCounter()
+    {
+        var c = new GCounter();
+        c.Increment("replica-a", 7);
+        c.Increment("replica-b", 2);
+        return c;
+    }
+
+    private static GCounterDelta SampleGCounterDelta() => new()
+    {
+        Increments = new Dictionary<string, long> { ["replica-a"] = 7, ["replica-b"] = 2 },
     };
 
     private static OrSetDelta SampleOrSetDelta() => new()
@@ -140,6 +189,11 @@ public class CrdtJsonSerializerContextTests
         {
             new OrSetDot { ReplicaId = "replica-d", Counter = 3 },
         },
+    };
+
+    private static GSetDelta SampleGSetDelta() => new()
+    {
+        Adds = new[] { new byte[] { 1, 2, 3 }, new byte[] { 4, 5 } },
     };
 
     [Test]
@@ -239,6 +293,54 @@ public class CrdtJsonSerializerContextTests
     }
 
     [Test]
+    public void GCounter_state_is_byte_identical_to_reflection()
+    {
+        var value = SampleGCounter();
+        var sourceGen = JsonSerializer.SerializeToUtf8Bytes(value, CrdtJsonSerializerContext.Default.GCounter);
+        Assert.That(sourceGen, Is.EqualTo(Reflection(value)));
+    }
+
+    [Test]
+    public void GSet_state_is_byte_identical_to_reflection()
+    {
+        var value = SampleGSet();
+        var sourceGen = JsonSerializer.SerializeToUtf8Bytes(value, CrdtJsonSerializerContext.Default.GSet);
+        Assert.That(sourceGen, Is.EqualTo(Reflection(value)));
+    }
+
+    [Test]
+    public void GCounterDelta_is_byte_identical_to_reflection()
+    {
+        var value = SampleGCounterDelta();
+        var sourceGen = JsonSerializer.SerializeToUtf8Bytes(value, CrdtJsonSerializerContext.Default.GCounterDelta);
+        Assert.That(sourceGen, Is.EqualTo(Reflection(value)));
+    }
+
+    [Test]
+    public void GSetDelta_is_byte_identical_to_reflection()
+    {
+        var value = SampleGSetDelta();
+        var sourceGen = JsonSerializer.SerializeToUtf8Bytes(value, CrdtJsonSerializerContext.Default.GSetDelta);
+        Assert.That(sourceGen, Is.EqualTo(Reflection(value)));
+    }
+
+    [Test]
+    public void RwSet_state_is_byte_identical_to_reflection()
+    {
+        var value = SampleRwSet();
+        var sourceGen = JsonSerializer.SerializeToUtf8Bytes(value, CrdtJsonSerializerContext.Default.RwSet);
+        Assert.That(sourceGen, Is.EqualTo(Reflection(value)));
+    }
+
+    [Test]
+    public void RwSetDelta_is_byte_identical_to_reflection()
+    {
+        var value = SampleRwSetDelta();
+        var sourceGen = JsonSerializer.SerializeToUtf8Bytes(value, CrdtJsonSerializerContext.Default.RwSetDelta);
+        Assert.That(sourceGen, Is.EqualTo(Reflection(value)));
+    }
+
+    [Test]
     public void Source_gen_reads_legacy_reflection_bytes_for_states()
     {
         // Old persisted rows were written by the reflection serialiser; the
@@ -262,6 +364,13 @@ public class CrdtJsonSerializerContextTests
 
         var rw = (RwFlag)registry.TryGet("t", LatticeMergeMode.RwFlag)!.DeserializeState(Reflection(SampleRwFlag()));
         Assert.That(rw.IsEnabled, Is.EqualTo(SampleRwFlag().IsEnabled));
+
+        var gc = (GCounter)registry.TryGet("t", LatticeMergeMode.GCounter)!.DeserializeState(Reflection(SampleGCounter()));
+        Assert.That(gc.Value, Is.EqualTo(SampleGCounter().Value));
+        var gs = (GSet)registry.TryGet("t", LatticeMergeMode.GSet)!.DeserializeState(Reflection(SampleGSet()));
+        Assert.That(gs.Count, Is.EqualTo(SampleGSet().Count));
+        var rws = (RwSet)registry.TryGet("t", LatticeMergeMode.RwSet)!.DeserializeState(Reflection(SampleRwSet()));
+        Assert.That(rws.Count, Is.EqualTo(SampleRwSet().Count));
     }
 
     [Test]
@@ -286,6 +395,13 @@ public class CrdtJsonSerializerContextTests
 
         var rw = (RwFlagDelta)registry.TryGet("t", LatticeMergeMode.RwFlag)!.DeserializeDelta(Reflection(SampleRwFlagDelta()));
         Assert.That(rw.Enables!.Count, Is.EqualTo(2));
+
+        var gc = (GCounterDelta)registry.TryGet("t", LatticeMergeMode.GCounter)!.DeserializeDelta(Reflection(SampleGCounterDelta()));
+        Assert.That(gc.Increments!["replica-a"], Is.EqualTo(7));
+        var gs = (GSetDelta)registry.TryGet("t", LatticeMergeMode.GSet)!.DeserializeDelta(Reflection(SampleGSetDelta()));
+        Assert.That(gs.Adds!.Count, Is.EqualTo(2));
+        var rws = (RwSetDelta)registry.TryGet("t", LatticeMergeMode.RwSet)!.DeserializeDelta(Reflection(SampleRwSetDelta()));
+        Assert.That(rws.Adds!.Count, Is.EqualTo(2));
     }
 
     [Test]
@@ -312,5 +428,12 @@ public class CrdtJsonSerializerContextTests
 
         var rw = SampleRwFlag();
         Assert.That(registry.TryGet("t", LatticeMergeMode.RwFlag)!.SerializeState(rw), Is.EqualTo(Reflection(rw)));
+
+        var gc = SampleGCounter();
+        Assert.That(registry.TryGet("t", LatticeMergeMode.GCounter)!.SerializeState(gc), Is.EqualTo(Reflection(gc)));
+        var gs = SampleGSet();
+        Assert.That(registry.TryGet("t", LatticeMergeMode.GSet)!.SerializeState(gs), Is.EqualTo(Reflection(gs)));
+        var rws = SampleRwSet();
+        Assert.That(registry.TryGet("t", LatticeMergeMode.RwSet)!.SerializeState(rws), Is.EqualTo(Reflection(rws)));
     }
 }

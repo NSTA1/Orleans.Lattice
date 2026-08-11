@@ -40,9 +40,10 @@ public sealed class LatticeMcpDataToolsRegistrationTests
             Is.EquivalentTo(new[]
             {
                 "lattice_data_get", "lattice_data_read_range",
-                "lattice_data_pncounter_get", "lattice_data_orset_get", "lattice_data_orflag_get",
-                "lattice_data_rwflag_get", "lattice_data_version_vector_get", "lattice_data_mvregister_get",
-                "lattice_data_sequence_get", "lattice_data_ormap_get",
+                "lattice_data_pncounter_get", "lattice_data_gcounter_get", "lattice_data_orset_get", "lattice_data_orflag_get",
+                "lattice_data_rwflag_get", "lattice_data_rwset_get", "lattice_data_version_vector_get", "lattice_data_mvregister_get",
+                "lattice_data_sequence_get", "lattice_data_ormap_get", "lattice_data_gset_get",
+                "lattice_data_maxregister_get", "lattice_data_minregister_get",
             }));
     }
 
@@ -61,12 +62,14 @@ public sealed class LatticeMcpDataToolsRegistrationTests
             {
                 "lattice_data_get", "lattice_data_read_range", "lattice_data_set", "lattice_data_delete",
                 "lattice_data_set_many", "lattice_data_set_many_atomic", "lattice_data_set_many_atomic_cross_tree",
-                "lattice_data_pncounter_get", "lattice_data_orset_get", "lattice_data_orflag_get",
-                "lattice_data_rwflag_get", "lattice_data_version_vector_get", "lattice_data_mvregister_get",
-                "lattice_data_sequence_get", "lattice_data_ormap_get",
-                "lattice_data_pncounter", "lattice_data_orset", "lattice_data_orflag", "lattice_data_rwflag",
+                "lattice_data_pncounter_get", "lattice_data_gcounter_get", "lattice_data_orset_get", "lattice_data_orflag_get",
+                "lattice_data_rwflag_get", "lattice_data_rwset_get", "lattice_data_version_vector_get", "lattice_data_mvregister_get",
+                "lattice_data_sequence_get", "lattice_data_ormap_get", "lattice_data_gset_get",
+                "lattice_data_maxregister_get", "lattice_data_minregister_get",
+                "lattice_data_pncounter", "lattice_data_gcounter", "lattice_data_orset", "lattice_data_orflag", "lattice_data_rwflag", "lattice_data_rwset",
                 "lattice_data_version_vector_tick", "lattice_data_mvregister_set", "lattice_data_sequence",
-                "lattice_data_ormap",
+                "lattice_data_ormap", "lattice_data_gset",
+                "lattice_data_maxregister_set", "lattice_data_minregister_set",
             }));
     }
 

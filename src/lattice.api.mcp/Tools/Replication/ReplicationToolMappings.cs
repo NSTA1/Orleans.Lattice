@@ -88,7 +88,7 @@ internal static class ReplicationToolMappings
         {
             throw new ArgumentException(
                 "A merge mode is required to enable replication for a tree. Expected one of: "
-                + "LwwRegister, OrSet, PnCounter, VersionVector, MvRegister, OrMap, Sequence, OrFlag, RwFlag.",
+                + "LwwRegister, OrSet, PnCounter, VersionVector, MvRegister, OrMap, Sequence, OrFlag, RwFlag, RwSet.",
                 nameof(mode));
         }
 
@@ -100,7 +100,7 @@ internal static class ReplicationToolMappings
 
         throw new ArgumentException(
             $"Unrecognised merge mode '{mode}'. Expected one of: LwwRegister, OrSet, PnCounter, "
-            + "VersionVector, MvRegister, OrMap, Sequence, OrFlag, RwFlag.",
+            + "VersionVector, MvRegister, OrMap, Sequence, OrFlag, RwFlag, RwSet.",
             nameof(mode));
     }
 }

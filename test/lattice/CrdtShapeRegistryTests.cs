@@ -21,6 +21,9 @@ public class CrdtShapeRegistryTests
         Assert.That(r.TryGet("any", LatticeMergeMode.Sequence), Is.Not.Null);
         Assert.That(r.TryGet("any", LatticeMergeMode.OrFlag), Is.Not.Null);
         Assert.That(r.TryGet("any", LatticeMergeMode.RwFlag), Is.Not.Null);
+        Assert.That(r.TryGet("any", LatticeMergeMode.GCounter), Is.Not.Null);
+        Assert.That(r.TryGet("any", LatticeMergeMode.GSet), Is.Not.Null);
+        Assert.That(r.TryGet("any", LatticeMergeMode.RwSet), Is.Not.Null);
     }
 
     [Test]
@@ -299,6 +302,342 @@ public class CrdtShapeRegistryTests
         Assert.That(a.IsEnabled, Is.False);
     }
 
+    [Test]
+    public void ForGCounter_descriptor_roundtrips_delta_through_state()
+    {
+        var shape = CrdtShape.ForGCounter();
+        Assert.That(shape.Mode, Is.EqualTo(LatticeMergeMode.GCounter));
+
+        var state = (GCounter)shape.CreateEmpty();
+        Assert.That(state.IsBottom, Is.True);
+
+        var delta = new GCounterDelta
+        {
+            Increments = new Dictionary<string, long> { ["A"] = 5 },
+        };
+        var deltaBytes = JsonLatticeSerializer<GCounterDelta>.Default.Serialize(delta);
+        shape.MergeDelta(state, shape.DeserializeDelta(deltaBytes));
+        Assert.That(state.Value, Is.EqualTo(5));
+
+        var stateBytes = shape.SerializeState(state);
+        var roundtripped = (GCounter)shape.DeserializeState(stateBytes);
+        Assert.That(roundtripped.Value, Is.EqualTo(5));
+    }
+
+    [Test]
+    public void ForGCounter_descriptor_merges_state_pointwise_max()
+    {
+        var shape = CrdtShape.ForGCounter();
+        var a = (GCounter)shape.CreateEmpty();
+        a.Increment("A", 3);
+        var b = (GCounter)shape.CreateEmpty();
+        b.Increment("B", 5);
+        shape.MergeStates(a, b);
+        Assert.That(a.Value, Is.EqualTo(8));
+    }
+
+    [Test]
+    public void ForGCounter_CombineDeltas_coalesces_by_pointwise_max()
+    {
+        var shape = CrdtShape.ForGCounter();
+        Assert.That(shape.CombineDeltas, Is.Not.Null);
+
+        var a = new GCounterDelta { Increments = new Dictionary<string, long> { ["A"] = 5, ["B"] = 2 } };
+        var b = new GCounterDelta { Increments = new Dictionary<string, long> { ["A"] = 3, ["B"] = 9 } };
+
+        var combined = (GCounterDelta)shape.CombineDeltas!(a, b);
+
+        Assert.That(combined.Increments["A"], Is.EqualTo(5));
+        Assert.That(combined.Increments["B"], Is.EqualTo(9));
+    }
+
+    [Test]
+    public void ForGCounter_CombineDeltas_apply_equivalent_to_sequential_apply()
+    {
+        var shape = CrdtShape.ForGCounter();
+        var a = new GCounterDelta { Increments = new Dictionary<string, long> { ["A"] = 5, ["B"] = 2 } };
+        var b = new GCounterDelta { Increments = new Dictionary<string, long> { ["A"] = 3, ["B"] = 9 } };
+
+        var sequential = (GCounter)shape.CreateEmpty();
+        shape.MergeDelta(sequential, a);
+        shape.MergeDelta(sequential, b);
+
+        var coalesced = (GCounter)shape.CreateEmpty();
+        shape.MergeDelta(coalesced, shape.CombineDeltas!(a, b));
+
+        Assert.That(coalesced.Value, Is.EqualTo(sequential.Value));
+        Assert.That(coalesced.Increments, Is.EquivalentTo(sequential.Increments));
+    }
+
+    [Test]
+    public void ForGSet_descriptor_roundtrips_delta_through_state()
+    {
+        var shape = CrdtShape.ForGSet();
+        Assert.That(shape.Mode, Is.EqualTo(LatticeMergeMode.GSet));
+
+        var state = (GSet)shape.CreateEmpty();
+        Assert.That(state.IsBottom, Is.True);
+
+        var delta = new GSetDelta { Adds = new[] { new byte[] { 1 }, new byte[] { 2 } } };
+        var deltaBytes = JsonLatticeSerializer<GSetDelta>.Default.Serialize(delta);
+        shape.MergeDelta(state, shape.DeserializeDelta(deltaBytes));
+        Assert.That(state.Count, Is.EqualTo(2));
+
+        var stateBytes = shape.SerializeState(state);
+        var roundtripped = (GSet)shape.DeserializeState(stateBytes);
+        Assert.That(roundtripped.Count, Is.EqualTo(2));
+    }
+
+    [Test]
+    public void ForGSet_descriptor_merges_other_state_by_union()
+    {
+        var shape = CrdtShape.ForGSet();
+        var a = (GSet)shape.CreateEmpty();
+        a.Add(new byte[] { 1 });
+        var b = (GSet)shape.CreateEmpty();
+        b.Add(new byte[] { 2 });
+
+        shape.MergeStates(a, b);
+        Assert.That(a.Count, Is.EqualTo(2));
+    }
+
+    [Test]
+    public void ForGSet_CombineDeltas_unions_adds_deduped()
+    {
+        var shape = CrdtShape.ForGSet();
+        var a = new GSetDelta { Adds = new[] { new byte[] { 1 }, new byte[] { 2 } } };
+        var b = new GSetDelta { Adds = new[] { new byte[] { 2 }, new byte[] { 3 } } };
+
+        Assert.That(shape.CombineDeltas, Is.Not.Null);
+        var combined = (GSetDelta)shape.CombineDeltas!(a, b);
+        Assert.That(combined.Adds, Has.Count.EqualTo(3));
+
+        // Applying the combined delta is equivalent to applying both in sequence.
+        var viaCombined = (GSet)shape.CreateEmpty();
+        viaCombined.MergeDelta(combined);
+        var viaSequence = (GSet)shape.CreateEmpty();
+        viaSequence.MergeDelta(a);
+        viaSequence.MergeDelta(b);
+        Assert.That(viaCombined.Elements, Is.EquivalentTo(viaSequence.Elements));
+    }
+
+    [Test]
+    public void ForRwSet_descriptor_roundtrips_delta_through_state()
+    {
+        var shape = CrdtShape.ForRwSet();
+        Assert.That(shape.Mode, Is.EqualTo(LatticeMergeMode.RwSet));
+
+        var state = (RwSet)shape.CreateEmpty();
+        Assert.That(state.IsBottom, Is.True);
+
+        var delta = new RwSetDelta
+        {
+            Adds = new[] { new OrSetDeltaDot { Element = new byte[] { 9 }, ReplicaId = "A", Counter = 1 } },
+            Removes = Array.Empty<OrSetDeltaDot>(),
+            Tombstones = Array.Empty<OrSetDeltaDot>(),
+        };
+        var deltaBytes = JsonLatticeSerializer<RwSetDelta>.Default.Serialize(delta);
+        shape.MergeDelta(state, shape.DeserializeDelta(deltaBytes));
+        Assert.That(state.Contains(new byte[] { 9 }), Is.True);
+
+        var stateBytes = shape.SerializeState(state);
+        var roundtripped = (RwSet)shape.DeserializeState(stateBytes);
+        Assert.That(roundtripped.Contains(new byte[] { 9 }), Is.True);
+    }
+
+    [Test]
+    public void ForRwSet_descriptor_merges_other_state_remove_wins()
+    {
+        var shape = CrdtShape.ForRwSet();
+
+        // a adds then removes x (observing its own add dot); b adds x
+        // concurrently with a dot that observes neither a's remove. The state
+        // merge must keep x absent (remove-wins): a's remove dot is not
+        // tombstoned by b's add, so it survives.
+        var a = (RwSet)shape.CreateEmpty();
+        a.Add(new byte[] { 1 }, "A", 1);
+        a.Remove(new byte[] { 1 }, "A", 2);
+        var b = (RwSet)shape.CreateEmpty();
+        b.Add(new byte[] { 1 }, "B", 1);
+
+        shape.MergeStates(a, b);
+        Assert.That(a.Contains(new byte[] { 1 }), Is.False);
+    }
+
+    [Test]
+    public void ForRwSet_CombineDeltas_unions_the_three_dot_lists()
+    {
+        var shape = CrdtShape.ForRwSet();
+        var a = new RwSetDelta
+        {
+            Adds = new[] { new OrSetDeltaDot { Element = new byte[] { 1 }, ReplicaId = "A", Counter = 1 } },
+            Removes = Array.Empty<OrSetDeltaDot>(),
+            Tombstones = Array.Empty<OrSetDeltaDot>(),
+        };
+        var b = new RwSetDelta
+        {
+            Adds = new[] { new OrSetDeltaDot { Element = new byte[] { 2 }, ReplicaId = "B", Counter = 1 } },
+            Removes = new[] { new OrSetDeltaDot { Element = new byte[] { 1 }, ReplicaId = "C", Counter = 3 } },
+            Tombstones = new[] { new OrSetDeltaDot { Element = new byte[] { 2 }, ReplicaId = "D", Counter = 5 } },
+        };
+
+        Assert.That(shape.CombineDeltas, Is.Not.Null);
+        var combined = (RwSetDelta)shape.CombineDeltas!(a, b);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(combined.Adds, Has.Count.EqualTo(2));
+            Assert.That(combined.Removes, Has.Count.EqualTo(1));
+            Assert.That(combined.Tombstones, Has.Count.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void ForMaxRegister_descriptor_roundtrips_delta_through_state()
+    {
+        var shape = CrdtShape.ForMaxRegister();
+        Assert.That(shape.Mode, Is.EqualTo(LatticeMergeMode.MaxRegister));
+
+        var state = (BoundedRegister)shape.CreateEmpty();
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.IsBottom, Is.True);
+            Assert.That(state.IsMin, Is.False);
+        });
+
+        var delta = new BoundedRegisterDelta { Value = new byte[] { 0x05 }, OrderKey = new byte[] { 0x05 }, HasValue = true };
+        var deltaBytes = JsonLatticeSerializer<BoundedRegisterDelta>.Default.Serialize(delta);
+        shape.MergeDelta(state, shape.DeserializeDelta(deltaBytes));
+        Assert.That(state.OrderKey, Is.EqualTo(new byte[] { 0x05 }));
+
+        var stateBytes = shape.SerializeState(state);
+        var roundtripped = (BoundedRegister)shape.DeserializeState(stateBytes);
+        Assert.Multiple(() =>
+        {
+            Assert.That(roundtripped.OrderKey, Is.EqualTo(new byte[] { 0x05 }));
+            Assert.That(roundtripped.IsMin, Is.False);
+        });
+    }
+
+    [Test]
+    public void ForRwSet_CombineDeltas_dedupes_identical_dots()
+    {
+        var shape = CrdtShape.ForRwSet();
+        var dot = new OrSetDeltaDot { Element = new byte[] { 1 }, ReplicaId = "A", Counter = 1 };
+        var a = new RwSetDelta
+        {
+            Adds = new[] { dot },
+            Removes = Array.Empty<OrSetDeltaDot>(),
+            Tombstones = Array.Empty<OrSetDeltaDot>(),
+        };
+        var b = new RwSetDelta
+        {
+            Adds = new[] { new OrSetDeltaDot { Element = new byte[] { 1 }, ReplicaId = "A", Counter = 1 } },
+            Removes = Array.Empty<OrSetDeltaDot>(),
+            Tombstones = Array.Empty<OrSetDeltaDot>(),
+        };
+
+        var combined = (RwSetDelta)shape.CombineDeltas!(a, b);
+
+        Assert.That(combined.Adds, Has.Count.EqualTo(1),
+            "identical (element, replica, counter) add dots collapse to one");
+    }
+
+    [Test]
+    public void SerializeStateInto_matches_SerializeState_for_GSet()
+    {
+        var shape = CrdtShape.ForGSet();
+        var state = (GSet)shape.CreateEmpty();
+        state.Add(new byte[] { 9 });
+        Assert.That(StreamState(shape, state), Is.EqualTo(shape.SerializeState(state)));
+    }
+
+    [Test]
+    public void SerializeStateInto_matches_SerializeState_for_RwSet()
+    {
+        var shape = CrdtShape.ForRwSet();
+        var state = (RwSet)shape.CreateEmpty();
+        for (var i = 0; i < 32; i++)
+        {
+            state.Add(System.Text.Encoding.UTF8.GetBytes("e-" + i), "R", i + 1);
+        }
+        Assert.That(StreamState(shape, state), Is.EqualTo(shape.SerializeState(state)));
+    }
+
+    [Test]
+    public void ForMinRegister_descriptor_creates_min_direction_empty()
+    {
+        var shape = CrdtShape.ForMinRegister();
+        Assert.That(shape.Mode, Is.EqualTo(LatticeMergeMode.MinRegister));
+
+        var state = (BoundedRegister)shape.CreateEmpty();
+        Assert.That(state.IsMin, Is.True);
+    }
+
+    [Test]
+    public void ForMaxRegister_descriptor_merges_other_state_keeps_greatest()
+    {
+        var shape = CrdtShape.ForMaxRegister();
+        var a = (BoundedRegister)shape.CreateEmpty();
+        a.Set(new byte[] { 0x02 }, new byte[] { 0x02 });
+        var b = (BoundedRegister)shape.CreateEmpty();
+        b.Set(new byte[] { 0x08 }, new byte[] { 0x08 });
+
+        shape.MergeStates(a, b);
+        Assert.That(a.OrderKey, Is.EqualTo(new byte[] { 0x08 }));
+    }
+
+    [Test]
+    public void ForMinRegister_descriptor_merges_other_state_keeps_least()
+    {
+        var shape = CrdtShape.ForMinRegister();
+        var a = (BoundedRegister)shape.CreateEmpty();
+        a.Set(new byte[] { 0x08 }, new byte[] { 0x08 });
+        var b = (BoundedRegister)shape.CreateEmpty();
+        b.Set(new byte[] { 0x02 }, new byte[] { 0x02 });
+
+        shape.MergeStates(a, b);
+        Assert.That(a.OrderKey, Is.EqualTo(new byte[] { 0x02 }));
+    }
+
+    [Test]
+    public void ForMaxRegister_combine_deltas_keeps_greatest_candidate()
+    {
+        var shape = CrdtShape.ForMaxRegister();
+        var lo = new BoundedRegisterDelta { Value = new byte[] { 0x02 }, OrderKey = new byte[] { 0x02 }, HasValue = true };
+        var hi = new BoundedRegisterDelta { Value = new byte[] { 0x08 }, OrderKey = new byte[] { 0x08 }, HasValue = true };
+
+        var combined = (BoundedRegisterDelta)shape.CombineDeltas!(lo, hi);
+        var combinedSwapped = (BoundedRegisterDelta)shape.CombineDeltas!(hi, lo);
+        Assert.Multiple(() =>
+        {
+            Assert.That(combined.OrderKey, Is.EqualTo(new byte[] { 0x08 }));
+            Assert.That(combinedSwapped.OrderKey, Is.EqualTo(new byte[] { 0x08 }));
+        });
+    }
+
+    [Test]
+    public void ForMinRegister_combine_deltas_keeps_least_candidate()
+    {
+        var shape = CrdtShape.ForMinRegister();
+        var lo = new BoundedRegisterDelta { Value = new byte[] { 0x02 }, OrderKey = new byte[] { 0x02 }, HasValue = true };
+        var hi = new BoundedRegisterDelta { Value = new byte[] { 0x08 }, OrderKey = new byte[] { 0x08 }, HasValue = true };
+
+        var combined = (BoundedRegisterDelta)shape.CombineDeltas!(lo, hi);
+        Assert.That(combined.OrderKey, Is.EqualTo(new byte[] { 0x02 }));
+    }
+
+    [Test]
+    public void Constructor_prepopulates_bounded_register_modes()
+    {
+        var r = new CrdtShapeRegistry();
+        Assert.Multiple(() =>
+        {
+            Assert.That(r.TryGet("any", LatticeMergeMode.MaxRegister), Is.Not.Null);
+            Assert.That(r.TryGet("any", LatticeMergeMode.MinRegister), Is.Not.Null);
+        });
+    }
+
     private static OrMapDeltaEntry<string, PnCounter> Add(string key, string replicaId, long counter, string incReplica, long amount)
     {
         var counterValue = new PnCounter();
@@ -493,7 +832,7 @@ public class CrdtShapeRegistryTests
         Assert.That(combined.Tombstones, Is.Empty);
     }
 
-    // ── streaming state serialiser (deferred CRDT-apply digest lane) ──
+    // ?? streaming state serialiser (deferred CRDT-apply digest lane) ??
     //
     // The deferred CRDT-apply path feeds the projection-digest fold from
     // SerializeStateInto and later materialises the byte[] row from
@@ -571,10 +910,38 @@ public class CrdtShapeRegistryTests
     }
 
     [Test]
+    public void SerializeStateInto_matches_SerializeState_for_GCounter()
+    {
+        var shape = CrdtShape.ForGCounter();
+        var state = (GCounter)shape.CreateEmpty();
+        state.Increment("A", 7);
+        state.Increment("B", 3);
+        Assert.That(StreamState(shape, state), Is.EqualTo(shape.SerializeState(state)));
+    }
+
+    [Test]
     public void SerializeStateInto_matches_SerializeState_for_empty_OrSet()
     {
         var shape = CrdtShape.ForOrSet();
         var state = shape.CreateEmpty();
+        Assert.That(StreamState(shape, state), Is.EqualTo(shape.SerializeState(state)));
+    }
+
+    [Test]
+    public void SerializeStateInto_matches_SerializeState_for_MaxRegister()
+    {
+        var shape = CrdtShape.ForMaxRegister();
+        var state = (BoundedRegister)shape.CreateEmpty();
+        state.Set(new byte[] { 0x05 }, new byte[] { 0x05 });
+        Assert.That(StreamState(shape, state), Is.EqualTo(shape.SerializeState(state)));
+    }
+
+    [Test]
+    public void SerializeStateInto_matches_SerializeState_for_MinRegister()
+    {
+        var shape = CrdtShape.ForMinRegister();
+        var state = (BoundedRegister)shape.CreateEmpty();
+        state.Set(new byte[] { 0x05 }, new byte[] { 0x05 });
         Assert.That(StreamState(shape, state), Is.EqualTo(shape.SerializeState(state)));
     }
 

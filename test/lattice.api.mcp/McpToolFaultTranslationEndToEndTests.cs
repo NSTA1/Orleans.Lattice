@@ -181,6 +181,8 @@ public sealed class McpToolFaultTranslationEndToEndTests
         public Task CounterIncrementAsync(string treeId, string key, string replicaId, long amount, CancellationToken cancellationToken = default) => throw fault;
         public Task CounterDecrementAsync(string treeId, string key, string replicaId, long amount, CancellationToken cancellationToken = default) => throw fault;
         public Task<long> CounterGetAsync(string treeId, string key, CancellationToken cancellationToken = default) => throw fault;
+        public Task GCounterIncrementAsync(string treeId, string key, string replicaId, long amount, CancellationToken cancellationToken = default) => throw fault;
+        public Task<long> GCounterGetAsync(string treeId, string key, CancellationToken cancellationToken = default) => throw fault;
         public Task SetAddAsync(string treeId, string key, byte[] element, string replicaId, CancellationToken cancellationToken = default) => throw fault;
         public Task SetRemoveAsync(string treeId, string key, byte[] element, CancellationToken cancellationToken = default) => throw fault;
         public Task<IReadOnlyList<byte[]>> SetGetAsync(string treeId, string key, CancellationToken cancellationToken = default) => throw fault;
@@ -190,15 +192,24 @@ public sealed class McpToolFaultTranslationEndToEndTests
         public Task RwFlagEnableAsync(string treeId, string key, string replicaId, CancellationToken cancellationToken = default) => throw fault;
         public Task RwFlagDisableAsync(string treeId, string key, string replicaId, CancellationToken cancellationToken = default) => throw fault;
         public Task<bool> RwFlagGetAsync(string treeId, string key, CancellationToken cancellationToken = default) => throw fault;
+        public Task RwSetAddAsync(string treeId, string key, byte[] element, string replicaId, CancellationToken cancellationToken = default) => throw fault;
+        public Task RwSetRemoveAsync(string treeId, string key, byte[] element, string replicaId, CancellationToken cancellationToken = default) => throw fault;
+        public Task<IReadOnlyList<byte[]>> RwSetGetAsync(string treeId, string key, CancellationToken cancellationToken = default) => throw fault;
         public Task VersionVectorTickAsync(string treeId, string key, string replicaId, CancellationToken cancellationToken = default) => throw fault;
         public Task<IReadOnlyDictionary<string, string>> VersionVectorGetAsync(string treeId, string key, CancellationToken cancellationToken = default) => throw fault;
         public Task RegisterSetAsync(string treeId, string key, string replicaId, byte[] value, CancellationToken cancellationToken = default) => throw fault;
         public Task<IReadOnlyList<byte[]>> RegisterGetAsync(string treeId, string key, CancellationToken cancellationToken = default) => throw fault;
+        public Task MaxRegisterSetAsync(string treeId, string key, byte[] value, CancellationToken cancellationToken = default) => throw fault;
+        public Task<byte[]?> MaxRegisterGetAsync(string treeId, string key, CancellationToken cancellationToken = default) => throw fault;
+        public Task MinRegisterSetAsync(string treeId, string key, byte[] value, CancellationToken cancellationToken = default) => throw fault;
+        public Task<byte[]?> MinRegisterGetAsync(string treeId, string key, CancellationToken cancellationToken = default) => throw fault;
         public Task SequenceInsertAtAsync(string treeId, string key, int index, string replicaId, byte[] value, CancellationToken cancellationToken = default) => throw fault;
         public Task SequenceRemoveAtAsync(string treeId, string key, int index, CancellationToken cancellationToken = default) => throw fault;
         public Task<IReadOnlyList<byte[]>> SequenceGetAsync(string treeId, string key, CancellationToken cancellationToken = default) => throw fault;
         public Task MapSetAsync(string treeId, string key, string field, string replicaId, byte[] value, CancellationToken cancellationToken = default) => throw fault;
         public Task MapRemoveAsync(string treeId, string key, string field, CancellationToken cancellationToken = default) => throw fault;
         public Task<IReadOnlyDictionary<string, IReadOnlyList<byte[]>>> MapGetAsync(string treeId, string key, CancellationToken cancellationToken = default) => throw fault;
+        public Task GSetAddAsync(string treeId, string key, byte[] element, CancellationToken cancellationToken = default) => throw fault;
+        public Task<IReadOnlyList<byte[]>> GSetGetAsync(string treeId, string key, CancellationToken cancellationToken = default) => throw fault;
     }
 }

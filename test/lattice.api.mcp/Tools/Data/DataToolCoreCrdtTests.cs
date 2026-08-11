@@ -88,6 +88,34 @@ public sealed class DataToolCoreCrdtTests
     }
 
     [Test]
+    public async Task RwSet_add_then_get_returns_the_observed_element()
+    {
+        var api = new FakeDataApi();
+
+        var write = await DataToolCore.RwSetWriteAsync(api, Tree, "s", CrdtRwSetOp.Add, Bytes("x"), "r1", CancellationToken.None);
+        var read = await DataToolCore.RwSetGetAsync(api, Tree, "s", CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(write.Committed, Is.True);
+            Assert.That(read.Elements, Has.Count.EqualTo(1));
+            Assert.That(read.Elements[0], Is.EqualTo(Bytes("x")));
+        });
+    }
+
+    [Test]
+    public async Task RwSet_remove_drops_the_element()
+    {
+        var api = new FakeDataApi();
+        await DataToolCore.RwSetWriteAsync(api, Tree, "s", CrdtRwSetOp.Add, Bytes("x"), "r1", CancellationToken.None);
+
+        await DataToolCore.RwSetWriteAsync(api, Tree, "s", CrdtRwSetOp.Remove, Bytes("x"), "r1", CancellationToken.None);
+        var read = await DataToolCore.RwSetGetAsync(api, Tree, "s", CancellationToken.None);
+
+        Assert.That(read.Elements, Is.Empty);
+    }
+
+    [Test]
     public async Task VersionVector_tick_then_get_exposes_the_per_replica_clock()
     {
         var api = new FakeDataApi();
@@ -108,6 +136,88 @@ public sealed class DataToolCoreCrdtTests
         var read = await DataToolCore.RegisterGetAsync(api, Tree, "r", CancellationToken.None);
 
         Assert.That(read.Elements[0], Is.EqualTo(Bytes("v1")));
+    }
+
+    [Test]
+    public async Task MaxRegister_set_then_get_returns_the_greatest_value()
+    {
+        var api = new FakeDataApi();
+
+        await DataToolCore.MaxRegisterSetAsync(api, Tree, "r", new byte[] { 0x02 }, CancellationToken.None);
+        await DataToolCore.MaxRegisterSetAsync(api, Tree, "r", new byte[] { 0x08 }, CancellationToken.None);
+        await DataToolCore.MaxRegisterSetAsync(api, Tree, "r", new byte[] { 0x05 }, CancellationToken.None);
+        var read = await DataToolCore.MaxRegisterGetAsync(api, Tree, "r", CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(read.Elements, Has.Count.EqualTo(1));
+            Assert.That(read.Elements[0], Is.EqualTo(new byte[] { 0x08 }));
+        });
+    }
+
+    [Test]
+    public async Task MinRegister_set_then_get_returns_the_least_value()
+    {
+        var api = new FakeDataApi();
+
+        await DataToolCore.MinRegisterSetAsync(api, Tree, "r", new byte[] { 0x08 }, CancellationToken.None);
+        await DataToolCore.MinRegisterSetAsync(api, Tree, "r", new byte[] { 0x02 }, CancellationToken.None);
+        await DataToolCore.MinRegisterSetAsync(api, Tree, "r", new byte[] { 0x05 }, CancellationToken.None);
+        var read = await DataToolCore.MinRegisterGetAsync(api, Tree, "r", CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(read.Elements, Has.Count.EqualTo(1));
+            Assert.That(read.Elements[0], Is.EqualTo(new byte[] { 0x02 }));
+        });
+    }
+
+    [Test]
+    public async Task MaxRegister_get_on_missing_key_returns_no_elements()
+    {
+        var api = new FakeDataApi();
+
+        var read = await DataToolCore.MaxRegisterGetAsync(api, Tree, "absent", CancellationToken.None);
+
+        Assert.That(read.Elements, Is.Empty);
+    }
+
+    [Test]
+    public void MaxRegisterSetAsync_on_a_denied_key_throws_and_persists_nothing()
+    {
+        var api = new FakeDataApi();
+        api.Denied.Add((Tree, "secret"));
+
+        Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
+            () => DataToolCore.MaxRegisterSetAsync(api, Tree, "secret", new byte[] { 1 }, CancellationToken.None));
+    }
+
+    [Test]
+    public async Task MinRegisterGetAsync_on_a_denied_key_reads_as_empty()
+    {
+        var api = new FakeDataApi();
+        await DataToolCore.MinRegisterSetAsync(api, Tree, "secret", new byte[] { 1 }, CancellationToken.None);
+        api.Denied.Add((Tree, "secret"));
+
+        var read = await DataToolCore.MinRegisterGetAsync(api, Tree, "secret", CancellationToken.None);
+
+        Assert.That(read.Elements, Is.Empty);
+    }
+
+    [Test]
+    public void MaxRegister_methods_reject_a_null_facade()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.ThrowsAsync<ArgumentNullException>(
+                () => DataToolCore.MaxRegisterSetAsync(null!, Tree, "k", new byte[] { 1 }, CancellationToken.None));
+            Assert.ThrowsAsync<ArgumentNullException>(
+                () => DataToolCore.MaxRegisterGetAsync(null!, Tree, "k", CancellationToken.None));
+            Assert.ThrowsAsync<ArgumentNullException>(
+                () => DataToolCore.MinRegisterSetAsync(null!, Tree, "k", new byte[] { 1 }, CancellationToken.None));
+            Assert.ThrowsAsync<ArgumentNullException>(
+                () => DataToolCore.MinRegisterGetAsync(null!, Tree, "k", CancellationToken.None));
+        });
     }
 
     [Test]
@@ -162,6 +272,56 @@ public sealed class DataToolCoreCrdtTests
     }
 
     [Test]
+    public async Task GSet_add_then_get_returns_the_element()
+    {
+        var api = new FakeDataApi();
+
+        var write = await DataToolCore.GSetAddAsync(api, Tree, "g", Bytes("x"), CancellationToken.None);
+        var read = await DataToolCore.GSetGetAsync(api, Tree, "g", CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(write.Committed, Is.True);
+            Assert.That(read.Elements, Has.Count.EqualTo(1));
+            Assert.That(read.Elements[0], Is.EqualTo(Bytes("x")));
+        });
+    }
+
+    [Test]
+    public async Task GSet_add_is_idempotent()
+    {
+        var api = new FakeDataApi();
+
+        await DataToolCore.GSetAddAsync(api, Tree, "g", Bytes("x"), CancellationToken.None);
+        await DataToolCore.GSetAddAsync(api, Tree, "g", Bytes("x"), CancellationToken.None);
+        var read = await DataToolCore.GSetGetAsync(api, Tree, "g", CancellationToken.None);
+
+        Assert.That(read.Elements, Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public void GSetAddAsync_on_a_denied_key_throws_and_persists_nothing()
+    {
+        var api = new FakeDataApi();
+        api.Denied.Add((Tree, "secret"));
+
+        Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
+            () => DataToolCore.GSetAddAsync(api, Tree, "secret", Bytes("x"), CancellationToken.None));
+    }
+
+    [Test]
+    public async Task GSetGetAsync_on_a_denied_key_reads_as_empty()
+    {
+        var api = new FakeDataApi();
+        await DataToolCore.GSetAddAsync(api, Tree, "secret", Bytes("x"), CancellationToken.None);
+        api.Denied.Add((Tree, "secret"));
+
+        var read = await DataToolCore.GSetGetAsync(api, Tree, "secret", CancellationToken.None);
+
+        Assert.That(read.Elements, Is.Empty);
+    }
+
+    [Test]
     public void CounterWriteAsync_on_a_denied_key_throws_and_persists_nothing()
     {
         var api = new FakeDataApi();
@@ -202,12 +362,55 @@ public sealed class DataToolCoreCrdtTests
     }
 
     [Test]
+    public async Task GCounter_increment_then_get_sums_the_replica_contributions()
+    {
+        var api = new FakeDataApi();
+
+        await DataToolCore.GCounterIncrementAsync(api, Tree, "c", "r1", 3, CancellationToken.None);
+        await DataToolCore.GCounterIncrementAsync(api, Tree, "c", "r2", 4, CancellationToken.None);
+        var read = await DataToolCore.GCounterGetAsync(api, Tree, "c", CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(read.Value, Is.EqualTo(7));
+            Assert.That(read.TreeId, Is.EqualTo(Tree));
+            Assert.That(read.Key, Is.EqualTo("c"));
+        });
+    }
+
+    [Test]
+    public void GCounterIncrementAsync_on_a_denied_key_throws_with_nothing_persisted()
+    {
+        var api = new FakeDataApi();
+        api.Denied.Add((Tree, "secret"));
+
+        Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
+            () => DataToolCore.GCounterIncrementAsync(api, Tree, "secret", "r1", 1, CancellationToken.None));
+    }
+
+    [Test]
+    public async Task GCounterGetAsync_on_a_denied_key_reads_as_zero()
+    {
+        var api = new FakeDataApi();
+        await DataToolCore.GCounterIncrementAsync(api, Tree, "secret", "r1", 5, CancellationToken.None);
+        api.Denied.Add((Tree, "secret"));
+
+        var read = await DataToolCore.GCounterGetAsync(api, Tree, "secret", CancellationToken.None);
+
+        Assert.That(read.Value, Is.EqualTo(0));
+    }
+
+    [Test]
     public void Crdt_methods_reject_a_null_facade()
     {
         Assert.Multiple(() =>
         {
             Assert.ThrowsAsync<ArgumentNullException>(
                 () => DataToolCore.CounterGetAsync(null!, Tree, "k", CancellationToken.None));
+            Assert.ThrowsAsync<ArgumentNullException>(
+                () => DataToolCore.GCounterGetAsync(null!, Tree, "k", CancellationToken.None));
+            Assert.ThrowsAsync<ArgumentNullException>(
+                () => DataToolCore.GCounterIncrementAsync(null!, Tree, "k", "r1", 1, CancellationToken.None));
             Assert.ThrowsAsync<ArgumentNullException>(
                 () => DataToolCore.MapWriteAsync(null!, Tree, "k", CrdtMapOp.Set, "f", "r1", Bytes("v"), CancellationToken.None));
         });

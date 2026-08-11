@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Buffers.Binary;
 using System.Globalization;
 using BenchmarkDotNet.Attributes;
 using Microsoft.Extensions.DependencyInjection;
@@ -888,6 +889,7 @@ public class LatticeMicroBenchmarks
         BuildOrMapBulkSetFixture();
         BuildRgaFixture();
         BuildFlagFixture();
+        BuildNewCrdtFixture();
         BuildLeafQueueFixture();
         BuildCrdtGrowStateFixture();
         BuildCrdtGrowStateWriterFixture();
@@ -3287,6 +3289,24 @@ public class LatticeMicroBenchmarks
     private RwFlag _rwFlagMergeLeft = null!;
     private RwFlag _rwFlagMergeRight = null!;
 
+    // ===== New CRDT catalogue micro-suite operands =====
+    // GCounter / GSet / RwSet / BoundedRegister. Each operand pair is shaped so
+    // the merge exercises the tuned fold branch the primitive was optimised for
+    // (single-probe pointwise-max, presized clone, stack-buffer element keys,
+    // linear-scan dot union, append-only read fast-path), directly comparable
+    // to the existing PnCounter / OrSet / OrFlag instruments.
+    private GCounter _gCounterLeft = null!;
+    private GCounter _gCounterRight = null!;
+    private GSet _gSetLeft = null!;
+    private GSet _gSetRight = null!;
+    private GSet _gSetContainsTarget = null!;
+    private byte[][] _gSetProbeElements = null!;
+    private RwSet _rwSetLeft = null!;
+    private RwSet _rwSetRight = null!;
+    private RwSet _rwSetCountTarget = null!;
+    private BoundedRegister _boundedRegLeft = null!;
+    private BoundedRegister _boundedRegRight = null!;
+
     private void BuildShipFramingFixture()
     {
         // Self-contained ServiceProvider for the two Orleans serializers
@@ -4083,6 +4103,183 @@ public class LatticeMicroBenchmarks
     /// </summary>
     [Benchmark(Description = "RwFlag merge")]
     public RwFlag RwFlag_Merge() => RwFlag.Merge(_rwFlagMergeLeft, _rwFlagMergeRight);
+
+    /// <summary>
+    /// Builds the operands for the new CRDT catalogue micro-suite
+    /// (<see cref="GCounter"/>, <see cref="GSet"/>, <see cref="RwSet"/>,
+    /// <see cref="BoundedRegister"/>). The operand pairs share part of their
+    /// key / replica range so each merge folds both the fresh-slot and the
+    /// existing-slot branch, exercising the tuned path the primitive was
+    /// optimised for (single-probe pointwise-max, presized clone, stack-buffer
+    /// element keys, linear-scan dot union). The append-only <c>RwSet</c> count
+    /// target isolates the remove-free read fast-path.
+    /// </summary>
+    private void BuildNewCrdtFixture()
+    {
+        // GCounter: two multi-replica counters sharing every replica id so the
+        // fold takes the existing-slot pointwise-max branch (single-probe).
+        var replicas = ReadIntEnv("BENCH_MICROBENCH_GCOUNTER_REPLICAS", 8);
+        if (replicas < 1) replicas = 1;
+        _gCounterLeft = new GCounter();
+        _gCounterRight = new GCounter();
+        for (var i = 0; i < replicas; i++)
+        {
+            var id = string.Create(CultureInfo.InvariantCulture, $"replica-{i:D2}");
+            _gCounterLeft.Increment(id, i + 1);
+            _gCounterRight.Increment(id, i + 2);
+        }
+
+        // GSet: two grow-only sets sharing the upper half of their element
+        // range so the union folds both overlapping and fresh elements.
+        var elems = ReadIntEnv("BENCH_MICROBENCH_GSET_ELEMENTS", 64);
+        if (elems < 2) elems = 2;
+        _gSetLeft = new GSet();
+        _gSetRight = new GSet();
+        for (var i = 0; i < elems; i++)
+        {
+            _gSetLeft.Add(ElementBytes(i));
+            _gSetRight.Add(ElementBytes(i + elems / 2));
+        }
+        _gSetContainsTarget = _gSetLeft.Clone();
+        _gSetProbeElements = new byte[elems][];
+        for (var i = 0; i < elems; i++) _gSetProbeElements[i] = ElementBytes(i);
+
+        // RwSet: two remove-wins sets with a single dot per element (the
+        // linear-scan union branch), plus a large append-only set (no removes)
+        // for the count read fast-path instrument.
+        var rwElems = ReadIntEnv("BENCH_MICROBENCH_RWSET_ELEMENTS", 64);
+        if (rwElems < 2) rwElems = 2;
+        _rwSetLeft = new RwSet();
+        _rwSetRight = new RwSet();
+        for (var i = 0; i < rwElems; i++)
+        {
+            _rwSetLeft.Add(ElementBytes(i), "site-a", i);
+            _rwSetRight.Add(ElementBytes(i + rwElems / 2), "site-b", i);
+        }
+        var rwCount = ReadIntEnv("BENCH_MICROBENCH_RWSET_COUNT_ELEMENTS", 1024);
+        if (rwCount < 1) rwCount = 1;
+        _rwSetCountTarget = new RwSet();
+        for (var i = 0; i < rwCount; i++) _rwSetCountTarget.Add(ElementBytes(i), "site-a", i);
+
+        // BoundedRegister (Max direction): two written registers with distinct
+        // order keys so the directional fold takes the compare-and-keep branch.
+        _boundedRegLeft = new BoundedRegister(isMin: false);
+        _boundedRegLeft.Set(ElementBytes(42), RegisterOrderKey(42));
+        _boundedRegRight = new BoundedRegister(isMin: false);
+        _boundedRegRight.Set(ElementBytes(90), RegisterOrderKey(90));
+    }
+
+    private static byte[] ElementBytes(int seed)
+    {
+        var element = new byte[24];
+        element[0] = (byte)seed;
+        element[1] = (byte)(seed >> 8);
+        element[2] = (byte)(seed >> 16);
+        element[3] = (byte)(seed >> 24);
+        return element;
+    }
+
+    private static byte[] RegisterOrderKey(int value)
+    {
+        var buffer = new byte[4];
+        BinaryPrimitives.WriteUInt32BigEndian(buffer, (uint)value);
+        return buffer;
+    }
+
+    /// <summary>
+    /// Allocating pointwise-max merge of two multi-replica <see cref="GCounter"/>s.
+    /// <see cref="GCounter.Merge"/> clones the left operand and folds the right
+    /// in via the single-probe <c>GetValueRefOrAddDefault</c> pointwise-max -
+    /// the same fold surface <see cref="PnCounter"/> uses, so the two merge
+    /// instruments are directly comparable.
+    /// </summary>
+    [Benchmark(Description = "Crdt gcounter merge")]
+    public GCounter GCounter_Merge() => GCounter.Merge(_gCounterLeft, _gCounterRight);
+
+    /// <summary>
+    /// In-place pointwise-max fold into a throwaway clone of the left operand:
+    /// the allocation control for <see cref="GCounter_Merge"/> that isolates the
+    /// per-replica single-probe fold cost from the result allocation.
+    /// </summary>
+    [Benchmark(Description = "Crdt gcounter mergeFrom (in-place)")]
+    public GCounter GCounter_MergeFrom()
+    {
+        var target = _gCounterLeft.Clone();
+        target.MergeFrom(_gCounterRight);
+        return target;
+    }
+
+    /// <summary>
+    /// Read-path instrument: <see cref="GCounter.Value"/> sums every replica
+    /// component with no allocation - the value-read the counter accessor runs.
+    /// </summary>
+    [Benchmark(Description = "Crdt gcounter value")]
+    public long GCounter_Value() => _gCounterLeft.Value;
+
+    /// <summary>
+    /// Allocating set-union merge of two grow-only <see cref="GSet"/>s. The union
+    /// is a single <c>HashSet.UnionWith</c> over the base64 element keys; the
+    /// clone the merge pays is presized to the source count.
+    /// </summary>
+    [Benchmark(Description = "Crdt gset merge")]
+    public GSet GSet_Merge() => GSet.Merge(_gSetLeft, _gSetRight);
+
+    /// <summary>Deep copy: the presized element-set fill the merge clones on every fold.</summary>
+    [Benchmark(Description = "Crdt gset clone")]
+    public GSet GSet_Clone() => _gSetLeft.Clone();
+
+    /// <summary>
+    /// Read-path instrument: repeated <see cref="GSet.Contains(byte[])"/> against
+    /// a pre-seeded set. The span-keyed alternate lookup keys each probe through
+    /// the stack buffer, so a hit allocates nothing.
+    /// </summary>
+    [Benchmark(Description = "Crdt gset contains")]
+    public bool GSet_Contains()
+    {
+        var elements = _gSetProbeElements;
+        var last = false;
+        for (var i = 0; i < elements.Length; i++) last = _gSetContainsTarget.Contains(elements[i]);
+        return last;
+    }
+
+    /// <summary>
+    /// Allocating merge of two remove-wins <see cref="RwSet"/>s. With a single
+    /// dot per element the three per-element dot unions take the linear-scan
+    /// branch and allocate no transient <see cref="HashSet{T}"/>; the clone is
+    /// presized to the source key counts.
+    /// </summary>
+    [Benchmark(Description = "Crdt rwset merge")]
+    public RwSet RwSet_Merge() => RwSet.Merge(_rwSetLeft, _rwSetRight);
+
+    /// <summary>
+    /// Liveness-scan instrument: <see cref="RwSet.Count"/> over a large
+    /// append-only (remove-free) set. The remove-free fast-path skips the
+    /// per-element remove/tombstone probe entirely, mirroring the
+    /// <see cref="OrSet.Count"/> append-only branch.
+    /// </summary>
+    [Benchmark(Description = "Crdt rwset count (append-only)")]
+    public int RwSet_Count() => _rwSetCountTarget.Count;
+
+    /// <summary>
+    /// Allocating directional fold of two written <see cref="BoundedRegister"/>s:
+    /// <see cref="BoundedRegister.Merge"/> clones the left operand and keeps the
+    /// winning value under a fixed lexicographic order-key comparison (no domain
+    /// comparer, no allocation beyond the clone).
+    /// </summary>
+    [Benchmark(Description = "Crdt bounded register merge")]
+    public BoundedRegister BoundedRegister_Merge() => BoundedRegister.Merge(_boundedRegLeft, _boundedRegRight);
+
+    /// <summary>
+    /// In-place directional fold into a throwaway clone: the allocation control
+    /// for <see cref="BoundedRegister_Merge"/> isolating the span-compare fold.
+    /// </summary>
+    [Benchmark(Description = "Crdt bounded register mergeFrom (in-place)")]
+    public BoundedRegister BoundedRegister_MergeFrom()
+    {
+        var target = _boundedRegLeft.Clone();
+        target.MergeFrom(_boundedRegRight);
+        return target;
+    }
 }
 
 /// <summary>

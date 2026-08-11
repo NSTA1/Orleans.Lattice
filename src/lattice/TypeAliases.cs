@@ -28,6 +28,10 @@ internal static class TypeAliases
     internal const string RgaDeltaNode = "ol.rgi";
     internal const string OrFlag = "ol.orf";
     internal const string RwFlag = "ol.rwf";
+    internal const string GCounter = "ol.gc";
+    internal const string GSet = "ol.gs";
+    internal const string RwSet = "ol.rws";
+    internal const string BoundedRegister = "ol.mxr";
     internal const string LeafDeliveryCursor = "ol.ldc";
 
     // Opt-in idempotency-key surface (carried on the ambient
@@ -303,6 +307,10 @@ internal static class TypeAliases
     internal const string OrMapDeltaTombstone = "ol.omt";
     internal const string OrFlagDelta = "ol.ofd";
     internal const string RwFlagDelta = "ol.rwd";
+    internal const string GCounterDelta = "ol.gcd";
+    internal const string GSetDelta = "ol.gsd";
+    internal const string RwSetDelta = "ol.rsd";
+    internal const string BoundedRegisterDelta = "ol.mxd";
 
     // CRDT element-level provenance decoding - the structured member-change
     // events a provenance decoder produces from a CRDT's stored state and/or

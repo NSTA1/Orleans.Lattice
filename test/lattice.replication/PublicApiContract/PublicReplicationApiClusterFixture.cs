@@ -358,6 +358,31 @@ internal sealed class PublicReplicationApiClusterFixture
                 return LatticeMergeMode.PnCounter;
             }
 
+            if (treeId.Contains("crdt-gcounter", StringComparison.Ordinal))
+            {
+                return LatticeMergeMode.GCounter;
+            }
+
+            if (treeId.Contains("crdt-gset", StringComparison.Ordinal))
+            {
+                return LatticeMergeMode.GSet;
+            }
+
+            if (treeId.Contains("crdt-rwset", StringComparison.Ordinal))
+            {
+                return LatticeMergeMode.RwSet;
+            }
+
+            if (treeId.Contains("crdt-maxregister", StringComparison.Ordinal))
+            {
+                return LatticeMergeMode.MaxRegister;
+            }
+
+            if (treeId.Contains("crdt-minregister", StringComparison.Ordinal))
+            {
+                return LatticeMergeMode.MinRegister;
+            }
+
             if (treeId.Contains("crdt-vv", StringComparison.Ordinal))
             {
                 return LatticeMergeMode.VersionVector;

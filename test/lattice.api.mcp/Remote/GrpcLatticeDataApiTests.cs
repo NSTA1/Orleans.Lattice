@@ -297,4 +297,70 @@ public sealed class GrpcLatticeDataApiTests
             Assert.That(map["title"][0], Is.EqualTo(new byte[] { 3 }));
         });
     }
+
+    [Test]
+    public async Task MaxRegisterSetAsync_forwards_a_typed_write_request()
+    {
+        var invoker = new FakeCallInvoker(_ => new CrdtWriteResponse());
+
+        await Adapter(invoker).MaxRegisterSetAsync("tree", "r", new byte[] { 9 });
+
+        var sent = (CrdtWriteRequest)invoker.LastRequest!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(sent.Op, Is.EqualTo(CrdtWriteOp.MaxRegisterSet));
+            Assert.That(sent.Element, Is.EqualTo(new byte[] { 9 }));
+        });
+    }
+
+    [Test]
+    public async Task MinRegisterSetAsync_forwards_a_typed_write_request()
+    {
+        var invoker = new FakeCallInvoker(_ => new CrdtWriteResponse());
+
+        await Adapter(invoker).MinRegisterSetAsync("tree", "r", new byte[] { 1 });
+
+        var sent = (CrdtWriteRequest)invoker.LastRequest!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(sent.Op, Is.EqualTo(CrdtWriteOp.MinRegisterSet));
+            Assert.That(sent.Element, Is.EqualTo(new byte[] { 1 }));
+        });
+    }
+
+    [Test]
+    public void MaxRegisterSetAsync_translates_permission_denied()
+        => Assert.That(
+            async () => await Adapter(new FakeCallInvoker(_ => Denied())).MaxRegisterSetAsync("t", "k", new byte[] { 1 }),
+            Throws.TypeOf<LatticeAuthorizationDeniedException>());
+
+    [Test]
+    public async Task MaxRegisterGetAsync_maps_the_single_element()
+    {
+        var invoker = new FakeCallInvoker(_ => new CrdtReadResponse { Elements = { new byte[] { 9 } } });
+
+        var value = await Adapter(invoker).MaxRegisterGetAsync("tree", "r");
+
+        var sent = (CrdtReadRequest)invoker.LastRequest!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(sent.Kind, Is.EqualTo(CrdtKind.MaxRegister));
+            Assert.That(value, Is.EqualTo(new byte[] { 9 }));
+        });
+    }
+
+    [Test]
+    public async Task MinRegisterGetAsync_returns_null_when_no_element()
+    {
+        var invoker = new FakeCallInvoker(_ => new CrdtReadResponse());
+
+        var value = await Adapter(invoker).MinRegisterGetAsync("tree", "r");
+
+        var sent = (CrdtReadRequest)invoker.LastRequest!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(sent.Kind, Is.EqualTo(CrdtKind.MinRegister));
+            Assert.That(value, Is.Null);
+        });
+    }
 }

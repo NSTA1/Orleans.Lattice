@@ -1,0 +1,434 @@
+using System.Buffers;
+
+namespace Orleans.Lattice;
+
+/// <summary>
+/// A remove-wins observed-remove set CRDT - the set-granularity generalisation
+/// of <see cref="RwFlag"/> (an <see cref="RwFlag"/> is a single-element
+/// <see cref="RwSet"/>, exactly as <see cref="OrFlag"/> is to <see cref="OrSet"/>).
+/// Per element it keeps three grow-only dot lists: add dots
+/// (<see cref="Adds"/>), remove dots (<see cref="Removes"/>), and the remove
+/// dots an observed add has tombstoned (<see cref="Tombstones"/>). An element
+/// is a member if and only if it carries an add dot and no remove dot survives.
+/// <para>
+/// Concurrent add and remove of the same element converge <strong>remove-wins</strong>:
+/// a remove that an add has not observed survives the merge and keeps the
+/// element out, so a revoke is never silently resurrected by a concurrent
+/// re-add - the natural primitive for membership revocation lists and
+/// blocklists. This is the remove-wins counterpart of the add-wins
+/// <see cref="OrSet"/>.
+/// </para>
+/// <para>
+/// State-level <see cref="Merge(RwSet, RwSet)"/> is the pointwise union of every
+/// replica's add, remove, and tombstone dots per element, making the CRDT
+/// commutative, associative, and idempotent under arbitrary delivery order.
+/// Element identity is by content (byte equality), encoded internally as a
+/// base64 string for serialization stability. Empty arrays are valid elements;
+/// <c>null</c> is rejected.
+/// </para>
+/// </summary>
+[GenerateSerializer]
+[Alias(TypeAliases.RwSet)]
+public sealed class RwSet : ICrdt<RwSet>
+{
+    // Below this many already-present dots a linear scan over the small list
+    // beats allocating and populating a HashSet for the membership checks. An
+    // element carries one dot per concurrent add / remove, overwhelmingly 1-2
+    // in practice, so the linear path is the common case; the set is only built
+    // once a key genuinely accumulates many concurrent dots. Mirrors
+    // OrSet.DotLinearScanThreshold and RwFlag.DotLinearScanThreshold.
+    private const int DotLinearScanThreshold = 4;
+
+    // Elements whose base64 encoding fits in this many chars are keyed through
+    // a stack buffer; larger elements rent from the shared pool. 256 chars
+    // covers elements up to 192 bytes with no allocation.
+    private const int MaxStackBase64Chars = 256;
+
+    private static int Base64CharCount(int byteCount) => checked((byteCount + 2) / 3 * 4);
+
+    /// <summary>
+    /// Per-element add dots, keyed by the base64 encoding of the element bytes.
+    /// An element requires at least one add dot to be a member; add dots are
+    /// grow-only and are never cancelled (the remove side gates membership).
+    /// </summary>
+    [Id(0)]
+    public Dictionary<string, List<OrSetDot>> Adds { get; set; } = [];
+
+    /// <summary>
+    /// Per-element remove dots, keyed identically to <see cref="Adds"/>. A
+    /// remove dot suppresses the element until an add observes it and cancels
+    /// it via <see cref="Tombstones"/>.
+    /// </summary>
+    [Id(1)]
+    public Dictionary<string, List<OrSetDot>> Removes { get; set; } = [];
+
+    /// <summary>
+    /// Per-element observed-add tombstones: remove dots that an
+    /// <see cref="Add(byte[], string, long)"/> has observed and cancelled. A
+    /// dot in this map cancels the matching dot in <see cref="Removes"/> on
+    /// merge.
+    /// </summary>
+    [Id(2)]
+    public Dictionary<string, List<OrSetDot>> Tombstones { get; set; } = [];
+
+    /// <summary>Returns <c>true</c> when no element is currently a member.</summary>
+    public bool IsEmpty
+    {
+        get
+        {
+            if (Adds.Count == 0) return true;
+            // No element has ever been removed: every add-carrying key is a
+            // live member, so the emptiness check skips the per-key remove /
+            // tombstone probe entirely. Append-only allow-lists and blocklists
+            // that only ever grow stay in this branch for their whole lifetime.
+            var noRemoves = Removes.Count == 0;
+            foreach (var (key, dots) in Adds)
+            {
+                if (dots.Count == 0) continue;
+                if (noRemoves || LiveRemoveCount(key) == 0) return false;
+            }
+            return true;
+        }
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// An <see cref="RwSet"/> is bottom when no element is present - i.e.
+    /// <see cref="IsEmpty"/>. Remove dots and tombstones may still be present
+    /// and are preserved for causal-history purposes, but a containing
+    /// composite (e.g. <see cref="OrMap{TKey, TValue}"/>) treats the slot as
+    /// empty.
+    /// </remarks>
+    public bool IsBottom => IsEmpty;
+
+    /// <summary>
+    /// Adds <paramref name="element"/> with a fresh causal dot and tombstones
+    /// every remove dot currently observed for it. Concurrent removes on other
+    /// replicas (with dots not in the local <see cref="Removes"/> at the time
+    /// of the add) survive a later merge because their dots are not tombstoned
+    /// here, so they continue to suppress the element - remove wins.
+    /// </summary>
+    /// <param name="element">The element bytes to add. Must not be <c>null</c>.</param>
+    /// <param name="replicaId">The replica authoring the add. Must be non-empty.</param>
+    /// <param name="counter">The replica-local monotonic counter for the add dot.</param>
+    public void Add(byte[] element, string replicaId, long counter)
+    {
+        ArgumentNullException.ThrowIfNull(element);
+        ArgumentException.ThrowIfNullOrEmpty(replicaId);
+
+        var charCount = Base64CharCount(element.Length);
+        char[]? rented = charCount > MaxStackBase64Chars ? ArrayPool<char>.Shared.Rent(charCount) : null;
+        Span<char> buffer = rented ?? stackalloc char[MaxStackBase64Chars];
+        try
+        {
+            Convert.TryToBase64Chars(element, buffer, out var written);
+            var key = buffer[..written];
+            var adds = Adds.GetAlternateLookup<ReadOnlySpan<char>>();
+            if (!adds.TryGetValue(key, out var dots))
+            {
+                dots = [];
+                Adds[new string(key)] = dots;
+            }
+            dots.Add(new OrSetDot { ReplicaId = replicaId, Counter = counter });
+
+            // Tombstone the remove dots observed for this element so a
+            // subsequent membership check sees the element present, unless a
+            // concurrent unobserved remove survives.
+            var removeLookup = Removes.GetAlternateLookup<ReadOnlySpan<char>>();
+            if (!removeLookup.TryGetValue(key, out var removeDots) || removeDots.Count == 0) return;
+            var tombLookup = Tombstones.GetAlternateLookup<ReadOnlySpan<char>>();
+            if (!tombLookup.TryGetValue(key, out var tomb))
+            {
+                tomb = [];
+                Tombstones[new string(key)] = tomb;
+            }
+            AddObservedTombstones(tomb, removeDots);
+        }
+        finally
+        {
+            if (rented is not null) ArrayPool<char>.Shared.Return(rented);
+        }
+    }
+
+    /// <summary>
+    /// Removes <paramref name="element"/> with a fresh causal remove dot. The
+    /// remove dominates any concurrent add that has not observed it (remove
+    /// wins) and keeps the element out until an add observes and cancels this
+    /// dot. Returns <c>true</c> when the element was previously a member.
+    /// </summary>
+    /// <param name="element">The element bytes to remove. Must not be <c>null</c>.</param>
+    /// <param name="replicaId">The replica authoring the remove. Must be non-empty.</param>
+    /// <param name="counter">The replica-local monotonic counter for the remove dot.</param>
+    public bool Remove(byte[] element, string replicaId, long counter)
+    {
+        ArgumentNullException.ThrowIfNull(element);
+        ArgumentException.ThrowIfNullOrEmpty(replicaId);
+
+        var charCount = Base64CharCount(element.Length);
+        char[]? rented = charCount > MaxStackBase64Chars ? ArrayPool<char>.Shared.Rent(charCount) : null;
+        Span<char> buffer = rented ?? stackalloc char[MaxStackBase64Chars];
+        try
+        {
+            Convert.TryToBase64Chars(element, buffer, out var written);
+            var key = buffer[..written];
+            var wasMember = ContainsKey(key);
+            var removeLookup = Removes.GetAlternateLookup<ReadOnlySpan<char>>();
+            if (!removeLookup.TryGetValue(key, out var removeDots))
+            {
+                removeDots = [];
+                Removes[new string(key)] = removeDots;
+            }
+            removeDots.Add(new OrSetDot { ReplicaId = replicaId, Counter = counter });
+            return wasMember;
+        }
+        finally
+        {
+            if (rented is not null) ArrayPool<char>.Shared.Return(rented);
+        }
+    }
+
+    /// <summary>Returns <c>true</c> when <paramref name="element"/> is currently a member.</summary>
+    public bool Contains(byte[] element)
+    {
+        ArgumentNullException.ThrowIfNull(element);
+
+        var charCount = Base64CharCount(element.Length);
+        char[]? rented = charCount > MaxStackBase64Chars ? ArrayPool<char>.Shared.Rent(charCount) : null;
+        Span<char> buffer = rented ?? stackalloc char[MaxStackBase64Chars];
+        try
+        {
+            Convert.TryToBase64Chars(element, buffer, out var written);
+            return ContainsKey(buffer[..written]);
+        }
+        finally
+        {
+            if (rented is not null) ArrayPool<char>.Shared.Return(rented);
+        }
+    }
+
+    /// <summary>
+    /// Enumerates the live members of the set in deterministic order. Order is
+    /// the ordinal sort of each element's base64 encoding (the internal key
+    /// form), which is stable across replicas but is not the same as ordering
+    /// by the raw element bytes.
+    /// </summary>
+    public IEnumerable<byte[]> Elements()
+    {
+        if (Adds.Count == 0) yield break;
+
+        // No element has ever been removed: every add-carrying key is live, so
+        // skip the per-key remove/tombstone probe when collecting survivors.
+        var noRemoves = Removes.Count == 0;
+        var live = new List<string>(Adds.Count);
+        foreach (var (key, dots) in Adds)
+        {
+            if (dots.Count == 0) continue;
+            if (noRemoves || LiveRemoveCount(key) == 0) live.Add(key);
+        }
+        live.Sort(StringComparer.Ordinal);
+        foreach (var key in live)
+        {
+            yield return Convert.FromBase64String(key);
+        }
+    }
+
+    /// <summary>Returns the number of live members.</summary>
+    public int Count
+    {
+        get
+        {
+            // No element has ever been removed: every add-carrying key is live,
+            // so count them without the per-key remove/tombstone probe.
+            var noRemoves = Removes.Count == 0;
+            var n = 0;
+            foreach (var (key, dots) in Adds)
+            {
+                if (dots.Count == 0) continue;
+                if (noRemoves || LiveRemoveCount(key) == 0) n++;
+            }
+            return n;
+        }
+    }
+
+    /// <summary>
+    /// Lattice merge: pointwise union of <see cref="Adds"/>,
+    /// <see cref="Removes"/>, and <see cref="Tombstones"/> per element.
+    /// Commutative, associative, idempotent.
+    /// </summary>
+    public static RwSet Merge(RwSet left, RwSet right)
+    {
+        ArgumentNullException.ThrowIfNull(left);
+        ArgumentNullException.ThrowIfNull(right);
+        var result = left.Clone();
+        result.MergeFrom(right);
+        return result;
+    }
+
+    /// <summary>
+    /// In-place lattice merge: applies the pointwise union of
+    /// <paramref name="other"/>'s add, remove, and tombstone dots into this
+    /// set. Equivalent to <see cref="Merge(RwSet, RwSet)"/> followed by
+    /// replacing the receiver, but avoids the intermediate clone.
+    /// </summary>
+    public void MergeFrom(RwSet other)
+    {
+        ArgumentNullException.ThrowIfNull(other);
+        MergeMap(Adds, other.Adds);
+        MergeMap(Removes, other.Removes);
+        MergeMap(Tombstones, other.Tombstones);
+    }
+
+    /// <summary>Creates a deep copy of this set.</summary>
+    public RwSet Clone()
+    {
+        var copy = new RwSet
+        {
+            Adds = new Dictionary<string, List<OrSetDot>>(Adds.Count),
+            Removes = new Dictionary<string, List<OrSetDot>>(Removes.Count),
+            Tombstones = new Dictionary<string, List<OrSetDot>>(Tombstones.Count),
+        };
+        foreach (var (key, dots) in Adds) copy.Adds[key] = [.. dots];
+        foreach (var (key, dots) in Removes) copy.Removes[key] = [.. dots];
+        foreach (var (key, dots) in Tombstones) copy.Tombstones[key] = [.. dots];
+        return copy;
+    }
+
+    /// <summary>
+    /// Folds an <see cref="RwSetDelta"/> into this set: every dot in
+    /// <see cref="RwSetDelta.Adds"/> is unioned into <see cref="Adds"/>, every
+    /// dot in <see cref="RwSetDelta.Removes"/> into <see cref="Removes"/>, and
+    /// every dot in <see cref="RwSetDelta.Tombstones"/> into
+    /// <see cref="Tombstones"/>. The merge is commutative, associative, and
+    /// idempotent against arrival order and duplicate delivery - applying the
+    /// same delta twice yields the same state because the per-(element, dot)
+    /// sets are unions.
+    /// </summary>
+    /// <param name="delta">
+    /// The typed CRDT delta authored by the producing call site. Empty
+    /// collections are valid; <c>null</c> collections are treated as empty.
+    /// </param>
+    public void MergeDelta(RwSetDelta delta)
+    {
+        UnionDeltaDots(Adds, delta.Adds);
+        UnionDeltaDots(Removes, delta.Removes);
+        UnionDeltaDots(Tombstones, delta.Tombstones);
+    }
+
+    private bool ContainsKey(ReadOnlySpan<char> key)
+    {
+        var adds = Adds.GetAlternateLookup<ReadOnlySpan<char>>();
+        if (!adds.TryGetValue(key, out var addDots) || addDots.Count == 0) return false;
+        if (Removes.Count == 0) return true;
+        var removeLookup = Removes.GetAlternateLookup<ReadOnlySpan<char>>();
+        if (!removeLookup.TryGetValue(key, out var removeDots) || removeDots.Count == 0) return true;
+        List<OrSetDot>? tomb = null;
+        if (Tombstones.Count > 0)
+        {
+            Tombstones.GetAlternateLookup<ReadOnlySpan<char>>().TryGetValue(key, out tomb);
+        }
+        return LiveDotCount(removeDots, tomb) == 0;
+    }
+
+    private int LiveRemoveCount(string key)
+    {
+        if (Removes.Count == 0) return 0;
+        if (!Removes.TryGetValue(key, out var removeDots) || removeDots.Count == 0) return 0;
+        Tombstones.TryGetValue(key, out var tomb);
+        return LiveDotCount(removeDots, tomb);
+    }
+
+    private static void AddObservedTombstones(List<OrSetDot> tomb, List<OrSetDot> observed)
+    {
+        if (tomb.Count <= DotLinearScanThreshold)
+        {
+            foreach (var dot in observed)
+            {
+                if (!tomb.Contains(dot)) tomb.Add(dot);
+            }
+            return;
+        }
+        var tombSet = new HashSet<OrSetDot>(tomb);
+        foreach (var dot in observed)
+        {
+            if (tombSet.Add(dot)) tomb.Add(dot);
+        }
+    }
+
+    private static int LiveDotCount(List<OrSetDot> dots, List<OrSetDot>? tomb)
+    {
+        if (tomb is null || tomb.Count == 0) return dots.Count;
+        if (tomb.Count <= DotLinearScanThreshold)
+        {
+            var live = 0;
+            foreach (var d in dots)
+            {
+                if (!tomb.Contains(d)) live++;
+            }
+            return live;
+        }
+        var tombSet = new HashSet<OrSetDot>(tomb);
+        var n = 0;
+        foreach (var d in dots)
+        {
+            if (!tombSet.Contains(d)) n++;
+        }
+        return n;
+    }
+
+    private static void MergeMap(Dictionary<string, List<OrSetDot>> target, Dictionary<string, List<OrSetDot>> source)
+    {
+        foreach (var (key, dots) in source)
+        {
+            if (!target.TryGetValue(key, out var existing))
+            {
+                target[key] = [.. dots];
+                continue;
+            }
+            if (existing.Count <= DotLinearScanThreshold && dots.Count <= DotLinearScanThreshold)
+            {
+                foreach (var d in dots)
+                {
+                    if (!existing.Contains(d)) existing.Add(d);
+                }
+                continue;
+            }
+            var seen = new HashSet<OrSetDot>(existing);
+            foreach (var d in dots)
+            {
+                if (seen.Add(d)) existing.Add(d);
+            }
+        }
+    }
+
+    private static void UnionDeltaDots(Dictionary<string, List<OrSetDot>> target, IReadOnlyList<OrSetDeltaDot>? source)
+    {
+        if (source is not { Count: > 0 }) return;
+        Span<char> scratch = stackalloc char[MaxStackBase64Chars];
+        var lookup = target.GetAlternateLookup<ReadOnlySpan<char>>();
+        for (var i = 0; i < source.Count; i++)
+        {
+            var dot = source[i];
+            var element = dot.Element;
+            if (element is null) continue;
+            var charCount = Base64CharCount(element.Length);
+            char[]? rented = charCount > scratch.Length ? ArrayPool<char>.Shared.Rent(charCount) : null;
+            Span<char> buffer = rented ?? scratch;
+            try
+            {
+                Convert.TryToBase64Chars(element, buffer, out var written);
+                var key = buffer[..written];
+                if (!lookup.TryGetValue(key, out var dots))
+                {
+                    dots = [];
+                    target[new string(key)] = dots;
+                }
+                var entry = new OrSetDot { ReplicaId = dot.ReplicaId, Counter = dot.Counter };
+                if (!dots.Contains(entry)) dots.Add(entry);
+            }
+            finally
+            {
+                if (rented is not null) ArrayPool<char>.Shared.Return(rented);
+            }
+        }
+    }
+}

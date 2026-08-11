@@ -215,6 +215,65 @@ public sealed class GrpcDataDtoSerializationTests
     }
 
     [Test]
+    public void CrdtWriteRequest_round_trips_bounded_register_ops()
+    {
+        var max = RoundTrip(new CrdtWriteRequest
+        {
+            TreeId = "t",
+            Key = "k",
+            Op = CrdtWriteOp.MaxRegisterSet,
+            Element = new byte[] { 0x09 },
+        });
+        var min = RoundTrip(new CrdtWriteRequest
+        {
+            TreeId = "t",
+            Key = "k",
+            Op = CrdtWriteOp.MinRegisterSet,
+            Element = new byte[] { 0x01 },
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(max.Op, Is.EqualTo(CrdtWriteOp.MaxRegisterSet));
+            Assert.That(max.Element, Is.EqualTo(new byte[] { 0x09 }));
+            Assert.That(min.Op, Is.EqualTo(CrdtWriteOp.MinRegisterSet));
+            Assert.That(min.Element, Is.EqualTo(new byte[] { 0x01 }));
+        });
+    }
+
+    [Test]
+    public void CrdtReadRequest_round_trips_bounded_register_kinds()
+    {
+        var max = RoundTrip(new CrdtReadRequest { TreeId = "t", Key = "k", Kind = CrdtKind.MaxRegister });
+        var min = RoundTrip(new CrdtReadRequest { TreeId = "t", Key = "k", Kind = CrdtKind.MinRegister });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(max.Kind, Is.EqualTo(CrdtKind.MaxRegister));
+            Assert.That(min.Kind, Is.EqualTo(CrdtKind.MinRegister));
+        });
+    }
+
+    [Test]
+    public void Marshaller_round_trips_a_bounded_register_write_request()
+    {
+        var original = new CrdtWriteRequest
+        {
+            TreeId = "t",
+            Key = "k",
+            Op = CrdtWriteOp.MaxRegisterSet,
+            Element = new byte[] { 0x07 },
+        };
+
+        var copy = MarshalRoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Op, Is.EqualTo(CrdtWriteOp.MaxRegisterSet));
+            Assert.That(copy.Element, Is.EqualTo(new byte[] { 0x07 }));
+        });
+    }
+
+    [Test]
     public void CrdtWriteResponse_round_trips()
     {
         Assert.That(RoundTrip(new CrdtWriteResponse()), Is.EqualTo(new CrdtWriteResponse()));
@@ -304,6 +363,87 @@ public sealed class GrpcDataDtoSerializationTests
         {
             Assert.That(copy.Op, Is.EqualTo(CrdtWriteOp.CounterIncrement));
             Assert.That(copy.Amount, Is.EqualTo(3));
+        });
+    }
+
+    [Test]
+    public void Marshaller_round_trips_a_gcounter_write_request_through_the_grpc_contexts()
+    {
+        var original = new CrdtWriteRequest
+        {
+            TreeId = "t",
+            Key = "k",
+            Op = CrdtWriteOp.GCounterIncrement,
+            ReplicaId = "r1",
+            Amount = 7,
+        };
+
+        var copy = MarshalRoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Op, Is.EqualTo(CrdtWriteOp.GCounterIncrement));
+            Assert.That(copy.Amount, Is.EqualTo(7));
+        });
+    }
+
+    [Test]
+    public void Marshaller_round_trips_a_gset_add_request_through_the_grpc_contexts()
+    {
+        var original = new CrdtWriteRequest
+        {
+            TreeId = "t",
+            Key = "g",
+            Op = CrdtWriteOp.GSetAdd,
+            Element = new byte[] { 8, 9 },
+        };
+
+        var copy = MarshalRoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Op, Is.EqualTo(CrdtWriteOp.GSetAdd));
+            Assert.That(copy.Element, Is.EqualTo(new byte[] { 8, 9 }));
+        });
+    }
+
+    [Test]
+    public void Marshaller_round_trips_a_gcounter_read_request_through_the_grpc_contexts()
+    {
+        var original = new CrdtReadRequest { TreeId = "tree-a", Key = "k", Kind = CrdtKind.GCounter };
+
+        var copy = MarshalRoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Kind, Is.EqualTo(CrdtKind.GCounter));
+            Assert.That(copy.Key, Is.EqualTo("k"));
+        });
+    }
+
+    [Test]
+    public void CrdtReadRequest_round_trips_the_gset_kind()
+    {
+        var original = new CrdtReadRequest { TreeId = "t", Key = "g", Kind = CrdtKind.GSet };
+
+        Assert.That(RoundTrip(original), Is.EqualTo(original));
+    }
+
+    [Test]
+    public void Marshaller_round_trips_a_rwset_add_request_through_the_grpc_contexts()
+    {
+        var original = new CrdtWriteRequest
+        {
+            TreeId = "t",
+            Key = "k",
+            Op = CrdtWriteOp.RwSetAdd,
+            ReplicaId = "r1",
+            Element = new byte[] { 9, 9 },
+        };
+
+        var copy = MarshalRoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Op, Is.EqualTo(CrdtWriteOp.RwSetAdd));
+            Assert.That(copy.Element, Is.EqualTo(new byte[] { 9, 9 }));
+            Assert.That(copy.ReplicaId, Is.EqualTo("r1"));
         });
     }
 

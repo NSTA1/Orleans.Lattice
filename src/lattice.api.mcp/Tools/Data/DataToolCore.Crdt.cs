@@ -156,6 +156,70 @@ internal static partial class DataToolCore
         return new CrdtFlagToolResult { TreeId = treeId, Key = key, Enabled = enabled };
     }
 
+    /// <summary>Maps <see cref="ILatticeDataApi.GCounterIncrementAsync"/> onto the increment write result.</summary>
+    public static async Task<CrdtWriteToolResult> GCounterIncrementAsync(
+        ILatticeDataApi api,
+        string treeId,
+        string key,
+        string replicaId,
+        long amount,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(api);
+
+        await api.GCounterIncrementAsync(treeId, key, replicaId, amount, cancellationToken).ConfigureAwait(false);
+        return new CrdtWriteToolResult { TreeId = treeId, Key = key };
+    }
+
+    /// <summary>Maps <see cref="ILatticeDataApi.GCounterGetAsync"/> onto the counter read result.</summary>
+    public static async Task<CrdtCounterToolResult> GCounterGetAsync(
+        ILatticeDataApi api,
+        string treeId,
+        string key,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(api);
+
+        var value = await api.GCounterGetAsync(treeId, key, cancellationToken).ConfigureAwait(false);
+        return new CrdtCounterToolResult { TreeId = treeId, Key = key, Value = value };
+    }
+
+    /// <summary>Maps a remove-wins (RW) set write onto the add / remove facade verb.</summary>
+    public static async Task<CrdtWriteToolResult> RwSetWriteAsync(
+        ILatticeDataApi api,
+        string treeId,
+        string key,
+        CrdtRwSetOp operation,
+        byte[] element,
+        string replicaId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(api);
+
+        var task = operation switch
+        {
+            CrdtRwSetOp.Add => api.RwSetAddAsync(treeId, key, element, replicaId, cancellationToken),
+            CrdtRwSetOp.Remove => api.RwSetRemoveAsync(treeId, key, element, replicaId, cancellationToken),
+            _ => throw UnknownOperation(nameof(operation)),
+        };
+
+        await task.ConfigureAwait(false);
+        return new CrdtWriteToolResult { TreeId = treeId, Key = key };
+    }
+
+    /// <summary>Maps <see cref="ILatticeDataApi.RwSetGetAsync"/> onto the elements read result.</summary>
+    public static async Task<CrdtElementsToolResult> RwSetGetAsync(
+        ILatticeDataApi api,
+        string treeId,
+        string key,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(api);
+
+        var elements = await api.RwSetGetAsync(treeId, key, cancellationToken).ConfigureAwait(false);
+        return new CrdtElementsToolResult { TreeId = treeId, Key = key, Elements = elements };
+    }
+
     /// <summary>Maps <see cref="ILatticeDataApi.VersionVectorTickAsync"/> onto the tick write result.</summary>
     public static async Task<CrdtWriteToolResult> VersionVectorTickAsync(
         ILatticeDataApi api,
@@ -209,6 +273,60 @@ internal static partial class DataToolCore
 
         var values = await api.RegisterGetAsync(treeId, key, cancellationToken).ConfigureAwait(false);
         return new CrdtElementsToolResult { TreeId = treeId, Key = key, Elements = values };
+    }
+
+    /// <summary>Maps <see cref="ILatticeDataApi.MaxRegisterSetAsync"/> onto the register write result.</summary>
+    public static async Task<CrdtWriteToolResult> MaxRegisterSetAsync(
+        ILatticeDataApi api,
+        string treeId,
+        string key,
+        byte[] value,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(api);
+
+        await api.MaxRegisterSetAsync(treeId, key, value, cancellationToken).ConfigureAwait(false);
+        return new CrdtWriteToolResult { TreeId = treeId, Key = key };
+    }
+
+    /// <summary>Maps <see cref="ILatticeDataApi.MaxRegisterGetAsync"/> onto the elements read result (zero or one element).</summary>
+    public static async Task<CrdtElementsToolResult> MaxRegisterGetAsync(
+        ILatticeDataApi api,
+        string treeId,
+        string key,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(api);
+
+        var value = await api.MaxRegisterGetAsync(treeId, key, cancellationToken).ConfigureAwait(false);
+        return new CrdtElementsToolResult { TreeId = treeId, Key = key, Elements = value is null ? Array.Empty<byte[]>() : new[] { value } };
+    }
+
+    /// <summary>Maps <see cref="ILatticeDataApi.MinRegisterSetAsync"/> onto the register write result.</summary>
+    public static async Task<CrdtWriteToolResult> MinRegisterSetAsync(
+        ILatticeDataApi api,
+        string treeId,
+        string key,
+        byte[] value,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(api);
+
+        await api.MinRegisterSetAsync(treeId, key, value, cancellationToken).ConfigureAwait(false);
+        return new CrdtWriteToolResult { TreeId = treeId, Key = key };
+    }
+
+    /// <summary>Maps <see cref="ILatticeDataApi.MinRegisterGetAsync"/> onto the elements read result (zero or one element).</summary>
+    public static async Task<CrdtElementsToolResult> MinRegisterGetAsync(
+        ILatticeDataApi api,
+        string treeId,
+        string key,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(api);
+
+        var value = await api.MinRegisterGetAsync(treeId, key, cancellationToken).ConfigureAwait(false);
+        return new CrdtElementsToolResult { TreeId = treeId, Key = key, Elements = value is null ? Array.Empty<byte[]>() : new[] { value } };
     }
 
     /// <summary>Maps a Sequence write onto the insert-at / remove-at facade verb.</summary>
@@ -285,6 +403,33 @@ internal static partial class DataToolCore
 
         var fields = await api.MapGetAsync(treeId, key, cancellationToken).ConfigureAwait(false);
         return new CrdtMapToolResult { TreeId = treeId, Key = key, Fields = fields };
+    }
+
+    /// <summary>Maps a G-Set add onto <see cref="ILatticeDataApi.GSetAddAsync"/>. The set is grow-only, so add is the only write.</summary>
+    public static async Task<CrdtWriteToolResult> GSetAddAsync(
+        ILatticeDataApi api,
+        string treeId,
+        string key,
+        byte[] element,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(api);
+
+        await api.GSetAddAsync(treeId, key, element, cancellationToken).ConfigureAwait(false);
+        return new CrdtWriteToolResult { TreeId = treeId, Key = key };
+    }
+
+    /// <summary>Maps <see cref="ILatticeDataApi.GSetGetAsync"/> onto the elements read result.</summary>
+    public static async Task<CrdtElementsToolResult> GSetGetAsync(
+        ILatticeDataApi api,
+        string treeId,
+        string key,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(api);
+
+        var elements = await api.GSetGetAsync(treeId, key, cancellationToken).ConfigureAwait(false);
+        return new CrdtElementsToolResult { TreeId = treeId, Key = key, Elements = elements };
     }
 
     private static McpException UnknownOperation(string parameterName)
