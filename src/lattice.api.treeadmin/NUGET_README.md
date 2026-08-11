@@ -10,17 +10,19 @@ control-plane package advertises it as a discoverable capability group.
 
 The facade follows **composition over absorption**. Tree administration does not
 re-implement operations that already have a single-responsibility facade; it
-**wraps** them by delegation. This foundation composes the schema control facade
+**wraps** them by delegation. It composes the schema control facade
 ([`Orleans.Lattice.Api.Schema`](https://www.nuget.org/packages/Orleans.Lattice.Api.Schema))
 so schema stays its own facade with no breaking change, while tree administration
 presents one complete surface.
 
-- **Scaffolding scope.** This foundation release ships the capability probe only.
-  The whole-tree lifecycle operations (bulk-load, delete, resize, reshard, and the
-  rest) land in later releases, each adding its verb and a probe flag.
-- **Discoverable but empty.** The facade is registered, discoverable through the
-  MCP capability advertisement, and probe-answerable from day one, so a management
-  surface can bind to it before any operation exists.
+- **Capability probe.** The package exposes a fail-closed capability probe: a
+  caller asks which whole-tree administration operations it may perform on a given
+  tree. Individual lifecycle verbs (bulk-load, delete, resize, reshard, and the
+  rest) are added to the facade as they become available, each with its own probe
+  flag.
+- **Discoverable from day one.** The facade is registered, discoverable through the
+  MCP capability advertisement, and probe-answerable, so a management surface can
+  bind to it before any operation exists.
 
 ## Security
 
