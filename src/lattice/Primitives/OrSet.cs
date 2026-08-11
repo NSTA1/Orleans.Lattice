@@ -55,6 +55,18 @@ public sealed class OrSet : ICrdt<OrSet>
     {
         get
         {
+            // No element has ever been removed: every stored dot is live, so
+            // the emptiness check reduces to "does any key hold a dot" without
+            // a per-key tombstone probe. Append-only membership sets and
+            // secondary indexes stay in this branch for their whole lifetime.
+            if (Tombstones.Count == 0)
+            {
+                foreach (var dots in Adds.Values)
+                {
+                    if (dots.Count > 0) return false;
+                }
+                return true;
+            }
             foreach (var (key, dots) in Adds)
             {
                 Tombstones.TryGetValue(key, out var tomb);
@@ -175,6 +187,10 @@ public sealed class OrSet : ICrdt<OrSet>
             var key = buffer[..written];
             var adds = Adds.GetAlternateLookup<ReadOnlySpan<char>>();
             if (!adds.TryGetValue(key, out var dots)) return false;
+            // No element has ever been removed: the stored dots are all live,
+            // so skip the tombstone alternate-lookup and probe entirely - the
+            // common case for append-only membership sets and secondary indexes.
+            if (Tombstones.Count == 0) return dots.Count > 0;
             Tombstones.GetAlternateLookup<ReadOnlySpan<char>>().TryGetValue(key, out var tomb);
             return LiveDotCount(dots, tomb) > 0;
         }
@@ -198,9 +214,17 @@ public sealed class OrSet : ICrdt<OrSet>
         // LiveDotCount per key) then sort only the survivors, avoiding
         // both the OrderBy allocation over dead keys and the former
         // redundant second Adds[key] lookup in the yield loop.
+        var noTombstones = Tombstones.Count == 0;
         var live = new List<string>(Adds.Count);
         foreach (var (key, dots) in Adds)
         {
+            // No removes anywhere: every stored dot is live, so skip the
+            // per-key tombstone probe and keep any non-empty key.
+            if (noTombstones)
+            {
+                if (dots.Count > 0) live.Add(key);
+                continue;
+            }
             Tombstones.TryGetValue(key, out var tomb);
             if (LiveDotCount(dots, tomb) > 0) live.Add(key);
         }
@@ -217,6 +241,16 @@ public sealed class OrSet : ICrdt<OrSet>
         get
         {
             var n = 0;
+            // No element has ever been removed: every non-empty key is live,
+            // so count them without a per-key tombstone probe.
+            if (Tombstones.Count == 0)
+            {
+                foreach (var dots in Adds.Values)
+                {
+                    if (dots.Count > 0) n++;
+                }
+                return n;
+            }
             foreach (var (key, dots) in Adds)
             {
                 Tombstones.TryGetValue(key, out var tomb);
