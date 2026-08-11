@@ -51,9 +51,13 @@ internal sealed class LatticeAuthAdmin(
     /// <summary>
     /// The control-plane tree whose <see cref="LatticeOperation.Admin"/>
     /// capability defines "authorization administrator": the reserved policy
-    /// tree. Because a rule can never be scoped at the reserved
-    /// <c>sys-auth-*</c> namespace, only a bootstrap administrator satisfies this
-    /// under the recommended deny-by-default posture.
+    /// tree. Absent a delegation grant, only a bootstrap administrator satisfies
+    /// this under the recommended deny-by-default posture. When
+    /// access-administration delegation is enabled
+    /// (<c>LatticeAuthOptions.AccessAdministrationDelegationEnabled</c>), a subject
+    /// holding the delegated whole-tree <see cref="LatticeOperation.Admin"/> grant
+    /// on this policy tree also satisfies it; that transitive delegation is
+    /// intended, so a delegated admin passes this same authorization check.
     /// </summary>
     private static readonly string AdminScopeTreeId = LatticeAuthReservedTrees.PolicyTreeId;
 

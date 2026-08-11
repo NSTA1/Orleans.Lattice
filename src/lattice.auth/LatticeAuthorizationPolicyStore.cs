@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Microsoft.Extensions.Options;
 
 namespace Orleans.Lattice.Auth;
 
@@ -24,7 +25,8 @@ namespace Orleans.Lattice.Auth;
 /// </remarks>
 internal sealed class LatticeAuthorizationPolicyStore(
     IGrainFactory grainFactory,
-    AuthInitializer initializer) : ILatticeAuthorizationPolicyStore
+    AuthInitializer initializer,
+    IOptionsMonitor<LatticeAuthOptions> options) : ILatticeAuthorizationPolicyStore
 {
     private ILattice Policy => grainFactory.GetGrain<ILattice>(AuthConstants.PolicyTree);
 
@@ -32,7 +34,13 @@ internal sealed class LatticeAuthorizationPolicyStore(
     public async Task PutRuleAsync(LatticeAuthorizationRule rule, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(rule);
-        AuthConstants.ThrowIfReservedTree(rule.Scope.TreeId, "rule.Scope.TreeId");
+
+        // Authoring guard (the single seam that decides whether a reserved-namespace
+        // rule may be persisted): an ordinary tree is always authorable; the reserved
+        // sys-auth-* namespace is rejected fail-closed except for the whole-tree Admin
+        // delegation grant on the policy tree, and only when the operator has opted in.
+        AuthConstants.EnsureAuthorableRuleScope(
+            rule, options.CurrentValue.AccessAdministrationDelegationEnabled);
 
         await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
         using (LatticeAccessGateContext.EnterSystemOrigin())

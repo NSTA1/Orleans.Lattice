@@ -1,4 +1,5 @@
 using Orleans.Lattice.Api.Auth;
+using Orleans.Lattice.Auth;
 using Orleans.Lattice.Membership;
 
 namespace Orleans.Lattice.Explorer.Access;
@@ -33,6 +34,51 @@ public sealed class AccessCreateModel
         "locally-defined membership has no effect on access. Manage groups in your identity provider.";
 
     private readonly IMembershipAdminService _membership;
+
+    /// <summary>
+    /// The reserved policy tree an access-administration delegation rule targets
+    /// (<c>"sys-auth-policy"</c>, from <see cref="LatticeAuthReservedTrees.PolicyTreeId"/>).
+    /// The delegation affordance supplies this automatically, so the operator never
+    /// has to pick the reserved tree from the (hidden) tree catalog.
+    /// </summary>
+    public static string AccessAdministrationTreeId => LatticeAuthReservedTrees.PolicyTreeId;
+
+    /// <summary>
+    /// The operator-facing helper text shown beside the access-administration
+    /// delegation affordance. States that it grants full access-administration
+    /// authority and that the cluster must have the delegation option enabled for
+    /// the server to accept the rule.
+    /// </summary>
+    public const string AccessAdministrationHelpText =
+        "Grants full access administration on this cluster: the chosen subject may manage groups, " +
+        "membership, and policy rules. Requires the cluster's access-administration delegation option " +
+        "to be enabled; if it is off, the server rejects this rule.";
+
+    /// <summary>
+    /// Builds the single access-administration delegation rule the affordance
+    /// authors: a <b>whole-tree</b> <see cref="LatticeOperation.Admin"/>
+    /// <see cref="LatticeEffect.Allow"/> rule on the reserved policy tree
+    /// (<see cref="AccessAdministrationTreeId"/>) for <paramref name="subject"/>.
+    /// This is exactly the shape the policy store permits when
+    /// access-administration delegation is enabled, so authoring it delegates
+    /// access administration to the chosen user or group.
+    /// </summary>
+    /// <param name="ruleId">A stable id for the rule. Must not be <see langword="null"/> or empty.</param>
+    /// <param name="subject">The user or group to delegate to. Must not be <see langword="null"/>.</param>
+    /// <returns>The whole-tree Admin Allow rule on the reserved policy tree.</returns>
+    /// <exception cref="ArgumentException"><paramref name="ruleId"/> is <see langword="null"/> or empty.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="subject"/> is <see langword="null"/>.</exception>
+    public static LatticeAuthorizationRule BuildAccessAdministrationRule(string ruleId, LatticeSubjectSelector subject)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(ruleId);
+        ArgumentNullException.ThrowIfNull(subject);
+        return new LatticeAuthorizationRule(
+            ruleId,
+            subject,
+            LatticeScope.Tree(AccessAdministrationTreeId),
+            LatticeOperation.Admin,
+            LatticeEffect.Allow);
+    }
 
     /// <summary>Creates a model over the membership admin service the resolve runs over.</summary>
     /// <param name="membership">The membership admin service. Must not be <see langword="null"/>.</param>

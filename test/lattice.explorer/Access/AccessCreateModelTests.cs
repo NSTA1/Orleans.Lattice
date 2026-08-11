@@ -1,4 +1,5 @@
 using Orleans.Lattice.Api.Auth;
+using Orleans.Lattice.Auth;
 using Orleans.Lattice.Explorer.Access;
 using Orleans.Lattice.Membership;
 
@@ -291,6 +292,59 @@ public sealed class AccessCreateModelTests
         var decision = await model.ValidateAsync("payments", DirectoryPrincipalKind.Group);
 
         Assert.That(decision.Outcome, Is.EqualTo(CreatePrincipalOutcome.Allow));
+    }
+
+    // ----- Access-administration delegation rule builder -----
+
+    [Test]
+    public void BuildAccessAdministrationRule_targets_the_policy_tree_with_whole_tree_admin_allow()
+    {
+        var rule = AccessCreateModel.BuildAccessAdministrationRule("grant-1", LatticeSubjectSelector.User("alice"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rule.RuleId, Is.EqualTo("grant-1"));
+            Assert.That(rule.Subject.Kind, Is.EqualTo(LatticeSubjectSelectorKind.User));
+            Assert.That(rule.Subject.Id, Is.EqualTo("alice"));
+            Assert.That(rule.Scope.TreeId, Is.EqualTo("sys-auth-policy"));
+            Assert.That(rule.Scope.TreeId, Is.EqualTo(AccessCreateModel.AccessAdministrationTreeId));
+            Assert.That(rule.Scope.Kind, Is.EqualTo(LatticeScopeKind.Tree));
+            Assert.That(rule.Operations, Is.EqualTo(LatticeOperation.Admin));
+            Assert.That(rule.Effect, Is.EqualTo(LatticeEffect.Allow));
+        });
+    }
+
+    [Test]
+    public void BuildAccessAdministrationRule_supports_a_group_subject()
+    {
+        var rule = AccessCreateModel.BuildAccessAdministrationRule("grant-2", LatticeSubjectSelector.Group("admins"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rule.Subject.Kind, Is.EqualTo(LatticeSubjectSelectorKind.Group));
+            Assert.That(rule.Subject.Id, Is.EqualTo("admins"));
+            Assert.That(rule.Scope.TreeId, Is.EqualTo("sys-auth-policy"));
+            Assert.That(rule.Operations, Is.EqualTo(LatticeOperation.Admin));
+        });
+    }
+
+    [Test]
+    public void BuildAccessAdministrationRule_null_or_empty_rule_id_throws()
+    {
+        Assert.That(
+            () => AccessCreateModel.BuildAccessAdministrationRule(null!, LatticeSubjectSelector.User("alice")),
+            Throws.InstanceOf<ArgumentException>());
+        Assert.That(
+            () => AccessCreateModel.BuildAccessAdministrationRule("", LatticeSubjectSelector.User("alice")),
+            Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public void BuildAccessAdministrationRule_null_subject_throws()
+    {
+        Assert.That(
+            () => AccessCreateModel.BuildAccessAdministrationRule("grant-3", null!),
+            Throws.ArgumentNullException);
     }
 
     // ----- Decision value type -----

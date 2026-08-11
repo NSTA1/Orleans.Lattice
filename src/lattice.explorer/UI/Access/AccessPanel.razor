@@ -286,7 +286,7 @@
                         <div class="explorer-access-listhead">
                             <h3 class="explorer-access-title">Rules</h3>
                             <button type="button" class="explorer-btn"
-                                    disabled="@(_busy || !_allowed || _selectedTreeId is null)" @onclick="NewRule">New rule</button>
+                                    disabled="@(_busy || !_allowed)" @onclick="NewRule">New rule</button>
                         </div>
                 @if (_rules.Count == 0)
                 {
@@ -337,6 +337,24 @@
                                    @bind-SubjectId="_ruleSubjectId"
                                    Disabled="@(_busy || !_allowed)" />
                 </label>
+                <label class="explorer-access-field explorer-access-check">
+                    <input type="checkbox" checked="@_ruleDelegateAccessAdmin"
+                           disabled="@(_busy || !_allowed || _editingExistingRule)"
+                           @onchange="e => _ruleDelegateAccessAdmin = (bool)(e.Value ?? false)" />
+                    <span>Access administration (delegate)</span>
+                </label>
+                @if (_ruleDelegateAccessAdmin)
+                {
+                    <p class="explorer-backups-note">@AccessCreateModel.AccessAdministrationHelpText</p>
+                    <label class="explorer-access-field">
+                        <span>Target</span>
+                        <span class="explorer-access-treevalue">
+                            access administration (@AccessCreateModel.AccessAdministrationTreeId), whole tree, Admin, Allow
+                        </span>
+                    </label>
+                }
+                else
+                {
                 <label class="explorer-access-field">
                     <span>Tree</span>
                     <span class="explorer-access-treevalue">
@@ -380,6 +398,7 @@
                         <option value="@nameof(LatticeEffect.Deny)">Deny</option>
                     </select>
                 </label>
+                }
                 <div class="explorer-access-actions">
                     <button type="button" class="explorer-btn" disabled="@(_busy || !_allowed || !CanSaveRule())" @onclick="SaveRuleAsync">Save</button>
                     <button type="button" class="explorer-btn" disabled="@_busy" @onclick="CancelRuleForm">Cancel</button>

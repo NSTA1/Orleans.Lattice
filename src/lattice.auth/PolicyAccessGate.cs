@@ -54,16 +54,18 @@ internal sealed class PolicyAccessGate(
         // namespace (sys-auth-*) governs the gate itself - membership and policy -
         // so its access decision must be independent of the data-plane
         // DefaultEffect. A non-bootstrap caller only reaches this point because it
-        // is not a break-glass administrator; since no rule may be scoped at the
-        // reserved namespace (the store rejects it), an unmatched request MUST
-        // fail closed to Deny even under DefaultEffect=Allow. Without this, an
-        // unmatched admin request would inherit Allow and any caller (including an
-        // anonymous one) could rewrite membership and policy - a full
-        // control-plane takeover. The infrastructure's own reads and writes of
-        // this namespace run system-origin and never reach the gate, so they are
-        // unaffected; only a genuine external control-plane request is governed
-        // here. An explicit matched Allow (a future separately-modelled grant) is
-        // still honoured.
+        // is not a break-glass administrator; an unmatched request MUST fail closed
+        // to Deny even under DefaultEffect=Allow. Without this, an unmatched admin
+        // request would inherit Allow and any caller (including an anonymous one)
+        // could rewrite membership and policy - a full control-plane takeover. The
+        // infrastructure's own reads and writes of this namespace run system-origin
+        // and never reach the gate, so they are unaffected; only a genuine external
+        // control-plane request is governed here. An explicit matched Allow is
+        // honoured: this is the access-administration delegation grant (a whole-tree
+        // Admin rule on the policy tree, authorable only when
+        // AccessAdministrationDelegationEnabled is set on LatticeAuthOptions), which
+        // lets a bootstrap admin delegate access administration to a chosen subject
+        // without weakening the fail-closed default for every other case.
         if (LatticeAuthReservedTrees.IsReserved(request.TreeId))
         {
             var controlPlane = EvaluateControlPlane(in request);
@@ -156,9 +158,12 @@ internal sealed class PolicyAccessGate(
     /// forced closed (Deny) on every outcome that is not an explicit matched
     /// Allow, so the data-plane <see cref="LatticeAuthOptions.DefaultEffect"/> can
     /// never grant control of the gate. Bootstrap administrators never reach here
-    /// (they are allowed earlier), so this governs only non-bootstrap callers,
-    /// which - absent a rule that can be scoped at the reserved namespace - always
-    /// resolve to Deny.
+    /// (they are allowed earlier), so this governs only non-bootstrap callers. Such
+    /// a caller is allowed only by an explicit matched allow rule on the reserved
+    /// namespace - the access-administration delegation grant (a whole-tree
+    /// <see cref="LatticeOperation.Admin"/> rule on the policy tree, authorable only
+    /// when <c>AccessAdministrationDelegationEnabled</c> is set); absent such a
+    /// grant, the request always resolves to Deny.
     /// </summary>
     private LatticeAccessDecision EvaluateControlPlane(in LatticeAccessRequest request)
     {

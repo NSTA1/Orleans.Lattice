@@ -94,6 +94,14 @@ public partial class AccessPanel : ComponentBase, IDisposable
     private readonly HashSet<LatticeOperation> _ruleOperations = new();
     private LatticeEffect _ruleEffect = LatticeEffect.Allow;
 
+    // When true, the rule form authors the access-administration delegation grant
+    // instead of an ordinary rule: a whole-tree Admin Allow rule on the reserved
+    // policy tree (sys-auth-policy) for the chosen subject. The affordance supplies
+    // the reserved tree, whole-tree scope, and Admin operation, so the operator does
+    // not select a tree, scope, or operation set. The server still authorizes the
+    // write and only accepts it when the cluster's delegation option is enabled.
+    private bool _ruleDelegateAccessAdmin;
+
     // ----- Explain / Effective -----
     private LatticeSubjectSelectorKind _explainSubjectKind = LatticeSubjectSelectorKind.User;
     private string _explainSubjectId = string.Empty;
@@ -631,6 +639,12 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _ruleScopeKind = rule.Scope.Kind;
         _ruleScopeKeyOrPrefix = rule.Scope.KeyOrPrefix ?? string.Empty;
         _ruleEffect = rule.Effect;
+        // Reflect an existing access-administration delegation grant so the form
+        // identifies it: a whole-tree Admin rule on the reserved policy tree.
+        _ruleDelegateAccessAdmin =
+            rule.Scope.Kind == LatticeScopeKind.Tree
+            && string.Equals(rule.Scope.TreeId, LatticeAuthReservedTrees.PolicyTreeId, StringComparison.Ordinal)
+            && rule.Operations == LatticeOperation.Admin;
         _ruleOperations.Clear();
         foreach (var option in AccessRuleFormat.Operations)
         {
@@ -651,6 +665,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _ruleScopeKeyOrPrefix = string.Empty;
         _ruleOperations.Clear();
         _ruleEffect = LatticeEffect.Allow;
+        _ruleDelegateAccessAdmin = false;
     }
 
     private void NewRule()
@@ -677,12 +692,25 @@ public partial class AccessPanel : ComponentBase, IDisposable
         }
     }
 
-    private bool CanSaveRule() =>
-        !string.IsNullOrWhiteSpace(_ruleIdInput)
-        && !string.IsNullOrWhiteSpace(_ruleSubjectId)
-        && !string.IsNullOrWhiteSpace(_selectedTreeId)
-        && _ruleOperations.Count > 0
-        && (_ruleScopeKind == LatticeScopeKind.Tree || !string.IsNullOrWhiteSpace(_ruleScopeKeyOrPrefix));
+    private bool CanSaveRule()
+    {
+        if (string.IsNullOrWhiteSpace(_ruleIdInput) || string.IsNullOrWhiteSpace(_ruleSubjectId))
+        {
+            return false;
+        }
+
+        // The delegation affordance supplies the reserved policy tree, whole-tree
+        // scope, and the Admin operation, so no tree selection or operation choice
+        // is required to author it.
+        if (_ruleDelegateAccessAdmin)
+        {
+            return true;
+        }
+
+        return !string.IsNullOrWhiteSpace(_selectedTreeId)
+            && _ruleOperations.Count > 0
+            && (_ruleScopeKind == LatticeScopeKind.Tree || !string.IsNullOrWhiteSpace(_ruleScopeKeyOrPrefix));
+    }
 
     private async Task SaveRuleAsync()
     {
@@ -697,9 +725,22 @@ public partial class AccessPanel : ComponentBase, IDisposable
             var subject = _ruleSubjectKind == LatticeSubjectSelectorKind.Group
                 ? LatticeSubjectSelector.Group(_ruleSubjectId.Trim())
                 : LatticeSubjectSelector.User(_ruleSubjectId.Trim());
-            var scope = BuildScope(_ruleScopeKind, _selectedTreeId!.Trim(), _ruleScopeKeyOrPrefix);
-            var operations = CombineOperations(_ruleOperations);
-            var rule = new LatticeAuthorizationRule(_ruleIdInput.Trim(), subject, scope, operations, _ruleEffect);
+
+            LatticeAuthorizationRule rule;
+            if (_ruleDelegateAccessAdmin)
+            {
+                // Author the access-administration delegation grant: a whole-tree
+                // Admin Allow rule on the reserved policy tree for the chosen
+                // subject. The server accepts it only when the cluster's delegation
+                // option is enabled; otherwise its rejection surfaces below.
+                rule = AccessCreateModel.BuildAccessAdministrationRule(_ruleIdInput.Trim(), subject);
+            }
+            else
+            {
+                var scope = BuildScope(_ruleScopeKind, _selectedTreeId!.Trim(), _ruleScopeKeyOrPrefix);
+                var operations = CombineOperations(_ruleOperations);
+                rule = new LatticeAuthorizationRule(_ruleIdInput.Trim(), subject, scope, operations, _ruleEffect);
+            }
 
             _lastResult = await Policy.PutRuleAsync(rule);
             if (_lastResult.IsSuccess)

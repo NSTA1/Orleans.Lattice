@@ -73,6 +73,37 @@ public sealed class CompiledPolicyEvaluationTests
     }
 
     [Test]
+    public void Evaluate_delegated_whole_tree_admin_grant_allows_a_non_bootstrap_subject_admin_on_the_policy_tree()
+    {
+        // This is the compiled-policy layer the enforcement gate's control-plane
+        // path relies on: a whole-tree Admin allow authored on the reserved policy
+        // tree grants the named (non-bootstrap) subject Admin over that tree, and
+        // no one else. The gate honours this matched allow on the reserved
+        // namespace, which is what makes access-administration delegation take
+        // effect.
+        const string policyTree = "sys-auth-policy";
+        var rules = new[]
+        {
+            new LatticeAuthorizationRule(
+                "delegate",
+                LatticeSubjectSelector.User("alice"),
+                LatticeScope.Tree(policyTree),
+                LatticeOperation.Admin,
+                LatticeEffect.Allow),
+        };
+        var policy = CompiledPolicy.Compile(rules);
+        var options = new LatticeAuthOptions();
+
+        var allowed = PolicyEvaluator.Evaluate(
+            policy, options, Subject("alice"), policyTree, LatticeOperation.Admin, key: null, rangeStart: null, rangeEnd: null);
+        var denied = PolicyEvaluator.Evaluate(
+            policy, options, Subject("bob"), policyTree, LatticeOperation.Admin, key: null, rangeStart: null, rangeEnd: null);
+
+        Assert.That(allowed.Allowed, Is.True, "the delegated subject holds Admin on the policy tree");
+        Assert.That(denied.Allowed, Is.False, "a subject without the grant is denied - reserved-tree isolation is preserved");
+    }
+
+    [Test]
     public void Evaluate_group_rule_matches_a_member_of_the_group_closure()
     {
         var rules = new[] { Group("r", "admins", LatticeScope.Tree(Tree), LatticeOperation.Read, LatticeEffect.Allow) };

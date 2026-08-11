@@ -62,4 +62,90 @@ internal static class AuthConstants
                 paramName);
         }
     }
+
+    /// <summary>
+    /// The policy-store <b>authoring</b> guard: throws unless <paramref name="rule"/>
+    /// is a shape a caller is permitted to persist. A rule scoped at an ordinary
+    /// (non-reserved) tree is always authorable. A rule scoped at the reserved
+    /// <c>sys-auth-*</c> namespace is rejected fail-closed <b>except</b> for the
+    /// single access-administration delegation shape - a <b>whole-tree</b>
+    /// <see cref="LatticeOperation.Admin"/> rule on the policy tree
+    /// (<see cref="PolicyTree"/>) - and only when
+    /// <paramref name="delegationEnabled"/> is set. This is the one seam that
+    /// decides whether a reserved-namespace rule may be written; the enforcement
+    /// gate independently honours a matched allow on that namespace, so no gate
+    /// change is needed for the delegation to take effect.
+    /// </summary>
+    /// <param name="rule">The candidate rule. Must not be <c>null</c>.</param>
+    /// <param name="delegationEnabled">
+    /// Whether access-administration delegation is enabled for this deployment
+    /// (<c>LatticeAuthOptions.AccessAdministrationDelegationEnabled</c>).
+    /// </param>
+    /// <exception cref="ArgumentNullException"><paramref name="rule"/> is <c>null</c>.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="rule"/> targets the reserved namespace and is not the
+    /// permitted delegation shape, or is the delegation shape while
+    /// <paramref name="delegationEnabled"/> is <c>false</c>.
+    /// </exception>
+    internal static void EnsureAuthorableRuleScope(LatticeAuthorizationRule rule, bool delegationEnabled)
+    {
+        ArgumentNullException.ThrowIfNull(rule);
+        var treeId = rule.Scope.TreeId;
+
+        // Ordinary application tree: always authorable, byte-for-byte unchanged.
+        if (!treeId.StartsWith(ReservedTreePrefix, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        // The rule targets the reserved sys-auth-* namespace. Exactly one shape is
+        // authorable there, and only when the operator has opted in: a whole-tree
+        // Admin grant on the policy tree itself - the access-administration
+        // delegation. Effect (Allow or Deny) is unconstrained.
+        if (IsAccessAdministrationDelegationShape(rule))
+        {
+            if (!delegationEnabled)
+            {
+                throw new ArgumentException(
+                    $"Authoring an access-administration delegation rule on the reserved policy tree '{PolicyTree}' " +
+                    "requires access-administration delegation to be enabled " +
+                    "(LatticeAuthOptions.AccessAdministrationDelegationEnabled). It is off by default; enable it on " +
+                    "the silo to delegate access administration to a user or group.",
+                    nameof(rule));
+            }
+
+            return;
+        }
+
+        // The policy tree, but not the permitted shape (a key/prefix scope, or an
+        // operation set that is not exactly Admin): never authorable, even with
+        // delegation enabled - fail closed.
+        if (string.Equals(treeId, PolicyTree, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"Only a whole-tree '{nameof(LatticeOperation)}.{nameof(LatticeOperation.Admin)}' rule (the " +
+                $"access-administration delegation shape) may be authored on the reserved policy tree '{PolicyTree}'. " +
+                "A key or prefix scope, or any other operation set, is not authorable on the reserved namespace.",
+                nameof(rule));
+        }
+
+        // Any other reserved sys-auth-* tree: unchanged rejection.
+        ThrowIfReservedTree(treeId, nameof(rule));
+    }
+
+    /// <summary>
+    /// Whether <paramref name="rule"/> is exactly the authorable
+    /// access-administration delegation shape: a whole-tree rule on the policy tree
+    /// whose operation set is exactly <see cref="LatticeOperation.Admin"/> (no
+    /// other capability bits, and not a key/prefix scope).
+    /// </summary>
+    /// <param name="rule">The candidate rule. Must not be <c>null</c>.</param>
+    /// <returns><c>true</c> if the rule is the delegation shape; otherwise <c>false</c>.</returns>
+    internal static bool IsAccessAdministrationDelegationShape(LatticeAuthorizationRule rule)
+    {
+        ArgumentNullException.ThrowIfNull(rule);
+        return string.Equals(rule.Scope.TreeId, PolicyTree, StringComparison.Ordinal)
+            && rule.Scope.Kind == LatticeScopeKind.Tree
+            && rule.Operations == LatticeOperation.Admin;
+    }
 }
