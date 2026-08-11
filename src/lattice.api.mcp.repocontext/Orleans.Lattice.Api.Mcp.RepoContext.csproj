@@ -18,6 +18,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\lattice\Orleans.Lattice.csproj" />
     <ProjectReference Include="..\lattice.api.mcp\Orleans.Lattice.Api.Mcp.csproj" />
   </ItemGroup>
 
