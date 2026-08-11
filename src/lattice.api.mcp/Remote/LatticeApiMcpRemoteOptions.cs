@@ -115,10 +115,16 @@ public sealed class LatticeApiMcpRemoteOptions
 
     /// <summary>
     /// The remote endpoint for the tree-administration control facade
-    /// (<c>ILatticeTreeAdmin</c>), or <see langword="null"/> to not serve the
-    /// tree-administration group remotely. This foundation group is discoverable
-    /// but ships no operations yet, so wiring an endpoint advertises the group (to
-    /// an administrator-granted caller) with an empty tool set.
+    /// (<c>ILatticeTreeAdmin</c>) and its schema-management control facade
+    /// (<c>ILatticeSchemaControl</c>), or <see langword="null"/> to not serve the
+    /// tree-administration group remotely. The tree-administration MCP group's
+    /// tools are the schema-control tools, so the schema-API gRPC service (which is
+    /// co-hosted with the tree-administration gRPC service on the same silo
+    /// address) is reached at this same endpoint - the group maps to one endpoint
+    /// throughout discovery, region routing, and the capabilities report, exactly
+    /// like every sibling group. Wiring it serves the read-only schema-inspection
+    /// tools; the mutating schema-management tools are added when
+    /// <see cref="EnableSchemaControl"/> is set.
     /// </summary>
     public LatticeApiMcpRemoteEndpoint? TreeAdmin { get; set; }
 
@@ -180,4 +186,14 @@ public sealed class LatticeApiMcpRemoteOptions
     /// <see cref="Replication"/> is unset.
     /// </summary>
     public bool EnableReplicationControl { get; set; }
+
+    /// <summary>
+    /// Whether the tree-administration group's mutating schema-management tools
+    /// (set / clear policy, set / clear version config, advance / migrate version,
+    /// remediate) are advertised. Forwarded to <c>AddTreeAdminTools</c> and mapped
+    /// onto <see cref="LatticeApiMcpOptions.EnableTreeAdminSchemaControlTools"/>.
+    /// Defaults to <see langword="false"/> (the read-only schema-inspection tools
+    /// only). Ignored when <see cref="TreeAdmin"/> is unset.
+    /// </summary>
+    public bool EnableSchemaControl { get; set; }
 }
