@@ -50,6 +50,15 @@ public sealed record LatticeTreeAdminCapabilities
     [Id(1)] public bool CanAdministerTree { get; init; }
 
     /// <summary>
+    /// <see langword="true"/> when the caller may read the tree's administrative
+    /// diagnostics (<see cref="LatticeOperation.Read"/> over the whole tree): shard
+    /// hotness, shard diagnostics, the shard-map topology, per-shard projection
+    /// digests, and rolled-up tree statistics. A management surface can grey out the
+    /// read-only diagnostics panels when it is <see langword="false"/>.
+    /// </summary>
+    [Id(3)] public bool CanViewDiagnostics { get; init; }
+
+    /// <summary>
     /// The composed schema-management capabilities for the tree, delegated to the
     /// wrapped <see cref="ILatticeSchemaControl"/> facade. Never <see langword="null"/>:
     /// a caller with no schema grant sees an all-deny schema capability set for the

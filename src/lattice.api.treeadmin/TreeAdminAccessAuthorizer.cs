@@ -1,0 +1,119 @@
+using Orleans.Lattice;
+
+namespace Orleans.Lattice.Api.TreeAdmin;
+
+/// <summary>
+/// The tree-administration diagnostics authorization seam. Given the resolved
+/// caller and a target scope, it consults the registered core
+/// <see cref="ILatticeAccessGate"/> for the capability a read-only diagnostics
+/// operation requires - ordinary <see cref="LatticeOperation.Read"/> authority for
+/// the per-tree inspection verbs, or the distinct
+/// <see cref="LatticeOperation.Telemetry"/> capability for the cluster-wide storage
+/// accounting summary - and fails closed by throwing
+/// <see cref="LatticeAuthorizationDeniedException"/> when the request is not
+/// authorized. It is the single choke point the tree-administration facade consults
+/// before touching the in-process grain surface for a diagnostics read.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>Reuses the existing enforcement primitive unchanged.</b> Every check is
+/// delegated to the shared <see cref="LatticeAccessGateEnforcement"/> helper the
+/// data plane already uses, so the diagnostics capabilities inherit its behaviour
+/// exactly: the <b>system-origin</b> gate-bypass, the <b>zero-cost default</b>
+/// short-circuit when only the no-op core gate is registered, caller-subject
+/// resolution through the membership seam, and the <b>bootstrap-administrator
+/// break-glass</b> honoured by the gate itself.
+/// </para>
+/// <para>
+/// Diagnostics reads are whole-tree scoped (they address a tree or the whole
+/// cluster, never a single key), so every check is a whole-tree check: a partial /
+/// filtered allow is refused, fail-closed, exactly as an admin operation is. The
+/// cluster-wide storage accounting is scoped to the sentinel all-trees id
+/// (<c>"*"</c>), so its <see cref="LatticeOperation.Telemetry"/> grant is authored as
+/// an ordinary cluster-wide rule.
+/// </para>
+/// </remarks>
+internal sealed class TreeAdminAccessAuthorizer
+{
+    /// <summary>
+    /// The cluster-wide scope sentinel the storage accounting summary authorizes
+    /// against. Mirrors <c>Orleans.Lattice.Auth.LatticeScope.ClusterWideTreeId</c>
+    /// (<c>"*"</c>) without taking a dependency on the auth add-on: the facade never
+    /// references it, so the sentinel is repeated locally as a plain constant.
+    /// </summary>
+    internal const string ClusterWideScope = "*";
+
+    private readonly ILatticeAccessGate _gate;
+    private readonly ILatticeMembershipContext? _membership;
+
+    /// <summary>
+    /// Initializes a new <see cref="TreeAdminAccessAuthorizer"/>.
+    /// </summary>
+    /// <param name="gate">
+    /// The registered core access gate to consult. Must not be <c>null</c>. In a
+    /// host with no authorization add-on this is the no-op gate, so every check
+    /// short-circuits to allow at zero cost.
+    /// </param>
+    /// <param name="membership">
+    /// The membership context used to resolve the caller subject, or <c>null</c>
+    /// when none is registered (every caller then resolves to
+    /// <see cref="LatticeSubject.Anonymous"/>).
+    /// </param>
+    /// <exception cref="ArgumentNullException"><paramref name="gate"/> is <c>null</c>.</exception>
+    public TreeAdminAccessAuthorizer(ILatticeAccessGate gate, ILatticeMembershipContext? membership = null)
+    {
+        ArgumentNullException.ThrowIfNull(gate);
+        _gate = gate;
+        _membership = membership;
+    }
+
+    /// <summary>
+    /// Authorizes a per-tree diagnostics <b>read</b> (hotness, diagnostics, shard-map
+    /// inspection, projection digest, tree statistics) over <paramref name="treeId"/>
+    /// for the current caller, throwing <see cref="LatticeAuthorizationDeniedException"/>
+    /// when <see cref="LatticeOperation.Read"/> authority is not granted over the whole
+    /// tree.
+    /// </summary>
+    /// <param name="treeId">The tree being read. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancels the authorization.</param>
+    /// <returns>A task that completes when the read is authorized.</returns>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the tree.</exception>
+    public ValueTask AuthorizeTreeReadAsync(string treeId, CancellationToken cancellationToken = default) =>
+        LatticeAccessGateEnforcement.EnforceWholeTreeAsync(
+            _gate, _membership, treeId, LatticeOperation.Read, cancellationToken);
+
+    /// <summary>
+    /// Authorizes the cluster-wide storage accounting <b>read</b> for the current
+    /// caller, throwing <see cref="LatticeAuthorizationDeniedException"/> when the
+    /// distinct <see cref="LatticeOperation.Telemetry"/> capability is not granted over
+    /// the cluster-wide scope.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the authorization.</param>
+    /// <returns>A task that completes when the read is authorized.</returns>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized for cluster telemetry.</exception>
+    public ValueTask AuthorizeClusterTelemetryAsync(CancellationToken cancellationToken = default) =>
+        LatticeAccessGateEnforcement.EnforceWholeTreeAsync(
+            _gate, _membership, ClusterWideScope, LatticeOperation.Telemetry, cancellationToken);
+
+    /// <summary>
+    /// Probes whether the current caller may perform per-tree diagnostics <b>reads</b>
+    /// over <paramref name="treeId"/>, returning <c>true</c> when authorized and
+    /// <c>false</c> when denied. Never throws for a plain authorization denial; other
+    /// failures propagate. Read-only, no side effects.
+    /// </summary>
+    /// <param name="treeId">The tree being probed. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancels the probe.</param>
+    /// <returns><c>true</c> when the caller may read the tree's diagnostics; otherwise <c>false</c>.</returns>
+    public async ValueTask<bool> IsTreeReadAuthorizedAsync(string treeId, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch (LatticeAuthorizationDeniedException)
+        {
+            return false;
+        }
+    }
+}

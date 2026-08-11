@@ -23,4 +23,31 @@ public static class ApiTreeAdminTypeAliases
 
     /// <summary>Alias for <see cref="LatticeTreeAdminCapabilities"/>.</summary>
     public const string LatticeTreeAdminCapabilities = "oit.ca";
+
+    /// <summary>Alias for <see cref="ShardHotnessSnapshot"/>.</summary>
+    public const string ShardHotnessSnapshot = "oit.hs";
+
+    /// <summary>Alias for <see cref="TreeHotnessReport"/>.</summary>
+    public const string TreeHotnessReport = "oit.hr";
+
+    /// <summary>Alias for <see cref="ShardDiagnosticSnapshot"/>.</summary>
+    public const string ShardDiagnosticSnapshot = "oit.ds";
+
+    /// <summary>Alias for <see cref="TreeAdminDiagnosticReport"/>.</summary>
+    public const string TreeAdminDiagnosticReport = "oit.dr";
+
+    /// <summary>Alias for <see cref="ShardMapInspection"/>.</summary>
+    public const string ShardMapInspection = "oit.mi";
+
+    /// <summary>Alias for <see cref="ShardProjectionDigestReport"/>.</summary>
+    public const string ShardProjectionDigestReport = "oit.pd";
+
+    /// <summary>Alias for <see cref="TreeStatsReport"/>.</summary>
+    public const string TreeStatsReport = "oit.st";
+
+    /// <summary>Alias for <see cref="TreeStorageUsageSnapshot"/>.</summary>
+    public const string TreeStorageUsageSnapshot = "oit.us";
+
+    /// <summary>Alias for <see cref="ClusterStorageUsageSummary"/>.</summary>
+    public const string ClusterStorageUsageSummary = "oit.cs";
 }

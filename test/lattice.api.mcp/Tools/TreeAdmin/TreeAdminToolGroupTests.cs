@@ -45,6 +45,20 @@ public sealed class TreeAdminToolGroupTests
         "lattice_treeadmin_schema_remediate",
     };
 
+    private static readonly string[] DiagnosticsToolNames =
+    {
+        "lattice_treeadmin_shard_hotness",
+        "lattice_treeadmin_shard_diagnostics",
+        "lattice_treeadmin_shard_map_inspect",
+        "lattice_treeadmin_projection_digest",
+        "lattice_treeadmin_tree_stats",
+        "lattice_treeadmin_storage_usage",
+    };
+
+    /// <summary>The read-only tools always contributed regardless of the schema-control opt-in.</summary>
+    private static IEnumerable<string> ReadOnlyToolNames => InspectionToolNames.Concat(DiagnosticsToolNames);
+
+
     private static TreeAdminToolGroup CreateGroup(bool enableSchemaControl)
     {
         var services = new ServiceCollection();
@@ -65,13 +79,13 @@ public sealed class TreeAdminToolGroupTests
     }
 
     [Test]
-    public void Inspection_only_when_schema_control_is_disabled()
+    public void Read_only_tools_present_when_schema_control_is_disabled()
     {
         var group = CreateGroup(enableSchemaControl: false);
 
         Assert.Multiple(() =>
         {
-            Assert.That(Names(group), Is.EquivalentTo(InspectionToolNames));
+            Assert.That(Names(group), Is.EquivalentTo(ReadOnlyToolNames));
             foreach (var management in ManagementToolNames)
             {
                 Assert.That(Names(group), Does.Not.Contain(management),
@@ -81,11 +95,19 @@ public sealed class TreeAdminToolGroupTests
     }
 
     [Test]
+    public void Diagnostics_tools_are_always_present_even_without_schema_control()
+    {
+        var group = CreateGroup(enableSchemaControl: false);
+
+        Assert.That(Names(group), Is.SupersetOf(DiagnosticsToolNames));
+    }
+
+    [Test]
     public void Management_tools_appear_when_schema_control_is_enabled()
     {
         var group = CreateGroup(enableSchemaControl: true);
 
-        Assert.That(Names(group), Is.EquivalentTo(InspectionToolNames.Concat(ManagementToolNames)));
+        Assert.That(Names(group), Is.EquivalentTo(ReadOnlyToolNames.Concat(ManagementToolNames)));
     }
 
     [Test]
@@ -95,7 +117,7 @@ public sealed class TreeAdminToolGroupTests
 
         Assert.Multiple(() =>
         {
-            foreach (var name in InspectionToolNames)
+            foreach (var name in ReadOnlyToolNames)
             {
                 var annotations = ServerTool(group, name).ProtocolTool.Annotations;
                 Assert.That(annotations?.ReadOnlyHint, Is.True, $"{name} must be read-only.");
@@ -151,6 +173,10 @@ public sealed class TreeAdminToolGroupTests
             Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_schema_advance_target_version"), "newTargetVersion"), Is.True);
             Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_schema_remediate"), "transform"), Is.True);
             Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_schema_remediate"), "targetPolicy"), Is.True);
+            Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_shard_diagnostics"), "treeId"), Is.True);
+            Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_shard_diagnostics"), "deep"), Is.True);
+            Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_projection_digest"), "shardIndex"), Is.True);
+            Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_storage_usage"), "deep"), Is.True);
         });
     }
 
@@ -188,7 +214,7 @@ public sealed class TreeAdminToolGroupTests
         Assert.Multiple(() =>
         {
             Assert.That(group.Group, Is.EqualTo(LatticeApiMcpGroup.TreeAdmin));
-            Assert.That(group.Tools.Select(t => t.ProtocolTool.Name), Is.EquivalentTo(InspectionToolNames));
+            Assert.That(group.Tools.Select(t => t.ProtocolTool.Name), Is.EquivalentTo(ReadOnlyToolNames));
         });
     }
 
@@ -204,7 +230,7 @@ public sealed class TreeAdminToolGroupTests
 
         Assert.That(
             group.Tools.Select(t => t.ProtocolTool.Name),
-            Is.EquivalentTo(InspectionToolNames.Concat(ManagementToolNames)));
+            Is.EquivalentTo(ReadOnlyToolNames.Concat(ManagementToolNames)));
     }
 
     [Test]

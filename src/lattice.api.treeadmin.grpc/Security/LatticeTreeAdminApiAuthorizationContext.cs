@@ -14,6 +14,24 @@ public enum LatticeTreeAdminApiOperation
     /// <summary>The read-only <c>ProbeCapabilities</c> capability-probe RPC.</summary>
     ProbeCapabilities,
 
+    /// <summary>The read-only <c>GetShardHotness</c> hotness RPC.</summary>
+    GetShardHotness,
+
+    /// <summary>The read-only <c>GetDiagnostics</c> diagnostics RPC.</summary>
+    GetDiagnostics,
+
+    /// <summary>The read-only <c>InspectShardMap</c> topology RPC.</summary>
+    InspectShardMap,
+
+    /// <summary>The read-only <c>GetProjectionDigest</c> digest RPC.</summary>
+    GetProjectionDigest,
+
+    /// <summary>The read-only <c>GetTreeStats</c> statistics RPC.</summary>
+    GetTreeStats,
+
+    /// <summary>The read-only <c>GetStorageUsage</c> cluster-storage RPC.</summary>
+    GetStorageUsage,
+
     /// <summary>
     /// A tree-administration control-API method the interceptor does not recognise
     /// (for example a future RPC added without updating the operation map).
