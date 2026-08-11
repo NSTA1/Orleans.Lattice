@@ -96,4 +96,64 @@ public class RulePrecedenceTests
 
         Assert.That(ranked.Select(r => r.Rule.RuleId), Is.EqualTo(new[] { "a", "b" }));
     }
+
+    // ----- All-trees (Tree:*) tier ordering -----
+
+    [Test]
+    public void SpecificityOf_all_trees_scope_ranks_below_a_specific_whole_tree_scope()
+    {
+        var allTrees = RulePrecedence.SpecificityOf(LatticeScope.ClusterWide());
+        var tree = RulePrecedence.SpecificityOf(LatticeScope.Tree("t"));
+
+        Assert.That(allTrees, Is.LessThan(tree));
+    }
+
+    [Test]
+    public void Rank_all_trees_deny_sorts_to_the_very_top()
+    {
+        var rules = new[]
+        {
+            Rule("key-allow", LatticeScope.Key("t", "k"), LatticeEffect.Allow),
+            Rule("tree-deny", LatticeScope.Tree("t"), LatticeEffect.Deny),
+            Rule("all-deny", LatticeScope.ClusterWide(), LatticeEffect.Deny),
+        };
+
+        var ranked = RulePrecedence.Rank(rules);
+
+        Assert.That(ranked[0].Rule.RuleId, Is.EqualTo("all-deny"),
+            "a cluster-wide deny wins outright and ranks above every specific rule");
+    }
+
+    [Test]
+    public void Rank_all_trees_allow_sorts_to_the_bottom()
+    {
+        var rules = new[]
+        {
+            Rule("all-allow", LatticeScope.ClusterWide(), LatticeEffect.Allow),
+            Rule("tree-allow", LatticeScope.Tree("t"), LatticeEffect.Allow),
+            Rule("key-allow", LatticeScope.Key("t", "k"), LatticeEffect.Allow),
+        };
+
+        var ranked = RulePrecedence.Rank(rules);
+
+        Assert.That(ranked[^1].Rule.RuleId, Is.EqualTo("all-allow"),
+            "a specific-tree rule outranks a cluster-wide allow");
+        Assert.That(ranked.Select(r => r.Rule.RuleId), Is.EqualTo(new[] { "key-allow", "tree-allow", "all-allow" }));
+    }
+
+    [Test]
+    public void Rank_reproduces_the_engine_tier_order()
+    {
+        var rules = new[]
+        {
+            Rule("all-allow", LatticeScope.ClusterWide(), LatticeEffect.Allow),
+            Rule("tree-allow", LatticeScope.Tree("t"), LatticeEffect.Allow),
+            Rule("all-deny", LatticeScope.ClusterWide(), LatticeEffect.Deny),
+        };
+
+        var ranked = RulePrecedence.Rank(rules);
+
+        // Engine order: all-trees deny (top) > specific > all-trees allow (bottom).
+        Assert.That(ranked.Select(r => r.Rule.RuleId), Is.EqualTo(new[] { "all-deny", "tree-allow", "all-allow" }));
+    }
 }

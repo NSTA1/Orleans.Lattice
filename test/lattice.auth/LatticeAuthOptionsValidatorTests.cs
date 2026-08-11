@@ -112,6 +112,22 @@ public class LatticeAuthOptionsValidatorTests
     }
 
     [Test]
+    public void All_trees_grants_are_disabled_by_default()
+    {
+        Assert.That(new LatticeAuthOptions().AllTreesGrantsEnabled, Is.False);
+    }
+
+    [Test]
+    public void All_trees_grants_enabled_validates_successfully()
+    {
+        var options = new LatticeAuthOptions { AllTreesGrantsEnabled = true };
+
+        var result = Validator.Validate(null, options);
+
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
     public void Strict_consistency_trees_is_null_by_default()
     {
         Assert.That(new LatticeAuthOptions().StrictConsistencyTrees, Is.Null);

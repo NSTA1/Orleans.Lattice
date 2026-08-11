@@ -102,6 +102,15 @@ public partial class AccessPanel : ComponentBase, IDisposable
     // write and only accepts it when the cluster's delegation option is enabled.
     private bool _ruleDelegateAccessAdmin;
 
+    // When true, the rule form authors an all-trees (cluster-wide) grant instead of
+    // an ordinary rule: a whole-tree rule over the all-trees sentinel ("*") for the
+    // chosen subject, carrying the selected operations and effect. The affordance
+    // supplies the sentinel scope, so the operator does not select a tree or scope
+    // but still chooses operations and Allow/Deny. Mutually exclusive with the
+    // access-administration delegation affordance. The rule is only enforced when
+    // the cluster's all-trees grants option is enabled; otherwise it is inert.
+    private bool _ruleAllTrees;
+
     // ----- Explain / Effective -----
     private LatticeSubjectSelectorKind _explainSubjectKind = LatticeSubjectSelectorKind.User;
     private string _explainSubjectId = string.Empty;
@@ -645,6 +654,11 @@ public partial class AccessPanel : ComponentBase, IDisposable
             rule.Scope.Kind == LatticeScopeKind.Tree
             && string.Equals(rule.Scope.TreeId, LatticeAuthReservedTrees.PolicyTreeId, StringComparison.Ordinal)
             && rule.Operations == LatticeOperation.Admin;
+        // Reflect an existing all-trees grant so the form identifies it: a
+        // whole-tree rule over the all-trees sentinel ("*").
+        _ruleAllTrees =
+            rule.Scope.Kind == LatticeScopeKind.Tree
+            && string.Equals(rule.Scope.TreeId, LatticeScope.ClusterWideTreeId, StringComparison.Ordinal);
         _ruleOperations.Clear();
         foreach (var option in AccessRuleFormat.Operations)
         {
@@ -666,6 +680,7 @@ public partial class AccessPanel : ComponentBase, IDisposable
         _ruleOperations.Clear();
         _ruleEffect = LatticeEffect.Allow;
         _ruleDelegateAccessAdmin = false;
+        _ruleAllTrees = false;
     }
 
     private void NewRule()
@@ -707,6 +722,13 @@ public partial class AccessPanel : ComponentBase, IDisposable
             return true;
         }
 
+        // The all-trees affordance supplies the sentinel scope, so no tree
+        // selection is required; the operator still chooses at least one operation.
+        if (_ruleAllTrees)
+        {
+            return _ruleOperations.Count > 0;
+        }
+
         return !string.IsNullOrWhiteSpace(_selectedTreeId)
             && _ruleOperations.Count > 0
             && (_ruleScopeKind == LatticeScopeKind.Tree || !string.IsNullOrWhiteSpace(_ruleScopeKeyOrPrefix));
@@ -734,6 +756,15 @@ public partial class AccessPanel : ComponentBase, IDisposable
                 // subject. The server accepts it only when the cluster's delegation
                 // option is enabled; otherwise its rejection surfaces below.
                 rule = AccessCreateModel.BuildAccessAdministrationRule(_ruleIdInput.Trim(), subject);
+            }
+            else if (_ruleAllTrees)
+            {
+                // Author an all-trees (cluster-wide) grant: a whole-tree rule over
+                // the all-trees sentinel ("*") carrying the chosen operations and
+                // effect. The server records it always, but only enforces it when
+                // the cluster's all-trees grants option is enabled.
+                rule = AccessCreateModel.BuildAllTreesRule(
+                    _ruleIdInput.Trim(), subject, CombineOperations(_ruleOperations), _ruleEffect);
             }
             else
             {

@@ -339,9 +339,15 @@
                 </label>
                 <label class="explorer-access-field explorer-access-check">
                     <input type="checkbox" checked="@_ruleDelegateAccessAdmin"
-                           disabled="@(_busy || !_allowed || _editingExistingRule)"
+                           disabled="@(_busy || !_allowed || _editingExistingRule || _ruleAllTrees)"
                            @onchange="e => _ruleDelegateAccessAdmin = (bool)(e.Value ?? false)" />
                     <span>Access administration (delegate)</span>
+                </label>
+                <label class="explorer-access-field explorer-access-check">
+                    <input type="checkbox" checked="@_ruleAllTrees"
+                           disabled="@(_busy || !_allowed || _editingExistingRule || _ruleDelegateAccessAdmin)"
+                           @onchange="e => _ruleAllTrees = (bool)(e.Value ?? false)" />
+                    <span>All trees (cluster-wide)</span>
                 </label>
                 @if (_ruleDelegateAccessAdmin)
                 {
@@ -351,6 +357,16 @@
                         <span class="explorer-access-treevalue">
                             access administration (@AccessCreateModel.AccessAdministrationTreeId), whole tree, Admin, Allow
                         </span>
+                    </label>
+                }
+                else
+                {
+                @if (_ruleAllTrees)
+                {
+                    <p class="explorer-backups-note">@AccessCreateModel.AllTreesHelpText</p>
+                    <label class="explorer-access-field">
+                        <span>Scope</span>
+                        <span class="explorer-access-treevalue">all trees (@LatticeScope.ClusterWideTreeId), whole tree</span>
                     </label>
                 }
                 else
@@ -378,6 +394,7 @@
                         }
                     </span>
                 </label>
+                }
                 <fieldset class="explorer-access-ops" disabled="@(_busy || !_allowed)">
                     <legend>Operations</legend>
                     @foreach (var op in AccessRuleFormat.Operations)

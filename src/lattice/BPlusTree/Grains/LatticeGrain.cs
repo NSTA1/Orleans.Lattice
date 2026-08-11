@@ -381,7 +381,30 @@ internal sealed partial class LatticeGrain(
                 "are reserved for internal Lattice system-data trees (identity, authorization, backup, and " +
                 "membership add-ons) and cannot be created via the public ILattice surface. Choose a tree name " +
                 "that does not start with the 'sys-' namespace.");
+
+        // Reserve the all-trees authorization sentinel ("*") as a non-creatable
+        // tree id. The authorization decision engine promotes "*" into a
+        // cluster-wide, all-trees grant tier (LatticeAuthOptions.AllTreesGrantsEnabled),
+        // so a real application tree literally named "*" must never exist, or it
+        // would be governed by every cluster-wide rule and collide with the
+        // sentinel. Rejected on the same user-origin data-mutation surface as the
+        // sys- guard above; the literal is kept local so the core takes no
+        // dependency on the auth package (mirrors
+        // Orleans.Lattice.Auth LatticeScope.ClusterWideTreeId).
+        if (string.Equals(TreeId, ClusterWideAuthSentinelTreeId, StringComparison.Ordinal)
+            && !LatticeAccessGateContext.IsSystemOrigin)
+            throw new InvalidOperationException(
+                $"Tree ID '{ClusterWideAuthSentinelTreeId}' is reserved as the all-trees authorization sentinel " +
+                "and cannot be created via the public ILattice surface. Choose a different tree name.");
     }
+
+    /// <summary>
+    /// The all-trees authorization sentinel tree id (<c>"*"</c>), reserved so it
+    /// can never name a real application tree. Kept as a local literal to avoid a
+    /// core dependency on the authorization package; mirrors
+    /// <c>Orleans.Lattice.Auth.LatticeScope.ClusterWideTreeId</c>.
+    /// </summary>
+    private const string ClusterWideAuthSentinelTreeId = "*";
 
     /// <summary>
     /// Resolves the declared replication <see cref="LatticeMergeMode"/> for
