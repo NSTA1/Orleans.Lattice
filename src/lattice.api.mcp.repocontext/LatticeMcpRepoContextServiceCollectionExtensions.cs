@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Options;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext;
 
@@ -43,6 +44,13 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
 
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<ILatticeApiMcpToolGroup, RepoContextToolGroup>());
+
+        // Bind the per-repository TTL policy under the named-options convention
+        // (IOptionsMonitor<RepoContextTtlOptions>.Get(repoId)) and validate every
+        // instance at first resolve. The memory-writing tools consume these.
+        services.AddOptions<RepoContextTtlOptions>();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<RepoContextTtlOptions>, RepoContextTtlOptionsValidator>());
 
         return services;
     }

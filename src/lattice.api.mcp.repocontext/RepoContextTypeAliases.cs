@@ -42,4 +42,7 @@ internal static class RepoContextTypeAliases
 
     /// <summary>Alias for <see cref="RepoContext.MemoryKind"/>.</summary>
     internal const string MemoryKind = "ol.rcn";
+
+    /// <summary>Alias for <see cref="RepoContextRemainingLife"/>.</summary>
+    internal const string RemainingLife = "ol.rcl";
 }
