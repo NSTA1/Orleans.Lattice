@@ -10,9 +10,13 @@ namespace Orleans.Lattice.Api.Mcp;
 /// <remarks>
 /// The three <c>lattice_state_*</c> summaries have no gRPC method
 /// (<c>GetTreeSummary</c> / <c>GetShardSummaries</c> / <c>GetPhysicalShardCount</c>)
-/// and <c>lattice_backup_inventory</c> has no <c>GetInventory</c> binding. When
-/// those gRPC methods are added, remove the corresponding name here and the tool
-/// becomes discoverable remotely with no other change.
+/// and <c>lattice_backup_inventory</c> has no <c>GetInventory</c> binding. The
+/// tree-administration schema-control tools (<c>lattice_treeadmin_schema_*</c>) are
+/// backed by the in-process <c>ILatticeSchemaControl</c> facade, whose gRPC client
+/// (<c>Orleans.Lattice.Api.Schema.Grpc</c>) is not referenced by this MCP package,
+/// so the remote host cannot wire the facade and every schema tool is deferred. When
+/// those gRPC methods / clients are added and wired, remove the corresponding name
+/// here and the tool becomes discoverable remotely with no other change.
 /// </remarks>
 internal sealed class LatticeApiMcpRemoteUnsupportedToolSource : ILatticeApiMcpUnsupportedToolSource
 {
@@ -28,22 +32,30 @@ internal sealed class LatticeApiMcpRemoteUnsupportedToolSource : ILatticeApiMcpU
     /// <summary>The <c>lattice_backup_inventory</c> tool - no gRPC <c>GetInventory</c> binding.</summary>
     public const string BackupInventory = "lattice_backup_inventory";
 
-    private static readonly HashSet<string> Deferred = new(StringComparer.Ordinal)
+    /// <summary>The tree-administration schema-control tools, deferred remotely: the schema gRPC client is not referenced here.</summary>
+    private static readonly string[] TreeAdminSchemaTools =
     {
-        StateGetTreeSummary,
-        StateGetShardSummaries,
-        StateGetPhysicalShardCount,
-        BackupInventory,
+        "lattice_treeadmin_schema_get_policy",
+        "lattice_treeadmin_schema_list_dead_letters",
+        "lattice_treeadmin_schema_count_dead_letters",
+        "lattice_treeadmin_schema_get_version_config",
+        "lattice_treeadmin_schema_get_remediation_status",
+        "lattice_treeadmin_schema_scan_compliance",
+        "lattice_treeadmin_schema_probe_capabilities",
+        "lattice_treeadmin_schema_set_policy",
+        "lattice_treeadmin_schema_clear_policy",
+        "lattice_treeadmin_schema_set_version_config",
+        "lattice_treeadmin_schema_clear_version_config",
+        "lattice_treeadmin_schema_advance_target_version",
+        "lattice_treeadmin_schema_advance_and_migrate",
+        "lattice_treeadmin_schema_migrate_to_target",
+        "lattice_treeadmin_schema_remediate",
     };
 
+    private static readonly HashSet<string> Deferred = BuildDeferred();
+
     /// <summary>The tool names deferred under the remote-host topology, in a stable order.</summary>
-    public static IReadOnlyList<string> DeferredToolNames { get; } = new[]
-    {
-        StateGetTreeSummary,
-        StateGetShardSummaries,
-        StateGetPhysicalShardCount,
-        BackupInventory,
-    };
+    public static IReadOnlyList<string> DeferredToolNames { get; } = BuildDeferredList();
 
     /// <inheritdoc />
     public bool IsUnsupported(string toolName)
@@ -51,4 +63,20 @@ internal sealed class LatticeApiMcpRemoteUnsupportedToolSource : ILatticeApiMcpU
         ArgumentNullException.ThrowIfNull(toolName);
         return Deferred.Contains(toolName);
     }
+
+    private static string[] BuildDeferredList()
+    {
+        var names = new List<string>(4 + TreeAdminSchemaTools.Length)
+        {
+            StateGetTreeSummary,
+            StateGetShardSummaries,
+            StateGetPhysicalShardCount,
+            BackupInventory,
+        };
+        names.AddRange(TreeAdminSchemaTools);
+        return names.ToArray();
+    }
+
+    private static HashSet<string> BuildDeferred()
+        => new(BuildDeferredList(), StringComparer.Ordinal);
 }

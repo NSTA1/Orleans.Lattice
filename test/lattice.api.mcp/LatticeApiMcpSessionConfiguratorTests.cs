@@ -191,15 +191,22 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
     }
 
     [Test]
-    public async Task TreeAdmin_group_is_discoverable_but_contributes_no_tools()
+    public async Task TreeAdmin_group_is_discoverable_and_contributes_the_schema_inspection_tools()
     {
-        // The foundation TreeAdmin module is registered and the caller is granted
-        // TreeAdmin, so the group must report Available - proving the capability
-        // wiring end to end - while contributing no tools yet (scaffolding stage).
+        // The TreeAdmin module is registered and the caller is granted TreeAdmin, so
+        // the group must report Available - proving the capability wiring end to end -
+        // and contribute its always-on read-only schema-inspection tools. The mutating
+        // schema-management tools stay hidden until schema control is opted in.
+        var provider = new ServiceCollection()
+            .AddSingleton(Substitute.For<Orleans.Lattice.Api.Schema.ILatticeSchemaControl>())
+            .BuildServiceProvider();
+        var group = new TreeAdminToolGroup(
+            provider,
+            Microsoft.Extensions.Options.Options.Create(new LatticeApiMcpOptions()));
         var configurator = CreateConfigurator(
             new LatticeCredential("alice"),
             LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.TreeAdmin),
-            new TreeAdminToolGroup());
+            group);
 
         var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
 
@@ -207,8 +214,10 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
         {
             Assert.That(GroupAvailable(plan.Capabilities, LatticeApiMcpGroup.TreeAdmin), Is.True,
                 "A granted-and-registered TreeAdmin group must report available.");
-            Assert.That(ToolNames(plan.Tools), Is.EquivalentTo(new[] { "lattice_capabilities", "lattice_list_regions" }),
-                "The scaffolding TreeAdmin group is discoverable but adds no tools.");
+            Assert.That(ToolNames(plan.Tools), Does.Contain("lattice_treeadmin_schema_get_policy"),
+                "The TreeAdmin group contributes its read-only schema-inspection tools.");
+            Assert.That(ToolNames(plan.Tools), Does.Not.Contain("lattice_treeadmin_schema_set_policy"),
+                "The mutating schema-management tools stay hidden until schema control is opted in.");
         });
     }
 
