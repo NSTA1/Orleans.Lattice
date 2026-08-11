@@ -1,3 +1,5 @@
+using Microsoft.IdentityModel.Tokens;
+
 namespace Orleans.Lattice.Membership.Entra;
 
 /// <summary>
@@ -57,6 +59,24 @@ public sealed class LatticeEntraAuthenticatorOptions
     /// one entry.
     /// </summary>
     public IList<string> Audiences { get; } = new List<string>();
+
+    /// <summary>
+    /// The default token signature algorithm Microsoft Entra ID issues v2.0
+    /// tokens with (<c>RS256</c>). <see cref="Algorithms"/> is pre-populated with
+    /// this value.
+    /// </summary>
+    public const string DefaultAlgorithm = SecurityAlgorithms.RsaSha256;
+
+    /// <summary>
+    /// The token signature algorithms this authenticator accepts (the JWT header
+    /// <c>alg</c>), pinned via <see cref="TokenValidationParameters.ValidAlgorithms"/>.
+    /// Defaults to <c>RS256</c>, the asymmetric algorithm Entra issues v2.0 tokens
+    /// with, so the validator refuses a token advertising any other algorithm -
+    /// a defense-in-depth measure against algorithm-confusion attacks (CWE-347).
+    /// Clear and repopulate to accept a different set; leaving it empty disables
+    /// algorithm pinning (not recommended). Populate the collection in place.
+    /// </summary>
+    public IList<string> Algorithms { get; } = new List<string> { DefaultAlgorithm };
 
     /// <summary>
     /// Optional scheme hint. When set, a credential whose

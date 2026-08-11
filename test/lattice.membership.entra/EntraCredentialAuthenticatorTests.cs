@@ -1,3 +1,4 @@
+using Microsoft.IdentityModel.Tokens;
 using Orleans.Lattice.Membership;
 
 namespace Orleans.Lattice.Membership.Entra.Tests;
@@ -205,6 +206,35 @@ public class EntraCredentialAuthenticatorTests
         var token = otherAuthority.MintToken();
 
         var principal = await authenticator.AuthenticateAsync(new LatticeCredential(token));
+
+        Assert.That(principal, Is.Null);
+    }
+
+    [Test]
+    public async Task AuthenticateAsync_default_pins_rs256_and_authenticates()
+    {
+        // The default Algorithms allow-list is RS256, which is exactly what the
+        // authority mints, so a valid token still authenticates.
+        using var authority = new EntraTestAuthority();
+        var authenticator = CreateAuthenticator(authority);
+
+        var principal = await authenticator.AuthenticateAsync(new LatticeCredential(authority.MintToken()));
+
+        Assert.That(principal, Is.Not.Null);
+    }
+
+    [Test]
+    public async Task AuthenticateAsync_algorithm_outside_pinned_set_returns_null()
+    {
+        // Restricting the pinned set to an algorithm the authority does not use
+        // must reject its RS256 token (CWE-347 algorithm confusion).
+        using var authority = new EntraTestAuthority();
+        var options = CreateOptions();
+        options.Algorithms.Clear();
+        options.Algorithms.Add(SecurityAlgorithms.RsaSsaPssSha256);
+        var authenticator = new EntraCredentialAuthenticator(options, authority.ConfigurationSource);
+
+        var principal = await authenticator.AuthenticateAsync(new LatticeCredential(authority.MintToken()));
 
         Assert.That(principal, Is.Null);
     }
