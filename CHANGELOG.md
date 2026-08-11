@@ -10,6 +10,10 @@ This changelog covers the whole **package family** - every published `Orleans.La
 
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), labelled `lattice` or `lattice.replication`. See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
 
+### Security
+
+- **Orleans.Lattice.Membership: JWT audience validation now fails closed on misconfiguration.** `JwtCredentialAuthenticator` previously disabled audience validation silently when `ValidateAudience` was left at its `true` default but no `Audiences` were configured, accepting any validly-signed token from the trusted issuer - including one minted for a different relying party (audience/token confusion, CWE-287 / CWE-1032). Construction now throws `ArgumentException` when `ValidateAudience` is `true` and `Audiences` is empty (and no explicit `ValidationParameters` override is supplied); an operator must add an audience or set `ValidateAudience = false` to opt out explicitly. ([#1410](https://github.com/NSTA1/Orleans.Lattice/issues/1410))
+
 ## Released
 
 Published releases, newest first. Each section is keyed by its publish date; within a date, packages advance on their own patch digits per [`docs/RELEASING.md`](docs/RELEASING.md).

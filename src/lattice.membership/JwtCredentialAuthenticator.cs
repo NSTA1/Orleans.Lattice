@@ -30,13 +30,33 @@ public class JwtCredentialAuthenticator : ILatticeCredentialAuthenticator
     /// </summary>
     /// <param name="options">The per-issuer configuration. Must not be <c>null</c> and must set an issuer.</param>
     /// <exception cref="ArgumentNullException"><paramref name="options"/> is <c>null</c>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="options"/> does not set an issuer.</exception>
+    /// <exception cref="ArgumentException"><paramref name="options"/> does not set an issuer, or requests audience validation without listing any audience.</exception>
     public JwtCredentialAuthenticator(JwtAuthenticatorOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
         if (string.IsNullOrWhiteSpace(options.Issuer))
         {
             throw new ArgumentException("JwtAuthenticatorOptions.Issuer must be set.", nameof(options));
+        }
+
+        // Fail closed on the audience-validation footgun: with ValidateAudience
+        // defaulting to true, an operator reasonably assumes the aud claim is
+        // checked, but an empty Audiences list would silently disable it and
+        // accept any validly-signed token from the trusted issuer - including one
+        // minted for a different relying party (audience/token confusion,
+        // CWE-287 / CWE-1032). Require an explicit opt-out (ValidateAudience =
+        // false) rather than inferring "disable" from a missing audience. The
+        // check is skipped when an explicit ValidationParameters override is
+        // supplied, because that override governs validation verbatim.
+        if (options.ValidationParameters is null
+            && options.ValidateAudience
+            && options.Audiences.Count == 0)
+        {
+            throw new ArgumentException(
+                "JwtAuthenticatorOptions.ValidateAudience is true but no Audiences are configured, "
+                + "which would silently disable audience validation. Add at least one audience, "
+                + "or set ValidateAudience = false to accept any audience explicitly.",
+                nameof(options));
         }
 
         Options = options;

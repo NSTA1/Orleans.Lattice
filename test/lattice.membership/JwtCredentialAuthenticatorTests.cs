@@ -129,6 +129,43 @@ public class JwtCredentialAuthenticatorTests
     }
 
     [Test]
+    public void Constructor_validate_audience_true_but_no_audiences_throws()
+    {
+        // Fail closed: ValidateAudience defaults to true, so an empty Audiences
+        // list would silently disable audience validation. Construction must
+        // reject this footgun rather than accept any audience implicitly.
+        var options = new JwtAuthenticatorOptions { Issuer = Issuer };
+        options.SigningKeys.Add(SigningKey);
+
+        Assert.That(() => new JwtCredentialAuthenticator(options), Throws.ArgumentException);
+    }
+
+    [Test]
+    public void Constructor_validate_audience_false_and_no_audiences_succeeds()
+    {
+        // Explicitly opting out of audience validation is allowed: the operator
+        // has stated the intent, so no audience is required.
+        var options = new JwtAuthenticatorOptions { Issuer = Issuer, ValidateAudience = false };
+        options.SigningKeys.Add(SigningKey);
+
+        Assert.That(() => new JwtCredentialAuthenticator(options), Throws.Nothing);
+    }
+
+    [Test]
+    public void Constructor_explicit_validation_parameters_override_skips_audience_guard()
+    {
+        // An explicit ValidationParameters override governs validation verbatim,
+        // so the audience guard does not apply even with an empty Audiences list.
+        var options = new JwtAuthenticatorOptions
+        {
+            Issuer = Issuer,
+            ValidationParameters = new TokenValidationParameters { ValidateAudience = false },
+        };
+
+        Assert.That(() => new JwtCredentialAuthenticator(options), Throws.Nothing);
+    }
+
+    [Test]
     public void CanHandle_matching_scheme_hint_returns_true()
     {
         var authenticator = CreateAuthenticator(schemeHint: "Bearer");
