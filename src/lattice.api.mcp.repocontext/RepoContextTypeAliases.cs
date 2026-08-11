@@ -60,4 +60,7 @@ internal static class RepoContextTypeAliases
 
     /// <summary>Alias for <see cref="VectorMembershipRecord"/>.</summary>
     internal const string VectorMembershipRecord = "ol.vmb";
+
+    /// <summary>Alias for <see cref="RepoContextSnapshotRecord"/>.</summary>
+    internal const string SnapshotRecord = "ol.rcx";
 }
