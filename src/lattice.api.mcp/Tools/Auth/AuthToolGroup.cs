@@ -64,12 +64,16 @@ internal sealed class AuthToolGroup : ILatticeApiMcpToolGroup
                 + "Group to explain a group subject rather than a user. Under a default-allow posture a subject can be "
                 + "allowed with an empty matchedRules list: no rule denied the operation, so the gate's implicit allow "
                 + "stands - an empty matchedRules on an allow verdict means 'nothing objected', not 'nothing was "
-                + "evaluated'. Read-only."),
+                + "evaluated'. The result also reports the cluster's authorization posture (whether the all-trees grant "
+                + "tier and access-administration delegation are enabled), so you can tell whether a cluster-wide "
+                + "Tree:* grant is actually live and whether a policy-tree delegation rule is authorable. Read-only."),
             Read(services, AuthToolHandlers.EffectivePermissionsAsync, "lattice_auth_effective_permissions",
                 "List a subject's effective permissions",
                 "Returns the authorization rules currently in effect for a subject (grants and denies), resolved from "
                 + "the live policy store and the subject's group closure. Set subjectKind to Group to resolve a group "
-                + "subject rather than a user. Read-only."),
+                + "subject rather than a user. The result also reports the cluster's authorization posture (the "
+                + "all-trees grant and access-administration delegation tier flags), so a listed but inert Tree:* rule "
+                + "is distinguishable from an enforced one. Read-only."),
             Read(services, AuthToolHandlers.GetGroupAsync, "lattice_auth_get_group", "Get a group",
                 "Reads a single group record by id, or null when no such group exists. Read-only."),
             Read(services, AuthToolHandlers.ListGroupsAsync, "lattice_auth_list_groups", "List groups",
@@ -109,7 +113,11 @@ internal sealed class AuthToolGroup : ILatticeApiMcpToolGroup
                 "Removes a membership edge. A no-op when the edge does not exist. Administrator-gated and destructive."));
             tools.Add(Write(services, AuthToolHandlers.PutRuleAsync, "lattice_auth_put_rule", "Create or replace a rule",
                 "Creates or replaces an authorization rule granting or denying a set of operations over a keyspace "
-                + "scope to a user or group, returning the persisted rule. Administrator-gated and destructive."));
+                + "scope to a user or group, returning the persisted rule. A cluster-wide all-trees rule (scope Tree:*) "
+                + "carrying data-plane operations is rejected unless the cluster's all-trees grant tier is enabled, and "
+                + "a whole-tree Admin rule on the reserved policy tree (access-administration delegation) is rejected "
+                + "unless the delegation tier is enabled; check the posture from lattice_auth_explain or "
+                + "lattice_auth_effective_permissions before authoring either shape. Administrator-gated and destructive."));
             tools.Add(Write(services, AuthToolHandlers.RemoveRuleAsync, "lattice_auth_remove_rule", "Remove a rule",
                 "Removes a rule by its governed tree id and rule id, returning true when a rule was removed. "
                 + "Administrator-gated and destructive."));
