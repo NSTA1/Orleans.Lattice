@@ -5,6 +5,7 @@ using Orleans.Lattice.Api.Data;
 using Orleans.Lattice.Api.Replication;
 using Orleans.Lattice.Api.Schema;
 using Orleans.Lattice.Api.State;
+using Orleans.Lattice.Api.TreeAdmin;
 
 namespace Orleans.Lattice.Api.Abstractions.Tests.PublicApiContract;
 
@@ -34,6 +35,7 @@ public class AbstractionsPublicApiContractTests
         typeof(ILatticeBackupControl),
         typeof(ILatticeSchemaControl),
         typeof(ILatticeReplicationControl),
+        typeof(ILatticeTreeAdmin),
     };
 
     private static readonly IReadOnlyList<string> ContractNamespaces = new[]
@@ -45,6 +47,7 @@ public class AbstractionsPublicApiContractTests
         "Orleans.Lattice.Api.Schema",
         "Orleans.Lattice.Api.Replication",
         "Orleans.Lattice.Api.Region",
+        "Orleans.Lattice.Api.TreeAdmin",
     };
 
     [TestCaseSource(nameof(ServiceInterfaces))]
