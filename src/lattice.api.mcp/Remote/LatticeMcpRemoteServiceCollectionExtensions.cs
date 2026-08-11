@@ -14,6 +14,8 @@ using Orleans.Lattice.Api.Replication;
 using Orleans.Lattice.Api.Replication.Grpc;
 using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Api.State.Grpc;
+using Orleans.Lattice.Api.TreeAdmin;
+using Orleans.Lattice.Api.TreeAdmin.Grpc;
 using Orleans.Serialization;
 
 namespace Orleans.Lattice.Api.Mcp;
@@ -154,6 +156,14 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
             services.AddReplicationTools(options.EnableReplicationControl);
         }
 
+        if (options.TreeAdmin is { } treeAdmin)
+        {
+            services.TryAddSingleton<ILatticeTreeAdmin>(sp =>
+                new GrpcLatticeTreeAdmin(LatticeTreeAdminApiGrpcClient.Create(
+                    BuildRoutingInvoker(sp, options, treeAdmin, static r => r.TreeAdmin), sp)));
+            services.AddTreeAdminTools();
+        }
+
         return services;
     }
 
@@ -216,7 +226,7 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
                 ClusterId = options.ClusterId ?? string.Empty,
                 IsCurrent = true,
                 Groups = GroupEndpoints(
-                    options.State, options.Data, options.Backup, options.Auth, options.Replication,
+                    options.State, options.Data, options.Backup, options.Auth, options.Replication, options.TreeAdmin,
                     telemetryAvailable: telemetryRegistered),
             },
         };
@@ -229,7 +239,7 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
                 ClusterId = region.ClusterId ?? string.Empty,
                 IsCurrent = false,
                 Groups = GroupEndpoints(
-                    region.State, region.Data, region.Backup, region.Auth, region.Replication,
+                    region.State, region.Data, region.Backup, region.Auth, region.Replication, region.TreeAdmin,
                     telemetryAvailable: false),
             });
         }
@@ -243,6 +253,7 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
         LatticeApiMcpRemoteEndpoint? backup,
         LatticeApiMcpRemoteEndpoint? auth,
         LatticeApiMcpRemoteEndpoint? replication,
+        LatticeApiMcpRemoteEndpoint? treeAdmin,
         bool telemetryAvailable)
     {
         var groups = new Dictionary<LatticeApiMcpGroup, string?>();
@@ -269,6 +280,11 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
         if (replication is not null)
         {
             groups[LatticeApiMcpGroup.Replication] = replication.Endpoint;
+        }
+
+        if (treeAdmin is not null)
+        {
+            groups[LatticeApiMcpGroup.TreeAdmin] = treeAdmin.Endpoint;
         }
 
         // Telemetry is a head-local PromQL proxy with no per-region gRPC endpoint,

@@ -6,6 +6,7 @@ using Orleans.Lattice.Api.Backup.Grpc;
 using Orleans.Lattice.Api.Data.Grpc;
 using Orleans.Lattice.Api.Replication.Grpc;
 using Orleans.Lattice.Api.State.Grpc;
+using Orleans.Lattice.Api.TreeAdmin.Grpc;
 using Orleans.Serialization;
 
 namespace Orleans.Lattice.Api.Mcp.Tests;
@@ -56,4 +57,8 @@ internal static class RemoteTestSupport
     /// <summary>Builds a replication-API client over <paramref name="invoker"/>.</summary>
     public static LatticeReplicationApiGrpcClient ReplicationClient(CallInvoker invoker)
         => LatticeReplicationApiGrpcClient.Create(invoker, Serializer);
+
+    /// <summary>Builds a tree-administration-API client over <paramref name="invoker"/>.</summary>
+    public static LatticeTreeAdminApiGrpcClient TreeAdminClient(CallInvoker invoker)
+        => LatticeTreeAdminApiGrpcClient.Create(invoker, Serializer);
 }

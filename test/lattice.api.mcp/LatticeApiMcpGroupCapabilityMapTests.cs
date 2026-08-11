@@ -21,6 +21,7 @@ public sealed class LatticeApiMcpGroupCapabilityMapTests
             LatticeApiMcpGroup.Auth,
             LatticeApiMcpGroup.Telemetry,
             LatticeApiMcpGroup.Replication,
+            LatticeApiMcpGroup.TreeAdmin,
         }));
     }
 
@@ -28,8 +29,9 @@ public sealed class LatticeApiMcpGroupCapabilityMapTests
     public void Existing_group_ordinals_are_unchanged()
     {
         // The access-set bitmask keys on 1 << (int)group, so the original
-        // members must keep their ordinal values; Telemetry appends after Auth
-        // and Replication appends after Telemetry.
+        // members must keep their ordinal values; Telemetry appends after Auth,
+        // Replication appends after Telemetry, and TreeAdmin appends after
+        // Replication.
         Assert.Multiple(() =>
         {
             Assert.That((int)LatticeApiMcpGroup.State, Is.EqualTo(0));
@@ -38,6 +40,7 @@ public sealed class LatticeApiMcpGroupCapabilityMapTests
             Assert.That((int)LatticeApiMcpGroup.Auth, Is.EqualTo(3));
             Assert.That((int)LatticeApiMcpGroup.Telemetry, Is.EqualTo(4));
             Assert.That((int)LatticeApiMcpGroup.Replication, Is.EqualTo(5));
+            Assert.That((int)LatticeApiMcpGroup.TreeAdmin, Is.EqualTo(6));
         });
     }
 
@@ -150,12 +153,21 @@ public sealed class LatticeApiMcpGroupCapabilityMapTests
             "An admin-only grant must not make the read-only state group usable.");
     }
 
+    [Test]
+    public void TreeAdmin_mask_is_admin_only()
+    {
+        Assert.That(
+            LatticeApiMcpGroupCapabilityMap.RequiredOperations(LatticeApiMcpGroup.TreeAdmin),
+            Is.EqualTo(LatticeOperation.Admin));
+    }
+
     [TestCase(LatticeApiMcpGroup.State, "state")]
     [TestCase(LatticeApiMcpGroup.Data, "data")]
     [TestCase(LatticeApiMcpGroup.Backup, "backup")]
     [TestCase(LatticeApiMcpGroup.Auth, "auth")]
     [TestCase(LatticeApiMcpGroup.Telemetry, "telemetry")]
     [TestCase(LatticeApiMcpGroup.Replication, "replication")]
+    [TestCase(LatticeApiMcpGroup.TreeAdmin, "treeadmin")]
     public void DisplayName_is_the_stable_lowercase_name(LatticeApiMcpGroup group, string expected)
     {
         Assert.That(LatticeApiMcpGroupCapabilityMap.DisplayName(group), Is.EqualTo(expected));

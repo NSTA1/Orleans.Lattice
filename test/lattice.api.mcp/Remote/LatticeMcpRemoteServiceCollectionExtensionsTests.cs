@@ -7,6 +7,7 @@ using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Api.Data;
 using Orleans.Lattice.Api.Replication;
 using Orleans.Lattice.Api.State;
+using Orleans.Lattice.Api.TreeAdmin;
 
 namespace Orleans.Lattice.Api.Mcp.Tests;
 
@@ -47,6 +48,7 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
                 o.Auth = Endpoint("https://auth:5003");
                 o.Backup = Endpoint("https://backup:5004");
                 o.Replication = Endpoint("https://replication:5005");
+                o.TreeAdmin = Endpoint("https://treeadmin:5006");
             })
             .BuildServiceProvider();
 
@@ -57,6 +59,7 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
             Assert.That(provider.GetService<ILatticeAuthAdmin>(), Is.TypeOf<GrpcLatticeAuthAdmin>());
             Assert.That(provider.GetService<ILatticeBackupControl>(), Is.TypeOf<GrpcLatticeBackupControl>());
             Assert.That(provider.GetService<ILatticeReplicationControl>(), Is.TypeOf<GrpcLatticeReplicationControl>());
+            Assert.That(provider.GetService<ILatticeTreeAdmin>(), Is.TypeOf<GrpcLatticeTreeAdmin>());
         });
     }
 
@@ -74,6 +77,7 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
             Assert.That(provider.GetService<ILatticeAuthAdmin>(), Is.Null);
             Assert.That(provider.GetService<ILatticeBackupControl>(), Is.Null);
             Assert.That(provider.GetService<ILatticeReplicationControl>(), Is.Null);
+            Assert.That(provider.GetService<ILatticeTreeAdmin>(), Is.Null);
         });
     }
 

@@ -13,6 +13,8 @@
   <Project Path="src/lattice.api.replication.grpc/Orleans.Lattice.Api.Replication.Grpc.csproj" />
   <Project Path="src/lattice.api.schema/Orleans.Lattice.Api.Schema.csproj" />
   <Project Path="src/lattice.api.schema.grpc/Orleans.Lattice.Api.Schema.Grpc.csproj" />
+  <Project Path="src/lattice.api.treeadmin/Orleans.Lattice.Api.TreeAdmin.csproj" />
+  <Project Path="src/lattice.api.treeadmin.grpc/Orleans.Lattice.Api.TreeAdmin.Grpc.csproj" />
   <Project Path="src/lattice.api.mcp/Orleans.Lattice.Api.Mcp.csproj" />
   <Project Path="src/lattice.api.mcp.telemetry/Orleans.Lattice.Api.Mcp.Telemetry.csproj" />
   <Project Path="src/lattice.api.mcp.telemetry.azure/Orleans.Lattice.Api.Mcp.Telemetry.Azure.csproj" />
@@ -54,6 +56,8 @@
   <Project Path="test/lattice.api.replication.grpc/Orleans.Lattice.Api.Replication.Grpc.Tests.csproj" />
   <Project Path="test/lattice.api.schema/Orleans.Lattice.Api.Schema.Tests.csproj" />
   <Project Path="test/lattice.api.schema.grpc/Orleans.Lattice.Api.Schema.Grpc.Tests.csproj" />
+  <Project Path="test/lattice.api.treeadmin/Orleans.Lattice.Api.TreeAdmin.Tests.csproj" />
+  <Project Path="test/lattice.api.treeadmin.grpc/Orleans.Lattice.Api.TreeAdmin.Grpc.Tests.csproj" />
   <Project Path="test/lattice.api.mcp/Orleans.Lattice.Api.Mcp.Tests.csproj" />
   <Project Path="test/lattice.api.mcp.telemetry/Orleans.Lattice.Api.Mcp.Telemetry.Tests.csproj" />
   <Project Path="test/lattice.api.mcp.telemetry.azure/Orleans.Lattice.Api.Mcp.Telemetry.Azure.Tests.csproj" />

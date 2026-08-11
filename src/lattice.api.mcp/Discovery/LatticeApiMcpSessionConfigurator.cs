@@ -256,7 +256,8 @@ internal sealed class LatticeApiMcpSessionConfigurator
                 SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 Title = "Lattice capabilities",
                 Description =
-                    "Reports which of the four Lattice API facade groups (state, data, backup, auth) "
+                    "Reports which of the Lattice API facade groups (such as state, data, backup, auth, "
+                    + "replication, and treeadmin) "
                     + "the current authenticated caller may use, the connected cluster's identity, and "
                     + "the endpoint each group is served from. The Telemetry group intentionally reports "
                     + "no endpoint: it is served by a head-local PromQL proxy co-located with this MCP "

@@ -53,4 +53,14 @@ public enum LatticeApiMcpGroup
     /// - not even administrator - confers.
     /// </summary>
     Replication,
+
+    /// <summary>
+    /// The tree-administration control-plane facade (<c>ILatticeTreeAdmin</c>):
+    /// whole-tree lifecycle administration, presented by composing the existing
+    /// single-responsibility facades (it wraps <c>ILatticeSchemaControl</c>).
+    /// Advertised when the caller holds an administrator grant. This foundation
+    /// group is discoverable but ships no operations yet; the whole-tree lifecycle
+    /// tools land in later work.
+    /// </summary>
+    TreeAdmin,
 }
