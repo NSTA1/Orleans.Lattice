@@ -4,8 +4,9 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests;
 
 /// <summary>
 /// Tests for <see cref="RepoContextToolGroup"/>: it serves the repository-context
-/// group, contributes exactly the read-only <c>repocontext_health</c> probe built
-/// once, and annotates it read-only and non-destructive.
+/// group, contributes exactly the read-only <c>repocontext_health</c> probe by
+/// default, adds the mutating <c>repocontext_bootstrap</c> tool only when writes
+/// are opted in, and annotates each tool correctly.
 /// </summary>
 [TestFixture]
 public sealed class RepoContextToolGroupTests
@@ -29,6 +30,14 @@ public sealed class RepoContextToolGroupTests
     }
 
     [Test]
+    public void Contributes_the_bootstrap_tool_only_when_writes_are_enabled()
+    {
+        var names = new RepoContextToolGroup(enableWrites: true)
+            .Tools.Select(t => t.ProtocolTool.Name).ToArray();
+        Assert.That(names, Is.EquivalentTo(new[] { "repocontext_health", "repocontext_bootstrap" }));
+    }
+
+    [Test]
     public void The_health_tool_is_annotated_read_only_and_non_destructive()
     {
         var tool = new RepoContextToolGroup().Tools.Single();
@@ -39,6 +48,34 @@ public sealed class RepoContextToolGroupTests
             Assert.That(annotations, Is.Not.Null);
             Assert.That(annotations!.ReadOnlyHint, Is.True);
             Assert.That(annotations!.DestructiveHint, Is.False);
+        });
+    }
+
+    [Test]
+    public void The_bootstrap_tool_is_annotated_mutating_and_destructive()
+    {
+        var tool = new RepoContextToolGroup(enableWrites: true)
+            .Tools.Single(t => t.ProtocolTool.Name == "repocontext_bootstrap");
+        var annotations = tool.ProtocolTool.Annotations;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(annotations, Is.Not.Null);
+            Assert.That(annotations!.ReadOnlyHint, Is.False);
+            Assert.That(annotations!.DestructiveHint, Is.True);
+        });
+    }
+
+    [Test]
+    public void The_bootstrap_tool_carries_a_title_and_description()
+    {
+        var tool = new RepoContextToolGroup(enableWrites: true)
+            .Tools.Single(t => t.ProtocolTool.Name == "repocontext_bootstrap");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(tool.ProtocolTool.Title, Is.Not.Null.And.Not.Empty);
+            Assert.That(tool.ProtocolTool.Description, Is.Not.Null.And.Not.Empty);
         });
     }
 

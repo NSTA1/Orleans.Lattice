@@ -14,10 +14,11 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// </summary>
 /// <remarks>
 /// <para>
-/// At this foundation stage the group contributes a single read-only
-/// <c>repocontext_health</c> probe that proves the registration and the
-/// authorization gate work end to end. The capture, maintenance, and retrieval
-/// tools - and the write opt-in that gates the mutating ones - land in later work.
+/// The group contributes a read-only <c>repocontext_health</c> probe that proves
+/// the registration and the authorization gate work end to end, and - when the
+/// host opts writes in - the mutating <c>repocontext_bootstrap</c> onboarding tool
+/// that ingests a codebase into the context store. The capture, maintenance, and
+/// retrieval tools land in later work.
 /// </para>
 /// <para>
 /// The tool list is built <b>once</b> in the constructor, so the per-session
@@ -28,13 +29,18 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
 {
     /// <summary>
-    /// Builds the repository-context tool list once. The tools resolve any future
-    /// collaborators from the request service provider at call time, so no
-    /// per-session state is captured here.
+    /// Builds the repository-context tool list once. When
+    /// <paramref name="enableWrites"/> is <see langword="false"/> (the default)
+    /// only the read-only <c>repocontext_health</c> probe is contributed; when
+    /// <see langword="true"/> the mutating <c>repocontext_bootstrap</c> tool is
+    /// added. The tools resolve any collaborators from the request service
+    /// provider at call time, so no per-session state is captured here.
     /// </summary>
-    public RepoContextToolGroup()
+    /// <param name="enableWrites">Whether the mutating repository-context tools are
+    /// contributed.</param>
+    public RepoContextToolGroup(bool enableWrites = false)
     {
-        Tools = new McpServerTool[]
+        var tools = new List<McpServerTool>(enableWrites ? 2 : 1)
         {
             McpServerTool.Create(
                 RepoContextToolHandlers.Health,
@@ -53,6 +59,13 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     UseStructuredContent = true,
                 }),
         };
+
+        if (enableWrites)
+        {
+            tools.Add(BuildBootstrapTool());
+        }
+
+        Tools = tools;
     }
 
     /// <inheritdoc />
@@ -60,4 +73,26 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
 
     /// <inheritdoc />
     public IReadOnlyList<McpServerTool> Tools { get; }
+
+    private static McpServerTool BuildBootstrapTool()
+        => McpServerTool.Create(
+            RepoContextToolHandlers.BootstrapAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "repocontext_bootstrap",
+                Title = "Bootstrap a repository into the context store",
+                Description =
+                    "Onboards a codebase into the repository-context store so an agent starts from a "
+                    + "populated, queryable baseline instead of empty memory. Walks the repository at "
+                    + "'repoRoot', records a structural node and content digest for every file under the "
+                    + "'repoId' keyspace, and reconciles the scan against the stored records. Idempotent and "
+                    + "resumable: re-running on an unchanged repository is a no-op, a changed repository "
+                    + "updates only changed files and prunes deleted ones, and an interrupted run resumes "
+                    + "without duplication. Returns a summary of files scanned, added, updated, removed, and "
+                    + "unchanged, symbols captured, and elapsed time. Fails closed: offered only to a caller "
+                    + "who cleared the authorization gate and for whom the host opted writes in. Destructive.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
 }

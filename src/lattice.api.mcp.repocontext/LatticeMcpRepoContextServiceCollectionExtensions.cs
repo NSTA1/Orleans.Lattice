@@ -32,18 +32,31 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
     /// <summary>
     /// Opts the repository-context surface into the MCP binding: registers the
     /// repository-context tool group so its tools are advertised to a caller
-    /// holding a data read-or-write grant. Idempotent: calling it more than once
-    /// registers exactly one tool group. The host must also have called
-    /// <c>AddLatticeMcp</c> for the tools to be reachable.
+    /// holding a data read-or-write grant, along with the bootstrap coordinator
+    /// and the default no-op vectorisation seam. Idempotent for the tool group:
+    /// calling it more than once registers exactly one tool group. The host must
+    /// also have called <c>AddLatticeMcp</c> for the tools to be reachable.
     /// </summary>
     /// <param name="services">The host's service collection.</param>
+    /// <param name="enableWrites">
+    /// Whether the mutating repository-context tools (the <c>repocontext_bootstrap</c>
+    /// onboarding tool) are contributed. Defaults to <see langword="false"/> so a
+    /// data-permitted caller is offered the read-only surface only until the host
+    /// explicitly opts writes in.
+    /// </param>
     /// <returns>The service collection for chaining.</returns>
-    public static IServiceCollection AddRepoContextTools(this IServiceCollection services)
+    public static IServiceCollection AddRepoContextTools(
+        this IServiceCollection services,
+        bool enableWrites = false)
     {
         ArgumentNullException.ThrowIfNull(services);
 
         services.TryAddEnumerable(
-            ServiceDescriptor.Singleton<ILatticeApiMcpToolGroup, RepoContextToolGroup>());
+            ServiceDescriptor.Singleton<ILatticeApiMcpToolGroup>(
+                new RepoContextToolGroup(enableWrites)));
+
+        services.TryAddSingleton<IRepoContextVectorIngestor, NoOpRepoContextVectorIngestor>();
+        services.TryAddSingleton<RepoContextBootstrapService>();
 
         // Bind the per-repository TTL policy under the named-options convention
         // (IOptionsMonitor<RepoContextTtlOptions>.Get(repoId)) and validate every

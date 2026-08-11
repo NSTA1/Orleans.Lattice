@@ -56,4 +56,49 @@ public sealed class AddRepoContextToolsTests
     public void AddRepoContextTools_rejects_a_null_service_collection()
         => Assert.Throws<ArgumentNullException>(
             () => LatticeMcpRepoContextServiceCollectionExtensions.AddRepoContextTools(null!));
+
+    [Test]
+    public void AddRepoContextTools_registers_the_bootstrap_coordinator_and_no_op_vector_seam()
+    {
+        var services = new ServiceCollection();
+        services.AddRepoContextTools();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                services.Any(d => d.ServiceType == typeof(RepoContextBootstrapService)), Is.True);
+            Assert.That(
+                services.Any(d => d.ServiceType == typeof(IRepoContextVectorIngestor)
+                    && d.ImplementationType == typeof(NoOpRepoContextVectorIngestor)),
+                Is.True);
+        });
+    }
+
+    [Test]
+    public void AddRepoContextTools_does_not_offer_the_bootstrap_tool_by_default()
+    {
+        var services = new ServiceCollection();
+        services.AddRepoContextTools();
+
+        using var provider = services.BuildServiceProvider();
+        var group = (RepoContextToolGroup)provider.GetServices(ToolGroupInterface).Single()!;
+
+        Assert.That(
+            group.Tools.Select(t => t.ProtocolTool.Name),
+            Is.EquivalentTo(new[] { "repocontext_health" }));
+    }
+
+    [Test]
+    public void AddRepoContextTools_offers_the_bootstrap_tool_when_writes_are_enabled()
+    {
+        var services = new ServiceCollection();
+        services.AddRepoContextTools(enableWrites: true);
+
+        using var provider = services.BuildServiceProvider();
+        var group = (RepoContextToolGroup)provider.GetServices(ToolGroupInterface).Single()!;
+
+        Assert.That(
+            group.Tools.Select(t => t.ProtocolTool.Name),
+            Is.EquivalentTo(new[] { "repocontext_health", "repocontext_bootstrap" }));
+    }
 }

@@ -117,7 +117,14 @@ public sealed class RepoContextMcpHarness : IAsyncDisposable
         builder.Services.AddSingleton<ILatticeApiMcpAuthorizer>(new AllowAllMcpAuthorizer());
 
         builder.Services.AddLatticeMcp(o => o.RequireAuthorization = false);
-        builder.Services.AddRepoContextTools();
+
+        // The write opt-in is a host-side registration flag, not a per-caller
+        // grant: the Writer posture models a host that opted writes in, so the
+        // mutating repository-context tools are contributed; the Reader posture
+        // models the same group grant without the write opt-in, so only the
+        // read-only surface is offered.
+        builder.Services.AddRepoContextTools(
+            enableWrites: options.Posture == RepoContextMcpAuthPosture.Writer);
 
         var app = builder.Build();
         app.MapLatticeMcp();
