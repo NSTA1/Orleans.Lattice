@@ -123,6 +123,14 @@ public static class RepoContextHostBuilder
 
         // The box is a single trusted local agent, so writes are enabled.
         builder.Services.AddLatticeMcp(options => options.RequireAuthorization = false);
+
+        // Opt in past the default-deny coarse MCP gate. The container stamps every
+        // request as the trusted local agent through LocalTrustedCredentialBridge,
+        // and the per-tree access gate plus the seeded local-agent grant remain the
+        // real, fail-closed enforcement seam - so the coarse transport gate adds no
+        // value here and would otherwise hide the entire repocontext_* surface.
+        builder.Services.AddSingleton<ILatticeApiMcpAuthorizer, AllowAllMcpAuthorizer>();
+
         builder.Services.AddRepoContextTools(enableWrites: true);
 
         // The default embedding provider points at the separate Onyx companion

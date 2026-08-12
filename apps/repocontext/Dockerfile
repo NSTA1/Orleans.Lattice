@@ -36,6 +36,13 @@ RUN dotnet publish apps/repocontext/Orleans.Lattice.Api.Mcp.RepoContext.Host.csp
     -o /app/publish \
     /p:UseAppHost=false
 
+# Stage an empty data root here (this stage has a shell) so the runtime stage can
+# copy it in with the non-root UID as owner. A fresh named volume mounted at
+# /data inherits the ownership of the image directory at that path, so seeding it
+# owned by the runtime UID is what lets the non-root process create the WAL and
+# SQLite sub-directories on first start.
+RUN mkdir -p /data
+
 # --- Runtime stage ---------------------------------------------------------
 # Distroless, shell-less, non-root. InvariantGlobalization is set in the csproj
 # (the ingest path uses ordinal string comparison only), so the ICU-less chiseled
@@ -50,6 +57,15 @@ COPY --from=build /app/publish ./
 # be backed by a bind mount or named volume so state survives docker stop,
 # docker rm, and image upgrades. The host fails fast at startup if this path is
 # missing or not writable by the non-root runtime UID.
+#
+# The directory is seeded owned by the non-root runtime UID (the base image's
+# $APP_UID) so that a fresh named volume mounted here is writable by the process:
+# Docker initializes an empty named volume with the ownership and permissions of
+# the image directory at the mount point. Without this the volume would default
+# to root:root and the non-root process could not create the WAL/SQLite
+# sub-directories. $APP_UID is resolved from the chiseled base image rather than
+# hardcoded so it stays correct across base-image UID changes.
+COPY --from=build --chown=$APP_UID:$APP_UID /data /data
 ENV LATTICE_DATA_ROOT=/data
 VOLUME ["/data"]
 
@@ -57,6 +73,6 @@ VOLUME ["/data"]
 ENV LATTICE_MCP_PORT=8080
 EXPOSE 8080
 
-# The chiseled ASP.NET image already runs as a non-root user (UID 64198). No
-# shell, no package manager, no setuid binaries.
+# The chiseled ASP.NET image already runs as a non-root user (the base image's
+# $APP_UID). No shell, no package manager, no setuid binaries.
 ENTRYPOINT ["dotnet", "Orleans.Lattice.Api.Mcp.RepoContext.Host.dll"]

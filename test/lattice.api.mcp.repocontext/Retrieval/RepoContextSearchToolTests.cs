@@ -222,6 +222,67 @@ public sealed class RepoContextSearchToolTests
     }
 
     [Test]
+    public async Task Bootstrap_skips_empty_files_so_one_does_not_poison_the_embedding_batch()
+    {
+        // Regression: a real embedding server (Onyx) rejects a whole batch that
+        // contains any empty string, so a single contentless file in the repo
+        // would fail-close the entire run's vectorisation and silently drop
+        // search to keyword mode. The ingestor must filter empty/whitespace
+        // files out of the batch before embedding.
+        var root = NewRepo();
+        Write(root, "src/OrderService.cs", "class OrderService { void PlaceOrder() {} }");
+        Write(root, "src/Empty.cs", string.Empty);
+        Write(root, "src/Whitespace.cs", "   \n\t  ");
+
+        var embedder = new FakeEmbeddingProvider { RejectEmptyStrings = true };
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            WithEmbedder(RepoContextMcpAuthPosture.Writer, embedder), Ct);
+        await using var client = await harness.ConnectAsync(Ct);
+
+        await BootstrapAsync(client, root);
+
+        // Only the one file with content is embedded; the empty and
+        // whitespace-only files are skipped rather than poisoning the batch.
+        var metadata = await CollectKeysAsync(harness, RepoContextTrees.VectorMetadata, RepoContextKeys.VectorsPrefix(RepoId));
+        Assert.That(metadata, Has.Count.EqualTo(1), "Only the contentful file is vectorised; empty files are skipped.");
+
+        var json = await SearchAsync(client, "class OrderService PlaceOrder");
+        Assert.That(json.GetProperty("mode").GetString(), Is.EqualTo("semantic"),
+            "The empty file must not fail-close the batch; semantic search still runs.");
+    }
+
+    [Test]
+    public async Task Bootstrap_vectorises_more_files_than_one_embed_batch()
+    {
+        // Regression: a real repository has far more files than fit in a single
+        // embed request. The ingestor must chunk the run so a large repository
+        // never builds one oversized call (which tripped the provider's HTTP
+        // timeout and fail-closed the whole run) - and every file's vector must
+        // still land across the batches.
+        var root = NewRepo();
+        const int fileCount = 70; // > EmbeddingRepoContextVectorIngestor.EmbedBatchSize (32)
+        for (var i = 0; i < fileCount; i++)
+        {
+            Write(root, $"src/File{i:D3}.cs", $"class File{i:D3} {{ void Method{i:D3}() {{}} }}");
+        }
+
+        var embedder = new FakeEmbeddingProvider();
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            WithEmbedder(RepoContextMcpAuthPosture.Writer, embedder), Ct);
+        await using var client = await harness.ConnectAsync(Ct);
+
+        await BootstrapAsync(client, root);
+
+        var metadata = await CollectKeysAsync(harness, RepoContextTrees.VectorMetadata, RepoContextKeys.VectorsPrefix(RepoId));
+        Assert.That(metadata, Has.Count.EqualTo(fileCount),
+            "Every file must be vectorised across multiple embed batches.");
+
+        var json = await SearchAsync(client, "class File042 Method042");
+        Assert.That(json.GetProperty("mode").GetString(), Is.EqualTo("semantic"),
+            "Chunked vectorisation still yields a semantic index.");
+    }
+
+    [Test]
     public async Task Semantic_hit_hydrates_the_canonical_record_from_the_store_of_record()
     {
         var root = NewRepo();

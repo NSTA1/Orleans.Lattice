@@ -29,6 +29,17 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     /// </summary>
     internal const int MaxEmbedChars = 8192;
 
+    /// <summary>
+    /// The maximum number of files embedded in a single request to the provider.
+    /// A bootstrap run over a real repository has hundreds or thousands of files;
+    /// embedding them all in one call builds a multi-megabyte request that can
+    /// exceed the provider's HTTP timeout and fail-close the whole run. Chunking
+    /// bounds each request's size and duration and lets vectors land
+    /// incrementally, so a slow or partial provider still yields a searchable
+    /// index instead of nothing.
+    /// </summary>
+    internal const int EmbedBatchSize = 32;
+
     private readonly RepoContextVectorWriter _writer;
     private readonly IEmbeddingProvider? _embeddingProvider;
     private readonly ILogger<EmbeddingRepoContextVectorIngestor> _logger;
@@ -80,8 +91,14 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         {
             cancellationToken.ThrowIfCancellationRequested();
             var text = await ReadContentAsync(repoRoot, file.RelativePath, cancellationToken).ConfigureAwait(false);
-            if (text is null)
+            if (string.IsNullOrWhiteSpace(text))
             {
+                // Skip a file that could not be read (null) or that carries no
+                // embeddable content (empty or whitespace-only). An empty string
+                // is not merely useless to embed: the embedding server rejects a
+                // batch that contains one, which would fail-close the whole run's
+                // vectorisation. A contentless file still has its structural
+                // record from the walk, so keyword recall keeps covering it.
                 continue;
             }
 
@@ -94,24 +111,47 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             return;
         }
 
-        var result = await _embeddingProvider
-            .EmbedAsync(texts, EmbeddingTextType.Passage, cancellationToken)
-            .ConfigureAwait(false);
-        if (!result.Succeeded || result.Vectors.Count != texts.Count)
-        {
-            _logger.LogInformation(
-                "Skipping bootstrap vectorisation for repository {RepoId}: the embedding call did not succeed ({Error}). Search will use keyword recall.",
-                repoId,
-                result.Error ?? "no vectors returned");
-            return;
-        }
-
-        for (var i = 0; i < sourceKeys.Count; i++)
+        // Embed and store in bounded chunks. Each chunk is an independent request,
+        // so a large repository never builds one oversized, slow call that trips
+        // the provider's HTTP timeout, and vectors from earlier chunks survive
+        // even if a later chunk's embed fails - search then covers whatever landed
+        // and degrades to keyword recall only for the remainder.
+        var embedded = 0;
+        for (var start = 0; start < texts.Count; start += EmbedBatchSize)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            await _writer
-                .StoreAsync(repoId, sourceKeys[i], result.Space, result.Vectors[i], cancellationToken)
+            var count = Math.Min(EmbedBatchSize, texts.Count - start);
+            var batchTexts = texts.GetRange(start, count);
+
+            var result = await _embeddingProvider
+                .EmbedAsync(batchTexts, EmbeddingTextType.Passage, cancellationToken)
                 .ConfigureAwait(false);
+            if (!result.Succeeded || result.Vectors.Count != batchTexts.Count)
+            {
+                _logger.LogInformation(
+                    "Bootstrap vectorisation for repository {RepoId} skipped a batch of {Count} file(s): the embedding call did not succeed ({Error}). Those files fall back to keyword recall.",
+                    repoId,
+                    count,
+                    result.Error ?? "no vectors returned");
+                continue;
+            }
+
+            for (var i = 0; i < count; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await _writer
+                    .StoreAsync(repoId, sourceKeys[start + i], result.Space, result.Vectors[i], cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            embedded += count;
+        }
+
+        if (embedded == 0)
+        {
+            _logger.LogInformation(
+                "Skipping bootstrap vectorisation for repository {RepoId}: no embedding batch succeeded. Search will use keyword recall.",
+                repoId);
         }
     }
 

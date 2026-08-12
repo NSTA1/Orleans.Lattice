@@ -31,6 +31,15 @@ internal sealed class FakeEmbeddingProvider : IEmbeddingProvider
     /// <summary>When true, every <see cref="EmbedAsync"/> call returns a fail-closed unsuccessful result.</summary>
     public bool FailEmbeds { get; set; }
 
+    /// <summary>
+    /// When true, a batch that contains any empty or whitespace-only string
+    /// fails the whole call - mirroring the real Onyx model server, which
+    /// rejects the request with "Empty strings are not allowed for embedding."
+    /// Lets a test prove the ingestor filters contentless files before they can
+    /// poison a batch.
+    /// </summary>
+    public bool RejectEmptyStrings { get; set; }
+
     /// <inheritdoc />
     public Task<bool> IsAvailableAsync(CancellationToken cancellationToken = default)
         => Task.FromResult(Available);
@@ -43,6 +52,18 @@ internal sealed class FakeEmbeddingProvider : IEmbeddingProvider
         if (FailEmbeds)
         {
             return Task.FromResult(EmbeddingResult.Failure(Space, "The fake embedder was configured to fail."));
+        }
+
+        if (RejectEmptyStrings)
+        {
+            foreach (var text in texts)
+            {
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    return Task.FromResult(EmbeddingResult.Failure(
+                        Space, "Empty strings are not allowed for embedding."));
+                }
+            }
         }
 
         var vectors = new List<ReadOnlyMemory<float>>(texts.Count);

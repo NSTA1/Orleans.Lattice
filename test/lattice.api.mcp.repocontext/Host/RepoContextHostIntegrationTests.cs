@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Data.Sqlite;
@@ -9,6 +10,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice;
+using Orleans.Lattice.Api.Mcp;
 using Orleans.Lattice.Api.Mcp.RepoContext.Host;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
@@ -179,6 +181,38 @@ public sealed class RepoContextHostIntegrationTests
         {
             await app.StopAsync(Ct);
             await app.DisposeAsync();
+        }
+    }
+
+    [Test]
+    public void Local_host_opts_past_the_default_deny_mcp_gate()
+    {
+        // Regression: the container must register a permissive coarse MCP
+        // authorizer. Left unregistered, AddLatticeMcp's default-deny
+        // DenyAllMcpAuthorizer withholds every repocontext_* tool from
+        // tools/list even though lattice_capabilities reports the group
+        // available - making the whole surface unreachable. Real enforcement
+        // stays on the fail-closed per-tree access gate underneath.
+        var app = BuildLocalHost(LocalConfig());
+        try
+        {
+            var authorizer = app.Services.GetRequiredService<ILatticeApiMcpAuthorizer>();
+            Assert.That(
+                authorizer,
+                Is.Not.InstanceOf<DenyAllMcpAuthorizer>(),
+                "The container must opt past the default-deny MCP gate; DenyAll hides every repocontext_* tool.");
+
+            var permitted = authorizer.IsAuthorizedAsync(
+                new LatticeApiMcpAuthorizationContext(new DefaultHttpContext(), "repocontext_bootstrap"),
+                Ct).GetAwaiter().GetResult();
+            Assert.That(
+                permitted,
+                Is.True,
+                "The coarse MCP gate must permit the repocontext tools to reach the fail-closed data gate.");
+        }
+        finally
+        {
+            app.DisposeAsync().AsTask().GetAwaiter().GetResult();
         }
     }
 
