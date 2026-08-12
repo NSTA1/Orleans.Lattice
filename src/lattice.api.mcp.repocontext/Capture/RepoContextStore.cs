@@ -403,6 +403,7 @@ internal sealed class RepoContextStore
         var namespacePrefix = RepoContextKeys.AllReposPrefix();
         var namespaceEnd = RepoContextPortability.PrefixUpperBound(namespacePrefix);
         var summaries = new List<RepoContextRepoSummary>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
 
         var lower = namespacePrefix;
         while (true)
@@ -440,7 +441,24 @@ internal sealed class RepoContextStore
             }
 
             var repoId = parsed.RepoId;
-            summaries.Add(await BuildRepoSummaryAsync(tree, repoId, cancellationToken).ConfigureAwait(false));
+            if (seen.Add(repoId))
+            {
+                summaries.Add(await BuildRepoSummaryAsync(tree, repoId, cancellationToken).ConfigureAwait(false));
+            }
+
+            if (parsed.Kind == RepoContextRecordKind.Repo)
+            {
+                // The bare repo/{repoId} marker sorts before that repository's
+                // repo/{repoId}/... subtree, but a sibling whose id extends this
+                // one after a separator that orders below '/' (for example a
+                // hyphen, so repo/svc-api sorts between repo/svc and repo/svc/)
+                // lives in that gap. Stepping one key past the marker - rather
+                // than jumping over the whole subtree - keeps such a sibling
+                // visible; the subtree keys that follow parse back to an
+                // already-seen id and are skipped cheaply below.
+                lower = firstKey + '\0';
+                continue;
+            }
 
             var subtreeEnd = RepoContextPortability.PrefixUpperBound(RepoContextKeys.RepoScanPrefix(repoId));
             if (subtreeEnd is null)
@@ -455,11 +473,12 @@ internal sealed class RepoContextStore
     }
 
     /// <summary>
-    /// Removes every record for a repository: the resumable range-delete cursor
+    /// Removes every record for a repository: a resilient range-delete drain
     /// tombstones each context tree's <c>repo/{repoId}/</c> subtree in bounded
-    /// steps, then the bare <c>repo/{repoId}</c> root marker is deleted from the
-    /// structural tree. Removing an absent repository is a no-op that reports
-    /// zero deletions.
+    /// steps, reopening a fresh cursor across a transient enumerator loss so the
+    /// whole subtree is drained rather than aborting part-way, then the bare
+    /// <c>repo/{repoId}</c> root marker is deleted from the structural tree.
+    /// Removing an absent repository is a no-op that reports zero deletions.
     /// </summary>
     /// <param name="repoId">The repository whose records to remove. Must be non-empty.</param>
     /// <param name="cancellationToken">Cancels the removal between steps.</param>
@@ -493,33 +512,17 @@ internal sealed class RepoContextStore
         var end = RepoContextPortability.PrefixUpperBound(scanPrefix)
             ?? throw new McpException("The repository id produced an unbounded delete range.");
 
-        var deleted = 0;
+        long deleted = 0;
         foreach (var treeName in RepoContextTrees.All)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var tree = Tree(treeName);
-            var cursorId = await tree
-                .OpenDeleteRangeCursorAsync(scanPrefix, end, cancellationToken)
+            // The resilient drain reopens a fresh delete-range cursor across a
+            // transient enumerator loss (EnumerationAbortedException) so the whole
+            // subtree is tombstoned rather than aborting part-way and orphaning
+            // records after the control grains were already cleared above.
+            deleted += await Tree(treeName)
+                .DeleteRangeAsync(scanPrefix, end, DeleteStepSize, maxAttempts: null, cancellationToken)
                 .ConfigureAwait(false);
-            try
-            {
-                while (true)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    var progress = await tree
-                        .DeleteRangeStepAsync(cursorId, DeleteStepSize, cancellationToken)
-                        .ConfigureAwait(false);
-                    deleted += progress.DeletedThisStep;
-                    if (progress.IsComplete)
-                    {
-                        break;
-                    }
-                }
-            }
-            finally
-            {
-                await tree.CloseCursorAsync(cursorId, CancellationToken.None).ConfigureAwait(false);
-            }
         }
 
         // The root marker sits at repo/{repoId} with no trailing separator, so it
@@ -531,7 +534,7 @@ internal sealed class RepoContextStore
             deleted++;
         }
 
-        return new RepoContextRepoRemovalResult { RepoId = repoId, EntriesDeleted = deleted };
+        return new RepoContextRepoRemovalResult { RepoId = repoId, EntriesDeleted = checked((int)deleted) };
     }
 
     private async Task<RepoContextRepoSummary> BuildRepoSummaryAsync(
