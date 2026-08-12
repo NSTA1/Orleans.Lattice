@@ -55,6 +55,11 @@
     <PackageReference Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.2.0" />
     <PackageReference Include="Microsoft.Orleans.Reminders.AzureStorage" Version="10.2.0" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.0" />
+    <!-- Security pin: Microsoft.Data.Sqlite 10.0.0 pulls SQLitePCLRaw 2.1.11
+         transitively, whose bundled native e_sqlite3 carries a known high-severity
+         advisory (GHSA-2m69-gcr7-jv3q). Pin the bundle forward to the patched
+         2.1.12 so the vulnerable native lib never resolves. -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />
     <PackageReference Include="Npgsql" Version="9.0.3" />
   </ItemGroup>
 

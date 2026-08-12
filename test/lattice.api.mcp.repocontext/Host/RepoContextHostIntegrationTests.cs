@@ -142,6 +142,117 @@ public sealed class RepoContextHostIntegrationTests
     }
 
     [Test]
+    public async Task Indexing_run_writes_under_the_local_agent_even_with_no_ambient_credential()
+    {
+        // Regression for the reminder-driven resume path. A resume after restart
+        // re-enqueues the job from ReceiveReminder - a system-origin grain call that
+        // carries NO ambient credential - so the background run must stamp the fixed
+        // local-agent credential itself, or its structural writes fail closed as
+        // 'anonymous' against the default-deny gate. This test drives the runner
+        // with no ambient credential (exactly the resume condition) and asserts the
+        // structural writes land and the job completes.
+        var repoRoot = Path.Combine(_dataRoot, "sample-repo");
+        Directory.CreateDirectory(repoRoot);
+        await File.WriteAllTextAsync(
+            Path.Combine(repoRoot, "alpha.cs"), "namespace Sample; public class Alpha { }", Ct);
+        await File.WriteAllTextAsync(
+            Path.Combine(repoRoot, "beta.md"), "# Beta\nSome text.", Ct);
+
+        // The workspace guard is re-checked inside the run, so the sample repo must
+        // resolve under the configured workspace root.
+        var config = RepoContextHostConfiguration.FromConfiguration(
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    [RepoContextHostConfiguration.DataRootKey] = _dataRoot,
+                    [RepoContextHostConfiguration.ClusterIdKey] = "repocontext-it",
+                    [RepoContextHostConfiguration.ServiceIdKey] = "repocontext-it",
+                    [RepoContextHostConfiguration.WorkspaceRootKey] = _dataRoot,
+                })
+                .Build());
+
+        var app = BuildLocalHost(config);
+        await app.StartAsync(Ct);
+        try
+        {
+            await WaitForReadyAsync(app);
+            var grainFactory = app.Services.GetRequiredService<IGrainFactory>();
+
+            // Negative control: with no ambient credential, a direct structural
+            // write is anonymous and the default-deny gate denies it. This proves
+            // the gate is live, so the positive case below is a real grant - not an
+            // accident of a disabled gate.
+            Assert.That(
+                async () =>
+                {
+                    var tree = grainFactory.GetGrain<ILattice>(RepoContextHostTrees.Structural);
+                    await tree.SetAsync("regression-probe", Encoding.UTF8.GetBytes("x"), Ct);
+                },
+                Throws.InstanceOf<LatticeAuthorizationDeniedException>(),
+                "An un-stamped anonymous structural write must be denied by the default-deny gate.");
+
+            // Positive: drive the runner with no ambient credential (the resume
+            // condition). The runner must stamp the local-agent credential so the
+            // structural writes succeed and the job completes.
+            var runner = app.Services.GetRequiredService<IRepoIndexRunner>();
+            var request = new RepoIndexJobRequest
+            {
+                RepoRoot = repoRoot,
+                RepoId = "resume-auth-it",
+            };
+
+            Assert.That(
+                LatticeCredentialContext.IsActive,
+                Is.False,
+                "The run is started with no ambient credential, mirroring the reminder-driven resume.");
+
+            await runner.StartIndexAsync(request);
+
+            var progress = await PollUntilTerminalAsync(runner, "resume-auth-it");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    progress.Status,
+                    Is.EqualTo(RepoIndexStatus.Completed),
+                    $"The index must complete under the stamped local-agent credential (error: {progress.Error}).");
+                Assert.That(
+                    progress.Error,
+                    Is.Null,
+                    "A completed run under the stamped credential records no authorization error.");
+                Assert.That(
+                    progress.FilesAdded,
+                    Is.GreaterThan(0),
+                    "The structural writes must have landed the walked files under the stamped credential.");
+            });
+        }
+        finally
+        {
+            await app.StopAsync(Ct);
+            await app.DisposeAsync();
+        }
+    }
+
+    private static async Task<RepoIndexProgress> PollUntilTerminalAsync(
+        IRepoIndexRunner runner, string repoId)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(60);
+        while (DateTime.UtcNow < deadline)
+        {
+            var progress = await runner.GetProgressAsync(repoId);
+            if (progress.Status is RepoIndexStatus.Completed or RepoIndexStatus.Failed)
+            {
+                return progress;
+            }
+
+            await Task.Delay(100, Ct);
+        }
+
+        Assert.Fail("The indexing job did not reach a terminal state within the timeout.");
+        throw new InvalidOperationException("unreachable");
+    }
+
+    [Test]
     public async Task Readiness_is_not_ready_until_warmup_then_flips_not_ready_on_drain()
     {
         var app = BuildLocalHost(LocalConfig());

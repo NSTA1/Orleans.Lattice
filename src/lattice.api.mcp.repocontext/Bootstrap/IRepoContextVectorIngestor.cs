@@ -25,10 +25,17 @@ internal interface IRepoContextVectorIngestor
     /// <param name="repoRoot">The absolute repository root, so an implementation
     /// can re-read file content to embed it.</param>
     /// <param name="changedFiles">The files added or updated by the run.</param>
+    /// <param name="onProgress">An optional callback invoked after each batch of
+    /// vectors is stored, with the running count of files embedded so far, so a long
+    /// vectorisation pass can report incremental progress. May be <see langword="null"/>.</param>
     /// <param name="cancellationToken">Cancels the ingest.</param>
-    ValueTask IngestAsync(
+    /// <returns>The number of files whose vectors were embedded and stored. The
+    /// no-op binding returns zero, and a real binding returns fewer than the
+    /// offered count when it fails closed or skips contentless files.</returns>
+    ValueTask<int> IngestAsync(
         string repoId,
         string repoRoot,
         IReadOnlyList<RepoFileEntry> changedFiles,
+        Func<int, CancellationToken, ValueTask>? onProgress,
         CancellationToken cancellationToken);
 }

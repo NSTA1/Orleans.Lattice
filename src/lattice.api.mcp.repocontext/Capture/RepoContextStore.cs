@@ -36,27 +36,32 @@ internal sealed class RepoContextStore
     private const int DeleteStepSize = 256;
 
     private readonly IGrainFactory _grainFactory;
+    private readonly IRepoIndexRunner _indexRunner;
     private readonly Serializer _serializer;
     private readonly IOptionsMonitor<RepoContextTtlOptions> _ttlOptions;
     private readonly TimeProvider _timeProvider;
 
     /// <summary>Creates the capture/maintenance adapter.</summary>
     /// <param name="grainFactory">The grain factory used to reach the named Lattice trees. Must not be <see langword="null"/>.</param>
+    /// <param name="indexRunner">The indexing runner, used to drain an in-flight index to a halt before a repository's records are removed. Must not be <see langword="null"/>.</param>
     /// <param name="serializer">The Orleans serializer used to decode and re-encode records. Must not be <see langword="null"/>.</param>
     /// <param name="ttlOptions">The per-repository TTL policy. Must not be <see langword="null"/>.</param>
     /// <param name="timeProvider">The clock used to project remaining life. Must not be <see langword="null"/>.</param>
     public RepoContextStore(
         IGrainFactory grainFactory,
+        IRepoIndexRunner indexRunner,
         Serializer serializer,
         IOptionsMonitor<RepoContextTtlOptions> ttlOptions,
         TimeProvider timeProvider)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
+        ArgumentNullException.ThrowIfNull(indexRunner);
         ArgumentNullException.ThrowIfNull(serializer);
         ArgumentNullException.ThrowIfNull(ttlOptions);
         ArgumentNullException.ThrowIfNull(timeProvider);
 
         _grainFactory = grainFactory;
+        _indexRunner = indexRunner;
         _serializer = serializer;
         _ttlOptions = ttlOptions;
         _timeProvider = timeProvider;
@@ -463,6 +468,20 @@ internal sealed class RepoContextStore
     public async Task<RepoContextRepoRemovalResult> RemoveRepoAsync(string repoId, CancellationToken cancellationToken)
     {
         RequireNonEmpty(repoId, "repoId");
+
+        // Stop any in-flight indexing run and drain it to a full halt BEFORE
+        // deleting a single record. CancelAndWaitAsync cancels the run and awaits
+        // its termination, so no concurrent structural write from the indexer can
+        // race the range-delete below - a race that otherwise surfaces as an
+        // Orleans state version conflict on a leaf shared by both writers. The job
+        // grain then unregisters its resume reminder and clears its durable state,
+        // so a removed repository leaves no reminder firing forever and no job
+        // state for a later start to resume. Doing this first (rather than last)
+        // also means an error in the delete pass can no longer skip the cleanup.
+        await _indexRunner.CancelAndWaitAsync(repoId).ConfigureAwait(false);
+        await _grainFactory.GetGrain<IRepoIndexJobGrain>(repoId)
+            .CancelAndClearAsync()
+            .ConfigureAwait(false);
 
         var scanPrefix = RepoContextKeys.RepoScanPrefix(repoId);
         var end = RepoContextPortability.PrefixUpperBound(scanPrefix)

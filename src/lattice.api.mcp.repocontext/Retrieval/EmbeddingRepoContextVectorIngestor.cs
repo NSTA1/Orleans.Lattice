@@ -62,10 +62,11 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     }
 
     /// <inheritdoc />
-    public async ValueTask IngestAsync(
+    public async ValueTask<int> IngestAsync(
         string repoId,
         string repoRoot,
         IReadOnlyList<RepoFileEntry> changedFiles,
+        Func<int, CancellationToken, ValueTask>? onProgress,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(repoId);
@@ -74,7 +75,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
 
         if (_embeddingProvider is null || changedFiles.Count == 0)
         {
-            return;
+            return 0;
         }
 
         if (!await _embeddingProvider.IsAvailableAsync(cancellationToken).ConfigureAwait(false))
@@ -82,7 +83,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             _logger.LogInformation(
                 "Skipping bootstrap vectorisation for repository {RepoId}: the embedding provider is unavailable. Search will use keyword recall.",
                 repoId);
-            return;
+            return 0;
         }
 
         var sourceKeys = new List<string>(changedFiles.Count);
@@ -108,7 +109,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
 
         if (texts.Count == 0)
         {
-            return;
+            return 0;
         }
 
         // Embed and store in bounded chunks. Each chunk is an independent request,
@@ -145,6 +146,14 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             }
 
             embedded += count;
+
+            // Surface incremental progress after each batch lands, so a long
+            // vectorisation pass (hundreds or thousands of files, embedded on CPU)
+            // reports a rising count instead of appearing frozen until it finishes.
+            if (onProgress is not null)
+            {
+                await onProgress(embedded, cancellationToken).ConfigureAwait(false);
+            }
         }
 
         if (embedded == 0)
@@ -153,6 +162,8 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 "Skipping bootstrap vectorisation for repository {RepoId}: no embedding batch succeeded. Search will use keyword recall.",
                 repoId);
         }
+
+        return embedded;
     }
 
     private static async Task<string?> ReadContentAsync(

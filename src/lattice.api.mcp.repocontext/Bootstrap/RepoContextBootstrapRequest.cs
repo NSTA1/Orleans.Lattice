@@ -33,4 +33,20 @@ internal sealed class RepoContextBootstrapRequest
     /// also matched an include.
     /// </summary>
     public IReadOnlyList<string>? ExcludeGlobs { get; init; }
+
+    /// <summary>
+    /// When <see langword="true"/> (the default), the tree's <c>.gitignore</c>
+    /// files are honoured hierarchically so ignored files and directories are not
+    /// walked. Set to <see langword="false"/> to walk every file regardless of
+    /// ignore rules.
+    /// </summary>
+    public bool RespectGitignore { get; init; } = true;
+
+    /// <summary>
+    /// When <see langword="true"/> (the default), a file whose leading bytes look
+    /// non-text (a NUL byte is present) is dropped from the walk, so compiled
+    /// artefacts, images, and other binary blobs never enter the index. Set to
+    /// <see langword="false"/> to ingest binary files too.
+    /// </summary>
+    public bool ExcludeBinary { get; init; } = true;
 }

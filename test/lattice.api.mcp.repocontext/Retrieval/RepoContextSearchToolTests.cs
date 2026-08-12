@@ -88,6 +88,9 @@ public sealed class RepoContextSearchToolTests
     {
         var args = new Dictionary<string, object?> { ["repoRoot"] = root, ["repoId"] = RepoId };
         await client.CallToolAsync("repocontext_bootstrap", args, cancellationToken: Ct);
+        // Onboarding runs asynchronously; wait for the job to settle so the search
+        // assertions run against a fully ingested and vectorised store.
+        await client.WaitForIndexAsync(RepoId, Ct);
     }
 
     // -- Authorization gating --------------------------------------------------

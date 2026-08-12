@@ -80,4 +80,34 @@ public sealed class LocalTrustedAccessTests
             Assert.That(LocalTrustedAgent.Scheme, Is.Not.Empty);
             Assert.That(LocalTrustedAgent.Issuer, Is.Not.Empty);
         });
+
+    [Test]
+    public void Run_authority_resolves_the_fixed_local_agent_credential()
+    {
+        var credential = new LocalTrustedRunAuthority().Resolve();
+
+        Assert.That(credential, Is.Not.Null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(credential!.Value.Token, Is.EqualTo(LocalTrustedAgent.SubjectId));
+            Assert.That(credential.Value.Scheme, Is.EqualTo(LocalTrustedAgent.Scheme));
+            Assert.That(credential.Value.PrincipalId, Is.EqualTo(LocalTrustedAgent.SubjectId));
+        });
+    }
+
+    [Test]
+    public async Task Run_authority_credential_resolves_to_the_granted_subject()
+    {
+        // The run credential must resolve, through the scheme-matched authenticator,
+        // to exactly the subject the warmup seeds the grant for - otherwise a
+        // resume would write under a subject with no grant and still be denied.
+        var credential = new LocalTrustedRunAuthority().Resolve();
+        var authenticator = new LocalTrustedAuthenticator();
+
+        Assert.That(authenticator.CanHandle(credential!.Value), Is.True);
+        var principal = await authenticator.AuthenticateAsync(credential.Value);
+
+        Assert.That(principal, Is.Not.Null);
+        Assert.That(principal!.SubjectId, Is.EqualTo(LocalTrustedAgent.SubjectId));
+    }
 }

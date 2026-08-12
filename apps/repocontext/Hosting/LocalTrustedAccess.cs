@@ -66,3 +66,31 @@ public sealed class LocalTrustedAuthenticator : ILatticeCredentialAuthenticator
         CancellationToken cancellationToken = default)
         => new(new LatticePrincipal(credential.Token, LocalTrustedAgent.Issuer));
 }
+
+/// <summary>
+/// Supplies the fixed <see cref="LocalTrustedAgent.SubjectId"/> credential every
+/// background indexing run assumes, so a run's structural and vector writes carry
+/// the trusted local agent - the same subject the warmup grant authorizes - no
+/// matter what triggered it.
+/// </summary>
+/// <remarks>
+/// The indexing runner is decoupled from the request that starts it. A run started
+/// by an MCP tool call inherits the caller's ambient credential, but a run
+/// re-started by the durable resume reminder after a host restart is a
+/// system-origin grain call that carries no ambient credential; without this
+/// authority such a resume would write as anonymous and the default-deny access
+/// gate would deny it. This is a fixed container identity (the box serves a single
+/// trusted local agent), not a per-caller credential, so a singleton is correct and
+/// re-globalises no per-request credential state - it mirrors
+/// <see cref="LocalTrustedCredentialBridge"/>, which also resolves the same fixed
+/// credential for every inbound request.
+/// </remarks>
+public sealed class LocalTrustedRunAuthority : IRepoIndexRunAuthority
+{
+    /// <inheritdoc />
+    public LatticeCredential? Resolve()
+        => new LatticeCredential(
+            token: LocalTrustedAgent.SubjectId,
+            scheme: LocalTrustedAgent.Scheme,
+            principalId: LocalTrustedAgent.SubjectId);
+}

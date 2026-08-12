@@ -37,6 +37,13 @@ public sealed class RepoTreeWalkerTests
         File.WriteAllBytes(full, Encoding.UTF8.GetBytes(content));
     }
 
+    private void WriteBytes(string relativePath, byte[] content)
+    {
+        var full = Path.Combine(_root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        File.WriteAllBytes(full, content);
+    }
+
     [Test]
     public void Walk_returns_every_file_with_a_relative_posix_path_and_digest()
     {
@@ -195,5 +202,183 @@ public sealed class RepoTreeWalkerTests
         {
             Directory.Delete(outside, recursive: true);
         }
+    }
+
+    [Test]
+    public void Walk_ignores_gitignore_rules_when_the_flag_is_off()
+    {
+        Write(".gitignore", "*.log\n");
+        Write("keep.cs", "keep");
+        Write("noise.log", "noise");
+
+        var entries = RepoTreeWalker.Walk(_root, null, null, respectGitignore: false);
+
+        Assert.That(
+            entries.Select(e => e.RelativePath),
+            Is.EqualTo(new[] { ".gitignore", "keep.cs", "noise.log" }));
+    }
+
+    [Test]
+    public void Walk_honours_a_root_gitignore_file_pattern()
+    {
+        Write(".gitignore", "*.log\n");
+        Write("keep.cs", "keep");
+        Write("noise.log", "noise");
+        Write("nested/deep.log", "deep");
+
+        var entries = RepoTreeWalker.Walk(_root, null, null, respectGitignore: true);
+
+        // The .gitignore file itself is content and stays walked; a bare pattern
+        // matches at any depth.
+        Assert.That(
+            entries.Select(e => e.RelativePath),
+            Is.EqualTo(new[] { ".gitignore", "keep.cs" }));
+    }
+
+    [Test]
+    public void Walk_prunes_an_ignored_directory_and_its_whole_subtree()
+    {
+        Write(".gitignore", "bin/\n");
+        Write("src/Program.cs", "code");
+        Write("bin/Debug/app.dll", "dll");
+        Write("bin/obj/tmp", "tmp");
+
+        var entries = RepoTreeWalker.Walk(_root, null, null, respectGitignore: true);
+
+        Assert.That(
+            entries.Select(e => e.RelativePath),
+            Is.EqualTo(new[] { ".gitignore", "src/Program.cs" }));
+    }
+
+    [Test]
+    public void Walk_anchors_a_slash_pattern_to_the_gitignore_directory()
+    {
+        Write(".gitignore", "/build\n");
+        Write("build/out.o", "o");
+        Write("src/build/keep.cs", "keep");
+
+        var entries = RepoTreeWalker.Walk(_root, null, null, respectGitignore: true);
+
+        // The anchored '/build' matches only the root-level build directory, not a
+        // nested one.
+        Assert.That(
+            entries.Select(e => e.RelativePath),
+            Is.EqualTo(new[] { ".gitignore", "src/build/keep.cs" }));
+    }
+
+    [Test]
+    public void Walk_layers_a_nested_gitignore_over_a_parent()
+    {
+        Write(".gitignore", "*.log\n");
+        Write("keep.log", "root-log");
+        Write("sub/.gitignore", "!keep.log\n");
+        Write("sub/keep.log", "sub-log");
+        Write("sub/other.log", "other");
+
+        var entries = RepoTreeWalker.Walk(_root, null, null, respectGitignore: true);
+
+        // The parent ignores every *.log; the nested .gitignore re-includes
+        // keep.log for its own subtree only.
+        Assert.That(
+            entries.Select(e => e.RelativePath),
+            Is.EqualTo(new[] { ".gitignore", "sub/.gitignore", "sub/keep.log" }));
+    }
+
+    [Test]
+    public void Walk_skips_comment_and_blank_lines_in_a_gitignore()
+    {
+        Write(".gitignore", "# a comment\n\n   \n*.tmp\n");
+        Write("keep.cs", "keep");
+        Write("scratch.tmp", "tmp");
+
+        var entries = RepoTreeWalker.Walk(_root, null, null, respectGitignore: true);
+
+        Assert.That(
+            entries.Select(e => e.RelativePath),
+            Is.EqualTo(new[] { ".gitignore", "keep.cs" }));
+    }
+
+    [Test]
+    public void Walk_layers_gitignore_under_include_and_exclude_globs()
+    {
+        Write(".gitignore", "*.log\n");
+        Write("src/Program.cs", "code");
+        Write("src/Generated.g.cs", "gen");
+        Write("src/trace.log", "log");
+
+        var entries = RepoTreeWalker.Walk(
+            _root, new[] { "**/*.cs" }, new[] { "**/*.g.cs" }, respectGitignore: true);
+
+        // gitignore drops the .log; the include keeps only .cs; the exclude drops
+        // the generated file. (The .gitignore file is not a .cs, so the include
+        // filter naturally excludes it here.)
+        Assert.That(
+            entries.Select(e => e.RelativePath),
+            Is.EqualTo(new[] { "src/Program.cs" }));
+    }
+
+    [Test]
+    public void Walk_excludes_a_binary_file_when_the_flag_is_on()
+    {
+        Write("code.cs", "text");
+        WriteBytes("blob.bin", new byte[] { 0x01, 0x02, 0x00, 0x03 });
+
+        var entries = RepoTreeWalker.Walk(_root, null, null, respectGitignore: false, excludeBinary: true);
+
+        // The NUL byte in blob.bin classifies it as binary; only the text file survives.
+        Assert.That(entries.Select(e => e.RelativePath), Is.EqualTo(new[] { "code.cs" }));
+    }
+
+    [Test]
+    public void Walk_keeps_a_binary_file_when_the_flag_is_off()
+    {
+        Write("code.cs", "text");
+        WriteBytes("blob.bin", new byte[] { 0x01, 0x02, 0x00, 0x03 });
+
+        var entries = RepoTreeWalker.Walk(_root, null, null, respectGitignore: false, excludeBinary: false);
+
+        Assert.That(entries.Select(e => e.RelativePath), Is.EqualTo(new[] { "blob.bin", "code.cs" }));
+    }
+
+    [Test]
+    public void Walk_reports_progress_and_settles_on_the_exact_included_count()
+    {
+        Write("a.cs", "one");
+        Write("dir/b.cs", "two");
+        Write("dir/c.cs", "three");
+
+        var reports = new System.Collections.Concurrent.ConcurrentQueue<int>();
+        var entries = RepoTreeWalker.Walk(
+            _root, null, null, respectGitignore: false, excludeBinary: false,
+            onProgress: reports.Enqueue);
+
+        Assert.Multiple(() =>
+        {
+            // Progress was reported at least once, and the final reported value is
+            // the authoritative included count (also what the walk returned).
+            Assert.That(reports, Is.Not.Empty);
+            Assert.That(reports.Last(), Is.EqualTo(entries.Count));
+            Assert.That(entries, Has.Count.EqualTo(3));
+        });
+    }
+
+    [Test]
+    public void Walk_reports_the_final_count_excluding_dropped_binaries()
+    {
+        Write("code.cs", "text");
+        WriteBytes("blob.bin", new byte[] { 0x00, 0x01 });
+
+        var reports = new System.Collections.Concurrent.ConcurrentQueue<int>();
+        var entries = RepoTreeWalker.Walk(
+            _root, null, null, respectGitignore: false, excludeBinary: true,
+            onProgress: reports.Enqueue);
+
+        // The binary file is dropped, so the settled progress count is the one text
+        // file, never counting the excluded blob.
+        Assert.Multiple(() =>
+        {
+            Assert.That(reports.Last(), Is.EqualTo(1));
+            Assert.That(entries.Select(e => e.RelativePath), Is.EqualTo(new[] { "code.cs" }));
+        });
     }
 }

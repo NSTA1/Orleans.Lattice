@@ -14,12 +14,12 @@ public sealed class NoOpRepoContextVectorIngestorTests
         var ingestor = new NoOpRepoContextVectorIngestor();
         var changed = new[] { new RepoFileEntry("a.cs", "d", 1, "csharp") };
 
-        await ingestor.IngestAsync(
-            "repo", "/root", changed, TestContext.CurrentContext.CancellationToken);
+        var embedded = await ingestor.IngestAsync(
+            "repo", "/root", changed, onProgress: null, TestContext.CurrentContext.CancellationToken);
 
-        // A no-op that returns a completed task is the whole contract: reaching
-        // here without throwing proves the seam is inert.
-        Assert.Pass();
+        // A no-op that embeds nothing is the whole contract: it reports zero files
+        // embedded and reaching here without throwing proves the seam is inert.
+        Assert.That(embedded, Is.EqualTo(0));
     }
 
     [Test]
@@ -28,8 +28,12 @@ public sealed class NoOpRepoContextVectorIngestorTests
         var ingestor = new NoOpRepoContextVectorIngestor();
 
         var task = ingestor.IngestAsync(
-            "repo", "/root", Array.Empty<RepoFileEntry>(), CancellationToken.None);
+            "repo", "/root", Array.Empty<RepoFileEntry>(), onProgress: null, CancellationToken.None);
 
-        Assert.That(task.IsCompletedSuccessfully, Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(task.IsCompletedSuccessfully, Is.True);
+            Assert.That(task.Result, Is.EqualTo(0));
+        });
     }
 }

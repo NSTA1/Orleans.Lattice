@@ -63,4 +63,22 @@ internal static class RepoContextTypeAliases
 
     /// <summary>Alias for <see cref="RepoContextSnapshotRecord"/>.</summary>
     internal const string SnapshotRecord = "ol.rcx";
+
+    /// <summary>Alias for <see cref="RepoContext.RepoIndexStatus"/>.</summary>
+    internal const string RepoIndexStatus = "ol.rct";
+
+    /// <summary>Alias for <see cref="RepoContext.RepoIndexPhase"/>.</summary>
+    internal const string RepoIndexPhase = "ol.rch";
+
+    /// <summary>Alias for <see cref="RepoIndexJobRequest"/>.</summary>
+    internal const string RepoIndexJobRequest = "ol.rcq";
+
+    /// <summary>Alias for <see cref="RepoIndexProgress"/>.</summary>
+    internal const string RepoIndexProgress = "ol.rcg";
+
+    /// <summary>Alias for <see cref="RepoIndexJobState"/>.</summary>
+    internal const string RepoIndexJobState = "ol.rcj";
+
+    /// <summary>Alias for <see cref="RepoIndexProgressUpdate"/>.</summary>
+    internal const string RepoIndexProgressUpdate = "ol.rcu";
 }

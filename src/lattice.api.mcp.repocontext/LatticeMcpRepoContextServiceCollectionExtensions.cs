@@ -114,6 +114,21 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<RepoContextStore>();
 
+        // The background indexing runner runs each onboarding pass off the request
+        // thread, bound to the host lifetime, so a client disconnect never aborts an
+        // index. The reminder-anchored job grain is auto-discovered by Orleans from
+        // this library assembly; it requires the host to have configured a reminder
+        // service (the container host does).
+        services.TryAddSingleton<IRepoIndexRunner, RepoIndexRunner>();
+
+        // Resolve the credential every background indexing run assumes. The default
+        // resolves none, so a run carries whatever ambient credential the enqueue
+        // captured - correct for an in-process host with no access gate. A host that
+        // enforces a fail-closed gate (the container) registers its own authority
+        // BEFORE this call so its fixed local-agent credential wins, ensuring a
+        // reminder-driven resume writes under the same subject as the original pass.
+        services.TryAddSingleton<IRepoIndexRunAuthority, NullRepoIndexRunAuthority>();
+
         // Bind the per-repository TTL policy under the named-options convention
         // (IOptionsMonitor<RepoContextTtlOptions>.Get(repoId)) and validate every
         // instance at first resolve. The memory-writing tools consume these.

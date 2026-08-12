@@ -4,6 +4,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Orleans.Hosting;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Api.Mcp;
@@ -77,6 +78,8 @@ public static class RepoContextHostBuilder
 
         PrepareDataPaths(config);
 
+        ConfigureContainerLogging(builder.Logging);
+
         // The container's single application listener: the MCP port, bound on all
         // interfaces so it is reachable on the container network.
         builder.WebHost.UseUrls($"http://0.0.0.0:{config.McpPort}");
@@ -131,6 +134,14 @@ public static class RepoContextHostBuilder
         // value here and would otherwise hide the entire repocontext_* surface.
         builder.Services.AddSingleton<ILatticeApiMcpAuthorizer, AllowAllMcpAuthorizer>();
 
+        // The background indexing runner must write as the trusted local agent for
+        // BOTH a request-initiated pass and a reminder-driven resume. Register this
+        // authority BEFORE AddRepoContextTools so its TryAdd-registered null default
+        // is skipped and the runner stamps the local-agent credential on every run;
+        // otherwise a resume after restart would write as anonymous and the
+        // default-deny access gate would deny its structural writes.
+        builder.Services.AddSingleton<IRepoIndexRunAuthority, LocalTrustedRunAuthority>();
+
         // Enforce the workspace boundary: repositories added at runtime through
         // repocontext_add_repo must resolve under the mounted read-only workspace
         // root. Passing the root turns on workspace mode, which swaps the
@@ -183,6 +194,37 @@ public static class RepoContextHostBuilder
         }
 
         return app;
+    }
+
+    /// <summary>
+    /// Quietens the framework and runtime log categories that would otherwise
+    /// dominate the container's log stream, so the operator sees signal (indexing
+    /// lifecycle, warnings, and errors) rather than a line per HTTP request or per
+    /// slow grain turn. Our own <c>Orleans.Lattice.*</c> categories keep their
+    /// default Information level, so the walk, plan, and vectorisation progress
+    /// lines are untouched.
+    /// </summary>
+    /// <param name="logging">The host's logging builder.</param>
+    private static void ConfigureContainerLogging(ILoggingBuilder logging)
+    {
+        // Orleans warns when a grain turn runs longer than its turn-length
+        // threshold. Under CPU-bound embedding load the WAL commit turns routinely
+        // cross one second; that is expected back-pressure here, not a fault, so it
+        // is pure noise. Keep genuine scheduler errors.
+        logging.AddFilter("Orleans.Runtime.Scheduler", LogLevel.Error);
+
+        // ASP.NET Core logs "Request starting/finished" and "Executing endpoint"
+        // for every call, including the frequent Docker health probes. Keep
+        // warnings and above.
+        logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
+
+        // The health-check middleware logs each probe evaluation; keep warnings+.
+        logging.AddFilter("Microsoft.Extensions.Diagnostics.HealthChecks", LogLevel.Warning);
+
+        // The MCP server logs a pair of lines per tool call, which the repeated
+        // index-status poll turns into a wall of noise. Our handlers still log the
+        // meaningful lifecycle lines under their own categories.
+        logging.AddFilter("ModelContextProtocol", LogLevel.Warning);
     }
 
     /// <summary>

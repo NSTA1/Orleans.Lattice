@@ -14,7 +14,10 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests;
 public sealed class RepoContextToolGroupTests
 {
     private static readonly string[] ReadToolNames =
-        ["repocontext_health", "repocontext_recall", "repocontext_scan", "repocontext_list_topics", "repocontext_search"];
+        [
+            "repocontext_health", "repocontext_recall", "repocontext_scan",
+            "repocontext_list_topics", "repocontext_search", "repocontext_index_status",
+        ];
 
     private static readonly string[] WriteToolNames =
         ["repocontext_bootstrap", "repocontext_remember", "repocontext_update", "repocontext_forget"];
@@ -22,7 +25,8 @@ public sealed class RepoContextToolGroupTests
     private static readonly string[] WorkspaceReadToolNames =
         [
             "repocontext_health", "repocontext_recall", "repocontext_scan",
-            "repocontext_list_topics", "repocontext_search", "repocontext_list_repos",
+            "repocontext_list_topics", "repocontext_search", "repocontext_index_status",
+            "repocontext_list_repos",
         ];
 
     private static readonly string[] WorkspaceWriteToolNames =

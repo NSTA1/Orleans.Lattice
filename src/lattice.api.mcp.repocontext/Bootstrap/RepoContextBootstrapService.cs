@@ -36,6 +36,13 @@ internal sealed class RepoContextBootstrapService
 {
     private const int WriteChunkSize = 256;
 
+    /// <summary>
+    /// How often the concurrent walk-progress pump samples and reports the running
+    /// hashed-file count while the (synchronous) walk is in flight. Short enough to
+    /// feel live, long enough that a fast walk emits only a handful of reports.
+    /// </summary>
+    private static readonly TimeSpan WalkProgressInterval = TimeSpan.FromMilliseconds(500);
+
     private readonly IGrainFactory _grainFactory;
     private readonly Serializer<FileNode> _fileNodeSerializer;
     private readonly Serializer<RepoNode> _repoNodeSerializer;
@@ -89,8 +96,25 @@ internal sealed class RepoContextBootstrapService
     /// <returns>A summary of files scanned, added, updated, removed, and unchanged.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="request"/> is null.</exception>
     /// <exception cref="ArgumentException">The request omits a repository root or id.</exception>
+    public Task<RepoContextBootstrapResult> RunAsync(
+        RepoContextBootstrapRequest request,
+        CancellationToken cancellationToken = default)
+        => RunAsync(request, progress: null, cancellationToken);
+
+    /// <summary>
+    /// Runs one idempotent ingestion pass, reporting incremental progress through
+    /// the supplied sink, and returns a summary of what changed.
+    /// </summary>
+    /// <param name="request">The ingestion inputs. Must not be <see langword="null"/>.</param>
+    /// <param name="progress">An optional sink that receives phase and counter
+    /// deltas as the run proceeds; <see langword="null"/> reports nothing.</param>
+    /// <param name="cancellationToken">Cancels the run.</param>
+    /// <returns>A summary of files scanned, added, updated, removed, and unchanged.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="request"/> is null.</exception>
+    /// <exception cref="ArgumentException">The request omits a repository root or id.</exception>
     public async Task<RepoContextBootstrapResult> RunAsync(
         RepoContextBootstrapRequest request,
+        IRepoIndexProgressSink? progress,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -107,50 +131,215 @@ internal sealed class RepoContextBootstrapService
         var stopwatch = Stopwatch.StartNew();
         var repoRoot = _workspaceGuard.Resolve(request.RepoRoot);
         var repoId = request.RepoId;
+        var phase = RepoIndexPhase.Walking;
 
-        var scanned = RepoTreeWalker.Walk(
-            repoRoot, request.IncludeGlobs, request.ExcludeGlobs, cancellationToken);
-
-        var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.Structural);
-        var storedDigests = await ReadStoredDigestsAsync(tree, repoId, cancellationToken)
-            .ConfigureAwait(false);
-
-        var plan = RepoContextBootstrapPlan.Compute(storedDigests, scanned);
-
-        if (!plan.IsNoOp)
+        try
         {
-            await ApplyPlanAsync(tree, repoId, plan, cancellationToken).ConfigureAwait(false);
-
-            var changed = new List<RepoFileEntry>(plan.Added.Count + plan.Updated.Count);
-            changed.AddRange(plan.Added);
-            changed.AddRange(plan.Updated);
-            await _vectorIngestor.IngestAsync(repoId, repoRoot, changed, cancellationToken)
+            await ReportAsync(progress, new RepoIndexProgressUpdate { Phase = RepoIndexPhase.Walking }, cancellationToken)
                 .ConfigureAwait(false);
+
+            // The walk is synchronous, so a run with a progress sink drives a
+            // concurrent pump that samples the running hashed-file count and reports
+            // it. The walker only writes the latest count (a single lock-free
+            // volatile write per included file); the pump owns every grain report,
+            // so FilesScanned climbs during the walk instead of staying frozen at
+            // zero, and reports never reorder or pile up.
+            IReadOnlyList<RepoFileEntry> scanned;
+            if (progress is null)
+            {
+                scanned = RepoTreeWalker.Walk(
+                    repoRoot, request.IncludeGlobs, request.ExcludeGlobs,
+                    request.RespectGitignore, request.ExcludeBinary, onProgress: null, cancellationToken);
+            }
+            else
+            {
+                var hashedSoFar = 0;
+                using var walkComplete = new CancellationTokenSource();
+                var walkPump = PumpWalkProgressAsync(
+                    progress, () => Volatile.Read(ref hashedSoFar), walkComplete.Token, cancellationToken);
+                try
+                {
+                    scanned = RepoTreeWalker.Walk(
+                        repoRoot, request.IncludeGlobs, request.ExcludeGlobs,
+                        request.RespectGitignore, request.ExcludeBinary,
+                        done => Volatile.Write(ref hashedSoFar, done), cancellationToken);
+                }
+                finally
+                {
+                    walkComplete.Cancel();
+                    await walkPump.ConfigureAwait(false);
+                }
+            }
+
+            _logger.LogInformation(
+                "Repo {RepoId}: walk complete - {Scanned} files in {Elapsed} ms.",
+                repoId, scanned.Count, stopwatch.ElapsedMilliseconds);
+
+            phase = RepoIndexPhase.Reconciling;
+            await ReportAsync(
+                progress,
+                new RepoIndexProgressUpdate { Phase = RepoIndexPhase.Reconciling, FilesScanned = scanned.Count },
+                cancellationToken).ConfigureAwait(false);
+
+            var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.Structural);
+            var storedDigests = await ReadStoredDigestsAsync(tree, repoId, cancellationToken)
+                .ConfigureAwait(false);
+
+            var plan = RepoContextBootstrapPlan.Compute(storedDigests, scanned);
+
+            if (!plan.IsNoOp)
+            {
+                phase = RepoIndexPhase.Applying;
+                var chunksTotal = ComputeChunkCount(plan);
+                _logger.LogInformation(
+                    "Repo {RepoId}: plan - {Added} added, {Updated} updated, {Removed} removed, {Unchanged} unchanged; {Chunks} chunk(s) to commit.",
+                    repoId, plan.Added.Count, plan.Updated.Count, plan.RemovedPaths.Count, plan.Unchanged.Count, chunksTotal);
+                await ReportAsync(
+                    progress,
+                    new RepoIndexProgressUpdate
+                    {
+                        Phase = RepoIndexPhase.Applying,
+                        FilesAdded = plan.Added.Count,
+                        FilesUpdated = plan.Updated.Count,
+                        FilesRemoved = plan.RemovedPaths.Count,
+                        FilesUnchanged = plan.Unchanged.Count,
+                        ChunksTotal = chunksTotal,
+                        ChunksCommitted = 0,
+                    },
+                    cancellationToken).ConfigureAwait(false);
+
+                await ApplyPlanAsync(tree, repoId, plan, progress, cancellationToken).ConfigureAwait(false);
+
+                phase = RepoIndexPhase.Vectorising;
+                var changed = new List<RepoFileEntry>(plan.Added.Count + plan.Updated.Count);
+                changed.AddRange(plan.Added);
+                changed.AddRange(plan.Updated);
+                await ReportAsync(progress, new RepoIndexProgressUpdate { Phase = RepoIndexPhase.Vectorising }, cancellationToken)
+                    .ConfigureAwait(false);
+                _logger.LogInformation("Repo {RepoId}: vectorising {Count} changed file(s).", repoId, changed.Count);
+                var embedded = await _vectorIngestor.IngestAsync(
+                    repoId,
+                    repoRoot,
+                    changed,
+                    (count, ct) => ReportAsync(
+                        progress, new RepoIndexProgressUpdate { FilesEmbedded = count }, ct),
+                    cancellationToken).ConfigureAwait(false);
+                await ReportAsync(progress, new RepoIndexProgressUpdate { FilesEmbedded = embedded }, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                await ReportAsync(
+                    progress,
+                    new RepoIndexProgressUpdate { FilesUnchanged = plan.Unchanged.Count },
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            stopwatch.Stop();
+
+            _logger.LogInformation(
+                "Bootstrap of repository {RepoId} scanned {Scanned} files: {Added} added, {Updated} updated, {Removed} removed, {Unchanged} unchanged in {Elapsed} ms.",
+                repoId,
+                scanned.Count,
+                plan.Added.Count,
+                plan.Updated.Count,
+                plan.RemovedPaths.Count,
+                plan.Unchanged.Count,
+                stopwatch.ElapsedMilliseconds);
+
+            return new RepoContextBootstrapResult
+            {
+                RepoId = repoId,
+                FilesScanned = scanned.Count,
+                FilesAdded = plan.Added.Count,
+                FilesUpdated = plan.Updated.Count,
+                FilesRemoved = plan.RemovedPaths.Count,
+                FilesUnchanged = plan.Unchanged.Count,
+                SymbolsCaptured = 0,
+                ElapsedMilliseconds = stopwatch.ElapsedMilliseconds,
+            };
+        }
+        catch (OperationCanceledException)
+        {
+            stopwatch.Stop();
+            _logger.LogInformation(
+                "Repo {RepoId}: indexing cancelled during the {Phase} phase after {Elapsed} ms; durable structural writes already committed are preserved and a re-run resumes from the first uncommitted chunk.",
+                repoId, phase, stopwatch.ElapsedMilliseconds);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// The number of atomic write chunks <see cref="ApplyPlanAsync"/> will commit
+    /// for a plan: one per <see cref="WriteChunkSize"/> upserts, where the upserts
+    /// are the repository root marker plus every added and updated file. Deletes
+    /// ride with the first chunk (the marker guarantees at least one), so they add
+    /// no chunk of their own.
+    /// </summary>
+    /// <param name="plan">The reconciliation plan.</param>
+    /// <returns>The total chunk count.</returns>
+    private static int ComputeChunkCount(RepoContextBootstrapPlan plan)
+    {
+        var upsertCount = 1 + plan.Added.Count + plan.Updated.Count;
+        return (upsertCount + WriteChunkSize - 1) / WriteChunkSize;
+    }
+
+    private static ValueTask ReportAsync(
+        IRepoIndexProgressSink? sink, RepoIndexProgressUpdate update, CancellationToken cancellationToken)
+        => sink is null ? ValueTask.CompletedTask : sink.ReportAsync(update, cancellationToken);
+
+    /// <summary>
+    /// Samples <paramref name="currentCount"/> on a fixed cadence while the walk is
+    /// in flight and reports each changed value as a <c>FilesScanned</c> delta, then
+    /// emits one final authoritative report once <paramref name="walkComplete"/> is
+    /// signalled. Running the reporting on this single pump (rather than from inside
+    /// the walker's parallel loop) keeps every grain report ordered and coalesced,
+    /// so a fast walk emits only a handful of reports and the count never goes
+    /// backwards.
+    /// </summary>
+    private static async Task PumpWalkProgressAsync(
+        IRepoIndexProgressSink progress,
+        Func<int> currentCount,
+        CancellationToken walkComplete,
+        CancellationToken cancellationToken)
+    {
+        var lastReported = -1;
+        try
+        {
+            while (!walkComplete.IsCancellationRequested)
+            {
+                await Task.Delay(WalkProgressInterval, walkComplete).ConfigureAwait(false);
+                var current = currentCount();
+                if (current != lastReported)
+                {
+                    lastReported = current;
+                    await progress.ReportAsync(
+                        new RepoIndexProgressUpdate { FilesScanned = current }, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (walkComplete.IsCancellationRequested)
+        {
+            // The walk finished and signalled completion; fall through to the final
+            // report below rather than surfacing the sampling delay's cancellation.
         }
 
-        stopwatch.Stop();
-
-        _logger.LogInformation(
-            "Bootstrap of repository {RepoId} scanned {Scanned} files: {Added} added, {Updated} updated, {Removed} removed, {Unchanged} unchanged in {Elapsed} ms.",
-            repoId,
-            scanned.Count,
-            plan.Added.Count,
-            plan.Updated.Count,
-            plan.RemovedPaths.Count,
-            plan.Unchanged.Count,
-            stopwatch.ElapsedMilliseconds);
-
-        return new RepoContextBootstrapResult
+        var final = currentCount();
+        if (final != lastReported)
         {
-            RepoId = repoId,
-            FilesScanned = scanned.Count,
-            FilesAdded = plan.Added.Count,
-            FilesUpdated = plan.Updated.Count,
-            FilesRemoved = plan.RemovedPaths.Count,
-            FilesUnchanged = plan.Unchanged.Count,
-            SymbolsCaptured = 0,
-            ElapsedMilliseconds = stopwatch.ElapsedMilliseconds,
-        };
+            try
+            {
+                await progress.ReportAsync(
+                    new RepoIndexProgressUpdate { FilesScanned = final }, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // The run itself was cancelled (host shutdown or removal); the walk's
+                // partial count is not worth reporting as the run is unwinding.
+            }
+        }
     }
 
     private async Task<Dictionary<string, string>> ReadStoredDigestsAsync(
@@ -208,6 +397,7 @@ internal sealed class RepoContextBootstrapService
         ILattice tree,
         string repoId,
         RepoContextBootstrapPlan plan,
+        IRepoIndexProgressSink? progress,
         CancellationToken cancellationToken)
     {
         var ingestToken = DateTimeOffset.UtcNow.ToString("O");
@@ -260,12 +450,19 @@ internal sealed class RepoContextBootstrapService
             await tree.SetManyAtomicAsync(chunk, chunkDeletes, operationId, cancellationToken)
                 .ConfigureAwait(false);
             chunkIndex++;
+            await ReportAsync(
+                progress, new RepoIndexProgressUpdate { ChunksCommitted = chunkIndex }, cancellationToken)
+                .ConfigureAwait(false);
         }
 
         if (remainingDeletes.Count != 0)
         {
             var operationId = BuildOperationId(repoId, chunkIndex, [], remainingDeletes);
             await tree.SetManyAtomicAsync([], remainingDeletes, operationId, cancellationToken)
+                .ConfigureAwait(false);
+            chunkIndex++;
+            await ReportAsync(
+                progress, new RepoIndexProgressUpdate { ChunksCommitted = chunkIndex }, cancellationToken)
                 .ConfigureAwait(false);
         }
     }

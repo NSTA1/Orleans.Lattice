@@ -52,7 +52,7 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
     /// tools replace the single-repository onboarding tool.</param>
     public RepoContextToolGroup(bool enableWrites = false, bool workspaceMode = false)
     {
-        var capacity = 5
+        var capacity = 6
             + (workspaceMode ? 1 : 0)
             + (enableWrites ? (workspaceMode ? 5 : 4) : 0);
         var tools = new List<McpServerTool>(capacity)
@@ -77,6 +77,7 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
             BuildScanTool(),
             BuildListTopicsTool(),
             BuildSearchTool(),
+            BuildIndexStatusTool(),
         };
 
         if (workspaceMode)
@@ -180,6 +181,25 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                 UseStructuredContent = true,
             });
 
+    private static McpServerTool BuildIndexStatusTool()
+        => McpServerTool.Create(
+            RepoContextToolHandlers.IndexStatusAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "repocontext_index_status",
+                Title = "Inspect a repository indexing job",
+                Description =
+                    "Reports the progress of a repository's asynchronous indexing job: its status (none, "
+                    + "running, completed, or failed), the phase it is executing (walking, reconciling, "
+                    + "applying, or vectorising), the running file and chunk counters, the attempt number, and "
+                    + "timing. Because onboarding runs in the background and survives a client disconnect or a "
+                    + "host restart, poll this tool with the repository id to follow a long onboarding pass to "
+                    + "completion. A repository that was never onboarded reports status 'none'. Read-only.",
+                ReadOnly = true,
+                Destructive = false,
+                UseStructuredContent = true,
+            });
+
     private static McpServerTool BuildBootstrapTool()
         => McpServerTool.Create(
             RepoContextToolHandlers.BootstrapAsync,
@@ -194,9 +214,11 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     + "'repoId' keyspace, and reconciles the scan against the stored records. Idempotent and "
                     + "resumable: re-running on an unchanged repository is a no-op, a changed repository "
                     + "updates only changed files and prunes deleted ones, and an interrupted run resumes "
-                    + "without duplication. Returns a summary of files scanned, added, updated, removed, and "
-                    + "unchanged, symbols captured, and elapsed time. Fails closed: offered only to a caller "
-                    + "who cleared the authorization gate and for whom the host opted writes in. Destructive.",
+                    + "without duplication. Starts asynchronously and returns at once with the job's initial "
+                    + "progress; the walk continues in the background and survives a client disconnect or a "
+                    + "host restart, so poll 'repocontext_index_status' with the same 'repoId' to follow it to "
+                    + "completion. Fails closed: offered only to a caller who cleared the authorization gate "
+                    + "and for whom the host opted writes in. Destructive.",
                 ReadOnly = false,
                 Destructive = true,
                 UseStructuredContent = true,
@@ -227,16 +249,18 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                 Name = "repocontext_add_repo",
                 Title = "Add a repository under the workspace",
                 Description =
-                    "Registers a repository under the mounted read-only workspace and ingests it in one call, "
+                    "Registers a repository under the mounted read-only workspace and starts indexing it, "
                     + "so it becomes queryable through recall, scan, and search. This is the workspace-mode "
                     + "onboarding tool - prefer it over any separate bootstrap step. Supply 'path' pointing at a "
                     + "repository under the workspace root; a path that resolves outside the workspace (via '..' "
                     + "or a symbolic link) is rejected. Omit 'repoId' to derive it from the final path segment. "
                     + "Walks the tree, records a structural node and content digest per file, and reconciles the "
                     + "scan against the store: idempotent and resumable, so re-adding an unchanged repository is "
-                    + "a no-op and a changed one updates only what changed. Returns a summary of files scanned, "
-                    + "added, updated, removed, and unchanged. Fails closed: offered only to a caller who cleared "
-                    + "the authorization gate and for whom the host opted writes in. Destructive.",
+                    + "a no-op and a changed one updates only what changed. Starts asynchronously and returns at "
+                    + "once with the job's initial progress; the walk continues in the background and survives a "
+                    + "client disconnect or a host restart, so poll 'repocontext_index_status' with the "
+                    + "repository id to follow it to completion. Fails closed: offered only to a caller who "
+                    + "cleared the authorization gate and for whom the host opted writes in. Destructive.",
                 ReadOnly = false,
                 Destructive = true,
                 UseStructuredContent = true,

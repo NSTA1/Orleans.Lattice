@@ -12,9 +12,10 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 internal sealed class NoOpRepoContextVectorIngestor : IRepoContextVectorIngestor
 {
     /// <inheritdoc />
-    public ValueTask IngestAsync(
+    public ValueTask<int> IngestAsync(
         string repoId,
         string repoRoot,
         IReadOnlyList<RepoFileEntry> changedFiles,
-        CancellationToken cancellationToken) => ValueTask.CompletedTask;
+        Func<int, CancellationToken, ValueTask>? onProgress,
+        CancellationToken cancellationToken) => ValueTask.FromResult(0);
 }

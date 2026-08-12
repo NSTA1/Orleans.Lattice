@@ -141,12 +141,15 @@ public sealed class RepoContextWorkspaceToolsTests
 
         var result = await client.CallToolAsync(
             AddRepo, new Dictionary<string, object?> { ["path"] = repoRoot }, cancellationToken: Ct);
-        var json = result.RequireStructuredContent();
+        var accepted = result.RequireStructuredContent();
+        Assert.That(accepted.GetProperty("repoId").GetString(), Is.EqualTo("my-repo"),
+            "The repo id is derived from the final path segment when omitted.");
+
+        // Onboarding starts asynchronously; await the job's terminal state.
+        var json = await client.WaitForIndexAsync("my-repo", Ct);
 
         Assert.Multiple(() =>
         {
-            Assert.That(json.GetProperty("repoId").GetString(), Is.EqualTo("my-repo"),
-                "The repo id is derived from the final path segment when omitted.");
             Assert.That(json.GetProperty("filesScanned").GetInt32(), Is.EqualTo(2));
             Assert.That(json.GetProperty("filesAdded").GetInt32(), Is.EqualTo(2));
         });
@@ -167,6 +170,9 @@ public sealed class RepoContextWorkspaceToolsTests
 
         await client.CallToolAsync(AddRepo, new Dictionary<string, object?> { ["path"] = alpha }, cancellationToken: Ct);
         await client.CallToolAsync(AddRepo, new Dictionary<string, object?> { ["path"] = beta }, cancellationToken: Ct);
+        // Both onboarding jobs run asynchronously; await each so the file counts are landed.
+        await client.WaitForIndexAsync("alpha", Ct);
+        await client.WaitForIndexAsync("beta", Ct);
 
         var list = (await client.CallToolAsync(ListRepos, new Dictionary<string, object?>(), cancellationToken: Ct))
             .RequireStructuredContent();
@@ -194,7 +200,8 @@ public sealed class RepoContextWorkspaceToolsTests
         await using var client = await harness.ConnectAsync(Ct);
 
         await client.CallToolAsync(AddRepo, new Dictionary<string, object?> { ["path"] = repoRoot }, cancellationToken: Ct);
-
+        // Await the onboarding job so every record is committed before removal.
+        await client.WaitForIndexAsync("gone", Ct);
         var removal = (await client.CallToolAsync(
                 RemoveRepo, new Dictionary<string, object?> { ["repoId"] = "gone" }, cancellationToken: Ct))
             .RequireStructuredContent();
@@ -212,6 +219,43 @@ public sealed class RepoContextWorkspaceToolsTests
 
         var tree = harness.GrainFactory.GetGrain<ILattice>(RepoContextTrees.Structural);
         Assert.That(tree.GetAsync(RepoContextKeys.Repo("gone"), Ct).Result, Is.Null);
+    }
+
+    [Test]
+    public async Task Remove_repo_while_indexing_is_in_flight_succeeds_without_a_version_conflict()
+    {
+        // Regression: removing a repository must first cancel and drain the
+        // in-flight indexing run before it deletes any record. Deleting while the
+        // indexer is still writing the same structural leaves raced the two writers
+        // into an Orleans state version conflict, and the pre-delete throw meant the
+        // resume reminder was never cleared, so the job re-indexed forever.
+        var workspace = NewWorkspace();
+        var files = Enumerable.Range(0, 64)
+            .Select(i => ($"src/File{i:D3}.cs", $"// file {i}"))
+            .ToArray();
+        var repoRoot = WriteRepo(workspace, "inflight", files);
+
+        await using var harness = await StartAsync(workspace, RepoContextMcpAuthPosture.Writer);
+        await using var client = await harness.ConnectAsync(Ct);
+
+        // add_repo returns immediately with the job running; do not wait for it -
+        // remove it straight away so the removal races the live run.
+        await client.CallToolAsync(AddRepo, new Dictionary<string, object?> { ["path"] = repoRoot }, cancellationToken: Ct);
+
+        var removal = (await client.CallToolAsync(
+                RemoveRepo, new Dictionary<string, object?> { ["repoId"] = "inflight" }, cancellationToken: Ct))
+            .RequireStructuredContent();
+
+        Assert.That(removal.GetProperty("repoId").GetString(), Is.EqualTo("inflight"));
+
+        // The repository is gone from the list and its root marker is deleted, and
+        // no orphaned run resurrects it.
+        var list = (await client.CallToolAsync(ListRepos, new Dictionary<string, object?>(), cancellationToken: Ct))
+            .RequireStructuredContent();
+        Assert.That(list.GetProperty("count").GetInt32(), Is.EqualTo(0));
+
+        var tree = harness.GrainFactory.GetGrain<ILattice>(RepoContextTrees.Structural);
+        Assert.That(await tree.GetAsync(RepoContextKeys.Repo("inflight"), Ct), Is.Null);
     }
 
     [Test]

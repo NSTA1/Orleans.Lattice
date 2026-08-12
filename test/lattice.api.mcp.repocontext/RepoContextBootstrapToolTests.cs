@@ -67,8 +67,11 @@ public sealed class RepoContextBootstrapToolTests
 
     private async Task<JsonElement> BootstrapAsync(McpClient client, string root)
     {
-        var result = await client.CallToolAsync(ToolName, Args(root), cancellationToken: Ct);
-        return result.RequireStructuredContent();
+        var start = await client.CallToolAsync(ToolName, Args(root), cancellationToken: Ct);
+        // Onboarding starts asynchronously: the call returns the running job's
+        // acceptance snapshot, so await the job's terminal state to observe counts.
+        start.RequireStructuredContent();
+        return await client.WaitForIndexAsync(RepoId, Ct);
     }
 
     // -- Authorization gating --------------------------------------------------
@@ -142,7 +145,7 @@ public sealed class RepoContextBootstrapToolTests
             Assert.That(json.GetProperty("filesUpdated").GetInt32(), Is.EqualTo(0));
             Assert.That(json.GetProperty("filesRemoved").GetInt32(), Is.EqualTo(0));
             Assert.That(json.GetProperty("filesUnchanged").GetInt32(), Is.EqualTo(0));
-            Assert.That(json.GetProperty("symbolsCaptured").GetInt32(), Is.EqualTo(0));
+            Assert.That(json.GetProperty("status").GetString(), Is.EqualTo("Completed"));
         });
 
         var tree = harness.GrainFactory.GetGrain<ILattice>(RepoContextTrees.Structural);
@@ -254,10 +257,19 @@ public sealed class RepoContextBootstrapToolTests
             Ct);
         await using var client = await harness.ConnectAsync(Ct);
 
-        // First run: structural writes commit, then the seam throws, so the tool
-        // reports an error - the "interrupted" run.
-        var interrupted = await client.CallToolAsync(ToolName, Args(root), cancellationToken: Ct);
-        Assert.That(interrupted.IsError, Is.True, "The seam fault surfaces as a tool error.");
+        // First run: the job starts asynchronously and is accepted. The background
+        // run commits the structural writes, then the seam throws, so the job
+        // settles in Failed - the "interrupted" run.
+        var accepted = await client.CallToolAsync(ToolName, Args(root), cancellationToken: Ct);
+        Assert.That(accepted.IsError, Is.Not.True, "Starting the job is accepted.");
+        var failed = await client.WaitForIndexAsync(RepoId, Ct);
+        Assert.Multiple(() =>
+        {
+            Assert.That(failed.GetProperty("status").GetString(), Is.EqualTo("Failed"),
+                "The seam fault settles the job in Failed.");
+            Assert.That(failed.GetProperty("error").GetString(), Is.Not.Null.And.Not.Empty,
+                "The failure reason is recorded on the snapshot.");
+        });
 
         // The structural records committed before the fault, proving the writes are
         // durable at the point of interruption.
@@ -279,6 +291,32 @@ public sealed class RepoContextBootstrapToolTests
     }
 
     /// <summary>
+    /// The status tool reports <c>None</c> for a repository that was never
+    /// onboarded, so a caller can distinguish "no job" from a running or settled
+    /// one without the tool erroring.
+    /// </summary>
+    [Test]
+    public async Task Index_status_reports_none_for_an_unknown_repo()
+    {
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+        await using var client = await harness.ConnectAsync(Ct);
+
+        var result = await client.CallToolAsync(
+            "repocontext_index_status",
+            new Dictionary<string, object?> { ["repoId"] = "never-onboarded" },
+            cancellationToken: Ct);
+        var status = result.RequireStructuredContent();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(status.GetProperty("status").GetString(), Is.EqualTo("None"));
+            Assert.That(status.GetProperty("repoId").GetString(), Is.EqualTo("never-onboarded"));
+            Assert.That(status.GetProperty("attempt").GetInt32(), Is.EqualTo(0));
+        });
+    }
+
+    /// <summary>
     /// A test vectorisation seam that throws on its first call (to simulate a crash
     /// mid-run) and is inert thereafter, counting invocations.
     /// </summary>
@@ -288,10 +326,11 @@ public sealed class RepoContextBootstrapToolTests
 
         public int Invocations => _invocations;
 
-        public ValueTask IngestAsync(
+        public ValueTask<int> IngestAsync(
             string repoId,
             string repoRoot,
             IReadOnlyList<RepoFileEntry> changedFiles,
+            Func<int, CancellationToken, ValueTask>? onProgress,
             CancellationToken cancellationToken)
         {
             var count = Interlocked.Increment(ref _invocations);
@@ -300,7 +339,7 @@ public sealed class RepoContextBootstrapToolTests
                 throw new InvalidOperationException("Simulated interruption during vectorisation.");
             }
 
-            return ValueTask.CompletedTask;
+            return ValueTask.FromResult(0);
         }
     }
 }

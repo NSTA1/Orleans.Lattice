@@ -48,15 +48,21 @@ internal static class RepoContextToolHandlers
     public static RepoContextHealthResult Health() => Healthy;
 
     /// <summary>
-    /// Ingests a repository working tree into the context store: walks the tree,
-    /// records a structural node and content digest per file, and reconciles the
-    /// scan against the stored records idempotently (unchanged files are skipped,
-    /// changed files updated, and deleted files pruned). Reaching this handler
-    /// means the caller cleared the fail-closed authorization gate and the host
-    /// opted writes in.
+    /// Starts (or re-attaches to) an asynchronous indexing job for a repository:
+    /// walks the tree, records a structural node and content digest per file, and
+    /// reconciles the scan against the stored records idempotently (unchanged files
+    /// are skipped, changed files updated, and deleted files pruned). Reaching this
+    /// handler means the caller cleared the fail-closed authorization gate and the
+    /// host opted writes in.
+    /// <para>
+    /// The call returns as soon as the job is durably recorded and handed to the
+    /// background runner - it does not wait for the walk to finish - so a dropped
+    /// MCP stream can never abort the index. Poll <c>repocontext_index_status</c>
+    /// with the returned <c>repoId</c> to follow the run to completion.
+    /// </para>
     /// </summary>
-    /// <param name="context">The MCP request context, used to resolve the
-    /// bootstrap coordinator from the request service provider.</param>
+    /// <param name="context">The MCP request context, used to resolve the workspace
+    /// guard and the job grain from the request service provider.</param>
     /// <param name="repoRoot">The absolute path to the repository working tree the
     /// server should walk.</param>
     /// <param name="repoId">The stable repository identity records are filed under.</param>
@@ -64,11 +70,13 @@ internal static class RepoContextToolHandlers
     /// ingested only if it matches at least one.</param>
     /// <param name="excludeGlobs">Optional exclude globs; a match removes a file
     /// from the walk even when it also matched an include.</param>
-    /// <param name="cancellationToken">Cancels the ingestion run.</param>
-    /// <returns>A summary of files scanned, added, updated, removed, and unchanged.</returns>
-    /// <exception cref="McpException">A required argument is missing or the
-    /// repository root does not exist (caller errors).</exception>
-    public static async Task<RepoContextBootstrapResult> BootstrapAsync(
+    /// <param name="respectGitignore">When <see langword="true"/> (the default), the
+    /// tree's <c>.gitignore</c> files are honoured so ignored files and directories
+    /// are not ingested.</param>
+    /// <returns>The progress snapshot at acceptance, with the job running.</returns>
+    /// <exception cref="McpException">A required argument is missing, the repository
+    /// root resolves outside the workspace, or it does not exist (caller errors).</exception>
+    public static Task<RepoIndexProgress> BootstrapAsync(
         RequestContext<CallToolRequestParams> context,
         [Description("Absolute path to the repository working tree the server should walk and ingest.")]
         string repoRoot,
@@ -78,7 +86,10 @@ internal static class RepoContextToolHandlers
         IReadOnlyList<string>? includeGlobs = null,
         [Description("Optional exclude globs; a match removes a file even when it also matched an include. The '.git' directory is always skipped.")]
         IReadOnlyList<string>? excludeGlobs = null,
-        CancellationToken cancellationToken = default)
+        [Description("When true (the default), the tree's .gitignore files are honoured so ignored files and directories are not ingested. Set false to ingest every file regardless of ignore rules.")]
+        bool respectGitignore = true,
+        [Description("When true (the default), files that look binary (a NUL byte in their leading bytes) are dropped so compiled artefacts, images, and other blobs are not ingested. Set false to ingest binary files too.")]
+        bool excludeBinary = true)
     {
         if (string.IsNullOrWhiteSpace(repoRoot))
         {
@@ -90,31 +101,7 @@ internal static class RepoContextToolHandlers
             throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
         }
 
-        var services = context.Services
-            ?? throw new InvalidOperationException(
-                "The MCP request has no service provider; the bootstrap tool cannot resolve its coordinator.");
-        var coordinator = services.GetRequiredService<RepoContextBootstrapService>();
-
-        var request = new RepoContextBootstrapRequest
-        {
-            RepoRoot = repoRoot,
-            RepoId = repoId,
-            IncludeGlobs = includeGlobs,
-            ExcludeGlobs = excludeGlobs,
-        };
-
-        try
-        {
-            return await coordinator.RunAsync(request, cancellationToken).ConfigureAwait(false);
-        }
-        catch (RepoContextWorkspaceViolationException ex)
-        {
-            throw new McpException(ex.Message);
-        }
-        catch (DirectoryNotFoundException ex)
-        {
-            throw new McpException(ex.Message);
-        }
+        return StartIndexAsync(context, repoRoot, repoId.Trim(), includeGlobs, excludeGlobs, respectGitignore, excludeBinary);
     }
 
     /// <summary>
@@ -370,17 +357,24 @@ internal static class RepoContextToolHandlers
     }
 
     /// <summary>
-    /// Registers a repository under the mounted workspace and ingests it in one
-    /// call: it resolves the requested path against the workspace boundary, walks
-    /// the tree, and reconciles the scan against the store idempotently. This is
-    /// the workspace-mode replacement for <c>repocontext_bootstrap</c> - the
+    /// Registers a repository under the mounted workspace and starts an
+    /// asynchronous indexing job for it: it resolves the requested path against the
+    /// workspace boundary, then hands a durable job to the background runner that
+    /// walks the tree and reconciles the scan against the store idempotently. This
+    /// is the workspace-mode replacement for <c>repocontext_bootstrap</c> - the
     /// client mounts a broad parent read-only once and adds individual
     /// repositories beneath it on demand, rather than baking a single repository
     /// path into the container's configuration. Reaching this handler means the
     /// caller cleared the fail-closed authorization gate and the host opted writes
     /// in.
+    /// <para>
+    /// The call returns as soon as the job is durably recorded - it does not wait
+    /// for the walk - so a dropped MCP stream cannot abort the index. Poll
+    /// <c>repocontext_index_status</c> with the repository id to follow the run.
+    /// </para>
     /// </summary>
-    /// <param name="context">The MCP request context, used to resolve the bootstrap coordinator.</param>
+    /// <param name="context">The MCP request context, used to resolve the workspace
+    /// guard and the job grain.</param>
     /// <param name="path">The path to the repository under the mounted workspace.</param>
     /// <param name="repoId">The repository identity to file records under, or
     /// <see langword="null"/> to derive it from the final path segment.</param>
@@ -388,11 +382,13 @@ internal static class RepoContextToolHandlers
     /// ingested only if it matches at least one.</param>
     /// <param name="excludeGlobs">Optional exclude globs; a match removes a file
     /// even when it also matched an include.</param>
-    /// <param name="cancellationToken">Cancels the ingestion run.</param>
-    /// <returns>A summary of files scanned, added, updated, removed, and unchanged.</returns>
+    /// <param name="respectGitignore">When <see langword="true"/> (the default), the
+    /// tree's <c>.gitignore</c> files are honoured so ignored files and directories
+    /// are not ingested.</param>
+    /// <returns>The progress snapshot at acceptance, with the job running.</returns>
     /// <exception cref="McpException">The path is missing, resolves outside the
     /// workspace, does not exist, or yields no repository id (caller errors).</exception>
-    public static async Task<RepoContextBootstrapResult> AddRepoAsync(
+    public static Task<RepoIndexProgress> AddRepoAsync(
         RequestContext<CallToolRequestParams> context,
         [Description("Path to the repository to register, under the mounted workspace root (for example '/workspace/my-repo'). Resolved against the workspace boundary; a path outside it is rejected.")]
         string path,
@@ -402,7 +398,10 @@ internal static class RepoContextToolHandlers
         IReadOnlyList<string>? includeGlobs = null,
         [Description("Optional exclude globs; a match removes a file even when it also matched an include. The '.git' directory is always skipped.")]
         IReadOnlyList<string>? excludeGlobs = null,
-        CancellationToken cancellationToken = default)
+        [Description("When true (the default), the tree's .gitignore files are honoured so ignored files and directories are not ingested. Set false to ingest every file regardless of ignore rules.")]
+        bool respectGitignore = true,
+        [Description("When true (the default), files that look binary (a NUL byte in their leading bytes) are dropped so compiled artefacts, images, and other blobs are not ingested. Set false to ingest binary files too.")]
+        bool excludeBinary = true)
     {
         if (string.IsNullOrWhiteSpace(path))
         {
@@ -416,31 +415,7 @@ internal static class RepoContextToolHandlers
                 "A repository id could not be derived from the path; supply the 'repoId' parameter explicitly.");
         }
 
-        var services = context.Services
-            ?? throw new InvalidOperationException(
-                "The MCP request has no service provider; the add-repo tool cannot resolve its coordinator.");
-        var coordinator = services.GetRequiredService<RepoContextBootstrapService>();
-
-        var request = new RepoContextBootstrapRequest
-        {
-            RepoRoot = path,
-            RepoId = resolvedId,
-            IncludeGlobs = includeGlobs,
-            ExcludeGlobs = excludeGlobs,
-        };
-
-        try
-        {
-            return await coordinator.RunAsync(request, cancellationToken).ConfigureAwait(false);
-        }
-        catch (RepoContextWorkspaceViolationException ex)
-        {
-            throw new McpException(ex.Message);
-        }
-        catch (DirectoryNotFoundException ex)
-        {
-            throw new McpException(ex.Message);
-        }
+        return StartIndexAsync(context, path, resolvedId, includeGlobs, excludeGlobs, respectGitignore, excludeBinary);
     }
 
     /// <summary>
@@ -501,6 +476,96 @@ internal static class RepoContextToolHandlers
 
         var lastSeparator = trimmed.LastIndexOfAny(new[] { '/', '\\' });
         return lastSeparator < 0 ? trimmed : trimmed[(lastSeparator + 1)..];
+    }
+
+    /// <summary>
+    /// Returns the current progress snapshot for a repository's indexing job so a
+    /// caller can follow an asynchronous onboarding pass to completion. Read-only.
+    /// A repository that was never onboarded reports status <c>None</c>.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the job grain.</param>
+    /// <param name="repoId">The repository identity whose indexing job to inspect.</param>
+    /// <returns>The point-in-time progress snapshot.</returns>
+    /// <exception cref="McpException">The repository id is missing (a caller error).</exception>
+    public static Task<RepoIndexProgress> IndexStatusAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The repository identity whose indexing job to inspect. A repository that was never onboarded reports status 'None'.")]
+        string repoId)
+    {
+        if (string.IsNullOrWhiteSpace(repoId))
+        {
+            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+        }
+
+        var runner = context.Services?.GetRequiredService<IRepoIndexRunner>()
+            ?? throw new InvalidOperationException(
+                "The MCP request has no service provider; the repository-context tool cannot resolve the index runner.");
+        return runner.GetProgressAsync(repoId.Trim());
+    }
+
+    /// <summary>
+    /// Resolves and workspace-guards the path synchronously at the tool seam, then
+    /// hands a durable job to the indexing job grain and returns its acceptance
+    /// snapshot without waiting for the run. Guarding here - not inside the
+    /// resumable job - means a persisted, later-resumed job never re-derives a path
+    /// that could escape the workspace.
+    /// </summary>
+    /// <param name="context">The MCP request context.</param>
+    /// <param name="repoRoot">The caller-supplied repository path.</param>
+    /// <param name="repoId">The already-resolved repository identity.</param>
+    /// <param name="includeGlobs">Optional include globs.</param>
+    /// <param name="excludeGlobs">Optional exclude globs.</param>
+    /// <param name="respectGitignore">Whether the tree's <c>.gitignore</c> files are honoured.</param>
+    /// <param name="excludeBinary">Whether files that look binary are dropped from the walk.</param>
+    /// <returns>The progress snapshot at acceptance.</returns>
+    /// <exception cref="McpException">The path resolves outside the workspace or
+    /// does not exist (caller errors).</exception>
+    private static Task<RepoIndexProgress> StartIndexAsync(
+        RequestContext<CallToolRequestParams> context,
+        string repoRoot,
+        string repoId,
+        IReadOnlyList<string>? includeGlobs,
+        IReadOnlyList<string>? excludeGlobs,
+        bool respectGitignore,
+        bool excludeBinary)
+    {
+        var services = context.Services
+            ?? throw new InvalidOperationException(
+                "The MCP request has no service provider; the onboarding tool cannot resolve its collaborators.");
+
+        var guard = services.GetRequiredService<RepoContextWorkspaceGuard>();
+        string resolvedRoot;
+        try
+        {
+            resolvedRoot = guard.Resolve(repoRoot);
+        }
+        catch (RepoContextWorkspaceViolationException ex)
+        {
+            throw new McpException(ex.Message);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new McpException(ex.Message);
+        }
+
+        if (!Directory.Exists(resolvedRoot))
+        {
+            throw new McpException(
+                $"The repository root '{repoRoot}' does not exist or is not a directory.");
+        }
+
+        var request = new RepoIndexJobRequest
+        {
+            RepoRoot = resolvedRoot,
+            RepoId = repoId,
+            IncludeGlobs = includeGlobs,
+            ExcludeGlobs = excludeGlobs,
+            RespectGitignore = respectGitignore,
+            ExcludeBinary = excludeBinary,
+        };
+
+        var grain = services.GetRequiredService<IRepoIndexRunner>();
+        return grain.StartIndexAsync(request);
     }
 
     /// <summary>
