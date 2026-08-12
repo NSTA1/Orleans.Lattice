@@ -1,15 +1,29 @@
 # Orleans.Lattice.Api.Mcp.RepoContext
 
-Optional, opt-in **repository-context** add-on for the [Orleans.Lattice.Api.Mcp](https://www.nuget.org/packages/Orleans.Lattice.Api.Mcp) server. It gives an AI agent a durable, conflict-free place to capture and maintain detailed context about a codebase - structural facts, notes, and short-lived working memory - served as Model Context Protocol tools over dedicated Lattice trees.
+Give an AI coding agent a durable, long-term memory of a codebase.
 
-## What it gives you
+This is an opt-in **repository-context** add-on for the [Orleans.Lattice.Api.Mcp](https://www.nuget.org/packages/Orleans.Lattice.Api.Mcp) MCP server. It exposes a set of Model Context Protocol tools an agent uses to capture, maintain, and retrieve detailed context about a repository - the shape of the code, the decisions and notes it has made, and short-lived working memory - and keeps all of it in durable, conflict-free Lattice storage that survives process restarts.
 
-- **A codebase memory** - one `repocontext_bootstrap` call walks a repository and lands its structural model (files and their digests) on a durable tree; re-runs are incremental and idempotent.
-- **Agent-authored notes and working memory** - `repocontext_remember` / `_update` / `_forget` capture decisions and observations, with an optional per-entry time-to-live for ephemeral memory that lapses on its own.
-- **Retrieval** - `repocontext_recall`, `_scan`, and `_list_topics` read the context back; `repocontext_search` adds meaning-based retrieval when an embedding provider is bound, degrading fail-closed to keyword recall when it is not.
-- **Fail-closed and permission-scoped** - reuses the `Api.Mcp` credential bridge, authorization gate, and permission-scoped tool discovery. The mutating tools are contributed only when the host opts writes in; a reader-only caller never sees them.
+## Why
+
+An agent starts every session cold: it re-reads files, re-derives structure, and forgets what it learned last time. This package gives it a place to remember. One bootstrap call turns a repository into a queryable baseline; from then on the agent can recall what a file is, search the codebase by meaning, and write back notes and decisions that persist across sessions and restarts.
+
+## What an agent can do with it
+
+- **Onboard a codebase** - `repocontext_bootstrap` walks a repository and records a structural model (every file and its content digest) onto a durable tree. Re-running it is incremental and idempotent: unchanged files are a no-op, changed files update in place, deleted files are pruned, and an interrupted run resumes without duplication.
+- **Search by meaning or keyword** - `repocontext_search` returns the records most relevant to a natural-language query. With an embedding provider bound it runs an exact semantic (nearest-neighbour) search; without one it degrades fail-closed to deterministic keyword and structural recall, so a query always returns the best available answer instead of failing.
+- **Read context back** - `repocontext_recall` fetches a single record by key, `repocontext_scan` pages through an ordered range, and `repocontext_list_topics` enumerates the memory topics that have been captured.
+- **Remember decisions and notes** - `repocontext_remember`, `_update`, and `_forget` let the agent write and maintain its own memory and decision entries, each with an optional time-to-live so ephemeral working memory lapses on its own while durable knowledge stays.
+
+## How it stays safe
+
+- **Durable and conflict-free** - every record lives on a dedicated Lattice tree backed by the write-ahead log, so context survives restarts and concurrent writers converge via CRDT merge rather than clobbering each other.
+- **Fail-closed and permission-scoped** - it reuses the `Api.Mcp` credential bridge, authorization gate, and permission-scoped tool discovery. The mutating tools are contributed only when the host opts writes in; a read-only caller never sees them, and an unauthenticated caller sees nothing.
+- **Read-only over your code** - bootstrap only reads the repository; the store of record is the Lattice trees, never your source.
 
 ## Getting started
+
+Register the tools alongside the MCP server, then map the endpoint:
 
 ```csharp
 builder.Services.AddLatticeMcp(o => o.RequireAuthorization = true);
@@ -18,6 +32,12 @@ builder.Services.AddRepoContextTools(enableWrites: true);
 app.MapLatticeMcp();
 ```
 
-For a ready-to-run, restart-durable local deployment - "codebase memory in a box" - see the [container sample](https://github.com/NSTA1/Orleans.Lattice/blob/main/samples/RepoContextContainer/README.md).
+`AddRepoContextTools()` with writes off offers only the read-only tools; pass `enableWrites: true` to also contribute bootstrap and the memory-writing tools. Bind an `IEmbeddingProvider` to turn on semantic search; without one, search still works in keyword mode.
 
-See the [repository-context guide](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.api.mcp.repocontext/README.md) for the record model, the full tool catalogue, memory/TTL semantics, and the semantic-search seam.
+## Run it as a container - "codebase memory in a box"
+
+The [**RepoContextContainer sample**](https://github.com/NSTA1/Orleans.Lattice/blob/main/samples/RepoContextContainer/README.md) packages all of this into a single restart-durable Docker container (with an embedding companion) that mounts a repository read-only, bootstraps it, and serves the tools over MCP with no external services. It is the fastest way to see the whole flow end to end: start, bootstrap a mounted repo, search and recall, restart, and the context is still there.
+
+## Learn more
+
+See the [repository-context guide](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.api.mcp.repocontext/README.md) for the record model, the full tool catalogue, memory and TTL semantics, and the semantic-search seam.
