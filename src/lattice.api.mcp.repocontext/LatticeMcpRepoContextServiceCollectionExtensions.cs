@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext;
@@ -32,8 +33,10 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
     /// <summary>
     /// Opts the repository-context surface into the MCP binding: registers the
     /// repository-context tool group so its tools are advertised to a caller
-    /// holding a data read-or-write grant, along with the bootstrap coordinator
-    /// and the default no-op vectorisation seam. Idempotent for the tool group:
+    /// holding a data read-or-write grant, along with the bootstrap coordinator,
+    /// the retrieval services (the exact-kNN semantic index and the search
+    /// orchestrator), and the embed-and-store bootstrap vectorisation seam.
+    /// Idempotent for the tool group:
     /// calling it more than once registers exactly one tool group. The host must
     /// also have called <c>AddLatticeMcp</c> for the tools to be reachable.
     /// </summary>
@@ -56,7 +59,29 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
             ServiceDescriptor.Singleton<ILatticeApiMcpToolGroup>(
                 new RepoContextToolGroup(enableWrites)));
 
-        services.TryAddSingleton<IRepoContextVectorIngestor, NoOpRepoContextVectorIngestor>();
+        // Wire the bootstrap-time vectorisation seam to the real embed-and-store
+        // ingestor (replacing the deferred no-op): a bootstrap run now embeds the
+        // files it added or updated and lands their vectors on the reserved vector
+        // trees, so the search tool can find them. The ingestor resolves an
+        // IEmbeddingProvider only if the host bound one; absent (or unavailable) it
+        // fails closed and search degrades to keyword recall.
+        services.TryAddSingleton<IRepoContextVectorIngestor>(sp =>
+            new EmbeddingRepoContextVectorIngestor(
+                sp.GetRequiredService<RepoContextVectorWriter>(),
+                sp.GetRequiredService<ILogger<EmbeddingRepoContextVectorIngestor>>(),
+                sp.GetService<IEmbeddingProvider>()));
+        services.TryAddSingleton<RepoContextVectorWriter>();
+        services.TryAddSingleton<IRepoContextSemanticIndex, ExactKnnSemanticIndex>();
+        services.TryAddSingleton<RepoContextSearchService>(sp =>
+            new RepoContextSearchService(
+                sp.GetRequiredService<IGrainFactory>(),
+                sp.GetRequiredService<Orleans.Serialization.Serializer>(),
+                sp.GetRequiredService<IRepoContextSemanticIndex>(),
+                sp.GetRequiredService<RepoContextStore>(),
+                sp.GetRequiredService<TimeProvider>(),
+                sp.GetRequiredService<ILogger<RepoContextSearchService>>(),
+                sp.GetService<IEmbeddingProvider>()));
+
         services.TryAddSingleton<RepoContextBootstrapService>();
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<RepoContextStore>();

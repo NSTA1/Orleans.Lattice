@@ -58,19 +58,27 @@ public sealed class AddRepoContextToolsTests
             () => LatticeMcpRepoContextServiceCollectionExtensions.AddRepoContextTools(null!));
 
     [Test]
-    public void AddRepoContextTools_registers_the_bootstrap_coordinator_and_no_op_vector_seam()
+    public void AddRepoContextTools_registers_the_bootstrap_coordinator_and_real_vector_ingestor()
     {
         var services = new ServiceCollection();
         services.AddRepoContextTools();
+
+        var ingestor = services.SingleOrDefault(d => d.ServiceType == typeof(IRepoContextVectorIngestor));
 
         Assert.Multiple(() =>
         {
             Assert.That(
                 services.Any(d => d.ServiceType == typeof(RepoContextBootstrapService)), Is.True);
+            Assert.That(ingestor, Is.Not.Null);
+            // The seam is wired to the embed-and-store ingestor via a factory, so
+            // the deferred no-op is no longer the registered implementation.
+            Assert.That(ingestor!.ImplementationType, Is.Not.EqualTo(typeof(NoOpRepoContextVectorIngestor)));
             Assert.That(
-                services.Any(d => d.ServiceType == typeof(IRepoContextVectorIngestor)
-                    && d.ImplementationType == typeof(NoOpRepoContextVectorIngestor)),
-                Is.True);
+                services.Any(d => d.ServiceType == typeof(RepoContextVectorWriter)), Is.True);
+            Assert.That(
+                services.Any(d => d.ServiceType == typeof(IRepoContextSemanticIndex)), Is.True);
+            Assert.That(
+                services.Any(d => d.ServiceType == typeof(RepoContextSearchService)), Is.True);
         });
     }
 
@@ -88,6 +96,7 @@ public sealed class AddRepoContextToolsTests
             Is.EquivalentTo(new[]
             {
                 "repocontext_health", "repocontext_recall", "repocontext_scan", "repocontext_list_topics",
+                "repocontext_search",
             }));
     }
 
@@ -105,6 +114,7 @@ public sealed class AddRepoContextToolsTests
             Is.EquivalentTo(new[]
             {
                 "repocontext_health", "repocontext_recall", "repocontext_scan", "repocontext_list_topics",
+                "repocontext_search",
                 "repocontext_bootstrap", "repocontext_remember", "repocontext_update", "repocontext_forget",
             }));
     }

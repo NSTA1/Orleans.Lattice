@@ -40,7 +40,7 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
     /// contributed.</param>
     public RepoContextToolGroup(bool enableWrites = false)
     {
-        var tools = new List<McpServerTool>(enableWrites ? 8 : 4)
+        var tools = new List<McpServerTool>(enableWrites ? 9 : 5)
         {
             McpServerTool.Create(
                 RepoContextToolHandlers.Health,
@@ -61,6 +61,7 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
             BuildRecallTool(),
             BuildScanTool(),
             BuildListTopicsTool(),
+            BuildSearchTool(),
         };
 
         if (enableWrites)
@@ -126,6 +127,25 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     "Enumerates the distinct agent memory topics available for a repository, each with its live "
                     + "entry count, so an agent can discover what working memory, notes, and decisions have been "
                     + "captured before recalling or scanning them. Read-only.",
+                ReadOnly = true,
+                Destructive = false,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildSearchTool()
+        => McpServerTool.Create(
+            RepoContextToolHandlers.SearchAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "repocontext_search",
+                Title = "Search the repository-context store",
+                Description =
+                    "Finds the repository-context records most relevant to a natural-language query and returns "
+                    + "them hydrated from the store of record, ranked best-first. When an embedding provider and "
+                    + "vectors are available it runs an exact semantic (nearest-neighbour) search; otherwise it "
+                    + "degrades to a deterministic keyword/structural scan, so a query always returns the best "
+                    + "available matches instead of failing. The result's 'mode' reports which path answered "
+                    + "('semantic', 'keyword', or 'empty'). Read-only.",
                 ReadOnly = true,
                 Destructive = false,
                 UseStructuredContent = true,

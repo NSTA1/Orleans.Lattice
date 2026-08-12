@@ -330,6 +330,42 @@ internal static class RepoContextToolHandlers
     }
 
     /// <summary>
+    /// Finds the repository-context records most relevant to a natural-language
+    /// query, hydrated from the store of record and ranked best-first. Runs an
+    /// exact semantic search when an embedder and vectors are available and
+    /// otherwise degrades to a keyword/structural scan.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the search service.</param>
+    /// <param name="repoId">The repository to search.</param>
+    /// <param name="query">The natural-language query.</param>
+    /// <param name="k">The maximum number of hits to return (clamped to [1, 100]).</param>
+    /// <param name="cancellationToken">Cancels the search.</param>
+    /// <returns>The ranked hits and the mode that produced them.</returns>
+    /// <exception cref="McpException">The repository id or query is missing.</exception>
+    public static Task<RepoContextSearchResult> SearchAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The repository identifier to search.")]
+        string repoId,
+        [Description("The natural-language query to find relevant repository-context records for.")]
+        string query,
+        [Description("The maximum number of hits to return. Clamped to the range [1, 100]; defaults to 10.")]
+        int k = 0,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(repoId))
+        {
+            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+        }
+
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            throw new McpException("The 'query' parameter is required and must be a non-empty query string.");
+        }
+
+        return ResolveSearchService(context).SearchAsync(repoId, query, k, cancellationToken);
+    }
+
+    /// <summary>
     /// Resolves the <see cref="RepoContextStore"/> from the MCP request's service
     /// provider, failing with a clear message when the provider is absent.
     /// </summary>
@@ -341,5 +377,19 @@ internal static class RepoContextToolHandlers
             ?? throw new InvalidOperationException(
                 "The MCP request has no service provider; the repository-context tool cannot resolve its store.");
         return services.GetRequiredService<RepoContextStore>();
+    }
+
+    /// <summary>
+    /// Resolves the <see cref="RepoContextSearchService"/> from the MCP request's
+    /// service provider, failing with a clear message when the provider is absent.
+    /// </summary>
+    /// <param name="context">The MCP request context.</param>
+    /// <returns>The resolved search service.</returns>
+    private static RepoContextSearchService ResolveSearchService(RequestContext<CallToolRequestParams> context)
+    {
+        var services = context.Services
+            ?? throw new InvalidOperationException(
+                "The MCP request has no service provider; the repository-context search tool cannot resolve its service.");
+        return services.GetRequiredService<RepoContextSearchService>();
     }
 }
