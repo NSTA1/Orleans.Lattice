@@ -27,4 +27,15 @@ public sealed record RepoContextRepoSummary
     /// ingested before the count was tracked).
     /// </summary>
     public long? FileCount { get; init; }
+
+    /// <summary>
+    /// The number of files with a live embedding currently in the store - the size
+    /// of the durable add-wins vector-membership set, read from the store of record
+    /// (never the last run's in-flight progress). It is <c>0</c> for a repository
+    /// whose embeddings have not yet landed and is expected to converge on
+    /// <see cref="FileCount"/> once vectorising completes. Because it is read from
+    /// durable state rather than run progress, it survives a host restart, so an
+    /// operator can confirm the vectors persisted by re-reading it after a restart.
+    /// </summary>
+    public long EmbeddedVectorCount { get; init; }
 }

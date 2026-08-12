@@ -550,12 +550,37 @@ internal sealed class RepoContextStore
             fileCount = RepoContextValues.ReadInt64(node.FileCount);
         }
 
+        var embeddedVectorCount = await ReadEmbeddedVectorCountAsync(repoId, cancellationToken)
+            .ConfigureAwait(false);
+
         return new RepoContextRepoSummary
         {
             RepoId = repoId,
             LastIngested = lastIngested,
             FileCount = fileCount,
+            EmbeddedVectorCount = embeddedVectorCount,
         };
+    }
+
+    /// <summary>
+    /// Reads the durable count of files with a live embedding for a repository: the
+    /// live size of the add-wins vector-membership set that the vector writer
+    /// maintains as embeddings land. It is read from the store of record (the
+    /// vector-membership tree), never from a run's in-flight progress, so it is a
+    /// restart-durable diagnostic. Returns <c>0</c> when no membership record exists
+    /// yet (a repository whose embeddings have not started landing).
+    /// </summary>
+    private async Task<long> ReadEmbeddedVectorCountAsync(string repoId, CancellationToken cancellationToken)
+    {
+        var membership = Tree(RepoContextTrees.VectorMembership);
+        var key = RepoContextKeys.VectorMembership(repoId, RepoContextVectorWriter.SourceCollection);
+        var bytes = await membership.GetAsync(key, cancellationToken).ConfigureAwait(false);
+        if (bytes is null)
+        {
+            return 0L;
+        }
+
+        return _serializer.Deserialize<VectorMembershipRecord>(bytes).Members.Count;
     }
 
     private TimeSpan? ResolveTtl(string repoId, long? ttlSeconds, bool created)
