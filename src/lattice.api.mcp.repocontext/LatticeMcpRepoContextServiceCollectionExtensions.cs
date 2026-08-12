@@ -113,6 +113,7 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
 
         services.TryAddSingleton<RepoContextBootstrapService>();
         services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton(RepoContextIndexingOptions.FromEnvironment());
         services.TryAddSingleton<RepoContextStore>();
 
         // The background indexing runner runs each onboarding pass off the request

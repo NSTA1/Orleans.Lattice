@@ -47,6 +47,17 @@ services:
       LATTICE_WORKSPACE_ROOT: /workspace
       # Point the default embedding provider at the separate companion container.
       LATTICE_EMBEDDING_ENDPOINT: http://embedder:9000
+      # Background-indexing cadence. A short self-index tick and a short reconcile
+      # interval (with no jitter) make the periodic content reconcile effectively
+      # continuous: the walk's directory-modification-time pruning keeps each
+      # reconcile cheap, so edits and deletions are picked up within seconds. The
+      # full-walk interval bounds how long an in-place content edit (which does not
+      # bump a directory's modification time and is invisible to pruning) can go
+      # unnoticed before a forced full sweep re-stats every file.
+      LATTICE_SELFINDEX_TICK_SECONDS: "5"
+      LATTICE_RECONCILE_INTERVAL_SECONDS: "5"
+      LATTICE_RECONCILE_JITTER_SECONDS: "0"
+      LATTICE_FULL_WALK_INTERVAL_SECONDS: "120"
     ports:
       # The MCP streamable-HTTP endpoint (and the health probes) on the host.
       - "8080:8080"

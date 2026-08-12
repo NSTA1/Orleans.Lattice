@@ -49,4 +49,16 @@ internal sealed class RepoContextBootstrapRequest
     /// <see langword="false"/> to ingest binary files too.
     /// </summary>
     public bool ExcludeBinary { get; init; } = true;
+
+    /// <summary>
+    /// When <see langword="true"/>, the walk may skip the per-file stat of a
+    /// directory whose modification time is unchanged since the previous walk
+    /// (directory-modification-time pruning), trading exactness for a much cheaper
+    /// sweep. Pruning is blind to an in-place content edit that leaves a
+    /// directory's modification time untouched, so it is only ever enabled for the
+    /// continuous background reconcile, whose periodic full-sweep backstop closes
+    /// that gap within a bounded interval. Defaults to <see langword="false"/>, so
+    /// an explicit onboarding or re-bootstrap always runs a full, exact walk.
+    /// </summary>
+    public bool AllowPrune { get; init; }
 }

@@ -37,6 +37,7 @@ internal sealed class RepoContextSelfIndexGrain(
     RepoContextEmbeddingGapScanner gapScanner,
     IRepoIndexRunAuthority runAuthority,
     TimeProvider timeProvider,
+    RepoContextIndexingOptions options,
     ILogger<RepoContextSelfIndexGrain> logger,
     [PersistentState("repoContextSelfIndex", global::Orleans.Lattice.LatticeOptions.StorageProviderName)]
     IPersistentState<RepoContextSelfIndexState> state) : IRepoContextSelfIndexGrain, IRemindable, IGrainBase
@@ -47,9 +48,6 @@ internal sealed class RepoContextSelfIndexGrain(
     /// </summary>
     private const string KeepaliveReminderName = "repo-context-self-index-keepalive";
 
-    /// <summary>The grain-timer cadence. Each tick does at most one page of scan work.</summary>
-    private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(15);
-
     /// <summary>The base cooldown between completed scans of a clean (or just re-driven) repository.</summary>
     private static readonly TimeSpan ScanCooldown = TimeSpan.FromMinutes(5);
 
@@ -58,17 +56,6 @@ internal sealed class RepoContextSelfIndexGrain(
 
     /// <summary>The maximum number of structural file keys inspected per tick.</summary>
     private const int PageSize = 512;
-
-    /// <summary>
-    /// The base interval between periodic content reconciles. A reconcile re-drives
-    /// the full idempotent index so on-disk edits and deletions are picked up
-    /// automatically; it is deliberately longer than the presence-only gap-scan
-    /// cooldown, and the walk's stat fast-path keeps each one cheap.
-    /// </summary>
-    private static readonly TimeSpan ReconcileInterval = TimeSpan.FromMinutes(15);
-
-    /// <summary>The maximum extra random interval added on top of <see cref="ReconcileInterval"/> to desync repositories.</summary>
-    private static readonly TimeSpan ReconcileIntervalJitter = TimeSpan.FromMinutes(5);
 
     IGrainContext IGrainBase.GrainContext => grainContext;
 
@@ -149,10 +136,10 @@ internal sealed class RepoContextSelfIndexGrain(
         // reactivated together by their keep-alive reminders does not all fire
         // their first scan at the same instant. The fixed period then keeps them
         // phase-shifted.
-        var jitterMs = Random.Shared.Next(0, (int)TickInterval.TotalMilliseconds);
-        var dueTime = TickInterval + TimeSpan.FromMilliseconds(jitterMs);
+        var jitterMs = Random.Shared.Next(0, (int)options.TickInterval.TotalMilliseconds);
+        var dueTime = options.TickInterval + TimeSpan.FromMilliseconds(jitterMs);
         _timer = this.RegisterGrainTimer(
-            OnTickAsync, new GrainTimerCreationOptions(dueTime, TickInterval));
+            OnTickAsync, new GrainTimerCreationOptions(dueTime, options.TickInterval));
     }
 
     private async Task OnTickAsync(CancellationToken cancellationToken)
@@ -193,6 +180,32 @@ internal sealed class RepoContextSelfIndexGrain(
     {
         var nowTicks = timeProvider.GetUtcNow().UtcTicks;
         var continuing = state.State.ResumeKey is not null;
+
+        // The periodic content reconcile is checked before the gap-scan cooldown gate,
+        // so a short reconcile interval yields near-continuous reconciles bounded only by
+        // the tick cadence rather than being delayed behind the longer presence-scan
+        // cooldown. A reconcile re-drives the whole idempotent index so on-disk edits and
+        // deletions are picked up automatically; the gap scan only detects missing
+        // embeddings. It is idempotent and single-flight, so a reconcile already in flight
+        // is a no-op, and because each tick is a fresh grain turn re-driving on completion
+        // polls for the prior run rather than recursing.
+        if (!continuing && nowTicks >= state.State.NextReconcileAfterTicks)
+        {
+            var triggered = await grainFactory
+                .GetGrain<IRepoIndexJobGrain>(RepoId).EnsureIndexedAsync().ConfigureAwait(true);
+            if (triggered)
+            {
+                logger.LogInformation(
+                    "Repo {RepoId}: self-index re-drove a periodic reconcile to pick up edits and deletions.",
+                    RepoId);
+            }
+
+            ScheduleNextReconcile(nowTicks);
+            EndScan(nowTicks);
+            await state.WriteStateAsync().ConfigureAwait(true);
+            return;
+        }
+
         if (!continuing && nowTicks < state.State.NextSweepAfterTicks)
         {
             // Between scans and still cooling down: a cheap no-op tick.
@@ -222,29 +235,6 @@ internal sealed class RepoContextSelfIndexGrain(
                 await state.WriteStateAsync().ConfigureAwait(true);
                 return;
             }
-        }
-
-        // At the start of a fresh cycle, and on a longer cadence than the gap scan,
-        // re-drive the whole idempotent index so on-disk edits and deletions are
-        // picked up automatically. The gap scan only detects missing embeddings; a
-        // reconcile re-walks the tree (with the cheap stat fast-path) to detect
-        // changed and removed files. It is idempotent and single-flight, so a reconcile
-        // already in flight is a no-op.
-        if (!continuing && nowTicks >= state.State.NextReconcileAfterTicks)
-        {
-            var triggered = await grainFactory
-                .GetGrain<IRepoIndexJobGrain>(RepoId).EnsureIndexedAsync().ConfigureAwait(true);
-            if (triggered)
-            {
-                logger.LogInformation(
-                    "Repo {RepoId}: self-index re-drove a periodic reconcile to pick up edits and deletions.",
-                    RepoId);
-            }
-
-            ScheduleNextReconcile(nowTicks);
-            EndScan(nowTicks);
-            await state.WriteStateAsync().ConfigureAwait(true);
-            return;
         }
 
         // Load the membership set once per scan and reuse it across the scan's
@@ -301,8 +291,8 @@ internal sealed class RepoContextSelfIndexGrain(
     {
         // Space the next content reconcile by the base interval plus a random jitter
         // so many repositories' reconciles stay desynchronised in steady state.
-        var jitterTicks = (long)(Random.Shared.NextDouble() * ReconcileIntervalJitter.Ticks);
-        state.State.NextReconcileAfterTicks = nowTicks + ReconcileInterval.Ticks + jitterTicks;
+        var jitterTicks = (long)(Random.Shared.NextDouble() * options.ReconcileIntervalJitter.Ticks);
+        state.State.NextReconcileAfterTicks = nowTicks + options.ReconcileInterval.Ticks + jitterTicks;
     }
 
     private async Task RegisterKeepaliveAsync()

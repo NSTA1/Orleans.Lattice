@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
@@ -48,7 +49,18 @@ internal sealed class RepoContextBootstrapService
     private readonly Serializer<RepoNode> _repoNodeSerializer;
     private readonly IRepoContextVectorIngestor _vectorIngestor;
     private readonly RepoContextWorkspaceGuard _workspaceGuard;
+    private readonly TimeProvider _timeProvider;
+    private readonly RepoContextIndexingOptions _options;
     private readonly ILogger<RepoContextBootstrapService> _logger;
+
+    /// <summary>
+    /// The per-repository cross-walk pruning cache, keyed by repository id. Each entry
+    /// holds the directory-modification-time snapshot the previous walk observed and the
+    /// wall-clock tick of the last full (unpruned) sweep. It lives only in this singleton's
+    /// memory, so a process restart starts every repository cold - the first post-restart
+    /// walk is a full one, which is correct by construction.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, PruneCacheEntry> _pruneCache = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Creates the bootstrap coordinator.
@@ -64,6 +76,13 @@ internal sealed class RepoContextBootstrapService
     /// <param name="workspaceGuard">The fail-closed workspace boundary that every
     /// ingestion path is resolved and bounds-checked through. Must not be
     /// <see langword="null"/>.</param>
+    /// <param name="timeProvider">The clock used to schedule the periodic full sweep
+    /// that backstops directory-modification-time pruning. Must not be
+    /// <see langword="null"/>.</param>
+    /// <param name="options">The background-indexing cadence knobs, whose
+    /// <see cref="RepoContextIndexingOptions.FullWalkInterval"/> bounds how stale an
+    /// in-place content edit can be before a full sweep catches it. Must not be
+    /// <see langword="null"/>.</param>
     /// <param name="logger">The logger. Must not be <see langword="null"/>.</param>
     public RepoContextBootstrapService(
         IGrainFactory grainFactory,
@@ -71,6 +90,8 @@ internal sealed class RepoContextBootstrapService
         Serializer<RepoNode> repoNodeSerializer,
         IRepoContextVectorIngestor vectorIngestor,
         RepoContextWorkspaceGuard workspaceGuard,
+        TimeProvider timeProvider,
+        RepoContextIndexingOptions options,
         ILogger<RepoContextBootstrapService> logger)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
@@ -78,6 +99,8 @@ internal sealed class RepoContextBootstrapService
         ArgumentNullException.ThrowIfNull(repoNodeSerializer);
         ArgumentNullException.ThrowIfNull(vectorIngestor);
         ArgumentNullException.ThrowIfNull(workspaceGuard);
+        ArgumentNullException.ThrowIfNull(timeProvider);
+        ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
 
         _grainFactory = grainFactory;
@@ -85,6 +108,8 @@ internal sealed class RepoContextBootstrapService
         _repoNodeSerializer = repoNodeSerializer;
         _vectorIngestor = vectorIngestor;
         _workspaceGuard = workspaceGuard;
+        _timeProvider = timeProvider;
+        _options = options;
         _logger = logger;
     }
 
@@ -147,6 +172,28 @@ internal sealed class RepoContextBootstrapService
             await ReportAsync(progress, new RepoIndexProgressUpdate { Phase = RepoIndexPhase.Walking }, cancellationToken)
                 .ConfigureAwait(false);
 
+            // Build the cross-walk pruning context for this run. Pruning is opt-in
+            // per request: only the continuous background reconcile enables it, so
+            // an explicit onboarding or re-bootstrap always forces a full, exact
+            // walk. When pruning is allowed and a prior directory-modification-time
+            // snapshot exists (and a full sweep is not due), the walk skips the
+            // per-file stat of unchanged directories. Even then a full sweep is
+            // forced when the repository is cold (no snapshot) or the configured
+            // full-walk interval has elapsed since the last one, so an in-place
+            // content edit - which does not bump a directory's modification time and
+            // is invisible to pruning - is still caught within that bound.
+            var nowTicks = _timeProvider.GetUtcNow().UtcTicks;
+            _pruneCache.TryGetValue(repoId, out var priorPrune);
+            var lastFullSweepTicks = priorPrune?.LastFullSweepTicks ?? 0;
+            var forceFull = !request.AllowPrune
+                || priorPrune?.DirectoryMtimes is not { Count: > 0 }
+                || nowTicks - lastFullSweepTicks >= _options.FullWalkInterval.Ticks;
+            var pruning = new RepoWalkPruning
+            {
+                PreviousDirectoryMtimes = priorPrune?.DirectoryMtimes,
+                ForceFull = forceFull,
+            };
+
             // The walk is synchronous, so a run with a progress sink drives a
             // concurrent pump that samples the running processed-file count and
             // reports it. The walker only writes the latest count (a single lock-free
@@ -159,7 +206,7 @@ internal sealed class RepoContextBootstrapService
                 scanned = RepoTreeWalker.Walk(
                     repoRoot, request.IncludeGlobs, request.ExcludeGlobs,
                     request.RespectGitignore, request.ExcludeBinary, onProgress: null, cancellationToken,
-                    knownFiles: storedMeta);
+                    knownFiles: storedMeta, pruning: pruning);
             }
             else
             {
@@ -173,7 +220,7 @@ internal sealed class RepoContextBootstrapService
                         repoRoot, request.IncludeGlobs, request.ExcludeGlobs,
                         request.RespectGitignore, request.ExcludeBinary,
                         done => Volatile.Write(ref hashedSoFar, done), cancellationToken,
-                        knownFiles: storedMeta);
+                        knownFiles: storedMeta, pruning: pruning);
                 }
                 finally
                 {
@@ -182,9 +229,19 @@ internal sealed class RepoContextBootstrapService
                 }
             }
 
+            // Store the snapshot this walk observed for the next run. The walk records a
+            // modification time for every directory it visits, pruned or not, so the
+            // snapshot is always complete and self-heals as the tree changes. Advance the
+            // last-full-sweep marker only when this run actually forced a full sweep.
+            var updatedSnapshot = new PruneCacheEntry(
+                pruning.CurrentDirectoryMtimes,
+                forceFull ? nowTicks : lastFullSweepTicks);
+
             _logger.LogInformation(
-                "Repo {RepoId}: walk complete - {Scanned} files in {Elapsed} ms.",
-                repoId, scanned.Count, stopwatch.ElapsedMilliseconds);
+                "Repo {RepoId}: walk complete - {Scanned} files in {Elapsed} ms ({Mode}; pruned {PrunedDirs} dir(s), {PrunedFiles} file(s)).",
+                repoId, scanned.Count, stopwatch.ElapsedMilliseconds,
+                forceFull ? "full sweep" : "pruned",
+                pruning.PrunedDirectoryCount, pruning.PrunedFileCount);
 
             phase = RepoIndexPhase.Reconciling;
             await ReportAsync(
@@ -271,6 +328,13 @@ internal sealed class RepoContextBootstrapService
 
             stopwatch.Stop();
 
+            // The run reconciled and applied cleanly, so publish the walk's directory
+            // snapshot as the pruning baseline for the next run. Deferring the publish to
+            // the success path means a run that fails during apply leaves the previous
+            // baseline intact, so the next run does not wrongly prune a directory whose
+            // changes were never committed.
+            _pruneCache[repoId] = updatedSnapshot;
+
             _logger.LogInformation(
                 "Bootstrap of repository {RepoId} scanned {Scanned} files: {Added} added, {Updated} updated, {Removed} removed, {Unchanged} unchanged in {Elapsed} ms.",
                 repoId,
@@ -302,6 +366,18 @@ internal sealed class RepoContextBootstrapService
             throw;
         }
     }
+
+    /// <summary>
+    /// One repository's cross-walk pruning baseline: the directory-modification-time
+    /// snapshot the last successful walk observed, and the wall-clock tick of the last
+    /// full (unpruned) sweep so the periodic force-full backstop can be scheduled.
+    /// </summary>
+    /// <param name="DirectoryMtimes">The repository-relative directory to modification-time
+    /// snapshot from the last successful walk.</param>
+    /// <param name="LastFullSweepTicks">The UTC tick at which the last full sweep ran.</param>
+    private sealed record PruneCacheEntry(
+        IReadOnlyDictionary<string, long> DirectoryMtimes,
+        long LastFullSweepTicks);
 
     /// <summary>
     /// The number of atomic write chunks <see cref="ApplyPlanAsync"/> will commit

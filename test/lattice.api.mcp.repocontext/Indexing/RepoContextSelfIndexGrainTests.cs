@@ -188,7 +188,18 @@ public sealed class RepoContextSelfIndexGrainTests
         var root = NewRepo(("a.cs", "class A {}"), ("b.cs", "class B {}"));
 
         await using var harness = await RepoContextMcpHarness.StartAsync(
-            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+            new RepoContextMcpHarnessOptions
+            {
+                Posture = RepoContextMcpAuthPosture.Writer,
+                // Force every reconcile to a full walk so an in-place content edit -
+                // which does not bump a directory's modification time and is invisible
+                // to directory-modification-time pruning - is detected deterministically.
+                // This is the default production regime, where the full-walk interval is
+                // at or below the reconcile interval, so every reconcile is a full sweep.
+                ConfigureServices = services =>
+                    services.AddSingleton(new RepoContextIndexingOptions { FullWalkInterval = TimeSpan.Zero }),
+            },
+            Ct);
         var grain = harness.GrainFactory.GetGrain<IRepoContextSelfIndexGrain>(RepoId);
 
         await grain.EnsureRunningAsync(new RepoIndexJobRequest { RepoRoot = root, RepoId = RepoId });
@@ -221,7 +232,15 @@ public sealed class RepoContextSelfIndexGrainTests
         var root = NewRepo(("keep.cs", "class Keep {}"), ("gone.cs", "class Gone {}"));
 
         await using var harness = await RepoContextMcpHarness.StartAsync(
-            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+            new RepoContextMcpHarnessOptions
+            {
+                Posture = RepoContextMcpAuthPosture.Writer,
+                // Force every reconcile to a full walk so the reconcile-diff assertion is
+                // independent of the test filesystem's directory-modification-time behaviour.
+                ConfigureServices = services =>
+                    services.AddSingleton(new RepoContextIndexingOptions { FullWalkInterval = TimeSpan.Zero }),
+            },
+            Ct);
         var grain = harness.GrainFactory.GetGrain<IRepoContextSelfIndexGrain>(RepoId);
 
         await grain.EnsureRunningAsync(new RepoIndexJobRequest { RepoRoot = root, RepoId = RepoId });

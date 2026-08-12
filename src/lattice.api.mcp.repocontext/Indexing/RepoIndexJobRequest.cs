@@ -60,4 +60,17 @@ public sealed record RepoIndexJobRequest
     /// </summary>
     [Id(5)]
     public bool ExcludeBinary { get; init; }
+
+    /// <summary>
+    /// When <see langword="true"/>, the background reconcile that re-drives this job
+    /// may use directory-modification-time pruning to skip the per-file stat of
+    /// unchanged directories. It is set only by the self-index continuous-reconcile
+    /// path, whose periodic full-sweep backstop catches the in-place content edits
+    /// pruning cannot see; an explicit onboarding or re-bootstrap leaves it
+    /// <see langword="false"/> so the walk is full and exact. A persisted job that
+    /// predates this field deserialises it as <see langword="false"/>, so a resumed
+    /// pre-upgrade job runs the same exact walk it began.
+    /// </summary>
+    [Id(6)]
+    public bool AllowPrune { get; init; }
 }

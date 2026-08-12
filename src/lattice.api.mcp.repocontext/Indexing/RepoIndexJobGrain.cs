@@ -106,7 +106,13 @@ internal sealed class RepoIndexJobGrain(
             return false;
         }
 
-        await StartAsync(state.State.Request).ConfigureAwait(true);
+        // A background reconcile or gap back-fill re-drives the persisted request
+        // with pruning allowed: these run continuously, so the cheaper pruned walk
+        // is the intended behaviour and its periodic full-sweep backstop catches the
+        // in-place edits pruning cannot see. An explicit onboarding or re-bootstrap
+        // comes through StartAsync with the request as built at the tool seam
+        // (AllowPrune left false), so it stays a full, exact walk.
+        await StartAsync(state.State.Request with { AllowPrune = true }).ConfigureAwait(true);
         return true;
     }
 
