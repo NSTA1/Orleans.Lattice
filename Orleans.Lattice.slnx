@@ -42,6 +42,7 @@
   <Project Path="src/lattice.explorer/UI/Orleans.Lattice.Explorer.UI.csproj" />
   <Project Path="src/lattice.explorer/WebHosting/Orleans.Lattice.Explorer.Web.csproj" />
   <Project Path="src/lattice.explorer/Web/Orleans.Lattice.Explorer.WebHost.csproj" />
+  <Project Path="apps/repocontext/Orleans.Lattice.Api.Mcp.RepoContext.Host.csproj" />
   <Project Path="benchmark/host/Bench.Microbench/Orleans.Lattice.Benchmark.Microbench.csproj" />
   <Project Path="test/shared/Orleans.Lattice.Testing/Orleans.Lattice.Testing.csproj" />
   <Project Path="test/lattice/Orleans.Lattice.Tests.csproj" />

@@ -1,0 +1,59 @@
+# RepoContext MCP container - "codebase memory in a box" (issue #1435).
+#
+# Brings up the restart-durable MCP host alongside its Onyx embedding companion.
+# The host runs the default `local` durability profile (SQLite grain storage +
+# reminders and the file WAL, all under the /data named volume), so ingested
+# context survives `docker compose restart` and `docker compose down` (without
+# `-v`). See README.md for the start -> bootstrap -> recall -> restart -> verify
+# walkthrough.
+#
+# Build context is the repository root for both images (the host image
+# ProjectReferences the just-built src/ bits). Run from this directory.
+
+services:
+  # The embedding companion stays a SEPARATE container so the MCP host keeps its
+  # single-listener surface. Its baked HEALTHCHECK gates the host's startup.
+  embedder:
+    build:
+      context: ../..
+      dockerfile: apps/embedding/Dockerfile
+    volumes:
+      # Persist the HuggingFace model cache so a restart needs no re-download.
+      - hf-cache:/app/.cache/huggingface
+    expose:
+      - "9000"
+
+  # The RepoContext MCP host: its ONLY application listener is the MCP endpoint on
+  # 8080 (plus the HTTP health probes). No gRPC facade, no Explorer UI.
+  repocontext:
+    build:
+      context: ../..
+      dockerfile: apps/repocontext/Dockerfile
+    depends_on:
+      embedder:
+        condition: service_healthy
+    environment:
+      # Default local, durable, zero-external-dependency profile.
+      LATTICE_DURABILITY: local
+      # All durable local state lives here (a named volume): the file WAL
+      # directory and the SQLite database file.
+      LATTICE_DATA_ROOT: /data
+      LATTICE_MCP_PORT: "8080"
+      # Point the default embedding provider at the separate companion container.
+      LATTICE_EMBEDDING_ENDPOINT: http://embedder:9000
+    ports:
+      # The MCP streamable-HTTP endpoint (and the health probes) on the host.
+      - "8080:8080"
+    volumes:
+      # Durable state survives restart / recreation / image upgrade.
+      - repocontext-data:/data
+      # The repository the box remembers, mounted READ-ONLY so the box can never
+      # mutate the code it ingests. Override with REPO_PATH; defaults to this repo.
+      - ${REPO_PATH:-../..}:/workspace:ro
+    restart: unless-stopped
+
+volumes:
+  # Durable Lattice state (WAL + SQLite): the heart of "codebase memory in a box".
+  repocontext-data:
+  # The embedder's HuggingFace model cache.
+  hf-cache:
