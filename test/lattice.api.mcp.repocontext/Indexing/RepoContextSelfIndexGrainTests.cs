@@ -181,6 +181,69 @@ public sealed class RepoContextSelfIndexGrainTests
             "The re-driven run completes, rescuing the failed onboarding.");
     }
 
+    [Test]
+    public async Task A_reconcile_picks_up_a_file_edited_on_disk_after_onboarding()
+    {
+        const string RepoId = "acme";
+        var root = NewRepo(("a.cs", "class A {}"), ("b.cs", "class B {}"));
+
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+        var grain = harness.GrainFactory.GetGrain<IRepoContextSelfIndexGrain>(RepoId);
+
+        await grain.EnsureRunningAsync(new RepoIndexJobRequest { RepoRoot = root, RepoId = RepoId });
+        var initial = await WaitForTerminalAsync(harness, RepoId);
+        Assert.That(initial.FilesAdded, Is.EqualTo(2), "Both files are ingested by onboarding.");
+
+        // Edit one file on disk. The content (and digest) changes, so the reconcile's
+        // stat fast-path misses and the file is re-read and detected as an update.
+        File.WriteAllText(Path.Combine(root, "a.cs"), "class A { int X; }");
+
+        // Drive the reconcile exactly as the periodic self-index scan would: from the
+        // persisted request, with no client call.
+        var job = harness.GrainFactory.GetGrain<IRepoIndexJobGrain>(RepoId);
+        var triggered = await job.EnsureIndexedAsync();
+        Assert.That(triggered, Is.True, "A completed job is re-driven to reconcile on-disk changes.");
+
+        var reconciled = await WaitForTerminalAsync(harness, RepoId);
+        Assert.Multiple(() =>
+        {
+            Assert.That(reconciled.Status, Is.EqualTo(RepoIndexStatus.Completed));
+            Assert.That(reconciled.FilesUpdated, Is.EqualTo(1), "The edited file is detected as an update.");
+            Assert.That(reconciled.FilesRemoved, Is.EqualTo(0), "Nothing is pruned by an edit.");
+        });
+    }
+
+    [Test]
+    public async Task A_reconcile_prunes_a_file_deleted_on_disk_after_onboarding()
+    {
+        const string RepoId = "acme";
+        var root = NewRepo(("keep.cs", "class Keep {}"), ("gone.cs", "class Gone {}"));
+
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+        var grain = harness.GrainFactory.GetGrain<IRepoContextSelfIndexGrain>(RepoId);
+
+        await grain.EnsureRunningAsync(new RepoIndexJobRequest { RepoRoot = root, RepoId = RepoId });
+        await WaitForTerminalAsync(harness, RepoId);
+
+        // Delete a file on disk. The reconcile's walk no longer produces it, so the
+        // diff lists its stored path for pruning.
+        File.Delete(Path.Combine(root, "gone.cs"));
+
+        var job = harness.GrainFactory.GetGrain<IRepoIndexJobGrain>(RepoId);
+        var triggered = await job.EnsureIndexedAsync();
+        Assert.That(triggered, Is.True, "A completed job is re-driven to reconcile a deletion.");
+
+        var reconciled = await WaitForTerminalAsync(harness, RepoId);
+        Assert.Multiple(() =>
+        {
+            Assert.That(reconciled.Status, Is.EqualTo(RepoIndexStatus.Completed));
+            Assert.That(reconciled.FilesRemoved, Is.EqualTo(1), "The deleted file is pruned.");
+            Assert.That(reconciled.FilesScanned, Is.EqualTo(1), "Only the surviving file is scanned.");
+        });
+    }
+
     /// <summary>
     /// A test vectorisation seam that throws on its first ingest (to fail the first
     /// run) and is inert thereafter, so a re-drive succeeds.

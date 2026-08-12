@@ -135,13 +135,22 @@ internal sealed class RepoContextBootstrapService
 
         try
         {
+            // Read the facts already stored for this repository's files before the
+            // walk, so the walk can apply its stat fast-path: an unchanged file
+            // (matching size, older modification time than its ingest anchor) is
+            // skipped without a read. The digest projection of the same map drives
+            // the reconciliation diff.
+            var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.Structural);
+            var storedMeta = await ReadStoredMetaAsync(tree, repoId, cancellationToken)
+                .ConfigureAwait(false);
+
             await ReportAsync(progress, new RepoIndexProgressUpdate { Phase = RepoIndexPhase.Walking }, cancellationToken)
                 .ConfigureAwait(false);
 
             // The walk is synchronous, so a run with a progress sink drives a
-            // concurrent pump that samples the running hashed-file count and reports
-            // it. The walker only writes the latest count (a single lock-free
-            // volatile write per included file); the pump owns every grain report,
+            // concurrent pump that samples the running processed-file count and
+            // reports it. The walker only writes the latest count (a single lock-free
+            // volatile write per processed file); the pump owns every grain report,
             // so FilesScanned climbs during the walk instead of staying frozen at
             // zero, and reports never reorder or pile up.
             IReadOnlyList<RepoFileEntry> scanned;
@@ -149,7 +158,8 @@ internal sealed class RepoContextBootstrapService
             {
                 scanned = RepoTreeWalker.Walk(
                     repoRoot, request.IncludeGlobs, request.ExcludeGlobs,
-                    request.RespectGitignore, request.ExcludeBinary, onProgress: null, cancellationToken);
+                    request.RespectGitignore, request.ExcludeBinary, onProgress: null, cancellationToken,
+                    knownFiles: storedMeta);
             }
             else
             {
@@ -162,7 +172,8 @@ internal sealed class RepoContextBootstrapService
                     scanned = RepoTreeWalker.Walk(
                         repoRoot, request.IncludeGlobs, request.ExcludeGlobs,
                         request.RespectGitignore, request.ExcludeBinary,
-                        done => Volatile.Write(ref hashedSoFar, done), cancellationToken);
+                        done => Volatile.Write(ref hashedSoFar, done), cancellationToken,
+                        knownFiles: storedMeta);
                 }
                 finally
                 {
@@ -181,19 +192,25 @@ internal sealed class RepoContextBootstrapService
                 new RepoIndexProgressUpdate { Phase = RepoIndexPhase.Reconciling, FilesScanned = scanned.Count },
                 cancellationToken).ConfigureAwait(false);
 
-            var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.Structural);
-            var storedDigests = await ReadStoredDigestsAsync(tree, repoId, cancellationToken)
-                .ConfigureAwait(false);
-
+            var storedDigests = ProjectDigests(storedMeta);
             var plan = RepoContextBootstrapPlan.Compute(storedDigests, scanned);
+
+            // Metadata-changed files are content-unchanged (only their ingest anchor
+            // is refreshed), so callers see them within the unchanged tally, and they
+            // join the unchanged set offered to the ingestor for embedding-gap
+            // back-fill - never re-embedded, but eligible to fill a missing vector.
+            var unchangedCount = plan.Unchanged.Count + plan.MetadataChanged.Count;
+            var unchangedForBackfill = new List<RepoFileEntry>(unchangedCount);
+            unchangedForBackfill.AddRange(plan.Unchanged);
+            unchangedForBackfill.AddRange(plan.MetadataChanged);
 
             if (!plan.IsNoOp)
             {
                 phase = RepoIndexPhase.Applying;
                 var chunksTotal = ComputeChunkCount(plan);
                 _logger.LogInformation(
-                    "Repo {RepoId}: plan - {Added} added, {Updated} updated, {Removed} removed, {Unchanged} unchanged; {Chunks} chunk(s) to commit.",
-                    repoId, plan.Added.Count, plan.Updated.Count, plan.RemovedPaths.Count, plan.Unchanged.Count, chunksTotal);
+                    "Repo {RepoId}: plan - {Added} added, {Updated} updated, {MetadataChanged} anchor-refreshed, {Removed} removed, {Unchanged} unchanged; {Chunks} chunk(s) to commit.",
+                    repoId, plan.Added.Count, plan.Updated.Count, plan.MetadataChanged.Count, plan.RemovedPaths.Count, plan.Unchanged.Count, chunksTotal);
                 await ReportAsync(
                     progress,
                     new RepoIndexProgressUpdate
@@ -202,7 +219,7 @@ internal sealed class RepoContextBootstrapService
                         FilesAdded = plan.Added.Count,
                         FilesUpdated = plan.Updated.Count,
                         FilesRemoved = plan.RemovedPaths.Count,
-                        FilesUnchanged = plan.Unchanged.Count,
+                        FilesUnchanged = unchangedCount,
                         ChunksTotal = chunksTotal,
                         ChunksCommitted = 0,
                     },
@@ -222,7 +239,7 @@ internal sealed class RepoContextBootstrapService
             {
                 await ReportAsync(
                     progress,
-                    new RepoIndexProgressUpdate { FilesUnchanged = plan.Unchanged.Count },
+                    new RepoIndexProgressUpdate { FilesUnchanged = unchangedCount },
                     cancellationToken).ConfigureAwait(false);
             }
 
@@ -240,12 +257,12 @@ internal sealed class RepoContextBootstrapService
                 .ConfigureAwait(false);
             _logger.LogInformation(
                 "Repo {RepoId}: vectorising {Changed} changed file(s); scanning {Unchanged} unchanged for embedding gaps.",
-                repoId, changed.Count, plan.Unchanged.Count);
+                repoId, changed.Count, unchangedForBackfill.Count);
             var embedded = await _vectorIngestor.IngestAsync(
                 repoId,
                 repoRoot,
                 changed,
-                plan.Unchanged,
+                unchangedForBackfill,
                 (count, ct) => ReportAsync(
                     progress, new RepoIndexProgressUpdate { FilesEmbedded = count }, ct),
                 cancellationToken).ConfigureAwait(false);
@@ -261,7 +278,7 @@ internal sealed class RepoContextBootstrapService
                 plan.Added.Count,
                 plan.Updated.Count,
                 plan.RemovedPaths.Count,
-                plan.Unchanged.Count,
+                unchangedCount,
                 stopwatch.ElapsedMilliseconds);
 
             return new RepoContextBootstrapResult
@@ -271,7 +288,7 @@ internal sealed class RepoContextBootstrapService
                 FilesAdded = plan.Added.Count,
                 FilesUpdated = plan.Updated.Count,
                 FilesRemoved = plan.RemovedPaths.Count,
-                FilesUnchanged = plan.Unchanged.Count,
+                FilesUnchanged = unchangedCount,
                 SymbolsCaptured = 0,
                 ElapsedMilliseconds = stopwatch.ElapsedMilliseconds,
             };
@@ -289,15 +306,15 @@ internal sealed class RepoContextBootstrapService
     /// <summary>
     /// The number of atomic write chunks <see cref="ApplyPlanAsync"/> will commit
     /// for a plan: one per <see cref="WriteChunkSize"/> upserts, where the upserts
-    /// are the repository root marker plus every added and updated file. Deletes
-    /// ride with the first chunk (the marker guarantees at least one), so they add
-    /// no chunk of their own.
+    /// are the repository root marker plus every added, updated, and
+    /// anchor-refreshed file. Deletes ride with the first chunk (the marker
+    /// guarantees at least one), so they add no chunk of their own.
     /// </summary>
     /// <param name="plan">The reconciliation plan.</param>
     /// <returns>The total chunk count.</returns>
     private static int ComputeChunkCount(RepoContextBootstrapPlan plan)
     {
-        var upsertCount = 1 + plan.Added.Count + plan.Updated.Count;
+        var upsertCount = 1 + plan.Added.Count + plan.Updated.Count + plan.MetadataChanged.Count;
         return (upsertCount + WriteChunkSize - 1) / WriteChunkSize;
     }
 
@@ -359,14 +376,37 @@ internal sealed class RepoContextBootstrapService
         }
     }
 
-    private async Task<Dictionary<string, string>> ReadStoredDigestsAsync(
+    /// <summary>
+    /// Projects the digest-only view the reconciliation diff needs from the fuller
+    /// stored-meta map the walk consumes, so a single structural read serves both.
+    /// </summary>
+    private static Dictionary<string, string> ProjectDigests(
+        IReadOnlyDictionary<string, StoredFileMeta> storedMeta)
+    {
+        var digests = new Dictionary<string, string>(storedMeta.Count, StringComparer.Ordinal);
+        foreach (var (path, meta) in storedMeta)
+        {
+            digests[path] = meta.Digest;
+        }
+
+        return digests;
+    }
+
+    /// <summary>
+    /// Reads the reconcile-relevant facts already stored for each of the
+    /// repository's files - digest, language, size, and the ingest hybrid-logical
+    /// clock's wall component (the fast-path anchor, recovered from the digest
+    /// register's order key) - keyed by repository-relative path. A single structural
+    /// range scan feeds both the walk's stat fast-path and the reconciliation diff.
+    /// </summary>
+    private async Task<Dictionary<string, StoredFileMeta>> ReadStoredMetaAsync(
         ILattice tree,
         string repoId,
         CancellationToken cancellationToken)
     {
         var prefix = RepoContextKeys.FilesPrefix(repoId);
         var endExclusive = PrefixUpperBound(prefix);
-        var digests = new Dictionary<string, string>(StringComparer.Ordinal);
+        var meta = new Dictionary<string, StoredFileMeta>(StringComparer.Ordinal);
 
         var cursorId = await tree.OpenEntryCursorAsync(
             prefix, endExclusive, reverse: false, pointInTime: false, cancellationToken)
@@ -392,7 +432,11 @@ internal sealed class RepoContextBootstrapService
                     var digest = RepoContextValues.ReadString(node.Digest);
                     if (digest is not null)
                     {
-                        digests[path] = digest;
+                        meta[path] = new StoredFileMeta(
+                            digest,
+                            RepoContextValues.ReadString(node.Language) ?? string.Empty,
+                            RepoContextValues.ReadInt64(node.SizeBytes) ?? -1,
+                            RepoContextValues.ReadHlcWallTicks(node.Digest) ?? 0);
                     }
                 }
 
@@ -407,7 +451,7 @@ internal sealed class RepoContextBootstrapService
             await tree.CloseCursorAsync(cursorId, CancellationToken.None).ConfigureAwait(false);
         }
 
-        return digests;
+        return meta;
     }
 
     private async Task ApplyPlanAsync(
@@ -420,7 +464,8 @@ internal sealed class RepoContextBootstrapService
         var ingestToken = DateTimeOffset.UtcNow.ToString("O");
         var clock = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
 
-        var upserts = new List<KeyValuePair<string, byte[]>>(plan.Added.Count + plan.Updated.Count + 1);
+        var upserts = new List<KeyValuePair<string, byte[]>>(
+            plan.Added.Count + plan.Updated.Count + plan.MetadataChanged.Count + 1);
 
         // Refresh the repository root marker in the same pass that mutates its
         // files. The live file count is the full scanned set, so list_repos can
@@ -438,6 +483,17 @@ internal sealed class RepoContextBootstrapService
         }
 
         foreach (var entry in plan.Updated)
+        {
+            clock = HybridLogicalClock.Tick(clock);
+            upserts.Add(new KeyValuePair<string, byte[]>(
+                RepoContextKeys.File(repoId, entry.RelativePath),
+                BuildFileNode(repoId, entry, ingestToken, clock)));
+        }
+
+        // Metadata-changed files are content-identical, so rewriting their node with
+        // a fresh clock advances the ingest anchor (the register order key) without
+        // changing any value - the fast-path skips them on the next reconcile.
+        foreach (var entry in plan.MetadataChanged)
         {
             clock = HybridLogicalClock.Tick(clock);
             upserts.Add(new KeyValuePair<string, byte[]>(

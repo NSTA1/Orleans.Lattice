@@ -67,11 +67,18 @@ internal static class RepoTreeWalker
     /// returned, so compiled artefacts, images, and other blobs never enter the
     /// index. Text files are unaffected.</param>
     /// <param name="onProgress">An optional callback invoked with the running count
-    /// of included (hashed, non-binary) files as the parallel phase progresses, so a
-    /// caller can report live walk progress. It is called from pool threads and must
-    /// be cheap and thread-safe; the walk emits one final call with the exact total
-    /// before returning. May be <see langword="null"/>.</param>
+    /// of processed files (hashed or skipped via the stat fast-path) as the parallel
+    /// phase progresses, so a caller can report live walk progress. It is called from
+    /// pool threads and must be cheap and thread-safe; the walk emits one final call
+    /// with the exact total before returning. May be <see langword="null"/>.</param>
     /// <param name="cancellationToken">Cancels the walk between files.</param>
+    /// <param name="knownFiles">Optional map of repository-relative path to the facts
+    /// already stored for that file. When supplied, a candidate whose size is
+    /// unchanged and whose on-disk modification time is strictly older than its
+    /// stored ingest anchor is assumed unchanged and its stored digest and language
+    /// are reused without a read - the stat fast-path that makes a periodic reconcile
+    /// cheap. When <see langword="null"/> every file is read and hashed (the cold
+    /// behaviour), so existing callers and tests are unaffected.</param>
     /// <returns>The included files, ordered by repository-relative path.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="rootPath"/> is null.</exception>
     /// <exception cref="DirectoryNotFoundException"><paramref name="rootPath"/> does not exist.</exception>
@@ -82,7 +89,8 @@ internal static class RepoTreeWalker
         bool respectGitignore = false,
         bool excludeBinary = false,
         Action<int>? onProgress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IReadOnlyDictionary<string, StoredFileMeta>? knownFiles = null)
     {
         ArgumentNullException.ThrowIfNull(rootPath);
         if (!Directory.Exists(rootPath))
@@ -98,6 +106,9 @@ internal static class RepoTreeWalker
 
         // Phase 1: serial, symlink-safe discovery of the included files. This is a
         // cheap stat-only pass; the expensive read-and-hash is deferred to phase 2.
+        // Each candidate carries the size and modification time the enumeration
+        // already populated (at zero extra stat cost) so phase 2 can apply the
+        // fast-path without a second stat.
         var candidates = DiscoverIncludedFiles(root, includes, excludes, respectGitignore, cancellationToken);
         if (candidates.Count == 0)
         {
@@ -109,7 +120,7 @@ internal static class RepoTreeWalker
         // slot is left null when the file is dropped as binary (see excludeBinary),
         // so the array is compacted before the deterministic ordinal sort.
         var results = new RepoFileEntry?[candidates.Count];
-        var hashedCount = 0;
+        var processedCount = 0;
         var options = new ParallelOptions
         {
             CancellationToken = cancellationToken,
@@ -120,8 +131,38 @@ internal static class RepoTreeWalker
         {
             Parallel.For(0, candidates.Count, options, index =>
             {
-                var (absolutePath, relativePath) = candidates[index];
-                var content = File.ReadAllBytes(absolutePath);
+                var candidate = candidates[index];
+                var relativePath = candidate.Relative;
+
+                StoredFileMeta meta = default;
+                var known = knownFiles is not null
+                    && knownFiles.TryGetValue(relativePath, out meta);
+
+                // Stat fast-path: a stored file whose size is unchanged and whose
+                // modification time is strictly older than the ingest anchor is
+                // assumed unchanged. Reuse its stored digest and language without a
+                // read. The strict comparison stays clear of the racy-clean window
+                // (a file touched in the same tick as its last ingest is re-hashed),
+                // and the content digest remains the sole source of truth: a false
+                // "unchanged" is impossible here because a real edit either grows or
+                // shrinks the file or leaves a modification time at or after the
+                // anchor, both of which fall through to the read below.
+                if (known
+                    && candidate.Length == meta.SizeBytes
+                    && meta.IngestWallTicks > 0
+                    && candidate.MtimeTicks < meta.IngestWallTicks)
+                {
+                    results[index] = new RepoFileEntry(
+                        relativePath, meta.Digest, candidate.Length, meta.Language);
+                    if (onProgress is not null)
+                    {
+                        onProgress(Interlocked.Increment(ref processedCount));
+                    }
+
+                    return;
+                }
+
+                var content = File.ReadAllBytes(candidate.Absolute);
 
                 // Drop a non-text file before it is hashed, embedded, or indexed:
                 // a NUL byte in the leading window is the same cheap, language- and
@@ -131,18 +172,40 @@ internal static class RepoTreeWalker
                     return;
                 }
 
-                results[index] = new RepoFileEntry(
-                    relativePath,
-                    FileDigest.Compute(content),
-                    content.LongLength,
-                    LanguageClassifier.Classify(relativePath));
+                string digest;
+                var anchorStale = false;
+                if (known && FileDigest.Matches(meta.Digest, content))
+                {
+                    // The stat looked stale (bumped modification time or a size the
+                    // fast-path could not clear) but the content is byte-for-byte the
+                    // stored content. Keep the stored digest verbatim - so the plan
+                    // sees it as unchanged, not a spurious update - and flag the
+                    // anchor stale so the node is rewritten to refresh the ingest
+                    // anchor, letting the fast-path skip this file from now on.
+                    digest = meta.Digest;
+                    anchorStale = true;
+                }
+                else
+                {
+                    // A new file, or genuinely changed content: stamp the modern
+                    // digest so the store migrates off any older algorithm as content
+                    // evolves.
+                    digest = FileDigest.Compute(content);
+                }
 
-                // Publish the running included-file count for live progress. The
+                results[index] = new RepoFileEntry(
+                    relativePath, digest, content.LongLength,
+                    LanguageClassifier.Classify(relativePath))
+                {
+                    AnchorStale = anchorStale,
+                };
+
+                // Publish the running processed-file count for live progress. The
                 // sampled value is approximate under concurrency; the exact total is
                 // published once below after the loop drains.
                 if (onProgress is not null)
                 {
-                    onProgress(Interlocked.Increment(ref hashedCount));
+                    onProgress(Interlocked.Increment(ref processedCount));
                 }
             });
         }
@@ -198,14 +261,14 @@ internal static class RepoTreeWalker
     /// <c>.gitignore</c> (when honoured), include, and exclude filters, in
     /// discovery order.
     /// </summary>
-    private static List<(string Absolute, string Relative)> DiscoverIncludedFiles(
+    private static List<(string Absolute, string Relative, long Length, long MtimeTicks)> DiscoverIncludedFiles(
         string root,
         List<GlobMatcher> includes,
         List<GlobMatcher> excludes,
         bool respectGitignore,
         CancellationToken cancellationToken)
     {
-        var included = new List<(string Absolute, string Relative)>();
+        var included = new List<(string Absolute, string Relative, long Length, long MtimeTicks)>();
 
         // Explicit depth-first walk over real directories only, so a symlinked or
         // junctioned directory is never descended (escape prevention + cycle
@@ -276,7 +339,12 @@ internal static class RepoTreeWalker
                     continue;
                 }
 
-                included.Add((child.FullName, relativePath));
+                // The enumeration already populated Length and LastWriteTimeUtc for
+                // this entry, so reading them here costs no extra stat. Both feed the
+                // phase-2 stat fast-path; the modification time is an advisory local
+                // read only (never persisted or ordered across clusters).
+                var file = (FileInfo)child;
+                included.Add((child.FullName, relativePath, file.Length, file.LastWriteTimeUtc.Ticks));
             }
         }
 

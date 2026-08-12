@@ -12,6 +12,9 @@ public sealed class RepoContextBootstrapPlanTests
     private static RepoFileEntry Entry(string path, string digest)
         => new(path, digest, digest.Length, "csharp");
 
+    private static RepoFileEntry StaleEntry(string path, string digest)
+        => new(path, digest, digest.Length, "csharp") { AnchorStale = true };
+
     [Test]
     public void A_cold_scan_over_an_empty_store_adds_every_file()
     {
@@ -122,6 +125,45 @@ public sealed class RepoContextBootstrapPlanTests
         var plan = RepoContextBootstrapPlan.Compute(stored, Array.Empty<RepoFileEntry>());
 
         Assert.That(plan.RemovedPaths, Is.EqualTo(new[] { "a.cs", "b.cs", "c.cs" }));
+    }
+
+    [Test]
+    public void A_touched_but_unchanged_file_is_metadata_changed_not_unchanged()
+    {
+        // Same digest as stored, but the walk flagged the anchor stale (the file was
+        // touched). It must be rewritten to refresh the anchor, so it is not a no-op,
+        // yet it is content-unchanged so it counts toward the live/unchanged tally.
+        var stored = new Dictionary<string, string> { ["a.cs"] = "d1" };
+        var scanned = new[] { StaleEntry("a.cs", "d1") };
+
+        var plan = RepoContextBootstrapPlan.Compute(stored, scanned);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(plan.Added, Is.Empty);
+            Assert.That(plan.Updated, Is.Empty);
+            Assert.That(plan.Unchanged, Is.Empty);
+            Assert.That(plan.MetadataChanged.Single().RelativePath, Is.EqualTo("a.cs"));
+            Assert.That(plan.IsNoOp, Is.False);
+            Assert.That(plan.LiveFileCount, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void A_changed_file_that_is_also_stale_is_an_update_not_metadata_changed()
+    {
+        // A genuine content change dominates the anchor-stale flag: the digest
+        // differs from the stored digest, so it is an update (and is re-embedded).
+        var stored = new Dictionary<string, string> { ["a.cs"] = "old" };
+        var scanned = new[] { StaleEntry("a.cs", "new") };
+
+        var plan = RepoContextBootstrapPlan.Compute(stored, scanned);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(plan.Updated.Single().RelativePath, Is.EqualTo("a.cs"));
+            Assert.That(plan.MetadataChanged, Is.Empty);
+        });
     }
 
     [Test]

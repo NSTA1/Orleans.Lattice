@@ -20,4 +20,17 @@ internal readonly record struct RepoFileEntry(
     string RelativePath,
     string Digest,
     long SizeBytes,
-    string Language);
+    string Language)
+{
+    /// <summary>
+    /// Set by the walk when a stored file had to be read and re-hashed because its
+    /// on-disk stat looked stale (a bumped modification time or a mismatched size),
+    /// yet its content turned out identical to the stored digest. It tells the plan
+    /// to treat the file as metadata-changed - rewrite its node to refresh the
+    /// ingest anchor so the stat fast-path skips it next time - rather than as a
+    /// clean unchanged file that would be re-hashed on every future reconcile. It is
+    /// never set for a fast-path skip (the anchor is already fresh) or for a
+    /// genuinely new or changed file, and it is a transient reconcile flag only.
+    /// </summary>
+    public bool AnchorStale { get; init; }
+}

@@ -102,4 +102,25 @@ internal static class RepoContextValues
 
         return BinaryPrimitives.ReadInt64BigEndian(register.Value);
     }
+
+    /// <summary>
+    /// Reads the wall-clock tick component of the hybrid logical clock that authored
+    /// a register's current value, recovered from the leading eight big-endian bytes
+    /// of its order key (see <see cref="HlcOrderKey(HybridLogicalClock)"/>). This is
+    /// the ingest-time anchor a reconcile compares an on-disk modification time
+    /// against, so it needs no separately persisted field. Returns
+    /// <see langword="null"/> when the register has never been written or its order
+    /// key is too short to carry the wall component.
+    /// </summary>
+    /// <param name="register">The register to read. Must not be <see langword="null"/>.</param>
+    internal static long? ReadHlcWallTicks(BoundedRegister register)
+    {
+        ArgumentNullException.ThrowIfNull(register);
+        if (!register.HasValue || register.OrderKey is not { Length: >= sizeof(long) })
+        {
+            return null;
+        }
+
+        return BinaryPrimitives.ReadInt64BigEndian(register.OrderKey);
+    }
 }

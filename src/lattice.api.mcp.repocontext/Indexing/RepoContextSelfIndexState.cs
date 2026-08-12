@@ -29,4 +29,17 @@ internal sealed class RepoContextSelfIndexState
     /// </summary>
     [Id(1)]
     public long NextSweepAfterTicks { get; set; }
+
+    /// <summary>
+    /// The earliest UTC tick count at which a new periodic content reconcile may
+    /// run, set when one completes so reconciles are spaced by a jittered interval
+    /// that is longer than the gap-scan cooldown. A reconcile re-drives the full
+    /// idempotent index (walk, reconcile, prune, vectorise) so on-disk edits and
+    /// deletions are picked up automatically between the cheaper presence-only gap
+    /// scans. This is a local scheduling deadline only (an Orleans timer concern),
+    /// deliberately distinct from the hybrid-logical-clock anchors that order the
+    /// structural records.
+    /// </summary>
+    [Id(2)]
+    public long NextReconcileAfterTicks { get; set; }
 }

@@ -381,4 +381,155 @@ public sealed class RepoTreeWalkerTests
             Assert.That(entries.Select(e => e.RelativePath), Is.EqualTo(new[] { "code.cs" }));
         });
     }
+
+    [Test]
+    public void Walk_reuses_the_stored_digest_without_reading_when_the_stat_fast_path_hits()
+    {
+        // A file whose size matches and whose modification time is strictly older
+        // than the stored ingest anchor is assumed unchanged. Prove the read is
+        // skipped by seeding a stored digest that does NOT match the on-disk bytes:
+        // if the walk reused it verbatim, it never read the file.
+        Write("a.cs", "12345");
+        var path = Path.Combine(_root, "a.cs");
+        File.SetLastWriteTimeUtc(path, new DateTime(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+        var anchor = new DateTime(2001, 1, 1, 0, 0, 0, DateTimeKind.Utc).Ticks;
+
+        var known = new Dictionary<string, StoredFileMeta>
+        {
+            ["a.cs"] = new StoredFileMeta("xx128:deadbeefdeadbeefdeadbeefdeadbeef", "csharp", 5, anchor),
+        };
+
+        var entry = RepoTreeWalker.Walk(
+            _root, null, null, knownFiles: known).Single();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(entry.Digest, Is.EqualTo("xx128:deadbeefdeadbeefdeadbeefdeadbeef"));
+            Assert.That(entry.Language, Is.EqualTo("csharp"));
+            Assert.That(entry.AnchorStale, Is.False);
+        });
+    }
+
+    [Test]
+    public void Walk_reads_and_recomputes_when_the_on_disk_size_differs_from_the_stored_size()
+    {
+        Write("a.cs", "grown content");
+        var path = Path.Combine(_root, "a.cs");
+        File.SetLastWriteTimeUtc(path, new DateTime(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+        var anchor = new DateTime(2001, 1, 1, 0, 0, 0, DateTimeKind.Utc).Ticks;
+
+        // Stored size is stale, so the fast-path cannot apply and the file is read.
+        var known = new Dictionary<string, StoredFileMeta>
+        {
+            ["a.cs"] = new StoredFileMeta("xx128:deadbeefdeadbeefdeadbeefdeadbeef", "csharp", 3, anchor),
+        };
+
+        var entry = RepoTreeWalker.Walk(
+            _root, null, null, knownFiles: known).Single();
+
+        Assert.That(
+            entry.Digest, Is.EqualTo(FileDigest.Compute(Encoding.UTF8.GetBytes("grown content"))));
+    }
+
+    [Test]
+    public void Walk_reads_and_recomputes_when_the_modification_time_is_at_or_after_the_anchor()
+    {
+        Write("a.cs", "edited");
+        var path = Path.Combine(_root, "a.cs");
+        var anchor = new DateTime(2001, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(path, anchor);
+
+        // Modification time equals the anchor (the racy-clean window): the strict
+        // comparison forces a read even though the size matches.
+        var known = new Dictionary<string, StoredFileMeta>
+        {
+            ["a.cs"] = new StoredFileMeta("xx128:deadbeefdeadbeefdeadbeefdeadbeef", "csharp", 6, anchor.Ticks),
+        };
+
+        var entry = RepoTreeWalker.Walk(
+            _root, null, null, knownFiles: known).Single();
+
+        Assert.That(
+            entry.Digest, Is.EqualTo(FileDigest.Compute(Encoding.UTF8.GetBytes("edited"))));
+    }
+
+    [Test]
+    public void Walk_keeps_the_stored_digest_and_flags_the_anchor_stale_when_a_touched_file_is_unchanged()
+    {
+        // The file was touched (modification time bumped past the anchor) but the
+        // bytes are identical. The fast-path misses, the read confirms the content
+        // matches the stored digest, so the digest is kept verbatim and the entry is
+        // flagged so the reconcile rewrites the node to refresh the anchor.
+        Write("a.cs", "same");
+        var content = Encoding.UTF8.GetBytes("same");
+        var storedDigest = FileDigest.Compute(content);
+        var path = Path.Combine(_root, "a.cs");
+        var anchor = new DateTime(2001, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(path, anchor.AddDays(1));
+
+        var known = new Dictionary<string, StoredFileMeta>
+        {
+            ["a.cs"] = new StoredFileMeta(storedDigest, "csharp", content.Length, anchor.Ticks),
+        };
+
+        var entry = RepoTreeWalker.Walk(
+            _root, null, null, knownFiles: known).Single();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(entry.Digest, Is.EqualTo(storedDigest));
+            Assert.That(entry.AnchorStale, Is.True);
+        });
+    }
+
+    [Test]
+    public void Walk_never_skips_a_file_whose_stored_anchor_is_unknown()
+    {
+        Write("a.cs", "abc");
+        var path = Path.Combine(_root, "a.cs");
+        File.SetLastWriteTimeUtc(path, new DateTime(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+
+        // A zero anchor (a record ingested before the anchor was recoverable) must
+        // fall through to a real read rather than trusting the stale digest.
+        var known = new Dictionary<string, StoredFileMeta>
+        {
+            ["a.cs"] = new StoredFileMeta("xx128:deadbeefdeadbeefdeadbeefdeadbeef", "csharp", 3, 0),
+        };
+
+        var entry = RepoTreeWalker.Walk(
+            _root, null, null, knownFiles: known).Single();
+
+        Assert.That(
+            entry.Digest, Is.EqualTo(FileDigest.Compute(Encoding.UTF8.GetBytes("abc"))));
+    }
+
+    [Test]
+    public void Walk_migrates_a_legacy_sha256_digest_only_when_the_content_changes()
+    {
+        // A legacy SHA-256 store that is genuinely edited (fast-path miss, content
+        // differs) is rewritten with the modern tagged digest, so the algorithm
+        // migrates lazily as content evolves rather than in a forced bulk re-hash.
+        Write("a.cs", "new bytes");
+        var path = Path.Combine(_root, "a.cs");
+        var anchor = new DateTime(2001, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(path, anchor.AddDays(1));
+
+        var legacyDigest = System.Convert.ToHexStringLower(
+            System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes("old bytes")));
+        var known = new Dictionary<string, StoredFileMeta>
+        {
+            ["a.cs"] = new StoredFileMeta(legacyDigest, "csharp", 9, anchor.Ticks),
+        };
+
+        var entry = RepoTreeWalker.Walk(
+            _root, null, null, knownFiles: known).Single();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(entry.Digest, Does.StartWith("xx128:"));
+            Assert.That(
+                entry.Digest, Is.EqualTo(FileDigest.Compute(Encoding.UTF8.GetBytes("new bytes"))));
+            Assert.That(entry.AnchorStale, Is.False);
+        });
+    }
 }

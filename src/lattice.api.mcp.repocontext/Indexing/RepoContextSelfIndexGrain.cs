@@ -59,6 +59,17 @@ internal sealed class RepoContextSelfIndexGrain(
     /// <summary>The maximum number of structural file keys inspected per tick.</summary>
     private const int PageSize = 512;
 
+    /// <summary>
+    /// The base interval between periodic content reconciles. A reconcile re-drives
+    /// the full idempotent index so on-disk edits and deletions are picked up
+    /// automatically; it is deliberately longer than the presence-only gap-scan
+    /// cooldown, and the walk's stat fast-path keeps each one cheap.
+    /// </summary>
+    private static readonly TimeSpan ReconcileInterval = TimeSpan.FromMinutes(15);
+
+    /// <summary>The maximum extra random interval added on top of <see cref="ReconcileInterval"/> to desync repositories.</summary>
+    private static readonly TimeSpan ReconcileIntervalJitter = TimeSpan.FromMinutes(5);
+
     IGrainContext IGrainBase.GrainContext => grainContext;
 
     private string RepoId => this.GetPrimaryKeyString();
@@ -89,7 +100,15 @@ internal sealed class RepoContextSelfIndexGrain(
         // every run - onboarding, resume, and self-index recovery - through one
         // credential-stamped, single-flight background pass, so this call is exactly
         // the run the self-index scan would otherwise re-drive.
-        return await runner.StartIndexAsync(request).ConfigureAwait(true);
+        var progress = await runner.StartIndexAsync(request).ConfigureAwait(true);
+
+        // Space the first periodic reconcile one interval past this onboarding pass:
+        // onboarding already reconciled the whole tree, so an immediate reconcile
+        // would be redundant. Persist the deadline so a restart mid-interval keeps
+        // it rather than reconciling again on the first tick after reactivation.
+        ScheduleNextReconcile(timeProvider.GetUtcNow().UtcTicks);
+        await state.WriteStateAsync().ConfigureAwait(true);
+        return progress;
     }
 
     /// <inheritdoc />
@@ -205,6 +224,29 @@ internal sealed class RepoContextSelfIndexGrain(
             }
         }
 
+        // At the start of a fresh cycle, and on a longer cadence than the gap scan,
+        // re-drive the whole idempotent index so on-disk edits and deletions are
+        // picked up automatically. The gap scan only detects missing embeddings; a
+        // reconcile re-walks the tree (with the cheap stat fast-path) to detect
+        // changed and removed files. It is idempotent and single-flight, so a reconcile
+        // already in flight is a no-op.
+        if (!continuing && nowTicks >= state.State.NextReconcileAfterTicks)
+        {
+            var triggered = await grainFactory
+                .GetGrain<IRepoIndexJobGrain>(RepoId).EnsureIndexedAsync().ConfigureAwait(true);
+            if (triggered)
+            {
+                logger.LogInformation(
+                    "Repo {RepoId}: self-index re-drove a periodic reconcile to pick up edits and deletions.",
+                    RepoId);
+            }
+
+            ScheduleNextReconcile(nowTicks);
+            EndScan(nowTicks);
+            await state.WriteStateAsync().ConfigureAwait(true);
+            return;
+        }
+
         // Load the membership set once per scan and reuse it across the scan's
         // pages. After a restart mid-scan the in-memory copy is gone, so reload it.
         _embedded ??= await gapScanner.LoadEmbeddedAsync(RepoId, cancellationToken).ConfigureAwait(true);
@@ -253,6 +295,14 @@ internal sealed class RepoContextSelfIndexGrain(
         state.State.ResumeKey = null;
         state.State.NextSweepAfterTicks = nowTicks + ScanCooldown.Ticks + jitterTicks;
         _embedded = null;
+    }
+
+    private void ScheduleNextReconcile(long nowTicks)
+    {
+        // Space the next content reconcile by the base interval plus a random jitter
+        // so many repositories' reconciles stay desynchronised in steady state.
+        var jitterTicks = (long)(Random.Shared.NextDouble() * ReconcileIntervalJitter.Ticks);
+        state.State.NextReconcileAfterTicks = nowTicks + ReconcileInterval.Ticks + jitterTicks;
     }
 
     private async Task RegisterKeepaliveAsync()
