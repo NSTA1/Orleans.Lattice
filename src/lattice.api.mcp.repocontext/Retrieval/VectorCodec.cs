@@ -101,4 +101,12 @@ internal static class VectorCodec
         SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(sourceKey), hash);
         return Convert.ToHexStringLower(hash[..8]);
     }
+
+    /// <summary>
+    /// The number of UTF-8 bytes a <see cref="SourceId(string)"/> occupies (16
+    /// lower-case hex characters, one byte each). A membership presence probe can
+    /// size a single reusable buffer to this length and fill it per source rather
+    /// than allocating a fresh array for every check.
+    /// </summary>
+    internal const int SourceIdByteLength = 16;
 }

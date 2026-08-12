@@ -277,16 +277,19 @@ public sealed class RepoContextBootstrapToolTests
         Assert.That(tree.GetAsync(RepoContextKeys.File(RepoId, "a.cs"), Ct).Result, Is.Not.Null);
 
         // Second run resumes: the already-written files match by digest, so nothing
-        // is re-added or duplicated - the resume is a clean no-op over committed work.
+        // is re-added or duplicated - the structural resume is a clean no-op over
+        // committed work. Vectorising still runs (it always does), so the ingestor
+        // is re-entered exactly once to back-fill the embeddings the interrupted run
+        // never wrote; this time the seam is inert, so the resume settles cleanly.
         var resumed = await BootstrapAsync(client, root);
         Assert.Multiple(() =>
         {
             Assert.That(resumed.GetProperty("filesAdded").GetInt32(), Is.EqualTo(0));
             Assert.That(resumed.GetProperty("filesUpdated").GetInt32(), Is.EqualTo(0));
             Assert.That(resumed.GetProperty("filesUnchanged").GetInt32(), Is.EqualTo(2));
-            Assert.That(ingestor.Invocations, Is.EqualTo(1),
-                "The interrupted run reached the seam once; the resumed run is a pure "
-                + "no-op over already-committed work and never re-enters it.");
+            Assert.That(ingestor.Invocations, Is.EqualTo(2),
+                "The interrupted run reached the seam once and failed; the resumed run "
+                + "re-enters it once more to back-fill the embeddings that never landed.");
         });
     }
 
@@ -330,6 +333,7 @@ public sealed class RepoContextBootstrapToolTests
             string repoId,
             string repoRoot,
             IReadOnlyList<RepoFileEntry> changedFiles,
+            IReadOnlyList<RepoFileEntry> unchangedFiles,
             Func<int, CancellationToken, ValueTask>? onProgress,
             CancellationToken cancellationToken)
         {
@@ -341,5 +345,10 @@ public sealed class RepoContextBootstrapToolTests
 
             return ValueTask.FromResult(0);
         }
+
+        public Task RetireAsync(
+            string repoId,
+            IReadOnlyList<string> removedPaths,
+            CancellationToken cancellationToken) => Task.CompletedTask;
     }
 }

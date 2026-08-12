@@ -20,6 +20,19 @@ internal interface IRepoIndexJobGrain : IGrainWithStringKey
     /// <returns>The progress snapshot at acceptance (status running).</returns>
     Task<RepoIndexProgress> StartAsync(RepoIndexJobRequest request);
 
+    /// <summary>
+    /// Ensures the repository is (re-)indexed using its last persisted request,
+    /// without any client call. Used by the always-on self-heal sweep to re-drive a
+    /// bootstrap pass over a repository whose structural walk completed but whose
+    /// embeddings were left incomplete, so the idempotent back-fill can close the
+    /// gap. Does nothing and returns <see langword="false"/> when the repository was
+    /// never bootstrapped (no persisted request) or a run is already in flight;
+    /// otherwise it starts a run from the persisted request and returns
+    /// <see langword="true"/>.
+    /// </summary>
+    /// <returns><see langword="true"/> if a run was triggered; otherwise <see langword="false"/>.</returns>
+    Task<bool> EnsureIndexedAsync();
+
     /// <summary>Returns the current progress snapshot for the repository's job.</summary>
     /// <returns>The point-in-time progress, or an empty snapshot when no job has ever run.</returns>
     Task<RepoIndexProgress> GetProgressAsync();

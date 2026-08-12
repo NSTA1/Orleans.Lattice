@@ -520,7 +520,7 @@ internal static class RepoContextToolHandlers
     /// <returns>The progress snapshot at acceptance.</returns>
     /// <exception cref="McpException">The path resolves outside the workspace or
     /// does not exist (caller errors).</exception>
-    private static Task<RepoIndexProgress> StartIndexAsync(
+    private static async Task<RepoIndexProgress> StartIndexAsync(
         RequestContext<CallToolRequestParams> context,
         string repoRoot,
         string repoId,
@@ -564,8 +564,14 @@ internal static class RepoContextToolHandlers
             ExcludeBinary = excludeBinary,
         };
 
-        var grain = services.GetRequiredService<IRepoIndexRunner>();
-        return grain.StartIndexAsync(request);
+        // The self-index grain is the single owner of this repository's "reach and
+        // stay fully indexed" guarantee: EnsureRunningAsync arms the durable
+        // per-repository keep-alive reminder and background gap scan, then drives the
+        // initial indexing pass and returns its snapshot. Onboarding and self-heal
+        // recovery therefore funnel through exactly one path, so they can never drift.
+        var grainFactory = services.GetRequiredService<IGrainFactory>();
+        return await grainFactory
+            .GetGrain<IRepoContextSelfIndexGrain>(repoId).EnsureRunningAsync(request).ConfigureAwait(false);
     }
 
     /// <summary>

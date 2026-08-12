@@ -81,4 +81,7 @@ internal static class RepoContextTypeAliases
 
     /// <summary>Alias for <see cref="RepoIndexProgressUpdate"/>.</summary>
     internal const string RepoIndexProgressUpdate = "ol.rcu";
+
+    /// <summary>Alias for <see cref="RepoContextSelfIndexState"/>.</summary>
+    internal const string RepoContextSelfIndexState = "ol.rcz";
 }

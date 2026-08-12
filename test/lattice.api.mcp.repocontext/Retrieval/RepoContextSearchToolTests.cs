@@ -323,11 +323,14 @@ public sealed class RepoContextSearchToolTests
         var space = new EmbeddingSpace("churn-model", 4, normalized: true);
         var sourceKey = RepoContextKeys.File(RepoId, "src/A.cs");
 
-        // Re-embed the same source many times with a distinct vector each time.
+        // Re-embed the same source many times with a distinct vector each time,
+        // recording membership per embed as the ingestor does (StoreAsync no longer
+        // folds presence itself - the caller flushes it once per batch).
         for (var i = 0; i < 6; i++)
         {
             var vector = new[] { 0.1f * i, 1f - (0.1f * i), 0.25f, 0.5f };
             await writer.StoreAsync(RepoId, sourceKey, space, vector, Ct);
+            await writer.AddMembersAsync(RepoId, new[] { sourceKey }, Ct);
         }
 
         // Live membership stays bounded: exactly one live source identifier.

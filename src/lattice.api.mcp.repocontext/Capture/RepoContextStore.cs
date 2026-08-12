@@ -483,6 +483,12 @@ internal sealed class RepoContextStore
             .CancelAndClearAsync()
             .ConfigureAwait(false);
 
+        // Tear down the repository's always-on self-index scan so a removed
+        // repository leaves no keep-alive reminder firing and no checkpoint behind.
+        await _grainFactory.GetGrain<IRepoContextSelfIndexGrain>(repoId)
+            .StopAsync()
+            .ConfigureAwait(false);
+
         var scanPrefix = RepoContextKeys.RepoScanPrefix(repoId);
         var end = RepoContextPortability.PrefixUpperBound(scanPrefix)
             ?? throw new McpException("The repository id produced an unbounded delete range.");

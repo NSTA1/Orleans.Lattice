@@ -90,6 +90,27 @@ internal sealed class RepoIndexJobGrain(
     }
 
     /// <inheritdoc />
+    public async Task<bool> EnsureIndexedAsync()
+    {
+        // Never bootstrapped: there is no persisted request to re-drive, so the
+        // self-heal sweep has nothing to do for this repository.
+        if (state.State.Request is null)
+        {
+            return false;
+        }
+
+        // Already running: a run is in flight (or resuming), so the back-fill it
+        // performs will close any embedding gap. Do not start a duplicate.
+        if (state.State.Status == RepoIndexStatus.Running)
+        {
+            return false;
+        }
+
+        await StartAsync(state.State.Request).ConfigureAwait(true);
+        return true;
+    }
+
+    /// <inheritdoc />
     public Task<RepoIndexProgress> GetProgressAsync() =>
         Task.FromResult(state.State.ToProgress(RepoId));
 

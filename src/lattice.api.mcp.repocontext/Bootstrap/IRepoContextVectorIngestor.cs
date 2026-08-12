@@ -18,13 +18,20 @@ internal interface IRepoContextVectorIngestor
 {
     /// <summary>
     /// Offers the files a bootstrap run added or updated to the vectorisation
-    /// path. The default binding ignores them (vector persistence is out of scope
-    /// for structural ingestion); a later binding embeds and stores them.
+    /// path, together with the files it left unchanged, so an interrupted prior
+    /// vectorise can be self-healed. The default binding ignores them (vector
+    /// persistence is out of scope for structural ingestion); a later binding
+    /// embeds the changed files and back-fills any unchanged file that has no
+    /// embedding yet.
     /// </summary>
     /// <param name="repoId">The repository identity the files belong to.</param>
     /// <param name="repoRoot">The absolute repository root, so an implementation
     /// can re-read file content to embed it.</param>
-    /// <param name="changedFiles">The files added or updated by the run.</param>
+    /// <param name="changedFiles">The files added or updated by the run. These are
+    /// always embedded (their content changed, so any prior vector is stale).</param>
+    /// <param name="unchangedFiles">The files the run left unchanged. A binding
+    /// that embeds only re-embeds one of these when it has no embedding yet, which
+    /// heals a vectorise that a prior run left incomplete without redundant work.</param>
     /// <param name="onProgress">An optional callback invoked after each batch of
     /// vectors is stored, with the running count of files embedded so far, so a long
     /// vectorisation pass can report incremental progress. May be <see langword="null"/>.</param>
@@ -36,6 +43,24 @@ internal interface IRepoContextVectorIngestor
         string repoId,
         string repoRoot,
         IReadOnlyList<RepoFileEntry> changedFiles,
+        IReadOnlyList<RepoFileEntry> unchangedFiles,
         Func<int, CancellationToken, ValueTask>? onProgress,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Retires the vectors of the files a bootstrap run removed, so a deleted file
+    /// naturally drops its embedding and the live vector count stays honest. The
+    /// default binding ignores them; the embedding binding deletes each source's
+    /// vector presence keys and observed-removes it from the membership set. This
+    /// is independent of the embedding provider - it only deletes stored records -
+    /// so retirement still happens when the provider is unavailable.
+    /// </summary>
+    /// <param name="repoId">The repository identity the files belonged to.</param>
+    /// <param name="removedPaths">The repository-relative paths of the files the
+    /// run removed.</param>
+    /// <param name="cancellationToken">Cancels the retirement.</param>
+    Task RetireAsync(
+        string repoId,
+        IReadOnlyList<string> removedPaths,
         CancellationToken cancellationToken);
 }

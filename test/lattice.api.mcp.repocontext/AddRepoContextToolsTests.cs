@@ -75,6 +75,10 @@ public sealed class AddRepoContextToolsTests
             Assert.That(ingestor!.ImplementationType, Is.Not.EqualTo(typeof(NoOpRepoContextVectorIngestor)));
             Assert.That(
                 services.Any(d => d.ServiceType == typeof(RepoContextVectorWriter)), Is.True);
+            // The always-on embedding gap scanner (consumed by the self-index grain)
+            // is wired alongside the writer it reads membership through.
+            Assert.That(
+                services.Any(d => d.ServiceType == typeof(RepoContextEmbeddingGapScanner)), Is.True);
             Assert.That(
                 services.Any(d => d.ServiceType == typeof(IRepoContextSemanticIndex)), Is.True);
             Assert.That(

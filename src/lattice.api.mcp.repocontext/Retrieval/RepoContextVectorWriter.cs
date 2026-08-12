@@ -78,22 +78,69 @@ internal sealed class RepoContextVectorWriter
         await WriteMetadataAsync(repoId, vectorId, sourceKey, contentAddress, tag, cancellationToken)
             .ConfigureAwait(false);
         await RetireStaleAsync(repoId, sourceId, keep: vectorId, cancellationToken).ConfigureAwait(false);
-        await AddMemberAsync(repoId, sourceId, cancellationToken).ConfigureAwait(false);
 
+        // Membership is recorded by the caller once per embed batch (see
+        // AddMembersAsync), not per store: folding presence for every file would
+        // read-modify-write the whole growing membership record thousands of times
+        // over a large back-fill. The caller flushes a batch's membership after its
+        // vectors land, so an interrupted run leaves at most one batch of vectors
+        // unrecorded (re-embedded, idempotently, on the next pass).
         return vectorId;
     }
 
+    /// <summary>
+    /// Retires the entire live embedding of <paramref name="sourceKey"/>: every
+    /// metadata presence key for the source is deleted and its identifier is
+    /// observed-removed from the membership set. Used when the source itself is
+    /// removed (its file was pruned), so a deleted file naturally drops its vector
+    /// and the membership set stays an honest tally of live embeddings. The
+    /// immutable, content-addressed payload is left for the per-tree compactor to
+    /// reclaim, since it may be shared by another source with identical content.
+    /// Idempotent: retiring a source with no live vector is a no-op.
+    /// </summary>
+    /// <param name="repoId">The repository the source belongs to. Must not be <see langword="null"/>.</param>
+    /// <param name="sourceKey">The canonical record key whose embedding to retire. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancels the retirement.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="repoId"/> or <paramref name="sourceKey"/> is null.</exception>
+    public async Task RetireAsync(string repoId, string sourceKey, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentNullException.ThrowIfNull(sourceKey);
+
+        var sourceId = VectorCodec.SourceId(sourceKey);
+
+        await DeleteVectorsAsync(repoId, sourceId, cancellationToken).ConfigureAwait(false);
+        await RemoveMemberAsync(repoId, sourceId, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task DeleteVectorsAsync(string repoId, string sourceId, CancellationToken cancellationToken)
+    {
+        var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMetadata);
+
+        // Every presence key for the source shares the prefix "{sourceId}." within
+        // the repository's vector range, so a single range delete retires the whole
+        // source in one call - no prefix scan and no per-key point deletes.
+        var prefix = $"{RepoContextKeys.VectorsPrefix(repoId)}{sourceId}.";
+        var endExclusive = RepoContextPortability.PrefixUpperBound(prefix);
+        if (endExclusive is null)
+        {
+            return;
+        }
+
+        await tree.DeleteRangeAsync(prefix, endExclusive, cancellationToken).ConfigureAwait(false);
+    }
     private async Task WritePayloadAsync(
         string repoId, string contentAddress, EmbeddingSpaceTag tag, byte[] payload, CancellationToken cancellationToken)
     {
         var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorPayload);
         var key = RepoContextKeys.VectorPayload(repoId, contentAddress);
 
-        var existing = await tree.GetAsync(key, cancellationToken).ConfigureAwait(false);
-        if (existing is not null)
+        // Immutable and content-addressed: a present payload is byte-identical,
+        // so a presence probe is enough. ExistsAsync avoids transferring the
+        // (multi-kilobyte) embedding back across the grain boundary just to
+        // discover it is already stored.
+        if (await tree.ExistsAsync(key, cancellationToken).ConfigureAwait(false))
         {
-            // Immutable and content-addressed: the payload already present is
-            // byte-identical, so there is nothing to rewrite.
             return;
         }
 
@@ -165,8 +212,32 @@ internal sealed class RepoContextVectorWriter
         }
     }
 
-    private async Task AddMemberAsync(string repoId, string sourceId, CancellationToken cancellationToken)
+    /// <summary>
+    /// Records embedded presence for a whole batch of sources in a single
+    /// membership read-modify-write. The membership set holds only the 16-character
+    /// source identifiers derived from <paramref name="sourceKeys"/>, never the
+    /// embeddings themselves. Folding presence per source would re-read and rewrite
+    /// the whole growing membership record once per file - thousands of cycles over
+    /// a large back-fill - so a caller stores a batch's vectors and then calls this
+    /// once to fold all of that batch's identifiers in with one read and, at most,
+    /// one write. Re-adding an identifier that is already a live member is a no-op,
+    /// and a batch whose sources are all already present writes nothing.
+    /// </summary>
+    /// <param name="repoId">The repository the sources belong to. Must not be <see langword="null"/>.</param>
+    /// <param name="sourceKeys">The canonical record keys whose embeddings just landed. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancels the write.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="repoId"/> or <paramref name="sourceKeys"/> is null.</exception>
+    public async Task AddMembersAsync(
+        string repoId, IReadOnlyList<string> sourceKeys, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentNullException.ThrowIfNull(sourceKeys);
+
+        if (sourceKeys.Count == 0)
+        {
+            return;
+        }
+
         var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
         var key = RepoContextKeys.VectorMembership(repoId, SourceCollection);
 
@@ -175,15 +246,79 @@ internal sealed class RepoContextVectorWriter
             ? new VectorMembershipRecord { RepoId = repoId, Collection = SourceCollection }
             : _serializer.Deserialize<VectorMembershipRecord>(existing);
 
-        var element = System.Text.Encoding.UTF8.GetBytes(sourceId);
-        if (record.Members.Contains(element))
+        var added = false;
+        foreach (var sourceKey in sourceKeys)
         {
-            // The source is a stable identifier, so a re-embed re-adds the same
-            // member: the set is already correct and needs no rewrite.
+            var element = System.Text.Encoding.UTF8.GetBytes(VectorCodec.SourceId(sourceKey));
+            if (record.Members.Contains(element))
+            {
+                // A stable identifier: a re-embed re-adds the same member, so the
+                // set is already correct for this source and needs no change.
+                continue;
+            }
+
+            record.Members.Add(element, Guid.NewGuid().ToString("N"), 0L);
+            added = true;
+        }
+
+        if (!added)
+        {
+            // Every source in the batch was already a live member (an idempotent
+            // re-run), so the set is unchanged and needs no rewrite.
             return;
         }
 
-        record.Members.Add(element, Guid.NewGuid().ToString("N"), 0L);
         await tree.SetAsync(key, _serializer.SerializeToArray(record), cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task RemoveMemberAsync(string repoId, string sourceId, CancellationToken cancellationToken)
+    {
+        var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
+        var key = RepoContextKeys.VectorMembership(repoId, SourceCollection);
+
+        var existing = await tree.GetAsync(key, cancellationToken).ConfigureAwait(false);
+        if (existing is null)
+        {
+            // No membership record yet: nothing was ever embedded for this repo.
+            return;
+        }
+
+        var record = _serializer.Deserialize<VectorMembershipRecord>(existing);
+        var element = System.Text.Encoding.UTF8.GetBytes(sourceId);
+        if (!record.Members.Remove(element))
+        {
+            // The source was not a live member (never embedded, or already
+            // retired), so the set is already correct and needs no rewrite.
+            return;
+        }
+
+        await tree.SetAsync(key, _serializer.SerializeToArray(record), cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Loads the set of embedded source identifiers for <paramref name="repoId"/>
+    /// as the raw add-wins membership set, so a caller can probe presence with
+    /// <see cref="OrSet.Contains(byte[])"/> without materialising a separate
+    /// collection. The membership record carries only 16-character source
+    /// identifiers - never the embeddings themselves - so this read never
+    /// transfers a vector payload across the grain boundary; it is a single read
+    /// per repository, not one per source. Returns an empty set when the
+    /// repository has embedded nothing yet.
+    /// </summary>
+    /// <param name="repoId">The repository whose embedded source identifiers to load. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    /// <returns>The live membership set of embedded source identifiers.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="repoId"/> is null.</exception>
+    public async Task<OrSet> LoadEmbeddedMembersAsync(string repoId, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+
+        var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
+        var key = RepoContextKeys.VectorMembership(repoId, SourceCollection);
+
+        var existing = await tree.GetAsync(key, cancellationToken).ConfigureAwait(false);
+        return existing is null
+            ? new OrSet()
+            : _serializer.Deserialize<VectorMembershipRecord>(existing).Members;
     }
 }

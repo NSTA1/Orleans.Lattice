@@ -16,6 +16,13 @@ internal sealed class NoOpRepoContextVectorIngestor : IRepoContextVectorIngestor
         string repoId,
         string repoRoot,
         IReadOnlyList<RepoFileEntry> changedFiles,
+        IReadOnlyList<RepoFileEntry> unchangedFiles,
         Func<int, CancellationToken, ValueTask>? onProgress,
         CancellationToken cancellationToken) => ValueTask.FromResult(0);
+
+    /// <inheritdoc />
+    public Task RetireAsync(
+        string repoId,
+        IReadOnlyList<string> removedPaths,
+        CancellationToken cancellationToken) => Task.CompletedTask;
 }

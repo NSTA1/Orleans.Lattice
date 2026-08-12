@@ -99,6 +99,7 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
                 sp.GetRequiredService<ILogger<EmbeddingRepoContextVectorIngestor>>(),
                 sp.GetService<IEmbeddingProvider>()));
         services.TryAddSingleton<RepoContextVectorWriter>();
+        services.TryAddSingleton<RepoContextEmbeddingGapScanner>();
         services.TryAddSingleton<IRepoContextSemanticIndex, ExactKnnSemanticIndex>();
         services.TryAddSingleton<RepoContextSearchService>(sp =>
             new RepoContextSearchService(

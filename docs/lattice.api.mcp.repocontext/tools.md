@@ -32,6 +32,22 @@ Onboarding a repository (`repocontext_bootstrap`, or `repocontext_add_repo` in w
 
 Because the run is decoupled from the request, a dropped MCP stream or client disconnect can no longer abort an index. Each job is anchored by an Orleans reminder: while a run is in flight the reminder beats as a single-flight heartbeat, and after a host restart it re-fires, reactivates the job, and re-enqueues the persisted request so the interrupted pass resumes from where it left off (the bootstrap pass is idempotent, so already-committed files are skipped by digest). The `attempt` counter on the status snapshot rises each time a job is started or resumed. A durable grain-storage provider and the Orleans reminder service must therefore be configured on the host; the bundled container image wires both.
 
+## Staying fully indexed: the self-index grain
+
+Onboarding a repository does more than complete once: a per-repository **self-index grain**, keyed by `repoId`, owns that repository's "reach and stay fully indexed" guarantee for as long as the repository is registered. The same onboarding call that starts the first pass (`repocontext_bootstrap`, or `repocontext_add_repo` in workspace mode) arms this grain; removing the repository (`repocontext_remove_repo`) tears it down. Onboarding and self-heal recovery therefore funnel through exactly one path and cannot drift.
+
+The grain runs a continuous, low-cost background scan of its own repository's structural file range and re-drives the idempotent index whenever it finds work - all without a client call:
+
+- **It is cheap and bounded.** A grain-local timer ticks one bounded page of a *keys-only* structural scan per tick, probing embedded presence in memory against the repository's add-wins membership set (stable source identifiers only, never the embeddings themselves). The scan stops at the first file with no live embedding, so a repository with a gap is detected without reading the rest of it. Between full scans the grain idles behind a jittered cooldown, and the first tick after each activation is itself jittered, so a fleet of repositories reactivated together never all scan at the same instant.
+- **It back-fills missing embeddings.** When the scan finds an unembedded file, the grain re-drives the whole-repository index. The embedding pass is an idempotent back-fill: it re-embeds every file the membership set says is missing and skips the rest, so a single trigger closes all of that repository's gaps. This is what makes embedding presence self-healing - a file whose content digest is unchanged is structurally skipped, but the independent presence set still catches a vector that was never written (for example because the embedder was unavailable at first onboarding) and closes the gap once it is back.
+- **It rescues a failed run.** At the start of each scan cycle the grain checks the job's status and re-drives a run that outright *failed*. A failure before any structural record was written leaves nothing for the file scan to detect, so this status check - not the gap scan - is what keeps a failed onboarding from being abandoned. Both re-drives are single-flight: they are a no-op while a run is already in flight.
+
+The grain stays durable through a one-minute keep-alive reminder that keeps it activated and re-fires it after a host restart, at which point it re-arms its scan timer and resumes from the persisted checkpoint. This keep-alive is the repository's standing backstop, and **the only thing that unregisters it is removing the repository.** A job's own resume reminder is cleared when a run *fails* (so a deterministic logic failure does not retry forever inside the job), but the self-index grain's keep-alive survives that failure and is what re-drives the run - a failed onboarding is never silently abandoned while the repository is still registered.
+
+## Removing a repository
+
+Removing a repository (`repocontext_remove_repo`) tears down everything indexing owns for it: it cancels any in-flight run, unregisters the job's resume reminder and the self-index grain's keep-alive reminder, and clears both grains' durable state, so a removed repository never resumes and never scans again.
+
 ## Filtering the walk
 
 The onboarding tools (`repocontext_bootstrap` and `repocontext_add_repo`) take optional `includeGlobs` and `excludeGlobs` to narrow which files are ingested, a `respectGitignore` flag that defaults to `true`, and an `excludeBinary` flag that also defaults to `true`.
@@ -39,8 +55,6 @@ The onboarding tools (`repocontext_bootstrap` and `repocontext_add_repo`) take o
 When `respectGitignore` is on, the walk honours the repository's own `.gitignore` files with a dependency-free, hierarchical matcher: rules layer from the repository root down, a deeper `.gitignore` overriding a shallower one and the last matching pattern within a file winning (including a `!` re-include). It covers the forms real repositories use - comments, blank lines, `!` negation, a leading or interior `/` to anchor a pattern to its `.gitignore` directory, a trailing `/` for a directory-only match, `[...]` character classes (ranges and `!`/`^` negation), and the `*`, `?`, and `**` wildcards - and prunes an ignored directory during descent rather than walking it, so a build output tree never enters the index and never costs a hash. The matcher does not read `.git/info/exclude` or the user's global excludes, and the container needs no `git` binary. Set `respectGitignore` to `false` to index every file the include/exclude globs allow, tracked or not. When globs and `.gitignore` are combined, a file must satisfy both to be ingested.
 
 When `excludeBinary` is on, a file whose leading bytes look non-text - a `NUL` byte anywhere in the first 8 KB, the same cheap, language- and extension-agnostic heuristic Git uses - is dropped before it is hashed, embedded, or indexed, so compiled artefacts, images, archives, and other blobs never enter the index. Because the walk already reads each surviving file's bytes to hash it, the sniff is essentially free and never reads more than a bounded prefix. Set `excludeBinary` to `false` to ingest binary files too.
-
-Removing a repository (`repocontext_remove_repo`) cancels any in-flight run, unregisters its resume reminder, and clears the job state, so a removed repository never resumes.
 
 ## Discovery and gating
 

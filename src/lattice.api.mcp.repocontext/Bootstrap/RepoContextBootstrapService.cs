@@ -208,24 +208,15 @@ internal sealed class RepoContextBootstrapService
                     },
                     cancellationToken).ConfigureAwait(false);
 
-                await ApplyPlanAsync(tree, repoId, plan, progress, cancellationToken).ConfigureAwait(false);
+                // Retire a removed file's vector before deleting its structural
+                // record. Retiring first means a crash between the two steps leaves
+                // the structural record in place, so the next run re-drives the
+                // same removal (idempotently) rather than orphaning a vector - which
+                // keeps the membership set an honest tally of live embeddings.
+                await _vectorIngestor.RetireAsync(repoId, plan.RemovedPaths, cancellationToken)
+                    .ConfigureAwait(false);
 
-                phase = RepoIndexPhase.Vectorising;
-                var changed = new List<RepoFileEntry>(plan.Added.Count + plan.Updated.Count);
-                changed.AddRange(plan.Added);
-                changed.AddRange(plan.Updated);
-                await ReportAsync(progress, new RepoIndexProgressUpdate { Phase = RepoIndexPhase.Vectorising }, cancellationToken)
-                    .ConfigureAwait(false);
-                _logger.LogInformation("Repo {RepoId}: vectorising {Count} changed file(s).", repoId, changed.Count);
-                var embedded = await _vectorIngestor.IngestAsync(
-                    repoId,
-                    repoRoot,
-                    changed,
-                    (count, ct) => ReportAsync(
-                        progress, new RepoIndexProgressUpdate { FilesEmbedded = count }, ct),
-                    cancellationToken).ConfigureAwait(false);
-                await ReportAsync(progress, new RepoIndexProgressUpdate { FilesEmbedded = embedded }, cancellationToken)
-                    .ConfigureAwait(false);
+                await ApplyPlanAsync(tree, repoId, plan, progress, cancellationToken).ConfigureAwait(false);
             }
             else
             {
@@ -234,6 +225,32 @@ internal sealed class RepoContextBootstrapService
                     new RepoIndexProgressUpdate { FilesUnchanged = plan.Unchanged.Count },
                     cancellationToken).ConfigureAwait(false);
             }
+
+            // Vectorising always runs, even when the structural plan is a no-op. An
+            // earlier run may have committed a file's structural record but been
+            // interrupted before its embedding landed, so the file now looks
+            // unchanged yet has no vector. Offering the unchanged set lets the
+            // ingestor back-fill exactly those gaps while re-embedding nothing that
+            // already has a live vector.
+            phase = RepoIndexPhase.Vectorising;
+            var changed = new List<RepoFileEntry>(plan.Added.Count + plan.Updated.Count);
+            changed.AddRange(plan.Added);
+            changed.AddRange(plan.Updated);
+            await ReportAsync(progress, new RepoIndexProgressUpdate { Phase = RepoIndexPhase.Vectorising }, cancellationToken)
+                .ConfigureAwait(false);
+            _logger.LogInformation(
+                "Repo {RepoId}: vectorising {Changed} changed file(s); scanning {Unchanged} unchanged for embedding gaps.",
+                repoId, changed.Count, plan.Unchanged.Count);
+            var embedded = await _vectorIngestor.IngestAsync(
+                repoId,
+                repoRoot,
+                changed,
+                plan.Unchanged,
+                (count, ct) => ReportAsync(
+                    progress, new RepoIndexProgressUpdate { FilesEmbedded = count }, ct),
+                cancellationToken).ConfigureAwait(false);
+            await ReportAsync(progress, new RepoIndexProgressUpdate { FilesEmbedded = embedded }, cancellationToken)
+                .ConfigureAwait(false);
 
             stopwatch.Stop();
 
