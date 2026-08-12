@@ -35,6 +35,7 @@
     <ProjectReference Include="..\..\src\lattice.api.mcp\Orleans.Lattice.Api.Mcp.csproj" />
     <ProjectReference Include="..\..\src\lattice.api.mcp.repocontext\Orleans.Lattice.Api.Mcp.RepoContext.csproj" />
     <ProjectReference Include="..\..\apps\repocontext\Orleans.Lattice.Api.Mcp.RepoContext.Host.csproj" />
+    <ProjectReference Include="..\shared\Orleans.Lattice.Testing\Orleans.Lattice.Testing.csproj" />
   </ItemGroup>
 
 </Project>

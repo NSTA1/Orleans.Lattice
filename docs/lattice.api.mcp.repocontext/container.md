@@ -1,0 +1,53 @@
+# Container quickstart
+
+The module ships as a single, restart-durable container image - "codebase memory in a box". The container's only application listener is the MCP endpoint (plus HTTP health probes); no gRPC facade and no Explorer UI are exposed. All durable state lives on a host mount, so context survives a restart, a recreate, and an image upgrade.
+
+The runnable sample is [`samples/RepoContextContainer`](../../samples/RepoContextContainer/README.md); this page summarises how it is wired.
+
+## The durability loop
+
+The end-to-end guarantee the sample demonstrates:
+
+**start -> bootstrap a mounted repo -> recall -> restart -> context is still present.**
+
+State is replayed from the WAL and the relational store on the mounted volume after a restart, so an agent's onboarded structural model and its remembered notes are all still there.
+
+## Durability profiles
+
+The host selects a durability profile from the `LATTICE_DURABILITY` environment variable:
+
+| Profile | Grain storage + reminders | WAL | Use |
+|---|---|---|---|
+| `local` (default) | Single SQLite file under the data root | File-backed WAL under the data root | Zero external services - a laptop or a single box. |
+| `postgres` | PostgreSQL | File-backed WAL | A durable relational store you already run. |
+| `azure` | Azure Table Storage | Azure Table WAL | A cloud deployment; also enables the scaling signal endpoint. |
+
+Every profile applies finite per-tree tombstone compaction to the churn trees (structural, memory, and the two vector projection trees), so re-embed and forget tombstones are reaped rather than accumulating.
+
+## Data root and fail-fast
+
+All durable local state - the file WAL directory and, in the `local` profile, the SQLite database - lives under `LATTICE_DATA_ROOT` (default `/data`), which must be a bind mount or named volume. The host fails fast at startup if that path is missing or not writable by its non-root UID, so a misconfigured mount surfaces immediately instead of silently losing durability.
+
+## Configuration
+
+The host is configured entirely by environment variables. The common ones:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `LATTICE_DURABILITY` | `local` | The durability profile (`local`, `postgres`, `azure`). |
+| `LATTICE_DATA_ROOT` | `/data` | Root for all durable local state; must be a writable host mount. |
+| `LATTICE_MCP_PORT` | `8080` | The MCP listener port (the only application listener). |
+| `LATTICE_EMBEDDING_ENDPOINT` | (unset) | The separate embedding companion's base address; enables semantic search. |
+| `LATTICE_WAL_DIR` / `LATTICE_SQLITE_PATH` | under the data root | Override the WAL directory or SQLite file path individually. |
+| `LATTICE_POSTGRES_CONNECTION_STRING` / `LATTICE_AZURE_STORAGE_CONNECTION_STRING` | (unset) | Required by the `postgres` / `azure` profiles. |
+
+## Health probing
+
+The runtime image is distroless and shell-less, so probing is HTTP-only - there is no shell-exec healthcheck:
+
+- `GET /health/live` - process and silo host alive (liveness).
+- `GET /health/ready` - silo joined, activation-time WAL replay done, durable stores reachable, MCP serving (readiness). Not-ready during startup replay and during drain.
+
+## Graceful shutdown
+
+On `SIGTERM` (a `docker stop` or `restart`) the host flips readiness to not-ready first, then drains: the silo deactivates and the WAL commit-log flushes buffered records before exit, within a generous shutdown budget, so an in-flight write is durable after restart.
