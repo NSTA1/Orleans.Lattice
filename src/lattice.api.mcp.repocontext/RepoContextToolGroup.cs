@@ -40,7 +40,7 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
     /// contributed.</param>
     public RepoContextToolGroup(bool enableWrites = false)
     {
-        var tools = new List<McpServerTool>(enableWrites ? 2 : 1)
+        var tools = new List<McpServerTool>(enableWrites ? 8 : 4)
         {
             McpServerTool.Create(
                 RepoContextToolHandlers.Health,
@@ -52,17 +52,23 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                         "Reports whether the Orleans.Lattice repository-context surface is registered and "
                         + "reachable for the current authenticated caller. Returns success only when the caller "
                         + "cleared the fail-closed authorization gate, so an agent can confirm the surface is "
-                        + "wired end to end before attempting the capture, maintenance, and retrieval tools that "
-                        + "land in later work. Read-only.",
+                        + "wired end to end before attempting the capture, maintenance, and retrieval tools. "
+                        + "Read-only.",
                     ReadOnly = true,
                     Destructive = false,
                     UseStructuredContent = true,
                 }),
+            BuildRecallTool(),
+            BuildScanTool(),
+            BuildListTopicsTool(),
         };
 
         if (enableWrites)
         {
             tools.Add(BuildBootstrapTool());
+            tools.Add(BuildRememberTool());
+            tools.Add(BuildUpdateTool());
+            tools.Add(BuildForgetTool());
         }
 
         Tools = tools;
@@ -73,6 +79,57 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
 
     /// <inheritdoc />
     public IReadOnlyList<McpServerTool> Tools { get; }
+
+    private static McpServerTool BuildRecallTool()
+        => McpServerTool.Create(
+            RepoContextToolHandlers.RecallAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "repocontext_recall",
+                Title = "Recall a repository-context entry",
+                Description =
+                    "Fetches a single repository-context record by its full key - a structural node, a symbol, "
+                    + "or an agent memory entry - and returns its flattened fields, tags, links, and remaining "
+                    + "life. A key with no live entry returns 'exists=false' so the caller can tell an absent or "
+                    + "expired entry from an empty one. Read-only.",
+                ReadOnly = true,
+                Destructive = false,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildScanTool()
+        => McpServerTool.Create(
+            RepoContextToolHandlers.ScanAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "repocontext_scan",
+                Title = "Scan a repository-context range",
+                Description =
+                    "Walks an ordered range of repository-context entries under a scope (all files, packages, "
+                    + "or symbols; all memory; or the memory under one topic) and returns one page at a time with "
+                    + "an opaque continuation token. Expired and tombstoned entries are never returned. Use the "
+                    + "returned token as the next call's 'continuationToken' to page through the whole range. "
+                    + "Read-only.",
+                ReadOnly = true,
+                Destructive = false,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildListTopicsTool()
+        => McpServerTool.Create(
+            RepoContextToolHandlers.ListTopicsAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "repocontext_list_topics",
+                Title = "List repository memory topics",
+                Description =
+                    "Enumerates the distinct agent memory topics available for a repository, each with its live "
+                    + "entry count, so an agent can discover what working memory, notes, and decisions have been "
+                    + "captured before recalling or scanning them. Read-only.",
+                ReadOnly = true,
+                Destructive = false,
+                UseStructuredContent = true,
+            });
 
     private static McpServerTool BuildBootstrapTool()
         => McpServerTool.Create(
@@ -91,6 +148,63 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     + "without duplication. Returns a summary of files scanned, added, updated, removed, and "
                     + "unchanged, symbols captured, and elapsed time. Fails closed: offered only to a caller "
                     + "who cleared the authorization gate and for whom the host opted writes in. Destructive.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildRememberTool()
+        => McpServerTool.Create(
+            RepoContextToolHandlers.RememberAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "repocontext_remember",
+                Title = "Remember a repository memory entry",
+                Description =
+                    "Creates or updates an agent memory or decision entry under a repository topic, with an "
+                    + "optional time-to-live. Omit 'id' to create a new entry with a generated id; supply an "
+                    + "existing 'id' to merge into it in place using CRDT semantics rather than a blind "
+                    + "overwrite. When no explicit 'ttlSeconds' is given, a newly created entry inherits the "
+                    + "repository's default memory TTL if one is configured, otherwise it is durable. Fails "
+                    + "closed: offered only to a caller who cleared the authorization gate and for whom the host "
+                    + "opted writes in. Destructive.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildUpdateTool()
+        => McpServerTool.Create(
+            RepoContextToolHandlers.UpdateAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "repocontext_update",
+                Title = "Update a repository-context record",
+                Description =
+                    "Patches scalar fields and tags on an existing structural or memory record using CRDT-merge "
+                    + "semantics: each field is applied as a last-writer-wins register at a fresh logical tick and "
+                    + "merged into the current record, so concurrent updates converge instead of clobbering each "
+                    + "other. Any remaining time-to-live on the record is preserved. Fails if no record exists at "
+                    + "the key. Fails closed: offered only to a caller who cleared the authorization gate and for "
+                    + "whom the host opted writes in. Destructive.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildForgetTool()
+        => McpServerTool.Create(
+            RepoContextToolHandlers.ForgetAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "repocontext_forget",
+                Title = "Forget a repository-context entry",
+                Description =
+                    "Removes a repository-context entry. By default it hard-deletes the entry immediately; set "
+                    + "'lapse' to true to instead re-write it with a short time-to-live (default 60 seconds) so it "
+                    + "lapses on its own, which lets concurrent readers drain gracefully. Fails closed: offered "
+                    + "only to a caller who cleared the authorization gate and for whom the host opted writes in. "
+                    + "Destructive.",
                 ReadOnly = false,
                 Destructive = true,
                 UseStructuredContent = true,

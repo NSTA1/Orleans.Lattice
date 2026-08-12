@@ -40,9 +40,10 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
     /// <param name="services">The host's service collection.</param>
     /// <param name="enableWrites">
     /// Whether the mutating repository-context tools (the <c>repocontext_bootstrap</c>
-    /// onboarding tool) are contributed. Defaults to <see langword="false"/> so a
-    /// data-permitted caller is offered the read-only surface only until the host
-    /// explicitly opts writes in.
+    /// onboarding tool and the <c>repocontext_remember</c>, <c>repocontext_update</c>,
+    /// and <c>repocontext_forget</c> capture and maintenance tools) are contributed.
+    /// Defaults to <see langword="false"/> so a data-permitted caller is offered the
+    /// read-only surface only until the host explicitly opts writes in.
     /// </param>
     /// <returns>The service collection for chaining.</returns>
     public static IServiceCollection AddRepoContextTools(
@@ -57,6 +58,8 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
 
         services.TryAddSingleton<IRepoContextVectorIngestor, NoOpRepoContextVectorIngestor>();
         services.TryAddSingleton<RepoContextBootstrapService>();
+        services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<RepoContextStore>();
 
         // Bind the per-repository TTL policy under the named-options convention
         // (IOptionsMonitor<RepoContextTtlOptions>.Get(repoId)) and validate every

@@ -11,9 +11,11 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// The adapter behind the repository-context tool module. It exposes the
 /// read-only <c>repocontext_health</c> probe - which proves the module is
 /// registered and that the caller cleared the fail-closed authorization gate -
-/// and the mutating <c>repocontext_bootstrap</c> onboarding tool that ingests a
-/// codebase into the context store. The capture, maintenance, and retrieval
-/// handlers land in later work.
+/// the mutating <c>repocontext_bootstrap</c> onboarding tool that ingests a
+/// codebase into the context store, and the day-to-day capture, maintenance, and
+/// retrieval tools: the read-only <c>repocontext_recall</c>, <c>_scan</c>, and
+/// <c>_list_topics</c>, and the mutating <c>repocontext_remember</c>,
+/// <c>_update</c>, and <c>_forget</c>.
 /// </summary>
 /// <remarks>
 /// The health result is invariant, so it is built once and reused on every call:
@@ -109,5 +111,235 @@ internal static class RepoContextToolHandlers
         {
             throw new McpException(ex.Message);
         }
+    }
+
+    /// <summary>
+    /// Fetches a single repository-context entry by its full key and projects it.
+    /// A key with no live entry projects with <c>exists=false</c>.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the store.</param>
+    /// <param name="key">The full repository-context key to recall.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    /// <returns>The projected entry view.</returns>
+    /// <exception cref="McpException">The key is missing or malformed.</exception>
+    public static Task<RepoContextEntryView> RecallAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The full repository-context key to fetch, for example 'repo/{repoId}/file/{path}' or 'repo/{repoId}/mem/{topic}/{id}'.")]
+        string key,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            throw new McpException("The 'key' parameter is required and must be a non-empty repository-context key.");
+        }
+
+        return ResolveStore(context).RecallAsync(key, cancellationToken);
+    }
+
+    /// <summary>
+    /// Returns one ordered, paged range of live entries under a repository scope
+    /// (files, packages, symbols, all memory, or a single memory topic).
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the store.</param>
+    /// <param name="repoId">The repository to scan.</param>
+    /// <param name="scope">The range to walk: Files, Packages, Symbols, Memory, or MemoryTopic.</param>
+    /// <param name="topic">The topic, required when scope is MemoryTopic.</param>
+    /// <param name="pathPrefix">An optional directory path prefix, honoured only for the Files scope.</param>
+    /// <param name="continuationToken">An opaque token from a prior page, or null to start at the beginning.</param>
+    /// <param name="pageSize">The maximum entries per page (clamped to [1, 500]).</param>
+    /// <param name="cancellationToken">Cancels the scan.</param>
+    /// <returns>A page of projected entries with a continuation token.</returns>
+    /// <exception cref="McpException">A required argument is missing or the scope is unknown.</exception>
+    public static Task<RepoContextScanResult> ScanAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The repository identifier to scan.")]
+        string repoId,
+        [Description("The range to walk: 'Files', 'Packages', 'Symbols', 'Memory', or 'MemoryTopic'.")]
+        string scope,
+        [Description("The memory topic to scan; required when scope is 'MemoryTopic', otherwise ignored.")]
+        string? topic = null,
+        [Description("An optional directory path prefix to restrict a 'Files' scan to a subtree (for example 'src/'); ignored for other scopes.")]
+        string? pathPrefix = null,
+        [Description("An opaque continuation token from a prior page; omit to start at the beginning of the range.")]
+        string? continuationToken = null,
+        [Description("The maximum number of entries to return on this page. Clamped to the range [1, 500]; defaults to 100.")]
+        int pageSize = 0,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(repoId))
+        {
+            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+        }
+
+        if (!Enum.TryParse<RepoContextScanScope>(scope, ignoreCase: true, out var parsedScope))
+        {
+            throw new McpException(
+                $"The 'scope' value '{scope}' is not recognised. Use one of: Files, Packages, Symbols, Memory, MemoryTopic.");
+        }
+
+        return ResolveStore(context)
+            .ScanAsync(repoId, parsedScope, topic, pathPrefix, continuationToken, pageSize, cancellationToken);
+    }
+
+    /// <summary>
+    /// Enumerates the distinct agent memory topics for a repository with their
+    /// live entry counts.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the store.</param>
+    /// <param name="repoId">The repository whose topics to list.</param>
+    /// <param name="cancellationToken">Cancels the enumeration.</param>
+    /// <returns>The distinct topics and their entry counts.</returns>
+    /// <exception cref="McpException">The repository id is missing.</exception>
+    public static Task<RepoContextTopicsResult> ListTopicsAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The repository identifier whose memory topics to enumerate.")]
+        string repoId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(repoId))
+        {
+            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+        }
+
+        return ResolveStore(context).ListTopicsAsync(repoId, cancellationToken);
+    }
+
+    /// <summary>
+    /// Creates or updates an agent memory or decision entry, merging into any
+    /// existing record at the same key and applying an optional time-to-live.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the store.</param>
+    /// <param name="repoId">The repository the entry belongs to.</param>
+    /// <param name="topic">The topic bucket to file the entry under.</param>
+    /// <param name="id">The per-topic id, or null to generate one (create).</param>
+    /// <param name="kind">The memory kind applied on creation: Decision, Note, or Memory.</param>
+    /// <param name="title">An optional short title.</param>
+    /// <param name="body">An optional free-form body.</param>
+    /// <param name="author">An optional author identity.</param>
+    /// <param name="provenance">An optional provenance descriptor.</param>
+    /// <param name="tags">Optional tags to add to the entry.</param>
+    /// <param name="ttlSeconds">An optional explicit time-to-live in seconds.</param>
+    /// <param name="cancellationToken">Cancels the write.</param>
+    /// <returns>The write outcome.</returns>
+    /// <exception cref="McpException">A required argument is missing, the kind is unknown, or the TTL is not positive.</exception>
+    public static Task<RepoContextRememberResult> RememberAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The repository identifier the entry belongs to.")]
+        string repoId,
+        [Description("The topic bucket to file the memory entry under (for example 'decisions' or 'gotchas').")]
+        string topic,
+        [Description("The per-topic entry id. Omit to create a new entry with a generated id; supply an existing id to update in place.")]
+        string? id = null,
+        [Description("The memory kind applied when the entry is created: 'Decision', 'Note', or 'Memory'. Defaults to 'Note'.")]
+        string? kind = null,
+        [Description("An optional short title for the entry.")]
+        string? title = null,
+        [Description("An optional free-form body for the entry.")]
+        string? body = null,
+        [Description("An optional author identity (the agent or session that wrote the entry).")]
+        string? author = null,
+        [Description("An optional provenance descriptor (where the context came from).")]
+        string? provenance = null,
+        [Description("Optional tags to add to the entry's add-wins tag set.")]
+        IReadOnlyList<string>? tags = null,
+        [Description("An optional explicit time-to-live in seconds. When omitted, a newly created entry uses the repository's default memory TTL (if configured), otherwise it is durable.")]
+        long? ttlSeconds = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(repoId))
+        {
+            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+        }
+
+        if (string.IsNullOrWhiteSpace(topic))
+        {
+            throw new McpException("The 'topic' parameter is required and must be a non-empty identifier.");
+        }
+
+        var memoryKind = MemoryKind.Note;
+        if (!string.IsNullOrWhiteSpace(kind)
+            && !Enum.TryParse(kind, ignoreCase: true, out memoryKind))
+        {
+            throw new McpException(
+                $"The 'kind' value '{kind}' is not recognised. Use one of: Decision, Note, Memory.");
+        }
+
+        return ResolveStore(context).RememberAsync(
+            repoId, topic, id, memoryKind, title, body, author, provenance, tags, ttlSeconds, cancellationToken);
+    }
+
+    /// <summary>
+    /// Patches scalar fields and tags on an existing structural or memory record
+    /// using CRDT-merge semantics (never a blind overwrite).
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the store.</param>
+    /// <param name="key">The full repository-context key of the record to patch.</param>
+    /// <param name="fields">The scalar field patches, keyed by field name.</param>
+    /// <param name="addTags">Tags to add to the record.</param>
+    /// <param name="removeTags">Tags to remove from the record.</param>
+    /// <param name="cancellationToken">Cancels the read-merge-write.</param>
+    /// <returns>The patch outcome.</returns>
+    /// <exception cref="McpException">The key is missing or malformed, no record exists, or a field is invalid.</exception>
+    public static Task<RepoContextUpdateResult> UpdateAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The full repository-context key of the record to patch, for example 'repo/{repoId}/file/{path}'.")]
+        string key,
+        [Description("Scalar field patches keyed by field name (for example {\"digest\":\"...\",\"language\":\"csharp\"}). Valid names depend on the record family.")]
+        IReadOnlyDictionary<string, string>? fields = null,
+        [Description("Tags to add to the record's add-wins set.")]
+        IReadOnlyList<string>? addTags = null,
+        [Description("Tags to remove from the record's add-wins set.")]
+        IReadOnlyList<string>? removeTags = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            throw new McpException("The 'key' parameter is required and must be a non-empty repository-context key.");
+        }
+
+        return ResolveStore(context).UpdateAsync(key, fields, addTags, removeTags, cancellationToken);
+    }
+
+    /// <summary>
+    /// Forgets an entry by hard-deleting it, or by re-writing it with a short
+    /// time-to-live so it lapses on its own.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the store.</param>
+    /// <param name="key">The full repository-context key of the entry to forget.</param>
+    /// <param name="lapse">When true, soft-lapse via a short TTL; otherwise hard delete immediately.</param>
+    /// <param name="lapseSeconds">The lapse window in seconds; defaults to 60 when lapsing.</param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>The forget outcome.</returns>
+    /// <exception cref="McpException">The key is missing or malformed, or the lapse window is not positive.</exception>
+    public static Task<RepoContextForgetResult> ForgetAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The full repository-context key of the entry to forget.")]
+        string key,
+        [Description("When true, re-write the entry with a short time-to-live so it lapses; when false (the default), hard-delete it immediately.")]
+        bool lapse = false,
+        [Description("The lapse window in seconds when 'lapse' is true; defaults to 60. Ignored for a hard delete.")]
+        long? lapseSeconds = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            throw new McpException("The 'key' parameter is required and must be a non-empty repository-context key.");
+        }
+
+        return ResolveStore(context).ForgetAsync(key, lapse, lapseSeconds, cancellationToken);
+    }
+
+    /// <summary>
+    /// Resolves the <see cref="RepoContextStore"/> from the MCP request's service
+    /// provider, failing with a clear message when the provider is absent.
+    /// </summary>
+    /// <param name="context">The MCP request context.</param>
+    /// <returns>The resolved store.</returns>
+    private static RepoContextStore ResolveStore(RequestContext<CallToolRequestParams> context)
+    {
+        var services = context.Services
+            ?? throw new InvalidOperationException(
+                "The MCP request has no service provider; the repository-context tool cannot resolve its store.");
+        return services.GetRequiredService<RepoContextStore>();
     }
 }

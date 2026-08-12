@@ -75,7 +75,7 @@ public sealed class AddRepoContextToolsTests
     }
 
     [Test]
-    public void AddRepoContextTools_does_not_offer_the_bootstrap_tool_by_default()
+    public void AddRepoContextTools_does_not_offer_the_write_tools_by_default()
     {
         var services = new ServiceCollection();
         services.AddRepoContextTools();
@@ -85,11 +85,14 @@ public sealed class AddRepoContextToolsTests
 
         Assert.That(
             group.Tools.Select(t => t.ProtocolTool.Name),
-            Is.EquivalentTo(new[] { "repocontext_health" }));
+            Is.EquivalentTo(new[]
+            {
+                "repocontext_health", "repocontext_recall", "repocontext_scan", "repocontext_list_topics",
+            }));
     }
 
     [Test]
-    public void AddRepoContextTools_offers_the_bootstrap_tool_when_writes_are_enabled()
+    public void AddRepoContextTools_offers_the_write_tools_when_writes_are_enabled()
     {
         var services = new ServiceCollection();
         services.AddRepoContextTools(enableWrites: true);
@@ -99,6 +102,20 @@ public sealed class AddRepoContextToolsTests
 
         Assert.That(
             group.Tools.Select(t => t.ProtocolTool.Name),
-            Is.EquivalentTo(new[] { "repocontext_health", "repocontext_bootstrap" }));
+            Is.EquivalentTo(new[]
+            {
+                "repocontext_health", "repocontext_recall", "repocontext_scan", "repocontext_list_topics",
+                "repocontext_bootstrap", "repocontext_remember", "repocontext_update", "repocontext_forget",
+            }));
+    }
+
+    [Test]
+    public void AddRepoContextTools_registers_the_capture_store()
+    {
+        var services = new ServiceCollection();
+        services.AddRepoContextTools();
+
+        Assert.That(
+            services.Any(d => d.ServiceType == typeof(RepoContextStore)), Is.True);
     }
 }

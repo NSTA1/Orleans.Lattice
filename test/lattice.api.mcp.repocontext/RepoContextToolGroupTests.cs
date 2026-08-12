@@ -4,13 +4,21 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests;
 
 /// <summary>
 /// Tests for <see cref="RepoContextToolGroup"/>: it serves the repository-context
-/// group, contributes exactly the read-only <c>repocontext_health</c> probe by
-/// default, adds the mutating <c>repocontext_bootstrap</c> tool only when writes
-/// are opted in, and annotates each tool correctly.
+/// group, contributes the read-only <c>repocontext_health</c> probe and the
+/// read-only capture tools (<c>repocontext_recall</c>, <c>_scan</c>,
+/// <c>_list_topics</c>) by default, adds the mutating tools
+/// (<c>repocontext_bootstrap</c>, <c>_remember</c>, <c>_update</c>, <c>_forget</c>)
+/// only when writes are opted in, and annotates each tool correctly.
 /// </summary>
 [TestFixture]
 public sealed class RepoContextToolGroupTests
 {
+    private static readonly string[] ReadToolNames =
+        ["repocontext_health", "repocontext_recall", "repocontext_scan", "repocontext_list_topics"];
+
+    private static readonly string[] WriteToolNames =
+        ["repocontext_bootstrap", "repocontext_remember", "repocontext_update", "repocontext_forget"];
+
     [Test]
     public void Group_is_repo_context()
         => Assert.That(new RepoContextToolGroup().Group, Is.EqualTo(LatticeApiMcpGroup.RepoContext));
@@ -23,24 +31,25 @@ public sealed class RepoContextToolGroupTests
     }
 
     [Test]
-    public void Contributes_exactly_the_health_tool()
+    public void Contributes_exactly_the_read_tools_by_default()
     {
         var names = new RepoContextToolGroup().Tools.Select(t => t.ProtocolTool.Name).ToArray();
-        Assert.That(names, Is.EquivalentTo(new[] { "repocontext_health" }));
+        Assert.That(names, Is.EquivalentTo(ReadToolNames));
     }
 
     [Test]
-    public void Contributes_the_bootstrap_tool_only_when_writes_are_enabled()
+    public void Contributes_the_write_tools_only_when_writes_are_enabled()
     {
         var names = new RepoContextToolGroup(enableWrites: true)
             .Tools.Select(t => t.ProtocolTool.Name).ToArray();
-        Assert.That(names, Is.EquivalentTo(new[] { "repocontext_health", "repocontext_bootstrap" }));
+        Assert.That(names, Is.EquivalentTo(ReadToolNames.Concat(WriteToolNames)));
     }
 
-    [Test]
-    public void The_health_tool_is_annotated_read_only_and_non_destructive()
+    [TestCaseSource(nameof(ReadToolNames))]
+    public void Read_tools_are_annotated_read_only_and_non_destructive(string toolName)
     {
-        var tool = new RepoContextToolGroup().Tools.Single();
+        var tool = new RepoContextToolGroup(enableWrites: true)
+            .Tools.Single(t => t.ProtocolTool.Name == toolName);
         var annotations = tool.ProtocolTool.Annotations;
 
         Assert.Multiple(() =>
@@ -51,11 +60,11 @@ public sealed class RepoContextToolGroupTests
         });
     }
 
-    [Test]
-    public void The_bootstrap_tool_is_annotated_mutating_and_destructive()
+    [TestCaseSource(nameof(WriteToolNames))]
+    public void Write_tools_are_annotated_mutating_and_destructive(string toolName)
     {
         var tool = new RepoContextToolGroup(enableWrites: true)
-            .Tools.Single(t => t.ProtocolTool.Name == "repocontext_bootstrap");
+            .Tools.Single(t => t.ProtocolTool.Name == toolName);
         var annotations = tool.ProtocolTool.Annotations;
 
         Assert.Multiple(() =>
@@ -67,27 +76,17 @@ public sealed class RepoContextToolGroupTests
     }
 
     [Test]
-    public void The_bootstrap_tool_carries_a_title_and_description()
+    public void Every_tool_carries_a_title_and_description()
     {
-        var tool = new RepoContextToolGroup(enableWrites: true)
-            .Tools.Single(t => t.ProtocolTool.Name == "repocontext_bootstrap");
+        var tools = new RepoContextToolGroup(enableWrites: true).Tools;
 
         Assert.Multiple(() =>
         {
-            Assert.That(tool.ProtocolTool.Title, Is.Not.Null.And.Not.Empty);
-            Assert.That(tool.ProtocolTool.Description, Is.Not.Null.And.Not.Empty);
-        });
-    }
-
-    [Test]
-    public void The_health_tool_carries_a_title_and_description()
-    {
-        var tool = new RepoContextToolGroup().Tools.Single();
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(tool.ProtocolTool.Title, Is.Not.Null.And.Not.Empty);
-            Assert.That(tool.ProtocolTool.Description, Is.Not.Null.And.Not.Empty);
+            foreach (var tool in tools)
+            {
+                Assert.That(tool.ProtocolTool.Title, Is.Not.Null.And.Not.Empty, tool.ProtocolTool.Name);
+                Assert.That(tool.ProtocolTool.Description, Is.Not.Null.And.Not.Empty, tool.ProtocolTool.Name);
+            }
         });
     }
 }
