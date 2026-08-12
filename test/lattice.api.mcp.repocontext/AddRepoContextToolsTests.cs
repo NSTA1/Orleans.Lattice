@@ -120,12 +120,46 @@ public sealed class AddRepoContextToolsTests
     }
 
     [Test]
-    public void AddRepoContextTools_registers_the_capture_store()
+    public void AddRepoContextTools_workspace_mode_offers_the_dynamic_repo_tools()
+    {
+        var services = new ServiceCollection();
+        services.AddRepoContextTools(enableWrites: true, workspaceMode: true, workspaceRoot: "/workspace");
+
+        using var provider = services.BuildServiceProvider();
+        var group = (RepoContextToolGroup)provider.GetServices(ToolGroupInterface).Single()!;
+
+        Assert.That(
+            group.Tools.Select(t => t.ProtocolTool.Name),
+            Is.EquivalentTo(new[]
+            {
+                "repocontext_health", "repocontext_recall", "repocontext_scan", "repocontext_list_topics",
+                "repocontext_search", "repocontext_list_repos",
+                "repocontext_add_repo", "repocontext_remove_repo",
+                "repocontext_remember", "repocontext_update", "repocontext_forget",
+            }));
+    }
+
+    [Test]
+    public void AddRepoContextTools_registers_an_enforcing_guard_when_a_workspace_root_is_supplied()
+    {
+        var services = new ServiceCollection();
+        services.AddRepoContextTools(enableWrites: true, workspaceMode: true, workspaceRoot: "/workspace");
+
+        using var provider = services.BuildServiceProvider();
+        var guard = provider.GetRequiredService<RepoContextWorkspaceGuard>();
+
+        Assert.That(guard.IsEnforcing, Is.True);
+    }
+
+    [Test]
+    public void AddRepoContextTools_registers_a_disabled_guard_by_default()
     {
         var services = new ServiceCollection();
         services.AddRepoContextTools();
 
-        Assert.That(
-            services.Any(d => d.ServiceType == typeof(RepoContextStore)), Is.True);
+        using var provider = services.BuildServiceProvider();
+        var guard = provider.GetRequiredService<RepoContextWorkspaceGuard>();
+
+        Assert.That(guard.IsEnforcing, Is.False);
     }
 }

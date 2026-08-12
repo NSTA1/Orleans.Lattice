@@ -40,6 +40,7 @@ internal sealed class RepoContextBootstrapService
     private readonly Serializer<FileNode> _fileNodeSerializer;
     private readonly Serializer<RepoNode> _repoNodeSerializer;
     private readonly IRepoContextVectorIngestor _vectorIngestor;
+    private readonly RepoContextWorkspaceGuard _workspaceGuard;
     private readonly ILogger<RepoContextBootstrapService> _logger;
 
     /// <summary>
@@ -53,24 +54,30 @@ internal sealed class RepoContextBootstrapService
     /// <see cref="RepoNode"/>. Must not be <see langword="null"/>.</param>
     /// <param name="vectorIngestor">The vectorisation seam (a no-op by default).
     /// Must not be <see langword="null"/>.</param>
+    /// <param name="workspaceGuard">The fail-closed workspace boundary that every
+    /// ingestion path is resolved and bounds-checked through. Must not be
+    /// <see langword="null"/>.</param>
     /// <param name="logger">The logger. Must not be <see langword="null"/>.</param>
     public RepoContextBootstrapService(
         IGrainFactory grainFactory,
         Serializer<FileNode> fileNodeSerializer,
         Serializer<RepoNode> repoNodeSerializer,
         IRepoContextVectorIngestor vectorIngestor,
+        RepoContextWorkspaceGuard workspaceGuard,
         ILogger<RepoContextBootstrapService> logger)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(fileNodeSerializer);
         ArgumentNullException.ThrowIfNull(repoNodeSerializer);
         ArgumentNullException.ThrowIfNull(vectorIngestor);
+        ArgumentNullException.ThrowIfNull(workspaceGuard);
         ArgumentNullException.ThrowIfNull(logger);
 
         _grainFactory = grainFactory;
         _fileNodeSerializer = fileNodeSerializer;
         _repoNodeSerializer = repoNodeSerializer;
         _vectorIngestor = vectorIngestor;
+        _workspaceGuard = workspaceGuard;
         _logger = logger;
     }
 
@@ -98,7 +105,7 @@ internal sealed class RepoContextBootstrapService
         }
 
         var stopwatch = Stopwatch.StartNew();
-        var repoRoot = Path.GetFullPath(request.RepoRoot);
+        var repoRoot = _workspaceGuard.Resolve(request.RepoRoot);
         var repoId = request.RepoId;
 
         var scanned = RepoTreeWalker.Walk(
@@ -208,10 +215,12 @@ internal sealed class RepoContextBootstrapService
 
         var upserts = new List<KeyValuePair<string, byte[]>>(plan.Added.Count + plan.Updated.Count + 1);
 
-        // Refresh the repository root marker in the same pass that mutates its files.
+        // Refresh the repository root marker in the same pass that mutates its
+        // files. The live file count is the full scanned set, so list_repos can
+        // report it without a per-call subtree scan.
         clock = HybridLogicalClock.Tick(clock);
         upserts.Add(new KeyValuePair<string, byte[]>(
-            RepoContextKeys.Repo(repoId), BuildRepoNode(repoId, ingestToken, clock)));
+            RepoContextKeys.Repo(repoId), BuildRepoNode(repoId, plan.LiveFileCount, ingestToken, clock)));
 
         foreach (var entry in plan.Added)
         {
@@ -276,12 +285,13 @@ internal sealed class RepoContextBootstrapService
         return _fileNodeSerializer.SerializeToArray(node);
     }
 
-    private byte[] BuildRepoNode(string repoId, string ingestToken, HybridLogicalClock clock)
+    private byte[] BuildRepoNode(string repoId, int liveFileCount, string ingestToken, HybridLogicalClock clock)
     {
         var node = new RepoNode
         {
             RepoId = repoId,
             LastIngested = RepoContextValues.Lww(ingestToken, clock),
+            FileCount = RepoContextValues.Lww(liveFileCount, clock),
         };
         return _repoNodeSerializer.SerializeToArray(node);
     }

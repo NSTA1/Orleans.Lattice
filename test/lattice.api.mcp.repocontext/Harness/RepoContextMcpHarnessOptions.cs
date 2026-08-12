@@ -23,6 +23,22 @@ public sealed class RepoContextMcpHarnessOptions
     public RepoContextMcpAuthPosture Posture { get; set; } = RepoContextMcpAuthPosture.Writer;
 
     /// <summary>
+    /// Whether the served surface runs in workspace mode: the dynamic
+    /// <c>repocontext_add_repo</c> / <c>repocontext_list_repos</c> /
+    /// <c>repocontext_remove_repo</c> tools replace the single-repository
+    /// <c>repocontext_bootstrap</c>, and the workspace guard enforces
+    /// <see cref="WorkspaceRoot"/>. Defaults to <see langword="false"/> so existing
+    /// fixtures keep the single-repository surface.
+    /// </summary>
+    public bool WorkspaceMode { get; set; }
+
+    /// <summary>
+    /// The read-only workspace root that runtime-added repositories must resolve
+    /// under when <see cref="WorkspaceMode"/> is set. Ignored otherwise.
+    /// </summary>
+    public string? WorkspaceRoot { get; set; }
+
+    /// <summary>
     /// An optional hook to configure the co-hosted Orleans silo beyond the
     /// baseline (in-memory grain storage / reminders and the core Lattice tree),
     /// for example to register a transport-agnostic facade such as

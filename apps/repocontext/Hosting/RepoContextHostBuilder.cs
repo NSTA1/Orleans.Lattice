@@ -131,7 +131,15 @@ public static class RepoContextHostBuilder
         // value here and would otherwise hide the entire repocontext_* surface.
         builder.Services.AddSingleton<ILatticeApiMcpAuthorizer, AllowAllMcpAuthorizer>();
 
-        builder.Services.AddRepoContextTools(enableWrites: true);
+        // Enforce the workspace boundary: repositories added at runtime through
+        // repocontext_add_repo must resolve under the mounted read-only workspace
+        // root. Passing the root turns on workspace mode, which swaps the
+        // single-repo bootstrap tool for the dynamic add_repo/list_repos/remove_repo
+        // surface and installs the fail-closed path guard.
+        builder.Services.AddRepoContextTools(
+            enableWrites: true,
+            workspaceMode: true,
+            workspaceRoot: config.WorkspaceRoot);
 
         // The default embedding provider points at the separate Onyx companion
         // container, preserving the MCP-only single-listener surface.

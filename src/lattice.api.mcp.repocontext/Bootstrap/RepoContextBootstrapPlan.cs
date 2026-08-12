@@ -45,6 +45,14 @@ internal sealed class RepoContextBootstrapPlan
     public bool IsNoOp => Added.Count == 0 && Updated.Count == 0 && RemovedPaths.Count == 0;
 
     /// <summary>
+    /// The number of files present in the repository after this plan is applied:
+    /// every scanned file, whether added, updated, or unchanged (pruned paths are
+    /// gone). Recorded on the repository root marker so <c>list_repos</c> can
+    /// report a per-repository file count without a subtree scan.
+    /// </summary>
+    public int LiveFileCount => Added.Count + Updated.Count + Unchanged.Count;
+
+    /// <summary>
     /// Computes the plan from the currently stored digests and a fresh scan.
     /// </summary>
     /// <param name="storedDigests">Map of repository-relative path to the digest

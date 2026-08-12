@@ -19,6 +19,15 @@ public sealed class RepoContextToolGroupTests
     private static readonly string[] WriteToolNames =
         ["repocontext_bootstrap", "repocontext_remember", "repocontext_update", "repocontext_forget"];
 
+    private static readonly string[] WorkspaceReadToolNames =
+        [
+            "repocontext_health", "repocontext_recall", "repocontext_scan",
+            "repocontext_list_topics", "repocontext_search", "repocontext_list_repos",
+        ];
+
+    private static readonly string[] WorkspaceWriteToolNames =
+        ["repocontext_add_repo", "repocontext_remove_repo", "repocontext_remember", "repocontext_update", "repocontext_forget"];
+
     [Test]
     public void Group_is_repo_context()
         => Assert.That(new RepoContextToolGroup().Group, Is.EqualTo(LatticeApiMcpGroup.RepoContext));
@@ -43,6 +52,58 @@ public sealed class RepoContextToolGroupTests
         var names = new RepoContextToolGroup(enableWrites: true)
             .Tools.Select(t => t.ProtocolTool.Name).ToArray();
         Assert.That(names, Is.EquivalentTo(ReadToolNames.Concat(WriteToolNames)));
+    }
+
+    [Test]
+    public void Workspace_mode_adds_list_repos_to_the_read_surface()
+    {
+        var names = new RepoContextToolGroup(enableWrites: false, workspaceMode: true)
+            .Tools.Select(t => t.ProtocolTool.Name).ToArray();
+        Assert.That(names, Is.EquivalentTo(WorkspaceReadToolNames));
+    }
+
+    [Test]
+    public void Workspace_mode_replaces_bootstrap_with_add_and_remove_repo()
+    {
+        var names = new RepoContextToolGroup(enableWrites: true, workspaceMode: true)
+            .Tools.Select(t => t.ProtocolTool.Name).ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(names, Is.EquivalentTo(WorkspaceReadToolNames.Concat(WorkspaceWriteToolNames)));
+            Assert.That(names, Does.Not.Contain("repocontext_bootstrap"));
+        });
+    }
+
+    [TestCase("repocontext_list_repos")]
+    public void Workspace_read_tools_are_annotated_read_only_and_non_destructive(string toolName)
+    {
+        var tool = new RepoContextToolGroup(enableWrites: true, workspaceMode: true)
+            .Tools.Single(t => t.ProtocolTool.Name == toolName);
+        var annotations = tool.ProtocolTool.Annotations;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(annotations, Is.Not.Null);
+            Assert.That(annotations!.ReadOnlyHint, Is.True);
+            Assert.That(annotations!.DestructiveHint, Is.False);
+        });
+    }
+
+    [TestCase("repocontext_add_repo")]
+    [TestCase("repocontext_remove_repo")]
+    public void Workspace_write_tools_are_annotated_mutating_and_destructive(string toolName)
+    {
+        var tool = new RepoContextToolGroup(enableWrites: true, workspaceMode: true)
+            .Tools.Single(t => t.ProtocolTool.Name == toolName);
+        var annotations = tool.ProtocolTool.Annotations;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(annotations, Is.Not.Null);
+            Assert.That(annotations!.ReadOnlyHint, Is.False);
+            Assert.That(annotations!.DestructiveHint, Is.True);
+        });
     }
 
     [TestCaseSource(nameof(ReadToolNames))]

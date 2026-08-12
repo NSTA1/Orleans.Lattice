@@ -30,6 +30,11 @@ internal sealed class RepoContextStore
     private const int DefaultPageSize = 100;
     private const long DefaultLapseSeconds = 60L;
 
+    // Bounded per-step delete budget for the resumable range-delete cursor, so
+    // removing a large repository proceeds in reliable, cancellable chunks rather
+    // than one unbounded tombstone pass.
+    private const int DeleteStepSize = 256;
+
     private readonly IGrainFactory _grainFactory;
     private readonly Serializer _serializer;
     private readonly IOptionsMonitor<RepoContextTtlOptions> _ttlOptions;
@@ -376,6 +381,157 @@ internal sealed class RepoContextStore
     }
 
     private ILattice Tree(string treeName) => _grainFactory.GetGrain<ILattice>(treeName);
+
+    /// <summary>
+    /// Lists every registered repository in ascending repository-id order, each
+    /// with its last-ingested marker and recorded file count. The scan is
+    /// proportional to the number of repositories, not the number of records: it
+    /// reads the first key at or after a moving lower bound, extracts the
+    /// repository id from that key, reads that repository's root marker, then
+    /// advances the bound past the whole subtree.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the scan between repositories.</param>
+    /// <returns>The registered repositories and their count.</returns>
+    public async Task<RepoContextRepoListResult> ListReposAsync(CancellationToken cancellationToken)
+    {
+        var tree = Tree(RepoContextTrees.Structural);
+        var namespacePrefix = RepoContextKeys.AllReposPrefix();
+        var namespaceEnd = RepoContextPortability.PrefixUpperBound(namespacePrefix);
+        var summaries = new List<RepoContextRepoSummary>();
+
+        var lower = namespacePrefix;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            string? firstKey = null;
+            var cursorId = await tree
+                .OpenEntryCursorAsync(lower, namespaceEnd, reverse: false, pointInTime: false, cancellationToken)
+                .ConfigureAwait(false);
+            try
+            {
+                var page = await tree.NextEntriesAsync(cursorId, 1, cancellationToken).ConfigureAwait(false);
+                if (page.Entries.Count != 0)
+                {
+                    firstKey = page.Entries[0].Key;
+                }
+            }
+            finally
+            {
+                await tree.CloseCursorAsync(cursorId, CancellationToken.None).ConfigureAwait(false);
+            }
+
+            if (firstKey is null)
+            {
+                break;
+            }
+
+            if (!RepoContextKeys.TryParse(firstKey, out var parsed))
+            {
+                // Defensive: a key that does not parse cannot yield a repository
+                // id, so step just past it rather than looping forever on it.
+                lower = firstKey + '\0';
+                continue;
+            }
+
+            var repoId = parsed.RepoId;
+            summaries.Add(await BuildRepoSummaryAsync(tree, repoId, cancellationToken).ConfigureAwait(false));
+
+            var subtreeEnd = RepoContextPortability.PrefixUpperBound(RepoContextKeys.RepoScanPrefix(repoId));
+            if (subtreeEnd is null)
+            {
+                break;
+            }
+
+            lower = subtreeEnd;
+        }
+
+        return new RepoContextRepoListResult { Repos = summaries, Count = summaries.Count };
+    }
+
+    /// <summary>
+    /// Removes every record for a repository: the resumable range-delete cursor
+    /// tombstones each context tree's <c>repo/{repoId}/</c> subtree in bounded
+    /// steps, then the bare <c>repo/{repoId}</c> root marker is deleted from the
+    /// structural tree. Removing an absent repository is a no-op that reports
+    /// zero deletions.
+    /// </summary>
+    /// <param name="repoId">The repository whose records to remove. Must be non-empty.</param>
+    /// <param name="cancellationToken">Cancels the removal between steps.</param>
+    /// <returns>The repository id and the number of entries tombstoned.</returns>
+    /// <exception cref="McpException">The repository id is empty.</exception>
+    public async Task<RepoContextRepoRemovalResult> RemoveRepoAsync(string repoId, CancellationToken cancellationToken)
+    {
+        RequireNonEmpty(repoId, "repoId");
+
+        var scanPrefix = RepoContextKeys.RepoScanPrefix(repoId);
+        var end = RepoContextPortability.PrefixUpperBound(scanPrefix)
+            ?? throw new McpException("The repository id produced an unbounded delete range.");
+
+        var deleted = 0;
+        foreach (var treeName in RepoContextTrees.All)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var tree = Tree(treeName);
+            var cursorId = await tree
+                .OpenDeleteRangeCursorAsync(scanPrefix, end, cancellationToken)
+                .ConfigureAwait(false);
+            try
+            {
+                while (true)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var progress = await tree
+                        .DeleteRangeStepAsync(cursorId, DeleteStepSize, cancellationToken)
+                        .ConfigureAwait(false);
+                    deleted += progress.DeletedThisStep;
+                    if (progress.IsComplete)
+                    {
+                        break;
+                    }
+                }
+            }
+            finally
+            {
+                await tree.CloseCursorAsync(cursorId, CancellationToken.None).ConfigureAwait(false);
+            }
+        }
+
+        // The root marker sits at repo/{repoId} with no trailing separator, so it
+        // is outside the subtree range deleted above and is removed explicitly. It
+        // is only ever written to the structural tree.
+        var structural = Tree(RepoContextTrees.Structural);
+        if (await structural.DeleteAsync(RepoContextKeys.Repo(repoId), cancellationToken).ConfigureAwait(false))
+        {
+            deleted++;
+        }
+
+        return new RepoContextRepoRemovalResult { RepoId = repoId, EntriesDeleted = deleted };
+    }
+
+    private async Task<RepoContextRepoSummary> BuildRepoSummaryAsync(
+        ILattice structural, string repoId, CancellationToken cancellationToken)
+    {
+        string? lastIngested = null;
+        long? fileCount = null;
+
+        var markerBytes = await structural
+            .GetAsync(RepoContextKeys.Repo(repoId), cancellationToken)
+            .ConfigureAwait(false);
+        if (markerBytes is not null)
+        {
+            var node = _serializer.Deserialize<RepoNode>(markerBytes);
+            lastIngested = RepoContextValues.ReadString(node.LastIngested);
+            fileCount = RepoContextValues.ReadInt64(node.FileCount);
+        }
+
+        return new RepoContextRepoSummary
+        {
+            RepoId = repoId,
+            LastIngested = lastIngested,
+            FileCount = fileCount,
+        };
+    }
 
     private TimeSpan? ResolveTtl(string repoId, long? ttlSeconds, bool created)
     {

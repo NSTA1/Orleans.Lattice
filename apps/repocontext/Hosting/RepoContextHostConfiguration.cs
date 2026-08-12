@@ -64,11 +64,21 @@ public sealed class RepoContextHostConfiguration
     /// <summary>Environment variable for the Orleans service id.</summary>
     public const string ServiceIdKey = "LATTICE_SERVICE_ID";
 
+    /// <summary>
+    /// Environment variable for the read-only workspace root the container mounts.
+    /// Repositories added at runtime through <c>repocontext_add_repo</c> must
+    /// resolve under this path; it is the boundary the workspace guard enforces.
+    /// </summary>
+    public const string WorkspaceRootKey = "LATTICE_WORKSPACE_ROOT";
+
     /// <summary>The default data root inside the image (a documented, stable mount point).</summary>
     public const string DefaultDataRoot = "/data";
 
     /// <summary>The default MCP listener port.</summary>
     public const int DefaultMcpPort = 8080;
+
+    /// <summary>The default read-only workspace root inside the image (a documented, stable mount point).</summary>
+    public const string DefaultWorkspaceRoot = "/workspace";
 
     /// <summary>The default Azure Table WAL table name.</summary>
     public const string DefaultAzureWalTable = "RepoContextWal";
@@ -90,7 +100,8 @@ public sealed class RepoContextHostConfiguration
         int embeddingDimension,
         int mcpPort,
         string clusterId,
-        string serviceId)
+        string serviceId,
+        string workspaceRoot)
     {
         Profile = profile;
         Wal = wal;
@@ -109,6 +120,7 @@ public sealed class RepoContextHostConfiguration
         McpPort = mcpPort;
         ClusterId = clusterId;
         ServiceId = serviceId;
+        WorkspaceRoot = workspaceRoot;
     }
 
     /// <summary>The selected durability profile.</summary>
@@ -161,6 +173,13 @@ public sealed class RepoContextHostConfiguration
 
     /// <summary>The Orleans service id.</summary>
     public string ServiceId { get; }
+
+    /// <summary>
+    /// The read-only workspace root the container mounts. Repositories registered
+    /// at runtime through <c>repocontext_add_repo</c> must resolve under this path;
+    /// it is the boundary the workspace guard enforces.
+    /// </summary>
+    public string WorkspaceRoot { get; }
 
     /// <summary>
     /// <see langword="true"/> when any selected store is backed by the SQLite
@@ -224,6 +243,7 @@ public sealed class RepoContextHostConfiguration
         var mcpPort = ParseInt(configuration[McpPortKey], McpPortKey) ?? DefaultMcpPort;
         var clusterId = Trimmed(configuration[ClusterIdKey]) ?? "repo-context";
         var serviceId = Trimmed(configuration[ServiceIdKey]) ?? "repo-context";
+        var workspaceRoot = Trimmed(configuration[WorkspaceRootKey]) ?? DefaultWorkspaceRoot;
 
         var config = new RepoContextHostConfiguration(
             profile,
@@ -242,7 +262,8 @@ public sealed class RepoContextHostConfiguration
             embeddingDimension,
             mcpPort,
             clusterId,
-            serviceId);
+            serviceId,
+            workspaceRoot);
 
         config.Validate();
         return config;

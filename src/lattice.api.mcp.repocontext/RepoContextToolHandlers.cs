@@ -107,6 +107,10 @@ internal static class RepoContextToolHandlers
         {
             return await coordinator.RunAsync(request, cancellationToken).ConfigureAwait(false);
         }
+        catch (RepoContextWorkspaceViolationException ex)
+        {
+            throw new McpException(ex.Message);
+        }
         catch (DirectoryNotFoundException ex)
         {
             throw new McpException(ex.Message);
@@ -363,6 +367,140 @@ internal static class RepoContextToolHandlers
         }
 
         return ResolveSearchService(context).SearchAsync(repoId, query, k, cancellationToken);
+    }
+
+    /// <summary>
+    /// Registers a repository under the mounted workspace and ingests it in one
+    /// call: it resolves the requested path against the workspace boundary, walks
+    /// the tree, and reconciles the scan against the store idempotently. This is
+    /// the workspace-mode replacement for <c>repocontext_bootstrap</c> - the
+    /// client mounts a broad parent read-only once and adds individual
+    /// repositories beneath it on demand, rather than baking a single repository
+    /// path into the container's configuration. Reaching this handler means the
+    /// caller cleared the fail-closed authorization gate and the host opted writes
+    /// in.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the bootstrap coordinator.</param>
+    /// <param name="path">The path to the repository under the mounted workspace.</param>
+    /// <param name="repoId">The repository identity to file records under, or
+    /// <see langword="null"/> to derive it from the final path segment.</param>
+    /// <param name="includeGlobs">Optional include globs; when non-empty a file is
+    /// ingested only if it matches at least one.</param>
+    /// <param name="excludeGlobs">Optional exclude globs; a match removes a file
+    /// even when it also matched an include.</param>
+    /// <param name="cancellationToken">Cancels the ingestion run.</param>
+    /// <returns>A summary of files scanned, added, updated, removed, and unchanged.</returns>
+    /// <exception cref="McpException">The path is missing, resolves outside the
+    /// workspace, does not exist, or yields no repository id (caller errors).</exception>
+    public static async Task<RepoContextBootstrapResult> AddRepoAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("Path to the repository to register, under the mounted workspace root (for example '/workspace/my-repo'). Resolved against the workspace boundary; a path outside it is rejected.")]
+        string path,
+        [Description("Optional stable repository identity to file records under; when omitted it is derived from the final path segment. Re-adding the same id updates the same records.")]
+        string? repoId = null,
+        [Description("Optional include globs (for example 'src/**' or '*.cs'); when non-empty a file is ingested only if it matches at least one. '**' matches any depth, '*' a single path segment.")]
+        IReadOnlyList<string>? includeGlobs = null,
+        [Description("Optional exclude globs; a match removes a file even when it also matched an include. The '.git' directory is always skipped.")]
+        IReadOnlyList<string>? excludeGlobs = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            throw new McpException("The 'path' parameter is required and must be a non-empty path under the workspace root.");
+        }
+
+        var resolvedId = string.IsNullOrWhiteSpace(repoId) ? DeriveRepoId(path) : repoId!.Trim();
+        if (string.IsNullOrWhiteSpace(resolvedId))
+        {
+            throw new McpException(
+                "A repository id could not be derived from the path; supply the 'repoId' parameter explicitly.");
+        }
+
+        var services = context.Services
+            ?? throw new InvalidOperationException(
+                "The MCP request has no service provider; the add-repo tool cannot resolve its coordinator.");
+        var coordinator = services.GetRequiredService<RepoContextBootstrapService>();
+
+        var request = new RepoContextBootstrapRequest
+        {
+            RepoRoot = path,
+            RepoId = resolvedId,
+            IncludeGlobs = includeGlobs,
+            ExcludeGlobs = excludeGlobs,
+        };
+
+        try
+        {
+            return await coordinator.RunAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (RepoContextWorkspaceViolationException ex)
+        {
+            throw new McpException(ex.Message);
+        }
+        catch (DirectoryNotFoundException ex)
+        {
+            throw new McpException(ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Lists every repository currently registered in the context store, each with
+    /// its last-ingested marker and recorded file count, so the caller can discover
+    /// what is queryable before it recalls, scans, searches, or removes a
+    /// repository.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the store.</param>
+    /// <param name="cancellationToken">Cancels the scan.</param>
+    /// <returns>The registered repositories and their count.</returns>
+    public static Task<RepoContextRepoListResult> ListReposAsync(
+        RequestContext<CallToolRequestParams> context,
+        CancellationToken cancellationToken = default)
+        => ResolveStore(context).ListReposAsync(cancellationToken);
+
+    /// <summary>
+    /// Removes every record for a repository from the context store: its
+    /// structural nodes, agent memory, and vector data are tombstoned and the
+    /// repository is dropped from <c>repocontext_list_repos</c>. The working tree
+    /// on disk is never touched. Removing an unknown repository is a no-op that
+    /// reports zero deletions. Reaching this handler means the caller cleared the
+    /// fail-closed authorization gate and the host opted writes in.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the store.</param>
+    /// <param name="repoId">The repository identity whose records to remove.</param>
+    /// <param name="cancellationToken">Cancels the removal.</param>
+    /// <returns>The repository id and the number of entries removed.</returns>
+    /// <exception cref="McpException">The repository id is missing (a caller error).</exception>
+    public static Task<RepoContextRepoRemovalResult> RemoveRepoAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The repository identity whose records to remove from the context store. The working tree on disk is not touched.")]
+        string repoId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(repoId))
+        {
+            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+        }
+
+        return ResolveStore(context).RemoveRepoAsync(repoId, cancellationToken);
+    }
+
+    /// <summary>
+    /// Derives a repository id from the final segment of a path, tolerating
+    /// trailing separators of either platform. Returns an empty string when no
+    /// segment remains (for example a bare root path).
+    /// </summary>
+    /// <param name="path">The repository path.</param>
+    /// <returns>The derived repository id, or an empty string.</returns>
+    private static string DeriveRepoId(string path)
+    {
+        var trimmed = path.Trim().TrimEnd('/', '\\');
+        if (trimmed.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        var lastSeparator = trimmed.LastIndexOfAny(new[] { '/', '\\' });
+        return lastSeparator < 0 ? trimmed : trimmed[(lastSeparator + 1)..];
     }
 
     /// <summary>

@@ -74,6 +74,14 @@ internal static class RepoContextKeys
     }
 
     /// <summary>
+    /// The ordered-range scan prefix covering every repository root marker and
+    /// subtree: <c>repo/</c>. A moving-cursor scan over this range visits each
+    /// registered repository exactly once (the bare <c>repo/{repoId}</c> marker
+    /// sorts before that repository's <c>repo/{repoId}/...</c> subtree).
+    /// </summary>
+    internal static string AllReposPrefix() => $"{RepoSegment}{Separator}";
+
+    /// <summary>
     /// Builds the ordered-range scan prefix for everything under a repository:
     /// <c>repo/{repoId}/</c>.
     /// </summary>

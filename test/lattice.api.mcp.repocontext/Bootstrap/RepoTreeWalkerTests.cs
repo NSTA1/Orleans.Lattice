@@ -132,4 +132,68 @@ public sealed class RepoTreeWalkerTests
     public void Walk_throws_for_a_missing_root()
         => Assert.Throws<DirectoryNotFoundException>(
             () => RepoTreeWalker.Walk(Path.Combine(_root, "does-not-exist"), null, null));
+
+    [Test]
+    public void Walk_does_not_follow_a_symlinked_directory()
+    {
+        Write("real/a.cs", "a");
+
+        var outside = Path.Combine(Path.GetTempPath(), "rcb-walker-out-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(outside);
+        File.WriteAllText(Path.Combine(outside, "secret.cs"), "secret");
+        try
+        {
+            var linkPath = Path.Combine(_root, "link");
+            try
+            {
+                Directory.CreateSymbolicLink(linkPath, outside);
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or PlatformNotSupportedException)
+            {
+                Assert.Ignore("Creating a symbolic link is not permitted in this environment.");
+                return;
+            }
+
+            var entries = RepoTreeWalker.Walk(_root, null, null);
+
+            // The real file is walked; nothing behind the symlinked directory is.
+            Assert.That(entries.Select(e => e.RelativePath), Is.EqualTo(new[] { "real/a.cs" }));
+        }
+        finally
+        {
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
+    [Test]
+    public void Walk_does_not_read_a_symlinked_file()
+    {
+        Write("real.cs", "real");
+
+        var outside = Path.Combine(Path.GetTempPath(), "rcb-walker-out-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(outside);
+        var target = Path.Combine(outside, "target.cs");
+        File.WriteAllText(target, "secret");
+        try
+        {
+            var linkPath = Path.Combine(_root, "link.cs");
+            try
+            {
+                File.CreateSymbolicLink(linkPath, target);
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or PlatformNotSupportedException)
+            {
+                Assert.Ignore("Creating a symbolic link is not permitted in this environment.");
+                return;
+            }
+
+            var entries = RepoTreeWalker.Walk(_root, null, null);
+
+            Assert.That(entries.Select(e => e.RelativePath), Is.EqualTo(new[] { "real.cs" }));
+        }
+        finally
+        {
+            Directory.Delete(outside, recursive: true);
+        }
+    }
 }

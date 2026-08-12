@@ -4,8 +4,8 @@ This sample runs the RepoContext MCP server (issue #1435) as a single,
 restart-durable container alongside its embedding companion, and demonstrates the
 core durability guarantee end to end:
 
-**start -> bootstrap a mounted repo -> recall -> restart -> context is still
-present.**
+**start -> add a repo under the mounted workspace -> recall -> restart -> context
+is still present.**
 
 Two containers, one private network:
 
@@ -28,15 +28,22 @@ Two containers, one private network:
   just-built `src/` bits), so this compose file sets `context: ../..`. Run it from
   this directory.
 
-## The mounted repo
+## The mounted workspace
 
-Set `REPO_PATH` to the absolute path of the repository you want the box to
-remember. It is mounted READ-ONLY at `/workspace` inside the container, so the box
-can never mutate the code it ingests.
+Set `REPO_PATH` to the absolute path of a directory the box may see. It is mounted
+READ-ONLY at `/workspace` inside the container, so the box can never mutate the
+code it indexes. This is a *workspace root*, not a single repository: mount a broad
+parent and register individual repositories under it at runtime with the
+`repocontext_add_repo` tool. It defaults to this repository's parent, so this repo
+is one registerable child.
 
 ```bash
-export REPO_PATH=/absolute/path/to/some/repo    # PowerShell: $env:REPO_PATH="C:\path\to\repo"
+export REPO_PATH=/absolute/path/to/some/parent    # PowerShell: $env:REPO_PATH="C:\path\to\parent"
 ```
+
+Every path passed to `repocontext_add_repo` is resolved to its real location - `..`
+traversal and symlink escape are both defeated - and must resolve under
+`/workspace` (set by `LATTICE_WORKSPACE_ROOT`); a path outside it is refused.
 
 ## Walkthrough
 
@@ -51,11 +58,15 @@ docker compose up -d --build
 #    reachable, and MCP is serving. It is 503 during startup replay and during drain.
 curl -fsS http://localhost:8080/health/ready
 
-# 3. Bootstrap the mounted repo into the box over MCP (repocontext_bootstrap with
-#    repoRoot=/workspace). Use your MCP client of choice against
+# 3. Register a repository under the mounted workspace over MCP (repocontext_add_repo
+#    with a path under /workspace). Use your MCP client of choice against
 #    http://localhost:8080 (the MCP streamable-HTTP endpoint). For example, with
 #    the reference `mcp` CLI:
-#      mcp call http://localhost:8080 repocontext_bootstrap '{"repoRoot":"/workspace","repoId":"demo"}'
+#      mcp call http://localhost:8080 repocontext_add_repo '{"path":"/workspace/my-repo"}'
+#    Omit repoId to derive it from the final path segment, or set it explicitly:
+#      mcp call http://localhost:8080 repocontext_add_repo '{"path":"/workspace/my-repo","repoId":"demo"}'
+#    List what is registered at any time:
+#      mcp call http://localhost:8080 repocontext_list_repos '{}'
 
 # 4. Recall: query the box (repocontext_search / repocontext_recall) and confirm it
 #    returns the ingested context.

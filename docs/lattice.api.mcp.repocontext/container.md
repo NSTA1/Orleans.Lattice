@@ -8,7 +8,7 @@ The runnable sample is [`samples/RepoContextContainer`](../../samples/RepoContex
 
 The end-to-end guarantee the sample demonstrates:
 
-**start -> bootstrap a mounted repo -> recall -> restart -> context is still present.**
+**start -> add a repo under the mounted workspace -> recall -> restart -> context is still present.**
 
 State is replayed from the WAL and the relational store on the mounted volume after a restart, so an agent's onboarded structural model and its remembered notes are all still there.
 
@@ -37,9 +37,20 @@ The host is configured entirely by environment variables. The common ones:
 | `LATTICE_DURABILITY` | `local` | The durability profile (`local`, `postgres`, `azure`). |
 | `LATTICE_DATA_ROOT` | `/data` | Root for all durable local state; must be a writable host mount. |
 | `LATTICE_MCP_PORT` | `8080` | The MCP listener port (the only application listener). |
+| `LATTICE_WORKSPACE_ROOT` | `/workspace` | The read-only root that runtime-registered repositories must resolve under; a path escaping it is refused. |
 | `LATTICE_EMBEDDING_ENDPOINT` | (unset) | The separate embedding companion's base address; enables semantic search. |
 | `LATTICE_WAL_DIR` / `LATTICE_SQLITE_PATH` | under the data root | Override the WAL directory or SQLite file path individually. |
 | `LATTICE_POSTGRES_CONNECTION_STRING` / `LATTICE_AZURE_STORAGE_CONNECTION_STRING` | (unset) | Required by the `postgres` / `azure` profiles. |
+
+## Registering repositories at runtime
+
+The container mounts a broad parent directory read-only at `LATTICE_WORKSPACE_ROOT` (default `/workspace`) and lets the MCP client decide which repositories under it to index - no repository path is baked into the container's configuration. The client drives this with three tools:
+
+- `repocontext_add_repo` - registers a repository under the workspace and ingests it in one call (walk, digest, reconcile). This is the workspace-mode onboarding tool; it supersedes `repocontext_bootstrap`, which is not exposed in the container. Supply `path` (for example `/workspace/my-repo`); omit `repoId` to derive it from the final path segment. Re-adding the same repository is idempotent - only changed files are updated and deleted ones pruned.
+- `repocontext_list_repos` - lists every registered repository with its last-ingested marker and recorded file count, so an agent can discover what is queryable before recalling, scanning, or searching.
+- `repocontext_remove_repo` - forgets every record for a repository (structural nodes, memory, and vectors). The working tree on disk is never touched.
+
+Every path passed to `repocontext_add_repo` is resolved to its real on-disk location - defeating both `..` traversal and symlink escape - and must sit inside `LATTICE_WORKSPACE_ROOT`; a path outside it is refused. Mounting the workspace read-only means the container can never mutate the code it indexes.
 
 ## Health probing
 

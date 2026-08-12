@@ -124,7 +124,9 @@ public sealed class RepoContextMcpHarness : IAsyncDisposable
         // models the same group grant without the write opt-in, so only the
         // read-only surface is offered.
         builder.Services.AddRepoContextTools(
-            enableWrites: options.Posture == RepoContextMcpAuthPosture.Writer);
+            enableWrites: options.Posture == RepoContextMcpAuthPosture.Writer,
+            workspaceMode: options.WorkspaceMode,
+            workspaceRoot: options.WorkspaceRoot);
 
         var app = builder.Build();
         app.MapLatticeMcp();

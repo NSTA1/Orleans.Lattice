@@ -31,16 +31,31 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
     /// <summary>
     /// Builds the repository-context tool list once. When
     /// <paramref name="enableWrites"/> is <see langword="false"/> (the default)
-    /// only the read-only <c>repocontext_health</c> probe is contributed; when
-    /// <see langword="true"/> the mutating <c>repocontext_bootstrap</c> tool is
-    /// added. The tools resolve any collaborators from the request service
-    /// provider at call time, so no per-session state is captured here.
+    /// only the read-only tools are contributed; when <see langword="true"/> the
+    /// mutating tools are added.
+    /// <para>
+    /// When <paramref name="workspaceMode"/> is <see langword="false"/> (the
+    /// default) the surface targets a single, host-configured repository: the
+    /// mutating onboarding tool is <c>repocontext_bootstrap</c>. When
+    /// <see langword="true"/> the host mounts a broad parent workspace read-only
+    /// and the client manages repositories dynamically: the read-only
+    /// <c>repocontext_list_repos</c> is added, and <c>repocontext_bootstrap</c> is
+    /// replaced by the workspace-scoped <c>repocontext_add_repo</c> and
+    /// <c>repocontext_remove_repo</c>.
+    /// </para>
+    /// The tools resolve any collaborators from the request service provider at
+    /// call time, so no per-session state is captured here.
     /// </summary>
     /// <param name="enableWrites">Whether the mutating repository-context tools are
     /// contributed.</param>
-    public RepoContextToolGroup(bool enableWrites = false)
+    /// <param name="workspaceMode">Whether the dynamic multi-repository workspace
+    /// tools replace the single-repository onboarding tool.</param>
+    public RepoContextToolGroup(bool enableWrites = false, bool workspaceMode = false)
     {
-        var tools = new List<McpServerTool>(enableWrites ? 9 : 5)
+        var capacity = 5
+            + (workspaceMode ? 1 : 0)
+            + (enableWrites ? (workspaceMode ? 5 : 4) : 0);
+        var tools = new List<McpServerTool>(capacity)
         {
             McpServerTool.Create(
                 RepoContextToolHandlers.Health,
@@ -64,9 +79,23 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
             BuildSearchTool(),
         };
 
+        if (workspaceMode)
+        {
+            tools.Add(BuildListReposTool());
+        }
+
         if (enableWrites)
         {
-            tools.Add(BuildBootstrapTool());
+            if (workspaceMode)
+            {
+                tools.Add(BuildAddRepoTool());
+                tools.Add(BuildRemoveRepoTool());
+            }
+            else
+            {
+                tools.Add(BuildBootstrapTool());
+            }
+
             tools.Add(BuildRememberTool());
             tools.Add(BuildUpdateTool());
             tools.Add(BuildForgetTool());
@@ -167,6 +196,64 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     + "updates only changed files and prunes deleted ones, and an interrupted run resumes "
                     + "without duplication. Returns a summary of files scanned, added, updated, removed, and "
                     + "unchanged, symbols captured, and elapsed time. Fails closed: offered only to a caller "
+                    + "who cleared the authorization gate and for whom the host opted writes in. Destructive.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildListReposTool()
+        => McpServerTool.Create(
+            RepoContextToolHandlers.ListReposAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "repocontext_list_repos",
+                Title = "List registered repositories",
+                Description =
+                    "Lists every repository currently registered in the context store, each with its "
+                    + "last-ingested marker and recorded file count, in ascending id order. Use it to discover "
+                    + "which repositories under the mounted workspace are queryable before recalling, scanning, "
+                    + "searching, or removing one. Read-only.",
+                ReadOnly = true,
+                Destructive = false,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildAddRepoTool()
+        => McpServerTool.Create(
+            RepoContextToolHandlers.AddRepoAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "repocontext_add_repo",
+                Title = "Add a repository under the workspace",
+                Description =
+                    "Registers a repository under the mounted read-only workspace and ingests it in one call, "
+                    + "so it becomes queryable through recall, scan, and search. This is the workspace-mode "
+                    + "onboarding tool - prefer it over any separate bootstrap step. Supply 'path' pointing at a "
+                    + "repository under the workspace root; a path that resolves outside the workspace (via '..' "
+                    + "or a symbolic link) is rejected. Omit 'repoId' to derive it from the final path segment. "
+                    + "Walks the tree, records a structural node and content digest per file, and reconciles the "
+                    + "scan against the store: idempotent and resumable, so re-adding an unchanged repository is "
+                    + "a no-op and a changed one updates only what changed. Returns a summary of files scanned, "
+                    + "added, updated, removed, and unchanged. Fails closed: offered only to a caller who cleared "
+                    + "the authorization gate and for whom the host opted writes in. Destructive.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildRemoveRepoTool()
+        => McpServerTool.Create(
+            RepoContextToolHandlers.RemoveRepoAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "repocontext_remove_repo",
+                Title = "Remove a repository from the context store",
+                Description =
+                    "Removes every record for a repository from the context store - its structural nodes, "
+                    + "agent memory, and vector data - and drops it from 'repocontext_list_repos'. The working "
+                    + "tree on disk is never touched; only the indexed context is forgotten. Removing an unknown "
+                    + "repository is a no-op that reports zero deletions. Fails closed: offered only to a caller "
                     + "who cleared the authorization gate and for whom the host opted writes in. Destructive.",
                 ReadOnly = false,
                 Destructive = true,

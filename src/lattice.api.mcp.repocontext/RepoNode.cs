@@ -37,6 +37,15 @@ internal sealed record RepoNode
     public OrSet Tags { get; init; } = new();
 
     /// <summary>
+    /// Last-writer-wins count of files present in the repository as of the last
+    /// ingestion. Written as an 8-byte integer register (see
+    /// <see cref="RepoContextValues.Lww(long, HybridLogicalClock)"/>); unset on a
+    /// repository ingested before this field existed.
+    /// </summary>
+    [Id(5)]
+    public BoundedRegister FileCount { get; init; } = new();
+
+    /// <summary>
     /// Lattice merge of two replicas of the same repository node. Identity is
     /// preserved from <paramref name="left"/> (both sides share the key-derived
     /// <see cref="RepoId"/>); every mutable field is folded through its CRDT
@@ -54,6 +63,7 @@ internal sealed record RepoNode
             DisplayName = BoundedRegister.Merge(left.DisplayName, right.DisplayName),
             DefaultBranch = BoundedRegister.Merge(left.DefaultBranch, right.DefaultBranch),
             LastIngested = BoundedRegister.Merge(left.LastIngested, right.LastIngested),
+            FileCount = BoundedRegister.Merge(left.FileCount, right.FileCount),
             Tags = OrSet.Merge(left.Tags, right.Tags),
         };
     }
