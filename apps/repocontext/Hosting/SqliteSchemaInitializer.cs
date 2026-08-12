@@ -72,8 +72,13 @@ public sealed class SqliteSchemaInitializer
 
     /// <summary>
     /// Ensures the database directory exists and is writable, then applies the
-    /// schema scripts once (idempotent: a second run against a populated file is a
-    /// no-op). Configures <c>WAL</c> journal mode on first creation.
+    /// schema scripts. The scripts are fully idempotent: every table and index is
+    /// created <c>IF NOT EXISTS</c> and every named-query definition is written
+    /// with <c>INSERT OR REPLACE</c>, so this runs on every start and a redeploy
+    /// over an existing database file self-heals the stored query text (for
+    /// example a corrected <c>WriteToStorageKey</c>) rather than keeping the
+    /// version first written. Configures <c>WAL</c> journal mode each start (a
+    /// no-op once the file header records it).
     /// </summary>
     /// <exception cref="InvalidOperationException">The data path is missing or not writable.</exception>
     public void Initialize()
@@ -85,11 +90,10 @@ public sealed class SqliteSchemaInitializer
 
         ExecutePragmas(connection);
 
-        if (SchemaAlreadyApplied(connection))
-        {
-            return;
-        }
-
+        // The startup schema apply runs on a single connection with no pooled
+        // concurrency, so wrapping the idempotent batch in one transaction is
+        // safe here (unlike the per-write grain-storage query, which must not
+        // manage transactions manually - see SQLite-Persistence.sql).
         using var transaction = connection.BeginTransaction();
         foreach (var script in LoadScripts())
         {
@@ -120,15 +124,6 @@ public sealed class SqliteSchemaInitializer
         command.CommandText =
             $"PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout={BusyTimeoutSeconds * 1000};";
         command.ExecuteNonQuery();
-    }
-
-    private static bool SchemaAlreadyApplied(SqliteConnection connection)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText =
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='OrleansQuery';";
-        var count = Convert.ToInt64(command.ExecuteScalar());
-        return count > 0;
     }
 
     private static IEnumerable<string> LoadScripts()

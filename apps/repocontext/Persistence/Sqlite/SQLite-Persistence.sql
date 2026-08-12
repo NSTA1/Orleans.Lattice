@@ -43,7 +43,7 @@
 --
 -- 7. In the storage operations queries the columns need to be in the exact same order
 -- since the storage table operations support optionally streaming.
-CREATE TABLE OrleansStorage
+CREATE TABLE IF NOT EXISTS OrleansStorage
 (
     -- These are for the book keeping. Orleans calculates
     -- these hashes (see RelationalStorageProvide implementation),
@@ -73,14 +73,25 @@ CREATE TABLE OrleansStorage
     -- rows down to [0, n] relevant ones, n being the number of collided value pairs.
 );
 
-CREATE INDEX IX_OrleansStorage ON OrleansStorage(GrainIdHash, GrainTypeHash);
+CREATE INDEX IF NOT EXISTS IX_OrleansStorage ON OrleansStorage(GrainIdHash, GrainTypeHash);
 
 
 -- Updates an existing grain state with optimistic concurrency control or inserts it if it does not exist.
-INSERT INTO OrleansQuery (QueryKey, QueryText) VALUES 
+--
+-- This batch deliberately does NOT wrap its statements in an explicit
+-- BEGIN TRANSACTION / COMMIT. SQLite forbids nested transactions, and under
+-- Microsoft.Data.Sqlite connection pooling a batch that fails before reaching
+-- its COMMIT leaves the transaction open on the pooled connection; the next
+-- reuse of that connection then fails at BEGIN with "cannot start a transaction
+-- within a transaction", cascading across a burst of concurrent writes. Manual
+-- transaction control is unnecessary here for correctness: Orleans serializes
+-- WriteStateAsync per grain (a single activation writes a given row), exactly
+-- one of the UPDATE or the conditional INSERT below mutates the target row, and
+-- the total_changes() / temp-table version bookkeeping is connection-scoped and
+-- independent of any surrounding transaction. Each statement therefore
+-- auto-commits and no open transaction can leak onto a pooled connection.
+INSERT OR REPLACE INTO OrleansQuery (QueryKey, QueryText) VALUES 
 ('WriteToStorageKey', '
-    BEGIN TRANSACTION;
-
     CREATE TEMP TABLE IF NOT EXISTS OrleansStorageWriteState
     (
         TotalChangesBefore INT NOT NULL
@@ -125,12 +136,10 @@ INSERT INTO OrleansQuery (QueryKey, QueryText) VALUES
     SELECT @GrainStateVersion AS NewGrainStateVersion
     WHERE total_changes() = (SELECT TotalChangesBefore FROM OrleansStorageWriteState LIMIT 1)
         AND @GrainStateVersion IS NOT NULL;
-
-    COMMIT;
 ');
 
 -- Retrieves the binary payload and the current version of a specific grain state.
-INSERT INTO OrleansQuery (QueryKey, QueryText) VALUES 
+INSERT OR REPLACE INTO OrleansQuery (QueryKey, QueryText) VALUES 
 ('ReadFromStorageKey', '
     SELECT
         PayloadBinary,
@@ -147,7 +156,7 @@ INSERT INTO OrleansQuery (QueryKey, QueryText) VALUES
 ');
 
 -- Clears the grain state by setting the payload to null and incrementing the version for consistency.
-INSERT INTO OrleansQuery (QueryKey, QueryText) VALUES 
+INSERT OR REPLACE INTO OrleansQuery (QueryKey, QueryText) VALUES 
 ('ClearStorageKey', '
     UPDATE OrleansStorage
     SET

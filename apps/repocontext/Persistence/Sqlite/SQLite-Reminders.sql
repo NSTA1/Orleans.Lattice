@@ -9,7 +9,7 @@
 -- parameters by @Name), and expresses the upsert and delete with SQLite's native
 -- ON CONFLICT ... DO UPDATE ... RETURNING and changes() rather than a stored
 -- procedure, so no server-side function is required.
-CREATE TABLE OrleansRemindersTable
+CREATE TABLE IF NOT EXISTS OrleansRemindersTable
 (
     ServiceId TEXT NOT NULL,
     GrainId TEXT NOT NULL,
@@ -24,7 +24,7 @@ CREATE TABLE OrleansRemindersTable
 
 -- Inserts a new reminder row at version 0 or bumps the version of an existing
 -- one, returning the resulting version.
-INSERT INTO OrleansQuery (QueryKey, QueryText) VALUES
+INSERT OR REPLACE INTO OrleansQuery (QueryKey, QueryText) VALUES
 ('UpsertReminderRowKey', '
     INSERT INTO OrleansRemindersTable
     (
@@ -56,7 +56,7 @@ INSERT INTO OrleansQuery (QueryKey, QueryText) VALUES
 ');
 
 -- Reads every reminder row for a grain.
-INSERT INTO OrleansQuery (QueryKey, QueryText) VALUES
+INSERT OR REPLACE INTO OrleansQuery (QueryKey, QueryText) VALUES
 ('ReadReminderRowsKey', '
     SELECT
         GrainId,
@@ -71,7 +71,7 @@ INSERT INTO OrleansQuery (QueryKey, QueryText) VALUES
 ');
 
 -- Reads a single reminder row.
-INSERT INTO OrleansQuery (QueryKey, QueryText) VALUES
+INSERT OR REPLACE INTO OrleansQuery (QueryKey, QueryText) VALUES
 ('ReadReminderRowKey', '
     SELECT
         GrainId,
@@ -88,7 +88,7 @@ INSERT INTO OrleansQuery (QueryKey, QueryText) VALUES
 
 -- Reads the reminder rows whose grain hash falls in the open-closed range
 -- (BeginHash, EndHash].
-INSERT INTO OrleansQuery (QueryKey, QueryText) VALUES
+INSERT OR REPLACE INTO OrleansQuery (QueryKey, QueryText) VALUES
 ('ReadRangeRows1Key', '
     SELECT
         GrainId,
@@ -105,7 +105,7 @@ INSERT INTO OrleansQuery (QueryKey, QueryText) VALUES
 
 -- Reads the reminder rows whose grain hash falls in the wrap-around range
 -- (GrainHash > BeginHash OR GrainHash <= EndHash).
-INSERT INTO OrleansQuery (QueryKey, QueryText) VALUES
+INSERT OR REPLACE INTO OrleansQuery (QueryKey, QueryText) VALUES
 ('ReadRangeRows2Key', '
     SELECT
         GrainId,
@@ -122,7 +122,7 @@ INSERT INTO OrleansQuery (QueryKey, QueryText) VALUES
 
 -- Deletes a reminder row at a specific version, returning 1 when a row was
 -- removed and 0 otherwise.
-INSERT INTO OrleansQuery (QueryKey, QueryText) VALUES
+INSERT OR REPLACE INTO OrleansQuery (QueryKey, QueryText) VALUES
 ('DeleteReminderRowKey', '
     DELETE FROM OrleansRemindersTable
     WHERE
@@ -134,7 +134,7 @@ INSERT INTO OrleansQuery (QueryKey, QueryText) VALUES
 ');
 
 -- Clears every reminder row for the service (used by the testing/reset path).
-INSERT INTO OrleansQuery (QueryKey, QueryText) VALUES
+INSERT OR REPLACE INTO OrleansQuery (QueryKey, QueryText) VALUES
 ('DeleteReminderRowsKey', '
     DELETE FROM OrleansRemindersTable
     WHERE

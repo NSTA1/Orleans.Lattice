@@ -5,8 +5,10 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
 
 /// <summary>
 /// Unit tests for <see cref="SqliteSchemaInitializer"/>: the embedded Orleans
-/// ADO.NET schema applies against a fresh database file, is idempotent on a second
-/// run, and the shared connection string carries the busy-timeout window.
+/// ADO.NET schema applies against a fresh database file, is idempotent and
+/// self-healing on a second run (re-applying corrected query definitions over an
+/// existing file), the grain-storage write query manages no transaction of its
+/// own, and the shared connection string carries the busy-timeout window.
 /// </summary>
 [TestFixture]
 public sealed class SqliteSchemaInitializerTests
@@ -56,6 +58,40 @@ public sealed class SqliteSchemaInitializerTests
     }
 
     [Test]
+    public void WriteToStorageKey_query_does_not_manage_transactions_manually()
+    {
+        new SqliteSchemaInitializer(_dbPath).Initialize();
+
+        var queryText = ReadQueryText("WriteToStorageKey");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(queryText, Does.Not.Contain("BEGIN TRANSACTION"),
+                "The write query must not open a transaction: under connection pooling a "
+                + "batch that fails before COMMIT leaks it onto the pooled connection, so its "
+                + "next reuse fails with 'cannot start a transaction within a transaction'.");
+            Assert.That(queryText, Does.Not.Contain("COMMIT"));
+        });
+    }
+
+    [Test]
+    public void Initialize_reapplies_query_definitions_over_an_existing_database()
+    {
+        var initializer = new SqliteSchemaInitializer(_dbPath);
+        initializer.Initialize();
+
+        // Simulate an older database whose stored query text predates a fix.
+        OverwriteQueryText("WriteToStorageKey", "SELECT 'stale';");
+        Assert.That(ReadQueryText("WriteToStorageKey"), Is.EqualTo("SELECT 'stale';"));
+
+        // A redeploy must self-heal the stored definition rather than keep the stale one.
+        initializer.Initialize();
+
+        Assert.That(ReadQueryText("WriteToStorageKey"), Does.Contain("UPDATE OrleansStorage"),
+            "Re-running the initializer over an existing file restores the current query text.");
+    }
+
+    [Test]
     public void Initialize_enables_wal_journal_mode()
     {
         new SqliteSchemaInitializer(_dbPath).Initialize();
@@ -95,5 +131,26 @@ public sealed class SqliteSchemaInitializerTests
         command.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=$name;";
         command.Parameters.AddWithValue("$name", table);
         return Convert.ToInt64(command.ExecuteScalar()) > 0;
+    }
+
+    private string ReadQueryText(string queryKey)
+    {
+        using var connection = new SqliteConnection(SqliteSchemaInitializer.BuildConnectionString(_dbPath));
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT QueryText FROM OrleansQuery WHERE QueryKey=$key;";
+        command.Parameters.AddWithValue("$key", queryKey);
+        return (string)command.ExecuteScalar()!;
+    }
+
+    private void OverwriteQueryText(string queryKey, string queryText)
+    {
+        using var connection = new SqliteConnection(SqliteSchemaInitializer.BuildConnectionString(_dbPath));
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE OrleansQuery SET QueryText=$text WHERE QueryKey=$key;";
+        command.Parameters.AddWithValue("$text", queryText);
+        command.Parameters.AddWithValue("$key", queryKey);
+        command.ExecuteNonQuery();
     }
 }
