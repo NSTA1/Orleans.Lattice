@@ -410,21 +410,17 @@ internal sealed class RepoContextStore
         {
             cancellationToken.ThrowIfCancellationRequested();
 
+            // Resilient single-key probe: ScanKeysAsync reopens over the same
+            // still-live range on a transient EnumerationAbortedException, so the
+            // per-repository advance survives an enumerator reclaimed between the
+            // open and the first read rather than aborting the whole listing.
             string? firstKey = null;
-            var cursorId = await tree
-                .OpenEntryCursorAsync(lower, namespaceEnd, reverse: false, pointInTime: false, cancellationToken)
-                .ConfigureAwait(false);
-            try
+            await foreach (var key in tree
+                .ScanKeysAsync(lower, namespaceEnd, cancellationToken: cancellationToken)
+                .ConfigureAwait(false))
             {
-                var page = await tree.NextEntriesAsync(cursorId, 1, cancellationToken).ConfigureAwait(false);
-                if (page.Entries.Count != 0)
-                {
-                    firstKey = page.Entries[0].Key;
-                }
-            }
-            finally
-            {
-                await tree.CloseCursorAsync(cursorId, CancellationToken.None).ConfigureAwait(false);
+                firstKey = key;
+                break;
             }
 
             if (firstKey is null)
