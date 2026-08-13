@@ -71,4 +71,13 @@ public static class ApiTreeAdminTypeAliases
 
     /// <summary>Alias for <see cref="TreeDeletionStatus"/>.</summary>
     public const string TreeDeletionStatus = "oit.dl";
+
+    /// <summary>Alias for <see cref="TreeBulkLoadSession"/>.</summary>
+    public const string TreeBulkLoadSession = "oit.bs";
+
+    /// <summary>Alias for <see cref="TreeBulkLoadChunkAck"/>.</summary>
+    public const string TreeBulkLoadChunkAck = "oit.bk";
+
+    /// <summary>Alias for <see cref="TreeBulkLoadResult"/>.</summary>
+    public const string TreeBulkLoadResult = "oit.bo";
 }

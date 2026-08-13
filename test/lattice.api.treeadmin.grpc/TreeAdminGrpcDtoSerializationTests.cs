@@ -282,6 +282,44 @@ public sealed class TreeAdminGrpcDtoSerializationTests
     }
 
     [Test]
+    public void TreeAdminBulkLoadSessionRequest_round_trips()
+    {
+        var copy = RoundTrip(new TreeAdminBulkLoadSessionRequest { TreeId = "orders", OperationId = "load-1" });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TreeId, Is.EqualTo("orders"));
+            Assert.That(copy.OperationId, Is.EqualTo("load-1"));
+        });
+    }
+
+    [Test]
+    public void TreeAdminBulkLoadAppendRequest_round_trips_its_ordered_entries()
+    {
+        var copy = RoundTrip(new TreeAdminBulkLoadAppendRequest
+        {
+            TreeId = "orders",
+            OperationId = "load-1",
+            ChunkIndex = 5,
+            Entries =
+            [
+                new Orleans.Lattice.Api.Data.DataEntry { Key = "a", Value = [1, 2] },
+                new Orleans.Lattice.Api.Data.DataEntry { Key = "b", Value = [3] },
+            ],
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.OperationId, Is.EqualTo("load-1"));
+            Assert.That(copy.ChunkIndex, Is.EqualTo(5));
+            Assert.That(copy.Entries, Has.Count.EqualTo(2));
+            Assert.That(copy.Entries[0].Key, Is.EqualTo("a"));
+            Assert.That(copy.Entries[0].Value, Is.EqualTo(new byte[] { 1, 2 }));
+            Assert.That(copy.Entries[1].Key, Is.EqualTo("b"));
+        });
+    }
+
+    [Test]
     public void Every_registry_alias_is_unique_and_uses_the_reserved_prefix()
     {
         var aliases = RegistryAliasValues();

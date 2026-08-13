@@ -83,6 +83,15 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
     /// <summary>Reads a tree's soft-deletion status. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
     public abstract Task<TreeDeletionStatus> GetTreeDeletionStatus(TreeAdminTreeRequest request, ServerCallContext context);
 
+    /// <summary>Opens a bulk-load session over an empty tree. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
+    public abstract Task<TreeBulkLoadSession> BeginBulkLoad(TreeAdminBulkLoadSessionRequest request, ServerCallContext context);
+
+    /// <summary>Grafts one ordered chunk onto a bulk-load session. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
+    public abstract Task<TreeBulkLoadChunkAck> AppendBulkLoad(TreeAdminBulkLoadAppendRequest request, ServerCallContext context);
+
+    /// <summary>Closes a bulk-load session and reports its summary. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
+    public abstract Task<TreeBulkLoadResult> CommitBulkLoad(TreeAdminBulkLoadSessionRequest request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at startup
     /// with <paramref name="serviceImpl"/> set to <see langword="null"/> to record
@@ -121,6 +130,9 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
             binder.AddMethod(methods.RecoverTree, (UnaryServerMethod<TreeAdminTreeRequest, TreeDeletionStatus>?)null);
             binder.AddMethod(methods.PurgeTree, (UnaryServerMethod<TreeAdminPurgeRequest, TreeDeletionStatus>?)null);
             binder.AddMethod(methods.GetTreeDeletionStatus, (UnaryServerMethod<TreeAdminTreeRequest, TreeDeletionStatus>?)null);
+            binder.AddMethod(methods.BeginBulkLoad, (UnaryServerMethod<TreeAdminBulkLoadSessionRequest, TreeBulkLoadSession>?)null);
+            binder.AddMethod(methods.AppendBulkLoad, (UnaryServerMethod<TreeAdminBulkLoadAppendRequest, TreeBulkLoadChunkAck>?)null);
+            binder.AddMethod(methods.CommitBulkLoad, (UnaryServerMethod<TreeAdminBulkLoadSessionRequest, TreeBulkLoadResult>?)null);
             return;
         }
 
@@ -143,6 +155,9 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
         binder.AddMethod(methods.RecoverTree, new UnaryServerMethod<TreeAdminTreeRequest, TreeDeletionStatus>(serviceImpl.RecoverTree));
         binder.AddMethod(methods.PurgeTree, new UnaryServerMethod<TreeAdminPurgeRequest, TreeDeletionStatus>(serviceImpl.PurgeTree));
         binder.AddMethod(methods.GetTreeDeletionStatus, new UnaryServerMethod<TreeAdminTreeRequest, TreeDeletionStatus>(serviceImpl.GetTreeDeletionStatus));
+        binder.AddMethod(methods.BeginBulkLoad, new UnaryServerMethod<TreeAdminBulkLoadSessionRequest, TreeBulkLoadSession>(serviceImpl.BeginBulkLoad));
+        binder.AddMethod(methods.AppendBulkLoad, new UnaryServerMethod<TreeAdminBulkLoadAppendRequest, TreeBulkLoadChunkAck>(serviceImpl.AppendBulkLoad));
+        binder.AddMethod(methods.CommitBulkLoad, new UnaryServerMethod<TreeAdminBulkLoadSessionRequest, TreeBulkLoadResult>(serviceImpl.CommitBulkLoad));
     }
 }
 
@@ -277,6 +292,18 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
         => InvokeAsync(request, context, static (control, req, ct) => control.GetTreeDeletionStatusAsync(req.TreeId, ct));
 
     /// <inheritdoc />
+    public override Task<TreeBulkLoadSession> BeginBulkLoad(TreeAdminBulkLoadSessionRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.BeginBulkLoadAsync(req.TreeId, req.OperationId, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeBulkLoadChunkAck> AppendBulkLoad(TreeAdminBulkLoadAppendRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.AppendBulkLoadAsync(req.TreeId, req.OperationId, req.ChunkIndex, req.Entries, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeBulkLoadResult> CommitBulkLoad(TreeAdminBulkLoadSessionRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.CommitBulkLoadAsync(req.TreeId, req.OperationId, ct));
+
+    /// <inheritdoc />
     public override Task<AuthSchemeAdvertisement> GetAuthScheme(AuthSchemeAdvertisementRequest request, ServerCallContext context)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -316,6 +343,20 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
         catch (KeyNotFoundException ex)
         {
             throw new RpcException(new Status(StatusCode.NotFound, ex.Message));
+        }
+        catch (TreeNotEmptyException ex)
+        {
+            // The bulk-load target already carries data: a distinct precondition
+            // failure, surfaced as FailedPrecondition so a client can tell it apart
+            // from a bad argument and retry against a fresh tree.
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
+        }
+        catch (BulkLoadOrderException ex)
+        {
+            // An out-of-order chunk is a caller-side contract breach: the keys within
+            // the chunk were not strictly ascending. InvalidArgument mirrors the
+            // local ArgumentException mapping.
+            throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
         }
         catch (InvalidOperationException ex)
         {

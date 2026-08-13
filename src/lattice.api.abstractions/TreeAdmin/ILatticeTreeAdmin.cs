@@ -1,4 +1,5 @@
 using Orleans.Lattice;
+using Orleans.Lattice.Api.Data;
 using Orleans.Lattice.Api.Schema;
 
 namespace Orleans.Lattice.Api.TreeAdmin;
@@ -329,4 +330,75 @@ public interface ILatticeTreeAdmin
     /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the tree.</exception>
     Task<TreeDeletionStatus> GetTreeDeletionStatusAsync(
         string treeId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Opens a resumable, chunk-paged <b>bulk-load (tree creation)</b> session on
+    /// <paramref name="treeId"/>, after authorizing the whole-tree
+    /// <see cref="LatticeOperation.BulkLoad"/> capability fail-closed. Bulk-load is a
+    /// bottom-up initial-seed primitive, so the tree must be <b>empty</b>: a tree
+    /// that already holds data is rejected with <see cref="TreeNotEmptyException"/>
+    /// so the caller can distinguish it from a transient fault. Reserved system tree
+    /// ids are rejected.
+    /// </summary>
+    /// <remarks>
+    /// The session holds no server-side state. The caller then streams the sorted
+    /// entries through <see cref="AppendBulkLoadAsync"/> in ascending key order,
+    /// advancing a monotonic chunk index, and finalizes with
+    /// <see cref="CommitBulkLoadAsync"/>. A dropped connection is recovered by
+    /// re-driving from the last un-acknowledged chunk under the same
+    /// <paramref name="operationId"/>; each append is idempotent.
+    /// </remarks>
+    /// <param name="treeId">The tree to bulk-load into. Must not be <c>null</c>, empty, or reserved.</param>
+    /// <param name="operationId">The caller-supplied idempotency key for the whole session. Must not be <c>null</c> or empty, and must not contain <c>'/'</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The opened bulk-load session.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved, or <paramref name="operationId"/> is <c>null</c>, empty, or contains <c>'/'</c>.</exception>
+    /// <exception cref="TreeNotEmptyException">The target tree already contains data.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the bulk-load capability.</exception>
+    Task<TreeBulkLoadSession> BeginBulkLoadAsync(
+        string treeId, string operationId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Appends one <paramref name="chunkIndex"/>-ordered chunk of a bulk-load stream
+    /// to <paramref name="treeId"/>, after authorizing the whole-tree
+    /// <see cref="LatticeOperation.BulkLoad"/> capability fail-closed. The chunk's
+    /// entries must be in <b>strictly ascending key order</b>, and each chunk must
+    /// continue the ascending order of the whole stream; an out-of-order chunk is
+    /// rejected with <see cref="BulkLoadOrderException"/> before any entry is
+    /// applied. Re-driving the same <paramref name="chunkIndex"/> under the same
+    /// <paramref name="operationId"/> is an idempotent no-op.
+    /// </summary>
+    /// <param name="treeId">The tree being loaded. Must not be <c>null</c>, empty, or reserved.</param>
+    /// <param name="operationId">The session operation id supplied to <see cref="BeginBulkLoadAsync"/>. Must not be <c>null</c> or empty, and must not contain <c>'/'</c>.</param>
+    /// <param name="chunkIndex">The zero-based, monotonically increasing chunk index. Must not be negative.</param>
+    /// <param name="entries">The chunk's entries in strictly ascending key order. An empty chunk is accepted as a no-op.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The chunk acknowledgement, carrying the next expected chunk index.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved, or <paramref name="operationId"/> is <c>null</c>, empty, or contains <c>'/'</c>.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="entries"/> is <c>null</c>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="chunkIndex"/> is negative.</exception>
+    /// <exception cref="BulkLoadOrderException">The chunk is not in strictly ascending key order.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the bulk-load capability.</exception>
+    Task<TreeBulkLoadChunkAck> AppendBulkLoadAsync(
+        string treeId,
+        string operationId,
+        long chunkIndex,
+        IReadOnlyList<DataEntry> entries,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Finalizes a bulk-load session on <paramref name="treeId"/>, after authorizing
+    /// the whole-tree <see cref="LatticeOperation.BulkLoad"/> capability fail-closed.
+    /// Commit is the caller's explicit end-of-stream marker; every acknowledged chunk
+    /// is already durable, so commit persists no further data and simply confirms the
+    /// load and reports the tree's observed live-key count.
+    /// </summary>
+    /// <param name="treeId">The tree that was loaded. Must not be <c>null</c>, empty, or reserved.</param>
+    /// <param name="operationId">The session operation id supplied to <see cref="BeginBulkLoadAsync"/>. Must not be <c>null</c> or empty, and must not contain <c>'/'</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The bulk-load result.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved, or <paramref name="operationId"/> is <c>null</c>, empty, or contains <c>'/'</c>.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the bulk-load capability.</exception>
+    Task<TreeBulkLoadResult> CommitBulkLoadAsync(
+        string treeId, string operationId, CancellationToken cancellationToken = default);
 }

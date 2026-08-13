@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice;
+using Orleans.Lattice.Api.Data;
 using Orleans.Lattice.Api.Schema;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
@@ -97,12 +98,20 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             .IsTreeLifecycleAuthorizedAsync(treeId, cancellationToken)
             .ConfigureAwait(false);
 
+        // The bulk-load capability is probed through its own distinct fail-closed
+        // gate (BulkLoad), which neither Admin nor TreeLifecycle confers, with no
+        // side effects.
+        var canBulkLoad = await _authorizer
+            .IsBulkLoadAuthorizedAsync(treeId, cancellationToken)
+            .ConfigureAwait(false);
+
         return new LatticeTreeAdminCapabilities
         {
             TreeId = treeId,
             CanAdministerTree = canAdministerTree,
             CanManageTreeLifecycle = canManageTreeLifecycle,
             CanViewDiagnostics = canViewDiagnostics,
+            CanBulkLoad = canBulkLoad,
             Schema = schema,
         };
     }
@@ -584,6 +593,105 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         return await ReadStatusAsync(treeId).ConfigureAwait(false);
     }
 
+    /// <inheritdoc />
+    public async Task<TreeBulkLoadSession> BeginBulkLoadAsync(
+        string treeId, string operationId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ThrowIfReserved(treeId);
+        ThrowIfInvalidOperationId(operationId);
+        await _authorizer.AuthorizeBulkLoadAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        // Bulk-load is a bottom-up tree-creation primitive, so require the target to
+        // start empty: an "already exists / has data" is surfaced as a distinct, typed
+        // TreeNotEmptyException rather than a silent right-edge append. The cheap
+        // per-shard projection distinguishes an empty tree from a populated one; a
+        // tree carrying only tombstones is likewise treated as non-empty.
+        var diagnostics = await _grainFactory.GetGrain<ILattice>(treeId)
+            .DiagnoseAsync(deep: false, cancellationToken)
+            .ConfigureAwait(false);
+        if (diagnostics.TotalLiveKeys > 0 || diagnostics.TotalTombstones > 0)
+        {
+            throw new TreeNotEmptyException(treeId);
+        }
+
+        return new TreeBulkLoadSession { TreeId = treeId, OperationId = operationId };
+    }
+
+    /// <inheritdoc />
+    public async Task<TreeBulkLoadChunkAck> AppendBulkLoadAsync(
+        string treeId,
+        string operationId,
+        long chunkIndex,
+        IReadOnlyList<DataEntry> entries,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ThrowIfReserved(treeId);
+        ThrowIfInvalidOperationId(operationId);
+        ArgumentNullException.ThrowIfNull(entries);
+        ArgumentOutOfRangeException.ThrowIfNegative(chunkIndex);
+        await _authorizer.AuthorizeBulkLoadAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        // Validate strict ascending key order within the chunk and project onto the
+        // core entry shape in a single pass. An out-of-order chunk is rejected before
+        // any grain call, so no partial data is grafted.
+        var pairs = new List<KeyValuePair<string, byte[]>>(entries.Count);
+        string? previousKey = null;
+        foreach (var entry in entries)
+        {
+            var key = entry.Key;
+            ArgumentException.ThrowIfNullOrEmpty(key);
+            if (previousKey is not null && string.CompareOrdinal(key, previousKey) <= 0)
+            {
+                throw new BulkLoadOrderException(treeId, chunkIndex, key, previousKey);
+            }
+            previousKey = key;
+            pairs.Add(new KeyValuePair<string, byte[]>(key, entry.Value ?? []));
+        }
+
+        var accepted = await _grainFactory.GetGrain<ILattice>(treeId)
+            .BulkAppendChunkAsync($"{operationId}/{chunkIndex}", pairs, cancellationToken)
+            .ConfigureAwait(false);
+
+        return new TreeBulkLoadChunkAck
+        {
+            TreeId = treeId,
+            OperationId = operationId,
+            ChunkIndex = chunkIndex,
+            AcceptedEntryCount = accepted,
+            NextChunkIndex = chunkIndex + 1,
+        };
+    }
+
+    /// <inheritdoc />
+    public async Task<TreeBulkLoadResult> CommitBulkLoadAsync(
+        string treeId, string operationId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ThrowIfReserved(treeId);
+        ThrowIfInvalidOperationId(operationId);
+        await _authorizer.AuthorizeBulkLoadAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        // Commit is the caller's explicit end-of-stream marker; the grafted chunks are
+        // already durable, so this persists nothing further and just reports the tree's
+        // observed live-key count for a client-side sanity check. CountAsync is used in
+        // preference to DiagnoseAsync because the shallow diagnostic report is cached for
+        // LatticeOptions.DiagnosticsCacheTtl (default 5 s): the emptiness probe in
+        // BeginBulkLoadAsync populates that cache with a zero count, so a begin/append/
+        // commit sequence completing inside the TTL would otherwise report a stale 0.
+        var liveKeys = await _grainFactory.GetGrain<ILattice>(treeId)
+            .CountAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return new TreeBulkLoadResult
+        {
+            TreeId = treeId,
+            OperationId = operationId,
+            TotalLiveKeys = liveKeys,
+        };
+    }
+
     /// <summary>
     /// Reads the deletion snapshot straight from the per-tree deletion coordinator
     /// (a pure read that asserts no internal-origin marker) and projects it onto the
@@ -626,6 +734,23 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             throw new ArgumentException(
                 $"Tree id '{treeId}' is reserved: the '{LatticeConstants.SystemTreePrefix}' namespace is managed by the library.",
                 nameof(treeId));
+        }
+    }
+
+    /// <summary>
+    /// Validates a bulk-load session operation id. It must be non-empty and must not
+    /// contain <c>'/'</c>, because the facade composes the per-chunk core operation id
+    /// as <c>"{operationId}/{chunkIndex}"</c>; a caller id carrying <c>'/'</c> would
+    /// collide chunk boundaries and break the idempotent per-chunk keying.
+    /// </summary>
+    private static void ThrowIfInvalidOperationId(string operationId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        if (operationId.Contains('/'))
+        {
+            throw new ArgumentException(
+                "The bulk-load operation id must not contain '/'.",
+                nameof(operationId));
         }
     }
 

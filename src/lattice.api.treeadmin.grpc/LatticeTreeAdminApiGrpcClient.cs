@@ -1,4 +1,5 @@
 using Grpc.Core;
+using Orleans.Lattice.Api.Data;
 
 namespace Orleans.Lattice.Api.TreeAdmin.Grpc;
 
@@ -422,6 +423,85 @@ public sealed class LatticeTreeAdminApiGrpcClient
         return UnaryAsync(
             _methods.GetTreeDeletionStatus,
             new TreeAdminTreeRequest { TreeId = treeId },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Opens a bulk-load session over the empty tree <paramref name="treeId"/> under
+    /// the stable, idempotent <paramref name="operationId"/>, returning the session
+    /// handle. Requires the whole-tree bulk-load capability.
+    /// </summary>
+    /// <param name="treeId">The tree to bulk-load. Must not be <c>null</c> or empty.</param>
+    /// <param name="operationId">The caller's stable bulk-load operation id. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The opened bulk-load session.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="operationId"/> is <c>null</c> or empty.</exception>
+    public Task<TreeBulkLoadSession> BeginBulkLoadAsync(
+        string treeId, string operationId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        return UnaryAsync(
+            _methods.BeginBulkLoad,
+            new TreeAdminBulkLoadSessionRequest { TreeId = treeId, OperationId = operationId },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Grafts one strictly-ascending chunk of <paramref name="entries"/> onto the
+    /// bulk-load session identified by <paramref name="treeId"/> and
+    /// <paramref name="operationId"/> at <paramref name="chunkIndex"/>. Idempotent
+    /// on re-drive of the same chunk index. Requires the whole-tree bulk-load
+    /// capability.
+    /// </summary>
+    /// <param name="treeId">The tree being bulk-loaded. Must not be <c>null</c> or empty.</param>
+    /// <param name="operationId">The caller's stable bulk-load operation id. Must not be <c>null</c> or empty.</param>
+    /// <param name="chunkIndex">The zero-based, monotonically increasing chunk index.</param>
+    /// <param name="entries">The chunk's entries, in strictly ascending key order.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The acknowledgement for the accepted chunk.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="operationId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="entries"/> is <c>null</c>.</exception>
+    public Task<TreeBulkLoadChunkAck> AppendBulkLoadAsync(
+        string treeId,
+        string operationId,
+        long chunkIndex,
+        IReadOnlyList<DataEntry> entries,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        ArgumentNullException.ThrowIfNull(entries);
+        return UnaryAsync(
+            _methods.AppendBulkLoad,
+            new TreeAdminBulkLoadAppendRequest
+            {
+                TreeId = treeId,
+                OperationId = operationId,
+                ChunkIndex = chunkIndex,
+                Entries = entries,
+            },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Closes the bulk-load session identified by <paramref name="treeId"/> and
+    /// <paramref name="operationId"/>, returning its summary. Requires the whole-tree
+    /// bulk-load capability.
+    /// </summary>
+    /// <param name="treeId">The tree being bulk-loaded. Must not be <c>null</c> or empty.</param>
+    /// <param name="operationId">The caller's stable bulk-load operation id. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The bulk-load result summary.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="operationId"/> is <c>null</c> or empty.</exception>
+    public Task<TreeBulkLoadResult> CommitBulkLoadAsync(
+        string treeId, string operationId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        return UnaryAsync(
+            _methods.CommitBulkLoad,
+            new TreeAdminBulkLoadSessionRequest { TreeId = treeId, OperationId = operationId },
             cancellationToken);
     }
 

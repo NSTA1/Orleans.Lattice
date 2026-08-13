@@ -80,4 +80,14 @@ public sealed record LatticeTreeAdminCapabilities
     /// tree.
     /// </summary>
     [Id(2)] public required LatticeSchemaCapabilities Schema { get; init; }
+
+    /// <summary>
+    /// <see langword="true"/> when the caller holds the whole-tree
+    /// <see cref="LatticeOperation.BulkLoad"/> capability over the tree - the
+    /// authority to stream a bottom-up bulk-load (tree creation) into it. This is a
+    /// distinct grant from routine administration (<see cref="CanAdministerTree"/>)
+    /// and from the destructive lifecycle grant (<see cref="CanManageTreeLifecycle"/>),
+    /// so a management surface can grey out the bulk-load control independently.
+    /// </summary>
+    [Id(5)] public bool CanBulkLoad { get; init; }
 }

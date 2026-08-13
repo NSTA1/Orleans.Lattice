@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Orleans.Lattice.Api.Data;
 using Orleans.Lattice.Api.TreeAdmin;
 
 namespace Orleans.Lattice.Api.Mcp;
@@ -180,5 +181,64 @@ internal static class TreeAdminLifecycleToolHandlers
     {
         ArgumentNullException.ThrowIfNull(treeAdmin);
         return treeAdmin.PurgeTreeAsync(treeId, confirm, cancellationToken);
+    }
+
+    /// <summary>Opens a bulk-load session over an empty tree under a stable, idempotent operation id.</summary>
+    public static Task<TreeBulkLoadSession> BeginBulkLoadAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The empty tree to bulk-load. Must not be null, empty, or a reserved system tree id.")]
+        string treeId,
+        [Description("The caller's stable, idempotent bulk-load operation id. Must be non-empty and must not contain '/'. Reuse the same id across a resumed stream so re-driven chunks are deduplicated.")]
+        string operationId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        return treeAdmin.BeginBulkLoadAsync(treeId, operationId, cancellationToken);
+    }
+
+    /// <summary>Grafts one strictly-ascending chunk of entries onto an open bulk-load session.</summary>
+    public static Task<TreeBulkLoadChunkAck> AppendBulkLoadAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The tree being bulk-loaded. Must not be null, empty, or a reserved system tree id.")]
+        string treeId,
+        [Description("The bulk-load operation id supplied to the begin call. Must be non-empty and must not contain '/'.")]
+        string operationId,
+        [Description("The zero-based, monotonically increasing chunk index. Re-sending the same index with the same operation id is idempotent, so a broken stream resumes from its last un-acknowledged chunk.")]
+        long chunkIndex,
+        [Description("The chunk's entries, in strictly ascending key order. Keys must not repeat within the chunk; the caller is responsible for keeping keys ascending across chunk boundaries too.")]
+        IReadOnlyList<DataEntryDto>? entries = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        return treeAdmin.AppendBulkLoadAsync(treeId, operationId, chunkIndex, ToDataEntries(entries), cancellationToken);
+    }
+
+    /// <summary>Closes an open bulk-load session and reports its summary.</summary>
+    public static Task<TreeBulkLoadResult> CommitBulkLoadAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The tree being bulk-loaded. Must not be null, empty, or a reserved system tree id.")]
+        string treeId,
+        [Description("The bulk-load operation id supplied to the begin call. Must be non-empty and must not contain '/'.")]
+        string operationId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        return treeAdmin.CommitBulkLoadAsync(treeId, operationId, cancellationToken);
+    }
+
+    private static List<DataEntry> ToDataEntries(IReadOnlyList<DataEntryDto>? entries)
+    {
+        if (entries is null || entries.Count == 0)
+        {
+            return [];
+        }
+
+        var mapped = new List<DataEntry>(entries.Count);
+        for (var i = 0; i < entries.Count; i++)
+        {
+            mapped.Add(new DataEntry { Key = entries[i].Key, Value = entries[i].Value });
+        }
+
+        return mapped;
     }
 }

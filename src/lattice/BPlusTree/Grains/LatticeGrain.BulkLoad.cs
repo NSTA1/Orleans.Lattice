@@ -77,6 +77,76 @@ internal sealed partial class LatticeGrain
         await Task.WhenAll(tasks);
     }
 
+    public async Task<int> BulkAppendChunkAsync(
+        string operationId,
+        IReadOnlyList<KeyValuePair<string, byte[]>> sortedEntries,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfSystemTree();
+        ThrowIfUserOriginSystemDataTree();
+        ThrowIfProtectedView();
+        ThrowIfLwwWriteToCrdtReplicatedTree();
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        ArgumentNullException.ThrowIfNull(sortedEntries);
+        cancellationToken.ThrowIfCancellationRequested();
+        await EnforceWholeTreeAsync(LatticeOperation.BulkLoad, cancellationToken);
+
+        if (sortedEntries.Count == 0)
+            return 0;
+
+        IReadOnlyList<KeyValuePair<string, byte[]>> effectiveEntries = sortedEntries;
+        if (WriteInterceptionActive)
+        {
+            var list = sortedEntries as List<KeyValuePair<string, byte[]>>
+                ?? new List<KeyValuePair<string, byte[]>>(sortedEntries);
+            effectiveEntries = await InterceptEntriesAsync(
+                LatticeOperation.BulkLoad, list, atomic: false, cancellationToken);
+        }
+
+        if (effectiveEntries.Count == 0)
+            return 0;
+
+        var (physicalTreeId, shardMap) = await GetRoutingAsync();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // Partition this chunk across physical shards. Only shards that actually
+        // receive an entry are grafted, so a sparse (post-split) map costs
+        // nothing for the shards this chunk does not touch.
+        var shardBuckets = new Dictionary<int, List<KeyValuePair<string, byte[]>>>();
+        foreach (var entry in effectiveEntries)
+        {
+            var idx = shardMap.Resolve(entry.Key);
+            if (!shardBuckets.TryGetValue(idx, out var bucket))
+            {
+                bucket = [];
+                shardBuckets[idx] = bucket;
+            }
+            bucket.Add(entry);
+        }
+
+        // Each shard's graft is idempotent under the deterministic per-shard
+        // operation id "{operationId}-{shardIndex}": re-driving the same chunk
+        // reissues the same ids, which the shard's LastCompletedBulkOperationId
+        // dedup short-circuits. Each shard's RPC is wrapped in its own
+        // ShardActivationRetry envelope so a single shard's seed timeout retries
+        // only that shard, not its siblings.
+        var tasks = new List<Task>(shardBuckets.Count);
+        foreach (var (shardIdx, bucket) in shardBuckets)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            bucket.Sort(static (a, b) => string.Compare(a.Key, b.Key, StringComparison.Ordinal));
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIdx}");
+            var capturedShardIdx = shardIdx;
+            var capturedBucket = bucket;
+            tasks.Add(ShardActivationRetry.RunAsync(
+                () => shard.BulkAppendAsync($"{operationId}-{capturedShardIdx}", capturedBucket),
+                cancellationToken));
+        }
+
+        await Task.WhenAll(tasks);
+        return effectiveEntries.Count;
+    }
+
     public async Task DeleteTreeAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();

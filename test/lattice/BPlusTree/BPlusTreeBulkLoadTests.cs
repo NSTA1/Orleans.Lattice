@@ -392,6 +392,68 @@ public partial class BPlusTreeBulkLoadTests
     }
 
     [Test]
+    public async Task BulkAppendChunk_routes_a_chunk_across_shards_and_returns_the_count()
+    {
+        // The tree-level chunk primitive partitions one chunk across the
+        // physical shard map (default multi-shard sizing) and reports how many
+        // entries it accepted; every key must be individually readable back.
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("bulk-chunk-route");
+        var entries = Enumerable.Range(0, 30)
+            .Select(i => KeyValuePair.Create($"k{i:D4}", Encoding.UTF8.GetBytes($"v{i}")))
+            .ToList();
+
+        var accepted = await tree.BulkAppendChunkAsync("chunk-op/0", entries);
+
+        Assert.That(accepted, Is.EqualTo(30));
+        var keys = new List<string>();
+        await foreach (var k in tree.KeysAsync())
+            keys.Add(k);
+        Assert.That(keys, Is.EquivalentTo(entries.Select(e => e.Key)));
+    }
+
+    [Test]
+    public async Task BulkAppendChunk_idempotent_redrive_does_not_duplicate_across_shards()
+    {
+        // Re-driving the same chunk under the same operation id reissues the
+        // deterministic per-shard ids, which every touched shard's dedup
+        // short-circuits, so no key is grafted twice.
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("bulk-chunk-idem");
+        var entries = Enumerable.Range(0, 24)
+            .Select(i => KeyValuePair.Create($"k{i:D4}", Encoding.UTF8.GetBytes($"v{i}")))
+            .ToList();
+
+        await tree.BulkAppendChunkAsync("idem-op/0", entries);
+        await tree.BulkAppendChunkAsync("idem-op/0", entries);
+
+        var keys = new List<string>();
+        await foreach (var k in tree.KeysAsync())
+            keys.Add(k);
+        Assert.That(keys.Count, Is.EqualTo(24));
+        Assert.That(keys, Is.EquivalentTo(entries.Select(e => e.Key)));
+    }
+
+    [Test]
+    public async Task BulkAppendChunk_empty_chunk_returns_zero()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("bulk-chunk-empty");
+
+        var accepted = await tree.BulkAppendChunkAsync("empty-op/0", []);
+
+        Assert.That(accepted, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void BulkAppendChunk_rejects_a_null_or_empty_operation_id()
+    {
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>("bulk-chunk-badop");
+        Assert.Multiple(() =>
+        {
+            Assert.ThrowsAsync<ArgumentException>(() => tree.BulkAppendChunkAsync("", []));
+            Assert.ThrowsAsync<ArgumentNullException>(() => tree.BulkAppendChunkAsync("op/0", null!));
+        });
+    }
+
+    [Test]
     public async Task Streaming_BulkLoad_multiple_chunks_all_keys_present()
     {
         // Streaming with a small chunkSize forces multiple BulkAppendAsync calls,

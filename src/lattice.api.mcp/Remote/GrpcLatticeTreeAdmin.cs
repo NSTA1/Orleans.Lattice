@@ -1,3 +1,4 @@
+using Orleans.Lattice.Api.Data;
 using Orleans.Lattice.Api.Schema;
 using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Api.TreeAdmin.Grpc;
@@ -147,4 +148,27 @@ internal sealed class GrpcLatticeTreeAdmin : ILatticeTreeAdmin
         string treeId,
         CancellationToken cancellationToken = default)
         => _client.GetTreeDeletionStatusAsync(treeId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TreeBulkLoadSession> BeginBulkLoadAsync(
+        string treeId,
+        string operationId,
+        CancellationToken cancellationToken = default)
+        => _client.BeginBulkLoadAsync(treeId, operationId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TreeBulkLoadChunkAck> AppendBulkLoadAsync(
+        string treeId,
+        string operationId,
+        long chunkIndex,
+        IReadOnlyList<DataEntry> entries,
+        CancellationToken cancellationToken = default)
+        => _client.AppendBulkLoadAsync(treeId, operationId, chunkIndex, entries, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TreeBulkLoadResult> CommitBulkLoadAsync(
+        string treeId,
+        string operationId,
+        CancellationToken cancellationToken = default)
+        => _client.CommitBulkLoadAsync(treeId, operationId, cancellationToken);
 }

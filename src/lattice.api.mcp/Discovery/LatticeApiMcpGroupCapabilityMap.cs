@@ -59,11 +59,12 @@ internal static class LatticeApiMcpGroupCapabilityMap
         // Runtime per-tree replication configuration.
         LatticeApiMcpGroup.Replication => LatticeOperation.Replication,
 
-        // Whole-tree administration control plane: routine administration (Admin)
-        // or the distinct irreversible / structural lifecycle capability
-        // (TreeLifecycle). A caller holding either may use the group; the per-verb
-        // gate at call time still separates routine from destructive operations.
-        LatticeApiMcpGroup.TreeAdmin => LatticeOperation.Admin | LatticeOperation.TreeLifecycle,
+        // Whole-tree administration control plane: routine administration (Admin),
+        // the distinct irreversible / structural lifecycle capability
+        // (TreeLifecycle), or the streamed tree-creation capability (BulkLoad). A
+        // caller holding any of these may use the group; the per-verb gate at call
+        // time still separates routine from destructive operations.
+        LatticeApiMcpGroup.TreeAdmin => LatticeOperation.Admin | LatticeOperation.TreeLifecycle | LatticeOperation.BulkLoad,
 
         // Repository-context store: a data-plane surface over dedicated Lattice
         // trees, so it shares the data group's read/write capability mask.

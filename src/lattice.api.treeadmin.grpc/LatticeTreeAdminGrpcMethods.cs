@@ -83,6 +83,15 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary tree deletion-status RPC method name.</summary>
     public const string GetTreeDeletionStatusMethodName = "GetTreeDeletionStatus";
 
+    /// <summary>The unary bulk-load begin (session-open) RPC method name.</summary>
+    public const string BeginBulkLoadMethodName = "BeginBulkLoad";
+
+    /// <summary>The unary bulk-load append (chunk-graft) RPC method name.</summary>
+    public const string AppendBulkLoadMethodName = "AppendBulkLoad";
+
+    /// <summary>The unary bulk-load commit (session-close) RPC method name.</summary>
+    public const string CommitBulkLoadMethodName = "CommitBulkLoad";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeTreeAdminGrpcMethods(
         Serializer<TreeAdminTreeRequest> treeRequestSerializer,
@@ -107,7 +116,12 @@ internal sealed class LatticeTreeAdminGrpcMethods
         Serializer<TreeConfigurationReport> configurationReportSerializer,
         Serializer<TreeShardMapView> shardMapViewSerializer,
         Serializer<TreeAdminPurgeRequest> purgeRequestSerializer,
-        Serializer<TreeDeletionStatus> deletionStatusSerializer)
+        Serializer<TreeDeletionStatus> deletionStatusSerializer,
+        Serializer<TreeAdminBulkLoadSessionRequest> bulkLoadSessionRequestSerializer,
+        Serializer<TreeAdminBulkLoadAppendRequest> bulkLoadAppendRequestSerializer,
+        Serializer<TreeBulkLoadSession> bulkLoadSessionSerializer,
+        Serializer<TreeBulkLoadChunkAck> bulkLoadChunkAckSerializer,
+        Serializer<TreeBulkLoadResult> bulkLoadResultSerializer)
     {
         ArgumentNullException.ThrowIfNull(treeRequestSerializer);
         ArgumentNullException.ThrowIfNull(capabilitiesSerializer);
@@ -132,6 +146,11 @@ internal sealed class LatticeTreeAdminGrpcMethods
         ArgumentNullException.ThrowIfNull(shardMapViewSerializer);
         ArgumentNullException.ThrowIfNull(purgeRequestSerializer);
         ArgumentNullException.ThrowIfNull(deletionStatusSerializer);
+        ArgumentNullException.ThrowIfNull(bulkLoadSessionRequestSerializer);
+        ArgumentNullException.ThrowIfNull(bulkLoadAppendRequestSerializer);
+        ArgumentNullException.ThrowIfNull(bulkLoadSessionSerializer);
+        ArgumentNullException.ThrowIfNull(bulkLoadChunkAckSerializer);
+        ArgumentNullException.ThrowIfNull(bulkLoadResultSerializer);
 
         ProbeCapabilities = new Method<TreeAdminTreeRequest, LatticeTreeAdminCapabilities>(
             type: MethodType.Unary,
@@ -265,6 +284,27 @@ internal sealed class LatticeTreeAdminGrpcMethods
             name: GetTreeDeletionStatusMethodName,
             requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(treeRequestSerializer),
             responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(deletionStatusSerializer));
+
+        BeginBulkLoad = new Method<TreeAdminBulkLoadSessionRequest, TreeBulkLoadSession>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: BeginBulkLoadMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(bulkLoadSessionRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(bulkLoadSessionSerializer));
+
+        AppendBulkLoad = new Method<TreeAdminBulkLoadAppendRequest, TreeBulkLoadChunkAck>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: AppendBulkLoadMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(bulkLoadAppendRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(bulkLoadChunkAckSerializer));
+
+        CommitBulkLoad = new Method<TreeAdminBulkLoadSessionRequest, TreeBulkLoadResult>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: CommitBulkLoadMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(bulkLoadSessionRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(bulkLoadResultSerializer));
     }
 
     /// <summary>The unary <c>ProbeCapabilities</c> capability-probe RPC.</summary>
@@ -324,6 +364,15 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary <c>GetTreeDeletionStatus</c> read-only deletion-status RPC.</summary>
     public Method<TreeAdminTreeRequest, TreeDeletionStatus> GetTreeDeletionStatus { get; }
 
+    /// <summary>The unary <c>BeginBulkLoad</c> session-open RPC.</summary>
+    public Method<TreeAdminBulkLoadSessionRequest, TreeBulkLoadSession> BeginBulkLoad { get; }
+
+    /// <summary>The unary <c>AppendBulkLoad</c> chunk-graft RPC.</summary>
+    public Method<TreeAdminBulkLoadAppendRequest, TreeBulkLoadChunkAck> AppendBulkLoad { get; }
+
+    /// <summary>The unary <c>CommitBulkLoad</c> session-close RPC.</summary>
+    public Method<TreeAdminBulkLoadSessionRequest, TreeBulkLoadResult> CommitBulkLoad { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out of
     /// <paramref name="serializerProvider"/>. Shared by the server-side DI factory
@@ -356,7 +405,12 @@ internal sealed class LatticeTreeAdminGrpcMethods
             serializerProvider.GetRequiredService<Serializer<TreeConfigurationReport>>(),
             serializerProvider.GetRequiredService<Serializer<TreeShardMapView>>(),
             serializerProvider.GetRequiredService<Serializer<TreeAdminPurgeRequest>>(),
-            serializerProvider.GetRequiredService<Serializer<TreeDeletionStatus>>());
+            serializerProvider.GetRequiredService<Serializer<TreeDeletionStatus>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAdminBulkLoadSessionRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAdminBulkLoadAppendRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeBulkLoadSession>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeBulkLoadChunkAck>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeBulkLoadResult>>());
     }
 }
 

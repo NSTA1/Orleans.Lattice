@@ -156,13 +156,14 @@ public sealed class LatticeApiMcpGroupCapabilityMapTests
     }
 
     [Test]
-    public void TreeAdmin_mask_covers_admin_and_tree_lifecycle()
+    public void TreeAdmin_mask_covers_admin_tree_lifecycle_and_bulk_load()
     {
-        // Routine administration (Admin) or the distinct destructive / structural
-        // lifecycle capability (TreeLifecycle) makes the group usable.
+        // Routine administration (Admin), the distinct destructive / structural
+        // lifecycle capability (TreeLifecycle), or the streamed tree-creation
+        // capability (BulkLoad) each makes the group usable.
         Assert.That(
             LatticeApiMcpGroupCapabilityMap.RequiredOperations(LatticeApiMcpGroup.TreeAdmin),
-            Is.EqualTo(LatticeOperation.Admin | LatticeOperation.TreeLifecycle));
+            Is.EqualTo(LatticeOperation.Admin | LatticeOperation.TreeLifecycle | LatticeOperation.BulkLoad));
     }
 
     [Test]
