@@ -82,7 +82,7 @@ internal sealed partial class LatticeGrain
         ThrowIfSystemTree();
         ThrowIfProtectedView();
         cancellationToken.ThrowIfCancellationRequested();
-        await EnforceWholeTreeAsync(LatticeOperation.Admin, cancellationToken);
+        await EnforceWholeTreeAsync(LatticeOperation.TreeLifecycle, cancellationToken);
         await ThrowIfSourceOfMaterialisedViewAsync(cancellationToken);
         var deletion = grainFactory.GetGrain<ITreeDeletionGrain>(TreeId);
         await ShardActivationRetry.RunAsync(
@@ -121,7 +121,7 @@ internal sealed partial class LatticeGrain
         ThrowIfSystemTree();
         ThrowIfProtectedView();
         cancellationToken.ThrowIfCancellationRequested();
-        await EnforceWholeTreeAsync(LatticeOperation.Admin, cancellationToken);
+        await EnforceWholeTreeAsync(LatticeOperation.TreeLifecycle, cancellationToken);
         var deletion = grainFactory.GetGrain<ITreeDeletionGrain>(TreeId);
         await ShardActivationRetry.RunAsync(
             () => deletion.RecoverAsync(),
@@ -133,7 +133,7 @@ internal sealed partial class LatticeGrain
         ThrowIfSystemTree();
         ThrowIfProtectedView();
         cancellationToken.ThrowIfCancellationRequested();
-        await EnforceWholeTreeAsync(LatticeOperation.Admin, cancellationToken);
+        await EnforceWholeTreeAsync(LatticeOperation.TreeLifecycle, cancellationToken);
         var deletion = grainFactory.GetGrain<ITreeDeletionGrain>(TreeId);
         await ShardActivationRetry.RunAsync(
             () => deletion.PurgeNowAsync(),

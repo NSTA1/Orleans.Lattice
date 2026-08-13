@@ -71,6 +71,18 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
     /// <summary>Reads a tree's registry-persisted shard map. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
     public abstract Task<TreeShardMapView> GetShardMap(TreeAdminTreeRequest request, ServerCallContext context);
 
+    /// <summary>Soft-deletes a tree. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
+    public abstract Task<TreeDeletionStatus> DeleteTree(TreeAdminTreeRequest request, ServerCallContext context);
+
+    /// <summary>Recovers a soft-deleted tree. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
+    public abstract Task<TreeDeletionStatus> RecoverTree(TreeAdminTreeRequest request, ServerCallContext context);
+
+    /// <summary>Irreversibly hard-purges a soft-deleted tree. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
+    public abstract Task<TreeDeletionStatus> PurgeTree(TreeAdminPurgeRequest request, ServerCallContext context);
+
+    /// <summary>Reads a tree's soft-deletion status. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
+    public abstract Task<TreeDeletionStatus> GetTreeDeletionStatus(TreeAdminTreeRequest request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at startup
     /// with <paramref name="serviceImpl"/> set to <see langword="null"/> to record
@@ -105,6 +117,10 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
             binder.AddMethod(methods.GetTreeConfig, (UnaryServerMethod<TreeAdminTreeRequest, TreeConfigurationReport>?)null);
             binder.AddMethod(methods.SetTreeConfig, (UnaryServerMethod<TreeAdminSetConfigRequest, TreeConfigurationReport>?)null);
             binder.AddMethod(methods.GetShardMap, (UnaryServerMethod<TreeAdminTreeRequest, TreeShardMapView>?)null);
+            binder.AddMethod(methods.DeleteTree, (UnaryServerMethod<TreeAdminTreeRequest, TreeDeletionStatus>?)null);
+            binder.AddMethod(methods.RecoverTree, (UnaryServerMethod<TreeAdminTreeRequest, TreeDeletionStatus>?)null);
+            binder.AddMethod(methods.PurgeTree, (UnaryServerMethod<TreeAdminPurgeRequest, TreeDeletionStatus>?)null);
+            binder.AddMethod(methods.GetTreeDeletionStatus, (UnaryServerMethod<TreeAdminTreeRequest, TreeDeletionStatus>?)null);
             return;
         }
 
@@ -123,6 +139,10 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
         binder.AddMethod(methods.GetTreeConfig, new UnaryServerMethod<TreeAdminTreeRequest, TreeConfigurationReport>(serviceImpl.GetTreeConfig));
         binder.AddMethod(methods.SetTreeConfig, new UnaryServerMethod<TreeAdminSetConfigRequest, TreeConfigurationReport>(serviceImpl.SetTreeConfig));
         binder.AddMethod(methods.GetShardMap, new UnaryServerMethod<TreeAdminTreeRequest, TreeShardMapView>(serviceImpl.GetShardMap));
+        binder.AddMethod(methods.DeleteTree, new UnaryServerMethod<TreeAdminTreeRequest, TreeDeletionStatus>(serviceImpl.DeleteTree));
+        binder.AddMethod(methods.RecoverTree, new UnaryServerMethod<TreeAdminTreeRequest, TreeDeletionStatus>(serviceImpl.RecoverTree));
+        binder.AddMethod(methods.PurgeTree, new UnaryServerMethod<TreeAdminPurgeRequest, TreeDeletionStatus>(serviceImpl.PurgeTree));
+        binder.AddMethod(methods.GetTreeDeletionStatus, new UnaryServerMethod<TreeAdminTreeRequest, TreeDeletionStatus>(serviceImpl.GetTreeDeletionStatus));
     }
 }
 
@@ -239,6 +259,22 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
     /// <inheritdoc />
     public override Task<TreeShardMapView> GetShardMap(TreeAdminTreeRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (control, req, ct) => control.GetShardMapAsync(req.TreeId, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeDeletionStatus> DeleteTree(TreeAdminTreeRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.DeleteTreeAsync(req.TreeId, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeDeletionStatus> RecoverTree(TreeAdminTreeRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.RecoverTreeAsync(req.TreeId, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeDeletionStatus> PurgeTree(TreeAdminPurgeRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.PurgeTreeAsync(req.TreeId, req.Confirm, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeDeletionStatus> GetTreeDeletionStatus(TreeAdminTreeRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.GetTreeDeletionStatusAsync(req.TreeId, ct));
 
     /// <inheritdoc />
     public override Task<AuthSchemeAdvertisement> GetAuthScheme(AuthSchemeAdvertisementRequest request, ServerCallContext context)

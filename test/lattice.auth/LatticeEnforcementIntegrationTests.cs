@@ -406,7 +406,7 @@ public sealed class LatticeEnforcementIntegrationTests
     }
 
     [Test]
-    public async Task Admin_lifecycle_requires_admin_authorization()
+    public async Task Tree_lifecycle_requires_tree_lifecycle_authorization()
     {
         const string tree = "enf-admin";
         using (AuthClusterFixture.AsSubject(AuthClusterFixture.BootstrapAdmin))
@@ -421,10 +421,10 @@ public sealed class LatticeEnforcementIntegrationTests
             Assert.That(
                 async () => await _fixture.Lattice(tree).DeleteTreeAsync(),
                 Throws.TypeOf<LatticeAuthorizationDeniedException>(),
-                "a tree-lifecycle admin operation with no Admin grant is denied");
+                "a tree-lifecycle operation with no TreeLifecycle grant is denied");
         }
 
-        Assert.That(await ReadBackAsync(tree, "k"), Is.EqualTo("v"), "the denied admin operation left the tree intact");
+        Assert.That(await ReadBackAsync(tree, "k"), Is.EqualTo("v"), "the denied lifecycle operation left the tree intact");
     }
 
     [Test]

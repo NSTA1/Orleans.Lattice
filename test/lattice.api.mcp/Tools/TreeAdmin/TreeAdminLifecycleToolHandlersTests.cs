@@ -162,6 +162,70 @@ public sealed class TreeAdminLifecycleToolHandlersTests
     }
 
     [Test]
+    public async Task GetTreeDeletionStatusAsync_forwards_the_tree_id_and_returns_the_status()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeDeletionStatus { TreeId = "orders", IsDeleted = true };
+        admin.GetTreeDeletionStatusAsync("orders", Arg.Any<CancellationToken>()).Returns(expected);
+
+        var result = await TreeAdminLifecycleToolHandlers.GetTreeDeletionStatusAsync(admin, "orders", CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).GetTreeDeletionStatusAsync("orders", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task DeleteTreeAsync_forwards_the_tree_id_and_returns_the_status()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeDeletionStatus { TreeId = "orders", IsDeleted = true, CanRecover = true };
+        admin.DeleteTreeAsync("orders", Arg.Any<CancellationToken>()).Returns(expected);
+
+        var result = await TreeAdminLifecycleToolHandlers.DeleteTreeAsync(admin, "orders", CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).DeleteTreeAsync("orders", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RecoverTreeAsync_forwards_the_tree_id_and_returns_the_status()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeDeletionStatus { TreeId = "orders", IsDeleted = false };
+        admin.RecoverTreeAsync("orders", Arg.Any<CancellationToken>()).Returns(expected);
+
+        var result = await TreeAdminLifecycleToolHandlers.RecoverTreeAsync(admin, "orders", CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).RecoverTreeAsync("orders", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task PurgeTreeAsync_forwards_the_confirmation_flag_and_returns_the_status()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeDeletionStatus { TreeId = "orders", IsDeleted = true, PurgeComplete = true };
+        admin.PurgeTreeAsync("orders", true, Arg.Any<CancellationToken>()).Returns(expected);
+
+        var result = await TreeAdminLifecycleToolHandlers.PurgeTreeAsync(admin, "orders", confirm: true, CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).PurgeTreeAsync("orders", true, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task PurgeTreeAsync_defaults_confirmation_to_false()
+    {
+        var admin = TreeAdmin();
+        admin.PurgeTreeAsync("orders", false, Arg.Any<CancellationToken>())
+            .Returns(new TreeDeletionStatus { TreeId = "orders" });
+
+        await TreeAdminLifecycleToolHandlers.PurgeTreeAsync(admin, "orders");
+
+        await admin.Received(1).PurgeTreeAsync("orders", false, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public void Handlers_reject_a_null_facade()
     {
         Assert.Multiple(() =>
@@ -173,6 +237,10 @@ public sealed class TreeAdminLifecycleToolHandlersTests
             Assert.That(() => TreeAdminLifecycleToolHandlers.GetTreeConfigAsync(null!, "t"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.SetTreeConfigAsync(null!, "t"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.GetShardMapAsync(null!, "t"), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.GetTreeDeletionStatusAsync(null!, "t"), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.DeleteTreeAsync(null!, "t"), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.RecoverTreeAsync(null!, "t"), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.PurgeTreeAsync(null!, "t"), Throws.ArgumentNullException);
         });
     }
 }

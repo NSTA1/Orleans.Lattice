@@ -520,6 +520,99 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         };
     }
 
+    /// <inheritdoc />
+    public async Task<TreeDeletionStatus> DeleteTreeAsync(
+        string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ThrowIfReserved(treeId);
+        await _authorizer.AuthorizeTreeLifecycleAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        // Wrap the public ILattice verb so the tree's own guards (system-tree,
+        // protected-view, materialised-view-source) and internal-origin marker are
+        // inherited rather than duplicated. The core re-enforces TreeLifecycle.
+        await _grainFactory.GetGrain<ILattice>(treeId)
+            .DeleteTreeAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return await ReadStatusAsync(treeId).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<TreeDeletionStatus> RecoverTreeAsync(
+        string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ThrowIfReserved(treeId);
+        await _authorizer.AuthorizeTreeLifecycleAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        await _grainFactory.GetGrain<ILattice>(treeId)
+            .RecoverTreeAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return await ReadStatusAsync(treeId).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<TreeDeletionStatus> PurgeTreeAsync(
+        string treeId, bool confirm, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ThrowIfReserved(treeId);
+        if (!confirm)
+        {
+            throw new ArgumentException(
+                "The irreversible tree purge must be explicitly confirmed by passing confirm=true.",
+                nameof(confirm));
+        }
+        await _authorizer.AuthorizeTreeLifecycleAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        await _grainFactory.GetGrain<ILattice>(treeId)
+            .PurgeTreeAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return await ReadStatusAsync(treeId).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<TreeDeletionStatus> GetTreeDeletionStatusAsync(
+        string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        await _authorizer.AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        return await ReadStatusAsync(treeId).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Reads the deletion snapshot straight from the per-tree deletion coordinator
+    /// (a pure read that asserts no internal-origin marker) and projects it onto the
+    /// transport-agnostic <see cref="TreeDeletionStatus"/>.
+    /// </summary>
+    private async Task<TreeDeletionStatus> ReadStatusAsync(string treeId)
+    {
+        var snapshot = await _grainFactory.GetGrain<ITreeDeletionGrain>(treeId)
+            .GetDeletionStatusAsync()
+            .ConfigureAwait(false);
+        return ToStatus(treeId, snapshot);
+    }
+
+    /// <summary>
+    /// Projects the core <see cref="TreeDeletionSnapshot"/> onto the public
+    /// <see cref="TreeDeletionStatus"/> DTO.
+    /// </summary>
+    private static TreeDeletionStatus ToStatus(string treeId, TreeDeletionSnapshot snapshot) =>
+        new()
+        {
+            TreeId = treeId,
+            IsDeleted = snapshot.IsDeleted,
+            DeletedAtUtc = snapshot.DeletedAtUtc,
+            RecoveryDeadlineUtc = snapshot.RecoveryDeadlineUtc,
+            PurgeInProgress = snapshot.PurgeInProgress,
+            PurgeComplete = snapshot.PurgeComplete,
+            CanRecover = snapshot.CanRecover,
+        };
+
     /// <summary>
     /// Rejects a reserved system tree id (the <see cref="LatticeConstants.SystemTreePrefix"/>
     /// namespace) fail-closed at the facade boundary, so a reserved-id mutation is

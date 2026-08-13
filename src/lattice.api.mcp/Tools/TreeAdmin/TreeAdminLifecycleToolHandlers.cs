@@ -135,4 +135,50 @@ internal static class TreeAdminLifecycleToolHandlers
         ArgumentNullException.ThrowIfNull(treeAdmin);
         return treeAdmin.GetShardMapAsync(treeId, cancellationToken);
     }
+
+    /// <summary>Reads a tree's soft-deletion status.</summary>
+    public static Task<TreeDeletionStatus> GetTreeDeletionStatusAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The tree whose soft-deletion status to read. Must not be null or empty.")]
+        string treeId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        return treeAdmin.GetTreeDeletionStatusAsync(treeId, cancellationToken);
+    }
+
+    /// <summary>Soft-deletes a tree, opening its recovery window.</summary>
+    public static Task<TreeDeletionStatus> DeleteTreeAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The tree to soft-delete. Must not be null, empty, or a reserved system tree id.")]
+        string treeId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        return treeAdmin.DeleteTreeAsync(treeId, cancellationToken);
+    }
+
+    /// <summary>Recovers a soft-deleted tree within its recovery window.</summary>
+    public static Task<TreeDeletionStatus> RecoverTreeAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The soft-deleted tree to recover. Must not be null, empty, or a reserved system tree id.")]
+        string treeId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        return treeAdmin.RecoverTreeAsync(treeId, cancellationToken);
+    }
+
+    /// <summary>Irreversibly hard-purges a soft-deleted tree.</summary>
+    public static Task<TreeDeletionStatus> PurgeTreeAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The soft-deleted tree to hard-purge. Must not be null, empty, or a reserved system tree id.")]
+        string treeId,
+        [Description("Must be set to true to acknowledge the irreversible destruction of the tree's data. A false or omitted value is rejected.")]
+        bool confirm = false,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        return treeAdmin.PurgeTreeAsync(treeId, confirm, cancellationToken);
+    }
 }

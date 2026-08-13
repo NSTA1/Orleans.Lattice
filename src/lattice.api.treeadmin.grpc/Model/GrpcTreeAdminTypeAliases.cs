@@ -50,4 +50,7 @@ public static class GrpcTreeAdminTypeAliases
 
     /// <summary>Alias for <see cref="TreeAdminSetConfigRequest"/>.</summary>
     public const string TreeAdminSetConfigRequest = "oitg.cfgreq";
+
+    /// <summary>Alias for <see cref="TreeAdminPurgeRequest"/>.</summary>
+    public const string TreeAdminPurgeRequest = "oitg.purgreq";
 }

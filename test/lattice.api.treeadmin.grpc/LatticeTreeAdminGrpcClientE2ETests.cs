@@ -189,4 +189,51 @@ public sealed class LatticeTreeAdminGrpcClientE2ETests
         var shardMap = await _host.Client.GetShardMapAsync(lifecycleTree);
         Assert.That(shardMap.TreeId, Is.EqualTo(lifecycleTree));
     }
+
+    [Test]
+    public async Task tree_deletion_lifecycle_round_trips_over_the_client()
+    {
+        const string deletionTree = "deletion-e2e";
+
+        await _host.Client.CreateTreeAsync(deletionTree, shardCount: 2);
+        var live = await _host.Client.GetTreeDeletionStatusAsync(deletionTree);
+        Assert.Multiple(() =>
+        {
+            Assert.That(live.TreeId, Is.EqualTo(deletionTree));
+            Assert.That(live.IsDeleted, Is.False);
+            Assert.That(live.CanRecover, Is.False);
+        });
+
+        var deleted = await _host.Client.DeleteTreeAsync(deletionTree);
+        Assert.Multiple(() =>
+        {
+            Assert.That(deleted.IsDeleted, Is.True);
+            Assert.That(deleted.DeletedAtUtc, Is.Not.Null);
+            Assert.That(deleted.RecoveryDeadlineUtc, Is.Not.Null);
+            Assert.That(deleted.CanRecover, Is.True);
+        });
+
+        var status = await _host.Client.GetTreeDeletionStatusAsync(deletionTree);
+        Assert.That(status.IsDeleted, Is.True);
+
+        var recovered = await _host.Client.RecoverTreeAsync(deletionTree);
+        Assert.Multiple(() =>
+        {
+            Assert.That(recovered.IsDeleted, Is.False);
+            Assert.That(recovered.CanRecover, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task purge_without_confirmation_is_rejected_over_the_client()
+    {
+        const string purgeTree = "purge-e2e";
+
+        await _host.Client.CreateTreeAsync(purgeTree, shardCount: 2);
+        await _host.Client.DeleteTreeAsync(purgeTree);
+
+        Assert.That(
+            async () => await _host.Client.PurgeTreeAsync(purgeTree, confirm: false),
+            Throws.Exception);
+    }
 }
