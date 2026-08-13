@@ -249,6 +249,31 @@ public sealed class LatticeFallOffLogDetectorTests
     }
 
     [Test]
+    public async Task ClassifyAsync_maps_RebuildFromWalAcceptLoss_policy_to_accept_loss_decision()
+    {
+        // A derived, re-derivable tree (issue #1453) opts in to
+        // ProjectionRebuildPolicy.RebuildFromWalAcceptLoss. When a hard
+        // fall-off trigger fires (here the WAL-trim trigger: checkpoint 25
+        // is below the oldest readable offset 50), the detector must return
+        // the RebuildFromWalAcceptLoss decision so the leaf rebuilds from
+        // the surviving suffix instead of surfacing LeafProjectionStaleException.
+        var (detector, _) = CreateDetector(head: 100, tail: 50);
+        var options = await BuildOptionsAsync(new LatticeOptions
+        {
+            ProjectionRebuildPolicy = ProjectionRebuildPolicy.RebuildFromWalAcceptLoss,
+        });
+
+        var decision = await detector.ClassifyAsync(
+            TreeId, ShardIndex,
+            checkpointOffset: 25,
+            checkpointAge: TimeSpan.Zero,
+            options,
+            CancellationToken.None);
+
+        Assert.That(decision, Is.EqualTo(FallOffLogDecision.RebuildFromWalAcceptLoss));
+    }
+
+    [Test]
     public async Task ClassifyAsync_returns_SnapshotPending_when_checkpoint_inside_margin()
     {
         // head=1000, tail=0, checkpoint=200. Proximity = 200/1000 = 0.20,

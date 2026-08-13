@@ -73,6 +73,26 @@ public static class RepoContextHostTrees
         VectorMetadata,
         VectorPayload,
     };
+
+    /// <summary>
+    /// The derived, re-derivable embedding-vector trees. Every one of these is a
+    /// projection of the source repository's embeddings that a downstream gap-scan
+    /// can re-ingest from scratch, so none holds authoritative state. They are the
+    /// trees that opt in to
+    /// <see cref="Orleans.Lattice.ProjectionRebuildPolicy.RebuildFromWalAcceptLoss"/>
+    /// (issue #1453): a dormant leaf whose durable checkpoint fell off the shared
+    /// WAL self-heals by rebuilding from the surviving suffix instead of wedging
+    /// every activation with <c>LeafProjectionStaleException</c>. The store-of-record
+    /// trees (structural, symbol, memory) are deliberately excluded - accepting loss
+    /// on them would silently drop committed data - so they keep the fail-closed
+    /// default policy.
+    /// </summary>
+    public static IReadOnlyList<string> VectorTrees { get; } = new[]
+    {
+        VectorMembership,
+        VectorMetadata,
+        VectorPayload,
+    };
 }
 
 /// <summary>
@@ -113,6 +133,34 @@ public static class RepoContextCompaction
                 options.TombstoneGracePeriod = ChurnTombstoneGracePeriod;
                 options.MinTombstoneRatioForCompaction = ChurnMinTombstoneRatio;
                 options.MaxLeafEntriesBeforeForcedCompaction = ChurnMaxLeafEntriesBeforeForcedCompaction;
+            });
+        }
+
+        return silo;
+    }
+
+    /// <summary>
+    /// Opts every <see cref="RepoContextHostTrees.VectorTrees"/> entry in to the
+    /// <see cref="Orleans.Lattice.ProjectionRebuildPolicy.RebuildFromWalAcceptLoss"/>
+    /// recovery policy so a derived embedding-vector leaf that falls off the shared
+    /// WAL self-heals by rebuilding from the surviving suffix instead of wedging every
+    /// activation with <c>LeafProjectionStaleException</c> (issue #1453). The discarded
+    /// prefix is re-derived by the embedding gap-scan. Only the re-derivable vector
+    /// trees are opted in; the store-of-record trees keep the fail-closed default.
+    /// Idempotent per tree; safe to call once during host wiring.
+    /// </summary>
+    /// <param name="silo">The Orleans silo builder.</param>
+    /// <returns>The same <paramref name="silo"/> for chaining.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="silo"/> is null.</exception>
+    public static ISiloBuilder ConfigureRepoContextVectorProjectionRecovery(this ISiloBuilder silo)
+    {
+        ArgumentNullException.ThrowIfNull(silo);
+
+        foreach (var tree in RepoContextHostTrees.VectorTrees)
+        {
+            silo.ConfigureLattice(tree, options =>
+            {
+                options.ProjectionRebuildPolicy = ProjectionRebuildPolicy.RebuildFromWalAcceptLoss;
             });
         }
 

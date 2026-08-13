@@ -74,4 +74,30 @@ public sealed class RepoContextCompactionTests
         => Assert.That(
             () => RepoContextCompaction.ConfigureRepoContextCompaction(null!),
             Throws.ArgumentNullException);
+
+    [Test]
+    public void VectorTrees_are_the_three_derived_embedding_trees()
+        => Assert.That(
+            RepoContextHostTrees.VectorTrees,
+            Is.EquivalentTo(new[]
+            {
+                RepoContextHostTrees.VectorMembership,
+                RepoContextHostTrees.VectorMetadata,
+                RepoContextHostTrees.VectorPayload,
+            }));
+
+    [Test]
+    public void VectorTrees_exclude_the_store_of_record_trees()
+        => Assert.Multiple(() =>
+        {
+            Assert.That(RepoContextHostTrees.VectorTrees, Does.Not.Contain(RepoContextHostTrees.Structural));
+            Assert.That(RepoContextHostTrees.VectorTrees, Does.Not.Contain(RepoContextHostTrees.Symbol));
+            Assert.That(RepoContextHostTrees.VectorTrees, Does.Not.Contain(RepoContextHostTrees.Memory));
+        });
+
+    [Test]
+    public void ConfigureRepoContextVectorProjectionRecovery_rejects_a_null_silo()
+        => Assert.That(
+            () => RepoContextCompaction.ConfigureRepoContextVectorProjectionRecovery(null!),
+            Throws.ArgumentNullException);
 }

@@ -122,6 +122,7 @@ internal sealed class LatticeFallOffLogDetector(IServiceProvider services) : ILa
             ProjectionRebuildPolicy.SnapshotThenWal => FallOffLogDecision.SnapshotThenWal,
             ProjectionRebuildPolicy.FullRebuildFromWal => FallOffLogDecision.FullRebuildFromWal,
             ProjectionRebuildPolicy.Fail => FallOffLogDecision.Fail,
+            ProjectionRebuildPolicy.RebuildFromWalAcceptLoss => FallOffLogDecision.RebuildFromWalAcceptLoss,
             _ => FallOffLogDecision.SnapshotThenWal,
         };
     }

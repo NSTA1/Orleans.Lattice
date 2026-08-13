@@ -115,6 +115,11 @@ public static class RepoContextHostBuilder
             // Reap re-embed / prune tombstones on the churn trees in every profile.
             silo.ConfigureRepoContextCompaction();
 
+            // Let the derived embedding-vector trees self-heal from a fall-off-log
+            // wedge by rebuilding from the surviving WAL suffix (issue #1453) rather
+            // than requiring an operator rebuild; the gap-scan re-ingests the loss.
+            silo.ConfigureRepoContextVectorProjectionRecovery();
+
             // Membership resolves the ambient credential into a subject; Auth
             // installs the default-deny gate with the bootstrap administrator that
             // seeds the local agent's grant.

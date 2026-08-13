@@ -32,7 +32,8 @@ public partial class BPlusLeafGrainTests
         Action<LeafNodeState>? seedState = null,
         Action<SortedDictionary<string, LwwValue<byte[]>>>? seedEntries = null,
         ILatticeFallOffLogDetector? detector = null,
-        ILeafCursorReporter? reporter = null)
+        ILeafCursorReporter? reporter = null,
+        Action<LatticeOptions>? configureOptions = null)
     {
         reporter ??= Substitute.For<ILeafCursorReporter>();
 
@@ -74,6 +75,7 @@ public partial class BPlusLeafGrainTests
             // covered by BPlusLeafGrainTests.MultiPartitionMaterialiser.
             WalPartitions = 1,
         };
+        configureOptions?.Invoke(baseOptions);
         var optionsResolver = TestOptionsResolver.Create(
             baseOptions: baseOptions,
             maxLeafKeys: 128,
@@ -885,6 +887,52 @@ public partial class BPlusLeafGrainTests
             detector: detector);
 
         Assert.ThrowsAsync<LeafProjectionStaleException>(async () => await ActivateAsync(grain));
+    }
+
+    [Test]
+    public async Task Materialiser_cold_replay_accepts_loss_and_rebuilds_from_surviving_suffix_for_derived_tree()
+    {
+        // Regression for issue #1453 (RepoContext write-once derived tree wedges
+        // with LeafProjectionStaleException when the shared WAL trims past a dormant
+        // leaf's checkpoint). This is the exact scenario of the #945 throw test above
+        // - durable checkpoint 40, WAL trimmed so the oldest readable offset is 50,
+        // no covering snapshot, the trimmed prefix holding this leaf's real data is
+        // gone - but the tree is configured with
+        // ProjectionRebuildPolicy.RebuildFromWalAcceptLoss because it is a derived,
+        // re-derivable projection. Instead of failing closed, the leaf must accept the
+        // loss of the trimmed prefix, rebuild from the surviving WAL suffix (only the
+        // "survivor" key), and advance its checkpoint to the head so the box self-heals
+        // rather than hot-looping every activation. A downstream gap-scan re-ingests
+        // the discarded prefix.
+        var reader = Substitute.For<ICommitLogReader>();
+        reader.GetHeadOffsetAsync(MaterialiserTreeId, 0, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(55L));
+        reader.GetTailOffsetAsync(MaterialiserTreeId, 0, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(50L));
+        var detectorServices = new ServiceCollection().AddSingleton<ICommitLogReader>(reader).BuildServiceProvider();
+        var detector = new LatticeFallOffLogDetector(detectorServices);
+
+        var coord = BuildCoordinator(
+            head: 55,
+            new CommitLogSliceEntry(55, BuildCommittedSet("survivor", Encoding.UTF8.GetBytes("s"), hlcPhysical: 600)));
+        coord.GetTailOffsetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(50L));
+
+        var (grain, state, _, _) = CreateGrainWithMaterialiser(
+            coord,
+            persistedCheckpoint: 40,
+            detector: detector,
+            configureOptions: o => o.ProjectionRebuildPolicy = ProjectionRebuildPolicy.RebuildFromWalAcceptLoss);
+
+        // Must NOT throw: the derived tree self-heals.
+        await ActivateAsync(grain);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(55),
+                "The leaf must rebuild from the surviving suffix and advance the checkpoint to the head.");
+        });
+        Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("survivor"))!), Is.EqualTo("s"),
+            "The surviving key must be present after the accept-loss rebuild.");
     }
 
     [Test]

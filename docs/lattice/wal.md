@@ -550,7 +550,8 @@ the WAL through `ILeafReplayCoordinatorGrain`. Three cases:
   as-of snapshot export), persists the snapshot offset as the new checkpoint,
   then tail-replays the remaining WAL entries past the snapshot offset. The
   default policy is `ProjectionRebuildPolicy.SnapshotThenWal`; alternative
-  policies (`FullRebuildFromWal`, `Fail`) are described on the enum and in
+  policies (`FullRebuildFromWal`, `Fail`, `RebuildFromWalAcceptLoss`) are
+  described on the enum and in
   [`projection-rebuild.md`](projection-rebuild.md). The grain-state row holds
   only tree metadata (sibling pointers, tree id, shard index, key range,
   split lifecycle, last-compaction-version) plus the projection checkpoint

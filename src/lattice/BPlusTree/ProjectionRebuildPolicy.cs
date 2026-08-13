@@ -32,4 +32,26 @@ public enum ProjectionRebuildPolicy
     /// rebuild via the operator rebuild API.
     /// </summary>
     Fail = 2,
+
+    /// <summary>
+    /// Opt-in, for derived and rebuildable trees only. When a fall-off-log
+    /// trigger fires (including the cold-replay durable-frontier guard - the
+    /// WAL has been trimmed past the leaf''s persisted checkpoint and no
+    /// covering snapshot exists), the leaf <b>accepts the loss</b> of the
+    /// trimmed prefix and rebuilds its projection from the surviving WAL
+    /// suffix (from the oldest still-readable offset) instead of failing
+    /// closed with <see cref="LeafProjectionStaleException"/>.
+    /// <para>
+    /// This is safe <b>only</b> for a tree whose contents can be
+    /// re-derived from an authoritative source after the rebuild - the
+    /// canonical case being the content-addressed embedding-vector
+    /// projections of a repository-context host, which a downstream
+    /// gap-scan re-ingests. Applying it to a store-of-record tree would
+    /// silently and permanently drop committed keys, so it must never be
+    /// the default: <see cref="SnapshotThenWal"/> remains the fail-closed
+    /// default and this policy is enabled per tree via
+    /// <c>ConfigureLattice</c>.
+    /// </para>
+    /// </summary>
+    RebuildFromWalAcceptLoss = 3,
 }

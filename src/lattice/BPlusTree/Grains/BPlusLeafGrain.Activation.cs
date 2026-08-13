@@ -481,13 +481,35 @@ internal sealed partial class BPlusLeafGrain
                 var tail = await trimCoordinator.GetTailOffsetAsync(cancellationToken);
                 if (tail > persistedCheckpoint + 1)
                 {
-                    throw new LeafProjectionStaleException(
-                        $"Leaf projection for tree '{treeId}' partition {partition} cannot be rebuilt " +
-                        $"from the WAL: the durable projection checkpoint (offset {persistedCheckpoint}) " +
-                        $"has fallen off the log (oldest readable offset {tail}) and no covering snapshot " +
-                        "is available, so a cold replay would silently rebuild the leaf over the lost " +
-                        "prefix and advance the materialiser pin past unrecoverable data. " +
-                        "Operator-driven projection rebuild is required.");
+                    if (resolvedOptions.ProjectionRebuildPolicy == ProjectionRebuildPolicy.RebuildFromWalAcceptLoss)
+                    {
+                        // Derived, re-derivable tree opted into accept-loss recovery
+                        // (issue #1453). The trimmed prefix (offsets up to tail) holds
+                        // committed data that fell off the shared WAL past this dormant
+                        // leaf's durable checkpoint and no snapshot covers it, so a
+                        // fail-closed throw would wedge every activation. Because the
+                        // tree's contents are re-derivable from an authoritative source
+                        // (e.g. the content-addressed embedding vectors a downstream
+                        // gap-scan re-ingests), the leaf instead rebuilds from the
+                        // surviving suffix: the cold-reset override already pins the
+                        // effective replay checkpoint at -1, so the replay below covers
+                        // the whole readable [tail, head] window. Record the discarded
+                        // prefix as a data-loss event for observability.
+                        LatticeMetrics.LeafProjectionAcceptLossRebuilds.Add(
+                            1,
+                            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                            new KeyValuePair<string, object?>(LatticeMetrics.TagShard, partition));
+                    }
+                    else
+                    {
+                        throw new LeafProjectionStaleException(
+                            $"Leaf projection for tree '{treeId}' partition {partition} cannot be rebuilt " +
+                            $"from the WAL: the durable projection checkpoint (offset {persistedCheckpoint}) " +
+                            $"has fallen off the log (oldest readable offset {tail}) and no covering snapshot " +
+                            "is available, so a cold replay would silently rebuild the leaf over the lost " +
+                            "prefix and advance the materialiser pin past unrecoverable data. " +
+                            "Operator-driven projection rebuild is required.");
+                    }
                 }
             }
 
@@ -513,6 +535,23 @@ internal sealed partial class BPlusLeafGrain
                         break;
                     case FallOffLogDecision.SnapshotPending:
                         _activationSnapshotPending = true;
+                        break;
+                    case FallOffLogDecision.RebuildFromWalAcceptLoss:
+                        // Opted-in derived tree (issue #1453): discard the trimmed
+                        // prefix and rebuild this partition's projection from the
+                        // surviving WAL. Reset the effective replay checkpoint to the
+                        // "nothing applied" sentinel so ReplayPartitionAsync below
+                        // covers the full readable [tail, head] window rather than the
+                        // (persistedCheckpoint, head] slice the WAL can no longer serve.
+                        // Only the warm path reaches here with a positive checkpoint;
+                        // the cold-restart path is already pinned to -1 by the
+                        // coherence override above and handled by the durable-frontier
+                        // guard. Record the discarded prefix as a data-loss event.
+                        LatticeMetrics.LeafProjectionAcceptLossRebuilds.Add(
+                            1,
+                            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                            new KeyValuePair<string, object?>(LatticeMetrics.TagShard, partition));
+                        checkpoint = -1L;
                         break;
                     case FallOffLogDecision.SnapshotThenWal:
                     case FallOffLogDecision.FullRebuildFromWal:

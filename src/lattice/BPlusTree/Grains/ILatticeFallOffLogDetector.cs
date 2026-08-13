@@ -55,6 +55,17 @@ internal enum FallOffLogDecision
     /// storage grain before the WAL trims past the checkpoint.
     /// </summary>
     SnapshotPending = 4,
+
+    /// <summary>
+    /// A fall-off-log trigger fired and the configured policy is
+    /// <see cref="ProjectionRebuildPolicy.RebuildFromWalAcceptLoss"/>. The
+    /// leaf discards the trimmed prefix and rebuilds its projection from
+    /// the surviving WAL suffix (resetting the effective replay checkpoint
+    /// to the "nothing applied" sentinel) instead of surfacing
+    /// <see cref="LeafProjectionStaleException"/>. Only valid for derived,
+    /// re-derivable trees; see the policy docs.
+    /// </summary>
+    RebuildFromWalAcceptLoss = 5,
 }
 
 /// <summary>

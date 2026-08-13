@@ -424,6 +424,7 @@ the leaf does once a trigger fires:
 | `SnapshotThenWal` *(default)* | Drains the per-leaf snapshot via `ILeafSnapshotProvider` as the recovery base, persists the snapshot offset as the new checkpoint, then tail-replays the remaining WAL entries since the snapshot. Reliable: works even when the WAL has been trimmed below the leaf's previous checkpoint. |
 | `FullRebuildFromWal` | Replays from the absolute tail of the WAL. Fails fast with `LeafProjectionStaleException` if the WAL has been trimmed and a complete history is unavailable. Diagnostic. |
 | `Fail` | Surfaces a `LeafProjectionStaleException` at activation time and waits for an operator-driven rebuild. |
+| `RebuildFromWalAcceptLoss` | Opt-in, for **derived and re-derivable trees only**. Discards the trimmed prefix and rebuilds the projection from the surviving WAL suffix instead of failing closed, so a leaf that has fallen off the shared WAL self-heals on activation. The discarded offsets are re-derived by a downstream process (for example the embedding gap-scan of a repository-context host). Never make this the default: applied to a store-of-record tree it silently and permanently drops committed keys. Each accept-loss rebuild increments `orleans.lattice.leaf.projection_accept_loss_rebuilds`. |
 
 ### Configuration
 

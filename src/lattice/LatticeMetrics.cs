@@ -712,6 +712,21 @@ public static class LatticeMetrics
         Meter.CreateCounter<long>("orleans.lattice.leaf.activation_cursor_publish_failures", unit: "{failure}",
             description: "Activation-time eager cursor-publish failures, tagged by tree.");
 
+    /// <summary>
+    /// Counter of accept-loss projection rebuilds performed at activation, emitted by
+    /// <c>BPlusLeafGrain.OnActivateAsync</c> when a fall-off-log trigger fires on a tree
+    /// configured with <see cref="ProjectionRebuildPolicy.RebuildFromWalAcceptLoss"/> and
+    /// the leaf rebuilds from the surviving WAL suffix instead of throwing
+    /// <see cref="LeafProjectionStaleException"/>. Each increment marks a leaf partition
+    /// that discarded a trimmed prefix of unrecoverable committed offsets - a data-loss
+    /// event that is expected and safe only on a derived, re-derivable tree, so any
+    /// occurrence on a store-of-record tree is a misconfiguration alarm. Tagged with
+    /// <see cref="TagTree"/> and <see cref="TagShard"/>.
+    /// </summary>
+    public static readonly Counter<long> LeafProjectionAcceptLossRebuilds =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.projection_accept_loss_rebuilds", unit: "{rebuild}",
+            description: "Activation-time accept-loss projection rebuilds from the surviving WAL suffix, tagged by tree and shard.");
+
     // --- Storage-usage instruments (byte-accurate retained footprint) ------
     //
     // The four byte gauges and the over-threshold gauge are observable gauges

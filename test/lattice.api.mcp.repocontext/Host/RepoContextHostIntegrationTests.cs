@@ -14,6 +14,7 @@ using ModelContextProtocol.AspNetCore;
 using Orleans.Lattice;
 using Orleans.Lattice.Api.Mcp;
 using Orleans.Lattice.Api.Mcp.RepoContext.Host;
+using Orleans.Lattice.BPlusTree;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
 
@@ -94,6 +95,47 @@ public sealed class RepoContextHostIntegrationTests
         }
 
         Assert.That(readiness.IsReady, Is.True, "The host did not reach readiness within the timeout.");
+    }
+
+    [Test]
+    public async Task Vector_trees_opt_in_to_accept_loss_recovery_and_store_of_record_trees_do_not()
+    {
+        // Regression for issue #1453. The host must opt the three derived, re-derivable
+        // embedding-vector trees in to ProjectionRebuildPolicy.RebuildFromWalAcceptLoss
+        // so a leaf that falls off the shared WAL self-heals by rebuilding from the
+        // surviving suffix instead of wedging every activation. The store-of-record
+        // trees (structural, symbol, memory) must keep the fail-closed default
+        // (SnapshotThenWal) so an accept-loss policy can never silently drop their
+        // committed data. Options resolution does not require the cluster to be running,
+        // so the host is built but not started.
+        var app = BuildLocalHost(LocalConfig());
+        try
+        {
+            var options = app.Services.GetRequiredService<IOptionsMonitor<LatticeOptions>>();
+
+            Assert.Multiple(() =>
+            {
+                foreach (var tree in RepoContextHostTrees.VectorTrees)
+                {
+                    Assert.That(
+                        options.Get(tree).ProjectionRebuildPolicy,
+                        Is.EqualTo(ProjectionRebuildPolicy.RebuildFromWalAcceptLoss),
+                        $"Vector tree '{tree}' must opt in to accept-loss recovery.");
+                }
+
+                foreach (var tree in new[] { RepoContextHostTrees.Structural, RepoContextHostTrees.Symbol, RepoContextHostTrees.Memory })
+                {
+                    Assert.That(
+                        options.Get(tree).ProjectionRebuildPolicy,
+                        Is.EqualTo(ProjectionRebuildPolicy.SnapshotThenWal),
+                        $"Store-of-record tree '{tree}' must keep the fail-closed default policy.");
+                }
+            });
+        }
+        finally
+        {
+            await app.DisposeAsync();
+        }
     }
 
     [Test]

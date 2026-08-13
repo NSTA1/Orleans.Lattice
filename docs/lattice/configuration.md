@@ -551,6 +551,7 @@ Selects the recovery strategy a leaf grain takes when one of the fall-off-log tr
 | `SnapshotThenWal` | Drains the per-leaf snapshot, persists the snapshot offset as the new checkpoint, then tail-replays the remaining WAL slice. Reliable: works even when the WAL has been trimmed below the leaf's previous checkpoint. |
 | `FullRebuildFromWal` | Replays from the absolute tail of the WAL. Fails fast with `LeafProjectionStaleException` if the WAL has been trimmed and a complete history is unavailable. Diagnostic. |
 | `Fail` | Surfaces `LeafProjectionStaleException` at activation and waits for an operator-driven rebuild. |
+| `RebuildFromWalAcceptLoss` | Opt-in, for derived and re-derivable trees only. Discards the trimmed prefix and rebuilds from the surviving WAL suffix so a leaf that fell off the shared WAL self-heals; the loss is re-derived downstream. Never safe as a default - on a store-of-record tree it silently drops committed keys. Emits `orleans.lattice.leaf.projection_accept_loss_rebuilds`. |
 
 This option can be changed freely at any time.
 
