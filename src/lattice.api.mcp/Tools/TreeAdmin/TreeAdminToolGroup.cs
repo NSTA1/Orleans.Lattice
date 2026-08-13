@@ -189,6 +189,25 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 "Reads a tree's snapshot status: whether a point-in-time snapshot capture is currently in flight for "
                 + "the source tree. Poll this after triggering tree_snapshot to watch the capture complete. A pure "
                 + "read with no side effects. Requires whole-tree read authority. Read-only."),
+            Read(services, TreeAdminLifecycleToolHandlers.GetWalPlacementAsync, "lattice_treeadmin_wal_placement_inspect",
+                "Inspect a tree's WAL placement",
+                "Inspects a tree's durable write-ahead-log placement: which storage provider key backs each WAL "
+                + "partition, the placement version used for compare-and-swap when moving a partition, and whether "
+                + "each key resolves on the reporting silo. A pure read with no side effects. Requires whole-tree "
+                + "read authority. Read-only."),
+            Read(services, TreeAdminLifecycleToolHandlers.AuditWalPlacementAsync, "lattice_treeadmin_wal_placement_audit",
+                "Audit a tree's WAL placement",
+                "Audits a tree's WAL placement against the resolving silo's storage provider catalog, surfacing any "
+                + "partition pinned to a provider key the silo cannot resolve so configuration drift is caught before "
+                + "WAL shards begin to fail closed. Reports the silo's known provider keys. A pure read with no side "
+                + "effects. Requires whole-tree read authority. Read-only."),
+            Read(services, TreeAdminLifecycleToolHandlers.PlanWalMoveAsync, "lattice_treeadmin_wal_move_plan",
+                "Preview a WAL partition move",
+                "Computes a read-only preview of moving a WAL partition to a target storage provider key: the offset "
+                + "range that would be copied, the entry count, and whether the target key resolves on the reporting "
+                + "silo, without quiescing the partition or changing any placement. Review this (and confirm the "
+                + "target key resolves everywhere) before executing a move. A pure read with no side effects. "
+                + "Requires whole-tree read authority. Read-only."),
         };
 
         if (enableSchemaControl)
@@ -360,6 +379,21 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "artifact. Idempotent for a matching in-flight capture. Rejected for a reserved source or destination "
                 + "tree id, when the destination already exists, or when a different snapshot is already in flight. "
                 + "Admin-gated and destructive."));
+            tools.Add(Write(services, TreeAdminLifecycleToolHandlers.ExecuteWalMoveAsync, "lattice_treeadmin_wal_move_execute",
+                "Move a WAL partition to a new provider",
+                "Executes an online move of a single write-ahead-log partition to a target storage provider key. Only "
+                + "the target partition is briefly quiesced while its tail is copied and the placement pin is "
+                + "atomically flipped; the source tail is retained (never trimmed by the move) so the move is "
+                + "revertible until an explicit wal_move_reclaim discards it. Preview first with wal_move_plan and "
+                + "confirm the target key resolves on every silo. Idempotent: a partition already pinned to the "
+                + "target is a no-copy repair. Rejected for a reserved tree id. Tree-lifecycle-gated and destructive."));
+            tools.Add(Write(services, TreeAdminLifecycleToolHandlers.ReclaimMovedWalSourceAsync, "lattice_treeadmin_wal_move_reclaim",
+                "Reclaim a moved WAL partition's source",
+                "Reclaims the orphaned source tail left behind by a completed wal_move_execute, discarding the "
+                + "partition's retained log on the old provider key. This is the irreversible finalisation step, "
+                + "deliberately separate from the move: once reclaimed the move can no longer be reverted by moving "
+                + "the partition back. Refused if the given key is the partition's live placement. Rejected for a "
+                + "reserved tree id. Tree-lifecycle-gated and destructive."));
         }
 
         return tools;

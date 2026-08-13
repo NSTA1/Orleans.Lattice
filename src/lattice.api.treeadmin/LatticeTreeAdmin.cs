@@ -923,6 +923,189 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             .ConfigureAwait(false);
     }
 
+    /// <inheritdoc />
+    public async Task<TreeWalPlacement> GetWalPlacementAsync(
+        string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        await _authorizer.AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        var placement = await _grainFactory.GetGrain<ILatticeAdmin>(LatticeConstants.AdminGrainKey)
+            .GetWalPlacementAsync(treeId, cancellationToken)
+            .ConfigureAwait(false);
+
+        return ToWalPlacement(placement);
+    }
+
+    /// <inheritdoc />
+    public async Task<TreeWalPlacementAudit> AuditWalPlacementAsync(
+        string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        await _authorizer.AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        var audit = await _grainFactory.GetGrain<ILatticeAdmin>(LatticeConstants.AdminGrainKey)
+            .AuditWalPlacementAsync(treeId, cancellationToken)
+            .ConfigureAwait(false);
+
+        return ToWalPlacementAudit(audit);
+    }
+
+    /// <inheritdoc />
+    public async Task<TreeWalMovePlan> PlanWalMoveAsync(
+        string treeId, int partition, string targetProviderKey,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentException.ThrowIfNullOrEmpty(targetProviderKey);
+        await _authorizer.AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        var plan = await _grainFactory.GetGrain<ILatticeAdmin>(LatticeConstants.AdminGrainKey)
+            .PlanWalMoveAsync(treeId, partition, targetProviderKey, cancellationToken)
+            .ConfigureAwait(false);
+
+        return ToWalMovePlan(plan);
+    }
+
+    /// <inheritdoc />
+    public async Task<TreeWalMoveReceipt> ExecuteWalMoveAsync(
+        string treeId, int partition, string targetProviderKey,
+        TreeWalMoveOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentException.ThrowIfNullOrEmpty(targetProviderKey);
+        ThrowIfReserved(treeId);
+        await _authorizer.AuthorizeTreeLifecycleAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        var receipt = await _grainFactory.GetGrain<ILatticeAdmin>(LatticeConstants.AdminGrainKey)
+            .ExecuteWalMoveAsync(treeId, partition, targetProviderKey, ToWalMoveOptions(options), cancellationToken)
+            .ConfigureAwait(false);
+
+        return ToWalMoveReceipt(receipt);
+    }
+
+    /// <inheritdoc />
+    public async Task<TreeWalMoveReceipt> ReclaimMovedWalSourceAsync(
+        string treeId, int partition, string sourceProviderKey,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentException.ThrowIfNullOrEmpty(sourceProviderKey);
+        ThrowIfReserved(treeId);
+        await _authorizer.AuthorizeTreeLifecycleAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        var receipt = await _grainFactory.GetGrain<ILatticeAdmin>(LatticeConstants.AdminGrainKey)
+            .ReclaimMovedWalSourceAsync(treeId, partition, sourceProviderKey, cancellationToken)
+            .ConfigureAwait(false);
+
+        return ToWalMoveReceipt(receipt);
+    }
+
+    /// <summary>Projects the core <see cref="WalPartitionPlacement"/> onto the transport-agnostic <see cref="TreeWalPartitionPlacement"/>.</summary>
+    private static TreeWalPartitionPlacement ToWalPartitionPlacement(WalPartitionPlacement p) =>
+        new()
+        {
+            Partition = p.Partition,
+            ProviderKey = p.ProviderKey ?? string.Empty,
+            ResolvableOnThisSilo = p.ResolvableOnThisSilo,
+        };
+
+    /// <summary>Projects the core <see cref="WalPlacement"/> onto the transport-agnostic <see cref="TreeWalPlacement"/>.</summary>
+    private static TreeWalPlacement ToWalPlacement(WalPlacement placement) =>
+        new()
+        {
+            TreeId = placement.TreeId ?? string.Empty,
+            Version = placement.Version,
+            DefaultProviderKey = placement.DefaultProviderKey ?? string.Empty,
+            Partitions = placement.Partitions.IsDefault
+                ? ImmutableArray<TreeWalPartitionPlacement>.Empty
+                : placement.Partitions.Select(ToWalPartitionPlacement).ToImmutableArray(),
+        };
+
+    /// <summary>Projects the core <see cref="WalPlacementAudit"/> onto the transport-agnostic <see cref="TreeWalPlacementAudit"/>.</summary>
+    private static TreeWalPlacementAudit ToWalPlacementAudit(WalPlacementAudit audit) =>
+        new()
+        {
+            TreeId = audit.TreeId ?? string.Empty,
+            Version = audit.Version,
+            PartitionCount = audit.PartitionCount,
+            Partitions = audit.Partitions.IsDefault
+                ? ImmutableArray<TreeWalPartitionPlacement>.Empty
+                : audit.Partitions.Select(ToWalPartitionPlacement).ToImmutableArray(),
+            AllResolvableOnThisSilo = audit.AllResolvableOnThisSilo,
+            KnownProviderKeys = audit.KnownProviderKeys.IsDefault
+                ? ImmutableArray<string>.Empty
+                : audit.KnownProviderKeys,
+        };
+
+    /// <summary>Projects the core <see cref="WalMovePlan"/> onto the transport-agnostic <see cref="TreeWalMovePlan"/>.</summary>
+    private static TreeWalMovePlan ToWalMovePlan(WalMovePlan plan) =>
+        new()
+        {
+            TreeId = plan.TreeId ?? string.Empty,
+            Partition = plan.Partition,
+            FromProviderKey = plan.FromProviderKey ?? string.Empty,
+            ToProviderKey = plan.ToProviderKey ?? string.Empty,
+            PlacementVersion = plan.PlacementVersion,
+            SourceLowestOffset = plan.SourceLowestOffset,
+            SourceHighestOffset = plan.SourceHighestOffset,
+            EntriesToCopy = plan.EntriesToCopy,
+            TargetResolvableOnThisSilo = plan.TargetResolvableOnThisSilo,
+            AlreadyAtTarget = plan.AlreadyAtTarget,
+        };
+
+    /// <summary>Projects the core <see cref="WalMoveReceipt"/> onto the transport-agnostic <see cref="TreeWalMoveReceipt"/>.</summary>
+    private static TreeWalMoveReceipt ToWalMoveReceipt(WalMoveReceipt receipt) =>
+        new()
+        {
+            TreeId = receipt.TreeId ?? string.Empty,
+            Partition = receipt.Partition,
+            FromProviderKey = receipt.FromProviderKey ?? string.Empty,
+            ToProviderKey = receipt.ToProviderKey ?? string.Empty,
+            PreviousPlacementVersion = receipt.PreviousPlacementVersion,
+            NewPlacementVersion = receipt.NewPlacementVersion,
+            CopiedFromOffset = receipt.CopiedFromOffset,
+            CopiedThroughOffset = receipt.CopiedThroughOffset,
+            SourceHighestOffset = receipt.SourceHighestOffset,
+            TargetHighestOffset = receipt.TargetHighestOffset,
+            SourceRetained = receipt.SourceRetained,
+            Outcome = ToWalMoveOutcome(receipt.Outcome),
+        };
+
+    /// <summary>Maps the core <see cref="WalMoveOutcome"/> onto the transport-agnostic <see cref="TreeWalMoveOutcome"/>.</summary>
+    private static TreeWalMoveOutcome ToWalMoveOutcome(WalMoveOutcome outcome) => outcome switch
+    {
+        WalMoveOutcome.Moved => TreeWalMoveOutcome.Moved,
+        WalMoveOutcome.AlreadyAtTarget => TreeWalMoveOutcome.AlreadyAtTarget,
+        WalMoveOutcome.SourceReclaimed => TreeWalMoveOutcome.SourceReclaimed,
+        _ => TreeWalMoveOutcome.NoOp,
+    };
+
+    /// <summary>
+    /// Maps the transport-agnostic <see cref="TreeWalMoveOptions"/> onto the core
+    /// <see cref="WalMoveOptions"/>, translating the wire-safe zero-defaulted fields
+    /// (seconds, page size, inverted verify flag) into the core's typed tunables and
+    /// leaving unset fields at zero so the core substitutes its conventional defaults.
+    /// A <see langword="null"/> argument maps to <see langword="null"/> so the core
+    /// applies its full default set.
+    /// </summary>
+    private static WalMoveOptions? ToWalMoveOptions(TreeWalMoveOptions? options)
+    {
+        if (options is not { } o)
+        {
+            return null;
+        }
+
+        return new WalMoveOptions
+        {
+            QuiesceLease = o.QuiesceLeaseSeconds > 0
+                ? TimeSpan.FromSeconds(o.QuiesceLeaseSeconds)
+                : TimeSpan.Zero,
+            CopyPageSize = o.CopyPageSize,
+            VerifyAfterCopy = !o.DisableVerifyAfterCopy,
+        };
+    }
+
     /// <summary>
     /// Projects the source tree's observable snapshot signal - the coordinator's
     /// idle/in-flight state via the public <see cref="ILattice.IsSnapshotCompleteAsync"/>

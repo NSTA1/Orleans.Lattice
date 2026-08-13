@@ -714,6 +714,128 @@ public sealed class LatticeTreeAdminApiGrpcClient
             cancellationToken);
     }
 
+    /// <summary>
+    /// Inspects the WAL placement of <paramref name="treeId"/>, with no side effects.
+    /// Requires whole-tree read authority.
+    /// </summary>
+    /// <param name="treeId">The tree to inspect. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tree's WAL partition placement.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    public Task<TreeWalPlacement> GetWalPlacementAsync(
+        string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return UnaryAsync(
+            _methods.GetWalPlacement,
+            new TreeAdminTreeRequest { TreeId = treeId },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Audits the WAL placement of <paramref name="treeId"/>, with no side effects.
+    /// Requires whole-tree read authority.
+    /// </summary>
+    /// <param name="treeId">The tree to audit. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tree's WAL placement audit.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    public Task<TreeWalPlacementAudit> AuditWalPlacementAsync(
+        string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return UnaryAsync(
+            _methods.AuditWalPlacement,
+            new TreeAdminTreeRequest { TreeId = treeId },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Computes a read-only preview of moving WAL partition <paramref name="partition"/>
+    /// of <paramref name="treeId"/> to <paramref name="targetProviderKey"/>, with no
+    /// side effects. Requires whole-tree read authority.
+    /// </summary>
+    /// <param name="treeId">The tree whose partition would be moved. Must not be <c>null</c> or empty.</param>
+    /// <param name="partition">The WAL partition index to preview.</param>
+    /// <param name="targetProviderKey">The target storage provider key. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The read-only move plan.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="targetProviderKey"/> is <c>null</c> or empty.</exception>
+    public Task<TreeWalMovePlan> PlanWalMoveAsync(
+        string treeId, int partition, string targetProviderKey,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentException.ThrowIfNullOrEmpty(targetProviderKey);
+        return UnaryAsync(
+            _methods.PlanWalMove,
+            new TreeAdminWalMovePlanRequest
+            {
+                TreeId = treeId,
+                Partition = partition,
+                TargetProviderKey = targetProviderKey,
+            },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Executes an online move of WAL partition <paramref name="partition"/> of
+    /// <paramref name="treeId"/> to <paramref name="targetProviderKey"/>. Requires
+    /// whole-tree tree-lifecycle authority.
+    /// </summary>
+    /// <param name="treeId">The tree whose partition to move. Must not be <c>null</c> or empty.</param>
+    /// <param name="partition">The WAL partition index to move.</param>
+    /// <param name="targetProviderKey">The target storage provider key. Must not be <c>null</c> or empty.</param>
+    /// <param name="options">Optional move tunables; <c>null</c> takes the conventional defaults.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The move receipt.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="targetProviderKey"/> is <c>null</c> or empty.</exception>
+    public Task<TreeWalMoveReceipt> ExecuteWalMoveAsync(
+        string treeId, int partition, string targetProviderKey,
+        TreeWalMoveOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentException.ThrowIfNullOrEmpty(targetProviderKey);
+        return UnaryAsync(
+            _methods.ExecuteWalMove,
+            new TreeAdminWalMoveExecuteRequest
+            {
+                TreeId = treeId,
+                Partition = partition,
+                TargetProviderKey = targetProviderKey,
+                Options = options,
+            },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Reclaims the orphaned source tail left behind by a completed WAL move of
+    /// partition <paramref name="partition"/> of <paramref name="treeId"/>. Requires
+    /// whole-tree tree-lifecycle authority.
+    /// </summary>
+    /// <param name="treeId">The tree whose moved source to reclaim. Must not be <c>null</c> or empty.</param>
+    /// <param name="partition">The WAL partition index whose orphaned source to reclaim.</param>
+    /// <param name="sourceProviderKey">The provider key of the orphaned source tail. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The reclaim receipt.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="sourceProviderKey"/> is <c>null</c> or empty.</exception>
+    public Task<TreeWalMoveReceipt> ReclaimMovedWalSourceAsync(
+        string treeId, int partition, string sourceProviderKey,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentException.ThrowIfNullOrEmpty(sourceProviderKey);
+        return UnaryAsync(
+            _methods.ReclaimMovedWalSource,
+            new TreeAdminWalReclaimRequest
+            {
+                TreeId = treeId,
+                Partition = partition,
+                SourceProviderKey = sourceProviderKey,
+            },
+            cancellationToken);
+    }
+
     private async Task<TResponse> UnaryAsync<TRequest, TResponse>(
         Method<TRequest, TResponse> method,
         TRequest request,

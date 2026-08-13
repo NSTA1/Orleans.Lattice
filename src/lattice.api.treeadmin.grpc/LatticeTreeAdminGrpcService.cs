@@ -122,6 +122,21 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
     /// <summary>Reads the snapshot status from the wrapped facade.</summary>
     public abstract Task<TreeSnapshotStatus> GetSnapshotStatus(TreeAdminTreeRequest request, ServerCallContext context);
 
+    /// <summary>Inspects the WAL placement on the wrapped facade.</summary>
+    public abstract Task<TreeWalPlacement> GetWalPlacement(TreeAdminTreeRequest request, ServerCallContext context);
+
+    /// <summary>Audits the WAL placement on the wrapped facade.</summary>
+    public abstract Task<TreeWalPlacementAudit> AuditWalPlacement(TreeAdminTreeRequest request, ServerCallContext context);
+
+    /// <summary>Computes a WAL move plan on the wrapped facade.</summary>
+    public abstract Task<TreeWalMovePlan> PlanWalMove(TreeAdminWalMovePlanRequest request, ServerCallContext context);
+
+    /// <summary>Executes a WAL move on the wrapped facade.</summary>
+    public abstract Task<TreeWalMoveReceipt> ExecuteWalMove(TreeAdminWalMoveExecuteRequest request, ServerCallContext context);
+
+    /// <summary>Reclaims a moved WAL source on the wrapped facade.</summary>
+    public abstract Task<TreeWalMoveReceipt> ReclaimMovedWalSource(TreeAdminWalReclaimRequest request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at startup
     /// with <paramref name="serviceImpl"/> set to <see langword="null"/> to record
@@ -173,6 +188,11 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
             binder.AddMethod(methods.GetResizeStatus, (UnaryServerMethod<TreeAdminTreeRequest, TreeResizeStatus>?)null);
             binder.AddMethod(methods.SnapshotTree, (UnaryServerMethod<TreeAdminSnapshotRequest, TreeSnapshotStatus>?)null);
             binder.AddMethod(methods.GetSnapshotStatus, (UnaryServerMethod<TreeAdminTreeRequest, TreeSnapshotStatus>?)null);
+            binder.AddMethod(methods.GetWalPlacement, (UnaryServerMethod<TreeAdminTreeRequest, TreeWalPlacement>?)null);
+            binder.AddMethod(methods.AuditWalPlacement, (UnaryServerMethod<TreeAdminTreeRequest, TreeWalPlacementAudit>?)null);
+            binder.AddMethod(methods.PlanWalMove, (UnaryServerMethod<TreeAdminWalMovePlanRequest, TreeWalMovePlan>?)null);
+            binder.AddMethod(methods.ExecuteWalMove, (UnaryServerMethod<TreeAdminWalMoveExecuteRequest, TreeWalMoveReceipt>?)null);
+            binder.AddMethod(methods.ReclaimMovedWalSource, (UnaryServerMethod<TreeAdminWalReclaimRequest, TreeWalMoveReceipt>?)null);
             return;
         }
 
@@ -208,6 +228,11 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
         binder.AddMethod(methods.GetResizeStatus, new UnaryServerMethod<TreeAdminTreeRequest, TreeResizeStatus>(serviceImpl.GetResizeStatus));
         binder.AddMethod(methods.SnapshotTree, new UnaryServerMethod<TreeAdminSnapshotRequest, TreeSnapshotStatus>(serviceImpl.SnapshotTree));
         binder.AddMethod(methods.GetSnapshotStatus, new UnaryServerMethod<TreeAdminTreeRequest, TreeSnapshotStatus>(serviceImpl.GetSnapshotStatus));
+        binder.AddMethod(methods.GetWalPlacement, new UnaryServerMethod<TreeAdminTreeRequest, TreeWalPlacement>(serviceImpl.GetWalPlacement));
+        binder.AddMethod(methods.AuditWalPlacement, new UnaryServerMethod<TreeAdminTreeRequest, TreeWalPlacementAudit>(serviceImpl.AuditWalPlacement));
+        binder.AddMethod(methods.PlanWalMove, new UnaryServerMethod<TreeAdminWalMovePlanRequest, TreeWalMovePlan>(serviceImpl.PlanWalMove));
+        binder.AddMethod(methods.ExecuteWalMove, new UnaryServerMethod<TreeAdminWalMoveExecuteRequest, TreeWalMoveReceipt>(serviceImpl.ExecuteWalMove));
+        binder.AddMethod(methods.ReclaimMovedWalSource, new UnaryServerMethod<TreeAdminWalReclaimRequest, TreeWalMoveReceipt>(serviceImpl.ReclaimMovedWalSource));
     }
 }
 
@@ -399,6 +424,26 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
     /// <inheritdoc />
     public override Task<TreeSnapshotStatus> GetSnapshotStatus(TreeAdminTreeRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (control, req, ct) => control.GetSnapshotStatusAsync(req.TreeId, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeWalPlacement> GetWalPlacement(TreeAdminTreeRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.GetWalPlacementAsync(req.TreeId, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeWalPlacementAudit> AuditWalPlacement(TreeAdminTreeRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.AuditWalPlacementAsync(req.TreeId, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeWalMovePlan> PlanWalMove(TreeAdminWalMovePlanRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.PlanWalMoveAsync(req.TreeId, req.Partition, req.TargetProviderKey, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeWalMoveReceipt> ExecuteWalMove(TreeAdminWalMoveExecuteRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.ExecuteWalMoveAsync(req.TreeId, req.Partition, req.TargetProviderKey, req.Options, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeWalMoveReceipt> ReclaimMovedWalSource(TreeAdminWalReclaimRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.ReclaimMovedWalSourceAsync(req.TreeId, req.Partition, req.SourceProviderKey, ct));
 
     /// <inheritdoc />
     public override Task<AuthSchemeAdvertisement> GetAuthScheme(AuthSchemeAdvertisementRequest request, ServerCallContext context)

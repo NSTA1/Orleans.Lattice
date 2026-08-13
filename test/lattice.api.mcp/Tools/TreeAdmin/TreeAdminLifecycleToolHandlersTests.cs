@@ -509,6 +509,80 @@ public sealed class TreeAdminLifecycleToolHandlersTests
     }
 
     [Test]
+    public async Task GetWalPlacementAsync_forwards_the_tree_id_and_returns_the_placement()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeWalPlacement { TreeId = "orders", Version = 2 };
+        admin.GetWalPlacementAsync("orders", Arg.Any<CancellationToken>()).Returns(expected);
+
+        var result = await TreeAdminLifecycleToolHandlers.GetWalPlacementAsync(admin, "orders", CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).GetWalPlacementAsync("orders", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task AuditWalPlacementAsync_forwards_the_tree_id_and_returns_the_audit()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeWalPlacementAudit { TreeId = "orders", PartitionCount = 1 };
+        admin.AuditWalPlacementAsync("orders", Arg.Any<CancellationToken>()).Returns(expected);
+
+        var result = await TreeAdminLifecycleToolHandlers.AuditWalPlacementAsync(admin, "orders", CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).AuditWalPlacementAsync("orders", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task PlanWalMoveAsync_forwards_the_arguments_and_returns_the_plan()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeWalMovePlan { TreeId = "orders", Partition = 1, ToProviderKey = "wal-secondary" };
+        admin.PlanWalMoveAsync("orders", 1, "wal-secondary", Arg.Any<CancellationToken>()).Returns(expected);
+
+        var result = await TreeAdminLifecycleToolHandlers.PlanWalMoveAsync(admin, "orders", 1, "wal-secondary", CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).PlanWalMoveAsync("orders", 1, "wal-secondary", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ExecuteWalMoveAsync_maps_the_option_scalars_and_returns_the_receipt()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeWalMoveReceipt { TreeId = "orders", Partition = 1, Outcome = TreeWalMoveOutcome.Moved };
+        admin.ExecuteWalMoveAsync("orders", 1, "wal-secondary", Arg.Any<TreeWalMoveOptions?>(), Arg.Any<CancellationToken>())
+            .Returns(expected);
+
+        var result = await TreeAdminLifecycleToolHandlers.ExecuteWalMoveAsync(
+            admin, "orders", 1, "wal-secondary", 45, 128, true, CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).ExecuteWalMoveAsync(
+            "orders", 1, "wal-secondary",
+            Arg.Is<TreeWalMoveOptions?>(o => o.HasValue
+                && o.Value.QuiesceLeaseSeconds == 45
+                && o.Value.CopyPageSize == 128
+                && o.Value.DisableVerifyAfterCopy),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ReclaimMovedWalSourceAsync_forwards_the_arguments_and_returns_the_receipt()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeWalMoveReceipt { TreeId = "orders", Partition = 1, Outcome = TreeWalMoveOutcome.SourceReclaimed };
+        admin.ReclaimMovedWalSourceAsync("orders", 1, "wal-primary", Arg.Any<CancellationToken>()).Returns(expected);
+
+        var result = await TreeAdminLifecycleToolHandlers.ReclaimMovedWalSourceAsync(
+            admin, "orders", 1, "wal-primary", CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).ReclaimMovedWalSourceAsync("orders", 1, "wal-primary", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public void Handlers_reject_a_null_facade()
     {
         Assert.Multiple(() =>
@@ -537,6 +611,11 @@ public sealed class TreeAdminLifecycleToolHandlersTests
             Assert.That(() => TreeAdminLifecycleToolHandlers.GetResizeStatusAsync(null!, "t"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.SnapshotTreeAsync(null!, "t", "d", TreeSnapshotMode.Offline), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.GetSnapshotStatusAsync(null!, "t"), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.GetWalPlacementAsync(null!, "t"), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.AuditWalPlacementAsync(null!, "t"), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.PlanWalMoveAsync(null!, "t", 0, "k"), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.ExecuteWalMoveAsync(null!, "t", 0, "k"), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.ReclaimMovedWalSourceAsync(null!, "t", 0, "k"), Throws.ArgumentNullException);
         });
     }
 }

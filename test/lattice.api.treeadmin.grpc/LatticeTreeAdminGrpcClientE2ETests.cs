@@ -471,6 +471,44 @@ public sealed class LatticeTreeAdminGrpcClientE2ETests
             Throws.Exception);
     }
 
+    [Test]
+    public async Task wal_placement_inspect_and_audit_round_trip_over_the_client()
+    {
+        const string walTree = "wal-placement-e2e";
+        await _host.Client.CreateTreeAsync(walTree, shardCount: 2);
+
+        var placement = await _host.Client.GetWalPlacementAsync(walTree);
+        Assert.Multiple(() =>
+        {
+            Assert.That(placement.TreeId, Is.EqualTo(walTree));
+            Assert.That(placement.Partitions, Is.Not.Empty);
+        });
+
+        var audit = await _host.Client.AuditWalPlacementAsync(walTree);
+        Assert.Multiple(() =>
+        {
+            Assert.That(audit.TreeId, Is.EqualTo(walTree));
+            Assert.That(audit.PartitionCount, Is.EqualTo(placement.Partitions.Length));
+            Assert.That(audit.KnownProviderKeys, Is.Not.Empty);
+        });
+    }
+
+    [Test]
+    public void wal_move_execute_into_a_reserved_tree_is_rejected_over_the_client()
+    {
+        Assert.That(
+            async () => await _host.Client.ExecuteWalMoveAsync("_lattice_trees", 0, "wal-secondary"),
+            Throws.Exception);
+    }
+
+    [Test]
+    public void wal_move_reclaim_into_a_reserved_tree_is_rejected_over_the_client()
+    {
+        Assert.That(
+            async () => await _host.Client.ReclaimMovedWalSourceAsync("_lattice_trees", 0, "wal-primary"),
+            Throws.Exception);
+    }
+
     private static IReadOnlyList<Orleans.Lattice.Api.Data.DataEntry> Chunk(params string[] keys)
         => keys.Select(k => new Orleans.Lattice.Api.Data.DataEntry { Key = k, Value = "{}"u8.ToArray() }).ToArray();
 }
