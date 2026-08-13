@@ -166,6 +166,12 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "the default identity map) and, when it has, the persisted slot topology and map version. Distinct "
                 + "from the live-routing shard-map inspection - this reflects durable registry truth. Requires "
                 + "whole-tree read authority. Read-only."),
+            Read(services, TreeAdminLifecycleToolHandlers.GetTreeDeletionStatusAsync, "lattice_treeadmin_tree_deletion_status",
+                "Read a tree's soft-deletion status",
+                "Reads a tree's soft-deletion lifecycle status: whether it is live, soft-deleted (with the UTC "
+                + "delete time and the recovery deadline derived from the configured soft-delete window), whether a "
+                + "hard purge is in progress or has completed, and whether it can still be recovered. A pure read "
+                + "with no side effects. Requires whole-tree read authority. Read-only."),
         };
 
         if (enableSchemaControl)
@@ -235,6 +241,27 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "projection-digest maintenance, durable-history retention), returning the resulting config. Each "
                 + "dimension is written only when its apply flag is set; a null value on an applied dimension clears "
                 + "that override. Rejected for a reserved system tree id. Admin-gated and destructive."));
+            tools.Add(Write(services, TreeAdminLifecycleToolHandlers.DeleteTreeAsync, "lattice_treeadmin_tree_delete",
+                "Soft-delete a tree",
+                "Soft-deletes a tree: every shard is immediately marked deleted (subsequent reads and writes throw) "
+                + "and a deferred hard purge is scheduled after the configured soft-delete window, returning the "
+                + "tree's deletion status including the recovery deadline. Reversible with tree_recover until the "
+                + "window elapses or tree_purge runs. Idempotent. Rejected for a reserved system tree id. "
+                + "Tree-lifecycle-gated and destructive."));
+            tools.Add(Write(services, TreeAdminLifecycleToolHandlers.RecoverTreeAsync, "lattice_treeadmin_tree_recover",
+                "Recover a soft-deleted tree",
+                "Recovers a soft-deleted tree within its recovery window, restoring normal operation and cancelling "
+                + "the deferred purge, returning the tree's deletion status. Rejected when the tree is not deleted, "
+                + "a purge is in progress, or the data was already purged, and for a reserved system tree id. "
+                + "Tree-lifecycle-gated and destructive."));
+            tools.Add(Write(services, TreeAdminLifecycleToolHandlers.PurgeTreeAsync, "lattice_treeadmin_tree_purge",
+                "Hard-purge a soft-deleted tree",
+                "Immediately and irreversibly hard-purges a soft-deleted tree, bypassing the soft-delete window: all "
+                + "leaf and internal node state is permanently removed and the tree is unregistered, returning the "
+                + "tree's final deletion status. The confirm flag must be set to true to acknowledge the "
+                + "irreversible destruction; a false or omitted value is rejected. Rejected when the tree is not "
+                + "deleted or was already purged, and for a reserved system tree id. Tree-lifecycle-gated and "
+                + "destructive."));
         }
 
         return tools;

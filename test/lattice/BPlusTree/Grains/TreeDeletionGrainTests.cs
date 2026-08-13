@@ -143,6 +143,88 @@ public partial class TreeDeletionGrainTests
         Assert.That(await grain.IsDeletedAsync(), Is.True);
     }
 
+    // --- GetDeletionStatusAsync ---
+
+    [Test]
+    public async Task GetDeletionStatus_reports_a_live_tree_with_no_deadline()
+    {
+        var (grain, _, _, _, _) = CreateGrain();
+
+        var status = await grain.GetDeletionStatusAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(status.IsDeleted, Is.False);
+            Assert.That(status.DeletedAtUtc, Is.Null);
+            Assert.That(status.RecoveryDeadlineUtc, Is.Null);
+            Assert.That(status.PurgeInProgress, Is.False);
+            Assert.That(status.PurgeComplete, Is.False);
+            Assert.That(status.CanRecover, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task GetDeletionStatus_derives_the_recovery_deadline_from_the_soft_delete_duration()
+    {
+        var options = new LatticeOptions { SoftDeleteDuration = TimeSpan.FromHours(72) };
+        var (grain, _, _, _, _) = CreateGrain(options);
+
+        await grain.DeleteTreeAsync();
+        var status = await grain.GetDeletionStatusAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(status.IsDeleted, Is.True);
+            Assert.That(status.DeletedAtUtc, Is.Not.Null);
+            Assert.That(status.RecoveryDeadlineUtc, Is.EqualTo(status.DeletedAtUtc!.Value + TimeSpan.FromHours(72)));
+            Assert.That(status.CanRecover, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task GetDeletionStatus_reports_purge_complete_and_denies_recovery()
+    {
+        var (grain, state, _, _, _) = CreateGrain();
+        state.State.IsDeleted = true;
+        state.State.DeletedAtUtc = DateTimeOffset.UtcNow.AddHours(-100);
+        state.State.PurgeComplete = true;
+
+        var status = await grain.GetDeletionStatusAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(status.IsDeleted, Is.True);
+            Assert.That(status.PurgeComplete, Is.True);
+            Assert.That(status.CanRecover, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task GetDeletionStatus_reports_purge_in_progress_and_denies_recovery()
+    {
+        var (grain, state, _, _, _) = CreateGrain();
+        state.State.IsDeleted = true;
+        state.State.DeletedAtUtc = DateTimeOffset.UtcNow.AddHours(-100);
+        state.State.PurgeInProgress = true;
+
+        var status = await grain.GetDeletionStatusAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(status.PurgeInProgress, Is.True);
+            Assert.That(status.CanRecover, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task GetDeletionStatus_does_not_require_an_internal_origin_marker()
+    {
+        // A pure read must not assert internal origin (mirrors IsDeletedAsync), so it
+        // never throws for a direct call, unlike the mutating verbs.
+        var (grain, _, _, _, _) = CreateGrain();
+        Assert.That(async () => await grain.GetDeletionStatusAsync(), Throws.Nothing);
+    }
+
     // --- Purge ---
 
     [Test]

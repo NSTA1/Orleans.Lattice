@@ -68,4 +68,7 @@ public static class ApiTreeAdminTypeAliases
 
     /// <summary>Alias for <see cref="TreeShardMapView"/>.</summary>
     public const string TreeShardMapView = "oit.sm";
+
+    /// <summary>Alias for <see cref="TreeDeletionStatus"/>.</summary>
+    public const string TreeDeletionStatus = "oit.dl";
 }

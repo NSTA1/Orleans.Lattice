@@ -71,6 +71,18 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary registry-persisted shard-map RPC method name.</summary>
     public const string GetShardMapMethodName = "GetShardMap";
 
+    /// <summary>The unary tree soft-delete RPC method name.</summary>
+    public const string DeleteTreeMethodName = "DeleteTree";
+
+    /// <summary>The unary tree recover RPC method name.</summary>
+    public const string RecoverTreeMethodName = "RecoverTree";
+
+    /// <summary>The unary tree hard-purge RPC method name.</summary>
+    public const string PurgeTreeMethodName = "PurgeTree";
+
+    /// <summary>The unary tree deletion-status RPC method name.</summary>
+    public const string GetTreeDeletionStatusMethodName = "GetTreeDeletionStatus";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeTreeAdminGrpcMethods(
         Serializer<TreeAdminTreeRequest> treeRequestSerializer,
@@ -93,7 +105,9 @@ internal sealed class LatticeTreeAdminGrpcMethods
         Serializer<TreeExistenceResult> existenceResultSerializer,
         Serializer<TreeAliasResolution> aliasResolutionSerializer,
         Serializer<TreeConfigurationReport> configurationReportSerializer,
-        Serializer<TreeShardMapView> shardMapViewSerializer)
+        Serializer<TreeShardMapView> shardMapViewSerializer,
+        Serializer<TreeAdminPurgeRequest> purgeRequestSerializer,
+        Serializer<TreeDeletionStatus> deletionStatusSerializer)
     {
         ArgumentNullException.ThrowIfNull(treeRequestSerializer);
         ArgumentNullException.ThrowIfNull(capabilitiesSerializer);
@@ -116,6 +130,8 @@ internal sealed class LatticeTreeAdminGrpcMethods
         ArgumentNullException.ThrowIfNull(aliasResolutionSerializer);
         ArgumentNullException.ThrowIfNull(configurationReportSerializer);
         ArgumentNullException.ThrowIfNull(shardMapViewSerializer);
+        ArgumentNullException.ThrowIfNull(purgeRequestSerializer);
+        ArgumentNullException.ThrowIfNull(deletionStatusSerializer);
 
         ProbeCapabilities = new Method<TreeAdminTreeRequest, LatticeTreeAdminCapabilities>(
             type: MethodType.Unary,
@@ -221,6 +237,34 @@ internal sealed class LatticeTreeAdminGrpcMethods
             name: GetShardMapMethodName,
             requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(treeRequestSerializer),
             responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(shardMapViewSerializer));
+
+        DeleteTree = new Method<TreeAdminTreeRequest, TreeDeletionStatus>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: DeleteTreeMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(treeRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(deletionStatusSerializer));
+
+        RecoverTree = new Method<TreeAdminTreeRequest, TreeDeletionStatus>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: RecoverTreeMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(treeRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(deletionStatusSerializer));
+
+        PurgeTree = new Method<TreeAdminPurgeRequest, TreeDeletionStatus>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: PurgeTreeMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(purgeRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(deletionStatusSerializer));
+
+        GetTreeDeletionStatus = new Method<TreeAdminTreeRequest, TreeDeletionStatus>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: GetTreeDeletionStatusMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(treeRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(deletionStatusSerializer));
     }
 
     /// <summary>The unary <c>ProbeCapabilities</c> capability-probe RPC.</summary>
@@ -268,6 +312,18 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary <c>GetShardMap</c> read-only registry-persisted shard-map RPC.</summary>
     public Method<TreeAdminTreeRequest, TreeShardMapView> GetShardMap { get; }
 
+    /// <summary>The unary <c>DeleteTree</c> soft-delete lifecycle RPC.</summary>
+    public Method<TreeAdminTreeRequest, TreeDeletionStatus> DeleteTree { get; }
+
+    /// <summary>The unary <c>RecoverTree</c> recovery lifecycle RPC.</summary>
+    public Method<TreeAdminTreeRequest, TreeDeletionStatus> RecoverTree { get; }
+
+    /// <summary>The unary <c>PurgeTree</c> irreversible hard-purge lifecycle RPC.</summary>
+    public Method<TreeAdminPurgeRequest, TreeDeletionStatus> PurgeTree { get; }
+
+    /// <summary>The unary <c>GetTreeDeletionStatus</c> read-only deletion-status RPC.</summary>
+    public Method<TreeAdminTreeRequest, TreeDeletionStatus> GetTreeDeletionStatus { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out of
     /// <paramref name="serializerProvider"/>. Shared by the server-side DI factory
@@ -298,7 +354,9 @@ internal sealed class LatticeTreeAdminGrpcMethods
             serializerProvider.GetRequiredService<Serializer<TreeExistenceResult>>(),
             serializerProvider.GetRequiredService<Serializer<TreeAliasResolution>>(),
             serializerProvider.GetRequiredService<Serializer<TreeConfigurationReport>>(),
-            serializerProvider.GetRequiredService<Serializer<TreeShardMapView>>());
+            serializerProvider.GetRequiredService<Serializer<TreeShardMapView>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAdminPurgeRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeDeletionStatus>>());
     }
 }
 

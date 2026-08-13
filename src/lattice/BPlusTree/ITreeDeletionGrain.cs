@@ -28,6 +28,16 @@ internal interface ITreeDeletionGrain : IGrainWithStringKey
     Task<bool> IsDeletedAsync();
 
     /// <summary>
+    /// Returns a read-only snapshot of the tree's soft-deletion lifecycle state -
+    /// whether it is deleted, when, the recovery deadline derived from the
+    /// configured soft-delete duration, and whether a purge is in progress or has
+    /// completed. A pure read with no side effects; unlike the mutating verbs it
+    /// asserts no internal-origin marker, so a diagnostics facade may call it
+    /// directly.
+    /// </summary>
+    Task<TreeDeletionSnapshot> GetDeletionStatusAsync();
+
+    /// <summary>
     /// Recovers a soft-deleted tree, making it accessible again. Clears the
     /// <c>IsDeleted</c> flag on all shards and unregisters the purge reminder.
     /// Throws <see cref="InvalidOperationException"/> if the tree has not been
