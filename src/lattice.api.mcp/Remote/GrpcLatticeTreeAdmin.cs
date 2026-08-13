@@ -122,4 +122,29 @@ internal sealed class GrpcLatticeTreeAdmin : ILatticeTreeAdmin
         string treeId,
         CancellationToken cancellationToken = default)
         => _client.GetShardMapAsync(treeId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TreeDeletionStatus> DeleteTreeAsync(
+        string treeId,
+        CancellationToken cancellationToken = default)
+        => _client.DeleteTreeAsync(treeId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TreeDeletionStatus> RecoverTreeAsync(
+        string treeId,
+        CancellationToken cancellationToken = default)
+        => _client.RecoverTreeAsync(treeId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TreeDeletionStatus> PurgeTreeAsync(
+        string treeId,
+        bool confirm,
+        CancellationToken cancellationToken = default)
+        => _client.PurgeTreeAsync(treeId, confirm, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TreeDeletionStatus> GetTreeDeletionStatusAsync(
+        string treeId,
+        CancellationToken cancellationToken = default)
+        => _client.GetTreeDeletionStatusAsync(treeId, cancellationToken);
 }

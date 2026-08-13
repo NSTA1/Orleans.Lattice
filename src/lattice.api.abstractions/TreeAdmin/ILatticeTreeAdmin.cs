@@ -262,4 +262,71 @@ public interface ILatticeTreeAdmin
     /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the tree.</exception>
     Task<TreeShardMapView> GetShardMapAsync(
         string treeId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Soft-deletes <paramref name="treeId"/>, after authorizing the whole-tree
+    /// <see cref="LatticeOperation.TreeLifecycle"/> capability fail-closed. Every
+    /// shard is immediately marked deleted (subsequent reads and writes throw), and
+    /// a deferred purge is scheduled after the configured soft-delete duration.
+    /// Reversible with <see cref="RecoverTreeAsync"/> until that window elapses or
+    /// an explicit <see cref="PurgeTreeAsync"/> runs. Idempotent: deleting an
+    /// already-deleted tree is a no-op. Reserved system tree ids are rejected.
+    /// </summary>
+    /// <param name="treeId">The tree to soft-delete. Must not be <c>null</c>, empty, or reserved.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tree's deletion status after the soft delete.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved.</exception>
+    /// <exception cref="InvalidOperationException">The tree is the source of one or more materialised views.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the tree-lifecycle capability.</exception>
+    Task<TreeDeletionStatus> DeleteTreeAsync(
+        string treeId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Recovers a soft-deleted <paramref name="treeId"/> within its recovery window,
+    /// after authorizing the whole-tree <see cref="LatticeOperation.TreeLifecycle"/>
+    /// capability fail-closed. Restores normal operation and cancels the deferred
+    /// purge. Reserved system tree ids are rejected.
+    /// </summary>
+    /// <param name="treeId">The tree to recover. Must not be <c>null</c>, empty, or reserved.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tree's deletion status after recovery.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved.</exception>
+    /// <exception cref="InvalidOperationException">The tree is not deleted, a purge is in progress, or the data was already purged.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the tree-lifecycle capability.</exception>
+    Task<TreeDeletionStatus> RecoverTreeAsync(
+        string treeId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Immediately hard-purges a soft-deleted <paramref name="treeId"/>, bypassing
+    /// the soft-delete window, after authorizing the whole-tree
+    /// <see cref="LatticeOperation.TreeLifecycle"/> capability fail-closed. This is
+    /// <b>irreversible</b>: all leaf and internal node state is permanently removed
+    /// and the tree is unregistered. As a guard against accidental destruction the
+    /// caller must pass <paramref name="confirm"/> <see langword="true"/>; a
+    /// <see langword="false"/> value is rejected before any authorization or grain
+    /// call. Reserved system tree ids are rejected.
+    /// </summary>
+    /// <param name="treeId">The tree to purge. Must not be <c>null</c>, empty, or reserved.</param>
+    /// <param name="confirm">Must be <see langword="true"/> to acknowledge the irreversible purge; <see langword="false"/> is rejected.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tree's deletion status after the purge.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved, or <paramref name="confirm"/> is <see langword="false"/>.</exception>
+    /// <exception cref="InvalidOperationException">The tree is not deleted or was already purged.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the tree-lifecycle capability.</exception>
+    Task<TreeDeletionStatus> PurgeTreeAsync(
+        string treeId, bool confirm, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads the soft-deletion lifecycle status of <paramref name="treeId"/> - live,
+    /// soft-deleted (with the recovery deadline), purge in progress, or purged -
+    /// after authorizing whole-tree <see cref="LatticeOperation.Read"/> fail-closed.
+    /// A pure read with no side effects.
+    /// </summary>
+    /// <param name="treeId">The tree to inspect. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tree's deletion status.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the tree.</exception>
+    Task<TreeDeletionStatus> GetTreeDeletionStatusAsync(
+        string treeId, CancellationToken cancellationToken = default);
 }

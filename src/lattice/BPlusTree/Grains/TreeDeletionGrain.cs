@@ -38,7 +38,7 @@ internal sealed class TreeDeletionGrain(
     public async Task DeleteTreeAsync()
     {
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
-            context.ActivationServices, TreeId, LatticeOperation.Admin);
+            context.ActivationServices, TreeId, LatticeOperation.TreeLifecycle);
 
         if (state.State.IsDeleted) return;
 
@@ -97,10 +97,27 @@ internal sealed class TreeDeletionGrain(
 
     public Task<bool> IsDeletedAsync() => Task.FromResult(state.State.IsDeleted);
 
+    public Task<TreeDeletionSnapshot> GetDeletionStatusAsync()
+    {
+        // A pure read: no internal-origin assertion (mirrors IsDeletedAsync), so
+        // the diagnostics facade can dial it directly. The recovery deadline is
+        // derived from the persisted delete time and the tree's configured
+        // soft-delete duration; it is null while the tree is live.
+        var deletedAt = state.State.DeletedAtUtc;
+        return Task.FromResult(new TreeDeletionSnapshot
+        {
+            IsDeleted = state.State.IsDeleted,
+            DeletedAtUtc = deletedAt,
+            RecoveryDeadlineUtc = deletedAt is { } at ? at + Options.SoftDeleteDuration : null,
+            PurgeInProgress = state.State.PurgeInProgress,
+            PurgeComplete = state.State.PurgeComplete,
+        });
+    }
+
     public async Task RecoverAsync()
     {
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
-            context.ActivationServices, TreeId, LatticeOperation.Admin);
+            context.ActivationServices, TreeId, LatticeOperation.TreeLifecycle);
 
         if (!state.State.IsDeleted)
             throw new InvalidOperationException("Cannot recover a tree that has not been deleted.");
@@ -155,7 +172,7 @@ internal sealed class TreeDeletionGrain(
     public async Task PurgeNowAsync()
     {
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
-            context.ActivationServices, TreeId, LatticeOperation.Admin);
+            context.ActivationServices, TreeId, LatticeOperation.TreeLifecycle);
 
         if (!state.State.IsDeleted)
             throw new InvalidOperationException("Cannot purge a tree that has not been deleted.");

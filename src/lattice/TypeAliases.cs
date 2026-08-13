@@ -79,6 +79,7 @@ internal static class TypeAliases
     internal const string GraftEntry = "ol.ge";
     internal const string TombstoneCompactionState = "ol.tcs";
     internal const string TreeDeletionState = "ol.tds";
+    internal const string TreeDeletionSnapshot = "ol.tdn";
     internal const string TreeResizeState = "ol.trs";
     internal const string ResizePhase = "ol.rp";
     internal const string TreeRegistryEntry = "ol.tre";

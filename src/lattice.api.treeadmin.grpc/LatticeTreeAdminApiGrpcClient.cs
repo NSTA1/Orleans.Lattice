@@ -350,6 +350,81 @@ public sealed class LatticeTreeAdminApiGrpcClient
             cancellationToken);
     }
 
+    /// <summary>
+    /// Soft-deletes <paramref name="treeId"/>, returning its deletion status.
+    /// Requires the whole-tree lifecycle capability.
+    /// </summary>
+    /// <param name="treeId">The tree to soft-delete. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tree's deletion status after the soft delete.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    public Task<TreeDeletionStatus> DeleteTreeAsync(
+        string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return UnaryAsync(
+            _methods.DeleteTree,
+            new TreeAdminTreeRequest { TreeId = treeId },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Recovers a soft-deleted <paramref name="treeId"/> within its recovery window,
+    /// returning its deletion status. Requires the whole-tree lifecycle capability.
+    /// </summary>
+    /// <param name="treeId">The tree to recover. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tree's deletion status after recovery.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    public Task<TreeDeletionStatus> RecoverTreeAsync(
+        string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return UnaryAsync(
+            _methods.RecoverTree,
+            new TreeAdminTreeRequest { TreeId = treeId },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Irreversibly hard-purges a soft-deleted <paramref name="treeId"/>, returning
+    /// its deletion status. The <paramref name="confirm"/> flag must be
+    /// <see langword="true"/> to acknowledge the irreversible destruction. Requires
+    /// the whole-tree lifecycle capability.
+    /// </summary>
+    /// <param name="treeId">The tree to purge. Must not be <c>null</c> or empty.</param>
+    /// <param name="confirm">Must be <see langword="true"/> to acknowledge the irreversible purge.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tree's deletion status after the purge.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    public Task<TreeDeletionStatus> PurgeTreeAsync(
+        string treeId, bool confirm, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return UnaryAsync(
+            _methods.PurgeTree,
+            new TreeAdminPurgeRequest { TreeId = treeId, Confirm = confirm },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Reads the soft-deletion status of <paramref name="treeId"/>, with no side
+    /// effects. Requires whole-tree read authority.
+    /// </summary>
+    /// <param name="treeId">The tree to inspect. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tree's deletion status.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    public Task<TreeDeletionStatus> GetTreeDeletionStatusAsync(
+        string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return UnaryAsync(
+            _methods.GetTreeDeletionStatus,
+            new TreeAdminTreeRequest { TreeId = treeId },
+            cancellationToken);
+    }
+
     private async Task<TResponse> UnaryAsync<TRequest, TResponse>(
         Method<TRequest, TResponse> method,
         TRequest request,
