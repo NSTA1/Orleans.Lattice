@@ -208,6 +208,21 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "silo, without quiescing the partition or changing any placement. Review this (and confirm the "
                 + "target key resolves everywhere) before executing a move. A pure read with no side effects. "
                 + "Requires whole-tree read authority. Read-only."),
+            Read(services, TreeAdminLifecycleToolHandlers.ListViewsAsync, "lattice_treeadmin_view_list",
+                "List the cluster's runtime materialised views",
+                "Lists every runtime-registered materialised view on the cluster - the views created at runtime "
+                + "through the view factory and durably recorded in the runtime-view registry - reporting each view's "
+                + "name, the source tree it tails, and whether it is an aggregation. Views declared at startup through "
+                + "AddLatticeViews are not included (they are code-declared, not runtime registrations, and cannot be "
+                + "dropped at runtime). A pure read with no side effects. Requires the cluster-wide telemetry "
+                + "capability. Read-only."),
+            Read(services, TreeAdminLifecycleToolHandlers.GetViewStatusAsync, "lattice_treeadmin_view_status",
+                "Read a materialised view's status",
+                "Reads a materialised view's status: the source tree it tails, its apply lag (source entries not yet "
+                + "reflected in the view), and its active generation tree id. A materialised view is authorized by "
+                + "the readability of its source tree, which the facade resolves authoritatively; the caller cannot "
+                + "supply the source. A pure read with no side effects. Requires whole-tree read authority over the "
+                + "view's source tree. Read-only."),
         };
 
         if (enableSchemaControl)
@@ -394,6 +409,34 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "deliberately separate from the move: once reclaimed the move can no longer be reverted by moving "
                 + "the partition back. Refused if the given key is the partition's live placement. Rejected for a "
                 + "reserved tree id. Tree-lifecycle-gated and destructive."));
+            tools.Add(Write(services, TreeAdminLifecycleToolHandlers.RebuildViewAsync, "lattice_treeadmin_view_rebuild",
+                "Rebuild a materialised view",
+                "Rebuilds a materialised view from current source state using an online shadow-swap: a complete new "
+                + "generation tree is built and the active generation is atomically flipped over in a single durable "
+                + "commit, so readers never observe a half-built view. The source keeps serving reads and writes "
+                + "throughout. A materialised view is authorized by the readability of its source tree, which the "
+                + "facade resolves authoritatively; the caller cannot supply the source. Returns the view's status "
+                + "after the rebuild. Requires whole-tree admin authority over the view's source tree. Admin-gated "
+                + "and destructive."));
+            tools.Add(Write(services, TreeAdminLifecycleToolHandlers.ReconcileViewAsync, "lattice_treeadmin_view_reconcile",
+                "Reconcile a materialised view against its source",
+                "Reconciles a materialised view against current source state - view anti-entropy that builds the "
+                + "expected view into a shadow generation, compares it to the live view via a content digest, and "
+                + "swaps the shadow in only when they diverge. Online and idempotent: a view that already matches its "
+                + "source is left untouched and reports no drift. A materialised view is authorized by the "
+                + "readability of its source tree, which the facade resolves authoritatively; the caller cannot "
+                + "supply the source. Returns whether drift was detected and repaired. Requires whole-tree admin "
+                + "authority over the view's source tree. Admin-gated and destructive."));
+            tools.Add(Write(services, TreeAdminLifecycleToolHandlers.DropViewAsync, "lattice_treeadmin_view_drop",
+                "Drop a materialised view",
+                "Drops a materialised view: stops and decommissions its maintainer, deletes every backing view "
+                + "generation, releases the source WAL pin, and removes its catalog entry and durable runtime "
+                + "registration. Idempotent for an already-absent view. A view declared at startup through "
+                + "AddLatticeViews cannot be dropped at runtime (the declaration would re-create it on the next silo "
+                + "start) and is rejected. A materialised view is authorized by the readability of its source tree, "
+                + "which the facade resolves authoritatively; the caller cannot supply the source. Returns the "
+                + "dropped view name. Requires whole-tree admin authority over the view's source tree. Admin-gated "
+                + "and destructive."));
         }
 
         return tools;

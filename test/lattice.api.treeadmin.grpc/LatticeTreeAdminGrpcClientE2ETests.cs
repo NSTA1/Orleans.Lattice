@@ -509,6 +509,32 @@ public sealed class LatticeTreeAdminGrpcClientE2ETests
             Throws.Exception);
     }
 
+    [Test]
+    public void view_list_over_the_client_throws_when_views_are_not_enabled()
+    {
+        // The fixture cluster registers no materialised-view subsystem, so the facade
+        // fails the operation closed; the point is that the RPC is wired end to end.
+        Assert.That(
+            async () => await _host.Client.ListViewsAsync(),
+            Throws.Exception);
+    }
+
+    [Test]
+    public void view_status_over_the_client_throws_when_views_are_not_enabled()
+    {
+        Assert.That(
+            async () => await _host.Client.GetViewStatusAsync("orders-by-region"),
+            Throws.Exception);
+    }
+
+    [Test]
+    public void view_drop_over_the_client_throws_when_views_are_not_enabled()
+    {
+        Assert.That(
+            async () => await _host.Client.DropViewAsync("orders-by-region"),
+            Throws.Exception);
+    }
+
     private static IReadOnlyList<Orleans.Lattice.Api.Data.DataEntry> Chunk(params string[] keys)
         => keys.Select(k => new Orleans.Lattice.Api.Data.DataEntry { Key = k, Value = "{}"u8.ToArray() }).ToArray();
 }

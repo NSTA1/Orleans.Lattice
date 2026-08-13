@@ -6,6 +6,7 @@ using Orleans.Lattice.Api.Schema;
 using Orleans.Lattice.Backup;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Views;
 
 namespace Orleans.Lattice.Api.TreeAdmin;
 
@@ -35,6 +36,8 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     private readonly IGrainFactory _grainFactory;
     private readonly TreeAdminAccessAuthorizer _authorizer;
     private readonly ILatticeBackupRestoreService? _restoreService;
+    private readonly IViewCatalog? _viewCatalog;
+    private readonly ILatticeViewFactory? _viewFactory;
 
     /// <summary>Initializes a new <see cref="LatticeTreeAdmin"/>.</summary>
     /// <param name="schemaControl">
@@ -57,13 +60,24 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     /// verbs throw <see cref="InvalidOperationException"/> and the restore capability
     /// probe reports <see langword="false"/>.
     /// </param>
+    /// <param name="viewCatalog">
+    /// The optional silo-local materialised-view catalog, or <c>null</c> when the
+    /// materialised-view subsystem is not enabled on this cluster. When <c>null</c> the
+    /// view administration verbs throw <see cref="InvalidOperationException"/>.
+    /// </param>
+    /// <param name="viewFactory">
+    /// The optional materialised-view factory the view-drop verb composes, or <c>null</c>
+    /// when the materialised-view subsystem is not enabled on this cluster.
+    /// </param>
     /// <exception cref="ArgumentNullException">A required dependency is <c>null</c>.</exception>
     public LatticeTreeAdmin(
         ILatticeSchemaControl schemaControl,
         IGrainFactory grainFactory,
         TreeAdminAccessAuthorizer authorizer,
         IOptions<LatticeApiTreeAdminOptions> options,
-        ILatticeBackupRestoreService? restoreService = null)
+        ILatticeBackupRestoreService? restoreService = null,
+        IViewCatalog? viewCatalog = null,
+        ILatticeViewFactory? viewFactory = null)
     {
         ArgumentNullException.ThrowIfNull(schemaControl);
         ArgumentNullException.ThrowIfNull(grainFactory);
@@ -74,6 +88,8 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         _grainFactory = grainFactory;
         _authorizer = authorizer;
         _restoreService = restoreService;
+        _viewCatalog = viewCatalog;
+        _viewFactory = viewFactory;
     }
 
     /// <inheritdoc />
@@ -999,6 +1015,170 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             .ConfigureAwait(false);
 
         return ToWalMoveReceipt(receipt);
+    }
+
+    /// <inheritdoc />
+    public async Task<TreeViewCatalog> ListViewsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        RequireViews();
+        await _authorizer.AuthorizeClusterTelemetryAsync(cancellationToken).ConfigureAwait(false);
+
+        var registrations = await _grainFactory
+            .GetGrain<IViewRegistryGrain>(IViewRegistryGrain.SingletonKey)
+            .ListAsync()
+            .ConfigureAwait(false);
+
+        var views = ImmutableArray.CreateBuilder<TreeViewInfo>(registrations.Count);
+        foreach (var r in registrations)
+        {
+            views.Add(new TreeViewInfo
+            {
+                ViewName = r.ViewName,
+                SourceTreeId = r.SourceTreeId,
+                IsAggregation = r.IsAggregation,
+                Accumulative = r.Accumulative,
+            });
+        }
+
+        return new TreeViewCatalog { Views = views.ToImmutable() };
+    }
+
+    /// <inheritdoc />
+    public async Task<TreeViewStatus> GetViewStatusAsync(
+        string viewName, CancellationToken cancellationToken = default)
+    {
+        RequireViews();
+        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        var (sourceTreeId, isAggregation) =
+            await ResolveViewAsync(viewName, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeTreeReadAsync(sourceTreeId, cancellationToken).ConfigureAwait(false);
+
+        return await CaptureViewStatusAsync(viewName, sourceTreeId, isAggregation, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<TreeViewStatus> RebuildViewAsync(
+        string viewName, CancellationToken cancellationToken = default)
+    {
+        RequireViews();
+        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        var (sourceTreeId, isAggregation) =
+            await ResolveViewAsync(viewName, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeTreeAdminAsync(sourceTreeId, cancellationToken).ConfigureAwait(false);
+
+        await _grainFactory.GetGrain<IViewMaintainerGrain>(viewName)
+            .RebuildAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return await CaptureViewStatusAsync(viewName, sourceTreeId, isAggregation, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<TreeViewReconcileResult> ReconcileViewAsync(
+        string viewName, CancellationToken cancellationToken = default)
+    {
+        RequireViews();
+        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        var (sourceTreeId, _) =
+            await ResolveViewAsync(viewName, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeTreeAdminAsync(sourceTreeId, cancellationToken).ConfigureAwait(false);
+
+        var repaired = await _grainFactory.GetGrain<IViewMaintainerGrain>(viewName)
+            .ReconcileAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return new TreeViewReconcileResult
+        {
+            ViewName = viewName,
+            SourceTreeId = sourceTreeId,
+            DriftRepaired = repaired,
+        };
+    }
+
+    /// <inheritdoc />
+    public async Task DropViewAsync(
+        string viewName, CancellationToken cancellationToken = default)
+    {
+        RequireViews();
+        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        var (sourceTreeId, _) =
+            await ResolveViewAsync(viewName, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeTreeAdminAsync(sourceTreeId, cancellationToken).ConfigureAwait(false);
+
+        await _viewFactory!.DeleteAsync(viewName, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Asserts the materialised-view subsystem is enabled on this cluster, throwing
+    /// <see cref="InvalidOperationException"/> when it is not. Both the silo-local
+    /// catalog and the view factory are registered together by <c>AddLatticeViews</c>,
+    /// so a <c>null</c> factory is the authoritative "views not enabled" signal.
+    /// </summary>
+    private void RequireViews()
+    {
+        if (_viewFactory is null)
+        {
+            throw new InvalidOperationException(
+                "The materialised-view subsystem is not enabled on this cluster. " +
+                "Register it with AddLatticeViews before using view administration.");
+        }
+    }
+
+    /// <summary>
+    /// Resolves the source tree a view tails, authoritatively and fail-closed, so a
+    /// view's authorization boundary is derived from its source rather than trusted from
+    /// the caller. The silo-local catalog is consulted first (covering both startup-declared
+    /// and runtime views resident on this silo); on a miss the cluster-wide runtime-view
+    /// registry is queried. A view that resolves through neither is reported absent with a
+    /// <see cref="KeyNotFoundException"/>.
+    /// </summary>
+    private async Task<(string SourceTreeId, bool IsAggregation)> ResolveViewAsync(
+        string viewName, CancellationToken cancellationToken)
+    {
+        if (_viewCatalog?.TryGet(viewName) is { } registration)
+        {
+            return (registration.SourceTreeId, registration.IsAggregation);
+        }
+
+        var registrations = await _grainFactory
+            .GetGrain<IViewRegistryGrain>(IViewRegistryGrain.SingletonKey)
+            .ListAsync()
+            .ConfigureAwait(false);
+
+        foreach (var r in registrations)
+        {
+            if (string.Equals(r.ViewName, viewName, StringComparison.Ordinal))
+            {
+                return (r.SourceTreeId, r.IsAggregation);
+            }
+        }
+
+        throw new KeyNotFoundException(
+            $"No materialised view named '{viewName}' is registered on this cluster.");
+    }
+
+    /// <summary>
+    /// Captures a view's live status - apply lag and active generation tree id - from
+    /// its maintainer, after the caller has already resolved and authorized the source.
+    /// </summary>
+    private async Task<TreeViewStatus> CaptureViewStatusAsync(
+        string viewName, string sourceTreeId, bool isAggregation, CancellationToken cancellationToken)
+    {
+        var maintainer = _grainFactory.GetGrain<IViewMaintainerGrain>(viewName);
+        var lag = await maintainer.GetLagAsync(cancellationToken).ConfigureAwait(false);
+        var activeTreeId = await maintainer.GetActiveTreeIdAsync(cancellationToken).ConfigureAwait(false);
+
+        return new TreeViewStatus
+        {
+            ViewName = viewName,
+            SourceTreeId = sourceTreeId,
+            IsAggregation = isAggregation,
+            ApplyLag = lag,
+            ActiveTreeId = activeTreeId ?? string.Empty,
+        };
     }
 
     /// <summary>Projects the core <see cref="WalPartitionPlacement"/> onto the transport-agnostic <see cref="TreeWalPartitionPlacement"/>.</summary>

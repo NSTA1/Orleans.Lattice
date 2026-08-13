@@ -454,6 +454,60 @@ internal static class TreeAdminLifecycleToolHandlers
         return treeAdmin.ReclaimMovedWalSourceAsync(treeId, partition, sourceProviderKey, cancellationToken);
     }
 
+    /// <summary>Lists the cluster's runtime-registered materialised views (view name, source tree, aggregation shape).</summary>
+    public static Task<TreeViewCatalog> ListViewsAsync(
+        ILatticeTreeAdmin treeAdmin,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        return treeAdmin.ListViewsAsync(cancellationToken);
+    }
+
+    /// <summary>Reads a materialised view's status (source tree, apply lag, active generation tree id).</summary>
+    public static Task<TreeViewStatus> GetViewStatusAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The logical materialised-view name whose status to read. Must not be null or empty.")]
+        string viewName,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        return treeAdmin.GetViewStatusAsync(viewName, cancellationToken);
+    }
+
+    /// <summary>Rebuilds a materialised view from current source state via an online shadow-swap.</summary>
+    public static Task<TreeViewStatus> RebuildViewAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The logical materialised-view name to rebuild. Must not be null or empty.")]
+        string viewName,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        return treeAdmin.RebuildViewAsync(viewName, cancellationToken);
+    }
+
+    /// <summary>Reconciles a materialised view against current source state, repairing drift only when detected.</summary>
+    public static Task<TreeViewReconcileResult> ReconcileViewAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The logical materialised-view name to reconcile. Must not be null or empty.")]
+        string viewName,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        return treeAdmin.ReconcileViewAsync(viewName, cancellationToken);
+    }
+
+    /// <summary>Drops a materialised view (decommissions its maintainer and deletes its backing generations); returns the dropped view name.</summary>
+    public static async Task<string> DropViewAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The logical materialised-view name to drop. Must not be null or empty, and must not be a startup-declared view.")]
+        string viewName,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        await treeAdmin.DropViewAsync(viewName, cancellationToken).ConfigureAwait(false);
+        return viewName;
+    }
+
     private static List<DataEntry> ToDataEntries(IReadOnlyList<DataEntryDto>? entries)
     {
         if (entries is null || entries.Count == 0)

@@ -603,4 +603,92 @@ public sealed class GrpcLatticeTreeAdminTests
             Assert.That(result.Outcome, Is.EqualTo(TreeWalMoveOutcome.SourceReclaimed));
         });
     }
+
+    [Test]
+    public async Task ListViewsAsync_forwards_request_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeViewCatalog
+        {
+            Views = System.Collections.Immutable.ImmutableArray<TreeViewInfo>.Empty,
+        });
+
+        var result = await Adapter(invoker).ListViewsAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(invoker.LastRequest, Is.InstanceOf<TreeAdminViewListRequest>());
+            Assert.That(result.Views, Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task GetViewStatusAsync_forwards_request_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeViewStatus
+        {
+            ViewName = "orders-by-region",
+            SourceTreeId = "orders",
+            ApplyLag = 4,
+        });
+
+        var result = await Adapter(invoker).GetViewStatusAsync("orders-by-region");
+
+        var sent = (TreeAdminViewRequest)invoker.LastRequest!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(sent.ViewName, Is.EqualTo("orders-by-region"));
+            Assert.That(result.SourceTreeId, Is.EqualTo("orders"));
+            Assert.That(result.ApplyLag, Is.EqualTo(4));
+        });
+    }
+
+    [Test]
+    public async Task RebuildViewAsync_forwards_request_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeViewStatus
+        {
+            ViewName = "orders-by-region",
+            SourceTreeId = "orders",
+        });
+
+        var result = await Adapter(invoker).RebuildViewAsync("orders-by-region");
+
+        var sent = (TreeAdminViewRequest)invoker.LastRequest!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(sent.ViewName, Is.EqualTo("orders-by-region"));
+            Assert.That(result.ViewName, Is.EqualTo("orders-by-region"));
+        });
+    }
+
+    [Test]
+    public async Task ReconcileViewAsync_forwards_request_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeViewReconcileResult
+        {
+            ViewName = "orders-by-region",
+            SourceTreeId = "orders",
+            DriftRepaired = true,
+        });
+
+        var result = await Adapter(invoker).ReconcileViewAsync("orders-by-region");
+
+        var sent = (TreeAdminViewRequest)invoker.LastRequest!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(sent.ViewName, Is.EqualTo("orders-by-region"));
+            Assert.That(result.DriftRepaired, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task DropViewAsync_forwards_request_and_completes()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeAdminViewRequest { ViewName = "orders-by-region" });
+
+        await Adapter(invoker).DropViewAsync("orders-by-region");
+
+        var sent = (TreeAdminViewRequest)invoker.LastRequest!;
+        Assert.That(sent.ViewName, Is.EqualTo("orders-by-region"));
+    }
 }

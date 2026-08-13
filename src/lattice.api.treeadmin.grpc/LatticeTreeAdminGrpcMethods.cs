@@ -137,6 +137,21 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary WAL move reclaim RPC method name.</summary>
     public const string ReclaimMovedWalSourceMethodName = "ReclaimMovedWalSource";
 
+    /// <summary>The unary read-only runtime materialised-view listing RPC method name.</summary>
+    public const string ListViewsMethodName = "ListViews";
+
+    /// <summary>The unary read-only materialised-view status RPC method name.</summary>
+    public const string GetViewStatusMethodName = "GetViewStatus";
+
+    /// <summary>The unary materialised-view rebuild trigger RPC method name.</summary>
+    public const string RebuildViewMethodName = "RebuildView";
+
+    /// <summary>The unary materialised-view reconcile trigger RPC method name.</summary>
+    public const string ReconcileViewMethodName = "ReconcileView";
+
+    /// <summary>The unary materialised-view drop RPC method name.</summary>
+    public const string DropViewMethodName = "DropView";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeTreeAdminGrpcMethods(
         Serializer<TreeAdminTreeRequest> treeRequestSerializer,
@@ -183,7 +198,12 @@ internal sealed class LatticeTreeAdminGrpcMethods
         Serializer<TreeWalPlacement> walPlacementSerializer,
         Serializer<TreeWalPlacementAudit> walPlacementAuditSerializer,
         Serializer<TreeWalMovePlan> walMovePlanSerializer,
-        Serializer<TreeWalMoveReceipt> walMoveReceiptSerializer)
+        Serializer<TreeWalMoveReceipt> walMoveReceiptSerializer,
+        Serializer<TreeAdminViewRequest> viewRequestSerializer,
+        Serializer<TreeAdminViewListRequest> viewListRequestSerializer,
+        Serializer<TreeViewCatalog> viewCatalogSerializer,
+        Serializer<TreeViewStatus> viewStatusSerializer,
+        Serializer<TreeViewReconcileResult> viewReconcileResultSerializer)
     {
         ArgumentNullException.ThrowIfNull(treeRequestSerializer);
         ArgumentNullException.ThrowIfNull(capabilitiesSerializer);
@@ -230,6 +250,11 @@ internal sealed class LatticeTreeAdminGrpcMethods
         ArgumentNullException.ThrowIfNull(walPlacementAuditSerializer);
         ArgumentNullException.ThrowIfNull(walMovePlanSerializer);
         ArgumentNullException.ThrowIfNull(walMoveReceiptSerializer);
+        ArgumentNullException.ThrowIfNull(viewRequestSerializer);
+        ArgumentNullException.ThrowIfNull(viewListRequestSerializer);
+        ArgumentNullException.ThrowIfNull(viewCatalogSerializer);
+        ArgumentNullException.ThrowIfNull(viewStatusSerializer);
+        ArgumentNullException.ThrowIfNull(viewReconcileResultSerializer);
 
         ProbeCapabilities = new Method<TreeAdminTreeRequest, LatticeTreeAdminCapabilities>(
             type: MethodType.Unary,
@@ -489,6 +514,41 @@ internal sealed class LatticeTreeAdminGrpcMethods
             name: ReclaimMovedWalSourceMethodName,
             requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(walReclaimRequestSerializer),
             responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(walMoveReceiptSerializer));
+
+        ListViews = new Method<TreeAdminViewListRequest, TreeViewCatalog>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: ListViewsMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(viewListRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(viewCatalogSerializer));
+
+        GetViewStatus = new Method<TreeAdminViewRequest, TreeViewStatus>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: GetViewStatusMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(viewRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(viewStatusSerializer));
+
+        RebuildView = new Method<TreeAdminViewRequest, TreeViewStatus>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: RebuildViewMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(viewRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(viewStatusSerializer));
+
+        ReconcileView = new Method<TreeAdminViewRequest, TreeViewReconcileResult>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: ReconcileViewMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(viewRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(viewReconcileResultSerializer));
+
+        DropView = new Method<TreeAdminViewRequest, TreeAdminViewRequest>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: DropViewMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(viewRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(viewRequestSerializer));
     }
 
     /// <summary>The unary <c>ProbeCapabilities</c> capability-probe RPC.</summary>
@@ -602,6 +662,21 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary <c>ReclaimMovedWalSource</c> WAL move reclaim RPC.</summary>
     public Method<TreeAdminWalReclaimRequest, TreeWalMoveReceipt> ReclaimMovedWalSource { get; }
 
+    /// <summary>The unary <c>ListViews</c> read-only runtime materialised-view listing RPC.</summary>
+    public Method<TreeAdminViewListRequest, TreeViewCatalog> ListViews { get; }
+
+    /// <summary>The unary <c>GetViewStatus</c> read-only materialised-view status RPC.</summary>
+    public Method<TreeAdminViewRequest, TreeViewStatus> GetViewStatus { get; }
+
+    /// <summary>The unary <c>RebuildView</c> materialised-view rebuild trigger RPC.</summary>
+    public Method<TreeAdminViewRequest, TreeViewStatus> RebuildView { get; }
+
+    /// <summary>The unary <c>ReconcileView</c> materialised-view reconcile trigger RPC.</summary>
+    public Method<TreeAdminViewRequest, TreeViewReconcileResult> ReconcileView { get; }
+
+    /// <summary>The unary <c>DropView</c> materialised-view drop RPC. The request is echoed back as the completion ack.</summary>
+    public Method<TreeAdminViewRequest, TreeAdminViewRequest> DropView { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out of
     /// <paramref name="serializerProvider"/>. Shared by the server-side DI factory
@@ -656,7 +731,12 @@ internal sealed class LatticeTreeAdminGrpcMethods
             serializerProvider.GetRequiredService<Serializer<TreeWalPlacement>>(),
             serializerProvider.GetRequiredService<Serializer<TreeWalPlacementAudit>>(),
             serializerProvider.GetRequiredService<Serializer<TreeWalMovePlan>>(),
-            serializerProvider.GetRequiredService<Serializer<TreeWalMoveReceipt>>());
+            serializerProvider.GetRequiredService<Serializer<TreeWalMoveReceipt>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAdminViewRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAdminViewListRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeViewCatalog>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeViewStatus>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeViewReconcileResult>>());
     }
 }
 

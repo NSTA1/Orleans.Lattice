@@ -137,6 +137,21 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
     /// <summary>Reclaims a moved WAL source on the wrapped facade.</summary>
     public abstract Task<TreeWalMoveReceipt> ReclaimMovedWalSource(TreeAdminWalReclaimRequest request, ServerCallContext context);
 
+    /// <summary>Lists the cluster's runtime materialised views on the wrapped facade.</summary>
+    public abstract Task<TreeViewCatalog> ListViews(TreeAdminViewListRequest request, ServerCallContext context);
+
+    /// <summary>Reads a materialised view's status from the wrapped facade.</summary>
+    public abstract Task<TreeViewStatus> GetViewStatus(TreeAdminViewRequest request, ServerCallContext context);
+
+    /// <summary>Rebuilds a materialised view on the wrapped facade.</summary>
+    public abstract Task<TreeViewStatus> RebuildView(TreeAdminViewRequest request, ServerCallContext context);
+
+    /// <summary>Reconciles a materialised view on the wrapped facade.</summary>
+    public abstract Task<TreeViewReconcileResult> ReconcileView(TreeAdminViewRequest request, ServerCallContext context);
+
+    /// <summary>Drops a materialised view on the wrapped facade.</summary>
+    public abstract Task<TreeAdminViewRequest> DropView(TreeAdminViewRequest request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at startup
     /// with <paramref name="serviceImpl"/> set to <see langword="null"/> to record
@@ -193,6 +208,11 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
             binder.AddMethod(methods.PlanWalMove, (UnaryServerMethod<TreeAdminWalMovePlanRequest, TreeWalMovePlan>?)null);
             binder.AddMethod(methods.ExecuteWalMove, (UnaryServerMethod<TreeAdminWalMoveExecuteRequest, TreeWalMoveReceipt>?)null);
             binder.AddMethod(methods.ReclaimMovedWalSource, (UnaryServerMethod<TreeAdminWalReclaimRequest, TreeWalMoveReceipt>?)null);
+            binder.AddMethod(methods.ListViews, (UnaryServerMethod<TreeAdminViewListRequest, TreeViewCatalog>?)null);
+            binder.AddMethod(methods.GetViewStatus, (UnaryServerMethod<TreeAdminViewRequest, TreeViewStatus>?)null);
+            binder.AddMethod(methods.RebuildView, (UnaryServerMethod<TreeAdminViewRequest, TreeViewStatus>?)null);
+            binder.AddMethod(methods.ReconcileView, (UnaryServerMethod<TreeAdminViewRequest, TreeViewReconcileResult>?)null);
+            binder.AddMethod(methods.DropView, (UnaryServerMethod<TreeAdminViewRequest, TreeAdminViewRequest>?)null);
             return;
         }
 
@@ -233,6 +253,11 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
         binder.AddMethod(methods.PlanWalMove, new UnaryServerMethod<TreeAdminWalMovePlanRequest, TreeWalMovePlan>(serviceImpl.PlanWalMove));
         binder.AddMethod(methods.ExecuteWalMove, new UnaryServerMethod<TreeAdminWalMoveExecuteRequest, TreeWalMoveReceipt>(serviceImpl.ExecuteWalMove));
         binder.AddMethod(methods.ReclaimMovedWalSource, new UnaryServerMethod<TreeAdminWalReclaimRequest, TreeWalMoveReceipt>(serviceImpl.ReclaimMovedWalSource));
+        binder.AddMethod(methods.ListViews, new UnaryServerMethod<TreeAdminViewListRequest, TreeViewCatalog>(serviceImpl.ListViews));
+        binder.AddMethod(methods.GetViewStatus, new UnaryServerMethod<TreeAdminViewRequest, TreeViewStatus>(serviceImpl.GetViewStatus));
+        binder.AddMethod(methods.RebuildView, new UnaryServerMethod<TreeAdminViewRequest, TreeViewStatus>(serviceImpl.RebuildView));
+        binder.AddMethod(methods.ReconcileView, new UnaryServerMethod<TreeAdminViewRequest, TreeViewReconcileResult>(serviceImpl.ReconcileView));
+        binder.AddMethod(methods.DropView, new UnaryServerMethod<TreeAdminViewRequest, TreeAdminViewRequest>(serviceImpl.DropView));
     }
 }
 
@@ -444,6 +469,32 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
     /// <inheritdoc />
     public override Task<TreeWalMoveReceipt> ReclaimMovedWalSource(TreeAdminWalReclaimRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (control, req, ct) => control.ReclaimMovedWalSourceAsync(req.TreeId, req.Partition, req.SourceProviderKey, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeViewCatalog> ListViews(TreeAdminViewListRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.ListViewsAsync(ct));
+
+    /// <inheritdoc />
+    public override Task<TreeViewStatus> GetViewStatus(TreeAdminViewRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.GetViewStatusAsync(req.ViewName, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeViewStatus> RebuildView(TreeAdminViewRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.RebuildViewAsync(req.ViewName, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeViewReconcileResult> ReconcileView(TreeAdminViewRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.ReconcileViewAsync(req.ViewName, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeAdminViewRequest> DropView(TreeAdminViewRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static async (control, req, ct) =>
+        {
+            // The facade drop is void; echo the request back as the completion ack
+            // so the unary RPC carries a typed response.
+            await control.DropViewAsync(req.ViewName, ct).ConfigureAwait(false);
+            return req;
+        });
 
     /// <inheritdoc />
     public override Task<AuthSchemeAdvertisement> GetAuthScheme(AuthSchemeAdvertisementRequest request, ServerCallContext context)

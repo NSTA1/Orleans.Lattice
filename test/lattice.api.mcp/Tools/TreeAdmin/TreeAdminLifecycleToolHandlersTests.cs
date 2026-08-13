@@ -583,6 +583,69 @@ public sealed class TreeAdminLifecycleToolHandlersTests
     }
 
     [Test]
+    public async Task ListViewsAsync_returns_the_catalog()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeViewCatalog { Views = ImmutableArray<TreeViewInfo>.Empty };
+        admin.ListViewsAsync(Arg.Any<CancellationToken>()).Returns(expected);
+
+        var result = await TreeAdminLifecycleToolHandlers.ListViewsAsync(admin, CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).ListViewsAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task GetViewStatusAsync_forwards_the_view_name_and_returns_the_status()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeViewStatus { ViewName = "orders-by-region", SourceTreeId = "orders" };
+        admin.GetViewStatusAsync("orders-by-region", Arg.Any<CancellationToken>()).Returns(expected);
+
+        var result = await TreeAdminLifecycleToolHandlers.GetViewStatusAsync(admin, "orders-by-region", CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).GetViewStatusAsync("orders-by-region", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RebuildViewAsync_forwards_the_view_name_and_returns_the_status()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeViewStatus { ViewName = "orders-by-region", SourceTreeId = "orders" };
+        admin.RebuildViewAsync("orders-by-region", Arg.Any<CancellationToken>()).Returns(expected);
+
+        var result = await TreeAdminLifecycleToolHandlers.RebuildViewAsync(admin, "orders-by-region", CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).RebuildViewAsync("orders-by-region", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ReconcileViewAsync_forwards_the_view_name_and_returns_the_result()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeViewReconcileResult { ViewName = "orders-by-region", SourceTreeId = "orders", DriftRepaired = true };
+        admin.ReconcileViewAsync("orders-by-region", Arg.Any<CancellationToken>()).Returns(expected);
+
+        var result = await TreeAdminLifecycleToolHandlers.ReconcileViewAsync(admin, "orders-by-region", CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).ReconcileViewAsync("orders-by-region", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task DropViewAsync_forwards_the_view_name_and_returns_it()
+    {
+        var admin = TreeAdmin();
+
+        var result = await TreeAdminLifecycleToolHandlers.DropViewAsync(admin, "orders-by-region", CancellationToken.None);
+
+        Assert.That(result, Is.EqualTo("orders-by-region"));
+        await admin.Received(1).DropViewAsync("orders-by-region", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public void Handlers_reject_a_null_facade()
     {
         Assert.Multiple(() =>
@@ -616,6 +679,11 @@ public sealed class TreeAdminLifecycleToolHandlersTests
             Assert.That(() => TreeAdminLifecycleToolHandlers.PlanWalMoveAsync(null!, "t", 0, "k"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.ExecuteWalMoveAsync(null!, "t", 0, "k"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.ReclaimMovedWalSourceAsync(null!, "t", 0, "k"), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.ListViewsAsync(null!), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.GetViewStatusAsync(null!, "v"), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.RebuildViewAsync(null!, "v"), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.ReconcileViewAsync(null!, "v"), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.DropViewAsync(null!, "v"), Throws.ArgumentNullException);
         });
     }
 }

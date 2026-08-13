@@ -836,6 +836,71 @@ public sealed class LatticeTreeAdminApiGrpcClient
             cancellationToken);
     }
 
+    /// <summary>
+    /// Lists the cluster's runtime-registered materialised views. Requires the
+    /// cluster-wide telemetry capability.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The runtime-registered view catalog.</returns>
+    public Task<TreeViewCatalog> ListViewsAsync(CancellationToken cancellationToken = default)
+        => UnaryAsync(_methods.ListViews, new TreeAdminViewListRequest(), cancellationToken);
+
+    /// <summary>
+    /// Reads the status of the materialised view named <paramref name="viewName"/>.
+    /// Requires read authority over the view's source tree.
+    /// </summary>
+    /// <param name="viewName">The logical view name. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The view's status.</returns>
+    /// <exception cref="ArgumentException"><paramref name="viewName"/> is <c>null</c> or empty.</exception>
+    public Task<TreeViewStatus> GetViewStatusAsync(string viewName, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        return UnaryAsync(_methods.GetViewStatus, new TreeAdminViewRequest { ViewName = viewName }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Rebuilds the materialised view named <paramref name="viewName"/> from current
+    /// source state. Requires admin authority over the view's source tree.
+    /// </summary>
+    /// <param name="viewName">The logical view name. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The view's status after the rebuild.</returns>
+    /// <exception cref="ArgumentException"><paramref name="viewName"/> is <c>null</c> or empty.</exception>
+    public Task<TreeViewStatus> RebuildViewAsync(string viewName, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        return UnaryAsync(_methods.RebuildView, new TreeAdminViewRequest { ViewName = viewName }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Reconciles the materialised view named <paramref name="viewName"/> against
+    /// current source state. Requires admin authority over the view's source tree.
+    /// </summary>
+    /// <param name="viewName">The logical view name. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The reconcile result.</returns>
+    /// <exception cref="ArgumentException"><paramref name="viewName"/> is <c>null</c> or empty.</exception>
+    public Task<TreeViewReconcileResult> ReconcileViewAsync(string viewName, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        return UnaryAsync(_methods.ReconcileView, new TreeAdminViewRequest { ViewName = viewName }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Drops the materialised view named <paramref name="viewName"/>. Requires admin
+    /// authority over the view's source tree.
+    /// </summary>
+    /// <param name="viewName">The logical view name to drop. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <exception cref="ArgumentException"><paramref name="viewName"/> is <c>null</c> or empty.</exception>
+    public async Task DropViewAsync(string viewName, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        _ = await UnaryAsync(_methods.DropView, new TreeAdminViewRequest { ViewName = viewName }, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
     private async Task<TResponse> UnaryAsync<TRequest, TResponse>(
         Method<TRequest, TResponse> method,
         TRequest request,

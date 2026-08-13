@@ -624,6 +624,81 @@ public sealed class TreeAdminGrpcDtoSerializationTests
     }
 
     [Test]
+    public void TreeAdminViewRequest_round_trips()
+    {
+        var copy = RoundTrip(new TreeAdminViewRequest { ViewName = "orders-by-region" });
+
+        Assert.That(copy.ViewName, Is.EqualTo("orders-by-region"));
+    }
+
+    [Test]
+    public void TreeAdminViewListRequest_round_trips()
+    {
+        var copy = RoundTrip(new TreeAdminViewListRequest());
+
+        Assert.That(copy, Is.Not.Null);
+    }
+
+    [Test]
+    public void TreeViewCatalog_response_round_trips_through_the_marshaller()
+    {
+        var copy = RoundTrip(new TreeViewCatalog
+        {
+            Views = System.Collections.Immutable.ImmutableArray.Create(
+                new TreeViewInfo { ViewName = "v1", SourceTreeId = "s1", IsAggregation = false, Accumulative = true },
+                new TreeViewInfo { ViewName = "v2", SourceTreeId = "s2", IsAggregation = true, Accumulative = false }),
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Views, Has.Length.EqualTo(2));
+            Assert.That(copy.Views[0].ViewName, Is.EqualTo("v1"));
+            Assert.That(copy.Views[0].Accumulative, Is.True);
+            Assert.That(copy.Views[1].IsAggregation, Is.True);
+        });
+    }
+
+    [Test]
+    public void TreeViewStatus_response_round_trips_through_the_marshaller()
+    {
+        var copy = RoundTrip(new TreeViewStatus
+        {
+            ViewName = "orders-by-region",
+            SourceTreeId = "orders",
+            IsAggregation = true,
+            ApplyLag = 42,
+            ActiveTreeId = "view-orders-by-region",
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.ViewName, Is.EqualTo("orders-by-region"));
+            Assert.That(copy.SourceTreeId, Is.EqualTo("orders"));
+            Assert.That(copy.IsAggregation, Is.True);
+            Assert.That(copy.ApplyLag, Is.EqualTo(42));
+            Assert.That(copy.ActiveTreeId, Is.EqualTo("view-orders-by-region"));
+        });
+    }
+
+    [Test]
+    public void TreeViewReconcileResult_response_round_trips_through_the_marshaller()
+    {
+        var copy = RoundTrip(new TreeViewReconcileResult
+        {
+            ViewName = "orders-by-region",
+            SourceTreeId = "orders",
+            DriftRepaired = true,
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.ViewName, Is.EqualTo("orders-by-region"));
+            Assert.That(copy.SourceTreeId, Is.EqualTo("orders"));
+            Assert.That(copy.DriftRepaired, Is.True);
+        });
+    }
+
+    [Test]
     public void Every_registry_alias_is_unique_and_uses_the_reserved_prefix()
     {
         var aliases = RegistryAliasValues();

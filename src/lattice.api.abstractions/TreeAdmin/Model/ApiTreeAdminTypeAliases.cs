@@ -122,4 +122,16 @@ public static class ApiTreeAdminTypeAliases
 
     /// <summary>Alias for <see cref="TreeWalMoveOptions"/>.</summary>
     public const string TreeWalMoveOptions = "oit.wt";
+
+    /// <summary>Alias for <see cref="TreeViewStatus"/>.</summary>
+    public const string TreeViewStatus = "oit.vs";
+
+    /// <summary>Alias for <see cref="TreeViewInfo"/>.</summary>
+    public const string TreeViewInfo = "oit.vi";
+
+    /// <summary>Alias for <see cref="TreeViewCatalog"/>.</summary>
+    public const string TreeViewCatalog = "oit.vc";
+
+    /// <summary>Alias for <see cref="TreeViewReconcileResult"/>.</summary>
+    public const string TreeViewReconcileResult = "oit.vr";
 }
