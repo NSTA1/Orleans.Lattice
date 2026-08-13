@@ -277,4 +277,24 @@ internal sealed class GrpcLatticeTreeAdmin : ILatticeTreeAdmin
         string sourceProviderKey,
         CancellationToken cancellationToken = default)
         => _client.ReclaimMovedWalSourceAsync(treeId, partition, sourceProviderKey, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TreeViewCatalog> ListViewsAsync(CancellationToken cancellationToken = default)
+        => _client.ListViewsAsync(cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TreeViewStatus> GetViewStatusAsync(string viewName, CancellationToken cancellationToken = default)
+        => _client.GetViewStatusAsync(viewName, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TreeViewStatus> RebuildViewAsync(string viewName, CancellationToken cancellationToken = default)
+        => _client.RebuildViewAsync(viewName, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TreeViewReconcileResult> ReconcileViewAsync(string viewName, CancellationToken cancellationToken = default)
+        => _client.ReconcileViewAsync(viewName, cancellationToken);
+
+    /// <inheritdoc />
+    public Task DropViewAsync(string viewName, CancellationToken cancellationToken = default)
+        => _client.DropViewAsync(viewName, cancellationToken);
 }

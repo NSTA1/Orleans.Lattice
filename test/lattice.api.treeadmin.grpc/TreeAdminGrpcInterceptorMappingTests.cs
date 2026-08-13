@@ -333,9 +333,57 @@ public sealed class TreeAdminGrpcInterceptorMappingTests
     }
 
     [Test]
-    public void IsUnauthenticatedMethod_does_not_exempt_the_wal_rpcs()
+    public void DescribeCall_view_request_shapes_carry_no_target_tree()
+    {
+        // A materialised view is authorized by its source tree, which the facade
+        // resolves authoritatively; the wire request carries only the view name, so
+        // the interceptor decodes no target tree (Unknown operation, null target).
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.ListViewsMethodName),
+                new TreeAdminViewListRequest()),
+                Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, (string?)null)));
+
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.GetViewStatusMethodName),
+                new TreeAdminViewRequest { ViewName = "orders-by-region" }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, (string?)null)));
+
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.RebuildViewMethodName),
+                new TreeAdminViewRequest { ViewName = "orders-by-region" }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, (string?)null)));
+
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.ReconcileViewMethodName),
+                new TreeAdminViewRequest { ViewName = "orders-by-region" }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, (string?)null)));
+
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.DropViewMethodName),
+                new TreeAdminViewRequest { ViewName = "orders-by-region" }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, (string?)null)));
+        });
+    }
+
+    [Test]
+    public void IsUnauthenticatedMethod_does_not_exempt_the_view_rpcs()
     {
         Assert.Multiple(() =>
+        {
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.IsUnauthenticatedMethod(
+                Method(LatticeTreeAdminGrpcMethods.ListViewsMethodName)), Is.False);
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.IsUnauthenticatedMethod(
+                Method(LatticeTreeAdminGrpcMethods.GetViewStatusMethodName)), Is.False);
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.IsUnauthenticatedMethod(
+                Method(LatticeTreeAdminGrpcMethods.DropViewMethodName)), Is.False);
+        });
+    }
+
+    [Test]
+    public void IsUnauthenticatedMethod_does_not_exempt_the_wal_rpcs()
+    {        Assert.Multiple(() =>
         {
             Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.IsUnauthenticatedMethod(
                 Method(LatticeTreeAdminGrpcMethods.GetWalPlacementMethodName)), Is.False);

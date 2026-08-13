@@ -725,4 +725,101 @@ public interface ILatticeTreeAdmin
         int partition,
         string sourceProviderKey,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lists the cluster's <b>runtime-registered materialised views</b> - every view
+    /// created at runtime through the view factory and durably recorded in the
+    /// cluster-wide runtime-view registry - after authorizing the cluster-wide
+    /// <see cref="LatticeOperation.Telemetry"/> capability fail-closed. A pure read with
+    /// no side effects.
+    /// <para>
+    /// Startup-declared views (declared authoritatively through <c>AddLatticeViews</c>)
+    /// are <b>not</b> included: they are not runtime registrations and cannot be dropped
+    /// at runtime; the State facade's view catalog read surfaces those.
+    /// </para>
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The runtime-registered view catalog.</returns>
+    /// <exception cref="InvalidOperationException">The materialised-view subsystem is not enabled on this cluster.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the telemetry capability.</exception>
+    Task<TreeViewCatalog> ListViewsAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads the status of the materialised view named <paramref name="viewName"/> -
+    /// its source tree, apply lag, and active view tree id - after resolving the view's
+    /// source tree and authorizing whole-tree <see cref="LatticeOperation.Read"/> over
+    /// that source fail-closed. A materialised view inherits its authorization boundary
+    /// from the readability of its source tree. A pure read with no side effects.
+    /// </summary>
+    /// <param name="viewName">The logical view name. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The view's status.</returns>
+    /// <exception cref="ArgumentException"><paramref name="viewName"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="InvalidOperationException">The materialised-view subsystem is not enabled on this cluster.</exception>
+    /// <exception cref="KeyNotFoundException">No view named <paramref name="viewName"/> is registered (or its source cannot be resolved).</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the view's source tree.</exception>
+    Task<TreeViewStatus> GetViewStatusAsync(
+        string viewName,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// <b>Rebuilds</b> the materialised view named <paramref name="viewName"/> from
+    /// current source state using a shadow-swap - a complete new generation tree is
+    /// built and the active generation is atomically flipped over in a single durable
+    /// commit, so readers never observe a half-built view - after resolving the view's
+    /// source tree and authorizing whole-tree <see cref="LatticeOperation.Admin"/> over
+    /// that source fail-closed. Online: the source keeps serving reads and writes
+    /// throughout.
+    /// </summary>
+    /// <param name="viewName">The logical view name. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The view's status after the rebuild.</returns>
+    /// <exception cref="ArgumentException"><paramref name="viewName"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="InvalidOperationException">The materialised-view subsystem is not enabled on this cluster.</exception>
+    /// <exception cref="KeyNotFoundException">No view named <paramref name="viewName"/> is registered (or its source cannot be resolved).</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the admin capability over the view's source tree.</exception>
+    Task<TreeViewStatus> RebuildViewAsync(
+        string viewName,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// <b>Reconciles</b> the materialised view named <paramref name="viewName"/> against
+    /// current source state - view anti-entropy that builds the expected view into a
+    /// shadow generation, compares it to the live view via a content digest, and swaps
+    /// the shadow in only when they diverge - after resolving the view's source tree and
+    /// authorizing whole-tree <see cref="LatticeOperation.Admin"/> over that source
+    /// fail-closed. Online and idempotent: a view that already matches its source is left
+    /// untouched.
+    /// </summary>
+    /// <param name="viewName">The logical view name. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The reconcile result, reporting whether drift was detected and repaired.</returns>
+    /// <exception cref="ArgumentException"><paramref name="viewName"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="InvalidOperationException">The materialised-view subsystem is not enabled on this cluster.</exception>
+    /// <exception cref="KeyNotFoundException">No view named <paramref name="viewName"/> is registered (or its source cannot be resolved).</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the admin capability over the view's source tree.</exception>
+    Task<TreeViewReconcileResult> ReconcileViewAsync(
+        string viewName,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// <b>Drops</b> the materialised view named <paramref name="viewName"/> - stopping
+    /// and decommissioning its maintainer, deleting every backing <c>view-{name}</c>
+    /// generation, and removing its catalog entry and durable runtime registration -
+    /// after resolving the view's source tree and authorizing whole-tree
+    /// <see cref="LatticeOperation.Admin"/> over that source fail-closed. Idempotent for
+    /// an already-absent view. A view declared at startup through <c>AddLatticeViews</c>
+    /// cannot be dropped at runtime (the declaration would re-create it on the next silo
+    /// start) and is rejected.
+    /// </summary>
+    /// <param name="viewName">The logical view name to drop. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <exception cref="ArgumentException"><paramref name="viewName"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="InvalidOperationException">The materialised-view subsystem is not enabled on this cluster, or the view is declared at startup and cannot be dropped at runtime.</exception>
+    /// <exception cref="KeyNotFoundException">No view named <paramref name="viewName"/> is registered (or its source cannot be resolved).</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the admin capability over the view's source tree.</exception>
+    Task DropViewAsync(
+        string viewName,
+        CancellationToken cancellationToken = default);
 }
