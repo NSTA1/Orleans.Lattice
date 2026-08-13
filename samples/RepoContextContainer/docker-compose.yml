@@ -68,8 +68,10 @@ services:
       # mutate the code it ingests. Mount a broad PARENT directory here and let
       # the client register individual repositories under it with
       # repocontext_add_repo. Override with REPO_PATH; defaults to this repo's
-      # parent-of-parent (so this repo is one registerable child).
-      - ${REPO_PATH:-../..}:/workspace:ro
+      # parent directory (so this repo is one registerable child, added at
+      # /workspace/<repo>). Note ../../.. resolves this compose file's grandparent
+      # (the repo root's parent), NOT the repo root itself.
+      - ${REPO_PATH:-../../..}:/workspace:ro
     restart: unless-stopped
 
 volumes:

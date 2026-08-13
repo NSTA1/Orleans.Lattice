@@ -9,6 +9,8 @@ using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using ModelContextProtocol.AspNetCore;
 using Orleans.Lattice;
 using Orleans.Lattice.Api.Mcp;
 using Orleans.Lattice.Api.Mcp.RepoContext.Host;
@@ -320,6 +322,30 @@ public sealed class RepoContextHostIntegrationTests
                 permitted,
                 Is.True,
                 "The coarse MCP gate must permit the repocontext tools to reach the fail-closed data gate.");
+        }
+        finally
+        {
+            app.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
+    }
+
+    [Test]
+    public void Local_host_runs_the_mcp_transport_stateless()
+    {
+        // Regression: the container exposes a fixed repocontext_* tool set to one
+        // trusted local agent (RequireAuthorization off, AllowAll authorizer), so it
+        // needs none of the permission-scoped per-session tool collections that
+        // stateful mode serves. It must run the streamable-HTTP transport STATELESS
+        // so a container restart or recreation does not expire the client's in-memory
+        // session and 404 every subsequent tool call until the client reconnects.
+        var app = BuildLocalHost(LocalConfig());
+        try
+        {
+            var transport = app.Services.GetRequiredService<IOptions<HttpServerTransportOptions>>().Value;
+            Assert.That(
+                transport.Stateless,
+                Is.True,
+                "The container's MCP transport must be stateless so a restart does not expire the client session.");
         }
         finally
         {
