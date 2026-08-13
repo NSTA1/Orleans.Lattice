@@ -224,10 +224,10 @@ public static class RepoContextHostBuilder
     /// <summary>
     /// Quietens the framework and runtime log categories that would otherwise
     /// dominate the container's log stream, so the operator sees signal (indexing
-    /// lifecycle, warnings, and errors) rather than a line per HTTP request or per
-    /// slow grain turn. Our own <c>Orleans.Lattice.*</c> categories keep their
-    /// default Information level, so the walk, plan, and vectorisation progress
-    /// lines are untouched.
+    /// lifecycle, warnings, and errors) rather than a line per HTTP request, per
+    /// outbound embedder call, or per slow grain turn. Our own
+    /// <c>Orleans.Lattice.*</c> categories keep their default Information level, so
+    /// the walk, plan, and vectorisation progress lines are untouched.
     /// </summary>
     /// <param name="logging">The host's logging builder.</param>
     private static void ConfigureContainerLogging(ILoggingBuilder logging)
@@ -250,6 +250,15 @@ public static class RepoContextHostBuilder
         // index-status poll turns into a wall of noise. Our handlers still log the
         // meaningful lifecycle lines under their own categories.
         logging.AddFilter("ModelContextProtocol", LogLevel.Warning);
+
+        // IHttpClientFactory's default logging emits ~4 Information lines
+        // ("Start/End processing HTTP request", "Sending HTTP request",
+        // "Received HTTP response") for every outbound call. The only outbound
+        // client here is the Onyx embedder client, which the near-continuous
+        // reconcile drives on almost every tick, so this dominates the log stream
+        // at the source (over and above the size cap). Keep warnings and above; a
+        // failed embed still surfaces through our own provider category.
+        logging.AddFilter("System.Net.Http.HttpClient", LogLevel.Warning);
     }
 
     /// <summary>
