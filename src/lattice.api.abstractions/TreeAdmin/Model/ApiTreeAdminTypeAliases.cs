@@ -134,4 +134,16 @@ public static class ApiTreeAdminTypeAliases
 
     /// <summary>Alias for <see cref="TreeViewReconcileResult"/>.</summary>
     public const string TreeViewReconcileResult = "oit.vr";
+
+    /// <summary>Alias for <see cref="TreeTagIndexInfo"/>.</summary>
+    public const string TreeTagIndexInfo = "oit.gi";
+
+    /// <summary>Alias for <see cref="TreeTagIndexCatalog"/>.</summary>
+    public const string TreeTagIndexCatalog = "oit.gc";
+
+    /// <summary>Alias for <see cref="TreeTagIndexStatus"/>.</summary>
+    public const string TreeTagIndexStatus = "oit.gs";
+
+    /// <summary>Alias for <see cref="TreeTagReconcileReport"/>.</summary>
+    public const string TreeTagReconcileReport = "oit.gr";
 }

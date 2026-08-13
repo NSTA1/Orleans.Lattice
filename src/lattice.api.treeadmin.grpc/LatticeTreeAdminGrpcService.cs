@@ -152,6 +152,15 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
     /// <summary>Drops a materialised view on the wrapped facade.</summary>
     public abstract Task<TreeAdminViewRequest> DropView(TreeAdminViewRequest request, ServerCallContext context);
 
+    /// <summary>Lists the cluster's tag indexes on the wrapped facade.</summary>
+    public abstract Task<TreeTagIndexCatalog> ListTagIndexes(TreeAdminTagIndexListRequest request, ServerCallContext context);
+
+    /// <summary>Reads a tag index's status from the wrapped facade.</summary>
+    public abstract Task<TreeTagIndexStatus> GetTagIndexStatus(TreeAdminTagIndexRequest request, ServerCallContext context);
+
+    /// <summary>Reconciles a tag index on the wrapped facade.</summary>
+    public abstract Task<TreeTagReconcileReport> ReconcileTagIndex(TreeAdminTagIndexRequest request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at startup
     /// with <paramref name="serviceImpl"/> set to <see langword="null"/> to record
@@ -213,6 +222,9 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
             binder.AddMethod(methods.RebuildView, (UnaryServerMethod<TreeAdminViewRequest, TreeViewStatus>?)null);
             binder.AddMethod(methods.ReconcileView, (UnaryServerMethod<TreeAdminViewRequest, TreeViewReconcileResult>?)null);
             binder.AddMethod(methods.DropView, (UnaryServerMethod<TreeAdminViewRequest, TreeAdminViewRequest>?)null);
+        binder.AddMethod(methods.ListTagIndexes, (UnaryServerMethod<TreeAdminTagIndexListRequest, TreeTagIndexCatalog>?)null);
+        binder.AddMethod(methods.GetTagIndexStatus, (UnaryServerMethod<TreeAdminTagIndexRequest, TreeTagIndexStatus>?)null);
+        binder.AddMethod(methods.ReconcileTagIndex, (UnaryServerMethod<TreeAdminTagIndexRequest, TreeTagReconcileReport>?)null);
             return;
         }
 
@@ -258,6 +270,9 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
         binder.AddMethod(methods.RebuildView, new UnaryServerMethod<TreeAdminViewRequest, TreeViewStatus>(serviceImpl.RebuildView));
         binder.AddMethod(methods.ReconcileView, new UnaryServerMethod<TreeAdminViewRequest, TreeViewReconcileResult>(serviceImpl.ReconcileView));
         binder.AddMethod(methods.DropView, new UnaryServerMethod<TreeAdminViewRequest, TreeAdminViewRequest>(serviceImpl.DropView));
+        binder.AddMethod(methods.ListTagIndexes, new UnaryServerMethod<TreeAdminTagIndexListRequest, TreeTagIndexCatalog>(serviceImpl.ListTagIndexes));
+        binder.AddMethod(methods.GetTagIndexStatus, new UnaryServerMethod<TreeAdminTagIndexRequest, TreeTagIndexStatus>(serviceImpl.GetTagIndexStatus));
+        binder.AddMethod(methods.ReconcileTagIndex, new UnaryServerMethod<TreeAdminTagIndexRequest, TreeTagReconcileReport>(serviceImpl.ReconcileTagIndex));
     }
 }
 
@@ -495,6 +510,18 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
             await control.DropViewAsync(req.ViewName, ct).ConfigureAwait(false);
             return req;
         });
+
+    /// <inheritdoc />
+    public override Task<TreeTagIndexCatalog> ListTagIndexes(TreeAdminTagIndexListRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.ListTagIndexesAsync(ct));
+
+    /// <inheritdoc />
+    public override Task<TreeTagIndexStatus> GetTagIndexStatus(TreeAdminTagIndexRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.GetTagIndexStatusAsync(req.IndexName, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeTagReconcileReport> ReconcileTagIndex(TreeAdminTagIndexRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.ReconcileTagIndexAsync(req.IndexName, ct));
 
     /// <inheritdoc />
     public override Task<AuthSchemeAdvertisement> GetAuthScheme(AuthSchemeAdvertisementRequest request, ServerCallContext context)

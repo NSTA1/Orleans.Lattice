@@ -297,4 +297,16 @@ internal sealed class GrpcLatticeTreeAdmin : ILatticeTreeAdmin
     /// <inheritdoc />
     public Task DropViewAsync(string viewName, CancellationToken cancellationToken = default)
         => _client.DropViewAsync(viewName, cancellationToken);
+
+/// <inheritdoc />
+public Task<TreeTagIndexCatalog> ListTagIndexesAsync(CancellationToken cancellationToken = default)
+    => _client.ListTagIndexesAsync(cancellationToken);
+
+/// <inheritdoc />
+public Task<TreeTagIndexStatus> GetTagIndexStatusAsync(string indexName, CancellationToken cancellationToken = default)
+    => _client.GetTagIndexStatusAsync(indexName, cancellationToken);
+
+/// <inheritdoc />
+public Task<TreeTagReconcileReport> ReconcileTagIndexAsync(string indexName, CancellationToken cancellationToken = default)
+    => _client.ReconcileTagIndexAsync(indexName, cancellationToken);
 }

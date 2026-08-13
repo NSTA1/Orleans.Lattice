@@ -691,4 +691,60 @@ public sealed class GrpcLatticeTreeAdminTests
         var sent = (TreeAdminViewRequest)invoker.LastRequest!;
         Assert.That(sent.ViewName, Is.EqualTo("orders-by-region"));
     }
+
+    [Test]
+    public async Task ListTagIndexesAsync_forwards_request_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeTagIndexCatalog
+        {
+            Indexes = System.Collections.Immutable.ImmutableArray<TreeTagIndexInfo>.Empty,
+        });
+
+        var result = await Adapter(invoker).ListTagIndexesAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(invoker.LastRequest, Is.InstanceOf<TreeAdminTagIndexListRequest>());
+            Assert.That(result.Indexes, Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task GetTagIndexStatusAsync_forwards_request_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeTagIndexStatus
+        {
+            IndexName = "by-tag",
+            TreeId = "tag-by-tag",
+        });
+
+        var result = await Adapter(invoker).GetTagIndexStatusAsync("by-tag");
+
+        var sent = (TreeAdminTagIndexRequest)invoker.LastRequest!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(sent.IndexName, Is.EqualTo("by-tag"));
+            Assert.That(result.TreeId, Is.EqualTo("tag-by-tag"));
+        });
+    }
+
+    [Test]
+    public async Task ReconcileTagIndexAsync_forwards_request_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeTagReconcileReport
+        {
+            IndexName = "by-tag",
+            TreeId = "tag-by-tag",
+            OrphanRowsRemoved = 3,
+        });
+
+        var result = await Adapter(invoker).ReconcileTagIndexAsync("by-tag");
+
+        var sent = (TreeAdminTagIndexRequest)invoker.LastRequest!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(sent.IndexName, Is.EqualTo("by-tag"));
+            Assert.That(result.OrphanRowsRemoved, Is.EqualTo(3));
+        });
+    }
 }

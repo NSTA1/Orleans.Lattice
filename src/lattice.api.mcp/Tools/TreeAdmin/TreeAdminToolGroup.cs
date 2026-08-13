@@ -223,6 +223,19 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "the readability of its source tree, which the facade resolves authoritatively; the caller cannot "
                 + "supply the source. A pure read with no side effects. Requires whole-tree read authority over the "
                 + "view's source tree. Read-only."),
+            Read(services, TreeAdminLifecycleToolHandlers.ListTagIndexesAsync, "lattice_treeadmin_tag_index_list",
+                "List the cluster's tag indexes",
+                "Lists every tag index on the cluster - reporting each index's name, its backing membership tree id, "
+                + "the shard count of that tree, and the source trees it covers. A tag index maps a tag to the keys "
+                + "carrying it via a durable membership tree named tag-{indexName}. A pure read with no side effects. "
+                + "Requires the cluster-wide telemetry capability. Read-only."),
+            Read(services, TreeAdminLifecycleToolHandlers.GetTagIndexStatusAsync, "lattice_treeadmin_tag_index_status",
+                "Read a tag index's status",
+                "Reads a tag index's status: its backing membership tree id, that tree's shard count, the source "
+                + "trees it covers, and whether its background reconcile sweep is currently idle. A tag index is "
+                + "authorized by the readability of its backing membership tree (tag-{indexName}), which the facade "
+                + "resolves authoritatively; the caller supplies only the index name. A pure read with no side "
+                + "effects. Requires whole-tree read authority over the index's backing tree. Read-only."),
         };
 
         if (enableSchemaControl)
@@ -437,6 +450,17 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "which the facade resolves authoritatively; the caller cannot supply the source. Returns the "
                 + "dropped view name. Requires whole-tree admin authority over the view's source tree. Admin-gated "
                 + "and destructive."));
+            tools.Add(Write(services, TreeAdminLifecycleToolHandlers.ReconcileTagIndexAsync, "lattice_treeadmin_tag_index_reconcile",
+                "Reconcile a tag index against its source",
+                "Reconciles a tag index against current source state - tag-index anti-entropy that rescans the covered "
+                + "source trees and removes membership rows for keys that no longer carry the tag. Online and "
+                + "idempotent: an index already consistent with its sources has no orphaned rows removed. A tag index "
+                + "is authorized by the admin authority over its backing membership tree (tag-{indexName}), which the "
+                + "facade resolves authoritatively; the caller supplies only the index name. Reconcile writes only to "
+                + "the backing membership tree; covered source trees are scanned read-only. Returns the reconcile "
+                + "counts (trees covered, keys scanned, membership rows scanned, orphan rows removed) and discloses no "
+                + "key or value content. Requires whole-tree admin authority over the index's backing tree. "
+                + "Admin-gated and destructive."));
         }
 
         return tools;
