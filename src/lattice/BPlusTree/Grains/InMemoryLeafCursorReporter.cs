@@ -91,4 +91,11 @@ internal sealed class InMemoryLeafCursorReporter(IWalCursorRegistry registry) : 
         IReadOnlyList<MaterialiserPinReport> reports,
         CancellationToken cancellationToken)
         => Task.CompletedTask;
+
+    /// <inheritdoc />
+    public Task FlushDurableMaterialiserFrontierAsync(
+        string treeName,
+        IReadOnlyList<MaterialiserPinReport> reports,
+        CancellationToken cancellationToken)
+        => Task.CompletedTask;
 }

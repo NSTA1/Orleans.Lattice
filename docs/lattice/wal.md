@@ -255,6 +255,29 @@ shape most exposed to this hazard, `AddAzureTableWalStorage`
 automatically wires the cursor registry and WAL GC seams (both
 idempotent) so durable storage never ships without the durable floor.
 
+Two cold-path **retention barriers** turn the durable pin from a
+best-effort mirror into an authoritative trim floor, so a write-once
+leaf that goes dormant can never have the shared WAL trimmed past its
+checkpoint (the "fall off the log" wedge). Neither adds a synchronous
+durable write to the steady-state checkpoint path:
+
+- **First real frontier.** The first time a leaf crosses from its `Zero`
+  block pin to a real checkpoint frontier it *awaits* the durable pin
+  write (once per activation) instead of the fire-and-forget mirror, so a
+  leaf that has checkpointed at least once always leaves a durable floor
+  even under an ungraceful crash before the coalesced write would have
+  landed. Every subsequent advance uses the debounced fire-and-forget
+  mirror.
+- **Graceful deactivation.** On deactivation, after its final checkpoint
+  flush, the leaf *awaits* a durable pin write of its current frontier, so
+  a leaf can never go dormant on a clean shutdown (and then have the WAL
+  trimmed past its checkpoint across a restart) without leaving a correct
+  durable floor behind.
+
+Both writes go through the pin store's monotonic-max merge, so they are
+idempotent and never roll a pin backwards, and both swallow transient
+failures so neither deactivation nor the checkpoint path is ever blocked.
+
 ## Origin cluster id stamping
 
 Every WAL record carries `OriginClusterId` so multi-site receivers can
