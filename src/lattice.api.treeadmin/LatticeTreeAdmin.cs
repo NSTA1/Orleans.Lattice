@@ -90,10 +90,18 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             .IsTreeAdminAuthorizedAsync(treeId, cancellationToken)
             .ConfigureAwait(false);
 
+        // The irreversible / structural lifecycle capability is probed through its
+        // own distinct fail-closed gate (TreeLifecycle), which Admin does not confer,
+        // with no side effects.
+        var canManageTreeLifecycle = await _authorizer
+            .IsTreeLifecycleAuthorizedAsync(treeId, cancellationToken)
+            .ConfigureAwait(false);
+
         return new LatticeTreeAdminCapabilities
         {
             TreeId = treeId,
             CanAdministerTree = canAdministerTree,
+            CanManageTreeLifecycle = canManageTreeLifecycle,
             CanViewDiagnostics = canViewDiagnostics,
             Schema = schema,
         };

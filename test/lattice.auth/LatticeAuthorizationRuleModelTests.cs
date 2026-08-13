@@ -217,4 +217,19 @@ public class LatticeAuthorizationRuleModelTests
         Assert.That(LatticeAuthOperations.All.HasFlag(LatticeOperation.Restore), Is.True);
         Assert.That(LatticeAuthOperations.All.HasFlag(LatticeOperation.SchemaAdmin), Is.True);
     }
+
+    [Test]
+    public void Operation_All_excludes_the_scopeless_and_high_blast_radius_capabilities()
+    {
+        // Telemetry (cluster-wide, scopeless), Replication (egress), and
+        // TreeLifecycle (irreversible / structural whole-tree ops) are deliberately
+        // excluded from the whole-data-plane convenience mask, so a wildcard data
+        // grant never silently confers any of them.
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeAuthOperations.All.HasFlag(LatticeOperation.Telemetry), Is.False);
+            Assert.That(LatticeAuthOperations.All.HasFlag(LatticeOperation.Replication), Is.False);
+            Assert.That(LatticeAuthOperations.All.HasFlag(LatticeOperation.TreeLifecycle), Is.False);
+        });
+    }
 }

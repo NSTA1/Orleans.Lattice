@@ -42,12 +42,27 @@ public sealed record LatticeTreeAdminCapabilities
 
     /// <summary>
     /// <see langword="true"/> when the caller holds whole-tree administration
-    /// authority (<see cref="LatticeOperation.Admin"/>) over the tree. The
-    /// whole-tree lifecycle operations the dependent sub-issues add (create, drop,
-    /// resize, reshard) gate on this grant, so a management surface can grey out the
-    /// administration controls when it is <see langword="false"/>.
+    /// authority (<see cref="LatticeOperation.Admin"/>) over the tree. This is the
+    /// <b>routine</b> administration grant: it covers the non-destructive lifecycle
+    /// verbs (create / exists / alias / reconfigure) and schema-management
+    /// delegation, so a management surface can grey out those administration
+    /// controls when it is <see langword="false"/>. It does <b>not</b> cover the
+    /// irreversible / structural operations (drop, resize, reshard, WAL move),
+    /// which report separately through <see cref="CanManageTreeLifecycle"/>.
     /// </summary>
     [Id(1)] public bool CanAdministerTree { get; init; }
+
+    /// <summary>
+    /// <see langword="true"/> when the caller holds the distinct whole-tree
+    /// <see cref="LatticeOperation.TreeLifecycle"/> capability over the tree - the
+    /// authority for the <b>irreversible or structural</b> lifecycle operations
+    /// (drop / purge, reshard, resize, WAL placement move). This is deliberately
+    /// separate from <see cref="CanAdministerTree"/>: holding routine administration
+    /// authority does not confer it, so a management surface can grey out the
+    /// destructive / structural controls independently of the ordinary
+    /// administration controls when it is <see langword="false"/>.
+    /// </summary>
+    [Id(4)] public bool CanManageTreeLifecycle { get; init; }
 
     /// <summary>
     /// <see langword="true"/> when the caller may read the tree's administrative
