@@ -63,6 +63,13 @@ Convention: package `foo` has code at `src/foo/`, tests at `test/foo/`, docs at
   `[Alias(TypeAliases.X)]`, sequential `[Id(n)]` on serialized members, and
   `[Immutable]` when never mutated. Never rename or remove an alias - it is wire
   format.
+- A `[GenerateSerializer]` exception must either derive directly from
+  `System.Exception` or register a no-op `[RegisterCopier] IDeepCopier<T>` beside
+  it (return the input unchanged). Orleans registers a same-silo deep copier for
+  `System.Exception` but not for its BCL subclasses, so an exception deriving from
+  `InvalidOperationException`/`TimeoutException`/etc. otherwise fails a co-located
+  grain-result copy with an opaque `KeyNotFoundException`. The
+  `SerializableExceptionDeepCopyContractTests` guard audits this per package.
 - Public API parameters validate with `ArgumentNullException.ThrowIfNull`.
 - Keep XML `<summary>` docs on all public types and members; they ship in the
   NuGet packages.

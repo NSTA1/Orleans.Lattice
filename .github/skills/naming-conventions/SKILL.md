@@ -36,3 +36,4 @@ Naming rules for every layer of Orleans.Lattice, plus the canonical registry of 
 | Async methods | Suffix `Async` | `GetAsync`, `SetAsync` |
 | Test methods | `Method_condition_expected` (snake_case segments) | `Get_returns_null_for_missing_key` |
 | Constants | `PascalCase` inside options or aliases | `DefaultMaxLeafKeys` |
+| Exception types | Suffix `Exception`; a `[GenerateSerializer]` exception must derive directly from `System.Exception` or register a no-op `[RegisterCopier] IDeepCopier<T>` beside it (see the Orleans Serialization section of `.github/copilot-instructions.md`) | `LatticeSaturatedException` |

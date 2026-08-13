@@ -46,6 +46,37 @@ All serializable types must have:
 
 Never rename or remove an alias - it is part of the wire format.
 
+### Serializable exceptions and same-silo copiers
+
+`[GenerateSerializer]` emits both a serializer (used cross-silo) and a deep
+copier (used same-silo, when a grain result crosses a co-located boundary). The
+generated copier for an exception copies its base-class slice by requesting a
+copier for the immediate base type. Orleans registers a copier for
+`System.Exception` but **not** for its BCL subclasses, so a `[GenerateSerializer]`
+exception deriving from `InvalidOperationException`, `TimeoutException`,
+`UnauthorizedAccessException`, or any other BCL exception subclass fails a
+same-silo deep copy with an opaque `KeyNotFoundException` ("Could not find a base
+type copier for ...") that masks the real fault.
+
+Therefore, any `[GenerateSerializer]` exception must **either** derive directly
+from `System.Exception`, **or** register a no-op copier next to it (an exception
+is immutable once constructed, so returning the same instance is a correct deep
+copy):
+
+```csharp
+[RegisterCopier]
+internal sealed class MyExceptionCopier : IDeepCopier<MyException>
+{
+    public MyException DeepCopy(MyException input, CopyContext context) => input;
+}
+```
+
+`[RegisterCopier]`, `IDeepCopier<T>`, and `CopyContext` live in
+`Orleans.Serialization.Cloning`. The `SerializableExceptionDeepCopyContractTests`
+guard (backed by the shared testing library) audits every `[GenerateSerializer]`
+exception per package by reflection and fails CI on any type that lacks this
+coverage, so no per-type same-silo test is needed.
+
 ## Dependency Registration
 
 - Use `ISiloBuilder.AddLattice(...)` to register storage.
