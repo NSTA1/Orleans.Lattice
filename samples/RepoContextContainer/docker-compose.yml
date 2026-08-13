@@ -22,6 +22,13 @@ services:
       - hf-cache:/app/.cache/huggingface
     expose:
       - "9000"
+    # Cap container log growth: the default json-file driver is otherwise
+    # unbounded. Rotate at 20 MiB x 5 files (100 MiB ceiling per container).
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
 
   # The RepoContext MCP host: its ONLY application listener is the MCP endpoint on
   # 8080 (plus the HTTP health probes). No gRPC facade, no Explorer UI.
@@ -73,6 +80,15 @@ services:
       # (the repo root's parent), NOT the repo root itself.
       - ${REPO_PATH:-../../..}:/workspace:ro
     restart: unless-stopped
+    # Cap container log growth: the periodic self-index reconcile (every
+    # LATTICE_RECONCILE_INTERVAL_SECONDS) logs continuously, so the default
+    # unbounded json-file driver would grow without limit. Rotate at
+    # 20 MiB x 5 files (100 MiB ceiling); older lines are dropped, not lost to disk.
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
 
 volumes:
   # Durable Lattice state (WAL + SQLite): the heart of "codebase memory in a box".
