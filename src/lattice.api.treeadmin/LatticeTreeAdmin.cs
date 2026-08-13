@@ -784,6 +784,64 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         await service.RevertRestoreAsync(ToRestoreResult(restore), cancellationToken).ConfigureAwait(false);
     }
 
+    /// <inheritdoc />
+    public async Task<TreeReshardStatus> ReshardTreeAsync(
+        string treeId, int targetShardCount, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ThrowIfReserved(treeId);
+        await _authorizer.AuthorizeTreeLifecycleAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        // Wrap the public ILattice verb so the tree's own guards (system-tree) and
+        // grow-only argument validation are inherited rather than duplicated, and the
+        // core re-enforces TreeLifecycle. Orchestration is accepted synchronously; the
+        // migration then runs online anchored by reminders.
+        await _grainFactory.GetGrain<ILattice>(treeId)
+            .ReshardAsync(targetShardCount, cancellationToken)
+            .ConfigureAwait(false);
+
+        return await ReadReshardStatusAsync(treeId, targetShardCount).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<TreeReshardStatus> GetReshardStatusAsync(
+        string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        await _authorizer.AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        return await ReadReshardStatusAsync(treeId, requestedShardCount: null).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Projects the tree's observable reshard signal - the coordinator's idle/in-flight
+    /// state (via the public <see cref="ILattice.IsReshardCompleteAsync"/> read) and the
+    /// current <see cref="ShardMap"/> fan-out (via the registry) - onto the
+    /// transport-agnostic <see cref="TreeReshardStatus"/>. A tree with no custom map yet
+    /// reports zeroed shard counts. <paramref name="requestedShardCount"/> echoes the
+    /// trigger's target and is <see langword="null"/> for a standalone status read.
+    /// </summary>
+    private async Task<TreeReshardStatus> ReadReshardStatusAsync(string treeId, int? requestedShardCount)
+    {
+        var complete = await _grainFactory.GetGrain<ILattice>(treeId)
+            .IsReshardCompleteAsync()
+            .ConfigureAwait(false);
+
+        var map = await _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId)
+            .GetShardMapAsync(treeId)
+            .ConfigureAwait(false);
+
+        return new TreeReshardStatus
+        {
+            TreeId = treeId,
+            InProgress = !complete,
+            CurrentPhysicalShardCount = map?.GetPhysicalShardIndices().Count ?? 0,
+            VirtualShardCount = map?.VirtualShardCount ?? 0,
+            MapVersion = map?.Version ?? 0,
+            RequestedShardCount = requestedShardCount,
+        };
+    }
+
     /// <summary>
     /// Resolves the composed backup/restore engine, throwing a clear
     /// <see cref="InvalidOperationException"/> when no backup add-on is registered so a

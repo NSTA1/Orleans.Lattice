@@ -101,6 +101,12 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary revert-restore RPC method name.</summary>
     public const string RevertTreeRestoreMethodName = "RevertTreeRestore";
 
+    /// <summary>The unary online-reshard trigger RPC method name.</summary>
+    public const string ReshardTreeMethodName = "ReshardTree";
+
+    /// <summary>The unary read-only reshard-status RPC method name.</summary>
+    public const string GetReshardStatusMethodName = "GetReshardStatus";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeTreeAdminGrpcMethods(
         Serializer<TreeAdminTreeRequest> treeRequestSerializer,
@@ -134,7 +140,9 @@ internal sealed class LatticeTreeAdminGrpcMethods
         Serializer<TreeAdminRestoreRequest> restoreRequestSerializer,
         Serializer<TreeAdminRestoreSetRequest> restoreSetRequestSerializer,
         Serializer<TreeRestoreResult> restoreResultSerializer,
-        Serializer<TreeRestoreSetResult> restoreSetResultSerializer)
+        Serializer<TreeRestoreSetResult> restoreSetResultSerializer,
+        Serializer<TreeAdminReshardRequest> reshardRequestSerializer,
+        Serializer<TreeReshardStatus> reshardStatusSerializer)
     {
         ArgumentNullException.ThrowIfNull(treeRequestSerializer);
         ArgumentNullException.ThrowIfNull(capabilitiesSerializer);
@@ -168,6 +176,8 @@ internal sealed class LatticeTreeAdminGrpcMethods
         ArgumentNullException.ThrowIfNull(restoreSetRequestSerializer);
         ArgumentNullException.ThrowIfNull(restoreResultSerializer);
         ArgumentNullException.ThrowIfNull(restoreSetResultSerializer);
+        ArgumentNullException.ThrowIfNull(reshardRequestSerializer);
+        ArgumentNullException.ThrowIfNull(reshardStatusSerializer);
 
         ProbeCapabilities = new Method<TreeAdminTreeRequest, LatticeTreeAdminCapabilities>(
             type: MethodType.Unary,
@@ -343,6 +353,20 @@ internal sealed class LatticeTreeAdminGrpcMethods
             name: RevertTreeRestoreMethodName,
             requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(restoreResultSerializer),
             responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(restoreResultSerializer));
+
+        ReshardTree = new Method<TreeAdminReshardRequest, TreeReshardStatus>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: ReshardTreeMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(reshardRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(reshardStatusSerializer));
+
+        GetReshardStatus = new Method<TreeAdminTreeRequest, TreeReshardStatus>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: GetReshardStatusMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(treeRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(reshardStatusSerializer));
     }
 
     /// <summary>The unary <c>ProbeCapabilities</c> capability-probe RPC.</summary>
@@ -420,6 +444,12 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary <c>RevertTreeRestore</c> revert-restore RPC. The request result is echoed back as the completion ack.</summary>
     public Method<TreeRestoreResult, TreeRestoreResult> RevertTreeRestore { get; }
 
+    /// <summary>The unary <c>ReshardTree</c> online-reshard trigger RPC.</summary>
+    public Method<TreeAdminReshardRequest, TreeReshardStatus> ReshardTree { get; }
+
+    /// <summary>The unary <c>GetReshardStatus</c> read-only reshard-status RPC.</summary>
+    public Method<TreeAdminTreeRequest, TreeReshardStatus> GetReshardStatus { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out of
     /// <paramref name="serializerProvider"/>. Shared by the server-side DI factory
@@ -461,7 +491,9 @@ internal sealed class LatticeTreeAdminGrpcMethods
             serializerProvider.GetRequiredService<Serializer<TreeAdminRestoreRequest>>(),
             serializerProvider.GetRequiredService<Serializer<TreeAdminRestoreSetRequest>>(),
             serializerProvider.GetRequiredService<Serializer<TreeRestoreResult>>(),
-            serializerProvider.GetRequiredService<Serializer<TreeRestoreSetResult>>());
+            serializerProvider.GetRequiredService<Serializer<TreeRestoreSetResult>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAdminReshardRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeReshardStatus>>());
     }
 }
 

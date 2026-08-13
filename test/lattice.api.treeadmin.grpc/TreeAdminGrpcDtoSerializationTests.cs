@@ -344,6 +344,42 @@ public sealed class TreeAdminGrpcDtoSerializationTests
     }
 
     [Test]
+    public void TreeAdminReshardRequest_round_trips()
+    {
+        var copy = RoundTrip(new TreeAdminReshardRequest { TreeId = "orders", TargetShardCount = 8 });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TreeId, Is.EqualTo("orders"));
+            Assert.That(copy.TargetShardCount, Is.EqualTo(8));
+        });
+    }
+
+    [Test]
+    public void TreeReshardStatus_response_round_trips_through_the_marshaller()
+    {
+        var copy = RoundTrip(new TreeReshardStatus
+        {
+            TreeId = "orders",
+            InProgress = true,
+            CurrentPhysicalShardCount = 2,
+            VirtualShardCount = 4,
+            MapVersion = 7,
+            RequestedShardCount = 4,
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TreeId, Is.EqualTo("orders"));
+            Assert.That(copy.InProgress, Is.True);
+            Assert.That(copy.CurrentPhysicalShardCount, Is.EqualTo(2));
+            Assert.That(copy.VirtualShardCount, Is.EqualTo(4));
+            Assert.That(copy.MapVersion, Is.EqualTo(7));
+            Assert.That(copy.RequestedShardCount, Is.EqualTo(4));
+        });
+    }
+
+    [Test]
     public void Every_registry_alias_is_unique_and_uses_the_reserved_prefix()
     {
         var aliases = RegistryAliasValues();

@@ -343,4 +343,51 @@ public sealed class GrpcLatticeTreeAdminTests
         Assert.That(sent.TargetTreeId, Is.EqualTo("orders"));
         Assert.That(sent.PreviousPhysicalTreeId, Is.EqualTo("phys-old"));
     }
+
+    [Test]
+    public async Task ReshardTreeAsync_forwards_the_target_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeReshardStatus
+        {
+            TreeId = "orders",
+            InProgress = false,
+            CurrentPhysicalShardCount = 4,
+            VirtualShardCount = 4096,
+            MapVersion = 3,
+            RequestedShardCount = 4,
+        });
+
+        var result = await Adapter(invoker).ReshardTreeAsync("orders", 4);
+
+        var sent = (TreeAdminReshardRequest)invoker.LastRequest!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(sent.TreeId, Is.EqualTo("orders"));
+            Assert.That(sent.TargetShardCount, Is.EqualTo(4));
+            Assert.That(result.CurrentPhysicalShardCount, Is.EqualTo(4));
+            Assert.That(result.RequestedShardCount, Is.EqualTo(4));
+        });
+    }
+
+    [Test]
+    public async Task GetReshardStatusAsync_forwards_request_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeReshardStatus
+        {
+            TreeId = "orders",
+            InProgress = true,
+            CurrentPhysicalShardCount = 2,
+            VirtualShardCount = 4096,
+            MapVersion = 1,
+        });
+
+        var result = await Adapter(invoker).GetReshardStatusAsync("orders");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(((TreeAdminTreeRequest)invoker.LastRequest!).TreeId, Is.EqualTo("orders"));
+            Assert.That(result.InProgress, Is.True);
+            Assert.That(result.CurrentPhysicalShardCount, Is.EqualTo(2));
+        });
+    }
 }

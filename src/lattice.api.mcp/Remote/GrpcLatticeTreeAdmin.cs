@@ -191,4 +191,17 @@ internal sealed class GrpcLatticeTreeAdmin : ILatticeTreeAdmin
         TreeRestoreResult restore,
         CancellationToken cancellationToken = default)
         => _client.RevertTreeRestoreAsync(restore, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TreeReshardStatus> ReshardTreeAsync(
+        string treeId,
+        int targetShardCount,
+        CancellationToken cancellationToken = default)
+        => _client.ReshardTreeAsync(treeId, targetShardCount, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TreeReshardStatus> GetReshardStatusAsync(
+        string treeId,
+        CancellationToken cancellationToken = default)
+        => _client.GetReshardStatusAsync(treeId, cancellationToken);
 }

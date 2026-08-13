@@ -337,6 +337,48 @@ public sealed class LatticeTreeAdminGrpcClientE2ETests
         });
     }
 
+    [Test]
+    public async Task reshard_trigger_and_status_round_trip_over_the_client()
+    {
+        // A freshly created, empty tree takes the online-reshard empty-tree fast path,
+        // which re-pins the shard count and rebuilds the identity map synchronously,
+        // so the status read observes the grown fan-out and an idle coordinator.
+        const string reshardTree = "reshard-e2e";
+        await _host.Client.CreateTreeAsync(reshardTree, shardCount: 2);
+
+        var before = await _host.Client.GetReshardStatusAsync(reshardTree);
+        Assert.Multiple(() =>
+        {
+            Assert.That(before.TreeId, Is.EqualTo(reshardTree));
+            Assert.That(before.InProgress, Is.False);
+            Assert.That(before.RequestedShardCount, Is.Null);
+        });
+
+        var triggered = await _host.Client.ReshardTreeAsync(reshardTree, targetShardCount: 4);
+        Assert.Multiple(() =>
+        {
+            Assert.That(triggered.TreeId, Is.EqualTo(reshardTree));
+            Assert.That(triggered.RequestedShardCount, Is.EqualTo(4));
+            Assert.That(triggered.InProgress, Is.False);
+            Assert.That(triggered.CurrentPhysicalShardCount, Is.EqualTo(4));
+        });
+
+        var after = await _host.Client.GetReshardStatusAsync(reshardTree);
+        Assert.Multiple(() =>
+        {
+            Assert.That(after.InProgress, Is.False);
+            Assert.That(after.CurrentPhysicalShardCount, Is.EqualTo(4));
+        });
+    }
+
+    [Test]
+    public void reshard_below_the_minimum_shard_count_is_rejected_over_the_client()
+    {
+        Assert.That(
+            async () => await _host.Client.ReshardTreeAsync("reshard-reject-e2e", targetShardCount: 1),
+            Throws.Exception);
+    }
+
     private static IReadOnlyList<Orleans.Lattice.Api.Data.DataEntry> Chunk(params string[] keys)
         => keys.Select(k => new Orleans.Lattice.Api.Data.DataEntry { Key = k, Value = "{}"u8.ToArray() }).ToArray();
 }
