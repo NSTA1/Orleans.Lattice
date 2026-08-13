@@ -113,6 +113,15 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
 
         services.TryAddSingleton<RepoContextBootstrapService>();
         services.TryAddSingleton(TimeProvider.System);
+
+        // The symbol-structural reconcile seam: a language-dispatching extractor
+        // (only C#/Roslyn is registered today; other languages fall through to no
+        // output) and the reconciler that upserts and prunes per-symbol records as
+        // files change. TryAdd means a host or test harness can substitute either.
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<ILanguageSymbolExtractor, CSharpSymbolExtractor>());
+        services.TryAddSingleton<ISymbolExtractor, SymbolExtractorDispatcher>();
+        services.TryAddSingleton<RepoContextSymbolReconciler>();
         services.TryAddSingleton(RepoContextIndexingOptions.FromEnvironment());
         services.TryAddSingleton<RepoContextStore>();
 

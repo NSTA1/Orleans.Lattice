@@ -15,7 +15,6 @@ public sealed class RepoContextTreesTests
             RepoContextRecordKind.Repo,
             RepoContextRecordKind.Package,
             RepoContextRecordKind.File,
-            RepoContextRecordKind.Symbol,
         };
 
         Assert.Multiple(() =>
@@ -27,6 +26,11 @@ public sealed class RepoContextTreesTests
             }
         });
     }
+
+    [Test]
+    public void Symbol_kind_maps_to_the_dedicated_symbol_tree()
+        => Assert.That(RepoContextTrees.ForKind(RepoContextRecordKind.Symbol),
+            Is.EqualTo(RepoContextTrees.Symbol));
 
     [Test]
     public void Memory_kind_maps_to_the_memory_tree()
@@ -46,6 +50,7 @@ public sealed class RepoContextTreesTests
             Assert.That(RepoContextTrees.All, Is.EquivalentTo(new[]
             {
                 RepoContextTrees.Structural,
+                RepoContextTrees.Symbol,
                 RepoContextTrees.Memory,
                 RepoContextTrees.VectorMembership,
                 RepoContextTrees.VectorPayload,

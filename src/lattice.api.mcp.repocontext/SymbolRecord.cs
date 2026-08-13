@@ -62,6 +62,17 @@ internal sealed record SymbolRecord
     public OrSet References { get; init; } = new();
 
     /// <summary>
+    /// Add-wins observed-remove set of repository-relative file paths that declare
+    /// this symbol (UTF-8 encoded elements). A single symbol may be declared in
+    /// more than one file - C# partial types are the canonical case - so ownership
+    /// is a set rather than a scalar. The reconciler removes a file from this set
+    /// when the file no longer declares the symbol and prunes the whole record
+    /// only once the set becomes empty.
+    /// </summary>
+    [Id(10)]
+    public OrSet DeclaringFiles { get; init; } = new();
+
+    /// <summary>
     /// Lattice merge of two replicas of the same symbol record. Identity and the
     /// immutable <see cref="Kind"/> are preserved from <paramref name="left"/>
     /// (falling back to <paramref name="right"/> only when the left side is
@@ -88,6 +99,7 @@ internal sealed record SymbolRecord
             Digest = BoundedRegister.Merge(left.Digest, right.Digest),
             Tags = OrSet.Merge(left.Tags, right.Tags),
             References = OrSet.Merge(left.References, right.References),
+            DeclaringFiles = OrSet.Merge(left.DeclaringFiles, right.DeclaringFiles),
         };
     }
 }

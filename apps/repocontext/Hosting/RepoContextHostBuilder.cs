@@ -11,6 +11,7 @@ using Orleans.Lattice.Api.Mcp;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Membership;
 using Orleans.Lattice.Scaling;
+using Orleans.Lattice.Schema;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 
@@ -97,6 +98,19 @@ public static class RepoContextHostBuilder
         builder.Host.UseOrleans(silo =>
         {
             silo.ConfigureDurability(config);
+
+            // Opt the per-symbol structural tree in to self-describing schema-version
+            // envelopes (Phase-1 stamping: one schema family, target version 1, no
+            // upcasters yet). Registration is transparent to every other tree - the
+            // envelope-stripping decoder passes an un-stamped value through verbatim
+            // and the stamping interceptor is a no-op for an unversioned tree - so
+            // only the symbol tree, opted in during warmup, ever carries an envelope.
+            // The value it buys: a later change to the symbol record shape ships as a
+            // new target version with an upcaster rather than a breaking reinterpret
+            // of stored bytes. RepoContext reads and writes symbol values as opaque
+            // whole values (client-side read-merge-write), so this is the simple
+            // whole-value envelope case with no CRDT-delta upcasting involved.
+            silo.AddLatticeSchemaVersioning();
 
             // Reap re-embed / prune tombstones on the churn trees in every profile.
             silo.ConfigureRepoContextCompaction();

@@ -11,7 +11,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
 public sealed class RepoContextCompactionTests
 {
     [Test]
-    public void ChurnTrees_are_the_four_delete_bearing_trees()
+    public void ChurnTrees_are_the_delete_bearing_trees()
         => Assert.That(
             RepoContextHostTrees.ChurnTrees,
             Is.EquivalentTo(new[]
@@ -20,6 +20,7 @@ public sealed class RepoContextCompactionTests
                 RepoContextHostTrees.VectorMembership,
                 RepoContextHostTrees.VectorMetadata,
                 RepoContextHostTrees.Structural,
+                RepoContextHostTrees.Symbol,
             }));
 
     [Test]
@@ -33,6 +34,7 @@ public sealed class RepoContextCompactionTests
             Is.EquivalentTo(new[]
             {
                 RepoContextHostTrees.Structural,
+                RepoContextHostTrees.Symbol,
                 RepoContextHostTrees.Memory,
                 RepoContextHostTrees.VectorMembership,
                 RepoContextHostTrees.VectorMetadata,
@@ -44,6 +46,7 @@ public sealed class RepoContextCompactionTests
         => Assert.Multiple(() =>
         {
             Assert.That(RepoContextHostTrees.Structural, Is.EqualTo("repo-context-structural"));
+            Assert.That(RepoContextHostTrees.Symbol, Is.EqualTo("repo-context-symbol"));
             Assert.That(RepoContextHostTrees.Memory, Is.EqualTo("repo-context-memory"));
             Assert.That(RepoContextHostTrees.VectorMembership, Is.EqualTo("repo-context-vector-membership"));
             Assert.That(RepoContextHostTrees.VectorMetadata, Is.EqualTo("repo-context-vector-metadata"));

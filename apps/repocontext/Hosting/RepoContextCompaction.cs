@@ -7,15 +7,32 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 /// The repository-context tree names the host references for per-tree option
 /// wiring. These literals mirror the package-internal <c>RepoContextTrees</c>
 /// constants (which are not part of the public surface, so they cannot be
-/// referenced here): <c>repo-context-structural</c>, <c>repo-context-memory</c>,
-/// <c>repo-context-vector-membership</c>, <c>repo-context-vector-metadata</c>,
-/// and <c>repo-context-vector-payload</c>. If a package accessor is ever exposed,
-/// prefer it over these literals.
+/// referenced here): <c>repo-context-structural</c>, <c>repo-context-symbol</c>,
+/// <c>repo-context-memory</c>, <c>repo-context-vector-membership</c>,
+/// <c>repo-context-vector-metadata</c>, and <c>repo-context-vector-payload</c>.
+/// If a package accessor is ever exposed, prefer it over these literals.
 /// </summary>
 public static class RepoContextHostTrees
 {
-    /// <summary>The structural tree (repo/package/file/symbol records).</summary>
+    /// <summary>The structural tree (repo/package/file records).</summary>
     public const string Structural = "repo-context-structural";
+
+    /// <summary>The per-symbol structural tree (type/member/function declarations).</summary>
+    public const string Symbol = "repo-context-symbol";
+
+    /// <summary>
+    /// The schema-family id stamped into the per-value envelope of every
+    /// <see cref="Symbol"/> tree record, and the target version that tree is opted in
+    /// at. Versioning the symbol tree makes each symbol value self-describing, so a
+    /// future change to the symbol record shape ships as a new target version with an
+    /// upcaster rather than a breaking, in-place reinterpretation of stored bytes.
+    /// Only the symbol tree is opted in; every other repository-context tree stays
+    /// unversioned and byte-identical.
+    /// </summary>
+    public const uint SymbolSchemaId = 1;
+
+    /// <summary>The current target schema version the <see cref="Symbol"/> tree is stamped at.</summary>
+    public const uint SymbolSchemaVersion = 1;
 
     /// <summary>The agent-authored memory tree.</summary>
     public const string Memory = "repo-context-memory";
@@ -31,10 +48,11 @@ public static class RepoContextHostTrees
 
     /// <summary>
     /// The churn trees whose re-embed / prune / forget cycles create tombstones
-    /// that must be reaped: memory, the two vector projections, and structural
-    /// (which the bootstrap prunes). The content-addressed vector-payload tree is
-    /// write-once with no in-place deletes, so it is excluded - it needs no
-    /// aggressive compaction.
+    /// that must be reaped: memory, the two vector projections, structural (which
+    /// the bootstrap prunes), and the symbol tree (which the bootstrap re-writes
+    /// and prunes on every re-index of a changed file). The content-addressed
+    /// vector-payload tree is write-once with no in-place deletes, so it is
+    /// excluded - it needs no aggressive compaction.
     /// </summary>
     public static IReadOnlyList<string> ChurnTrees { get; } = new[]
     {
@@ -42,12 +60,14 @@ public static class RepoContextHostTrees
         VectorMembership,
         VectorMetadata,
         Structural,
+        Symbol,
     };
 
     /// <summary>Every repository-context tree the box grants the local agent access to.</summary>
     public static IReadOnlyList<string> All { get; } = new[]
     {
         Structural,
+        Symbol,
         Memory,
         VectorMembership,
         VectorMetadata,

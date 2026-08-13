@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Auth;
+using Orleans.Lattice.Schema;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 
@@ -37,6 +38,7 @@ public static class RepoContextGrant
 public sealed class RepoContextStartupService : IHostedService
 {
     private readonly ILatticeAuthorizationPolicyStore _policyStore;
+    private readonly ILatticeSchemaVersionAdmin _versionAdmin;
     private readonly RepoContextReadinessState _readiness;
     private readonly IHostApplicationLifetime _lifetime;
     private readonly ILogger<RepoContextStartupService> _logger;
@@ -45,17 +47,20 @@ public sealed class RepoContextStartupService : IHostedService
 
     /// <summary>Initializes the coordinator.</summary>
     /// <param name="policyStore">The authorization policy store used to seed the local agent's grant.</param>
+    /// <param name="versionAdmin">The schema-version admin used to opt the symbol tree in to envelope versioning.</param>
     /// <param name="readiness">The shared readiness state.</param>
     /// <param name="lifetime">The host application lifetime.</param>
     /// <param name="logger">The logger.</param>
     /// <exception cref="ArgumentNullException">Any argument is null.</exception>
     public RepoContextStartupService(
         ILatticeAuthorizationPolicyStore policyStore,
+        ILatticeSchemaVersionAdmin versionAdmin,
         RepoContextReadinessState readiness,
         IHostApplicationLifetime lifetime,
         ILogger<RepoContextStartupService> logger)
     {
         _policyStore = policyStore ?? throw new ArgumentNullException(nameof(policyStore));
+        _versionAdmin = versionAdmin ?? throw new ArgumentNullException(nameof(versionAdmin));
         _readiness = readiness ?? throw new ArgumentNullException(nameof(readiness));
         _lifetime = lifetime ?? throw new ArgumentNullException(nameof(lifetime));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -158,6 +163,25 @@ public sealed class RepoContextStartupService : IHostedService
                     effect: LatticeEffect.Allow);
 
                 await _policyStore.PutRuleAsync(rule, cancellationToken).ConfigureAwait(false);
+            }
+
+            // Opt the symbol tree in to envelope versioning at its target version.
+            // SetVersionConfigAsync is SchemaAdmin-gated; it succeeds here because the
+            // bootstrap administrator bypasses the default-deny gate, exactly as the
+            // reserved-policy-tree writes above do. The call is idempotent: a restart
+            // re-installs the same (schemaId, version) config with no observable
+            // change, so warmup stays safe to retry.
+            var existing = await _versionAdmin
+                .GetVersionConfigAsync(RepoContextHostTrees.Symbol, cancellationToken)
+                .ConfigureAwait(false);
+            if (existing is null)
+            {
+                await _versionAdmin.SetVersionConfigAsync(
+                    RepoContextHostTrees.Symbol,
+                    new LatticeSchemaVersionConfig(
+                        RepoContextHostTrees.SymbolSchemaId,
+                        RepoContextHostTrees.SymbolSchemaVersion),
+                    cancellationToken).ConfigureAwait(false);
             }
         }
     }

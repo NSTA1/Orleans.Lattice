@@ -632,7 +632,7 @@ internal sealed class RepoContextStore
                 return (RepoContextTrees.Structural, RepoContextKeys.PackagesPrefix(repoId));
             case RepoContextScanScope.Symbols:
                 RequireNoPathPrefix(pathPrefix, scope);
-                return (RepoContextTrees.Structural, RepoContextKeys.SymbolsPrefix(repoId));
+                return (RepoContextTrees.Symbol, RepoContextKeys.SymbolsPrefix(repoId));
             case RepoContextScanScope.Memory:
                 RequireNoPathPrefix(pathPrefix, scope);
                 return (RepoContextTrees.Memory, RepoContextKeys.MemoryPrefix(repoId));

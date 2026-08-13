@@ -56,6 +56,30 @@ internal sealed record FileNode
     public GSet ContentBlobs { get; init; } = new();
 
     /// <summary>
+    /// Last-writer-wins set of fully-qualified names of the symbols this file
+    /// declares, encoded as a newline-joined, ordered string. The single-writer
+    /// indexer owns this projection, so a last-writer-wins register is the correct
+    /// and simplest join; the symbol reconciler reads the prior value to compute
+    /// which symbols a changed or removed file no longer declares.
+    /// </summary>
+    [Id(8)]
+    public BoundedRegister DeclaredSymbols { get; init; } = new();
+
+    /// <summary>
+    /// Last-writer-wins marker recording that this file has been symbol-processed -
+    /// its declared symbols were extracted (even when it declares none). It is the
+    /// presence signal the background symbol back-fill probes: a supported-language
+    /// file whose node predates symbol extraction (or was written by a run that never
+    /// reached the symbol phase) carries no marker, so the reconciler re-extracts it
+    /// without re-processing files that already have one. Distinct from
+    /// <see cref="DeclaredSymbols"/> because a file that genuinely declares nothing
+    /// still needs to be recorded as processed, which an empty declared-set register
+    /// cannot express.
+    /// </summary>
+    [Id(9)]
+    public BoundedRegister SymbolsProcessed { get; init; } = new();
+
+    /// <summary>
     /// Lattice merge of two replicas of the same file node. Identity is preserved
     /// from <paramref name="left"/>; every mutable field is folded through its
     /// CRDT join, so the result is commutative, associative, and idempotent.
@@ -76,6 +100,8 @@ internal sealed record FileNode
             LastIngested = BoundedRegister.Merge(left.LastIngested, right.LastIngested),
             Tags = OrSet.Merge(left.Tags, right.Tags),
             ContentBlobs = GSet.Merge(left.ContentBlobs, right.ContentBlobs),
+            DeclaredSymbols = BoundedRegister.Merge(left.DeclaredSymbols, right.DeclaredSymbols),
+            SymbolsProcessed = BoundedRegister.Merge(left.SymbolsProcessed, right.SymbolsProcessed),
         };
     }
 }
