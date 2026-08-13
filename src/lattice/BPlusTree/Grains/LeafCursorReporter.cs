@@ -264,14 +264,53 @@ internal sealed class LeafCursorReporter(
         }
 
         cancellationToken.ThrowIfCancellationRequested();
+        await PersistPinBatchDurablyAsync(treeName, reports, seed: true).ConfigureAwait(false);
+    }
 
+    /// <inheritdoc />
+    public async Task FlushDurableMaterialiserFrontierAsync(
+        string treeName,
+        IReadOnlyList<MaterialiserPinReport> reports,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(reports);
+        if (grainFactory is null || reports.Count == 0)
+        {
+            // No durable backing (pre-WAL host / bare-IServiceProvider) or
+            // nothing to flush: no-op.
+            return;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        await PersistPinBatchDurablyAsync(treeName, reports, seed: false).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Shared awaited-durable core for the birth block-pin seed
+    /// (<see cref="SeedDurableMaterialiserBlockManyAsync"/>) and the
+    /// real-frontier retention flush
+    /// (<see cref="FlushDurableMaterialiserFrontierAsync"/>). Groups the
+    /// per-partition pins by their routed durable-pin shard so each distinct
+    /// shard takes a single batched, awaited <c>SeedManyAsync</c> (monotonic-max
+    /// merge + durable persist) and pre-seeds the debounce state so a subsequent
+    /// coalesced <see cref="NoteDurableMaterialiserFrontier"/> does not re-issue
+    /// the same value. Transient failures are swallowed-and-logged so neither the
+    /// birth path nor deactivation is ever blocked; <paramref name="seed"/> only
+    /// selects the log wording.
+    /// </summary>
+    private async Task PersistPinBatchDurablyAsync(
+        string treeName,
+        IReadOnlyList<MaterialiserPinReport> reports,
+        bool seed)
+    {
         var shardCount = WalMaterialiserPinRouting.ResolveShardCount(options);
 
         // Group the per-partition pins by their routed shard key so each
         // distinct shard takes a single batched durable write. A single leaf's
         // partition-consumers can hash to several shards; issuing one
-        // SeedManyAsync per shard concurrently spreads the birth-seed load that
-        // was previously O(partitions) serialized writes through one hot grain.
+        // SeedManyAsync per shard concurrently spreads the write load that
+        // would otherwise be O(partitions) serialized writes through one hot
+        // grain.
         Dictionary<string, List<MaterialiserPinReport>>? byShard = null;
         for (var i = 0; i < reports.Count; i++)
         {
@@ -289,7 +328,8 @@ internal sealed class LeafCursorReporter(
 
             // Pre-seed the debounce state so a subsequent
             // NoteDurableMaterialiserFrontier treats this consumer as already
-            // seeded rather than issuing a redundant durable write of the seed.
+            // written through at this frontier rather than issuing a redundant
+            // durable write of the same value.
             var debounceKey = (treeName, report.ConsumerId);
             if (_durableDebounce.TryGetValue(debounceKey, out var current))
             {
@@ -309,26 +349,36 @@ internal sealed class LeafCursorReporter(
             return;
         }
 
-        var seeds = new List<Task>(byShard.Count);
+        var writes = new List<Task>(byShard.Count);
         foreach (var (key, bucket) in byShard)
         {
-            seeds.Add(SeedShardAsync(key, bucket));
+            writes.Add(SeedShardAsync(key, bucket));
         }
 
         try
         {
-            await Task.WhenAll(seeds).ConfigureAwait(false);
+            await Task.WhenAll(writes).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            // Swallow-and-log: the birth/create path must not fail because the
-            // durable pin store had a transient hiccup on one shard. A missed
-            // seed only narrows the protection window; the leaf's first
-            // checkpoint flush re-seeds via NoteDurableMaterialiserFrontier.
-            logger?.LogWarning(
-                ex,
-                "Failed to seed one or more durable WAL materialiser block pins for tree {TreeId}; will re-seed on next checkpoint.",
-                treeName);
+            // Swallow-and-log: neither the birth/create path nor deactivation
+            // must fail because the durable pin store had a transient hiccup on
+            // one shard. A missed write only narrows the protection window; the
+            // leaf's next checkpoint flush (or the next deactivation) re-writes.
+            if (seed)
+            {
+                logger?.LogWarning(
+                    ex,
+                    "Failed to seed one or more durable WAL materialiser block pins for tree {TreeId}; will re-seed on next checkpoint.",
+                    treeName);
+            }
+            else
+            {
+                logger?.LogWarning(
+                    ex,
+                    "Failed to flush one or more durable WAL materialiser frontier pins for tree {TreeId}; will re-flush on next checkpoint or deactivation.",
+                    treeName);
+            }
         }
     }
 
