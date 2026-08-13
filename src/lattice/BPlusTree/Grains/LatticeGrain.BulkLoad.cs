@@ -145,7 +145,7 @@ internal sealed partial class LatticeGrain
         ThrowIfSystemTree();
         ThrowIfProtectedView();
         cancellationToken.ThrowIfCancellationRequested();
-        await EnforceWholeTreeAsync(LatticeOperation.Admin, cancellationToken);
+        await EnforceWholeTreeAsync(LatticeOperation.TreeLifecycle, cancellationToken);
         var resize = grainFactory.GetGrain<ITreeResizeGrain>(TreeId);
         await ShardActivationRetry.RunAsync(
             () => resize.ResizeAsync(newMaxLeafKeys, newMaxInternalChildren),
@@ -157,7 +157,7 @@ internal sealed partial class LatticeGrain
         ThrowIfSystemTree();
         ThrowIfProtectedView();
         cancellationToken.ThrowIfCancellationRequested();
-        await EnforceWholeTreeAsync(LatticeOperation.Admin, cancellationToken);
+        await EnforceWholeTreeAsync(LatticeOperation.TreeLifecycle, cancellationToken);
         var resize = grainFactory.GetGrain<ITreeResizeGrain>(TreeId);
         await ShardActivationRetry.RunAsync(
             () => resize.UndoResizeAsync(),

@@ -422,6 +422,16 @@ public sealed class LatticeEnforcementIntegrationTests
                 async () => await _fixture.Lattice(tree).DeleteTreeAsync(),
                 Throws.TypeOf<LatticeAuthorizationDeniedException>(),
                 "a tree-lifecycle operation with no TreeLifecycle grant is denied");
+
+            Assert.That(
+                async () => await _fixture.Lattice(tree).ReshardAsync(4),
+                Throws.TypeOf<LatticeAuthorizationDeniedException>(),
+                "an online reshard with no TreeLifecycle grant is denied");
+
+            Assert.That(
+                async () => await _fixture.Lattice(tree).ResizeAsync(64, 64),
+                Throws.TypeOf<LatticeAuthorizationDeniedException>(),
+                "an online resize with no TreeLifecycle grant is denied");
         }
 
         Assert.That(await ReadBackAsync(tree, "k"), Is.EqualTo("v"), "the denied lifecycle operation left the tree intact");
