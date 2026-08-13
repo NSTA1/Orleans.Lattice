@@ -6,7 +6,7 @@ Optional, opt-in **repository-context** add-on for the [Orleans.Lattice.Api.Mcp]
 
 The repository-context module plugs into the `Orleans.Lattice.Api.Mcp` binding's permission-aware discovery core and contributes a group of `repocontext_*` tools:
 
-- **Onboarding.** `repocontext_bootstrap` walks a repository and lands a structural node plus a content digest for every file on a durable tree, so an agent starts from a populated, queryable baseline instead of empty memory. Re-runs are incremental, idempotent, and resumable.
+- **Onboarding.** `repocontext_bootstrap` walks a repository and lands a structural node plus a content digest for every file on a durable tree, so an agent starts from a populated, queryable baseline instead of empty memory. Re-runs are incremental, idempotent, and resumable. In the container's workspace mode this onboarding is driven per-repository by `repocontext_add_repo` and `repocontext_remove_repo`, with `repocontext_list_repos` enumerating what is registered.
 - **Working memory.** `repocontext_remember`, `repocontext_update`, and `repocontext_forget` capture agent-authored notes and decisions under topics, with an optional per-entry time-to-live for memory that lapses on its own.
 - **Retrieval.** `repocontext_recall`, `repocontext_scan`, and `repocontext_list_topics` read the context back; `repocontext_search` adds meaning-based retrieval when an embedding provider is bound, degrading fail-closed to a deterministic keyword scan when it is not.
 - **Health.** `repocontext_health` proves the surface is registered and reachable for the authenticated caller.
