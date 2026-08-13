@@ -72,6 +72,18 @@ internal sealed partial class BPlusLeafGrain(
                 await FlushPendingDigestPublishAsync();
             }
             await ((ILeafProjection)this).FlushCheckpointAsync(cancellationToken);
+
+            // Retention barrier: after the final checkpoint flush, AWAIT a
+            // durable write of this leaf's checkpoint frontier into the
+            // cluster-wide pin store so a leaf can never go dormant on a
+            // graceful shutdown and then have the shared WAL trimmed past its
+            // durable checkpoint across a restart (the "fall off the log"
+            // wedge). The pin store's monotonic-max merge makes this idempotent,
+            // and the flush swallows transient failures so it never blocks
+            // deactivation. Crash deactivations bypass this hook by design; the
+            // first-real-frontier barrier on the checkpoint path already left a
+            // durable floor for any leaf that had checkpointed.
+            await FlushDurableMaterialiserFrontierAsync();
         }
         catch
         {

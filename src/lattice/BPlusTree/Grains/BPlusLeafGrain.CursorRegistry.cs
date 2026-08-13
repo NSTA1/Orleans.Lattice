@@ -66,6 +66,21 @@ internal sealed partial class BPlusLeafGrain
     private string? _cachedConsumerIdBase;
 
     /// <summary>
+    /// <see langword="true"/> once this activation has <b>awaited</b> a durable
+    /// write of its first real (non-Zero) checkpoint frontier through
+    /// <see cref="ILeafCursorReporter.FlushDurableMaterialiserFrontierAsync"/>.
+    /// The first crossing from the seeded <see cref="HybridLogicalClock.Zero"/>
+    /// block pin to a real frontier is a hard durability barrier - awaited, not
+    /// fire-and-forget - so a leaf that has checkpointed at least once always
+    /// leaves a durable WAL retention floor at or above its checkpoint, even if
+    /// the process is killed ungracefully before the coalesced mirror would have
+    /// landed. Every subsequent checkpoint advance falls back to the cheap
+    /// debounced fire-and-forget mirror, so the steady-state checkpoint path
+    /// takes on no synchronous durable-write latency.
+    /// </summary>
+    private bool _durableFrontierBarriered;
+
+    /// <summary>
     /// Reports the leaf's current projection HLC to the registered
     /// <see cref="ILeafCursorReporter"/>, lazy-gated on
     /// <c>state.State.Clock &gt; HybridLogicalClock.Zero</c>. Called from
@@ -104,11 +119,6 @@ internal sealed partial class BPlusLeafGrain
             try
             {
                 await reporter.ReportAsync(treeId, consumerId, clock, CancellationToken.None);
-                // Mirror the frontier into the durable pin store so the WAL
-                // GC's trim floor survives a full restart. Fire-and-forget
-                // and coalesced inside the reporter - no synchronous durable
-                // write is added to the checkpoint path here.
-                reporter.NoteDurableMaterialiserFrontier(treeId, consumerId, clock);
             }
             catch (Exception ex)
             {
@@ -123,6 +133,77 @@ internal sealed partial class BPlusLeafGrain
                     clock);
             }
         }
+
+        // Durable pin mirror. The first time this activation crosses from the
+        // seeded Zero block pin to a real frontier we AWAIT the durable write
+        // (a retention barrier: a leaf that has checkpointed always has a
+        // durable trim floor, closing the crash-before-mirror-landed window);
+        // every subsequent advance uses the cheap debounced fire-and-forget
+        // mirror so the steady-state checkpoint path adds no durable-write
+        // latency. Never throws (the flush swallows transient failures).
+        if (!_durableFrontierBarriered)
+        {
+            await FlushDurableMaterialiserFrontierAsync();
+            _durableFrontierBarriered = true;
+        }
+        else
+        {
+            for (var partition = 0; partition < partitionCount; partition++)
+            {
+                var consumerId = BuildConsumerId(idBase, partition, partitionCount);
+                reporter.NoteDurableMaterialiserFrontier(treeId, consumerId, clock);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Durably persists this leaf's current real checkpoint frontier as an
+    /// awaited WAL retention pin (one per WAL partition) via
+    /// <see cref="ILeafCursorReporter.FlushDurableMaterialiserFrontierAsync"/>,
+    /// gated on <c>Clock &gt; Zero</c>. Unlike the fire-and-forget mirror on
+    /// <see cref="ReportCursorIfActiveAsync"/>, the write is awaited so the
+    /// durable pin store is guaranteed to floor the shared WAL's trim point at
+    /// or above this leaf's checkpoint before the caller proceeds. Called on the
+    /// first real-frontier checkpoint of an activation and again on graceful
+    /// deactivation (after the final checkpoint flush) so a leaf can never go
+    /// dormant, then have its shared WAL trimmed past its checkpoint across a
+    /// restart, without leaving a correct durable floor behind. Idempotent (the
+    /// pin store's monotonic-max merge no-ops a stale/equal frontier) and never
+    /// throws; a no-op when the host has no cursor reporter (pre-WAL), the tree
+    /// id is unset, or the leaf has not checkpointed yet.
+    /// </summary>
+    private async Task FlushDurableMaterialiserFrontierAsync()
+    {
+        var clock = state.State.Clock;
+        if (clock <= HybridLogicalClock.Zero)
+        {
+            return;
+        }
+
+        var reporter = ResolveCursorReporter();
+        if (reporter is null)
+        {
+            return;
+        }
+
+        var idBase = ResolveConsumerIdBase();
+        if (idBase is null)
+        {
+            return;
+        }
+
+        var treeId = state.State.TreeId!;
+        var options = await GetOptionsAsync();
+        var partitionCount = Math.Max(1, options.WalPartitions);
+        var reports = new MaterialiserPinReport[partitionCount];
+        for (var partition = 0; partition < partitionCount; partition++)
+        {
+            var consumerId = BuildConsumerId(idBase, partition, partitionCount);
+            reports[partition] = new MaterialiserPinReport(consumerId, clock);
+        }
+
+        await reporter.FlushDurableMaterialiserFrontierAsync(
+            treeId, reports, CancellationToken.None);
     }
 
     /// <summary>

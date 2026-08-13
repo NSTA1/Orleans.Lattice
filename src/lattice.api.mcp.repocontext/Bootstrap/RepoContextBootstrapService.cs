@@ -566,49 +566,36 @@ internal sealed class RepoContextBootstrapService
         var endExclusive = PrefixUpperBound(prefix);
         var meta = new Dictionary<string, StoredFileMeta>(StringComparer.Ordinal);
 
-        var cursorId = await tree.OpenEntryCursorAsync(
-            prefix, endExclusive, reverse: false, pointInTime: false, cancellationToken)
-            .ConfigureAwait(false);
-        try
+        // Resilient streaming scan: ScanEntriesAsync reopens a fresh cursor over
+        // the still-live range on a transient EnumerationAbortedException (silo
+        // failover, cold start, idle expiry, scale-down) and resumes without gaps
+        // or duplicates, so the reconcile diff reads the full stored-meta range
+        // rather than aborting part-way and mistaking un-read files for deletions.
+        await foreach (var entry in tree
+            .ScanEntriesAsync(prefix, endExclusive, cancellationToken: cancellationToken)
+            .ConfigureAwait(false))
         {
-            while (true)
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!RepoContextKeys.TryParse(entry.Key, out var parsed)
+                || parsed.Kind != RepoContextRecordKind.File
+                || parsed.Path is not { } path)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var page = await tree.NextEntriesAsync(cursorId, WriteChunkSize, cancellationToken)
-                    .ConfigureAwait(false);
-
-                foreach (var entry in page.Entries)
-                {
-                    if (!RepoContextKeys.TryParse(entry.Key, out var parsed)
-                        || parsed.Kind != RepoContextRecordKind.File
-                        || parsed.Path is not { } path)
-                    {
-                        continue;
-                    }
-
-                    var node = _fileNodeSerializer.Deserialize(entry.Value);
-                    var digest = RepoContextValues.ReadString(node.Digest);
-                    if (digest is not null)
-                    {
-                        meta[path] = new StoredFileMeta(
-                            digest,
-                            RepoContextValues.ReadString(node.Language) ?? string.Empty,
-                            RepoContextValues.ReadInt64(node.SizeBytes) ?? -1,
-                            RepoContextValues.ReadHlcWallTicks(node.Digest) ?? 0,
-                            DeclaredSymbolNames.Decode(RepoContextValues.ReadString(node.DeclaredSymbols)),
-                            RepoContextValues.ReadString(node.SymbolsProcessed) is not null);
-                    }
-                }
-
-                if (!page.HasMore)
-                {
-                    break;
-                }
+                continue;
             }
-        }
-        finally
-        {
-            await tree.CloseCursorAsync(cursorId, CancellationToken.None).ConfigureAwait(false);
+
+            var node = _fileNodeSerializer.Deserialize(entry.Value);
+            var digest = RepoContextValues.ReadString(node.Digest);
+            if (digest is not null)
+            {
+                meta[path] = new StoredFileMeta(
+                    digest,
+                    RepoContextValues.ReadString(node.Language) ?? string.Empty,
+                    RepoContextValues.ReadInt64(node.SizeBytes) ?? -1,
+                    RepoContextValues.ReadHlcWallTicks(node.Digest) ?? 0,
+                    DeclaredSymbolNames.Decode(RepoContextValues.ReadString(node.DeclaredSymbols)),
+                    RepoContextValues.ReadString(node.SymbolsProcessed) is not null);
+            }
         }
 
         return meta;

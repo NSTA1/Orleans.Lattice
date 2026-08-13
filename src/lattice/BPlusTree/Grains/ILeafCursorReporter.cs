@@ -174,4 +174,35 @@ internal interface ILeafCursorReporter
         string treeName,
         IReadOnlyList<MaterialiserPinReport> reports,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Durably persists a leaf's <b>real</b> checkpoint frontier pins (one per
+    /// WAL partition) and <b>awaits</b> the writes, unlike the fire-and-forget,
+    /// coalesced <see cref="NoteDurableMaterialiserFrontier"/>. This is the
+    /// retention barrier that makes the durable pin store an authoritative WAL
+    /// trim floor rather than a best-effort mirror: the leaf calls it (1) the
+    /// first time it crosses from a <see cref="HybridLogicalClock.Zero"/> block
+    /// pin to a real checkpoint frontier, so a leaf that has checkpointed once
+    /// always has a durable floor even under an ungraceful crash before the
+    /// coalesced mirror would have landed, and (2) on graceful deactivation
+    /// after its final checkpoint flush, so a leaf can never go dormant (and
+    /// then have its shared WAL trimmed past its checkpoint across a restart)
+    /// without leaving a correct durable floor behind. Both call sites are cold
+    /// paths (first-checkpoint and deactivation), so the awaited durable write
+    /// adds no latency to the steady-state foreground/checkpoint path, which
+    /// keeps using the debounced <see cref="NoteDurableMaterialiserFrontier"/>.
+    /// The pin store's monotonic-max merge makes a stale or equal frontier a
+    /// no-op, so the call is idempotent and safe to re-issue. Transient
+    /// durable-write failures are swallowed (logged) so deactivation and the
+    /// checkpoint path are never blocked; a missed flush only narrows the
+    /// protection window and the next flush catches up. Implementations with no
+    /// durable backing (no grain factory, pre-WAL hosts) treat this as a no-op.
+    /// </summary>
+    /// <param name="treeName">Logical tree id whose leaf is flushing its frontier.</param>
+    /// <param name="reports">One real-frontier pin per WAL partition; each report's consumer id must not be <see langword="null"/> or whitespace.</param>
+    /// <param name="cancellationToken">Cancellation token observed before the durable writes.</param>
+    Task FlushDurableMaterialiserFrontierAsync(
+        string treeName,
+        IReadOnlyList<MaterialiserPinReport> reports,
+        CancellationToken cancellationToken);
 }
