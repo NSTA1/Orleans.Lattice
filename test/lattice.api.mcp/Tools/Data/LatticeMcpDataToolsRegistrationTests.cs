@@ -61,6 +61,7 @@ public sealed class LatticeMcpDataToolsRegistrationTests
             Is.EquivalentTo(new[]
             {
                 "lattice_data_get", "lattice_data_read_range", "lattice_data_set", "lattice_data_delete",
+                "lattice_data_delete_range",
                 "lattice_data_set_many", "lattice_data_set_many_atomic", "lattice_data_set_many_atomic_cross_tree",
                 "lattice_data_pncounter_get", "lattice_data_gcounter_get", "lattice_data_orset_get", "lattice_data_orflag_get",
                 "lattice_data_rwflag_get", "lattice_data_rwset_get", "lattice_data_version_vector_get", "lattice_data_mvregister_get",

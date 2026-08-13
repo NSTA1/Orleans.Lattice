@@ -604,5 +604,136 @@ public static class LatticeExtensions
             .ConfigureAwait(false);
         return new LatticeScopedCursor(lattice, cursorId);
     }
+
+    /// <summary>
+    /// Resilient range delete: drives a durable range-delete cursor over
+    /// [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>) to
+    /// completion, tombstoning up to <paramref name="stepSize"/> keys per step,
+    /// and returns the total number of keys tombstoned across the whole range.
+    /// This is the delete-side analogue of <see cref="ScanKeysAsync"/>: it
+    /// transparently recovers from <c>Orleans.Runtime.EnumerationAbortedException</c>
+    /// (raised when the remote enumerator backing a step is reclaimed mid-drain
+    /// due to silo failover, cold start, idle expiry, or scale-down) by opening
+    /// a fresh cursor over the same still-live range and resuming, up to
+    /// <paramref name="maxAttempts"/> times (default
+    /// <see cref="DefaultScanReconnectAttempts"/>, negative clamps to zero). The
+    /// first reconnect is immediate; later reconnects apply the same small linear
+    /// backoff as the resilient scans. Because tombstoned keys are already gone,
+    /// a reopened cursor resumes at the first surviving key with no double
+    /// counting, so the returned total reflects keys actually deleted by this
+    /// call. A caller-established system-origin scope (see
+    /// <c>LatticeAccessGateContext.EnterSystemOrigin</c>) is re-asserted around
+    /// every step so a reopened cursor resolves to the same subject a fail-closed
+    /// gate authorized on the first step.
+    /// <para>
+    /// Prefer this over the raw
+    /// <see cref="ILattice.OpenDeleteRangeCursorAsync"/> /
+    /// <see cref="ILattice.DeleteRangeStepAsync"/> /
+    /// <see cref="ILattice.CloseCursorAsync"/> shape when draining a large or
+    /// unbounded range that must complete despite transient enumerator loss. The
+    /// single-call <see cref="ILattice.DeleteRangeAsync(string, string, CancellationToken)"/>
+    /// remains the right choice for short ranges, and the raw cursor shape for
+    /// callers that persist a cursor id across a process boundary.
+    /// </para>
+    /// </summary>
+    /// <param name="lattice">The tree to delete from. Not null.</param>
+    /// <param name="startInclusive">Inclusive lower bound. Not null.</param>
+    /// <param name="endExclusive">Exclusive upper bound. Not null.</param>
+    /// <param name="stepSize">Maximum keys to tombstone per step. Must be positive.</param>
+    /// <param name="maxAttempts">Reconnect budget override; defaults to
+    /// <see cref="DefaultScanReconnectAttempts"/> when null. A negative value is
+    /// clamped to zero (no reconnects).</param>
+    /// <param name="cancellationToken">Cancels the drain between steps.</param>
+    /// <returns>The total number of keys tombstoned across the range.</returns>
+    public static async Task<int> DeleteRangeAsync(
+        this ILattice lattice,
+        string startInclusive,
+        string endExclusive,
+        int stepSize,
+        int? maxAttempts = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        ArgumentNullException.ThrowIfNull(startInclusive);
+        ArgumentNullException.ThrowIfNull(endExclusive);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(stepSize);
+
+        var budget = maxAttempts ?? DefaultScanReconnectAttempts;
+        if (budget < 0) budget = 0;
+
+        var reassertSystemOrigin = LatticeAccessGateContext.IsSystemOrigin;
+
+        var total = 0;
+        var attempt = 0;
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            string cursorId;
+            using (reassertSystemOrigin ? LatticeAccessGateContext.EnterSystemOrigin() : null)
+            {
+                cursorId = await lattice
+                    .OpenDeleteRangeCursorAsync(startInclusive, endExclusive, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            var shouldReopen = false;
+            try
+            {
+                while (true)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    LatticeCursorDeleteProgress progress;
+                    try
+                    {
+                        using (reassertSystemOrigin ? LatticeAccessGateContext.EnterSystemOrigin() : null)
+                        {
+                            progress = await lattice
+                                .DeleteRangeStepAsync(cursorId, stepSize, cancellationToken)
+                                .ConfigureAwait(false);
+                        }
+                    }
+                    catch (EnumerationAbortedException) when (attempt < budget)
+                    {
+                        attempt++;
+                        shouldReopen = true;
+                        break;
+                    }
+
+                    total += progress.DeletedThisStep;
+                    if (progress.IsComplete)
+                    {
+                        return total;
+                    }
+                }
+            }
+            finally
+            {
+                // Best-effort close. A reclaimed or expired cursor may already be
+                // gone; its server-side state self-expires via the cursor idle
+                // TTL, so a failure here must not mask the drain result or the
+                // in-flight reconnect.
+                try
+                {
+                    await lattice.CloseCursorAsync(cursorId, CancellationToken.None).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // swallow: reopen path or already-reclaimed cursor
+                }
+            }
+
+            if (shouldReopen)
+            {
+                var delayMs = ComputeReconnectDelayMs(attempt);
+                if (delayMs > 0)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(delayMs), cancellationToken).ConfigureAwait(false);
+                }
+            }
+        }
+    }
 }
 

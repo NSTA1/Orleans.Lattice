@@ -6,10 +6,10 @@ namespace Orleans.Lattice.Api.Data.Grpc;
 /// <summary>
 /// Abstract base for the write-capable data-API gRPC service. Carries the
 /// <see cref="BindServiceMethodAttribute"/> that <c>Grpc.AspNetCore</c> reflects
-/// against to discover and register the nine unary RPCs (<c>Set</c>,
+/// against to discover and register the ten unary RPCs (<c>Set</c>,
 /// <c>Delete</c>, <c>SetManyAtomic</c>, <c>SetManyAtomicCrossTree</c>,
-/// <c>Get</c>, <c>ReadRange</c>, <c>SetMany</c>, <c>CrdtWrite</c>,
-/// <c>CrdtRead</c>).
+/// <c>Get</c>, <c>ReadRange</c>, <c>DeleteRange</c>, <c>SetMany</c>,
+/// <c>CrdtWrite</c>, <c>CrdtRead</c>).
 /// </summary>
 /// <remarks>
 /// The base/derived split mirrors the codegen shape <c>Grpc.Tools</c> produces
@@ -40,6 +40,9 @@ internal abstract class LatticeDataApiGrpcServiceBase
 
     /// <summary>Reads one page of a bounded range. Implemented in <see cref="LatticeDataApiGrpcService"/>.</summary>
     public abstract Task<DataRangePage> ReadRange(DataRangeRequest request, ServerCallContext context);
+
+    /// <summary>Deletes a bounded range of keys. Implemented in <see cref="LatticeDataApiGrpcService"/>.</summary>
+    public abstract Task<DataRangeDeleteResult> DeleteRange(DataRangeDeleteRequest request, ServerCallContext context);
 
     /// <summary>Commits a non-atomic bulk write. Implemented in <see cref="LatticeDataApiGrpcService"/>.</summary>
     public abstract Task<DataSetManyResponse> SetMany(DataSetManyRequest request, ServerCallContext context);
@@ -75,6 +78,7 @@ internal abstract class LatticeDataApiGrpcServiceBase
             binder.AddMethod(methods.SetManyAtomicCrossTree, (UnaryServerMethod<DataCrossTreeRequest, DataCrossTreeResponse>?)null);
             binder.AddMethod(methods.Get, (UnaryServerMethod<DataGetRequest, DataReadResult>?)null);
             binder.AddMethod(methods.ReadRange, (UnaryServerMethod<DataRangeRequest, DataRangePage>?)null);
+            binder.AddMethod(methods.DeleteRange, (UnaryServerMethod<DataRangeDeleteRequest, DataRangeDeleteResult>?)null);
             binder.AddMethod(methods.SetMany, (UnaryServerMethod<DataSetManyRequest, DataSetManyResponse>?)null);
             binder.AddMethod(methods.CrdtWrite, (UnaryServerMethod<CrdtWriteRequest, CrdtWriteResponse>?)null);
             binder.AddMethod(methods.CrdtRead, (UnaryServerMethod<CrdtReadRequest, CrdtReadResponse>?)null);
@@ -87,6 +91,7 @@ internal abstract class LatticeDataApiGrpcServiceBase
         binder.AddMethod(methods.SetManyAtomicCrossTree, new UnaryServerMethod<DataCrossTreeRequest, DataCrossTreeResponse>(serviceImpl.SetManyAtomicCrossTree));
         binder.AddMethod(methods.Get, new UnaryServerMethod<DataGetRequest, DataReadResult>(serviceImpl.Get));
         binder.AddMethod(methods.ReadRange, new UnaryServerMethod<DataRangeRequest, DataRangePage>(serviceImpl.ReadRange));
+        binder.AddMethod(methods.DeleteRange, new UnaryServerMethod<DataRangeDeleteRequest, DataRangeDeleteResult>(serviceImpl.DeleteRange));
         binder.AddMethod(methods.SetMany, new UnaryServerMethod<DataSetManyRequest, DataSetManyResponse>(serviceImpl.SetMany));
         binder.AddMethod(methods.CrdtWrite, new UnaryServerMethod<CrdtWriteRequest, CrdtWriteResponse>(serviceImpl.CrdtWrite));
         binder.AddMethod(methods.CrdtRead, new UnaryServerMethod<CrdtReadRequest, CrdtReadResponse>(serviceImpl.CrdtRead));
@@ -199,6 +204,10 @@ internal sealed class LatticeDataApiGrpcService : LatticeDataApiGrpcServiceBase
     /// <inheritdoc />
     public override Task<DataRangePage> ReadRange(DataRangeRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (api, req, ct) => api.ReadRangeAsync(req, ct));
+
+    /// <inheritdoc />
+    public override Task<DataRangeDeleteResult> DeleteRange(DataRangeDeleteRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (api, req, ct) => api.DeleteRangeAsync(req, ct));
 
     /// <inheritdoc />
     public override Task<DataSetManyResponse> SetMany(DataSetManyRequest request, ServerCallContext context)

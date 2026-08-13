@@ -75,6 +75,10 @@ public sealed class LatticeDataApiGrpcClient
     public Task<DataRangePage> ReadRangeAsync(DataRangeRequest request, CancellationToken cancellationToken = default)
         => UnaryAsync(_methods.ReadRange, request, cancellationToken);
 
+    /// <summary>Deletes a bounded range of keys, draining to completion with transparent reconnect. Throws a <c>PermissionDenied</c> <see cref="RpcException"/> when the caller may not delete the whole range.</summary>
+    public Task<DataRangeDeleteResult> DeleteRangeAsync(DataRangeDeleteRequest request, CancellationToken cancellationToken = default)
+        => UnaryAsync(_methods.DeleteRange, request, cancellationToken);
+
     /// <summary>Commits a non-atomic, upsert-only bulk write. A denied key aborts before any write with a <c>PermissionDenied</c> status.</summary>
     public Task<DataSetManyResponse> SetManyAsync(DataSetManyRequest request, CancellationToken cancellationToken = default)
         => UnaryAsync(_methods.SetMany, request, cancellationToken);

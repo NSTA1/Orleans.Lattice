@@ -99,6 +99,27 @@ internal static partial class DataToolCore
         return new DataDeleteToolResult { TreeId = treeId, Key = key, Deleted = deleted };
     }
 
+    /// <summary>Maps <see cref="ILatticeDataApi.DeleteRangeAsync"/> onto the <c>data_delete_range</c> result.</summary>
+    public static async Task<DataRangeDeleteToolResult> DeleteRangeAsync(
+        ILatticeDataApi api,
+        string treeId,
+        string startInclusive,
+        string endExclusive,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(api);
+
+        var request = new DataRangeDeleteRequest
+        {
+            TreeId = treeId,
+            StartInclusive = startInclusive,
+            EndExclusive = endExclusive,
+        };
+
+        var result = await api.DeleteRangeAsync(request, cancellationToken).ConfigureAwait(false);
+        return new DataRangeDeleteToolResult { TreeId = result.TreeId, DeletedCount = result.DeletedCount };
+    }
+
     /// <summary>Maps <see cref="ILatticeDataApi.SetManyAtomicAsync"/> onto the <c>data_set_many_atomic</c> result.</summary>
     public static async Task<DataAtomicBatchToolResult> SetManyAtomicAsync(
         ILatticeDataApi api,

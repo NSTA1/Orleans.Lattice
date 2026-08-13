@@ -8,7 +8,7 @@ Code-first gRPC binding for [Orleans.Lattice.Api.Data](../lattice.api.data/READM
 
 It provides:
 
-- **A code-first gRPC service.** A unary RPC per data-API verb - point read, range read, set, delete, and the two atomic multi-key writes (single-tree and cross-tree) - bound from C# definitions rather than a `.proto`.
+- **A code-first gRPC service.** A unary RPC per data-API verb - point read, range read, set, delete, range delete, and the two atomic multi-key writes (single-tree and cross-tree) - bound from C# definitions rather than a `.proto`.
 - **A public typed client.** `LatticeDataApiGrpcClient` exposes one method per RPC over a caller-supplied gRPC channel.
 - **Shared Orleans marshalling.** Every message is one of the package's `[GenerateSerializer]` records, serialized with the Orleans binary serializer, so client and server stay in lock-step by construction.
 - **Fail-closed authorization.** A per-call `ILatticeDataApiAuthorizer` seam gates every RPC; the default denies all traffic until a host configures one.
@@ -42,7 +42,7 @@ var app = builder.Build();
 app.MapLatticeDataApiGrpc();
 ```
 
-The public client wraps a caller-supplied channel and exposes one method per RPC - `GetAsync`, `ReadRangeAsync`, `SetAsync`, `DeleteAsync`, `SetManyAtomicAsync`, and `SetManyAtomicCrossTreeAsync`. A mutating call the caller is not permitted to make surfaces as a `PermissionDenied` `RpcException` rather than an unhandled error.
+The public client wraps a caller-supplied channel and exposes one method per RPC - `GetAsync`, `ReadRangeAsync`, `SetAsync`, `DeleteAsync`, `DeleteRangeAsync`, `SetManyAtomicAsync`, and `SetManyAtomicCrossTreeAsync`. A mutating call the caller is not permitted to make surfaces as a `PermissionDenied` `RpcException` rather than an unhandled error.
 
 See the [`Orleans.Lattice.Api.Data` overview](../lattice.api.data/README.md) for the full facade, its surfaces, and the shared authorization model.
 

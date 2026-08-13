@@ -32,4 +32,10 @@ public static class DataApiTypeAliases
 
     /// <summary>Alias for <see cref="DataReadResult"/>.</summary>
     public const string DataReadResult = "olad.rr";
+
+    /// <summary>Alias for <see cref="DataRangeDeleteRequest"/>.</summary>
+    public const string DataRangeDeleteRequest = "olad.dr";
+
+    /// <summary>Alias for <see cref="DataRangeDeleteResult"/>.</summary>
+    public const string DataRangeDeleteResult = "olad.dx";
 }

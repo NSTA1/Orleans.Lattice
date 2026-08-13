@@ -174,6 +174,73 @@ public sealed class AuthApiDataWriteReadTests
     }
 
     [Test]
+    public async Task authorized_range_delete_drains_the_whole_range()
+    {
+        const string tree = "auth-range-delete-ok";
+        await _fixture.RegisterTreeAsync(tree);
+        await _fixture.GrantAsync(AllowTree(Writer, tree, WriteOps | LatticeOperation.RangeDelete | ReadOps));
+
+        DataRangeDeleteResult result;
+        using (As(Writer))
+        {
+            for (var i = 0; i < 6; i++)
+            {
+                await _fixture.Api.SetAsync(tree, $"k{i:D2}", new byte[] { (byte)i });
+            }
+            await _fixture.Api.SetAsync(tree, "zzz", new byte[] { 99 });
+
+            result = await _fixture.Api.DeleteRangeAsync(
+                new DataRangeDeleteRequest { TreeId = tree, StartInclusive = "k00", EndExclusive = "k99" });
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.DeletedCount, Is.EqualTo(6));
+            Assert.That(_fixture.ReadRawAsync(tree, "k00").Result, Is.Null);
+            Assert.That(_fixture.ReadRawAsync(tree, "zzz").Result, Is.EqualTo(new byte[] { 99 }));
+        });
+    }
+
+    [Test]
+    public async Task unauthorized_range_delete_is_denied()
+    {
+        const string tree = "auth-range-delete-denied";
+        await _fixture.RegisterTreeAsync(tree);
+
+        // Writer may write and point-delete, but has no RangeDelete grant.
+        await _fixture.GrantAsync(AllowTree(Writer, tree, WriteOps));
+        using (As(Writer))
+        {
+            await _fixture.Api.SetAsync(tree, "k1", new byte[] { 1 });
+
+            Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
+                async () => await _fixture.Api.DeleteRangeAsync(
+                    new DataRangeDeleteRequest { TreeId = tree, StartInclusive = "k0", EndExclusive = "k9" }));
+        }
+
+        Assert.That(_fixture.ReadRawAsync(tree, "k1").Result, Is.EqualTo(new byte[] { 1 }));
+    }
+
+    [Test]
+    public async Task anonymous_range_delete_is_denied_fail_closed()
+    {
+        const string tree = "auth-range-delete-anon";
+        await _fixture.RegisterTreeAsync(tree);
+        await _fixture.GrantAsync(AllowTree(Writer, tree, WriteOps));
+        using (As(Writer))
+        {
+            await _fixture.Api.SetAsync(tree, "k1", new byte[] { 1 });
+        }
+
+        // No ambient subject: the caller is anonymous and default-denied.
+        Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
+            async () => await _fixture.Api.DeleteRangeAsync(
+                new DataRangeDeleteRequest { TreeId = tree, StartInclusive = "k0", EndExclusive = "k9" }));
+
+        Assert.That(_fixture.ReadRawAsync(tree, "k1").Result, Is.EqualTo(new byte[] { 1 }));
+    }
+
+    [Test]
     public async Task atomic_batch_aborts_wholesale_when_one_leg_is_denied()
     {
         const string tree = "auth-atomic-denied";

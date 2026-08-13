@@ -27,7 +27,7 @@ public sealed class DataToolGroupTests
 
     private static readonly string[] WriteToolNames =
     {
-        "lattice_data_set", "lattice_data_delete", "lattice_data_set_many",
+        "lattice_data_set", "lattice_data_delete", "lattice_data_delete_range", "lattice_data_set_many",
         "lattice_data_set_many_atomic", "lattice_data_set_many_atomic_cross_tree",
         "lattice_data_pncounter", "lattice_data_gcounter", "lattice_data_orset", "lattice_data_orflag", "lattice_data_rwflag", "lattice_data_rwset",
         "lattice_data_version_vector_tick", "lattice_data_mvregister_set", "lattice_data_sequence",

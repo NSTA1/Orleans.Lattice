@@ -26,6 +26,7 @@ Every operation is served by fetching the cluster grain with `GetGrain<ILattice>
 |---|---|---|---|
 | Point write | `SetAsync` | `Set` | `SetAsync(key, value)` |
 | Point delete | `DeleteAsync` | `Delete` | `DeleteAsync(key)` |
+| Range delete | `DeleteRangeAsync` | `DeleteRange` | the resilient range-delete drain (`DeleteRangeAsync(startInclusive, endExclusive)` extension over the delete-range cursor) |
 | Single-tree atomic batch | `SetManyAtomicAsync` | `SetManyAtomic` | `SetManyAtomicAsync(upserts, deletes, operationId)` |
 | Cross-tree atomic batch | `SetManyAtomicCrossTreeAsync` | `SetManyAtomicCrossTree` | the cross-tree atomic coordinator surface |
 | Point read | `GetAsync` | `Get` | `GetAsync(key)` |
@@ -36,7 +37,6 @@ Every operation is served by fetching the cluster grain with `GetGrain<ILattice>
 The following are **not** in v1 and are deliberately left out so a caller cannot mistake their absence for a bug:
 
 - **Live streaming scan / change feed.** There is no server-streamed entry tail or mutation feed on this surface. A caller that needs to observe live change should use the read-only [`Orleans.Lattice.Api.State`](../lattice.api.state/README.md) change-observation surface. The bounded `ReadRange` page here is a one-shot, continuation-token-paged read, not a live stream.
-- **Range delete.** No range/prefix delete verb is exposed. Only point delete and the delete legs inside an atomic batch are available.
 
 ## Quick start
 
@@ -110,6 +110,6 @@ This is a write-capable external surface, so its default posture is closed:
 - [Configuration](configuration.md) - every public options property, its type, and its default.
 - Facade registration: `AddLatticeDataApi()` on the silo builder, configured with `LatticeApiDataOptions`.
 - gRPC registration: `AddLatticeDataApiGrpc()` and `MapLatticeDataApiGrpc()`, configured with `LatticeDataApiGrpcOptions`.
-- Public client: `LatticeDataApiGrpcClient` (`Set`, `Delete`, `SetManyAtomic`, `SetManyAtomicCrossTree`, `Get`, `ReadRange`).
+- Public client: `LatticeDataApiGrpcClient` (`Set`, `Delete`, `DeleteRange`, `SetManyAtomic`, `SetManyAtomicCrossTree`, `Get`, `ReadRange`).
 - Authorization seam: `ILatticeDataApiAuthorizer` (`DenyAllDataApiAuthorizer`, `AllowAllDataApiAuthorizer`).
 - Identity seam: `ILatticeDataApiCredentialBridge`.

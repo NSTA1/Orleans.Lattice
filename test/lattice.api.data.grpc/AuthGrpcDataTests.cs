@@ -452,6 +452,54 @@ public sealed class AuthGrpcDataTests
     }
 
     [Test]
+    public async Task authorized_range_delete_over_the_wire_drains_the_whole_range()
+    {
+        const string tree = "grpc-range-delete-ok";
+        await _fixture.RegisterTreeAsync(tree);
+        await _fixture.GrantAsync(AllowTree(Writer, tree, WriteOps | LatticeOperation.RangeDelete | ReadOps));
+
+        for (var i = 0; i < 5; i++)
+        {
+            await CallAsync(_host.Methods.Set, new DataSetRequest { TreeId = tree, Key = $"k{i:D2}", Value = new byte[] { (byte)i } }, Writer);
+        }
+        await CallAsync(_host.Methods.Set, new DataSetRequest { TreeId = tree, Key = "zzz", Value = new byte[] { 99 } }, Writer);
+
+        var result = await CallAsync(
+            _host.Methods.DeleteRange,
+            new DataRangeDeleteRequest { TreeId = tree, StartInclusive = "k00", EndExclusive = "k99" },
+            Writer);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.DeletedCount, Is.EqualTo(5));
+            Assert.That(_fixture.ReadRawAsync(tree, "k00").Result, Is.Null);
+            Assert.That(_fixture.ReadRawAsync(tree, "zzz").Result, Is.EqualTo(new byte[] { 99 }));
+        });
+    }
+
+    [Test]
+    public async Task unauthorized_range_delete_over_the_wire_is_permission_denied()
+    {
+        const string tree = "grpc-range-delete-denied";
+        await _fixture.RegisterTreeAsync(tree);
+
+        // Writer may write and point-delete, but has no RangeDelete grant.
+        await _fixture.GrantAsync(AllowTree(Writer, tree, WriteOps));
+        await CallAsync(_host.Methods.Set, new DataSetRequest { TreeId = tree, Key = "k1", Value = new byte[] { 1 } }, Writer);
+
+        var ex = Assert.ThrowsAsync<RpcException>(async () => await CallAsync(
+            _host.Methods.DeleteRange,
+            new DataRangeDeleteRequest { TreeId = tree, StartInclusive = "k0", EndExclusive = "k9" },
+            Writer));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
+            Assert.That(_fixture.ReadRawAsync(tree, "k1").Result, Is.EqualTo(new byte[] { 1 }));
+        });
+    }
+
+    [Test]
     public async Task identity_bridge_maps_the_header_credential_to_the_writing_subject()
     {
         const string tree = "grpc-identity";

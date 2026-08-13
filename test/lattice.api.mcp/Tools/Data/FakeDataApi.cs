@@ -152,6 +152,35 @@ internal sealed partial class FakeDataApi : ILatticeDataApi
         return Task.FromResult(new DataRangePage { TreeId = request.TreeId, Entries = entries });
     }
 
+    public Task<DataRangeDeleteResult> DeleteRangeAsync(DataRangeDeleteRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var toDelete = _store.Keys
+            .Where(k => k.Tree == request.TreeId)
+            .Where(k => string.CompareOrdinal(k.Key, request.StartInclusive) >= 0)
+            .Where(k => string.CompareOrdinal(k.Key, request.EndExclusive) < 0)
+            .ToArray();
+
+        // A range delete is all-or-nothing across its span: a single denied key in
+        // the range denies the whole operation with nothing removed.
+        foreach (var key in toDelete)
+        {
+            if (Denied.Contains(key))
+            {
+                throw new LatticeAuthorizationDeniedException(
+                    $"The caller may not delete the range on tree '{request.TreeId}'.");
+            }
+        }
+
+        foreach (var key in toDelete)
+        {
+            _store.Remove(key);
+        }
+
+        return Task.FromResult(new DataRangeDeleteResult { TreeId = request.TreeId, DeletedCount = toDelete.Length });
+    }
+
     private void ThrowIfDenied(string treeId, string key)
     {
         if (Denied.Contains((treeId, key)))
