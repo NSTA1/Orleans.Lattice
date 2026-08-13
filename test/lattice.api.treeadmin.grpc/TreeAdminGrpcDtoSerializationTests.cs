@@ -782,6 +782,72 @@ public sealed class TreeAdminGrpcDtoSerializationTests
     }
 
     [Test]
+    public void TreeAdminSetRetentionRequest_round_trips_its_optional_overrides()
+    {
+        var copy = RoundTrip(new TreeAdminSetRetentionRequest
+        {
+            TreeId = "orders",
+            Mode = TreeHistoryRetentionMode.Hybrid,
+            Window = TimeSpan.FromHours(6),
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TreeId, Is.EqualTo("orders"));
+            Assert.That(copy.Mode, Is.EqualTo(TreeHistoryRetentionMode.Hybrid));
+            Assert.That(copy.Window, Is.EqualTo(TimeSpan.FromHours(6)));
+        });
+    }
+
+    [Test]
+    public void TreeAdminSetRetentionRequest_round_trips_null_overrides()
+    {
+        var copy = RoundTrip(new TreeAdminSetRetentionRequest { TreeId = "orders", Mode = null, Window = null });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Mode, Is.Null);
+            Assert.That(copy.Window, Is.Null);
+        });
+    }
+
+    [Test]
+    public void TreeHistoryRetention_response_round_trips_through_the_marshaller()
+    {
+        var copy = RoundTrip(new TreeHistoryRetention
+        {
+            TreeId = "orders",
+            Mode = TreeHistoryRetentionMode.FullValue,
+            Window = TimeSpan.FromDays(1),
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TreeId, Is.EqualTo("orders"));
+            Assert.That(copy.Mode, Is.EqualTo(TreeHistoryRetentionMode.FullValue));
+            Assert.That(copy.Window, Is.EqualTo(TimeSpan.FromDays(1)));
+        });
+    }
+
+    [Test]
+    public void TreeCompactionTriggerResult_response_round_trips_through_the_marshaller()
+    {
+        var copy = RoundTrip(new TreeCompactionTriggerResult
+        {
+            TreeId = "orders",
+            ShardIndex = 2,
+            Accepted = true,
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TreeId, Is.EqualTo("orders"));
+            Assert.That(copy.ShardIndex, Is.EqualTo(2));
+            Assert.That(copy.Accepted, Is.True);
+        });
+    }
+
+    [Test]
     public void Every_registry_alias_is_unique_and_uses_the_reserved_prefix()
     {
         var aliases = RegistryAliasValues();

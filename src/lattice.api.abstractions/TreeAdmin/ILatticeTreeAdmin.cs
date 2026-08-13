@@ -880,4 +880,65 @@ public interface ILatticeTreeAdmin
     Task<TreeTagReconcileReport> ReconcileTagIndexAsync(
         string indexName,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Triggers an out-of-cycle tombstone-compaction pass scoped to a single physical
+    /// shard of <paramref name="treeId"/>, after authorizing whole-tree
+    /// <see cref="LatticeOperation.Admin"/> over the tree fail-closed. Wraps the public
+    /// operator-tooling trigger, which bypasses the per-shard cooldown gate that the
+    /// background policy trigger enforces. Compaction reaps only tombstones and
+    /// TTL-expired entries, never live data, so it is mutating but non-destructive;
+    /// it is online (no tree pause), idempotent, and reminder-durable.
+    /// </summary>
+    /// <param name="treeId">The tree whose shard to compact. Must not be <c>null</c> or empty.</param>
+    /// <param name="shardIndex">The physical shard index resolved from the tree's shard map.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The trigger result, pairing the shard with whether the coordinator accepted the pass.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the admin capability over the tree.</exception>
+    Task<TreeCompactionTriggerResult> TriggerShardCompactionAsync(
+        string treeId,
+        int shardIndex,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads a tree's effective durable-history retention policy - the resolved
+    /// <see cref="TreeHistoryRetentionMode"/> and the age-bound window - after authorizing
+    /// whole-tree <see cref="LatticeOperation.Read"/> over the tree fail-closed. A pure
+    /// read with no side effects: it reflects the persisted per-tree override, falling
+    /// back to the documented defaults (<see cref="TreeHistoryRetentionMode.MetadataOnly"/>,
+    /// no age bound) when none is set.
+    /// </summary>
+    /// <param name="treeId">The tree whose retention policy to read. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tree's effective history retention policy.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the read capability over the tree.</exception>
+    Task<TreeHistoryRetention> GetHistoryRetentionAsync(
+        string treeId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Sets or clears a tree's durable-history retention policy, after authorizing
+    /// whole-tree <see cref="LatticeOperation.Admin"/> over the tree fail-closed. Each
+    /// argument is independent: pass <c>null</c> for <paramref name="mode"/> to fall back
+    /// to the default (<see cref="TreeHistoryRetentionMode.MetadataOnly"/>), or <c>null</c>
+    /// for <paramref name="window"/> to remove the age bound. The override is persisted on
+    /// the tree's registry entry and survives silo restarts. This configures retention
+    /// only - it never trips a view rebuild and is absorbed forward (already-written rows
+    /// keep their stamped shape; new rows adopt the new policy). Returns the effective
+    /// policy read back after the change.
+    /// </summary>
+    /// <param name="treeId">The tree whose retention policy to set. Must not be <c>null</c> or empty.</param>
+    /// <param name="mode">The retention mode for LWW value bytes, or <c>null</c> to clear the override.</param>
+    /// <param name="window">The age after which a revision row expires, or <c>null</c> for no age bound. Must be strictly positive when supplied.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tree's effective history retention policy after the change.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty, or <paramref name="window"/> is not strictly positive.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the admin capability over the tree.</exception>
+    Task<TreeHistoryRetention> SetHistoryRetentionAsync(
+        string treeId,
+        TreeHistoryRetentionMode? mode,
+        TimeSpan? window,
+        CancellationToken cancellationToken = default);
 }

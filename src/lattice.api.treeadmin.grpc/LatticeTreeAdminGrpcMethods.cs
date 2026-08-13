@@ -161,6 +161,15 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary tag-index reconcile trigger RPC method name.</summary>
     public const string ReconcileTagIndexMethodName = "ReconcileTagIndex";
 
+    /// <summary>The unary shard tombstone-compaction trigger RPC method name.</summary>
+    public const string TriggerShardCompactionMethodName = "TriggerShardCompaction";
+
+    /// <summary>The unary read-only durable-history retention read RPC method name.</summary>
+    public const string GetHistoryRetentionMethodName = "GetHistoryRetention";
+
+    /// <summary>The unary durable-history retention set RPC method name.</summary>
+    public const string SetHistoryRetentionMethodName = "SetHistoryRetention";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeTreeAdminGrpcMethods(
         Serializer<TreeAdminTreeRequest> treeRequestSerializer,
@@ -217,7 +226,10 @@ internal sealed class LatticeTreeAdminGrpcMethods
         Serializer<TreeAdminTagIndexListRequest> tagIndexListRequestSerializer,
         Serializer<TreeTagIndexCatalog> tagIndexCatalogSerializer,
         Serializer<TreeTagIndexStatus> tagIndexStatusSerializer,
-        Serializer<TreeTagReconcileReport> tagReconcileReportSerializer)
+        Serializer<TreeTagReconcileReport> tagReconcileReportSerializer,
+        Serializer<TreeAdminSetRetentionRequest> setRetentionRequestSerializer,
+        Serializer<TreeHistoryRetention> historyRetentionSerializer,
+        Serializer<TreeCompactionTriggerResult> compactionTriggerResultSerializer)
     {
         ArgumentNullException.ThrowIfNull(treeRequestSerializer);
         ArgumentNullException.ThrowIfNull(capabilitiesSerializer);
@@ -274,6 +286,9 @@ internal sealed class LatticeTreeAdminGrpcMethods
         ArgumentNullException.ThrowIfNull(tagIndexCatalogSerializer);
         ArgumentNullException.ThrowIfNull(tagIndexStatusSerializer);
         ArgumentNullException.ThrowIfNull(tagReconcileReportSerializer);
+        ArgumentNullException.ThrowIfNull(setRetentionRequestSerializer);
+        ArgumentNullException.ThrowIfNull(historyRetentionSerializer);
+        ArgumentNullException.ThrowIfNull(compactionTriggerResultSerializer);
 
         ProbeCapabilities = new Method<TreeAdminTreeRequest, LatticeTreeAdminCapabilities>(
             type: MethodType.Unary,
@@ -589,6 +604,27 @@ internal sealed class LatticeTreeAdminGrpcMethods
             name: ReconcileTagIndexMethodName,
             requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(tagIndexRequestSerializer),
             responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(tagReconcileReportSerializer));
+
+        TriggerShardCompaction = new Method<TreeAdminShardRequest, TreeCompactionTriggerResult>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: TriggerShardCompactionMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(shardRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(compactionTriggerResultSerializer));
+
+        GetHistoryRetention = new Method<TreeAdminTreeRequest, TreeHistoryRetention>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: GetHistoryRetentionMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(treeRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(historyRetentionSerializer));
+
+        SetHistoryRetention = new Method<TreeAdminSetRetentionRequest, TreeHistoryRetention>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: SetHistoryRetentionMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(setRetentionRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(historyRetentionSerializer));
     }
 
     /// <summary>The unary <c>ProbeCapabilities</c> capability-probe RPC.</summary>
@@ -726,6 +762,15 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary <c>ReconcileTagIndex</c> tag-index reconcile trigger RPC.</summary>
     public Method<TreeAdminTagIndexRequest, TreeTagReconcileReport> ReconcileTagIndex { get; }
 
+    /// <summary>The unary <c>TriggerShardCompaction</c> tombstone-compaction trigger RPC.</summary>
+    public Method<TreeAdminShardRequest, TreeCompactionTriggerResult> TriggerShardCompaction { get; }
+
+    /// <summary>The unary <c>GetHistoryRetention</c> read-only retention read RPC.</summary>
+    public Method<TreeAdminTreeRequest, TreeHistoryRetention> GetHistoryRetention { get; }
+
+    /// <summary>The unary <c>SetHistoryRetention</c> retention set RPC.</summary>
+    public Method<TreeAdminSetRetentionRequest, TreeHistoryRetention> SetHistoryRetention { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out of
     /// <paramref name="serializerProvider"/>. Shared by the server-side DI factory
@@ -790,7 +835,10 @@ internal sealed class LatticeTreeAdminGrpcMethods
             serializerProvider.GetRequiredService<Serializer<TreeAdminTagIndexListRequest>>(),
             serializerProvider.GetRequiredService<Serializer<TreeTagIndexCatalog>>(),
             serializerProvider.GetRequiredService<Serializer<TreeTagIndexStatus>>(),
-            serializerProvider.GetRequiredService<Serializer<TreeTagReconcileReport>>());
+            serializerProvider.GetRequiredService<Serializer<TreeTagReconcileReport>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAdminSetRetentionRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeHistoryRetention>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeCompactionTriggerResult>>());
     }
 }
 

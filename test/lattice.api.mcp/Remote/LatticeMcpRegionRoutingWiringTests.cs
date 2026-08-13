@@ -103,6 +103,34 @@ public sealed class LatticeMcpRegionRoutingWiringTests
     }
 
     [Test]
+    public void Peer_region_routes_the_tree_admin_group_when_it_configures_a_tree_admin_endpoint()
+    {
+        using var provider = new ServiceCollection()
+            .AddLatticeMcpRemote(o =>
+            {
+                o.RegionId = "us";
+                o.TreeAdmin = Endpoint("https://us-treeadmin:5006");
+                o.Regions.Add(new LatticeApiMcpRemoteRegionOptions
+                {
+                    RegionId = "eu",
+                    TreeAdmin = Endpoint("https://eu-treeadmin:5006"),
+                });
+            })
+            .BuildServiceProvider();
+        var router = provider.GetRequiredService<ILatticeApiMcpRegionRouter>();
+
+        Assert.Multiple(() =>
+        {
+            // The tree-administration group carries every lifecycle-gated verb, so a
+            // peer that configures a TreeAdmin endpoint routes the whole group -
+            // including the TreeLifecycle-gated tools, which share the group's endpoint.
+            Assert.That(router.Resolve("eu", LatticeApiMcpGroup.TreeAdmin).IsRouted, Is.True);
+            Assert.That(router.Resolve("eu", LatticeApiMcpGroup.State).IsRouted, Is.False,
+                "Fail-closed: a group with no endpoint in the region must not be routable there.");
+        });
+    }
+
+    [Test]
     public void Unknown_region_is_rejected_by_the_wired_router()
     {
         using var provider = MultiRegionProvider();

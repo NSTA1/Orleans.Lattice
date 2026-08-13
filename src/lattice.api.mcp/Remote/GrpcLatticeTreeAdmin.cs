@@ -309,4 +309,16 @@ public Task<TreeTagIndexStatus> GetTagIndexStatusAsync(string indexName, Cancell
 /// <inheritdoc />
 public Task<TreeTagReconcileReport> ReconcileTagIndexAsync(string indexName, CancellationToken cancellationToken = default)
     => _client.ReconcileTagIndexAsync(indexName, cancellationToken);
+
+/// <inheritdoc />
+public Task<TreeCompactionTriggerResult> TriggerShardCompactionAsync(string treeId, int shardIndex, CancellationToken cancellationToken = default)
+    => _client.TriggerShardCompactionAsync(treeId, shardIndex, cancellationToken);
+
+/// <inheritdoc />
+public Task<TreeHistoryRetention> GetHistoryRetentionAsync(string treeId, CancellationToken cancellationToken = default)
+    => _client.GetHistoryRetentionAsync(treeId, cancellationToken);
+
+/// <inheritdoc />
+public Task<TreeHistoryRetention> SetHistoryRetentionAsync(string treeId, TreeHistoryRetentionMode? mode, TimeSpan? window, CancellationToken cancellationToken = default)
+    => _client.SetHistoryRetentionAsync(treeId, mode, window, cancellationToken);
 }

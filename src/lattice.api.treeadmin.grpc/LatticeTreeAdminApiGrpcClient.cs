@@ -938,6 +938,59 @@ public sealed class LatticeTreeAdminApiGrpcClient
         return UnaryAsync(_methods.ReconcileTagIndex, new TreeAdminTagIndexRequest { IndexName = indexName }, cancellationToken);
     }
 
+    /// <summary>
+    /// Triggers an out-of-cycle tombstone-compaction pass scoped to a single physical
+    /// shard of <paramref name="treeId"/>. Requires admin authority over the tree. The
+    /// pass reaps only tombstones and TTL-expired entries, never live data.
+    /// </summary>
+    /// <param name="treeId">The tree whose shard to compact. Must not be <c>null</c> or empty.</param>
+    /// <param name="shardIndex">The physical shard index to compact.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The trigger result.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    public Task<TreeCompactionTriggerResult> TriggerShardCompactionAsync(string treeId, int shardIndex, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return UnaryAsync(_methods.TriggerShardCompaction, new TreeAdminShardRequest { TreeId = treeId, ShardIndex = shardIndex }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Reads the effective durable-history retention policy of <paramref name="treeId"/>.
+    /// Requires read authority over the tree.
+    /// </summary>
+    /// <param name="treeId">The tree whose retention policy to read. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tree's effective history retention policy.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    public Task<TreeHistoryRetention> GetHistoryRetentionAsync(string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return UnaryAsync(_methods.GetHistoryRetention, new TreeAdminTreeRequest { TreeId = treeId }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Sets or clears the durable-history retention policy of <paramref name="treeId"/>.
+    /// Requires admin authority over the tree. Each argument is independent: a
+    /// <c>null</c> <paramref name="mode"/> clears the mode override and a <c>null</c>
+    /// <paramref name="window"/> clears the age bound.
+    /// </summary>
+    /// <param name="treeId">The tree whose retention policy to set. Must not be <c>null</c> or empty.</param>
+    /// <param name="mode">The retention mode, or <c>null</c> to clear the override.</param>
+    /// <param name="window">The age bound, or <c>null</c> for none. Must be strictly positive when supplied.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tree's effective history retention policy after the change.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty, or <paramref name="window"/> is not strictly positive.</exception>
+    public Task<TreeHistoryRetention> SetHistoryRetentionAsync(string treeId, TreeHistoryRetentionMode? mode, TimeSpan? window, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        if (window is { } w && w <= TimeSpan.Zero)
+        {
+            throw new ArgumentException("The retention window must be strictly positive.", nameof(window));
+        }
+
+        return UnaryAsync(_methods.SetHistoryRetention, new TreeAdminSetRetentionRequest { TreeId = treeId, Mode = mode, Window = window }, cancellationToken);
+    }
+
     private async Task<TResponse> UnaryAsync<TRequest, TResponse>(
         Method<TRequest, TResponse> method,
         TRequest request,

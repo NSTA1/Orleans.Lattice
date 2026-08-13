@@ -72,6 +72,7 @@ public sealed class TreeAdminToolGroupTests
         "lattice_treeadmin_view_status",
         "lattice_treeadmin_tag_index_list",
         "lattice_treeadmin_tag_index_status",
+        "lattice_treeadmin_retention_get",
     };
 
     private static readonly string[] LifecycleWriteToolNames =
@@ -98,6 +99,18 @@ public sealed class TreeAdminToolGroupTests
         "lattice_treeadmin_view_reconcile",
         "lattice_treeadmin_view_drop",
         "lattice_treeadmin_tag_index_reconcile",
+    };
+
+    /// <summary>
+    /// Lifecycle-gated tools that mutate but are non-destructive to readable state
+    /// (compaction reaps only tombstones and expired entries; retention-set is a
+    /// forward-absorbed configuration change). They appear under the same lifecycle
+    /// opt-in as <see cref="LifecycleWriteToolNames"/> but carry a non-destructive hint.
+    /// </summary>
+    private static readonly string[] LifecycleMutateToolNames =
+    {
+        "lattice_treeadmin_compaction_trigger",
+        "lattice_treeadmin_retention_set",
     };
 
     /// <summary>The read-only tools always contributed regardless of any opt-in.</summary>
@@ -207,7 +220,7 @@ public sealed class TreeAdminToolGroupTests
 
         Assert.Multiple(() =>
         {
-            foreach (var write in LifecycleWriteToolNames)
+            foreach (var write in LifecycleWriteToolNames.Concat(LifecycleMutateToolNames))
             {
                 Assert.That(Names(group), Does.Not.Contain(write),
                     "The mutating lifecycle tools must be hidden until lifecycle control is opted in.");
@@ -220,7 +233,7 @@ public sealed class TreeAdminToolGroupTests
     {
         var group = CreateGroup(enableSchemaControl: false, enableLifecycle: true);
 
-        Assert.That(Names(group), Is.EquivalentTo(ReadOnlyToolNames.Concat(LifecycleWriteToolNames)));
+        Assert.That(Names(group), Is.EquivalentTo(ReadOnlyToolNames.Concat(LifecycleWriteToolNames).Concat(LifecycleMutateToolNames)));
     }
 
     [Test]
@@ -240,13 +253,29 @@ public sealed class TreeAdminToolGroupTests
     }
 
     [Test]
+    public void Lifecycle_mutate_tools_are_annotated_non_destructive_but_not_read_only()
+    {
+        var group = CreateGroup(enableSchemaControl: false, enableLifecycle: true);
+
+        Assert.Multiple(() =>
+        {
+            foreach (var name in LifecycleMutateToolNames)
+            {
+                var annotations = ServerTool(group, name).ProtocolTool.Annotations;
+                Assert.That(annotations?.DestructiveHint, Is.False, $"{name} must not be destructive.");
+                Assert.That(annotations?.ReadOnlyHint, Is.False, $"{name} must not be read-only.");
+            }
+        });
+    }
+
+    [Test]
     public void The_two_opt_ins_are_independent()
     {
         var group = CreateGroup(enableSchemaControl: true, enableLifecycle: true);
 
         Assert.That(
             Names(group),
-            Is.EquivalentTo(ReadOnlyToolNames.Concat(ManagementToolNames).Concat(LifecycleWriteToolNames)));
+            Is.EquivalentTo(ReadOnlyToolNames.Concat(ManagementToolNames).Concat(LifecycleWriteToolNames).Concat(LifecycleMutateToolNames)));
     }
 
     [Test]
@@ -261,7 +290,7 @@ public sealed class TreeAdminToolGroupTests
 
         Assert.That(
             group.Tools.Select(t => t.ProtocolTool.Name),
-            Is.EquivalentTo(ReadOnlyToolNames.Concat(LifecycleWriteToolNames)));
+            Is.EquivalentTo(ReadOnlyToolNames.Concat(LifecycleWriteToolNames).Concat(LifecycleMutateToolNames)));
     }
 
     [Test]

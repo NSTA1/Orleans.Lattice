@@ -685,6 +685,59 @@ public sealed class TreeAdminLifecycleToolHandlersTests
     }
 
     [Test]
+    public async Task TriggerShardCompactionAsync_forwards_the_tree_and_shard_and_returns_the_result()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeCompactionTriggerResult { TreeId = "orders", ShardIndex = 2, Accepted = true };
+        admin.TriggerShardCompactionAsync("orders", 2, Arg.Any<CancellationToken>()).Returns(expected);
+
+        var result = await TreeAdminLifecycleToolHandlers.TriggerShardCompactionAsync(admin, "orders", 2, CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).TriggerShardCompactionAsync("orders", 2, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task GetHistoryRetentionAsync_forwards_the_tree_and_returns_the_policy()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeHistoryRetention { TreeId = "orders", Mode = TreeHistoryRetentionMode.Hybrid, Window = TimeSpan.FromHours(6) };
+        admin.GetHistoryRetentionAsync("orders", Arg.Any<CancellationToken>()).Returns(expected);
+
+        var result = await TreeAdminLifecycleToolHandlers.GetHistoryRetentionAsync(admin, "orders", CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).GetHistoryRetentionAsync("orders", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task SetHistoryRetentionAsync_maps_window_seconds_to_a_timespan_and_forwards()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeHistoryRetention { TreeId = "orders", Mode = TreeHistoryRetentionMode.FullValue, Window = TimeSpan.FromSeconds(3600) };
+        admin.SetHistoryRetentionAsync("orders", TreeHistoryRetentionMode.FullValue, TimeSpan.FromSeconds(3600), Arg.Any<CancellationToken>())
+            .Returns(expected);
+
+        var result = await TreeAdminLifecycleToolHandlers.SetHistoryRetentionAsync(
+            admin, "orders", TreeHistoryRetentionMode.FullValue, 3600, CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).SetHistoryRetentionAsync("orders", TreeHistoryRetentionMode.FullValue, TimeSpan.FromSeconds(3600), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task SetHistoryRetentionAsync_passes_null_window_when_seconds_omitted()
+    {
+        var admin = TreeAdmin();
+        admin.SetHistoryRetentionAsync("orders", null, null, Arg.Any<CancellationToken>())
+            .Returns(new TreeHistoryRetention { TreeId = "orders", Mode = TreeHistoryRetentionMode.MetadataOnly, Window = TimeSpan.Zero });
+
+        await TreeAdminLifecycleToolHandlers.SetHistoryRetentionAsync(admin, "orders", null, null, CancellationToken.None);
+
+        await admin.Received(1).SetHistoryRetentionAsync("orders", null, null, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public void Handlers_reject_a_null_facade()
     {
         Assert.Multiple(() =>
@@ -726,6 +779,9 @@ public sealed class TreeAdminLifecycleToolHandlersTests
             Assert.That(() => TreeAdminLifecycleToolHandlers.ListTagIndexesAsync(null!), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.GetTagIndexStatusAsync(null!, "i"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.ReconcileTagIndexAsync(null!, "i"), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.TriggerShardCompactionAsync(null!, "t", 0), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.GetHistoryRetentionAsync(null!, "t"), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.SetHistoryRetentionAsync(null!, "t"), Throws.ArgumentNullException);
         });
     }
 }

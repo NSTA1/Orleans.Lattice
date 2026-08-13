@@ -1216,6 +1216,68 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         };
     }
 
+    /// <inheritdoc />
+    public async Task<TreeCompactionTriggerResult> TriggerShardCompactionAsync(
+        string treeId, int shardIndex, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ThrowIfReserved(treeId);
+        await _authorizer.AuthorizeTreeAdminAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        // Wrap the public operator-tooling trigger so the tree inherits its own guards
+        // (compaction-disabled and in-flight gating) and re-enforces the boundary. The
+        // pass reaps only tombstones and TTL-expired entries, never live data.
+        var accepted = await _grainFactory.GetGrain<ILattice>(treeId)
+            .CompactShardAsync(shardIndex, cancellationToken)
+            .ConfigureAwait(false);
+
+        return new TreeCompactionTriggerResult
+        {
+            TreeId = treeId,
+            ShardIndex = shardIndex,
+            Accepted = accepted,
+        };
+    }
+
+    /// <inheritdoc />
+    public async Task<TreeHistoryRetention> GetHistoryRetentionAsync(
+        string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        await _authorizer.AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        var settings = await _grainFactory.GetGrain<ILattice>(treeId)
+            .GetHistoryRetentionAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return ToRetention(treeId, settings);
+    }
+
+    /// <inheritdoc />
+    public async Task<TreeHistoryRetention> SetHistoryRetentionAsync(
+        string treeId, TreeHistoryRetentionMode? mode, TimeSpan? window,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        if (window is { } w && w <= TimeSpan.Zero)
+        {
+            throw new ArgumentException("The retention window must be strictly positive.", nameof(window));
+        }
+
+        ThrowIfReserved(treeId);
+        await _authorizer.AuthorizeTreeAdminAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        var tree = _grainFactory.GetGrain<ILattice>(treeId);
+        await tree
+            .SetHistoryRetentionAsync(ToRetentionMode(mode), window, cancellationToken)
+            .ConfigureAwait(false);
+
+        // Read back the effective policy so the caller sees the resolved shape, mirroring
+        // how the snapshot verb returns the observable status after orchestrating.
+        var settings = await tree.GetHistoryRetentionAsync(cancellationToken).ConfigureAwait(false);
+        return ToRetention(treeId, settings);
+    }
+
     /// <summary>
     /// Asserts the tag-index subsystem is available on this cluster, throwing
     /// <see cref="InvalidOperationException"/> when it is not. The tag-index factory is
@@ -1464,6 +1526,33 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         TreeSnapshotMode.Online => SnapshotMode.Online,
         _ => SnapshotMode.Offline,
     };
+
+    /// <summary>
+    /// Maps the transport-agnostic <see cref="TreeHistoryRetentionMode"/> onto the core
+    /// engine's <see cref="HistoryRetentionMode"/>, or <see langword="null"/> through to
+    /// clear the override (the core falls back to its default).
+    /// </summary>
+    private static HistoryRetentionMode? ToRetentionMode(TreeHistoryRetentionMode? mode) => mode switch
+    {
+        TreeHistoryRetentionMode.FullValue => HistoryRetentionMode.FullValue,
+        TreeHistoryRetentionMode.Hybrid => HistoryRetentionMode.Hybrid,
+        TreeHistoryRetentionMode.MetadataOnly => HistoryRetentionMode.MetadataOnly,
+        _ => null,
+    };
+
+    /// <summary>Projects the core engine's effective retention settings onto the transport-agnostic DTO.</summary>
+    private static TreeHistoryRetention ToRetention(string treeId, HistoryRetentionSettings settings) => new()
+    {
+        TreeId = treeId,
+        Mode = settings.Mode switch
+        {
+            HistoryRetentionMode.FullValue => TreeHistoryRetentionMode.FullValue,
+            HistoryRetentionMode.Hybrid => TreeHistoryRetentionMode.Hybrid,
+            _ => TreeHistoryRetentionMode.MetadataOnly,
+        },
+        Window = settings.Window,
+    };
+
     /// current effective B+ node capacity (via the registry, default-seeded) - onto the
     /// transport-agnostic <see cref="TreeResizeStatus"/>. The requested-capacity fields
     /// echo the trigger's target and are <see langword="null"/> for a standalone status

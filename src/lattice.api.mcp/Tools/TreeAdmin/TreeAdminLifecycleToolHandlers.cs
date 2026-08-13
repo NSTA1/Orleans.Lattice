@@ -539,6 +539,46 @@ internal static class TreeAdminLifecycleToolHandlers
         return treeAdmin.ReconcileTagIndexAsync(indexName, cancellationToken);
     }
 
+    /// <summary>Triggers an out-of-cycle tombstone-compaction pass on one physical shard of a tree; reaps only tombstones and expired entries, never live data. Returns whether the coordinator accepted the pass.</summary>
+    public static Task<TreeCompactionTriggerResult> TriggerShardCompactionAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The tree whose shard to compact. Must not be null, empty, or a reserved system tree id.")]
+        string treeId,
+        [Description("The zero-based physical shard index to compact.")]
+        int shardIndex,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        return treeAdmin.TriggerShardCompactionAsync(treeId, shardIndex, cancellationToken);
+    }
+
+    /// <summary>Reads a tree's effective durable-history retention policy (the resolved mode applied to LWW value bytes and the age-bound window).</summary>
+    public static Task<TreeHistoryRetention> GetHistoryRetentionAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The tree whose retention policy to read. Must not be null or empty.")]
+        string treeId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        return treeAdmin.GetHistoryRetentionAsync(treeId, cancellationToken);
+    }
+
+    /// <summary>Sets or clears a tree's durable-history retention policy. Each argument is independent: a null mode clears the mode override (falling back to MetadataOnly) and a null window clears the age bound. Returns the effective policy read back after the change.</summary>
+    public static Task<TreeHistoryRetention> SetHistoryRetentionAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The tree whose retention policy to set. Must not be null, empty, or a reserved system tree id.")]
+        string treeId,
+        [Description("Retention mode for LWW value bytes: MetadataOnly stores hash and length only; FullValue stores the bytes; Hybrid stores bytes for recent revisions and metadata for older ones. Null clears the override (falls back to MetadataOnly).")]
+        TreeHistoryRetentionMode? mode = null,
+        [Description("Optional age in seconds after which a revision row expires. Null clears the age bound (revisions do not expire by age). Must be strictly positive when supplied.")]
+        long? windowSeconds = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        var window = windowSeconds is { } s ? TimeSpan.FromSeconds(s) : (TimeSpan?)null;
+        return treeAdmin.SetHistoryRetentionAsync(treeId, mode, window, cancellationToken);
+    }
+
     private static List<DataEntry> ToDataEntries(IReadOnlyList<DataEntryDto>? entries)
     {
         if (entries is null || entries.Count == 0)

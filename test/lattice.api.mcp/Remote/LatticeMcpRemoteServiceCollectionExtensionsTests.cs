@@ -151,6 +151,34 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
     }
 
     [Test]
+    public void Lifecycle_control_flag_off_advertises_read_only()
+    {
+        using var provider = new ServiceCollection()
+            .AddLatticeMcpRemote(o => o.TreeAdmin = Endpoint("https://treeadmin:5006"))
+            .BuildServiceProvider();
+
+        Assert.That(
+            provider.GetRequiredService<IOptions<LatticeApiMcpOptions>>().Value.EnableTreeAdminLifecycleTools,
+            Is.False);
+    }
+
+    [Test]
+    public void Lifecycle_control_flag_on_advertises_mutating_tools()
+    {
+        using var provider = new ServiceCollection()
+            .AddLatticeMcpRemote(o =>
+            {
+                o.TreeAdmin = Endpoint("https://treeadmin:5006");
+                o.EnableLifecycleControl = true;
+            })
+            .BuildServiceProvider();
+
+        Assert.That(
+            provider.GetRequiredService<IOptions<LatticeApiMcpOptions>>().Value.EnableTreeAdminLifecycleTools,
+            Is.True);
+    }
+
+    [Test]
     public void Endpoint_source_reports_configured_endpoints()
     {
         using var provider = new ServiceCollection()

@@ -747,4 +747,68 @@ public sealed class GrpcLatticeTreeAdminTests
             Assert.That(result.OrphanRowsRemoved, Is.EqualTo(3));
         });
     }
+
+    [Test]
+    public async Task TriggerShardCompactionAsync_forwards_request_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeCompactionTriggerResult
+        {
+            TreeId = "orders",
+            ShardIndex = 2,
+            Accepted = true,
+        });
+
+        var result = await Adapter(invoker).TriggerShardCompactionAsync("orders", 2);
+
+        var sent = (TreeAdminShardRequest)invoker.LastRequest!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(sent.TreeId, Is.EqualTo("orders"));
+            Assert.That(sent.ShardIndex, Is.EqualTo(2));
+            Assert.That(result.Accepted, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task GetHistoryRetentionAsync_forwards_request_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeHistoryRetention
+        {
+            TreeId = "orders",
+            Mode = TreeHistoryRetentionMode.Hybrid,
+            Window = TimeSpan.FromHours(6),
+        });
+
+        var result = await Adapter(invoker).GetHistoryRetentionAsync("orders");
+
+        var sent = (TreeAdminTreeRequest)invoker.LastRequest!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(sent.TreeId, Is.EqualTo("orders"));
+            Assert.That(result.Mode, Is.EqualTo(TreeHistoryRetentionMode.Hybrid));
+            Assert.That(result.Window, Is.EqualTo(TimeSpan.FromHours(6)));
+        });
+    }
+
+    [Test]
+    public async Task SetHistoryRetentionAsync_forwards_request_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeHistoryRetention
+        {
+            TreeId = "orders",
+            Mode = TreeHistoryRetentionMode.FullValue,
+            Window = TimeSpan.FromHours(1),
+        });
+
+        var result = await Adapter(invoker).SetHistoryRetentionAsync("orders", TreeHistoryRetentionMode.FullValue, TimeSpan.FromHours(1));
+
+        var sent = (TreeAdminSetRetentionRequest)invoker.LastRequest!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(sent.TreeId, Is.EqualTo("orders"));
+            Assert.That(sent.Mode, Is.EqualTo(TreeHistoryRetentionMode.FullValue));
+            Assert.That(sent.Window, Is.EqualTo(TimeSpan.FromHours(1)));
+            Assert.That(result.Mode, Is.EqualTo(TreeHistoryRetentionMode.FullValue));
+        });
+    }
 }

@@ -153,6 +153,7 @@ internal sealed class LatticeTreeAdminApiGrpcAuthInterceptor : Interceptor
             TreeAdminWalMovePlanRequest wpl => wpl.TreeId,
             TreeAdminWalMoveExecuteRequest wmv => wmv.TreeId,
             TreeAdminWalReclaimRequest wrc => wrc.TreeId,
+            TreeAdminSetRetentionRequest ret => ret.TreeId,
             TreeRestoreResult rev => rev.TargetTreeId,
             _ => null,
         };

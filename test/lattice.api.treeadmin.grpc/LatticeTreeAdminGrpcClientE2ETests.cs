@@ -564,6 +564,62 @@ public sealed class LatticeTreeAdminGrpcClientE2ETests
             Throws.Exception);
     }
 
+    [Test]
+    public async Task retention_get_over_the_client_returns_the_default_policy_for_a_fresh_tree()
+    {
+        var retentionTree = "retention-get-" + Guid.NewGuid().ToString("N");
+        await _host.Client.CreateTreeAsync(retentionTree, shardCount: 2);
+
+        var retention = await _host.Client.GetHistoryRetentionAsync(retentionTree);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(retention.TreeId, Is.EqualTo(retentionTree));
+            Assert.That(retention.Mode, Is.EqualTo(TreeHistoryRetentionMode.MetadataOnly));
+            Assert.That(retention.Window, Is.EqualTo(TimeSpan.Zero));
+        });
+    }
+
+    [Test]
+    public async Task retention_set_over_the_client_applies_the_override_and_reads_it_back()
+    {
+        var retentionTree = "retention-set-" + Guid.NewGuid().ToString("N");
+        await _host.Client.CreateTreeAsync(retentionTree, shardCount: 2);
+
+        var applied = await _host.Client.SetHistoryRetentionAsync(
+            retentionTree, TreeHistoryRetentionMode.FullValue, TimeSpan.FromHours(12));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(applied.Mode, Is.EqualTo(TreeHistoryRetentionMode.FullValue));
+            Assert.That(applied.Window, Is.EqualTo(TimeSpan.FromHours(12)));
+        });
+
+        var readBack = await _host.Client.GetHistoryRetentionAsync(retentionTree);
+        Assert.Multiple(() =>
+        {
+            Assert.That(readBack.Mode, Is.EqualTo(TreeHistoryRetentionMode.FullValue));
+            Assert.That(readBack.Window, Is.EqualTo(TimeSpan.FromHours(12)));
+        });
+    }
+
+    [Test]
+    public async Task compaction_trigger_over_the_client_returns_a_result_for_the_targeted_shard()
+    {
+        var compactionTree = "compaction-" + Guid.NewGuid().ToString("N");
+        await _host.Client.CreateTreeAsync(compactionTree, shardCount: 2);
+
+        // The accept/decline decision depends on the tree's compaction policy; the point
+        // is that the trigger RPC is wired end to end and echoes the targeted shard.
+        var result = await _host.Client.TriggerShardCompactionAsync(compactionTree, 0);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.TreeId, Is.EqualTo(compactionTree));
+            Assert.That(result.ShardIndex, Is.EqualTo(0));
+        });
+    }
+
     private static IReadOnlyList<Orleans.Lattice.Api.Data.DataEntry> Chunk(params string[] keys)
         => keys.Select(k => new Orleans.Lattice.Api.Data.DataEntry { Key = k, Value = "{}"u8.ToArray() }).ToArray();
 }
