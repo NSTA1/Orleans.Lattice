@@ -92,6 +92,15 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary bulk-load commit (session-close) RPC method name.</summary>
     public const string CommitBulkLoadMethodName = "CommitBulkLoad";
 
+    /// <summary>The unary restore-into-tree RPC method name.</summary>
+    public const string RestoreTreeMethodName = "RestoreTree";
+
+    /// <summary>The unary restore-set RPC method name.</summary>
+    public const string RestoreTreeSetMethodName = "RestoreTreeSet";
+
+    /// <summary>The unary revert-restore RPC method name.</summary>
+    public const string RevertTreeRestoreMethodName = "RevertTreeRestore";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeTreeAdminGrpcMethods(
         Serializer<TreeAdminTreeRequest> treeRequestSerializer,
@@ -121,7 +130,11 @@ internal sealed class LatticeTreeAdminGrpcMethods
         Serializer<TreeAdminBulkLoadAppendRequest> bulkLoadAppendRequestSerializer,
         Serializer<TreeBulkLoadSession> bulkLoadSessionSerializer,
         Serializer<TreeBulkLoadChunkAck> bulkLoadChunkAckSerializer,
-        Serializer<TreeBulkLoadResult> bulkLoadResultSerializer)
+        Serializer<TreeBulkLoadResult> bulkLoadResultSerializer,
+        Serializer<TreeAdminRestoreRequest> restoreRequestSerializer,
+        Serializer<TreeAdminRestoreSetRequest> restoreSetRequestSerializer,
+        Serializer<TreeRestoreResult> restoreResultSerializer,
+        Serializer<TreeRestoreSetResult> restoreSetResultSerializer)
     {
         ArgumentNullException.ThrowIfNull(treeRequestSerializer);
         ArgumentNullException.ThrowIfNull(capabilitiesSerializer);
@@ -151,6 +164,10 @@ internal sealed class LatticeTreeAdminGrpcMethods
         ArgumentNullException.ThrowIfNull(bulkLoadSessionSerializer);
         ArgumentNullException.ThrowIfNull(bulkLoadChunkAckSerializer);
         ArgumentNullException.ThrowIfNull(bulkLoadResultSerializer);
+        ArgumentNullException.ThrowIfNull(restoreRequestSerializer);
+        ArgumentNullException.ThrowIfNull(restoreSetRequestSerializer);
+        ArgumentNullException.ThrowIfNull(restoreResultSerializer);
+        ArgumentNullException.ThrowIfNull(restoreSetResultSerializer);
 
         ProbeCapabilities = new Method<TreeAdminTreeRequest, LatticeTreeAdminCapabilities>(
             type: MethodType.Unary,
@@ -305,6 +322,27 @@ internal sealed class LatticeTreeAdminGrpcMethods
             name: CommitBulkLoadMethodName,
             requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(bulkLoadSessionRequestSerializer),
             responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(bulkLoadResultSerializer));
+
+        RestoreTree = new Method<TreeAdminRestoreRequest, TreeRestoreResult>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: RestoreTreeMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(restoreRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(restoreResultSerializer));
+
+        RestoreTreeSet = new Method<TreeAdminRestoreSetRequest, TreeRestoreSetResult>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: RestoreTreeSetMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(restoreSetRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(restoreSetResultSerializer));
+
+        RevertTreeRestore = new Method<TreeRestoreResult, TreeRestoreResult>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: RevertTreeRestoreMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(restoreResultSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(restoreResultSerializer));
     }
 
     /// <summary>The unary <c>ProbeCapabilities</c> capability-probe RPC.</summary>
@@ -373,6 +411,15 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary <c>CommitBulkLoad</c> session-close RPC.</summary>
     public Method<TreeAdminBulkLoadSessionRequest, TreeBulkLoadResult> CommitBulkLoad { get; }
 
+    /// <summary>The unary <c>RestoreTree</c> restore-into-tree RPC.</summary>
+    public Method<TreeAdminRestoreRequest, TreeRestoreResult> RestoreTree { get; }
+
+    /// <summary>The unary <c>RestoreTreeSet</c> restore-set RPC.</summary>
+    public Method<TreeAdminRestoreSetRequest, TreeRestoreSetResult> RestoreTreeSet { get; }
+
+    /// <summary>The unary <c>RevertTreeRestore</c> revert-restore RPC. The request result is echoed back as the completion ack.</summary>
+    public Method<TreeRestoreResult, TreeRestoreResult> RevertTreeRestore { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out of
     /// <paramref name="serializerProvider"/>. Shared by the server-side DI factory
@@ -410,7 +457,11 @@ internal sealed class LatticeTreeAdminGrpcMethods
             serializerProvider.GetRequiredService<Serializer<TreeAdminBulkLoadAppendRequest>>(),
             serializerProvider.GetRequiredService<Serializer<TreeBulkLoadSession>>(),
             serializerProvider.GetRequiredService<Serializer<TreeBulkLoadChunkAck>>(),
-            serializerProvider.GetRequiredService<Serializer<TreeBulkLoadResult>>());
+            serializerProvider.GetRequiredService<Serializer<TreeBulkLoadResult>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAdminRestoreRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAdminRestoreSetRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeRestoreResult>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeRestoreSetResult>>());
     }
 }
 

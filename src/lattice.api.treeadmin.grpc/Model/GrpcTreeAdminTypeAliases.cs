@@ -59,4 +59,10 @@ public static class GrpcTreeAdminTypeAliases
 
     /// <summary>Alias for <see cref="TreeAdminBulkLoadAppendRequest"/>.</summary>
     public const string TreeAdminBulkLoadAppendRequest = "oitg.blareq";
+
+    /// <summary>Alias for <see cref="TreeAdminRestoreRequest"/>.</summary>
+    public const string TreeAdminRestoreRequest = "oitg.rstreq";
+
+    /// <summary>Alias for <see cref="TreeAdminRestoreSetRequest"/>.</summary>
+    public const string TreeAdminRestoreSetRequest = "oitg.rssreq";
 }

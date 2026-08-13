@@ -292,6 +292,84 @@ public sealed class TreeAdminLifecycleToolHandlersTests
     }
 
     [Test]
+    public async Task RestoreTreeAsync_forwards_the_ids_and_returns_the_result()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeRestoreResult
+        {
+            BackupId = "bk-1",
+            TargetTreeId = "orders",
+            Mode = TreeRestoreMode.ShadowCutover,
+            OperationId = "op-1",
+            ManifestChain = ["bk-1"],
+            EntriesApplied = 3,
+        };
+        admin.RestoreTreeAsync("orders", "bk-1", "op-1", Arg.Any<CancellationToken>()).Returns(expected);
+
+        var result = await TreeAdminLifecycleToolHandlers.RestoreTreeAsync(admin, "orders", "bk-1", "op-1", CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).RestoreTreeAsync("orders", "bk-1", "op-1", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RestoreTreeAsync_defaults_the_operation_id_to_null()
+    {
+        var admin = TreeAdmin();
+        admin.RestoreTreeAsync("orders", "bk-1", null, Arg.Any<CancellationToken>())
+            .Returns(new TreeRestoreResult
+            {
+                BackupId = "bk-1",
+                TargetTreeId = "orders",
+                Mode = TreeRestoreMode.ShadowCutover,
+                OperationId = "derived",
+                ManifestChain = [],
+                EntriesApplied = 0,
+            });
+
+        await TreeAdminLifecycleToolHandlers.RestoreTreeAsync(admin, "orders", "bk-1");
+
+        await admin.Received(1).RestoreTreeAsync("orders", "bk-1", null, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RestoreTreeSetAsync_wraps_the_member_results()
+    {
+        var admin = TreeAdmin();
+        var members = new[]
+        {
+            new TreeRestoreResult { BackupId = "bk-a", TargetTreeId = "a", Mode = TreeRestoreMode.ShadowCutover, OperationId = "op", ManifestChain = [], EntriesApplied = 1 },
+            new TreeRestoreResult { BackupId = "bk-b", TargetTreeId = "b", Mode = TreeRestoreMode.ShadowCutover, OperationId = "op", ManifestChain = [], EntriesApplied = 2 },
+        };
+        admin.RestoreTreeSetAsync("nightly", Arg.Any<CancellationToken>()).Returns(members);
+
+        var result = await TreeAdminLifecycleToolHandlers.RestoreTreeSetAsync(admin, "nightly", CancellationToken.None);
+
+        Assert.That(result.Results, Is.EqualTo(members));
+        await admin.Received(1).RestoreTreeSetAsync("nightly", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RevertTreeRestoreAsync_reconstructs_the_result_and_forwards_it()
+    {
+        var admin = TreeAdmin();
+
+        var result = await TreeAdminLifecycleToolHandlers.RevertTreeRestoreAsync(
+            admin, "orders", "bk-1", "op-1", "phys-new", "phys-old", CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.TargetTreeId, Is.EqualTo("orders"));
+            Assert.That(result.Mode, Is.EqualTo(TreeRestoreMode.ShadowCutover));
+            Assert.That(result.ShadowPhysicalTreeId, Is.EqualTo("phys-new"));
+            Assert.That(result.PreviousPhysicalTreeId, Is.EqualTo("phys-old"));
+        });
+        await admin.Received(1).RevertTreeRestoreAsync(
+            Arg.Is<TreeRestoreResult>(r => r.TargetTreeId == "orders" && r.PreviousPhysicalTreeId == "phys-old"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public void Handlers_reject_a_null_facade()
     {
         Assert.Multiple(() =>
@@ -310,6 +388,9 @@ public sealed class TreeAdminLifecycleToolHandlersTests
             Assert.That(() => TreeAdminLifecycleToolHandlers.BeginBulkLoadAsync(null!, "t", "op"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.AppendBulkLoadAsync(null!, "t", "op", 0), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.CommitBulkLoadAsync(null!, "t", "op"), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.RestoreTreeAsync(null!, "t", "bk"), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.RestoreTreeSetAsync(null!, "set"), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.RevertTreeRestoreAsync(null!, "t", "bk", "op", "s", "p"), Throws.ArgumentNullException);
         });
     }
 }

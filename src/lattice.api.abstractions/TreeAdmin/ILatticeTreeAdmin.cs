@@ -401,4 +401,69 @@ public interface ILatticeTreeAdmin
     /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the bulk-load capability.</exception>
     Task<TreeBulkLoadResult> CommitBulkLoadAsync(
         string treeId, string operationId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Restores the captured backup <paramref name="backupId"/> into
+    /// <paramref name="treeId"/>, after authorizing the whole-tree
+    /// <see cref="LatticeOperation.Restore"/> capability fail-closed. Composes the
+    /// cluster's backup/restore engine: the backup's base chain is walked and every
+    /// referenced artifact validated before anything is installed, then the entries
+    /// are replayed HLC-preserving into a fresh shadow physical tree whose alias is
+    /// atomically cut over, so the restore is online and reversible. Reserved system
+    /// tree ids are rejected. Re-running the same restore under the same
+    /// <paramref name="operationId"/> converges to the same state.
+    /// </summary>
+    /// <param name="treeId">The tree to restore into. Must not be <c>null</c>, empty, or reserved.</param>
+    /// <param name="backupId">The content-addressed id of the backup to restore. Must not be <c>null</c> or empty.</param>
+    /// <param name="operationId">An idempotency key that makes a retried restore a no-op, or <c>null</c> to derive one from the request. Must not be empty when supplied.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The restore outcome, including the shadow and previous physical trees needed to revert it.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved, <paramref name="backupId"/> is <c>null</c> or empty, or <paramref name="operationId"/> is empty.</exception>
+    /// <exception cref="InvalidOperationException">No backup/restore engine is registered on the cluster, or the backup fails pre-apply validation.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the restore capability.</exception>
+    Task<TreeRestoreResult> RestoreTreeAsync(
+        string treeId,
+        string backupId,
+        string? operationId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Restores every tree in the captured backup <b>set</b> identified by
+    /// <paramref name="setId"/> as a single unit, composing the cluster's
+    /// backup/restore engine. Each member tree is restored via an atomic
+    /// shadow-cutover; when any member is replicated the whole set flips together as
+    /// a coordinated all-or-nothing saga. Because the set spans multiple member
+    /// trees, this verb applies no facade-level whole-tree authorization of its own -
+    /// the restore engine authorizes each member's <see cref="LatticeOperation.Restore"/>
+    /// scope fail-closed. Re-running the same set restore converges to the same state.
+    /// </summary>
+    /// <param name="setId">The content-addressed id of the backup set to restore. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The per-member restore results this cluster applied, one per hosted member tree.</returns>
+    /// <exception cref="ArgumentException"><paramref name="setId"/> is <c>null</c> or empty, or resolves to no member trees.</exception>
+    /// <exception cref="InvalidOperationException">No backup/restore engine is registered on the cluster, or a member backup fails pre-apply validation.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to restore a member tree's scope.</exception>
+    Task<IReadOnlyList<TreeRestoreResult>> RestoreTreeSetAsync(
+        string setId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reverts a <see cref="TreeRestoreMode.ShadowCutover"/> restore produced by
+    /// <see cref="RestoreTreeAsync"/> by swapping the target tree's registry alias
+    /// back to the physical tree it resolved to before the cutover
+    /// (<see cref="TreeRestoreResult.PreviousPhysicalTreeId"/>), after authorizing the
+    /// whole-tree <see cref="LatticeOperation.Restore"/> capability on the result's
+    /// target tree fail-closed. Idempotent. Rejects a result that did not come from a
+    /// shadow-cutover restore, and a reserved system target tree id.
+    /// </summary>
+    /// <param name="restore">The result of the shadow-cutover restore to revert. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A task that completes when the restore has been reverted.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="restore"/> is <c>null</c>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="restore"/> is not a shadow-cutover restore result, or its target tree id is reserved.</exception>
+    /// <exception cref="InvalidOperationException">No backup/restore engine is registered on the cluster.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the restore capability.</exception>
+    Task RevertTreeRestoreAsync(
+        TreeRestoreResult restore,
+        CancellationToken cancellationToken = default);
 }

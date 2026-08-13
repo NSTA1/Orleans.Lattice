@@ -283,6 +283,28 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "observed live-key count for a client-side sanity check. The grafted chunks are already durable, "
                 + "so commit persists nothing further. Rejected for a reserved system tree id. Bulk-load-gated and "
                 + "destructive."));
+            tools.Add(Write(services, TreeAdminLifecycleToolHandlers.RestoreTreeAsync, "lattice_treeadmin_tree_restore",
+                "Restore a backup into a tree",
+                "Restores a captured backup into a tree by composing the backup/restore engine: the backup's base "
+                + "chain is validated, then replayed HLC-preserving into a fresh shadow physical tree whose alias is "
+                + "atomically cut over, so the restore is online and reversible with tree_restore_revert. Returns the "
+                + "restore outcome, including the shadow and previous physical trees needed to revert it. Idempotent "
+                + "under a stable operation id. Rejected for a reserved system tree id, or when no backup engine is "
+                + "registered. Restore-gated and destructive."));
+            tools.Add(Write(services, TreeAdminLifecycleToolHandlers.RestoreTreeSetAsync, "lattice_treeadmin_tree_restore_set",
+                "Restore a backup set as one unit",
+                "Restores every tree in a captured backup set as a single all-or-nothing unit, each member via an "
+                + "atomic shadow-cutover; when any member is replicated the whole set flips together as a coordinated "
+                + "saga. Returns the per-member restore results this cluster applied. The backup engine authorizes "
+                + "each member's restore scope fail-closed. Idempotent. Rejected when no backup engine is registered. "
+                + "Restore-gated and destructive."));
+            tools.Add(Write(services, TreeAdminLifecycleToolHandlers.RevertTreeRestoreAsync, "lattice_treeadmin_tree_restore_revert",
+                "Revert a shadow-cutover restore",
+                "Reverts a shadow-cutover restore produced by tree_restore by swapping the target tree's registry "
+                + "alias back to the physical tree it resolved to before the cutover, restoring the pre-restore "
+                + "state. Pass the fields from the tree_restore result back verbatim. Idempotent. Rejects a result "
+                + "that did not come from a shadow-cutover restore, a reserved system tree id, or when no backup "
+                + "engine is registered. Restore-gated and destructive."));
         }
 
         return tools;

@@ -303,6 +303,40 @@ public sealed class LatticeTreeAdminGrpcClientE2ETests
             Throws.Exception);
     }
 
+    [Test]
+    public async Task restore_reports_unavailable_when_no_backup_engine_is_configured()
+    {
+        // The test cluster registers no ILatticeBackupRestoreService, so the composed
+        // facade reports the capability as absent and every restore verb is rejected
+        // over the wire rather than silently no-op'ing.
+        const string restoreTree = "restore-e2e";
+        await _host.Client.CreateTreeAsync(restoreTree, shardCount: 2);
+
+        var caps = await _host.Client.ProbeCapabilitiesAsync(restoreTree);
+        Assert.That(caps.CanRestore, Is.False);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                async () => await _host.Client.RestoreTreeAsync(restoreTree, "bk-1"),
+                Throws.Exception);
+            Assert.That(
+                async () => await _host.Client.RestoreTreeSetAsync("nightly"),
+                Throws.Exception);
+            Assert.That(
+                async () => await _host.Client.RevertTreeRestoreAsync(new TreeRestoreResult
+                {
+                    BackupId = "bk-1",
+                    TargetTreeId = restoreTree,
+                    Mode = TreeRestoreMode.ShadowCutover,
+                    OperationId = "op",
+                    ManifestChain = [],
+                    EntriesApplied = 0,
+                }),
+                Throws.Exception);
+        });
+    }
+
     private static IReadOnlyList<Orleans.Lattice.Api.Data.DataEntry> Chunk(params string[] keys)
         => keys.Select(k => new Orleans.Lattice.Api.Data.DataEntry { Key = k, Value = "{}"u8.ToArray() }).ToArray();
 }

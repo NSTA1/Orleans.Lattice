@@ -273,4 +273,74 @@ public sealed class GrpcLatticeTreeAdminTests
             Assert.That(result.PhysicalShardIndices, Is.EqualTo(new[] { 0, 1 }));
         });
     }
+
+    [Test]
+    public async Task RestoreTreeAsync_forwards_the_ids_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeRestoreResult
+        {
+            BackupId = "bk-1",
+            TargetTreeId = "orders",
+            Mode = TreeRestoreMode.ShadowCutover,
+            OperationId = "op-1",
+            ManifestChain = ["bk-1"],
+            EntriesApplied = 4,
+        });
+
+        var result = await Adapter(invoker).RestoreTreeAsync("orders", "bk-1", "op-1");
+
+        var sent = (TreeAdminRestoreRequest)invoker.LastRequest!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(sent.TreeId, Is.EqualTo("orders"));
+            Assert.That(sent.BackupId, Is.EqualTo("bk-1"));
+            Assert.That(sent.OperationId, Is.EqualTo("op-1"));
+            Assert.That(result.TargetTreeId, Is.EqualTo("orders"));
+            Assert.That(result.EntriesApplied, Is.EqualTo(4));
+        });
+    }
+
+    [Test]
+    public async Task RestoreTreeSetAsync_forwards_the_set_id_and_unwraps_the_member_results()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeRestoreSetResult
+        {
+            Results =
+            [
+                new TreeRestoreResult { BackupId = "bk-a", TargetTreeId = "a", Mode = TreeRestoreMode.ShadowCutover, OperationId = "op", ManifestChain = [], EntriesApplied = 1 },
+            ],
+        });
+
+        var result = await Adapter(invoker).RestoreTreeSetAsync("nightly");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(((TreeAdminRestoreSetRequest)invoker.LastRequest!).SetId, Is.EqualTo("nightly"));
+            Assert.That(result, Has.Count.EqualTo(1));
+            Assert.That(result[0].TargetTreeId, Is.EqualTo("a"));
+        });
+    }
+
+    [Test]
+    public async Task RevertTreeRestoreAsync_forwards_the_result()
+    {
+        var restore = new TreeRestoreResult
+        {
+            BackupId = "bk-1",
+            TargetTreeId = "orders",
+            Mode = TreeRestoreMode.ShadowCutover,
+            OperationId = "op-1",
+            ManifestChain = [],
+            EntriesApplied = 0,
+            ShadowPhysicalTreeId = "phys-new",
+            PreviousPhysicalTreeId = "phys-old",
+        };
+        var invoker = new FakeCallInvoker(_ => restore);
+
+        await Adapter(invoker).RevertTreeRestoreAsync(restore);
+
+        var sent = (TreeRestoreResult)invoker.LastRequest!;
+        Assert.That(sent.TargetTreeId, Is.EqualTo("orders"));
+        Assert.That(sent.PreviousPhysicalTreeId, Is.EqualTo("phys-old"));
+    }
 }

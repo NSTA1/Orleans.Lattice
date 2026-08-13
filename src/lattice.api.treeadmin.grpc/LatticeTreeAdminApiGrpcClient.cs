@@ -505,6 +505,63 @@ public sealed class LatticeTreeAdminApiGrpcClient
             cancellationToken);
     }
 
+    /// <summary>
+    /// Restores the captured backup <paramref name="backupId"/> into
+    /// <paramref name="treeId"/> via an online, reversible shadow-cutover. Requires the
+    /// whole-tree restore capability.
+    /// </summary>
+    /// <param name="treeId">The tree to restore into. Must not be <c>null</c> or empty.</param>
+    /// <param name="backupId">The content-addressed backup id to restore. Must not be <c>null</c> or empty.</param>
+    /// <param name="operationId">An optional idempotency key, or <c>null</c> to derive one. Must not be empty when supplied.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The restore outcome, including the trees needed to revert it.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="backupId"/> is <c>null</c> or empty.</exception>
+    public Task<TreeRestoreResult> RestoreTreeAsync(
+        string treeId, string backupId, string? operationId = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        return UnaryAsync(
+            _methods.RestoreTree,
+            new TreeAdminRestoreRequest { TreeId = treeId, BackupId = backupId, OperationId = operationId },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Restores the captured backup set <paramref name="setId"/> as a single unit,
+    /// returning the per-member restore results this cluster applied.
+    /// </summary>
+    /// <param name="setId">The content-addressed backup set id. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The per-member restore results this cluster applied.</returns>
+    /// <exception cref="ArgumentException"><paramref name="setId"/> is <c>null</c> or empty.</exception>
+    public async Task<IReadOnlyList<TreeRestoreResult>> RestoreTreeSetAsync(
+        string setId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(setId);
+        var result = await UnaryAsync(
+            _methods.RestoreTreeSet,
+            new TreeAdminRestoreSetRequest { SetId = setId },
+            cancellationToken).ConfigureAwait(false);
+        return result.Results;
+    }
+
+    /// <summary>
+    /// Reverts a shadow-cutover restore, swapping the target tree's alias back to the
+    /// physical tree it resolved to before the cutover. Requires the whole-tree restore
+    /// capability.
+    /// </summary>
+    /// <param name="restore">The result of the shadow-cutover restore to revert. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A task that completes when the restore has been reverted.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="restore"/> is <c>null</c>.</exception>
+    public async Task RevertTreeRestoreAsync(
+        TreeRestoreResult restore, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(restore);
+        await UnaryAsync(_methods.RevertTreeRestore, restore, cancellationToken).ConfigureAwait(false);
+    }
+
     private async Task<TResponse> UnaryAsync<TRequest, TResponse>(
         Method<TRequest, TResponse> method,
         TRequest request,

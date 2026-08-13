@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using Orleans.Lattice;
 using Orleans.Lattice.Api.Data;
 using Orleans.Lattice.Api.Schema;
+using Orleans.Lattice.Backup;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
 
@@ -33,6 +34,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     private readonly ILatticeSchemaControl _schemaControl;
     private readonly IGrainFactory _grainFactory;
     private readonly TreeAdminAccessAuthorizer _authorizer;
+    private readonly ILatticeBackupRestoreService? _restoreService;
 
     /// <summary>Initializes a new <see cref="LatticeTreeAdmin"/>.</summary>
     /// <param name="schemaControl">
@@ -49,12 +51,19 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     /// Must not be <c>null</c>.
     /// </param>
     /// <param name="options">The facade options. Must not be <c>null</c>.</param>
+    /// <param name="restoreService">
+    /// The optional backup/restore engine the restore verbs compose, or <c>null</c>
+    /// when no backup add-on is registered on the cluster. When <c>null</c> the restore
+    /// verbs throw <see cref="InvalidOperationException"/> and the restore capability
+    /// probe reports <see langword="false"/>.
+    /// </param>
     /// <exception cref="ArgumentNullException">A required dependency is <c>null</c>.</exception>
     public LatticeTreeAdmin(
         ILatticeSchemaControl schemaControl,
         IGrainFactory grainFactory,
         TreeAdminAccessAuthorizer authorizer,
-        IOptions<LatticeApiTreeAdminOptions> options)
+        IOptions<LatticeApiTreeAdminOptions> options,
+        ILatticeBackupRestoreService? restoreService = null)
     {
         ArgumentNullException.ThrowIfNull(schemaControl);
         ArgumentNullException.ThrowIfNull(grainFactory);
@@ -64,6 +73,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         _schemaControl = schemaControl;
         _grainFactory = grainFactory;
         _authorizer = authorizer;
+        _restoreService = restoreService;
     }
 
     /// <inheritdoc />
@@ -105,6 +115,15 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             .IsBulkLoadAuthorizedAsync(treeId, cancellationToken)
             .ConfigureAwait(false);
 
+        // The restore capability is probed through its own distinct fail-closed gate
+        // (Restore) with no side effects, and only when a backup/restore engine is
+        // actually registered - the surface never advertises a restore the cluster
+        // cannot serve.
+        var canRestore = _restoreService is not null
+            && await _authorizer
+                .IsRestoreAuthorizedAsync(treeId, cancellationToken)
+                .ConfigureAwait(false);
+
         return new LatticeTreeAdminCapabilities
         {
             TreeId = treeId,
@@ -112,6 +131,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             CanManageTreeLifecycle = canManageTreeLifecycle,
             CanViewDiagnostics = canViewDiagnostics,
             CanBulkLoad = canBulkLoad,
+            CanRestore = canRestore,
             Schema = schema,
         };
     }
@@ -691,6 +711,128 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             TotalLiveKeys = liveKeys,
         };
     }
+
+    /// <inheritdoc />
+    public async Task<TreeRestoreResult> RestoreTreeAsync(
+        string treeId,
+        string backupId,
+        string? operationId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        if (operationId is not null)
+        {
+            ArgumentException.ThrowIfNullOrEmpty(operationId);
+        }
+        ThrowIfReserved(treeId);
+        await _authorizer.AuthorizeRestoreAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        var service = RequireRestoreService();
+
+        // Force ShadowCutover: a tree-administration restore installs into a fresh
+        // shadow physical tree and cuts the alias over atomically, so the restore is
+        // online and reversible via RevertTreeRestoreAsync. The backup engine
+        // re-enforces the Restore capability for the target scope fail-closed.
+        var request = new LatticeRestoreRequest(
+            backupId,
+            targetTreeId: treeId,
+            mode: LatticeRestoreMode.ShadowCutover,
+            operationId: operationId);
+
+        var result = await service.RestoreAsync(request, cancellationToken).ConfigureAwait(false);
+        return ToRestoreResult(result);
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<TreeRestoreResult>> RestoreTreeSetAsync(
+        string setId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(setId);
+
+        // No facade-level whole-tree authorization: a set spans multiple member trees,
+        // so the restore engine authorizes each member's Restore scope fail-closed as
+        // it applies it. A single whole-tree gate here would be neither sufficient nor
+        // correct for the multi-tree unit.
+        var service = RequireRestoreService();
+
+        var results = await service.RestoreSetAsync(setId, cancellationToken).ConfigureAwait(false);
+        var projected = new List<TreeRestoreResult>(results.Count);
+        foreach (var result in results)
+        {
+            projected.Add(ToRestoreResult(result));
+        }
+
+        return projected;
+    }
+
+    /// <inheritdoc />
+    public async Task RevertTreeRestoreAsync(
+        TreeRestoreResult restore,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(restore);
+        ThrowIfReserved(restore.TargetTreeId);
+        await _authorizer.AuthorizeRestoreAsync(restore.TargetTreeId, cancellationToken).ConfigureAwait(false);
+
+        var service = RequireRestoreService();
+
+        // Reconstruct the backup engine's own result shape from the transport DTO so
+        // the revert swaps the alias back to PreviousPhysicalTreeId. The engine
+        // rejects a non-shadow-cutover result (ArgumentException).
+        await service.RevertRestoreAsync(ToRestoreResult(restore), cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Resolves the composed backup/restore engine, throwing a clear
+    /// <see cref="InvalidOperationException"/> when no backup add-on is registered so a
+    /// restore verb fails with an actionable message rather than a null reference.
+    /// </summary>
+    private ILatticeBackupRestoreService RequireRestoreService() =>
+        _restoreService ?? throw new InvalidOperationException(
+            "No backup/restore engine is registered on this cluster. Register the "
+            + "Orleans.Lattice.Backup add-on to enable tree-administration restore.");
+
+    /// <summary>Projects the backup engine's <see cref="LatticeRestoreResult"/> onto the transport-agnostic <see cref="TreeRestoreResult"/>.</summary>
+    private static TreeRestoreResult ToRestoreResult(LatticeRestoreResult result) =>
+        new()
+        {
+            BackupId = result.BackupId,
+            TargetTreeId = result.TargetTreeId,
+            Mode = ToRestoreMode(result.Mode),
+            OperationId = result.OperationId,
+            ManifestChain = result.ManifestChain,
+            EntriesApplied = result.EntriesApplied,
+            ShadowPhysicalTreeId = result.ShadowPhysicalTreeId,
+            PreviousPhysicalTreeId = result.PreviousPhysicalTreeId,
+        };
+
+    /// <summary>Reconstructs the backup engine's <see cref="LatticeRestoreResult"/> from the transport-agnostic <see cref="TreeRestoreResult"/> for a revert.</summary>
+    private static LatticeRestoreResult ToRestoreResult(TreeRestoreResult restore) =>
+        new(
+            restore.BackupId,
+            restore.TargetTreeId,
+            ToRestoreMode(restore.Mode),
+            restore.OperationId,
+            restore.ManifestChain,
+            restore.EntriesApplied,
+            restore.ShadowPhysicalTreeId,
+            restore.PreviousPhysicalTreeId);
+
+    /// <summary>Maps the backup engine's restore mode onto the transport-agnostic <see cref="TreeRestoreMode"/>.</summary>
+    private static TreeRestoreMode ToRestoreMode(LatticeRestoreMode mode) => mode switch
+    {
+        LatticeRestoreMode.ShadowCutover => TreeRestoreMode.ShadowCutover,
+        _ => TreeRestoreMode.InPlace,
+    };
+
+    /// <summary>Maps the transport-agnostic <see cref="TreeRestoreMode"/> back onto the backup engine's restore mode.</summary>
+    private static LatticeRestoreMode ToRestoreMode(TreeRestoreMode mode) => mode switch
+    {
+        TreeRestoreMode.ShadowCutover => LatticeRestoreMode.ShadowCutover,
+        _ => LatticeRestoreMode.InPlace,
+    };
 
     /// <summary>
     /// Reads the deletion snapshot straight from the per-tree deletion coordinator

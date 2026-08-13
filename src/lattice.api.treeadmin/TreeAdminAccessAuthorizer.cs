@@ -149,6 +149,25 @@ internal sealed class TreeAdminAccessAuthorizer
             _gate, _membership, treeId, LatticeOperation.BulkLoad, cancellationToken);
 
     /// <summary>
+    /// Authorizes a whole-tree <b>restore</b> (installing a captured backup into the
+    /// tree, or reverting such a restore) over <paramref name="treeId"/> for the
+    /// current caller, throwing <see cref="LatticeAuthorizationDeniedException"/> when
+    /// the distinct <see cref="LatticeOperation.Restore"/> capability is not granted
+    /// over the whole tree. Deliberately gated on <see cref="LatticeOperation.Restore"/>
+    /// - the same capability the backup engine authorizes against - rather than
+    /// <see cref="LatticeOperation.Admin"/> or <see cref="LatticeOperation.BulkLoad"/>:
+    /// overwriting a tree from a backup is a distinct trust decision. A partial /
+    /// filtered allow is refused, fail-closed.
+    /// </summary>
+    /// <param name="treeId">The tree being restored. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancels the authorization.</param>
+    /// <returns>A task that completes when the restore is authorized.</returns>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to restore the tree.</exception>
+    public ValueTask AuthorizeRestoreAsync(string treeId, CancellationToken cancellationToken = default) =>
+        LatticeAccessGateEnforcement.EnforceWholeTreeAsync(
+            _gate, _membership, treeId, LatticeOperation.Restore, cancellationToken);
+
+    /// <summary>
     /// Probes whether the current caller may perform per-tree lifecycle
     /// <b>mutations</b> over <paramref name="treeId"/>, returning <c>true</c> when
     /// authorized and <c>false</c> when denied. Never throws for a plain authorization
@@ -231,6 +250,29 @@ internal sealed class TreeAdminAccessAuthorizer
         try
         {
             await AuthorizeBulkLoadAsync(treeId, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch (LatticeAuthorizationDeniedException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Probes whether the current caller may perform a whole-tree <b>restore</b> over
+    /// <paramref name="treeId"/>, returning <c>true</c> when the distinct
+    /// <see cref="LatticeOperation.Restore"/> capability is granted and <c>false</c>
+    /// when denied. Never throws for a plain authorization denial; other failures
+    /// propagate. Read-only, no side effects.
+    /// </summary>
+    /// <param name="treeId">The tree being probed. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancels the probe.</param>
+    /// <returns><c>true</c> when the caller may restore the tree; otherwise <c>false</c>.</returns>
+    public async ValueTask<bool> IsRestoreAuthorizedAsync(string treeId, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await AuthorizeRestoreAsync(treeId, cancellationToken).ConfigureAwait(false);
             return true;
         }
         catch (LatticeAuthorizationDeniedException)

@@ -80,4 +80,13 @@ public static class ApiTreeAdminTypeAliases
 
     /// <summary>Alias for <see cref="TreeBulkLoadResult"/>.</summary>
     public const string TreeBulkLoadResult = "oit.bo";
+
+    /// <summary>Alias for <see cref="TreeRestoreMode"/>.</summary>
+    public const string TreeRestoreMode = "oit.rm";
+
+    /// <summary>Alias for <see cref="TreeRestoreResult"/>.</summary>
+    public const string TreeRestoreResult = "oit.rr";
+
+    /// <summary>Alias for <see cref="TreeRestoreSetResult"/>.</summary>
+    public const string TreeRestoreSetResult = "oit.rs";
 }

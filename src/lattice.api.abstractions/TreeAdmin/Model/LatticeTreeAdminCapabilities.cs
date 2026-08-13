@@ -90,4 +90,18 @@ public sealed record LatticeTreeAdminCapabilities
     /// so a management surface can grey out the bulk-load control independently.
     /// </summary>
     [Id(5)] public bool CanBulkLoad { get; init; }
+
+    /// <summary>
+    /// <see langword="true"/> when the caller holds the whole-tree
+    /// <see cref="LatticeOperation.Restore"/> capability over the tree <b>and</b> a
+    /// backup/restore engine is registered on the cluster - the authority to restore
+    /// a captured backup into the tree (and to revert that restore) through
+    /// <see cref="ILatticeTreeAdmin.RestoreTreeAsync"/>. This is a distinct grant from
+    /// routine administration (<see cref="CanAdministerTree"/>), the destructive
+    /// lifecycle grant (<see cref="CanManageTreeLifecycle"/>), and the bulk-load grant
+    /// (<see cref="CanBulkLoad"/>), so a management surface can grey out the restore
+    /// control independently. It is <see langword="false"/> when no restore engine is
+    /// available, so the surface never offers a restore the cluster cannot serve.
+    /// </summary>
+    [Id(6)] public bool CanRestore { get; init; }
 }
