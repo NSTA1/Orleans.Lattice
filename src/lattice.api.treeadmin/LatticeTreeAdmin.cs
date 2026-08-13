@@ -38,6 +38,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     private readonly ILatticeBackupRestoreService? _restoreService;
     private readonly IViewCatalog? _viewCatalog;
     private readonly ILatticeViewFactory? _viewFactory;
+    private readonly ILatticeTagIndexFactory? _tagIndexFactory;
 
     /// <summary>Initializes a new <see cref="LatticeTreeAdmin"/>.</summary>
     /// <param name="schemaControl">
@@ -69,6 +70,12 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     /// The optional materialised-view factory the view-drop verb composes, or <c>null</c>
     /// when the materialised-view subsystem is not enabled on this cluster.
     /// </param>
+    /// <param name="tagIndexFactory">
+    /// The optional tag-index factory the tag-index administration verbs compose, or
+    /// <c>null</c> when the tag-index subsystem is not available on this cluster. It is
+    /// registered by <c>AddLattice</c>, so it is present on every real host; when
+    /// <c>null</c> the tag-index verbs throw <see cref="InvalidOperationException"/>.
+    /// </param>
     /// <exception cref="ArgumentNullException">A required dependency is <c>null</c>.</exception>
     public LatticeTreeAdmin(
         ILatticeSchemaControl schemaControl,
@@ -77,7 +84,8 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         IOptions<LatticeApiTreeAdminOptions> options,
         ILatticeBackupRestoreService? restoreService = null,
         IViewCatalog? viewCatalog = null,
-        ILatticeViewFactory? viewFactory = null)
+        ILatticeViewFactory? viewFactory = null,
+        ILatticeTagIndexFactory? tagIndexFactory = null)
     {
         ArgumentNullException.ThrowIfNull(schemaControl);
         ArgumentNullException.ThrowIfNull(grainFactory);
@@ -90,6 +98,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         _restoreService = restoreService;
         _viewCatalog = viewCatalog;
         _viewFactory = viewFactory;
+        _tagIndexFactory = tagIndexFactory;
     }
 
     /// <inheritdoc />
@@ -1109,6 +1118,146 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         await _authorizer.AuthorizeTreeAdminAsync(sourceTreeId, cancellationToken).ConfigureAwait(false);
 
         await _viewFactory!.DeleteAsync(viewName, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<TreeTagIndexCatalog> ListTagIndexesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        RequireTagIndex();
+        await _authorizer.AuthorizeClusterTelemetryAsync(cancellationToken).ConfigureAwait(false);
+
+        var registry = _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var allIds = await registry.GetAllTreeIdsAsync().ConfigureAwait(false);
+
+        var indexTreeIds = allIds
+            .Where(id => id.StartsWith(LatticeConstants.TagIndexTreePrefix, StringComparison.Ordinal))
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToList();
+
+        var indexes = ImmutableArray.CreateBuilder<TreeTagIndexInfo>(indexTreeIds.Count);
+        foreach (var treeId in indexTreeIds)
+        {
+            var indexName = treeId[LatticeConstants.TagIndexTreePrefix.Length..];
+            var entry = await registry.GetEntryAsync(treeId).ConfigureAwait(false);
+            var covered = await _tagIndexFactory!.CreateMultiTree(indexName)
+                .CoveredTreesAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            indexes.Add(new TreeTagIndexInfo
+            {
+                IndexName = indexName,
+                TreeId = treeId,
+                ShardCount = entry?.ShardCount ?? LatticeConstants.DefaultShardCount,
+                CoveredTrees = covered is null
+                    ? ImmutableArray<string>.Empty
+                    : covered.ToImmutableArray(),
+            });
+        }
+
+        return new TreeTagIndexCatalog { Indexes = indexes.ToImmutable() };
+    }
+
+    /// <inheritdoc />
+    public async Task<TreeTagIndexStatus> GetTagIndexStatusAsync(
+        string indexName, CancellationToken cancellationToken = default)
+    {
+        RequireTagIndex();
+        ArgumentException.ThrowIfNullOrEmpty(indexName);
+        var treeId = ResolveTagIndexTreeId(indexName);
+        await _authorizer.AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        var entry = await ResolveTagIndexEntryAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        var covered = await _tagIndexFactory!.CreateMultiTree(indexName)
+            .CoveredTreesAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var idle = await _grainFactory.GetGrain<ITagIndexReconcileGrain>(indexName)
+            .IsIdleAsync()
+            .ConfigureAwait(false);
+
+        return new TreeTagIndexStatus
+        {
+            IndexName = indexName,
+            TreeId = treeId,
+            ShardCount = entry.ShardCount ?? LatticeConstants.DefaultShardCount,
+            CoveredTrees = covered is null
+                ? ImmutableArray<string>.Empty
+                : covered.ToImmutableArray(),
+            ReconcileIdle = idle,
+        };
+    }
+
+    /// <inheritdoc />
+    public async Task<TreeTagReconcileReport> ReconcileTagIndexAsync(
+        string indexName, CancellationToken cancellationToken = default)
+    {
+        RequireTagIndex();
+        ArgumentException.ThrowIfNullOrEmpty(indexName);
+        var treeId = ResolveTagIndexTreeId(indexName);
+        await _authorizer.AuthorizeTreeAdminAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        // Confirm the index exists before running the sweep, so an unknown index is a
+        // clean KeyNotFound rather than a silent empty pass.
+        await ResolveTagIndexEntryAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        var report = await _grainFactory.GetGrain<ITagIndexReconcileGrain>(indexName)
+            .RunSweepAsync()
+            .ConfigureAwait(false);
+
+        return new TreeTagReconcileReport
+        {
+            IndexName = indexName,
+            TreeId = treeId,
+            TreesCovered = report.TreesCovered,
+            KeysScanned = report.KeysScanned,
+            MembershipRowsScanned = report.MembershipRowsScanned,
+            OrphanRowsRemoved = report.OrphanRowsRemoved,
+        };
+    }
+
+    /// <summary>
+    /// Asserts the tag-index subsystem is available on this cluster, throwing
+    /// <see cref="InvalidOperationException"/> when it is not. The tag-index factory is
+    /// registered by <c>AddLattice</c>, so a <c>null</c> factory is the authoritative
+    /// "tag indexes not available" signal.
+    /// </summary>
+    private void RequireTagIndex()
+    {
+        if (_tagIndexFactory is null)
+        {
+            throw new InvalidOperationException(
+                "The tag-index subsystem is not available on this cluster. " +
+                "It is registered by AddLattice; ensure the silo registers Lattice.");
+        }
+    }
+
+    /// <summary>
+    /// Derives a tag index's backing membership tree id authoritatively from its name by
+    /// prefixing the reserved <c>tag-</c> namespace, so the index's authorization boundary
+    /// is derived from the caller-supplied name rather than trusted as a tree id.
+    /// </summary>
+    private static string ResolveTagIndexTreeId(string indexName) =>
+        LatticeConstants.TagIndexTreePrefix + indexName;
+
+    /// <summary>
+    /// Resolves the registry entry for a tag index's backing membership tree, throwing
+    /// <see cref="KeyNotFoundException"/> fail-closed when no such index is registered.
+    /// </summary>
+    private async Task<TreeRegistryEntry> ResolveTagIndexEntryAsync(
+        string treeId, CancellationToken cancellationToken)
+    {
+        var entry = await _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId)
+            .GetEntryAsync(treeId)
+            .ConfigureAwait(false);
+
+        if (entry is null)
+        {
+            throw new KeyNotFoundException(
+                $"No tag index backed by tree '{treeId}' is registered on this cluster.");
+        }
+
+        return entry;
     }
 
     /// <summary>

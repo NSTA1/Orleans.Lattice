@@ -901,6 +901,43 @@ public sealed class LatticeTreeAdminApiGrpcClient
             .ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Lists the cluster's tag indexes. Requires the cluster telemetry capability.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tag-index catalog.</returns>
+    public Task<TreeTagIndexCatalog> ListTagIndexesAsync(CancellationToken cancellationToken = default)
+        => UnaryAsync(_methods.ListTagIndexes, new TreeAdminTagIndexListRequest(), cancellationToken);
+
+    /// <summary>
+    /// Reads the status of the tag index named <paramref name="indexName"/>. Requires
+    /// read authority over the index's backing membership tree (<c>tag-{indexName}</c>).
+    /// </summary>
+    /// <param name="indexName">The logical tag-index name. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tag index's status.</returns>
+    /// <exception cref="ArgumentException"><paramref name="indexName"/> is <c>null</c> or empty.</exception>
+    public Task<TreeTagIndexStatus> GetTagIndexStatusAsync(string indexName, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(indexName);
+        return UnaryAsync(_methods.GetTagIndexStatus, new TreeAdminTagIndexRequest { IndexName = indexName }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Reconciles the tag index named <paramref name="indexName"/> against current source
+    /// state. Requires admin authority over the index's backing membership tree
+    /// (<c>tag-{indexName}</c>).
+    /// </summary>
+    /// <param name="indexName">The logical tag-index name. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The reconcile report.</returns>
+    /// <exception cref="ArgumentException"><paramref name="indexName"/> is <c>null</c> or empty.</exception>
+    public Task<TreeTagReconcileReport> ReconcileTagIndexAsync(string indexName, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(indexName);
+        return UnaryAsync(_methods.ReconcileTagIndex, new TreeAdminTagIndexRequest { IndexName = indexName }, cancellationToken);
+    }
+
     private async Task<TResponse> UnaryAsync<TRequest, TResponse>(
         Method<TRequest, TResponse> method,
         TRequest request,

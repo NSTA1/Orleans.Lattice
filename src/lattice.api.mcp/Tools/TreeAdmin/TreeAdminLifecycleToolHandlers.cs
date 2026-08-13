@@ -508,6 +508,37 @@ internal static class TreeAdminLifecycleToolHandlers
         return viewName;
     }
 
+    /// <summary>Lists the cluster's tag indexes (index name, backing tree id, shard count, covered source trees).</summary>
+    public static Task<TreeTagIndexCatalog> ListTagIndexesAsync(
+        ILatticeTreeAdmin treeAdmin,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        return treeAdmin.ListTagIndexesAsync(cancellationToken);
+    }
+
+    /// <summary>Reads a tag index's status (backing tree id, shard count, covered source trees, whether its reconcile sweep is idle).</summary>
+    public static Task<TreeTagIndexStatus> GetTagIndexStatusAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The logical tag-index name whose status to read. Must not be null or empty.")]
+        string indexName,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        return treeAdmin.GetTagIndexStatusAsync(indexName, cancellationToken);
+    }
+
+    /// <summary>Reconciles a tag index against current source state, removing orphaned membership rows; returns the reconcile counts.</summary>
+    public static Task<TreeTagReconcileReport> ReconcileTagIndexAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The logical tag-index name to reconcile. Must not be null or empty.")]
+        string indexName,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        return treeAdmin.ReconcileTagIndexAsync(indexName, cancellationToken);
+    }
+
     private static List<DataEntry> ToDataEntries(IReadOnlyList<DataEntryDto>? entries)
     {
         if (entries is null || entries.Count == 0)

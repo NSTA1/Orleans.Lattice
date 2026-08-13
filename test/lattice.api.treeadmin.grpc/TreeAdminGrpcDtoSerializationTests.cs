@@ -699,6 +699,89 @@ public sealed class TreeAdminGrpcDtoSerializationTests
     }
 
     [Test]
+    public void TreeAdminTagIndexRequest_round_trips()
+    {
+        Assert.That(RoundTrip(new TreeAdminTagIndexRequest { IndexName = "by-tag" }).IndexName, Is.EqualTo("by-tag"));
+    }
+
+    [Test]
+    public void TreeAdminTagIndexListRequest_round_trips()
+    {
+        Assert.That(RoundTrip(new TreeAdminTagIndexListRequest()), Is.Not.Null);
+    }
+
+    [Test]
+    public void TreeTagIndexCatalog_response_round_trips_through_the_marshaller()
+    {
+        var copy = RoundTrip(new TreeTagIndexCatalog
+        {
+            Indexes = System.Collections.Immutable.ImmutableArray.Create(
+                new TreeTagIndexInfo
+                {
+                    IndexName = "by-tag",
+                    TreeId = "tag-by-tag",
+                    ShardCount = 8,
+                    CoveredTrees = System.Collections.Immutable.ImmutableArray.Create("orders", "widgets"),
+                }),
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Indexes, Has.Length.EqualTo(1));
+            Assert.That(copy.Indexes[0].IndexName, Is.EqualTo("by-tag"));
+            Assert.That(copy.Indexes[0].TreeId, Is.EqualTo("tag-by-tag"));
+            Assert.That(copy.Indexes[0].ShardCount, Is.EqualTo(8));
+            Assert.That(copy.Indexes[0].CoveredTrees, Is.EquivalentTo(new[] { "orders", "widgets" }));
+        });
+    }
+
+    [Test]
+    public void TreeTagIndexStatus_response_round_trips_through_the_marshaller()
+    {
+        var copy = RoundTrip(new TreeTagIndexStatus
+        {
+            IndexName = "by-tag",
+            TreeId = "tag-by-tag",
+            ShardCount = 4,
+            CoveredTrees = System.Collections.Immutable.ImmutableArray.Create("orders"),
+            ReconcileIdle = false,
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.IndexName, Is.EqualTo("by-tag"));
+            Assert.That(copy.TreeId, Is.EqualTo("tag-by-tag"));
+            Assert.That(copy.ShardCount, Is.EqualTo(4));
+            Assert.That(copy.CoveredTrees, Is.EquivalentTo(new[] { "orders" }));
+            Assert.That(copy.ReconcileIdle, Is.False);
+        });
+    }
+
+    [Test]
+    public void TreeTagReconcileReport_response_round_trips_through_the_marshaller()
+    {
+        var copy = RoundTrip(new TreeTagReconcileReport
+        {
+            IndexName = "by-tag",
+            TreeId = "tag-by-tag",
+            TreesCovered = 2,
+            KeysScanned = 100,
+            MembershipRowsScanned = 40,
+            OrphanRowsRemoved = 3,
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.IndexName, Is.EqualTo("by-tag"));
+            Assert.That(copy.TreeId, Is.EqualTo("tag-by-tag"));
+            Assert.That(copy.TreesCovered, Is.EqualTo(2));
+            Assert.That(copy.KeysScanned, Is.EqualTo(100));
+            Assert.That(copy.MembershipRowsScanned, Is.EqualTo(40));
+            Assert.That(copy.OrphanRowsRemoved, Is.EqualTo(3));
+        });
+    }
+
+    [Test]
     public void Every_registry_alias_is_unique_and_uses_the_reserved_prefix()
     {
         var aliases = RegistryAliasValues();

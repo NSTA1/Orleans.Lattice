@@ -70,6 +70,8 @@ public sealed class TreeAdminToolGroupTests
         "lattice_treeadmin_wal_move_plan",
         "lattice_treeadmin_view_list",
         "lattice_treeadmin_view_status",
+        "lattice_treeadmin_tag_index_list",
+        "lattice_treeadmin_tag_index_status",
     };
 
     private static readonly string[] LifecycleWriteToolNames =
@@ -95,6 +97,7 @@ public sealed class TreeAdminToolGroupTests
         "lattice_treeadmin_view_rebuild",
         "lattice_treeadmin_view_reconcile",
         "lattice_treeadmin_view_drop",
+        "lattice_treeadmin_tag_index_reconcile",
     };
 
     /// <summary>The read-only tools always contributed regardless of any opt-in.</summary>

@@ -152,6 +152,15 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary materialised-view drop RPC method name.</summary>
     public const string DropViewMethodName = "DropView";
 
+    /// <summary>The unary read-only tag-index listing RPC method name.</summary>
+    public const string ListTagIndexesMethodName = "ListTagIndexes";
+
+    /// <summary>The unary read-only tag-index status RPC method name.</summary>
+    public const string GetTagIndexStatusMethodName = "GetTagIndexStatus";
+
+    /// <summary>The unary tag-index reconcile trigger RPC method name.</summary>
+    public const string ReconcileTagIndexMethodName = "ReconcileTagIndex";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeTreeAdminGrpcMethods(
         Serializer<TreeAdminTreeRequest> treeRequestSerializer,
@@ -203,7 +212,12 @@ internal sealed class LatticeTreeAdminGrpcMethods
         Serializer<TreeAdminViewListRequest> viewListRequestSerializer,
         Serializer<TreeViewCatalog> viewCatalogSerializer,
         Serializer<TreeViewStatus> viewStatusSerializer,
-        Serializer<TreeViewReconcileResult> viewReconcileResultSerializer)
+        Serializer<TreeViewReconcileResult> viewReconcileResultSerializer,
+        Serializer<TreeAdminTagIndexRequest> tagIndexRequestSerializer,
+        Serializer<TreeAdminTagIndexListRequest> tagIndexListRequestSerializer,
+        Serializer<TreeTagIndexCatalog> tagIndexCatalogSerializer,
+        Serializer<TreeTagIndexStatus> tagIndexStatusSerializer,
+        Serializer<TreeTagReconcileReport> tagReconcileReportSerializer)
     {
         ArgumentNullException.ThrowIfNull(treeRequestSerializer);
         ArgumentNullException.ThrowIfNull(capabilitiesSerializer);
@@ -255,6 +269,11 @@ internal sealed class LatticeTreeAdminGrpcMethods
         ArgumentNullException.ThrowIfNull(viewCatalogSerializer);
         ArgumentNullException.ThrowIfNull(viewStatusSerializer);
         ArgumentNullException.ThrowIfNull(viewReconcileResultSerializer);
+        ArgumentNullException.ThrowIfNull(tagIndexRequestSerializer);
+        ArgumentNullException.ThrowIfNull(tagIndexListRequestSerializer);
+        ArgumentNullException.ThrowIfNull(tagIndexCatalogSerializer);
+        ArgumentNullException.ThrowIfNull(tagIndexStatusSerializer);
+        ArgumentNullException.ThrowIfNull(tagReconcileReportSerializer);
 
         ProbeCapabilities = new Method<TreeAdminTreeRequest, LatticeTreeAdminCapabilities>(
             type: MethodType.Unary,
@@ -549,6 +568,27 @@ internal sealed class LatticeTreeAdminGrpcMethods
             name: DropViewMethodName,
             requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(viewRequestSerializer),
             responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(viewRequestSerializer));
+
+        ListTagIndexes = new Method<TreeAdminTagIndexListRequest, TreeTagIndexCatalog>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: ListTagIndexesMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(tagIndexListRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(tagIndexCatalogSerializer));
+
+        GetTagIndexStatus = new Method<TreeAdminTagIndexRequest, TreeTagIndexStatus>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: GetTagIndexStatusMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(tagIndexRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(tagIndexStatusSerializer));
+
+        ReconcileTagIndex = new Method<TreeAdminTagIndexRequest, TreeTagReconcileReport>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: ReconcileTagIndexMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(tagIndexRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(tagReconcileReportSerializer));
     }
 
     /// <summary>The unary <c>ProbeCapabilities</c> capability-probe RPC.</summary>
@@ -677,6 +717,15 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary <c>DropView</c> materialised-view drop RPC. The request is echoed back as the completion ack.</summary>
     public Method<TreeAdminViewRequest, TreeAdminViewRequest> DropView { get; }
 
+    /// <summary>The unary <c>ListTagIndexes</c> read-only tag-index listing RPC.</summary>
+    public Method<TreeAdminTagIndexListRequest, TreeTagIndexCatalog> ListTagIndexes { get; }
+
+    /// <summary>The unary <c>GetTagIndexStatus</c> read-only tag-index status RPC.</summary>
+    public Method<TreeAdminTagIndexRequest, TreeTagIndexStatus> GetTagIndexStatus { get; }
+
+    /// <summary>The unary <c>ReconcileTagIndex</c> tag-index reconcile trigger RPC.</summary>
+    public Method<TreeAdminTagIndexRequest, TreeTagReconcileReport> ReconcileTagIndex { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out of
     /// <paramref name="serializerProvider"/>. Shared by the server-side DI factory
@@ -736,7 +785,12 @@ internal sealed class LatticeTreeAdminGrpcMethods
             serializerProvider.GetRequiredService<Serializer<TreeAdminViewListRequest>>(),
             serializerProvider.GetRequiredService<Serializer<TreeViewCatalog>>(),
             serializerProvider.GetRequiredService<Serializer<TreeViewStatus>>(),
-            serializerProvider.GetRequiredService<Serializer<TreeViewReconcileResult>>());
+            serializerProvider.GetRequiredService<Serializer<TreeViewReconcileResult>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAdminTagIndexRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAdminTagIndexListRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeTagIndexCatalog>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeTagIndexStatus>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeTagReconcileReport>>());
     }
 }
 

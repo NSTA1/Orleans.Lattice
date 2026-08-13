@@ -646,6 +646,45 @@ public sealed class TreeAdminLifecycleToolHandlersTests
     }
 
     [Test]
+    public async Task ListTagIndexesAsync_returns_the_catalog()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeTagIndexCatalog { Indexes = ImmutableArray<TreeTagIndexInfo>.Empty };
+        admin.ListTagIndexesAsync(Arg.Any<CancellationToken>()).Returns(expected);
+
+        var result = await TreeAdminLifecycleToolHandlers.ListTagIndexesAsync(admin, CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).ListTagIndexesAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task GetTagIndexStatusAsync_forwards_the_index_name_and_returns_the_status()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeTagIndexStatus { IndexName = "by-tag", TreeId = "tag-by-tag" };
+        admin.GetTagIndexStatusAsync("by-tag", Arg.Any<CancellationToken>()).Returns(expected);
+
+        var result = await TreeAdminLifecycleToolHandlers.GetTagIndexStatusAsync(admin, "by-tag", CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).GetTagIndexStatusAsync("by-tag", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ReconcileTagIndexAsync_forwards_the_index_name_and_returns_the_report()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeTagReconcileReport { IndexName = "by-tag", TreeId = "tag-by-tag", OrphanRowsRemoved = 3 };
+        admin.ReconcileTagIndexAsync("by-tag", Arg.Any<CancellationToken>()).Returns(expected);
+
+        var result = await TreeAdminLifecycleToolHandlers.ReconcileTagIndexAsync(admin, "by-tag", CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).ReconcileTagIndexAsync("by-tag", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public void Handlers_reject_a_null_facade()
     {
         Assert.Multiple(() =>
@@ -684,6 +723,9 @@ public sealed class TreeAdminLifecycleToolHandlersTests
             Assert.That(() => TreeAdminLifecycleToolHandlers.RebuildViewAsync(null!, "v"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.ReconcileViewAsync(null!, "v"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.DropViewAsync(null!, "v"), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.ListTagIndexesAsync(null!), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.GetTagIndexStatusAsync(null!, "i"), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.ReconcileTagIndexAsync(null!, "i"), Throws.ArgumentNullException);
         });
     }
 }

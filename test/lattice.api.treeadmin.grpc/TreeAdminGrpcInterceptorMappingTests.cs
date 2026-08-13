@@ -368,6 +368,32 @@ public sealed class TreeAdminGrpcInterceptorMappingTests
     }
 
     [Test]
+    public void DescribeCall_tag_index_request_shapes_carry_no_target_tree()
+    {
+        // A tag index is authorized by its backing membership tree, which the facade
+        // derives authoritatively from the index name; the wire request carries only
+        // the index name, so the interceptor decodes no target tree (Unknown
+        // operation, null target).
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.ListTagIndexesMethodName),
+                new TreeAdminTagIndexListRequest()),
+                Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, (string?)null)));
+
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.GetTagIndexStatusMethodName),
+                new TreeAdminTagIndexRequest { IndexName = "by-tag" }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, (string?)null)));
+
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.ReconcileTagIndexMethodName),
+                new TreeAdminTagIndexRequest { IndexName = "by-tag" }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, (string?)null)));
+        });
+    }
+
+    [Test]
     public void IsUnauthenticatedMethod_does_not_exempt_the_view_rpcs()
     {
         Assert.Multiple(() =>

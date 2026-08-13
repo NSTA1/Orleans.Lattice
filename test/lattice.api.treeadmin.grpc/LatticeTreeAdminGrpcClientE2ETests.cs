@@ -535,6 +535,35 @@ public sealed class LatticeTreeAdminGrpcClientE2ETests
             Throws.Exception);
     }
 
+    [Test]
+    public async Task tag_index_list_over_the_client_returns_the_empty_catalog()
+    {
+        // The fixture cluster registers AddLattice, so the tag-index subsystem is
+        // available; with no indexes defined the list is an empty catalog. The point
+        // is that the read RPC is wired end to end.
+        var catalog = await _host.Client.ListTagIndexesAsync();
+
+        Assert.That(catalog.Indexes, Is.Empty);
+    }
+
+    [Test]
+    public void tag_index_status_over_the_client_throws_for_an_unknown_index()
+    {
+        // The index is authorized (permissive fixture authorizer) but does not exist,
+        // so the facade fails closed to KeyNotFound, surfaced as an RpcException.
+        Assert.That(
+            async () => await _host.Client.GetTagIndexStatusAsync("no-such-index"),
+            Throws.Exception);
+    }
+
+    [Test]
+    public void tag_index_reconcile_over_the_client_throws_for_an_unknown_index()
+    {
+        Assert.That(
+            async () => await _host.Client.ReconcileTagIndexAsync("no-such-index"),
+            Throws.Exception);
+    }
+
     private static IReadOnlyList<Orleans.Lattice.Api.Data.DataEntry> Chunk(params string[] keys)
         => keys.Select(k => new Orleans.Lattice.Api.Data.DataEntry { Key = k, Value = "{}"u8.ToArray() }).ToArray();
 }

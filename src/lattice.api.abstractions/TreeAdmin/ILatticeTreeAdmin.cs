@@ -822,4 +822,62 @@ public interface ILatticeTreeAdmin
     Task DropViewAsync(
         string viewName,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lists the cluster's tag indexes - each index's name, backing membership tree,
+    /// shard count, and the subject trees it currently covers - after authorizing the
+    /// distinct cluster-wide <see cref="LatticeOperation.Telemetry"/> capability
+    /// fail-closed. Indexes are discovered from the tree registry (their backing
+    /// membership trees carry the reserved <c>tag-</c> prefix). A pure read with no
+    /// side effects.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tag-index catalog.</returns>
+    /// <exception cref="InvalidOperationException">The tag-index subsystem is not available on this cluster.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the telemetry capability.</exception>
+    Task<TreeTagIndexCatalog> ListTagIndexesAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads the status of the tag index named <paramref name="indexName"/> - its
+    /// backing membership tree, shard count, covered subject trees, and whether its
+    /// background reconciliation coordinator is idle - after authorizing whole-tree
+    /// <see cref="LatticeOperation.Read"/> over its backing membership tree
+    /// (<c>tag-{indexName}</c>) fail-closed. A tag index inherits its authorization
+    /// boundary from its backing membership tree, whose id is derived authoritatively
+    /// from the index name and never trusted from the caller. A pure read with no side
+    /// effects.
+    /// </summary>
+    /// <param name="indexName">The logical tag-index name. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tag index's status.</returns>
+    /// <exception cref="ArgumentException"><paramref name="indexName"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="InvalidOperationException">The tag-index subsystem is not available on this cluster.</exception>
+    /// <exception cref="KeyNotFoundException">No tag index named <paramref name="indexName"/> is registered on this cluster.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the index's backing membership tree.</exception>
+    Task<TreeTagIndexStatus> GetTagIndexStatusAsync(
+        string indexName,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// <b>Reconciles</b> the tag index named <paramref name="indexName"/> against current
+    /// source state - an online, digest-gated live sweep that removes membership rows
+    /// whose subject key no longer exists - after authorizing whole-tree
+    /// <see cref="LatticeOperation.Admin"/> over its backing membership tree
+    /// (<c>tag-{indexName}</c>) fail-closed. Reconcile writes only to the backing
+    /// membership tree, so it authorizes on that tree; the covered subject trees are
+    /// scanned as read-only infrastructure. Online and idempotent: an index that already
+    /// matches its source is left untouched (no rows removed) and covered trees are never
+    /// paused.
+    /// </summary>
+    /// <param name="indexName">The logical tag-index name to reconcile. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The reconcile report, pairing the index identity with the sweep's counts.</returns>
+    /// <exception cref="ArgumentException"><paramref name="indexName"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="InvalidOperationException">The tag-index subsystem is not available on this cluster.</exception>
+    /// <exception cref="KeyNotFoundException">No tag index named <paramref name="indexName"/> is registered on this cluster.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the admin capability over the index's backing membership tree.</exception>
+    Task<TreeTagReconcileReport> ReconcileTagIndexAsync(
+        string indexName,
+        CancellationToken cancellationToken = default);
 }
