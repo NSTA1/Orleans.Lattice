@@ -31,7 +31,7 @@ jobs:
       #
       # Outputs:
       #   code       - at least one non-doc, non-benchmark file changed
-      #                (any *.md / *.txt / docs/** / benchmark/** /
+      #                (any *.md / *.txt / docs/** / benchmark/** / apps/** /
       #                 reference-architecture/** / .github/workflows/** only
       #                 => false).
       #   nonSample  - at least one non-doc, non-benchmark, non-sample file changed.
@@ -66,6 +66,23 @@ jobs:
       # library matrix while never actually building the kit's own projects.
       # The dedicated lane below builds only the kit and runs only its tests.
       #
+      # apps/** is excluded from `code`/`nonSample` (and handled by its own
+      # `apps` lane) for the same reason as reference-architecture/**: the
+      # container host apps (apps/repocontext, apps/embedding) map to no
+      # src/<name>/ package, so an apps-only change matches nothing in the
+      # per-package discovery step and would fall through to the conservative
+      # "test every package" fallback - fanning a Docker-host edit out to the
+      # entire core library matrix. Unlike the reference-architecture kit, the
+      # repocontext host IS in Orleans.Lattice.slnx and references src/ by
+      # ProjectReference, and it is covered by test/lattice.api.mcp.repocontext
+      # (which references the host via InternalsVisibleTo + ProjectReference), so
+      # it must still be compile-checked and its covering tests run. The
+      # dedicated lane below builds each changed app's csproj and runs every test
+      # project that covers it - both a *.Tests.csproj under the app and a
+      # test/<pkg>/ project that ProjectReferences the changed app - instead of
+      # rebuilding and testing every package. An app with no csproj (e.g.
+      # apps/embedding, a pure Dockerfile build) is a clean no-op there.
+      #
       # NOTE: patterns must use '**/*.md' for recursive markdown matching.
       # picomatch (the matcher dorny/paths-filter uses) only treats '**' as a
       # globstar when it stands alone as a path segment - '**.md' degrades to
@@ -82,6 +99,7 @@ jobs:
               - '!**/*.txt'
               - '!docs/**'
               - '!benchmark/**'
+              - '!apps/**'
               - '!reference-architecture/**'
               - '!.github/workflows/**'
             nonSample:
@@ -89,12 +107,16 @@ jobs:
               - '!**/*.txt'
               - '!docs/**'
               - '!benchmark/**'
+              - '!apps/**'
               - '!reference-architecture/**'
               - '!.github/workflows/**'
               - '!samples/**'
             refArch:
               - 'reference-architecture/**'
               - '!reference-architecture/**/*.md'
+            apps:
+              - 'apps/**'
+              - '!apps/**/*.md'
 
       # Auto-discover packages by convention: each subdirectory of `src/`
       # is a package; tests live at `test/{name}/`; docs at `docs/{name}/`.
@@ -193,14 +215,14 @@ jobs:
           echo "Packages to test: ${matched[*]}"
 
       - name: Setup .NET
-        if: steps.filter.outputs.code == 'true' || steps.filter.outputs.refArch == 'true'
+        if: steps.filter.outputs.code == 'true' || steps.filter.outputs.refArch == 'true' || steps.filter.outputs.apps == 'true'
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
       # Cache ~/.nuget/packages between runs.
       - name: Cache NuGet packages
-        if: steps.filter.outputs.code == 'true' || steps.filter.outputs.refArch == 'true'
+        if: steps.filter.outputs.code == 'true' || steps.filter.outputs.refArch == 'true' || steps.filter.outputs.apps == 'true'
         uses: actions/cache@v5
         with:
           path: ~/.nuget/packages
@@ -370,6 +392,98 @@ jobs:
             echo "::endgroup::"
           done
 
+      # Isolated apps lane. Runs only when a non-markdown file under apps/**
+      # changed (apps), independently of the core library matrix. The container
+      # host apps map to no src/<name>/ package (see the classification comment
+      # at the top of this job), so a change under apps/ is compile-checked and
+      # covered here instead of fanning out to every package. For each changed
+      # apps/<name>/ directory: build every csproj it owns (the repocontext host
+      # references src/ by ProjectReference, so this transitively compiles the
+      # core library too), then run every test project that covers a changed app
+      # - both a *.Tests.csproj living under the app directory and any
+      # test/**/ *.Tests.csproj that ProjectReferences a changed app csproj (e.g.
+      # test/lattice.api.mcp.repocontext covers apps/repocontext). Deterministic
+      # only (chaos and Azure-emulator categories excluded), mirroring the
+      # samples and reference-architecture lanes. An app with no csproj (e.g.
+      # apps/embedding, a pure Dockerfile build) and an app with no covering test
+      # are both clean no-ops in their respective phases.
+      - name: Build and test apps (apps change)
+        if: steps.filter.outputs.apps == 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LATTICE_DIGEST_SETTLE_TIMEOUT_MS: '60000'
+        run: |
+          set -euo pipefail
+
+          # Resolve which apps/<name>/ directories have a non-markdown change.
+          changed=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          mapfile -t appDirs < <(echo "$changed" \
+            | grep -E '^apps/[^/]+/' \
+            | grep -vE '\.md$' \
+            | sed -E 's#^(apps/[^/]+)/.*#\1#' \
+            | sort -u || true)
+          if [ ${#appDirs[@]} -eq 0 ]; then
+            echo "::notice::No non-markdown apps change resolved to an app directory - nothing to build."
+            exit 0
+          fi
+          echo "Changed app directories: ${appDirs[*]}"
+
+          # Build each changed app's csproj(s). ProjectReferences into src/ mean
+          # this compile-checks the host and the core projects it consumes.
+          appProjs=()
+          for appDir in "${appDirs[@]}"; do
+            while IFS= read -r p; do
+              [ -n "$p" ] && appProjs+=("$p")
+            done < <(find "$appDir" -type f -name '*.csproj' \
+              -not -path '*/bin/*' -not -path '*/obj/*' | sort)
+          done
+          if [ ${#appProjs[@]} -eq 0 ]; then
+            echo "::notice::No csproj under the changed app directories (pure Dockerfile build) - nothing to compile."
+          else
+            for proj in "${appProjs[@]}"; do
+              echo "::group::Build $proj"
+              dotnet build "$proj" --configuration Release
+              echo "::endgroup::"
+            done
+          fi
+
+          # Collect covering test projects: any *.Tests.csproj under a changed
+          # app directory, plus any test/**/ *.Tests.csproj that ProjectReferences
+          # a changed app's csproj (matched by csproj file name).
+          testProjs=()
+          for appDir in "${appDirs[@]}"; do
+            while IFS= read -r t; do
+              [ -n "$t" ] && testProjs+=("$t")
+            done < <(find "$appDir" -type f -name '*.Tests.csproj' \
+              -not -path '*/bin/*' -not -path '*/obj/*' | sort)
+          done
+          for proj in "${appProjs[@]}"; do
+            projFile=$(basename "$proj")
+            while IFS= read -r t; do
+              [ -n "$t" ] && testProjs+=("$t")
+            done < <(grep -rlF "$projFile" test --include='*.Tests.csproj' 2>/dev/null | sort -u || true)
+          done
+          if [ ${#testProjs[@]} -eq 0 ]; then
+            echo "::notice::No test project covers the changed apps - build-only."
+            exit 0
+          fi
+          mapfile -t testProjs < <(printf '%s\n' "${testProjs[@]}" | sort -u)
+          echo "Covering test projects: ${testProjs[*]}"
+
+          for testProj in "${testProjs[@]}"; do
+            testName=$(basename "$testProj" .csproj)
+            echo "::group::Build $testName"
+            dotnet build "$testProj" --configuration Release
+            echo "::endgroup::"
+            echo "::group::Test $testName"
+            dotnet test "$testProj" --no-build --configuration Release \
+              --filter "TestCategory!=Chaos&TestCategory!=AzureTableEmulator" \
+              --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
+              --logger "trx;LogFileName=apps-${testName}.trx"
+            echo "::endgroup::"
+          done
+
       - name: Restore
         if: steps.filter.outputs.nonSample == 'true'
         run: dotnet restore
@@ -476,11 +590,12 @@ jobs:
             echo "::endgroup::"
           done
 
-      # Upload test results even if the Test step fails. Gated on `code` or
-      # `refArch` rather than `nonSample` so trx files produced by the
-      # samples-only path and the reference-architecture lane are also captured.
+      # Upload test results even if the Test step fails. Gated on `code`,
+      # `refArch`, or `apps` rather than `nonSample` so trx files produced by the
+      # samples-only path, the reference-architecture lane, and the apps lane are
+      # also captured.
       - name: Upload test results
-        if: always() && (steps.filter.outputs.code == 'true' || steps.filter.outputs.refArch == 'true')
+        if: always() && (steps.filter.outputs.code == 'true' || steps.filter.outputs.refArch == 'true' || steps.filter.outputs.apps == 'true')
         uses: actions/upload-artifact@v6
         with:
           name: test-results
