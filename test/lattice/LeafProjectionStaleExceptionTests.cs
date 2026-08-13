@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Serialization;
+using Orleans.Serialization.Cloning;
 
 namespace Orleans.Lattice.Tests;
 
@@ -121,6 +122,35 @@ public class LeafProjectionStaleExceptionTests
             Assert.That(restored.Message, Is.EqualTo(original.Message));
             Assert.That(restored.InnerException, Is.Not.Null);
             Assert.That(restored.InnerException!.Message, Is.EqualTo(inner.Message));
+        });
+    }
+
+    [Test]
+    public void Deep_copies_through_the_Orleans_copier_on_a_same_silo_boundary()
+    {
+        // Regression: cross-silo the exception serialises fine, but a leaf
+        // activation fault is frequently raised on a leaf co-located with its
+        // caller on the SAME silo (a single-silo appliance, or any co-located
+        // activation). On that path Orleans deep-COPIES the exception rather
+        // than serialising it. Without a copier that terminates cleanly at the
+        // base exception, the copy throws
+        // "Could not find a base type copier for type
+        // System.InvalidOperationException" and the real, actionable fault is
+        // masked by an opaque KeyNotFoundException.
+        var copier = _services.GetRequiredService<DeepCopier<LeafProjectionStaleException>>();
+        var inner = new InvalidOperationException("checkpoint fell off the log");
+        var original = new LeafProjectionStaleException(
+            "Leaf projection for tree 'test' partition 4 cannot be rebuilt from the WAL",
+            inner);
+
+        var copy = copier.Copy(original);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy, Is.Not.Null);
+            Assert.That(copy.Message, Is.EqualTo(original.Message));
+            Assert.That(copy.InnerException, Is.Not.Null);
+            Assert.That(copy.InnerException!.Message, Is.EqualTo(inner.Message));
         });
     }
 }

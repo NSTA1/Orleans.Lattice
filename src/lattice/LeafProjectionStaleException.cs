@@ -1,3 +1,5 @@
+using Orleans.Serialization.Cloning;
+
 namespace Orleans.Lattice;
 
 /// <summary>
@@ -46,4 +48,24 @@ public sealed class LeafProjectionStaleException : InvalidOperationException
     /// exception.
     /// </summary>
     public LeafProjectionStaleException(string message, Exception innerException) : base(message, innerException) { }
+}
+
+/// <summary>
+/// Deep-copier for <see cref="LeafProjectionStaleException"/>. Orleans copies a
+/// grain call's result across an in-process (same-silo) boundary rather than
+/// serialising it, and the generated copier for a <c>[GenerateSerializer]</c>
+/// exception that derives from a BCL exception (here
+/// <see cref="InvalidOperationException"/>) requires a registered copier for its
+/// base type, which Orleans does not provide - so a same-silo throw would fail
+/// with an opaque <c>KeyNotFoundException</c> ("Could not find a base type
+/// copier for type System.InvalidOperationException") and mask the real,
+/// actionable fault. An exception is immutable once constructed, so sharing the
+/// same instance is a correct deep copy and keeps the typed exception intact on
+/// the co-located path (the cross-silo serialize path is unaffected).
+/// </summary>
+[RegisterCopier]
+internal sealed class LeafProjectionStaleExceptionCopier : IDeepCopier<LeafProjectionStaleException>
+{
+    /// <inheritdoc />
+    public LeafProjectionStaleException DeepCopy(LeafProjectionStaleException input, CopyContext context) => input;
 }
