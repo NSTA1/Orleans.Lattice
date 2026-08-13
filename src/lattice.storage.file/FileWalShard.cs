@@ -557,16 +557,22 @@ internal sealed class FileWalShard : IDisposable
             _stream.ReadExactly(header);
             var type = header[0];
             var bodyLen = BinaryPrimitives.ReadInt32LittleEndian(header.Slice(1, 4));
-            if (bodyLen < 0)
+
+            // bodyLen is read verbatim from a possibly-torn tail. Validate it in
+            // 64-bit against the bytes remaining in the file before trusting it:
+            // a negative, int-overflowing, or oversized length is a torn tail and
+            // is discarded here rather than used to size a buffer. Computing
+            // FramingOverhead + bodyLen in 32-bit would wrap a near-int.MaxValue
+            // garbage length to a negative Rent length and hard-fail recovery
+            // instead of rolling the torn tail back.
+            if (bodyLen < 0
+                || bodyLen > int.MaxValue - FileWalRecordFormat.FramingOverhead
+                || bodyLen > _fileLength - _position - FileWalRecordFormat.FramingOverhead)
             {
                 return false;
             }
 
             var recordLen = FileWalRecordFormat.FramingOverhead + bodyLen;
-            if (_position + recordLen > _fileLength)
-            {
-                return false;
-            }
 
             var rented = ArrayPool<byte>.Shared.Rent(recordLen);
             try

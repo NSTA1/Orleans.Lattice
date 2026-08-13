@@ -117,7 +117,29 @@ internal sealed class RepoContextSearchService
             };
         }
 
-        var keyword = await KeywordAsync(repoId, query, count, cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<RepoContextSearchHit> keyword;
+        try
+        {
+            keyword = await KeywordAsync(repoId, query, count, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Fail-closed contract: if the keyword/structural fallback itself
+            // faults (for example the same stale-leaf-projection activation fault
+            // that can trip the semantic path, since the keyword scan walks the
+            // structural and memory trees), the read-only search tool degrades to
+            // the terminal empty result rather than propagating a protocol error.
+            _logger.LogWarning(
+                ex,
+                "repocontext_search for repository {RepoId} returning empty: the keyword fallback threw.",
+                repoId);
+            keyword = Array.Empty<RepoContextSearchHit>();
+        }
+
         return new RepoContextSearchResult
         {
             RepoId = repoId,

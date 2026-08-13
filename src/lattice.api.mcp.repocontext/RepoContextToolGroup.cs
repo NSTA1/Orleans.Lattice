@@ -14,11 +14,16 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The group contributes a read-only <c>repocontext_health</c> probe that proves
-/// the registration and the authorization gate work end to end, and - when the
-/// host opts writes in - the mutating <c>repocontext_bootstrap</c> onboarding tool
-/// that ingests a codebase into the context store. The capture, maintenance, and
-/// retrieval tools land in later work.
+/// In the default single-repository mode the group contributes six always-on
+/// read-only tools (<c>repocontext_health</c>, <c>repocontext_recall</c>,
+/// <c>repocontext_scan</c>, <c>repocontext_list_topics</c>,
+/// <c>repocontext_search</c>, and <c>repocontext_index_status</c>) and - when the
+/// host opts writes in - the mutating onboarding tool <c>repocontext_bootstrap</c>
+/// together with <c>repocontext_remember</c>, <c>repocontext_update</c>, and
+/// <c>repocontext_forget</c>. In workspace mode the read-only
+/// <c>repocontext_list_repos</c> is added and the single-repository
+/// <c>repocontext_bootstrap</c> is replaced by the mutating
+/// <c>repocontext_add_repo</c> and <c>repocontext_remove_repo</c>.
 /// </para>
 /// <para>
 /// The tool list is built <b>once</b> in the constructor, so the per-session

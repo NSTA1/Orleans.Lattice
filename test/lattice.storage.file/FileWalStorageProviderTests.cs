@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using System.Buffers.Binary;
 using Orleans.Lattice.Primitives;
 using Orleans.Serialization;
 
@@ -298,6 +299,40 @@ public sealed class FileWalStorageProviderTests
     }
 
     [Test]
+    public async Task A_corrupt_oversized_length_field_in_the_tail_is_rolled_back_without_throwing()
+    {
+        // Regression: a torn tail whose 32-bit body-length field decodes to a
+        // near-int.MaxValue garbage value must be discarded as a torn tail. A
+        // naive FramingOverhead + bodyLen sum overflows to a negative record
+        // length, slips past the bounds check, and then throws inside
+        // ArrayPool.Rent - hard-failing recovery instead of rolling the tail
+        // back to the last durable boundary.
+        long logLengthAfterFirst;
+        using (var first = CreateProvider())
+        {
+            await first.AppendBatchAsync(TreeId, 0, new[] { Entry(0), Entry(1) }, CancellationToken.None);
+            logLengthAfterFirst = new FileInfo(LogPath(TreeId, 0)).Length;
+        }
+
+        // Append a raw torn record: a data type byte, an int32 body-length of
+        // int.MaxValue, then a few filler bytes far short of that length.
+        var tail = new byte[FileWalRecordFormat.FramingOverhead];
+        tail[0] = FileWalRecordFormat.RecordTypeData;
+        BinaryPrimitives.WriteInt32LittleEndian(tail.AsSpan(1, 4), int.MaxValue);
+        AppendRaw(TreeId, 0, tail);
+
+        using var recovered = CreateProvider();
+        Assert.DoesNotThrowAsync(() => recovered.ReconcileAsync(TreeId, 0, CancellationToken.None),
+            "an oversized garbage length in the tail must be treated as a torn tail, not throw");
+
+        var read = await ReadAllAsync(recovered, TreeId, 0);
+        Assert.That(read.Select(e => e.Offset), Is.EqualTo(new[] { 0L, 1L }),
+            "the committed batch must survive the corrupt tail");
+        Assert.That(new FileInfo(LogPath(TreeId, 0)).Length, Is.EqualTo(logLengthAfterFirst),
+            "the corrupt tail must be truncated back to the last durable boundary");
+    }
+
+    [Test]
     public async Task A_batch_whose_data_records_are_partially_written_rolls_back()
     {
         using (var first = CreateProvider())
@@ -507,5 +542,13 @@ public sealed class FileWalStorageProviderTests
         var path = LogPath(treeId, shard);
         using var fs = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
         fs.SetLength(fs.Length - byNBytes);
+    }
+
+    private void AppendRaw(string treeId, int shard, byte[] bytes)
+    {
+        var path = LogPath(treeId, shard);
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        fs.Seek(0, SeekOrigin.End);
+        fs.Write(bytes, 0, bytes.Length);
     }
 }
