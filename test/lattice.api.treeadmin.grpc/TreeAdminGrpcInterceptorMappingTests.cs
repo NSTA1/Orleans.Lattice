@@ -155,6 +155,46 @@ public sealed class TreeAdminGrpcInterceptorMappingTests
     }
 
     [Test]
+    public void DescribeCall_decodes_the_target_tree_from_the_bulk_load_request_shapes()
+    {
+        // The bulk-load RPCs share the unmapped-operation posture of the other
+        // whole-tree lifecycle verbs (Unknown, so a deny-by-default policy refuses
+        // them), but their target tree is still decoded from the request so a
+        // per-tree authorizer sees the tree the call targets.
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.BeginBulkLoadMethodName),
+                new TreeAdminBulkLoadSessionRequest { TreeId = "orders", OperationId = "op" }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, "orders")));
+
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.AppendBulkLoadMethodName),
+                new TreeAdminBulkLoadAppendRequest { TreeId = "orders", OperationId = "op", ChunkIndex = 0 }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, "orders")));
+
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.CommitBulkLoadMethodName),
+                new TreeAdminBulkLoadSessionRequest { TreeId = "orders", OperationId = "op" }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, "orders")));
+        });
+    }
+
+    [Test]
+    public void IsUnauthenticatedMethod_does_not_exempt_the_bulk_load_rpcs()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.IsUnauthenticatedMethod(
+                Method(LatticeTreeAdminGrpcMethods.BeginBulkLoadMethodName)), Is.False);
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.IsUnauthenticatedMethod(
+                Method(LatticeTreeAdminGrpcMethods.AppendBulkLoadMethodName)), Is.False);
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.IsUnauthenticatedMethod(
+                Method(LatticeTreeAdminGrpcMethods.CommitBulkLoadMethodName)), Is.False);
+        });
+    }
+
+    [Test]
     public void DescribeCall_unknown_request_shape_has_no_target()
     {
         var (_, targetId) = LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(

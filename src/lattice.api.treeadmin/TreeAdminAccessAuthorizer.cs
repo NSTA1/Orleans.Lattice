@@ -131,6 +131,24 @@ internal sealed class TreeAdminAccessAuthorizer
             _gate, _membership, treeId, LatticeOperation.TreeLifecycle, cancellationToken);
 
     /// <summary>
+    /// Authorizes a whole-tree <b>bulk-load (tree creation)</b> over
+    /// <paramref name="treeId"/> for the current caller, throwing
+    /// <see cref="LatticeAuthorizationDeniedException"/> when the distinct
+    /// <see cref="LatticeOperation.BulkLoad"/> capability is not granted over the whole
+    /// tree. Deliberately gated on <see cref="LatticeOperation.BulkLoad"/> rather than
+    /// <see cref="LatticeOperation.Write"/>: seeding a whole tree bottom-up is a
+    /// structural operation distinct from per-key writes, so a per-key write grant must
+    /// not confer it. A partial / filtered allow is refused, fail-closed.
+    /// </summary>
+    /// <param name="treeId">The tree being bulk-loaded. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancels the authorization.</param>
+    /// <returns>A task that completes when the bulk-load is authorized.</returns>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to bulk-load the tree.</exception>
+    public ValueTask AuthorizeBulkLoadAsync(string treeId, CancellationToken cancellationToken = default) =>
+        LatticeAccessGateEnforcement.EnforceWholeTreeAsync(
+            _gate, _membership, treeId, LatticeOperation.BulkLoad, cancellationToken);
+
+    /// <summary>
     /// Probes whether the current caller may perform per-tree lifecycle
     /// <b>mutations</b> over <paramref name="treeId"/>, returning <c>true</c> when
     /// authorized and <c>false</c> when denied. Never throws for a plain authorization
@@ -190,6 +208,29 @@ internal sealed class TreeAdminAccessAuthorizer
         try
         {
             await AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch (LatticeAuthorizationDeniedException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Probes whether the current caller may perform a whole-tree <b>bulk-load</b> over
+    /// <paramref name="treeId"/>, returning <c>true</c> when the distinct
+    /// <see cref="LatticeOperation.BulkLoad"/> capability is granted and <c>false</c>
+    /// when denied. Never throws for a plain authorization denial; other failures
+    /// propagate. Read-only, no side effects.
+    /// </summary>
+    /// <param name="treeId">The tree being probed. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancels the probe.</param>
+    /// <returns><c>true</c> when the caller may bulk-load the tree; otherwise <c>false</c>.</returns>
+    public async ValueTask<bool> IsBulkLoadAuthorizedAsync(string treeId, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await AuthorizeBulkLoadAsync(treeId, cancellationToken).ConfigureAwait(false);
             return true;
         }
         catch (LatticeAuthorizationDeniedException)

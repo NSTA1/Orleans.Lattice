@@ -236,4 +236,73 @@ public sealed class LatticeTreeAdminGrpcClientE2ETests
             async () => await _host.Client.PurgeTreeAsync(purgeTree, confirm: false),
             Throws.Exception);
     }
+
+    [Test]
+    public async Task bulk_load_streams_begin_append_commit_over_the_client()
+    {
+        const string bulkTree = "bulk-load-e2e";
+        const string op = "load-e2e-1";
+
+        await _host.Client.CreateTreeAsync(bulkTree, shardCount: 2);
+
+        var session = await _host.Client.BeginBulkLoadAsync(bulkTree, op);
+        Assert.Multiple(() =>
+        {
+            Assert.That(session.TreeId, Is.EqualTo(bulkTree));
+            Assert.That(session.OperationId, Is.EqualTo(op));
+        });
+
+        var ack0 = await _host.Client.AppendBulkLoadAsync(bulkTree, op, 0, Chunk("a", "b", "c"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(ack0.AcceptedEntryCount, Is.EqualTo(3));
+            Assert.That(ack0.NextChunkIndex, Is.EqualTo(1));
+        });
+
+        var ack1 = await _host.Client.AppendBulkLoadAsync(bulkTree, op, 1, Chunk("d", "e"));
+        Assert.That(ack1.AcceptedEntryCount, Is.EqualTo(2));
+
+        // Idempotent re-drive of chunk 0 does not double-count on commit.
+        await _host.Client.AppendBulkLoadAsync(bulkTree, op, 0, Chunk("a", "b", "c"));
+
+        var result = await _host.Client.CommitBulkLoadAsync(bulkTree, op);
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.TreeId, Is.EqualTo(bulkTree));
+            Assert.That(result.TotalLiveKeys, Is.EqualTo(5));
+        });
+
+        // The grafted keys are readable through the core grain.
+        var value = await _fixture.GrainFactory.GetGrain<ILattice>(bulkTree).GetAsync("c");
+        Assert.That(value, Is.Not.Null);
+    }
+
+    [Test]
+    public async Task bulk_load_begin_on_non_empty_tree_is_rejected_over_the_client()
+    {
+        const string nonEmptyTree = "bulk-load-nonempty-e2e";
+
+        await _fixture.GrainFactory.GetGrain<ILattice>(nonEmptyTree).SetAsync("seed", "{}"u8.ToArray());
+
+        Assert.That(
+            async () => await _host.Client.BeginBulkLoadAsync(nonEmptyTree, "op"),
+            Throws.Exception);
+    }
+
+    [Test]
+    public async Task bulk_load_append_out_of_order_chunk_is_rejected_over_the_client()
+    {
+        const string orderTree = "bulk-load-order-e2e";
+        const string op = "load-order-1";
+
+        await _host.Client.CreateTreeAsync(orderTree, shardCount: 2);
+        await _host.Client.BeginBulkLoadAsync(orderTree, op);
+
+        Assert.That(
+            async () => await _host.Client.AppendBulkLoadAsync(orderTree, op, 0, Chunk("a", "c", "b")),
+            Throws.Exception);
+    }
+
+    private static IReadOnlyList<Orleans.Lattice.Api.Data.DataEntry> Chunk(params string[] keys)
+        => keys.Select(k => new Orleans.Lattice.Api.Data.DataEntry { Key = k, Value = "{}"u8.ToArray() }).ToArray();
 }

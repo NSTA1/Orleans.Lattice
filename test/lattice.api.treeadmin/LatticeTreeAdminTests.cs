@@ -138,6 +138,8 @@ public sealed class LatticeTreeAdminTests
             Assert.That(caps.CanViewDiagnostics, Is.True);
             // The (uniform) gate allows, so the distinct lifecycle capability reports true.
             Assert.That(caps.CanManageTreeLifecycle, Is.True);
+            // The (uniform) gate allows, so the distinct bulk-load capability reports true.
+            Assert.That(caps.CanBulkLoad, Is.True);
         });
         await schemaControl.Received(1).ProbeCapabilitiesAsync(Tree, Arg.Any<CancellationToken>());
     }
@@ -157,6 +159,7 @@ public sealed class LatticeTreeAdminTests
             Assert.That(caps.CanViewDiagnostics, Is.False);
             Assert.That(caps.CanAdministerTree, Is.False);
             Assert.That(caps.CanManageTreeLifecycle, Is.False);
+            Assert.That(caps.CanBulkLoad, Is.False);
             Assert.That(caps.Schema.CanViewPolicy, Is.False);
         });
     }
@@ -220,6 +223,32 @@ public sealed class LatticeTreeAdminTests
             // The lifecycle grant confers nothing else: routine admin stays denied.
             Assert.That(caps.CanAdministerTree, Is.False,
                 "TreeLifecycle must not confer routine Admin authority.");
+        });
+    }
+
+    [Test]
+    public async Task ProbeCapabilitiesAsync_reports_bulk_load_when_granted()
+    {
+        var schemaControl = Substitute.For<ILatticeSchemaControl>();
+        schemaControl.ProbeCapabilitiesAsync(Tree, Arg.Any<CancellationToken>())
+            .Returns(SchemaCaps(Tree, granted: false));
+        var facade = new LatticeTreeAdmin(
+            schemaControl,
+            Substitute.For<IGrainFactory>(),
+            new TreeAdminAccessAuthorizer(new OperationGate(LatticeOperation.BulkLoad)),
+            Options.Create(new LatticeApiTreeAdminOptions()));
+
+        var caps = await facade.ProbeCapabilitiesAsync(Tree);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(caps.CanBulkLoad, Is.True);
+            // The bulk-load grant confers nothing else: routine admin and the
+            // lifecycle capability stay denied, proving independent gating.
+            Assert.That(caps.CanAdministerTree, Is.False,
+                "BulkLoad must not confer routine Admin authority.");
+            Assert.That(caps.CanManageTreeLifecycle, Is.False,
+                "BulkLoad must not confer the distinct TreeLifecycle capability.");
         });
     }
 

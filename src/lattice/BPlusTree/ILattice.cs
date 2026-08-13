@@ -402,6 +402,40 @@ public interface ILattice : IGrainWithStringKey
     Task BulkLoadAsync(IReadOnlyList<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Appends one chunk of an ascending-ordered bulk-load stream, grafting the
+    /// entries onto the right edge of each physical shard without splits. Unlike
+    /// the one-shot <see cref="BulkLoadAsync(IReadOnlyList{KeyValuePair{string, byte[]}}, CancellationToken)"/>
+    /// this is the incremental primitive behind a resumable, chunk-paged
+    /// bulk-load (tree creation) protocol: a control-plane facade drives it once
+    /// per chunk, carrying a caller-derived <paramref name="operationId"/> so a
+    /// re-driven chunk is an idempotent no-op.
+    /// <para>
+    /// <paramref name="operationId"/> must be <b>stable per chunk</b>: the
+    /// implementation derives a per-shard operation id of the form
+    /// <c>"{operationId}-{shardIndex}"</c>, and each shard records the last
+    /// completed id, so re-driving the <b>same</b> chunk after a dropped
+    /// connection reapplies nothing. Because a shard only remembers its single
+    /// most-recently-completed id, a caller must resume from the last
+    /// un-acknowledged chunk and never re-drive a chunk older than one a later
+    /// chunk has already superseded on the same shard.
+    /// </para>
+    /// <para>
+    /// The entries within a chunk, and the chunks across the whole stream, must
+    /// be in <b>ascending key order</b>: per-shard order is preserved because
+    /// hash-partitioning a globally sorted stream preserves the relative order
+    /// within each partition. This mirrors the streaming
+    /// <c>BulkLoadAsync(IAsyncEnumerable&lt;...&gt;, IGrainFactory, int)</c>
+    /// extension, but with a caller-supplied, idempotent operation id per chunk.
+    /// Enforces the whole-tree <see cref="LatticeOperation.BulkLoad"/> gate.
+    /// </para>
+    /// </summary>
+    /// <param name="operationId">A stable-per-chunk operation id used to derive the idempotent per-shard operation ids. Must not be <c>null</c> or empty.</param>
+    /// <param name="sortedEntries">The chunk's entries in ascending key order.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The number of entries appended from this chunk (after any write interception).</returns>
+    Task<int> BulkAppendChunkAsync(string operationId, IReadOnlyList<KeyValuePair<string, byte[]>> sortedEntries, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Soft-deletes the entire tree. All shards are immediately marked as deleted,
     /// causing subsequent reads and writes to throw <see cref="InvalidOperationException"/>.
     /// A grain reminder is registered to permanently purge all tree data after the

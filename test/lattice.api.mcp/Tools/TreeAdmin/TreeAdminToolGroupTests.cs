@@ -72,6 +72,9 @@ public sealed class TreeAdminToolGroupTests
         "lattice_treeadmin_tree_delete",
         "lattice_treeadmin_tree_recover",
         "lattice_treeadmin_tree_purge",
+        "lattice_treeadmin_bulk_load_begin",
+        "lattice_treeadmin_bulk_load_append",
+        "lattice_treeadmin_bulk_load_commit",
     };
 
     /// <summary>The read-only tools always contributed regardless of any opt-in.</summary>
@@ -289,6 +292,9 @@ public sealed class TreeAdminToolGroupTests
             Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_tree_set_config"), "applyPublishEvents"), Is.True);
             Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_tree_set_config"), "historyRetentionWindowTicks"), Is.True);
             Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_tree_get_shard_map"), "treeId"), Is.True);
+            Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_bulk_load_begin"), "operationId"), Is.True);
+            Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_bulk_load_append"), "chunkIndex"), Is.True);
+            Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_bulk_load_append"), "entries"), Is.True);
         });
     }
 

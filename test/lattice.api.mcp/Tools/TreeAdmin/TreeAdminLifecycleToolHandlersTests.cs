@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using NSubstitute;
+using Orleans.Lattice.Api.Data;
 using Orleans.Lattice.Api.TreeAdmin;
 
 namespace Orleans.Lattice.Api.Mcp.Tests;
@@ -226,6 +227,71 @@ public sealed class TreeAdminLifecycleToolHandlersTests
     }
 
     [Test]
+    public async Task BeginBulkLoadAsync_forwards_the_ids_and_returns_the_session()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeBulkLoadSession { TreeId = "orders", OperationId = "op-1" };
+        admin.BeginBulkLoadAsync("orders", "op-1", Arg.Any<CancellationToken>()).Returns(expected);
+
+        var result = await TreeAdminLifecycleToolHandlers.BeginBulkLoadAsync(admin, "orders", "op-1", CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).BeginBulkLoadAsync("orders", "op-1", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task AppendBulkLoadAsync_projects_the_dto_entries_and_returns_the_ack()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeBulkLoadChunkAck { TreeId = "orders", OperationId = "op-1", ChunkIndex = 3, AcceptedEntryCount = 2, NextChunkIndex = 4 };
+        admin.AppendBulkLoadAsync("orders", "op-1", 3, Arg.Any<IReadOnlyList<DataEntry>>(), Arg.Any<CancellationToken>())
+            .Returns(expected);
+
+        var dtos = new List<DataEntryDto>
+        {
+            new() { Key = "a", Value = [1] },
+            new() { Key = "b", Value = [2, 3] },
+        };
+
+        var result = await TreeAdminLifecycleToolHandlers.AppendBulkLoadAsync(admin, "orders", "op-1", 3, dtos, CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).AppendBulkLoadAsync(
+            "orders", "op-1", 3,
+            Arg.Is<IReadOnlyList<DataEntry>>(e =>
+                e.Count == 2 && e[0].Key == "a" && e[1].Key == "b"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task AppendBulkLoadAsync_maps_a_null_entry_list_to_an_empty_projection()
+    {
+        var admin = TreeAdmin();
+        admin.AppendBulkLoadAsync("orders", "op-1", 0, Arg.Any<IReadOnlyList<DataEntry>>(), Arg.Any<CancellationToken>())
+            .Returns(new TreeBulkLoadChunkAck { TreeId = "orders", OperationId = "op-1", ChunkIndex = 0, AcceptedEntryCount = 0, NextChunkIndex = 1 });
+
+        await TreeAdminLifecycleToolHandlers.AppendBulkLoadAsync(admin, "orders", "op-1", 0);
+
+        await admin.Received(1).AppendBulkLoadAsync(
+            "orders", "op-1", 0,
+            Arg.Is<IReadOnlyList<DataEntry>>(e => e.Count == 0),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task CommitBulkLoadAsync_forwards_the_ids_and_returns_the_result()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeBulkLoadResult { TreeId = "orders", OperationId = "op-1", TotalLiveKeys = 5 };
+        admin.CommitBulkLoadAsync("orders", "op-1", Arg.Any<CancellationToken>()).Returns(expected);
+
+        var result = await TreeAdminLifecycleToolHandlers.CommitBulkLoadAsync(admin, "orders", "op-1", CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).CommitBulkLoadAsync("orders", "op-1", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public void Handlers_reject_a_null_facade()
     {
         Assert.Multiple(() =>
@@ -241,6 +307,9 @@ public sealed class TreeAdminLifecycleToolHandlersTests
             Assert.That(() => TreeAdminLifecycleToolHandlers.DeleteTreeAsync(null!, "t"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.RecoverTreeAsync(null!, "t"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.PurgeTreeAsync(null!, "t"), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.BeginBulkLoadAsync(null!, "t", "op"), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.AppendBulkLoadAsync(null!, "t", "op", 0), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.CommitBulkLoadAsync(null!, "t", "op"), Throws.ArgumentNullException);
         });
     }
 }

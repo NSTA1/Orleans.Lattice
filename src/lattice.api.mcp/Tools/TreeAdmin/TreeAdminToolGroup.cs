@@ -262,6 +262,27 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "irreversible destruction; a false or omitted value is rejected. Rejected when the tree is not "
                 + "deleted or was already purged, and for a reserved system tree id. Tree-lifecycle-gated and "
                 + "destructive."));
+            tools.Add(Write(services, TreeAdminLifecycleToolHandlers.BeginBulkLoadAsync, "lattice_treeadmin_bulk_load_begin",
+                "Open a bulk-load session",
+                "Opens a streamed, resumable bulk-load (tree-creation) session over an empty tree under a stable, "
+                + "idempotent operation id, returning the session handle. The target tree must start empty (no live "
+                + "keys and no tombstones); a populated tree is rejected. Reuse the returned operation id across the "
+                + "append and commit calls, and across a resumed stream, so re-driven chunks deduplicate. Rejected "
+                + "for a reserved system tree id. Bulk-load-gated and destructive."));
+            tools.Add(Write(services, TreeAdminLifecycleToolHandlers.AppendBulkLoadAsync, "lattice_treeadmin_bulk_load_append",
+                "Append a bulk-load chunk",
+                "Grafts one strictly-ascending chunk of key/value entries onto an open bulk-load session at a "
+                + "zero-based, monotonically increasing chunk index, returning the accepted-entry count and the next "
+                + "expected chunk index. Keys within the chunk must be strictly ascending and non-repeating; keys "
+                + "must also stay ascending across chunk boundaries. Re-sending the same chunk index with the same "
+                + "operation id is idempotent, so a broken stream resumes from its last un-acknowledged chunk. "
+                + "Bulk-load-gated and destructive."));
+            tools.Add(Write(services, TreeAdminLifecycleToolHandlers.CommitBulkLoadAsync, "lattice_treeadmin_bulk_load_commit",
+                "Commit a bulk-load session",
+                "Closes an open bulk-load session, marking the streamed load complete and returning the tree's "
+                + "observed live-key count for a client-side sanity check. The grafted chunks are already durable, "
+                + "so commit persists nothing further. Rejected for a reserved system tree id. Bulk-load-gated and "
+                + "destructive."));
         }
 
         return tools;
