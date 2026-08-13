@@ -31,6 +31,19 @@ public sealed class LatticeTreeAdminTests
             => new(_allow ? LatticeAccessDecision.Allow() : LatticeAccessDecision.Deny("denied by test"));
     }
 
+    /// <summary>A gate that allows only requests whose operation is contained in a fixed granted mask, so a test can prove per-operation separation.</summary>
+    private sealed class OperationGate : ILatticeAccessGate
+    {
+        private readonly LatticeOperation _granted;
+        public OperationGate(LatticeOperation granted) => _granted = granted;
+
+        public ValueTask<LatticeAccessDecision> AuthorizeAsync(
+            in LatticeAccessRequest request, CancellationToken cancellationToken = default)
+            => new((_granted & request.Operation) == request.Operation
+                ? LatticeAccessDecision.Allow()
+                : LatticeAccessDecision.Deny("operation not granted by test gate"));
+    }
+
     private static LatticeTreeAdmin Create(
         ILatticeSchemaControl schemaControl,
         IGrainFactory? grainFactory = null,
@@ -123,6 +136,8 @@ public sealed class LatticeTreeAdminTests
             Assert.That(caps.CanAdministerTree, Is.True);
             // The read gate allows, so the diagnostics capability probe reports true.
             Assert.That(caps.CanViewDiagnostics, Is.True);
+            // The (uniform) gate allows, so the distinct lifecycle capability reports true.
+            Assert.That(caps.CanManageTreeLifecycle, Is.True);
         });
         await schemaControl.Received(1).ProbeCapabilitiesAsync(Tree, Arg.Any<CancellationToken>());
     }
@@ -141,6 +156,7 @@ public sealed class LatticeTreeAdminTests
         {
             Assert.That(caps.CanViewDiagnostics, Is.False);
             Assert.That(caps.CanAdministerTree, Is.False);
+            Assert.That(caps.CanManageTreeLifecycle, Is.False);
             Assert.That(caps.Schema.CanViewPolicy, Is.False);
         });
     }
@@ -154,6 +170,56 @@ public sealed class LatticeTreeAdminTests
         {
             Assert.That(async () => await facade.ProbeCapabilitiesAsync(null!), Throws.TypeOf<ArgumentNullException>());
             Assert.That(async () => await facade.ProbeCapabilitiesAsync(""), Throws.ArgumentException);
+        });
+    }
+
+    [Test]
+    public async Task ProbeCapabilitiesAsync_separates_admin_from_tree_lifecycle()
+    {
+        // A gate that grants routine administration (Admin) but not the distinct
+        // destructive / structural TreeLifecycle capability. The probe must report
+        // CanAdministerTree true and CanManageTreeLifecycle false, proving the two
+        // capabilities are gated independently.
+        var schemaControl = Substitute.For<ILatticeSchemaControl>();
+        schemaControl.ProbeCapabilitiesAsync(Tree, Arg.Any<CancellationToken>())
+            .Returns(SchemaCaps(Tree, granted: true));
+        var facade = new LatticeTreeAdmin(
+            schemaControl,
+            Substitute.For<IGrainFactory>(),
+            new TreeAdminAccessAuthorizer(new OperationGate(LatticeOperation.Admin | LatticeOperation.Read)),
+            Options.Create(new LatticeApiTreeAdminOptions()));
+
+        var caps = await facade.ProbeCapabilitiesAsync(Tree);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(caps.CanAdministerTree, Is.True);
+            Assert.That(caps.CanViewDiagnostics, Is.True);
+            Assert.That(caps.CanManageTreeLifecycle, Is.False,
+                "Admin must not confer the distinct TreeLifecycle capability.");
+        });
+    }
+
+    [Test]
+    public async Task ProbeCapabilitiesAsync_reports_tree_lifecycle_when_granted()
+    {
+        var schemaControl = Substitute.For<ILatticeSchemaControl>();
+        schemaControl.ProbeCapabilitiesAsync(Tree, Arg.Any<CancellationToken>())
+            .Returns(SchemaCaps(Tree, granted: false));
+        var facade = new LatticeTreeAdmin(
+            schemaControl,
+            Substitute.For<IGrainFactory>(),
+            new TreeAdminAccessAuthorizer(new OperationGate(LatticeOperation.TreeLifecycle)),
+            Options.Create(new LatticeApiTreeAdminOptions()));
+
+        var caps = await facade.ProbeCapabilitiesAsync(Tree);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(caps.CanManageTreeLifecycle, Is.True);
+            // The lifecycle grant confers nothing else: routine admin stays denied.
+            Assert.That(caps.CanAdministerTree, Is.False,
+                "TreeLifecycle must not confer routine Admin authority.");
         });
     }
 

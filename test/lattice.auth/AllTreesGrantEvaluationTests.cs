@@ -278,6 +278,44 @@ public sealed class AllTreesGrantEvaluationTests
         Assert.That(Eval(rules, Subject("alice"), LatticeOperation.Read, Enabled()).Allowed, Is.False);
     }
 
+    [Test]
+    public void Evaluate_all_trees_admin_grant_never_confers_tree_lifecycle()
+    {
+        var rules = new[] { User("all-admin", "alice", LatticeScope.ClusterWide(), LatticeOperation.Admin, LatticeEffect.Allow) };
+
+        // A cluster-wide Admin allow must NOT authorize a destructive / structural
+        // TreeLifecycle operation on an application tree: routine administration
+        // never silently confers the authority to drop / reshard / resize / move.
+        var decision = Eval(rules, Subject("alice"), LatticeOperation.TreeLifecycle, Enabled(), key: null);
+
+        Assert.That(decision.Allowed, Is.False);
+    }
+
+    [Test]
+    public void Evaluate_all_trees_tree_lifecycle_grant_authorizes_tree_lifecycle()
+    {
+        var rules = new[] { User("all-life", "alice", LatticeScope.ClusterWide(), LatticeOperation.TreeLifecycle, LatticeEffect.Allow) };
+
+        // A deliberate cluster-wide TreeLifecycle allow authorizes the structural
+        // whole-tree operation - the capability stays expressible, just never as a
+        // silent rider on Admin.
+        var decision = Eval(rules, Subject("alice"), LatticeOperation.TreeLifecycle, Enabled(), key: null);
+
+        Assert.That(decision.Allowed, Is.True);
+    }
+
+    [Test]
+    public void Evaluate_all_trees_tree_lifecycle_grant_never_confers_admin()
+    {
+        var rules = new[] { User("all-life", "alice", LatticeScope.ClusterWide(), LatticeOperation.TreeLifecycle, LatticeEffect.Allow) };
+
+        // Conversely the structural grant confers nothing else: a routine Admin
+        // request is not satisfied by a TreeLifecycle wildcard grant.
+        var decision = Eval(rules, Subject("alice"), LatticeOperation.Admin, Enabled(), key: null);
+
+        Assert.That(decision.Allowed, Is.False);
+    }
+
     // ---- Match / reason labelling ---------------------------------------
 
     [Test]

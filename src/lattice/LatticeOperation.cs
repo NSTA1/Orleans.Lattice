@@ -124,4 +124,23 @@ public enum LatticeOperation
     /// <b>nothing else</b>.
     /// </summary>
     Replication = 8192,
+
+    /// <summary>
+    /// Perform an <b>irreversible or structural whole-tree lifecycle</b>
+    /// operation: dropping / purging a tree, changing its shard count or topology
+    /// (reshard), changing its B+ node capacity (resize), or moving its
+    /// write-ahead-log placement. These are the highest-blast-radius verbs the
+    /// tree-administration control plane exposes, so this capability is
+    /// deliberately <b>distinct</b> from <see cref="Admin"/>: holding
+    /// <see cref="Admin"/> does not confer it, and holding it does not confer
+    /// <see cref="Admin"/>, <see cref="Backup"/>, <see cref="Restore"/>,
+    /// <see cref="SchemaAdmin"/>, or any data-plane capability. Routine
+    /// administration (create / exists / alias / reconfigure) stays on
+    /// <see cref="Admin"/>; a destructive or structural rebuild requires this bit,
+    /// granted explicitly and on its own so a cluster-wide administration grant
+    /// never silently authorizes destroying or rebuilding a tree. It is never part
+    /// of the data-plane <c>All</c> aggregate. Granting it grants <b>nothing
+    /// else</b>.
+    /// </summary>
+    TreeLifecycle = 16384,
 }

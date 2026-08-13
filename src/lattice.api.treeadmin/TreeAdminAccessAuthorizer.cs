@@ -112,6 +112,25 @@ internal sealed class TreeAdminAccessAuthorizer
             _gate, _membership, treeId, LatticeOperation.Admin, cancellationToken);
 
     /// <summary>
+    /// Authorizes an <b>irreversible or structural whole-tree</b> operation (drop /
+    /// purge, reshard, resize, WAL placement move) over <paramref name="treeId"/>
+    /// for the current caller, throwing <see cref="LatticeAuthorizationDeniedException"/>
+    /// when the distinct <see cref="LatticeOperation.TreeLifecycle"/> capability is not
+    /// granted over the whole tree. Deliberately gated on <see cref="LatticeOperation.TreeLifecycle"/>
+    /// rather than <see cref="LatticeOperation.Admin"/>: routine administration must
+    /// never silently confer the authority to destroy or rebuild a tree, and a
+    /// cluster-wide <c>Admin</c> grant must not reach these verbs. A partial /
+    /// filtered allow is refused, fail-closed.
+    /// </summary>
+    /// <param name="treeId">The tree being administered. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancels the authorization.</param>
+    /// <returns>A task that completes when the operation is authorized.</returns>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized for the tree's lifecycle operations.</exception>
+    public ValueTask AuthorizeTreeLifecycleAsync(string treeId, CancellationToken cancellationToken = default) =>
+        LatticeAccessGateEnforcement.EnforceWholeTreeAsync(
+            _gate, _membership, treeId, LatticeOperation.TreeLifecycle, cancellationToken);
+
+    /// <summary>
     /// Probes whether the current caller may perform per-tree lifecycle
     /// <b>mutations</b> over <paramref name="treeId"/>, returning <c>true</c> when
     /// authorized and <c>false</c> when denied. Never throws for a plain authorization
@@ -125,6 +144,30 @@ internal sealed class TreeAdminAccessAuthorizer
         try
         {
             await AuthorizeTreeAdminAsync(treeId, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch (LatticeAuthorizationDeniedException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Probes whether the current caller may perform <b>irreversible or structural</b>
+    /// whole-tree operations (drop / purge, reshard, resize, WAL placement move) over
+    /// <paramref name="treeId"/>, returning <c>true</c> when the distinct
+    /// <see cref="LatticeOperation.TreeLifecycle"/> capability is granted and <c>false</c>
+    /// when denied. Never throws for a plain authorization denial; other failures
+    /// propagate. Read-only, no side effects.
+    /// </summary>
+    /// <param name="treeId">The tree being probed. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancels the probe.</param>
+    /// <returns><c>true</c> when the caller may perform the tree's lifecycle operations; otherwise <c>false</c>.</returns>
+    public async ValueTask<bool> IsTreeLifecycleAuthorizedAsync(string treeId, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await AuthorizeTreeLifecycleAsync(treeId, cancellationToken).ConfigureAwait(false);
             return true;
         }
         catch (LatticeAuthorizationDeniedException)

@@ -19,6 +19,12 @@ public static class LatticeAuthOperations
     /// this mask: it is a cluster-wide, scopeless capability rather than a
     /// tree-scoped data-plane operation, so a whole-data-plane grant never
     /// silently confers telemetry access. It must be granted explicitly.
+    /// <see cref="LatticeOperation.Replication"/> and
+    /// <see cref="LatticeOperation.TreeLifecycle"/> are likewise excluded: enabling
+    /// replication egresses a tree's data to another cluster, and the tree
+    /// lifecycle bit authorizes irreversible / structural whole-tree operations
+    /// (drop, reshard, resize, WAL move), so neither is ever silently conferred by
+    /// a whole-data-plane grant. Each must be granted explicitly and on its own.
     /// </remarks>
     public const LatticeOperation All =
         LatticeOperation.Read

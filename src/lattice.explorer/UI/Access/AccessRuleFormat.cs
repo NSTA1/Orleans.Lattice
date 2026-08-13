@@ -39,6 +39,7 @@ internal static class AccessRuleFormat
         new(LatticeOperation.SchemaAdmin, "Schema admin"),
         new(LatticeOperation.Telemetry, "Telemetry"),
         new(LatticeOperation.Replication, "Replication"),
+        new(LatticeOperation.TreeLifecycle, "Tree lifecycle"),
     };
 
     /// <summary>Formats a subject selector as, for example, <c>user:alice</c> or <c>group:admins</c>.</summary>

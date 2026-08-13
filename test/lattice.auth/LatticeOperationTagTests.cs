@@ -5,9 +5,9 @@ namespace Orleans.Lattice.Auth.Tests;
 /// <summary>
 /// Unit tests for <see cref="LatticeOperationTag"/>: the single-flag tag cache
 /// returns the expected tag for every single-bit operation (including the newest
-/// bit, <see cref="LatticeOperation.Telemetry"/>), maps the empty request to
+/// bit, <see cref="LatticeOperation.TreeLifecycle"/>), maps the empty request to
 /// <c>none</c>, and falls back to the flags string for a composite mask. Also
-/// pins the cached-table size so bit 12 (Telemetry) is covered by the
+/// pins the cached-table size so bit 14 (TreeLifecycle) is covered by the
 /// allocation-free cached path rather than the fallback.
 /// </summary>
 [TestFixture]
@@ -31,6 +31,8 @@ public sealed class LatticeOperationTagTests
             Assert.That(LatticeOperationTag.For(LatticeOperation.Restore), Is.EqualTo("Restore"));
             Assert.That(LatticeOperationTag.For(LatticeOperation.SchemaAdmin), Is.EqualTo("SchemaAdmin"));
             Assert.That(LatticeOperationTag.For(LatticeOperation.Telemetry), Is.EqualTo("Telemetry"));
+            Assert.That(LatticeOperationTag.For(LatticeOperation.Replication), Is.EqualTo("Replication"));
+            Assert.That(LatticeOperationTag.For(LatticeOperation.TreeLifecycle), Is.EqualTo("TreeLifecycle"));
         });
     }
 
@@ -49,16 +51,18 @@ public sealed class LatticeOperationTagTests
     }
 
     [Test]
-    public void Cached_single_flag_table_covers_bit_twelve_telemetry()
+    public void Cached_single_flag_table_covers_bit_fourteen_tree_lifecycle()
     {
         var field = typeof(LatticeOperationTag).GetField(
             "SingleFlagNames",
             BindingFlags.NonPublic | BindingFlags.Static);
         var names = (string[])field!.GetValue(null)!;
 
-        // Bit 12 (Telemetry) must be inside the cached table, so the common
+        // Bit 14 (TreeLifecycle) must be inside the cached table, so the common
         // single-flag case takes the allocation-free indexed path.
-        Assert.That(names.Length, Is.EqualTo(13));
+        Assert.That(names.Length, Is.EqualTo(15));
         Assert.That(names[12], Is.EqualTo("Telemetry"));
+        Assert.That(names[13], Is.EqualTo("Replication"));
+        Assert.That(names[14], Is.EqualTo("TreeLifecycle"));
     }
 }

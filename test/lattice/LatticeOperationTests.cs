@@ -31,6 +31,8 @@ public class LatticeOperationTests
             Assert.That((int)LatticeOperation.Restore, Is.EqualTo(1024));
             Assert.That((int)LatticeOperation.SchemaAdmin, Is.EqualTo(2048));
             Assert.That((int)LatticeOperation.Telemetry, Is.EqualTo(4096));
+            Assert.That((int)LatticeOperation.Replication, Is.EqualTo(8192));
+            Assert.That((int)LatticeOperation.TreeLifecycle, Is.EqualTo(16384));
         });
     }
 
@@ -43,7 +45,7 @@ public class LatticeOperationTests
             LatticeOperation.RangeRead, LatticeOperation.RangeDelete, LatticeOperation.CrdtApply,
             LatticeOperation.AtomicWrite, LatticeOperation.BulkLoad, LatticeOperation.Admin,
             LatticeOperation.Backup, LatticeOperation.Restore, LatticeOperation.SchemaAdmin,
-            LatticeOperation.Telemetry,
+            LatticeOperation.Telemetry, LatticeOperation.Replication, LatticeOperation.TreeLifecycle,
         };
 
         var union = LatticeOperation.None;
@@ -91,6 +93,27 @@ public class LatticeOperationTests
             Assert.That(everythingElse.HasFlag(LatticeOperation.Telemetry), Is.False);
             Assert.That(LatticeOperation.Telemetry.HasFlag(LatticeOperation.Admin), Is.False);
             Assert.That((everythingElse & LatticeOperation.Telemetry), Is.EqualTo(LatticeOperation.None));
+        });
+    }
+
+    [Test]
+    public void TreeLifecycle_does_not_overlap_any_other_operation()
+    {
+        // TreeLifecycle is the distinct destructive / structural whole-tree
+        // capability: no other operation (including Admin) may confer it, and
+        // holding it confers nothing else.
+        var everythingElse =
+            LatticeOperation.Read | LatticeOperation.Write | LatticeOperation.Delete
+            | LatticeOperation.RangeRead | LatticeOperation.RangeDelete | LatticeOperation.CrdtApply
+            | LatticeOperation.AtomicWrite | LatticeOperation.BulkLoad | LatticeOperation.Admin
+            | LatticeOperation.Backup | LatticeOperation.Restore | LatticeOperation.SchemaAdmin
+            | LatticeOperation.Telemetry | LatticeOperation.Replication;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(everythingElse.HasFlag(LatticeOperation.TreeLifecycle), Is.False);
+            Assert.That(LatticeOperation.TreeLifecycle.HasFlag(LatticeOperation.Admin), Is.False);
+            Assert.That((everythingElse & LatticeOperation.TreeLifecycle), Is.EqualTo(LatticeOperation.None));
         });
     }
 }
