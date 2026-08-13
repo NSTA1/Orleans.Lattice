@@ -345,6 +345,36 @@ internal static class TreeAdminLifecycleToolHandlers
         return treeAdmin.GetResizeStatusAsync(treeId, cancellationToken);
     }
 
+    /// <summary>Captures a point-in-time snapshot of a tree into a fresh destination tree.</summary>
+    public static Task<TreeSnapshotStatus> SnapshotTreeAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The source tree to snapshot. Must not be null, empty, or a reserved system tree id.")]
+        string treeId,
+        [Description("The destination tree id to snapshot into. Must not be null, empty, reserved, or already exist.")]
+        string destinationTreeId,
+        [Description("Snapshot mode: Offline quiesces the source tree during the copy; Online keeps it serving reads and writes.")]
+        TreeSnapshotMode mode,
+        [Description("Optional maximum keys per leaf node for the destination tree. Null inherits the source tree's sizing.")]
+        int? maxLeafKeys = null,
+        [Description("Optional maximum children per internal node for the destination tree. Null inherits the source tree's sizing.")]
+        int? maxInternalChildren = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        return treeAdmin.SnapshotTreeAsync(treeId, destinationTreeId, mode, maxLeafKeys, maxInternalChildren, cancellationToken);
+    }
+
+    /// <summary>Reads a tree's snapshot status (whether a capture is currently in flight).</summary>
+    public static Task<TreeSnapshotStatus> GetSnapshotStatusAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The source tree whose snapshot status to read. Must not be null or empty.")]
+        string treeId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        return treeAdmin.GetSnapshotStatusAsync(treeId, cancellationToken);
+    }
+
     private static List<DataEntry> ToDataEntries(IReadOnlyList<DataEntryDto>? entries)
     {
         if (entries is null || entries.Count == 0)

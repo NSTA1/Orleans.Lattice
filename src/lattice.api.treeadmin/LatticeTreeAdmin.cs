@@ -889,9 +889,69 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             .ConfigureAwait(false);
     }
 
+    /// <inheritdoc />
+    public async Task<TreeSnapshotStatus> SnapshotTreeAsync(
+        string treeId, string destinationTreeId, TreeSnapshotMode mode,
+        int? maxLeafKeys = null, int? maxInternalChildren = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentException.ThrowIfNullOrEmpty(destinationTreeId);
+        ThrowIfReserved(treeId);
+        ThrowIfReserved(destinationTreeId);
+        await _authorizer.AuthorizeTreeAdminAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        // Wrap the public ILattice verb so the tree's own guards (system-tree) and
+        // destination-existence / in-progress validation are inherited rather than
+        // duplicated, and the core re-enforces Admin. Orchestration is accepted
+        // synchronously; the shard-by-shard drain then runs anchored by reminders.
+        await _grainFactory.GetGrain<ILattice>(treeId)
+            .SnapshotAsync(destinationTreeId, ToSnapshotMode(mode), maxLeafKeys, maxInternalChildren, cancellationToken)
+            .ConfigureAwait(false);
+
+        return await ReadSnapshotStatusAsync(treeId, destinationTreeId, mode).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<TreeSnapshotStatus> GetSnapshotStatusAsync(
+        string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        await _authorizer.AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        return await ReadSnapshotStatusAsync(treeId, requestedDestinationTreeId: null, requestedMode: null)
+            .ConfigureAwait(false);
+    }
+
     /// <summary>
-    /// Projects the tree's observable resize signal - the coordinator's idle/in-flight
-    /// state (via the public <see cref="ILattice.IsResizeCompleteAsync"/> read) and the
+    /// Projects the source tree's observable snapshot signal - the coordinator's
+    /// idle/in-flight state via the public <see cref="ILattice.IsSnapshotCompleteAsync"/>
+    /// read - onto the transport-agnostic <see cref="TreeSnapshotStatus"/>. The
+    /// requested destination/mode fields echo the trigger's arguments and are
+    /// <see langword="null"/> for a standalone status read.
+    /// </summary>
+    private async Task<TreeSnapshotStatus> ReadSnapshotStatusAsync(
+        string treeId, string? requestedDestinationTreeId, TreeSnapshotMode? requestedMode)
+    {
+        var complete = await _grainFactory.GetGrain<ILattice>(treeId)
+            .IsSnapshotCompleteAsync()
+            .ConfigureAwait(false);
+
+        return new TreeSnapshotStatus
+        {
+            TreeId = treeId,
+            InProgress = !complete,
+            RequestedDestinationTreeId = requestedDestinationTreeId,
+            RequestedMode = requestedMode,
+        };
+    }
+
+    /// <summary>Maps the transport-agnostic <see cref="TreeSnapshotMode"/> onto the core snapshot engine's mode.</summary>
+    private static SnapshotMode ToSnapshotMode(TreeSnapshotMode mode) => mode switch
+    {
+        TreeSnapshotMode.Online => SnapshotMode.Online,
+        _ => SnapshotMode.Offline,
+    };
     /// current effective B+ node capacity (via the registry, default-seeded) - onto the
     /// transport-agnostic <see cref="TreeResizeStatus"/>. The requested-capacity fields
     /// echo the trigger's target and are <see langword="null"/> for a standalone status

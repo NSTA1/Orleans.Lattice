@@ -470,6 +470,45 @@ public sealed class TreeAdminLifecycleToolHandlersTests
     }
 
     [Test]
+    public async Task SnapshotTreeAsync_forwards_the_destination_and_mode_and_returns_the_status()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeSnapshotStatus
+        {
+            TreeId = "orders",
+            InProgress = true,
+            RequestedDestinationTreeId = "orders-snap",
+            RequestedMode = TreeSnapshotMode.Online,
+        };
+        admin.SnapshotTreeAsync("orders", "orders-snap", TreeSnapshotMode.Online, 128, 64, Arg.Any<CancellationToken>())
+            .Returns(expected);
+
+        var result = await TreeAdminLifecycleToolHandlers.SnapshotTreeAsync(
+            admin, "orders", "orders-snap", TreeSnapshotMode.Online, 128, 64, CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).SnapshotTreeAsync(
+            "orders", "orders-snap", TreeSnapshotMode.Online, 128, 64, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task GetSnapshotStatusAsync_forwards_the_tree_id_and_returns_the_status()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeSnapshotStatus
+        {
+            TreeId = "orders",
+            InProgress = false,
+        };
+        admin.GetSnapshotStatusAsync("orders", Arg.Any<CancellationToken>()).Returns(expected);
+
+        var result = await TreeAdminLifecycleToolHandlers.GetSnapshotStatusAsync(admin, "orders", CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).GetSnapshotStatusAsync("orders", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public void Handlers_reject_a_null_facade()
     {
         Assert.Multiple(() =>
@@ -496,6 +535,8 @@ public sealed class TreeAdminLifecycleToolHandlersTests
             Assert.That(() => TreeAdminLifecycleToolHandlers.ResizeTreeAsync(null!, "t", 256, 128), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.UndoTreeResizeAsync(null!, "t"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.GetResizeStatusAsync(null!, "t"), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.SnapshotTreeAsync(null!, "t", "d", TreeSnapshotMode.Offline), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.GetSnapshotStatusAsync(null!, "t"), Throws.ArgumentNullException);
         });
     }
 }

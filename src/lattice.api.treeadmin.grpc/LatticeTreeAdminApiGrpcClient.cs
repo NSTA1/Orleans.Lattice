@@ -663,6 +663,57 @@ public sealed class LatticeTreeAdminApiGrpcClient
             cancellationToken);
     }
 
+    /// <summary>
+    /// Triggers a snapshot capture of <paramref name="treeId"/> into
+    /// <paramref name="destinationTreeId"/>, returning its snapshot status. Requires the
+    /// whole-tree admin capability.
+    /// </summary>
+    /// <param name="treeId">The source tree to snapshot. Must not be <c>null</c> or empty.</param>
+    /// <param name="destinationTreeId">The destination tree id. Must not be <c>null</c> or empty.</param>
+    /// <param name="mode">Whether to quiesce the source tree during the copy.</param>
+    /// <param name="maxLeafKeys">Optional leaf sizing override for the destination tree.</param>
+    /// <param name="maxInternalChildren">Optional internal-node sizing override for the destination tree.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The source tree's snapshot status after the trigger.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="destinationTreeId"/> is <c>null</c> or empty.</exception>
+    public Task<TreeSnapshotStatus> SnapshotTreeAsync(
+        string treeId, string destinationTreeId, TreeSnapshotMode mode,
+        int? maxLeafKeys = null, int? maxInternalChildren = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentException.ThrowIfNullOrEmpty(destinationTreeId);
+        return UnaryAsync(
+            _methods.SnapshotTree,
+            new TreeAdminSnapshotRequest
+            {
+                TreeId = treeId,
+                DestinationTreeId = destinationTreeId,
+                Mode = mode,
+                MaxLeafKeys = maxLeafKeys,
+                MaxInternalChildren = maxInternalChildren,
+            },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Reads the snapshot status of <paramref name="treeId"/>, with no side effects.
+    /// Requires whole-tree read authority.
+    /// </summary>
+    /// <param name="treeId">The source tree to inspect. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The source tree's snapshot status.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    public Task<TreeSnapshotStatus> GetSnapshotStatusAsync(
+        string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return UnaryAsync(
+            _methods.GetSnapshotStatus,
+            new TreeAdminTreeRequest { TreeId = treeId },
+            cancellationToken);
+    }
+
     private async Task<TResponse> UnaryAsync<TRequest, TResponse>(
         Method<TRequest, TResponse> method,
         TRequest request,
