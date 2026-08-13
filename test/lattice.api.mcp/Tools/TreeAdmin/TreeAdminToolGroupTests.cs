@@ -64,6 +64,7 @@ public sealed class TreeAdminToolGroupTests
         "lattice_treeadmin_tree_deletion_status",
         "lattice_treeadmin_tree_reshard_status",
         "lattice_treeadmin_tree_resize_status",
+        "lattice_treeadmin_tree_snapshot_status",
     };
 
     private static readonly string[] LifecycleWriteToolNames =
@@ -83,6 +84,7 @@ public sealed class TreeAdminToolGroupTests
         "lattice_treeadmin_tree_reshard",
         "lattice_treeadmin_tree_resize",
         "lattice_treeadmin_tree_resize_undo",
+        "lattice_treeadmin_tree_snapshot",
     };
 
     /// <summary>The read-only tools always contributed regardless of any opt-in.</summary>
@@ -309,6 +311,8 @@ public sealed class TreeAdminToolGroupTests
             Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_tree_reshard"), "targetShardCount"), Is.True);
             Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_tree_resize"), "newMaxLeafKeys"), Is.True);
             Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_tree_resize"), "newMaxInternalChildren"), Is.True);
+            Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_tree_snapshot"), "destinationTreeId"), Is.True);
+            Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_tree_snapshot"), "mode"), Is.True);
         });
     }
 

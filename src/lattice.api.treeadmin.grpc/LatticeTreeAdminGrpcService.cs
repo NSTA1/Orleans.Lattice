@@ -116,6 +116,12 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
     /// <summary>Reads the online-resize status from the wrapped facade.</summary>
     public abstract Task<TreeResizeStatus> GetResizeStatus(TreeAdminTreeRequest request, ServerCallContext context);
 
+    /// <summary>Triggers a snapshot capture on the wrapped facade.</summary>
+    public abstract Task<TreeSnapshotStatus> SnapshotTree(TreeAdminSnapshotRequest request, ServerCallContext context);
+
+    /// <summary>Reads the snapshot status from the wrapped facade.</summary>
+    public abstract Task<TreeSnapshotStatus> GetSnapshotStatus(TreeAdminTreeRequest request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at startup
     /// with <paramref name="serviceImpl"/> set to <see langword="null"/> to record
@@ -165,6 +171,8 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
             binder.AddMethod(methods.ResizeTree, (UnaryServerMethod<TreeAdminResizeRequest, TreeResizeStatus>?)null);
             binder.AddMethod(methods.UndoTreeResize, (UnaryServerMethod<TreeAdminTreeRequest, TreeResizeStatus>?)null);
             binder.AddMethod(methods.GetResizeStatus, (UnaryServerMethod<TreeAdminTreeRequest, TreeResizeStatus>?)null);
+            binder.AddMethod(methods.SnapshotTree, (UnaryServerMethod<TreeAdminSnapshotRequest, TreeSnapshotStatus>?)null);
+            binder.AddMethod(methods.GetSnapshotStatus, (UnaryServerMethod<TreeAdminTreeRequest, TreeSnapshotStatus>?)null);
             return;
         }
 
@@ -198,6 +206,8 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
         binder.AddMethod(methods.ResizeTree, new UnaryServerMethod<TreeAdminResizeRequest, TreeResizeStatus>(serviceImpl.ResizeTree));
         binder.AddMethod(methods.UndoTreeResize, new UnaryServerMethod<TreeAdminTreeRequest, TreeResizeStatus>(serviceImpl.UndoTreeResize));
         binder.AddMethod(methods.GetResizeStatus, new UnaryServerMethod<TreeAdminTreeRequest, TreeResizeStatus>(serviceImpl.GetResizeStatus));
+        binder.AddMethod(methods.SnapshotTree, new UnaryServerMethod<TreeAdminSnapshotRequest, TreeSnapshotStatus>(serviceImpl.SnapshotTree));
+        binder.AddMethod(methods.GetSnapshotStatus, new UnaryServerMethod<TreeAdminTreeRequest, TreeSnapshotStatus>(serviceImpl.GetSnapshotStatus));
     }
 }
 
@@ -381,6 +391,14 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
     /// <inheritdoc />
     public override Task<TreeResizeStatus> GetResizeStatus(TreeAdminTreeRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (control, req, ct) => control.GetResizeStatusAsync(req.TreeId, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeSnapshotStatus> SnapshotTree(TreeAdminSnapshotRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.SnapshotTreeAsync(req.TreeId, req.DestinationTreeId, req.Mode, req.MaxLeafKeys, req.MaxInternalChildren, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeSnapshotStatus> GetSnapshotStatus(TreeAdminTreeRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.GetSnapshotStatusAsync(req.TreeId, ct));
 
     /// <inheritdoc />
     public override Task<AuthSchemeAdvertisement> GetAuthScheme(AuthSchemeAdvertisementRequest request, ServerCallContext context)

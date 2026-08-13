@@ -572,4 +572,52 @@ public interface ILatticeTreeAdmin
     Task<TreeResizeStatus> GetResizeStatusAsync(
         string treeId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Triggers a <b>snapshot capture</b> of <paramref name="treeId"/> into a fresh
+    /// <paramref name="destinationTreeId"/>, after authorizing the whole-tree
+    /// <see cref="LatticeOperation.Admin"/> capability fail-closed. Every live
+    /// key-value pair is copied shard-by-shard into the destination tree, anchored by
+    /// reminders so it survives silo restarts. In <see cref="TreeSnapshotMode.Offline"/>
+    /// mode the source tree is quiesced for the duration; in
+    /// <see cref="TreeSnapshotMode.Online"/> mode the source keeps serving reads and
+    /// writes while live mutations are shadow-forwarded to the destination and the
+    /// drain converges under last-writer-wins. Returns once the coordinator has
+    /// accepted the intent; poll completion with <see cref="GetSnapshotStatusAsync"/>.
+    /// Idempotent: a matching in-flight capture to the same destination and mode is a
+    /// no-op. Reserved system tree ids are rejected. This is <b>not</b> the Backup
+    /// facade: the destination is a live tree, not a durable catalogued artifact.
+    /// </summary>
+    /// <param name="treeId">The source tree to snapshot. Must not be <c>null</c>, empty, or reserved.</param>
+    /// <param name="destinationTreeId">The id for the new destination tree. Must not be <c>null</c>, empty, reserved, or already exist.</param>
+    /// <param name="mode">Whether to quiesce the source tree during the copy.</param>
+    /// <param name="maxLeafKeys">Optional leaf sizing override for the destination tree; <c>null</c> inherits the source tree's options.</param>
+    /// <param name="maxInternalChildren">Optional internal-node sizing override for the destination tree; <c>null</c> inherits the source tree's options.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The source tree's snapshot status after the trigger, echoing the requested destination and mode.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="destinationTreeId"/> is <c>null</c>, empty, or reserved.</exception>
+    /// <exception cref="InvalidOperationException">A snapshot with different parameters is already in progress, or the destination tree already exists.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the admin capability.</exception>
+    Task<TreeSnapshotStatus> SnapshotTreeAsync(
+        string treeId,
+        string destinationTreeId,
+        TreeSnapshotMode mode,
+        int? maxLeafKeys = null,
+        int? maxInternalChildren = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads the snapshot status of <paramref name="treeId"/> - whether a snapshot is
+    /// in flight for the source tree - after authorizing whole-tree
+    /// <see cref="LatticeOperation.Read"/> fail-closed. A pure read with no side
+    /// effects.
+    /// </summary>
+    /// <param name="treeId">The source tree to inspect. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The source tree's snapshot status.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the tree.</exception>
+    Task<TreeSnapshotStatus> GetSnapshotStatusAsync(
+        string treeId,
+        CancellationToken cancellationToken = default);
 }

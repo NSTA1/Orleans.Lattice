@@ -436,6 +436,41 @@ public sealed class LatticeTreeAdminGrpcClientE2ETests
             Throws.Exception);
     }
 
+    [Test]
+    public async Task snapshot_trigger_and_status_round_trip_over_the_client()
+    {
+        const string snapshotTree = "snapshot-e2e";
+        const string snapshotDest = "snapshot-e2e-dest";
+        await _host.Client.CreateTreeAsync(snapshotTree, shardCount: 2);
+
+        var before = await _host.Client.GetSnapshotStatusAsync(snapshotTree);
+        Assert.Multiple(() =>
+        {
+            Assert.That(before.TreeId, Is.EqualTo(snapshotTree));
+            Assert.That(before.InProgress, Is.False);
+            Assert.That(before.RequestedDestinationTreeId, Is.Null);
+            Assert.That(before.RequestedMode, Is.Null);
+        });
+
+        var triggered = await _host.Client.SnapshotTreeAsync(
+            snapshotTree, snapshotDest, TreeSnapshotMode.Offline);
+        Assert.Multiple(() =>
+        {
+            Assert.That(triggered.TreeId, Is.EqualTo(snapshotTree));
+            Assert.That(triggered.RequestedDestinationTreeId, Is.EqualTo(snapshotDest));
+            Assert.That(triggered.RequestedMode, Is.EqualTo(TreeSnapshotMode.Offline));
+        });
+    }
+
+    [Test]
+    public void snapshot_into_a_reserved_destination_is_rejected_over_the_client()
+    {
+        Assert.That(
+            async () => await _host.Client.SnapshotTreeAsync(
+                "snapshot-reject-e2e", "_lattice_dest", TreeSnapshotMode.Offline),
+            Throws.Exception);
+    }
+
     private static IReadOnlyList<Orleans.Lattice.Api.Data.DataEntry> Chunk(params string[] keys)
         => keys.Select(k => new Orleans.Lattice.Api.Data.DataEntry { Key = k, Value = "{}"u8.ToArray() }).ToArray();
 }

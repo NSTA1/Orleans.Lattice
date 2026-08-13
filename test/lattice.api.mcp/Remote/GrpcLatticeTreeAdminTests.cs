@@ -458,4 +458,48 @@ public sealed class GrpcLatticeTreeAdminTests
             Assert.That(result.CurrentMaxLeafKeys, Is.EqualTo(128));
         });
     }
+
+    [Test]
+    public async Task SnapshotTreeAsync_forwards_the_destination_and_mode_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeSnapshotStatus
+        {
+            TreeId = "orders",
+            InProgress = true,
+            RequestedDestinationTreeId = "orders-snap",
+            RequestedMode = TreeSnapshotMode.Online,
+        });
+
+        var result = await Adapter(invoker).SnapshotTreeAsync("orders", "orders-snap", TreeSnapshotMode.Online, 128, 64);
+
+        var sent = (TreeAdminSnapshotRequest)invoker.LastRequest!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(sent.TreeId, Is.EqualTo("orders"));
+            Assert.That(sent.DestinationTreeId, Is.EqualTo("orders-snap"));
+            Assert.That(sent.Mode, Is.EqualTo(TreeSnapshotMode.Online));
+            Assert.That(sent.MaxLeafKeys, Is.EqualTo(128));
+            Assert.That(sent.MaxInternalChildren, Is.EqualTo(64));
+            Assert.That(result.RequestedDestinationTreeId, Is.EqualTo("orders-snap"));
+            Assert.That(result.RequestedMode, Is.EqualTo(TreeSnapshotMode.Online));
+        });
+    }
+
+    [Test]
+    public async Task GetSnapshotStatusAsync_forwards_request_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeSnapshotStatus
+        {
+            TreeId = "orders",
+            InProgress = false,
+        });
+
+        var result = await Adapter(invoker).GetSnapshotStatusAsync("orders");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(((TreeAdminTreeRequest)invoker.LastRequest!).TreeId, Is.EqualTo("orders"));
+            Assert.That(result.InProgress, Is.False);
+        });
+    }
 }

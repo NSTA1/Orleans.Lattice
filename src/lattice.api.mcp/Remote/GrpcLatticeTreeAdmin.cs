@@ -224,4 +224,20 @@ internal sealed class GrpcLatticeTreeAdmin : ILatticeTreeAdmin
         string treeId,
         CancellationToken cancellationToken = default)
         => _client.GetResizeStatusAsync(treeId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TreeSnapshotStatus> SnapshotTreeAsync(
+        string treeId,
+        string destinationTreeId,
+        TreeSnapshotMode mode,
+        int? maxLeafKeys = null,
+        int? maxInternalChildren = null,
+        CancellationToken cancellationToken = default)
+        => _client.SnapshotTreeAsync(treeId, destinationTreeId, mode, maxLeafKeys, maxInternalChildren, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TreeSnapshotStatus> GetSnapshotStatusAsync(
+        string treeId,
+        CancellationToken cancellationToken = default)
+        => _client.GetSnapshotStatusAsync(treeId, cancellationToken);
 }

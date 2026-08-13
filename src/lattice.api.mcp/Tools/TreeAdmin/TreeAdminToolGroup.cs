@@ -184,6 +184,11 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "current effective B+ node capacity (maximum keys per leaf node and maximum children per internal "
                 + "node) as recorded in the registry. Poll this after triggering tree_resize to watch the rebuild "
                 + "complete. A pure read with no side effects. Requires whole-tree read authority. Read-only."),
+            Read(services, TreeAdminLifecycleToolHandlers.GetSnapshotStatusAsync, "lattice_treeadmin_tree_snapshot_status",
+                "Read a tree's snapshot status",
+                "Reads a tree's snapshot status: whether a point-in-time snapshot capture is currently in flight for "
+                + "the source tree. Poll this after triggering tree_snapshot to watch the capture complete. A pure "
+                + "read with no side effects. Requires whole-tree read authority. Read-only."),
         };
 
         if (enableSchemaControl)
@@ -344,6 +349,17 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "intent; poll tree_resize_status for completion. Rejected when there is no completed resize to "
                 + "undo, for a reserved system tree id, or when a different resize is already in flight. "
                 + "Tree-lifecycle-gated and destructive."));
+            tools.Add(Write(services, TreeAdminLifecycleToolHandlers.SnapshotTreeAsync, "lattice_treeadmin_tree_snapshot",
+                "Capture a point-in-time snapshot of a tree",
+                "Captures a point-in-time snapshot of a source tree into a fresh destination tree, copying every live "
+                + "key-value pair shard-by-shard, anchored by reminders so it survives silo restarts. In Offline mode "
+                + "the source tree is quiesced for the duration; in Online mode the source keeps serving reads and "
+                + "writes while live mutations are shadow-forwarded to the destination and the drain converges under "
+                + "last-writer-wins. Returns once the coordinator accepts the intent; poll tree_snapshot_status for "
+                + "completion. This is not the backup facade: the destination is a live tree, not a durable catalogued "
+                + "artifact. Idempotent for a matching in-flight capture. Rejected for a reserved source or destination "
+                + "tree id, when the destination already exists, or when a different snapshot is already in flight. "
+                + "Admin-gated and destructive."));
         }
 
         return tools;

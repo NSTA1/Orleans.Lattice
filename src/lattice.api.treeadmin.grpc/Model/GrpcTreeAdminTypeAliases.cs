@@ -71,4 +71,7 @@ public static class GrpcTreeAdminTypeAliases
 
     /// <summary>Alias for <see cref="TreeAdminResizeRequest"/>.</summary>
     public const string TreeAdminResizeRequest = "oitg.rszreq";
+
+    /// <summary>Alias for <see cref="TreeAdminSnapshotRequest"/>.</summary>
+    public const string TreeAdminSnapshotRequest = "oitg.snapreq";
 }

@@ -422,6 +422,48 @@ public sealed class TreeAdminGrpcDtoSerializationTests
     }
 
     [Test]
+    public void TreeAdminSnapshotRequest_round_trips()
+    {
+        var copy = RoundTrip(new TreeAdminSnapshotRequest
+        {
+            TreeId = "orders",
+            DestinationTreeId = "orders-snap",
+            Mode = TreeSnapshotMode.Online,
+            MaxLeafKeys = 128,
+            MaxInternalChildren = 64,
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TreeId, Is.EqualTo("orders"));
+            Assert.That(copy.DestinationTreeId, Is.EqualTo("orders-snap"));
+            Assert.That(copy.Mode, Is.EqualTo(TreeSnapshotMode.Online));
+            Assert.That(copy.MaxLeafKeys, Is.EqualTo(128));
+            Assert.That(copy.MaxInternalChildren, Is.EqualTo(64));
+        });
+    }
+
+    [Test]
+    public void TreeSnapshotStatus_response_round_trips_through_the_marshaller()
+    {
+        var copy = RoundTrip(new TreeSnapshotStatus
+        {
+            TreeId = "orders",
+            InProgress = true,
+            RequestedDestinationTreeId = "orders-snap",
+            RequestedMode = TreeSnapshotMode.Offline,
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TreeId, Is.EqualTo("orders"));
+            Assert.That(copy.InProgress, Is.True);
+            Assert.That(copy.RequestedDestinationTreeId, Is.EqualTo("orders-snap"));
+            Assert.That(copy.RequestedMode, Is.EqualTo(TreeSnapshotMode.Offline));
+        });
+    }
+
+    [Test]
     public void Every_registry_alias_is_unique_and_uses_the_reserved_prefix()
     {
         var aliases = RegistryAliasValues();

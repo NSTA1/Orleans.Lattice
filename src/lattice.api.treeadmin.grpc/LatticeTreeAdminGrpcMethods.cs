@@ -116,6 +116,12 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary read-only resize-status RPC method name.</summary>
     public const string GetResizeStatusMethodName = "GetResizeStatus";
 
+    /// <summary>The unary snapshot-capture trigger RPC method name.</summary>
+    public const string SnapshotTreeMethodName = "SnapshotTree";
+
+    /// <summary>The unary read-only snapshot-status RPC method name.</summary>
+    public const string GetSnapshotStatusMethodName = "GetSnapshotStatus";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeTreeAdminGrpcMethods(
         Serializer<TreeAdminTreeRequest> treeRequestSerializer,
@@ -153,7 +159,9 @@ internal sealed class LatticeTreeAdminGrpcMethods
         Serializer<TreeAdminReshardRequest> reshardRequestSerializer,
         Serializer<TreeReshardStatus> reshardStatusSerializer,
         Serializer<TreeAdminResizeRequest> resizeRequestSerializer,
-        Serializer<TreeResizeStatus> resizeStatusSerializer)
+        Serializer<TreeResizeStatus> resizeStatusSerializer,
+        Serializer<TreeAdminSnapshotRequest> snapshotRequestSerializer,
+        Serializer<TreeSnapshotStatus> snapshotStatusSerializer)
     {
         ArgumentNullException.ThrowIfNull(treeRequestSerializer);
         ArgumentNullException.ThrowIfNull(capabilitiesSerializer);
@@ -191,6 +199,8 @@ internal sealed class LatticeTreeAdminGrpcMethods
         ArgumentNullException.ThrowIfNull(reshardStatusSerializer);
         ArgumentNullException.ThrowIfNull(resizeRequestSerializer);
         ArgumentNullException.ThrowIfNull(resizeStatusSerializer);
+        ArgumentNullException.ThrowIfNull(snapshotRequestSerializer);
+        ArgumentNullException.ThrowIfNull(snapshotStatusSerializer);
 
         ProbeCapabilities = new Method<TreeAdminTreeRequest, LatticeTreeAdminCapabilities>(
             type: MethodType.Unary,
@@ -401,6 +411,20 @@ internal sealed class LatticeTreeAdminGrpcMethods
             name: GetResizeStatusMethodName,
             requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(treeRequestSerializer),
             responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(resizeStatusSerializer));
+
+        SnapshotTree = new Method<TreeAdminSnapshotRequest, TreeSnapshotStatus>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: SnapshotTreeMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(snapshotRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(snapshotStatusSerializer));
+
+        GetSnapshotStatus = new Method<TreeAdminTreeRequest, TreeSnapshotStatus>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: GetSnapshotStatusMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(treeRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(snapshotStatusSerializer));
     }
 
     /// <summary>The unary <c>ProbeCapabilities</c> capability-probe RPC.</summary>
@@ -493,6 +517,12 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary <c>GetResizeStatus</c> read-only resize-status RPC.</summary>
     public Method<TreeAdminTreeRequest, TreeResizeStatus> GetResizeStatus { get; }
 
+    /// <summary>The unary <c>SnapshotTree</c> snapshot-capture trigger RPC.</summary>
+    public Method<TreeAdminSnapshotRequest, TreeSnapshotStatus> SnapshotTree { get; }
+
+    /// <summary>The unary <c>GetSnapshotStatus</c> read-only snapshot-status RPC.</summary>
+    public Method<TreeAdminTreeRequest, TreeSnapshotStatus> GetSnapshotStatus { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out of
     /// <paramref name="serializerProvider"/>. Shared by the server-side DI factory
@@ -538,7 +568,9 @@ internal sealed class LatticeTreeAdminGrpcMethods
             serializerProvider.GetRequiredService<Serializer<TreeAdminReshardRequest>>(),
             serializerProvider.GetRequiredService<Serializer<TreeReshardStatus>>(),
             serializerProvider.GetRequiredService<Serializer<TreeAdminResizeRequest>>(),
-            serializerProvider.GetRequiredService<Serializer<TreeResizeStatus>>());
+            serializerProvider.GetRequiredService<Serializer<TreeResizeStatus>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAdminSnapshotRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeSnapshotStatus>>());
     }
 }
 
