@@ -178,19 +178,30 @@ internal sealed class RepoContextSearchService
         }
 
         var querySpace = EmbeddingSpaceTag.FromSpace(embed.Space);
+        // Over-fetch: a source now contributes several chunk (and symbol) vectors, so
+        // the top-k raw matches can be several passages of one source. Pull a larger
+        // pool and collapse it to k distinct sources, keeping each source's best
+        // (highest-scored, hence first) passage - the ranker returns descending score.
+        var poolK = Math.Min(Math.Max(k * 8, k), 1000);
         var matches = await _index
-            .SearchAsync(repoId, embed.Vectors[0], querySpace, k, cancellationToken)
+            .SearchAsync(repoId, embed.Vectors[0], querySpace, poolK, cancellationToken)
             .ConfigureAwait(false);
         if (matches.Count == 0)
         {
             return null;
         }
 
-        var hits = new List<RepoContextSearchHit>(matches.Count);
+        var hits = new List<RepoContextSearchHit>(k);
+        var seenSources = new HashSet<string>(StringComparer.Ordinal);
         foreach (var match in matches)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (string.IsNullOrEmpty(match.SourceKey))
+            if (hits.Count >= k)
+            {
+                break;
+            }
+
+            if (string.IsNullOrEmpty(match.SourceKey) || !seenSources.Add(match.SourceKey))
             {
                 continue;
             }

@@ -276,6 +276,8 @@ internal sealed class RepoContextBootstrapService
             unchangedForBackfill.AddRange(plan.MetadataChanged);
 
             var symbolsCaptured = 0;
+            IReadOnlyCollection<string> changedSymbolKeys = Array.Empty<string>();
+            IReadOnlyCollection<string> prunedSymbolKeys = Array.Empty<string>();
 
             // The symbol back-fill self-heal: content-unchanged, supported-language
             // files whose node was never symbol-processed (it predates symbol
@@ -330,6 +332,8 @@ internal sealed class RepoContextBootstrapService
                     repoId, repoRoot, plan.Added, plan.Updated, plan.RemovedPaths, symbolBackfill, storedMeta, cancellationToken)
                     .ConfigureAwait(false);
                 symbolsCaptured = symbolResult.SymbolsCaptured;
+                changedSymbolKeys = symbolResult.ChangedSymbolKeys;
+                prunedSymbolKeys = symbolResult.PrunedSymbolKeys;
                 var declaredEncoded = BuildDeclaredEncoded(
                     symbolResult.DeclaredByPath, plan.MetadataChanged, storedMeta);
 
@@ -376,7 +380,19 @@ internal sealed class RepoContextBootstrapService
             await ReportAsync(progress, new RepoIndexProgressUpdate { FilesEmbedded = embedded }, cancellationToken)
                 .ConfigureAwait(false);
 
-            stopwatch.Stop();
+            // Embed the per-symbol records as their own passages. This runs even when
+            // the structural plan was a no-op: a symbol upserted or pruned this pass is
+            // refreshed or retired, and any symbol still lacking a live embedding - a
+            // repository captured before symbol embedding existed - is back-filled, so
+            // symbol-level recall converges without a re-walk.
+            var symbolsEmbedded = await _vectorIngestor.IngestSymbolsAsync(
+                repoId, changedSymbolKeys, prunedSymbolKeys, cancellationToken)
+                .ConfigureAwait(false);
+            if (symbolsEmbedded > 0)
+            {
+                _logger.LogInformation(
+                    "Repo {RepoId}: embedded {Symbols} symbol passage(s).", repoId, symbolsEmbedded);
+            }
 
             // The run reconciled and applied cleanly, so publish the walk's directory
             // snapshot as the pruning baseline for the next run. Deferring the publish to

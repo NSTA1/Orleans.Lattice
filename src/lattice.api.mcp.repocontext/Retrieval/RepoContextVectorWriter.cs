@@ -10,12 +10,17 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// <para>
 /// For each source (a file or symbol key) the writer stamps a stable
 /// <see cref="VectorCodec.SourceId(string)"/> and stores one metadata record per
-/// live embedding under the presence key <c>{sourceId}.{contentAddress}</c> in
-/// the <see cref="RepoContextTrees.VectorMetadata"/> tree. On re-embed, the new
-/// content address yields a new presence key and every prior presence key for the
-/// same source is <b>deleted</b>, so the source has exactly one live vector at a
-/// time and the deletions become tree-level tombstones the compactor collects -
-/// never a single ever-growing value. The immutable, content-addressed payload
+/// live embedding under the presence key <c>{sourceId}.{unit}.{contentAddress}</c>
+/// in the <see cref="RepoContextTrees.VectorMetadata"/> tree, where <c>unit</c> is
+/// the zero-based ordinal of a passage within the source. A file is embedded as
+/// several overlapping windows and a symbol as a single passage, so a source may
+/// hold more than one live vector - one per unit - all grouped under the same
+/// <c>{sourceId}.</c> prefix. On re-embed the writer stores the fresh set of units
+/// and <b>deletes every prior presence key for the source that is not in that
+/// set</b>, so a source that changed content, gained, or lost passages ends the
+/// write holding exactly its current vectors and the superseded keys become
+/// tree-level tombstones the compactor collects - never a single ever-growing
+/// value. The immutable, content-addressed payload
 /// lands once per content address in the <see cref="RepoContextTrees.VectorPayload"/>
 /// tree (deduplicated and never rewritten), and the low-churn set of live source
 /// identifiers is folded into a bounded add-wins <see cref="VectorMembershipRecord"/>
@@ -26,6 +31,13 @@ internal sealed class RepoContextVectorWriter
 {
     /// <summary>The single membership collection every source identifier is a member of.</summary>
     internal const string SourceCollection = "sources";
+
+    /// <summary>
+    /// The width, in digits, of the zero-padded unit ordinal embedded in a
+    /// presence key. Fixed-width so the lexical key order matches the numeric unit
+    /// order, and wide enough for the chunker's per-file cap.
+    /// </summary>
+    internal const int UnitDigits = 4;
 
     private readonly IGrainFactory _grainFactory;
     private readonly Serializer _serializer;
@@ -43,49 +55,80 @@ internal sealed class RepoContextVectorWriter
     }
 
     /// <summary>
-    /// Stores <paramref name="vector"/> as the current embedding of
-    /// <paramref name="sourceKey"/>, retiring any prior embedding of the same
-    /// source. The payload is content-addressed and written at most once; the
-    /// metadata presence key is created; stale presence keys for the source are
-    /// deleted; and the source identifier is added to the bounded membership set.
+    /// Stores <paramref name="vectors"/> as the current embedding of
+    /// <paramref name="sourceKey"/> - one vector per passage (a file's overlapping
+    /// windows, or a symbol's single passage) - retiring any prior embedding of the
+    /// same source. Each payload is content-addressed and written at most once; a
+    /// metadata presence key is created per unit; every stale presence key for the
+    /// source (a superseded content address or a unit the source no longer has) is
+    /// deleted; and the caller records the source identifier in the bounded
+    /// membership set once its vectors have landed.
     /// </summary>
-    /// <param name="repoId">The repository the vector belongs to. Must not be <see langword="null"/>.</param>
-    /// <param name="sourceKey">The canonical record key the vector was derived from. Must not be <see langword="null"/>.</param>
-    /// <param name="space">The embedding space the vector was produced in. Must not be <see langword="null"/>.</param>
-    /// <param name="vector">The vector components to store.</param>
+    /// <param name="repoId">The repository the vectors belong to. Must not be <see langword="null"/>.</param>
+    /// <param name="sourceKey">The canonical record key the vectors were derived from. Must not be <see langword="null"/>.</param>
+    /// <param name="space">The embedding space the vectors were produced in. Must not be <see langword="null"/>.</param>
+    /// <param name="vectors">The ordered passage vectors to store. An empty list retires the source's entire live embedding.</param>
     /// <param name="cancellationToken">Cancels the write.</param>
-    /// <returns>The per-repository vector identifier the embedding was stored under.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="repoId"/>,
-    /// <paramref name="sourceKey"/>, or <paramref name="space"/> is null.</exception>
-    public async Task<string> StoreAsync(
+    /// <paramref name="sourceKey"/>, <paramref name="space"/>, or
+    /// <paramref name="vectors"/> is null.</exception>
+    public async Task StoreAsync(
         string repoId,
         string sourceKey,
         EmbeddingSpace space,
-        ReadOnlyMemory<float> vector,
+        IReadOnlyList<ReadOnlyMemory<float>> vectors,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(repoId);
         ArgumentNullException.ThrowIfNull(sourceKey);
         ArgumentNullException.ThrowIfNull(space);
+        ArgumentNullException.ThrowIfNull(vectors);
 
         var tag = EmbeddingSpaceTag.FromSpace(space);
-        var payload = VectorCodec.Encode(vector);
-        var contentAddress = VectorCodec.ContentAddress(payload);
         var sourceId = VectorCodec.SourceId(sourceKey);
-        var vectorId = $"{sourceId}.{contentAddress}";
 
-        await WritePayloadAsync(repoId, contentAddress, tag, payload, cancellationToken).ConfigureAwait(false);
-        await WriteMetadataAsync(repoId, vectorId, sourceKey, contentAddress, tag, cancellationToken)
-            .ConfigureAwait(false);
-        await RetireStaleAsync(repoId, sourceId, keep: vectorId, cancellationToken).ConfigureAwait(false);
+        var keep = new HashSet<string>(StringComparer.Ordinal);
+        for (var unit = 0; unit < vectors.Count; unit++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var payload = VectorCodec.Encode(vectors[unit]);
+            var contentAddress = VectorCodec.ContentAddress(payload);
+            var vectorId = FormatVectorId(sourceId, unit, contentAddress);
+            keep.Add(vectorId);
+
+            await WritePayloadAsync(repoId, contentAddress, tag, payload, cancellationToken).ConfigureAwait(false);
+            await WriteMetadataAsync(repoId, vectorId, sourceKey, contentAddress, tag, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        await RetireStaleAsync(repoId, sourceId, keep, cancellationToken).ConfigureAwait(false);
 
         // Membership is recorded by the caller once per embed batch (see
-        // AddMembersAsync), not per store: folding presence for every file would
+        // AddMembersAsync), not per store: folding presence for every source would
         // read-modify-write the whole growing membership record thousands of times
         // over a large back-fill. The caller flushes a batch's membership after its
         // vectors land, so an interrupted run leaves at most one batch of vectors
         // unrecorded (re-embedded, idempotently, on the next pass).
-        return vectorId;
+    }
+
+    /// <summary>
+    /// Formats the per-repository vector identifier for a passage: the source
+    /// identifier, the zero-padded unit ordinal, and the content address, joined so
+    /// every unit of a source shares the <c>{sourceId}.</c> prefix a range delete
+    /// retires in one call.
+    /// </summary>
+    /// <param name="sourceId">The stable source identifier. Must not be <see langword="null"/>.</param>
+    /// <param name="unit">The zero-based passage ordinal within the source. Must be non-negative.</param>
+    /// <param name="contentAddress">The payload content address. Must not be <see langword="null"/>.</param>
+    /// <returns>The vector identifier <c>{sourceId}.{unit}.{contentAddress}</c>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="sourceId"/> or <paramref name="contentAddress"/> is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="unit"/> is negative.</exception>
+    internal static string FormatVectorId(string sourceId, int unit, string contentAddress)
+    {
+        ArgumentNullException.ThrowIfNull(sourceId);
+        ArgumentNullException.ThrowIfNull(contentAddress);
+        ArgumentOutOfRangeException.ThrowIfNegative(unit);
+        return $"{sourceId}.{unit.ToString($"D{UnitDigits}", System.Globalization.CultureInfo.InvariantCulture)}.{contentAddress}";
     }
 
     /// <summary>
@@ -178,7 +221,7 @@ internal sealed class RepoContextVectorWriter
     }
 
     private async Task RetireStaleAsync(
-        string repoId, string sourceId, string keep, CancellationToken cancellationToken)
+        string repoId, string sourceId, IReadOnlySet<string> keep, CancellationToken cancellationToken)
     {
         var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMetadata);
         var prefix = $"{RepoContextKeys.VectorsPrefix(repoId)}{sourceId}.";
@@ -196,7 +239,8 @@ internal sealed class RepoContextVectorWriter
             {
                 if (RepoContextKeys.TryParse(record.Key, out var parsed)
                     && parsed.Kind == RepoContextRecordKind.VectorMetadata
-                    && !string.Equals(parsed.VectorId, keep, StringComparison.Ordinal))
+                    && parsed.VectorId is not null
+                    && !keep.Contains(parsed.VectorId))
                 {
                     stale.Add(record.Key);
                 }

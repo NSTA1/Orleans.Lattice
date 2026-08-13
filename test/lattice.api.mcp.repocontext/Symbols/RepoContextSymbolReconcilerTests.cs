@@ -97,6 +97,9 @@ public sealed class RepoContextSymbolReconcilerTests
             Assert.That(DeclaringFiles(type!), Does.Contain("src/Gadget.cs"));
             Assert.That(method, Is.Not.Null);
             Assert.That(result.DeclaredByPath["src/Gadget.cs"], Does.Contain("N.Gadget.Run()"));
+            Assert.That(result.ChangedSymbolKeys, Does.Contain(RepoContextKeys.Symbol(RepoId, "N.Gadget.Run()")),
+                "an upserted symbol's canonical key is surfaced so its embedding is refreshed");
+            Assert.That(result.PrunedSymbolKeys, Is.Empty, "nothing is pruned when a file is added");
         });
     }
 
@@ -143,7 +146,7 @@ public sealed class RepoContextSymbolReconcilerTests
         var afterFirstRemoval = await ReadSymbolAsync(harness, "N.C");
 
         // Remove B.cs: the last declarer is gone, so N.C must be pruned.
-        await Reconciler(harness).ReconcileAsync(
+        var lastRemoval = await Reconciler(harness).ReconcileAsync(
             RepoId, _repoRoot, added: [], updated: [], removedPaths: ["B.cs"], backfill: [], storedMeta: stored, Ct);
 
         var afterLastRemoval = await ReadSymbolAsync(harness, "N.C");
@@ -153,6 +156,8 @@ public sealed class RepoContextSymbolReconcilerTests
             Assert.That(afterFirstRemoval, Is.Not.Null, "the symbol survives while a sibling still declares it");
             Assert.That(DeclaringFiles(afterFirstRemoval!), Is.EquivalentTo(new[] { "B.cs" }));
             Assert.That(afterLastRemoval, Is.Null, "the record is pruned once no file declares it");
+            Assert.That(lastRemoval.PrunedSymbolKeys, Does.Contain(RepoContextKeys.Symbol(RepoId, "N.C")),
+                "a pruned symbol's canonical key is surfaced so its embedding is retired");
         });
     }
 

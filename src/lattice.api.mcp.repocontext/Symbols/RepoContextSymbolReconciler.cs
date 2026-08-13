@@ -183,14 +183,15 @@ internal sealed class RepoContextSymbolReconciler
             }
         }
 
-        var captured = await ApplySymbolChangesAsync(
+        var applied = await ApplySymbolChangesAsync(
             repoId, upsertInfo, declaringFilesByFq, removeFilesByFq, cancellationToken)
             .ConfigureAwait(false);
 
-        return new SymbolReconcileResult(captured, declaredByPath);
+        return new SymbolReconcileResult(
+            applied.Captured, declaredByPath, applied.ChangedKeys, applied.PrunedKeys);
     }
 
-    private async Task<int> ApplySymbolChangesAsync(
+    private async Task<SymbolApplyOutcome> ApplySymbolChangesAsync(
         string repoId,
         IReadOnlyDictionary<string, (ExtractedSymbol Symbol, string File)> upsertInfo,
         IReadOnlyDictionary<string, HashSet<string>> declaringFilesByFq,
@@ -202,13 +203,15 @@ internal sealed class RepoContextSymbolReconciler
         touched.UnionWith(removeFilesByFq.Keys);
         if (touched.Count == 0)
         {
-            return 0;
+            return new SymbolApplyOutcome(0, Array.Empty<string>(), Array.Empty<string>());
         }
 
         var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.Symbol);
         var clock = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
         var writes = new List<KeyValuePair<string, byte[]>>();
         var deletes = new List<string>();
+        var changedKeys = new List<string>();
+        var prunedKeys = new List<string>();
         var captured = 0;
 
         foreach (var fqName in touched)
@@ -272,6 +275,7 @@ internal sealed class RepoContextSymbolReconciler
             if (record.DeclaringFiles.IsEmpty)
             {
                 deletes.Add(key);
+                prunedKeys.Add(key);
             }
             else
             {
@@ -279,13 +283,22 @@ internal sealed class RepoContextSymbolReconciler
                 if (isUpsert)
                 {
                     captured++;
+                    changedKeys.Add(key);
                 }
             }
         }
 
         await CommitAsync(tree, repoId, writes, deletes, cancellationToken).ConfigureAwait(false);
-        return captured;
+        return new SymbolApplyOutcome(captured, changedKeys, prunedKeys);
     }
+
+    /// <summary>
+    /// The outcome of applying one batch of symbol upserts and prunes: the number of
+    /// symbols written live, and the canonical record keys upserted (to refresh their
+    /// embeddings) and pruned (to retire theirs).
+    /// </summary>
+    private readonly record struct SymbolApplyOutcome(
+        int Captured, IReadOnlyList<string> ChangedKeys, IReadOnlyList<string> PrunedKeys);
 
     private static async Task CommitAsync(
         ILattice tree,
