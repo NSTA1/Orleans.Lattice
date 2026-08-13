@@ -201,7 +201,7 @@ internal static class RepoContextToolHandlers
     /// </summary>
     /// <param name="context">The MCP request context, used to resolve the store.</param>
     /// <param name="repoId">The repository the entry belongs to.</param>
-    /// <param name="topic">The topic bucket to file the entry under.</param>
+    /// <param name="topic">The topic bucket to file the entry under; free-form but not enforced, so prefer a small, stable vocabulary (for example 'decisions', 'gotchas', 'conventions', 'glossary', 'todo', or a stable feature name) for cross-session consistency.</param>
     /// <param name="id">The per-topic id, or null to generate one (create).</param>
     /// <param name="kind">The memory kind applied on creation: Decision, Note, or Memory.</param>
     /// <param name="title">An optional short title.</param>
@@ -217,7 +217,7 @@ internal static class RepoContextToolHandlers
         RequestContext<CallToolRequestParams> context,
         [Description("The repository identifier the entry belongs to.")]
         string repoId,
-        [Description("The topic bucket to file the memory entry under (for example 'decisions' or 'gotchas').")]
+        [Description("The topic bucket to file the memory entry under. Free-form and not enforced, but prefer a small, stable vocabulary so related notes stay groupable across sessions rather than fragmenting into synonyms - for example 'decisions' (design choices with rationale), 'gotchas' (non-obvious pitfalls), 'conventions' (project norms), 'glossary' (domain terms), 'todo' (follow-ups), or a stable feature or component name.")]
         string topic,
         [Description("The per-topic entry id. Omit to create a new entry with a generated id; supply an existing id to update in place.")]
         string? id = null,

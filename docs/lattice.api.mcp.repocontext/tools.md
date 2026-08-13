@@ -1,6 +1,6 @@
 # Tools
 
-The module contributes ten `repocontext_*` MCP tools. Six are read-only and offered to any caller holding the repository-context read grant; four are mutating and contributed only when the host calls `AddRepoContextTools(enableWrites: true)`. Every tool clears the same fail-closed authorization gate at both advertisement and invocation.
+The module contributes the `repocontext_*` MCP tools in two host-selected shapes. In the default **single-repository** mode it offers ten tools: six read-only, offered to any caller holding the repository-context read grant, plus four mutating, contributed only when the host calls `AddRepoContextTools(enableWrites: true)`. In **workspace** mode - what the bundled container runs - the read-only `repocontext_list_repos` is added and the mutating `repocontext_bootstrap` is replaced by `repocontext_add_repo` and `repocontext_remove_repo`, so the client manages many repositories under one mounted root. Every tool, in either mode, clears the same fail-closed authorization gate at both advertisement and invocation.
 
 ## Read-only tools
 
@@ -25,6 +25,16 @@ Contributed only under `enableWrites: true`. Each is annotated destructive and o
 | `repocontext_remember` | Creates or updates a memory or decision entry under a topic, with an optional time-to-live. Omit `id` to create a new entry with a generated id; supply an existing `id` to merge into it in place with CRDT semantics. When no explicit `ttlSeconds` is given, a new entry inherits the repository's default memory TTL if one is configured, otherwise it is durable. |
 | `repocontext_update` | Patches scalar fields and tags on an existing structural or memory record using CRDT-merge semantics: each field is a last-writer-wins register applied at a fresh logical tick, so concurrent updates converge instead of clobbering each other. Any remaining time-to-live is preserved. Fails if no record exists at the key. |
 | `repocontext_forget` | Removes an entry. By default it hard-deletes immediately; set `lapse` to true to re-write it with a short time-to-live (default 60 seconds) so it lapses on its own, letting concurrent readers drain gracefully. |
+
+## Workspace-mode tools
+
+Contributed only when the host runs in **workspace** mode: a broad parent directory is mounted read-only and the client manages repositories under it. `repocontext_list_repos` needs only a read grant; `repocontext_add_repo` and `repocontext_remove_repo` are mutating and, like the other mutating tools, require the host to have opted writes in. In this mode they stand in for the single-repository `repocontext_bootstrap`.
+
+| Tool | What it does |
+|---|---|
+| `repocontext_list_repos` | Lists every repository currently registered in the store, each with its last-ingested marker and recorded file count, in ascending id order, so an agent can discover which repositories under the workspace are queryable before recalling, scanning, or searching. Read-only. |
+| `repocontext_add_repo` | Registers a repository under the mounted workspace and starts indexing it. Takes `path` (which must resolve inside the workspace root - a `..` or symlink escape is rejected) and an optional `repoId`, derived from the final path segment when omitted, plus the same walk filters as `repocontext_bootstrap`. Starts asynchronously and returns the running job's snapshot; poll `repocontext_index_status`. Idempotent and resumable. |
+| `repocontext_remove_repo` | Removes every record for a repository - structural nodes, memory, and vector data - and drops it from `repocontext_list_repos`, cancelling any in-flight run and tearing down its indexing grains. The working tree on disk is never touched, and removing an unknown repository is a no-op. |
 
 ## Asynchronous indexing lifecycle
 
@@ -63,4 +73,4 @@ When `excludeBinary` is on, a file whose leading bytes look non-text - a `NUL` b
 
 ## Discovery and gating
 
-Tool advertisement and invocation both defer to the core permission-aware discovery filter and the fail-closed gate - the module registers exactly one tool group and adds no per-session state. A caller with no repository-context grant sees none of these tools; a caller with only a read grant sees the six read-only tools; the four mutating tools appear only when the host enabled writes. See the [MCP server](../lattice.api.mcp/README.md) docs for the credential bridge and grant model.
+Tool advertisement and invocation both defer to the core permission-aware discovery filter and the fail-closed gate - the module registers exactly one tool group and adds no per-session state. A caller with no repository-context grant sees none of these tools; a caller with only a read grant sees the read-only tools (the six always-on tools, plus `repocontext_list_repos` in workspace mode); the mutating tools appear only when the host enabled writes. See the [MCP server](../lattice.api.mcp/README.md) docs for the credential bridge and grant model.

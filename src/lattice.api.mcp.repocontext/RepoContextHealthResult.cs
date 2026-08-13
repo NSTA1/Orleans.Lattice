@@ -5,8 +5,10 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// read-only acknowledgement that the repository-context MCP surface is
 /// registered, reachable, and that the caller cleared the fail-closed
 /// authorization gate. It carries no repository state - the capture, maintenance,
-/// and retrieval tools that return real context land in later work - so an agent
-/// can use it purely to confirm the surface is wired end to end.
+/// and retrieval tools (<c>repocontext_recall</c>, <c>repocontext_scan</c>,
+/// <c>repocontext_search</c>, <c>repocontext_remember</c>, and the rest) return the
+/// real context - so an agent uses this result purely to confirm the surface is
+/// wired end to end before calling them.
 /// </summary>
 /// <remarks>
 /// This is an MCP protocol payload projected to JSON by the SDK, not an Orleans

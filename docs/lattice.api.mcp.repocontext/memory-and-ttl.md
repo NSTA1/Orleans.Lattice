@@ -4,7 +4,7 @@ Beyond the structural model of a codebase, the store holds agent-authored **memo
 
 ## Topics and entries
 
-A memory entry is keyed `repo/{repoId}/mem/{topic}/{id}`. The topic is a free-form grouping (for example `decisions`, `todo`, or a feature name); the id identifies one entry within it. An agent:
+A memory entry is keyed `repo/{repoId}/mem/{topic}/{id}`. The topic is a free-form grouping; the id identifies one entry within it. Topics are not enforced, but agents are nudged toward a small, stable vocabulary - `decisions` (design choices with rationale), `gotchas` (non-obvious pitfalls), `conventions` (project norms), `glossary` (domain terms), `todo` (follow-ups), or a stable feature or component name - so related notes stay groupable across sessions instead of fragmenting into synonyms. An agent:
 
 - creates or updates entries with `repocontext_remember` (omit `id` to create with a generated id, or supply one to merge in place),
 - discovers what topics exist with `repocontext_list_topics` (each topic reports its live entry count),

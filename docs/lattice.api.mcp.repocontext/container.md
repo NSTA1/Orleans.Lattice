@@ -4,6 +4,30 @@ The module ships as a single, restart-durable container image - "codebase memory
 
 The runnable sample is [`samples/RepoContextContainer`](../../samples/RepoContextContainer/README.md); this page summarises how it is wired.
 
+## Topology
+
+```mermaid
+flowchart LR
+    agent["AI coding agent<br/>(MCP client)"]
+
+    subgraph container["repocontext container"]
+        mcp["MCP listener :8080<br/>+ /health/live, /health/ready"]
+        silo["Orleans single silo<br/>Lattice CRDT B+ trees<br/>(structural, memory, vector)"]
+        mcp --> silo
+    end
+
+    embed["embedding companion<br/>(separate container)"]
+    workspace[("/workspace<br/>read-only mount")]
+    data[("LATTICE_DATA_ROOT (/data)<br/>file WAL + SQLite")]
+
+    agent -->|"tools/list, tools/call"| mcp
+    silo -->|"embed over HTTP"| embed
+    silo -->|"walk + digest (read-only)"| workspace
+    silo -->|"WAL + grain state"| data
+```
+
+The container exposes a single application listener (the MCP endpoint, plus HTTP health probes) and reads the code it indexes from a read-only workspace mount, so it can never mutate that code. The `local` profile keeps both the WAL and the relational store under `LATTICE_DATA_ROOT`; the `postgres` and `azure` profiles move the relational store (and, for `azure`, the WAL) to an external service, leaving the same listener and workspace wiring unchanged. The embedding companion is optional: with no `LATTICE_EMBEDDING_ENDPOINT` set, search runs on the keyword path.
+
 ## The durability loop
 
 The end-to-end guarantee the sample demonstrates:
