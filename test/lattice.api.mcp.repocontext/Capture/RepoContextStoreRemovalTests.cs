@@ -53,6 +53,7 @@ public sealed class RepoContextStoreRemovalTests
         var seeded = new (string Tree, string Key)[]
         {
             (RepoContextTrees.Structural, RepoContextKeys.File(repoId, "src/A.cs")),
+            (RepoContextTrees.Symbol, RepoContextKeys.Symbol(repoId, "Acme.A")),
             (RepoContextTrees.Memory, RepoContextKeys.Memory(repoId, "notes", "1")),
             (RepoContextTrees.VectorMembership, RepoContextKeys.VectorMembership(repoId, "default")),
             (RepoContextTrees.VectorPayload, RepoContextKeys.VectorPayload(repoId, "cafe")),
@@ -81,8 +82,8 @@ public sealed class RepoContextStoreRemovalTests
         Assert.Multiple(() =>
         {
             Assert.That(result.RepoId, Is.EqualTo("acme"));
-            // Five subtree records plus the bare root marker.
-            Assert.That(result.EntriesDeleted, Is.EqualTo(6));
+            // Six subtree records plus the bare root marker.
+            Assert.That(result.EntriesDeleted, Is.EqualTo(7));
         });
 
         foreach (var (treeName, key) in seeded)

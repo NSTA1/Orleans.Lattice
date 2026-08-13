@@ -409,3 +409,6 @@ benchmark/diagnostic-reports/*.json
 benchmark/diagnostic-report.md
 benchmark/diagnostic-report.pilot.md
 
+
+# Local RepoContext deployment artifacts (host publish + runtime Dockerfile)
+.deploy/

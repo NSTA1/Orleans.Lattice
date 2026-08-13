@@ -4,6 +4,7 @@ using NSubstitute;
 using Orleans.Lattice;
 using Orleans.Lattice.Api.Mcp.RepoContext.Host;
 using Orleans.Lattice.Auth;
+using Orleans.Lattice.Schema;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
 
@@ -75,9 +76,45 @@ public sealed class RepoContextStartupServiceTests
     }
 
     [Test]
+    public async Task SeedAccessAsync_opts_the_symbol_tree_in_to_schema_versioning_when_unversioned()
+    {
+        var store = Substitute.For<ILatticeAuthorizationPolicyStore>();
+        var admin = Substitute.For<ILatticeSchemaVersionAdmin>();
+        admin.GetVersionConfigAsync(RepoContextHostTrees.Symbol, Arg.Any<CancellationToken>())
+            .Returns((LatticeSchemaVersionConfig?)null);
+
+        var service = CreateService(store, admin: admin);
+        await service.SeedAccessAsync(CancellationToken.None);
+
+        await admin.Received(1).SetVersionConfigAsync(
+            RepoContextHostTrees.Symbol,
+            Arg.Is<LatticeSchemaVersionConfig>(c =>
+                c.SchemaId == RepoContextHostTrees.SymbolSchemaId
+                && c.TargetVersion == RepoContextHostTrees.SymbolSchemaVersion),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task SeedAccessAsync_leaves_an_already_versioned_symbol_tree_untouched()
+    {
+        var store = Substitute.For<ILatticeAuthorizationPolicyStore>();
+        var admin = Substitute.For<ILatticeSchemaVersionAdmin>();
+        admin.GetVersionConfigAsync(RepoContextHostTrees.Symbol, Arg.Any<CancellationToken>())
+            .Returns(new LatticeSchemaVersionConfig(
+                RepoContextHostTrees.SymbolSchemaId, RepoContextHostTrees.SymbolSchemaVersion));
+
+        var service = CreateService(store, admin: admin);
+        await service.SeedAccessAsync(CancellationToken.None);
+
+        await admin.DidNotReceive().SetVersionConfigAsync(
+            Arg.Any<string>(), Arg.Any<LatticeSchemaVersionConfig>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public void Constructor_rejects_null_arguments()
     {
         var store = Substitute.For<ILatticeAuthorizationPolicyStore>();
+        var admin = Substitute.For<ILatticeSchemaVersionAdmin>();
         var lifetime = Substitute.For<IHostApplicationLifetime>();
         var logger = Substitute.For<ILogger<RepoContextStartupService>>();
         var readiness = new RepoContextReadinessState();
@@ -85,25 +122,30 @@ public sealed class RepoContextStartupServiceTests
         Assert.Multiple(() =>
         {
             Assert.That(
-                () => new RepoContextStartupService(null!, readiness, lifetime, logger),
+                () => new RepoContextStartupService(null!, admin, readiness, lifetime, logger),
                 Throws.ArgumentNullException);
             Assert.That(
-                () => new RepoContextStartupService(store, null!, lifetime, logger),
+                () => new RepoContextStartupService(store, null!, readiness, lifetime, logger),
                 Throws.ArgumentNullException);
             Assert.That(
-                () => new RepoContextStartupService(store, readiness, null!, logger),
+                () => new RepoContextStartupService(store, admin, null!, lifetime, logger),
                 Throws.ArgumentNullException);
             Assert.That(
-                () => new RepoContextStartupService(store, readiness, lifetime, null!),
+                () => new RepoContextStartupService(store, admin, readiness, null!, logger),
+                Throws.ArgumentNullException);
+            Assert.That(
+                () => new RepoContextStartupService(store, admin, readiness, lifetime, null!),
                 Throws.ArgumentNullException);
         });
     }
 
     private static RepoContextStartupService CreateService(
         ILatticeAuthorizationPolicyStore store,
-        RepoContextReadinessState? readiness = null)
+        RepoContextReadinessState? readiness = null,
+        ILatticeSchemaVersionAdmin? admin = null)
         => new(
             store,
+            admin ?? Substitute.For<ILatticeSchemaVersionAdmin>(),
             readiness ?? new RepoContextReadinessState(),
             Substitute.For<IHostApplicationLifetime>(),
             Substitute.For<ILogger<RepoContextStartupService>>());

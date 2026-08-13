@@ -75,7 +75,7 @@ public sealed class RepoTreeWalkerPruningTests
         var anchorTicks = (anchor ?? DateTime.UtcNow.AddYears(1)).Ticks;
         var known = cold.ToDictionary(
             e => e.RelativePath,
-            e => new StoredFileMeta(Sentinel, e.Language, e.SizeBytes, anchorTicks),
+            e => new StoredFileMeta(Sentinel, e.Language, e.SizeBytes, anchorTicks, []),
             StringComparer.Ordinal);
         return (priming.CurrentDirectoryMtimes, known);
     }
@@ -136,7 +136,7 @@ public sealed class RepoTreeWalkerPruningTests
         var anchor = DateTime.UtcNow.AddYears(-1).Ticks;
         var known = new Dictionary<string, StoredFileMeta>(StringComparer.Ordinal)
         {
-            ["a/x.cs"] = new StoredFileMeta(Sentinel, "csharp", 1, anchor),
+            ["a/x.cs"] = new StoredFileMeta(Sentinel, "csharp", 1, anchor, []),
         };
 
         // A pruning context with no prior snapshot is the cold case: pruning cannot apply.
@@ -238,7 +238,7 @@ public sealed class RepoTreeWalkerPruningTests
         // sentinel.
         var known = new Dictionary<string, StoredFileMeta>(StringComparer.Ordinal)
         {
-            ["a/x.cs"] = new StoredFileMeta(Sentinel, "csharp", 1, 0),
+            ["a/x.cs"] = new StoredFileMeta(Sentinel, "csharp", 1, 0, []),
         };
         var pruning = new RepoWalkPruning { PreviousDirectoryMtimes = priming.CurrentDirectoryMtimes };
         var entry = RepoTreeWalker.Walk(_root, null, null, knownFiles: known, pruning: pruning)

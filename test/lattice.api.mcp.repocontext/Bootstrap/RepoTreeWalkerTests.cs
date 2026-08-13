@@ -396,7 +396,7 @@ public sealed class RepoTreeWalkerTests
 
         var known = new Dictionary<string, StoredFileMeta>
         {
-            ["a.cs"] = new StoredFileMeta("xx128:deadbeefdeadbeefdeadbeefdeadbeef", "csharp", 5, anchor),
+            ["a.cs"] = new StoredFileMeta("xx128:deadbeefdeadbeefdeadbeefdeadbeef", "csharp", 5, anchor, []),
         };
 
         var entry = RepoTreeWalker.Walk(
@@ -421,7 +421,7 @@ public sealed class RepoTreeWalkerTests
         // Stored size is stale, so the fast-path cannot apply and the file is read.
         var known = new Dictionary<string, StoredFileMeta>
         {
-            ["a.cs"] = new StoredFileMeta("xx128:deadbeefdeadbeefdeadbeefdeadbeef", "csharp", 3, anchor),
+            ["a.cs"] = new StoredFileMeta("xx128:deadbeefdeadbeefdeadbeefdeadbeef", "csharp", 3, anchor, []),
         };
 
         var entry = RepoTreeWalker.Walk(
@@ -443,7 +443,7 @@ public sealed class RepoTreeWalkerTests
         // comparison forces a read even though the size matches.
         var known = new Dictionary<string, StoredFileMeta>
         {
-            ["a.cs"] = new StoredFileMeta("xx128:deadbeefdeadbeefdeadbeefdeadbeef", "csharp", 6, anchor.Ticks),
+            ["a.cs"] = new StoredFileMeta("xx128:deadbeefdeadbeefdeadbeefdeadbeef", "csharp", 6, anchor.Ticks, []),
         };
 
         var entry = RepoTreeWalker.Walk(
@@ -469,7 +469,7 @@ public sealed class RepoTreeWalkerTests
 
         var known = new Dictionary<string, StoredFileMeta>
         {
-            ["a.cs"] = new StoredFileMeta(storedDigest, "csharp", content.Length, anchor.Ticks),
+            ["a.cs"] = new StoredFileMeta(storedDigest, "csharp", content.Length, anchor.Ticks, []),
         };
 
         var entry = RepoTreeWalker.Walk(
@@ -493,7 +493,7 @@ public sealed class RepoTreeWalkerTests
         // fall through to a real read rather than trusting the stale digest.
         var known = new Dictionary<string, StoredFileMeta>
         {
-            ["a.cs"] = new StoredFileMeta("xx128:deadbeefdeadbeefdeadbeefdeadbeef", "csharp", 3, 0),
+            ["a.cs"] = new StoredFileMeta("xx128:deadbeefdeadbeefdeadbeefdeadbeef", "csharp", 3, 0, []),
         };
 
         var entry = RepoTreeWalker.Walk(
@@ -518,7 +518,7 @@ public sealed class RepoTreeWalkerTests
             System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes("old bytes")));
         var known = new Dictionary<string, StoredFileMeta>
         {
-            ["a.cs"] = new StoredFileMeta(legacyDigest, "csharp", 9, anchor.Ticks),
+            ["a.cs"] = new StoredFileMeta(legacyDigest, "csharp", 9, anchor.Ticks, []),
         };
 
         var entry = RepoTreeWalker.Walk(

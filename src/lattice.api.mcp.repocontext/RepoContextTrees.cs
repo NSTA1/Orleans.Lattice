@@ -21,10 +21,20 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 internal static class RepoContextTrees
 {
     /// <summary>
-    /// Tree holding the structural nodes: repo, package, file, and symbol records
-    /// (low churn; may keep the default per-tree options).
+    /// Tree holding the structural nodes: repo, package, and file records (low
+    /// churn; may keep the default per-tree options). Per-symbol records live in
+    /// their own <see cref="Symbol"/> tree.
     /// </summary>
     internal const string Structural = "repo-context-structural";
+
+    /// <summary>
+    /// Tree holding the per-symbol structural records (type, member, and function
+    /// declarations). Held apart from the other structural nodes so the symbol
+    /// family can carry its own schema-version envelope and its own compaction
+    /// policy: symbols churn on every re-index of a changed file, whereas the
+    /// repo/package/file nodes are comparatively stable.
+    /// </summary>
+    internal const string Symbol = "repo-context-symbol";
 
     /// <summary>
     /// Tree holding agent-authored memory records (higher churn from re-write and
@@ -48,6 +58,7 @@ internal static class RepoContextTrees
     internal static IReadOnlyList<string> All { get; } = new[]
     {
         Structural,
+        Symbol,
         Memory,
         VectorMembership,
         VectorPayload,
@@ -56,10 +67,11 @@ internal static class RepoContextTrees
 
     /// <summary>
     /// Resolves the named tree that stores records of the given
-    /// <paramref name="kind"/>. Structural kinds (repo, package, file, symbol)
-    /// map to <see cref="Structural"/>; <see cref="RepoContextRecordKind.Memory"/>
-    /// maps to <see cref="Memory"/>; and the vector kinds map to their dedicated
-    /// vector trees.
+    /// <paramref name="kind"/>. Structural kinds (repo, package, file) map to
+    /// <see cref="Structural"/>; <see cref="RepoContextRecordKind.Symbol"/> maps to
+    /// its dedicated <see cref="Symbol"/> tree;
+    /// <see cref="RepoContextRecordKind.Memory"/> maps to <see cref="Memory"/>; and
+    /// the vector kinds map to their dedicated vector trees.
     /// </summary>
     /// <param name="kind">The record family to route.</param>
     /// <exception cref="ArgumentOutOfRangeException">The kind is not a known record kind.</exception>
@@ -67,8 +79,8 @@ internal static class RepoContextTrees
     {
         RepoContextRecordKind.Repo
             or RepoContextRecordKind.Package
-            or RepoContextRecordKind.File
-            or RepoContextRecordKind.Symbol => Structural,
+            or RepoContextRecordKind.File => Structural,
+        RepoContextRecordKind.Symbol => Symbol,
         RepoContextRecordKind.Memory => Memory,
         RepoContextRecordKind.VectorMetadata => VectorMetadata,
         RepoContextRecordKind.VectorPayload => VectorPayload,
