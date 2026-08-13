@@ -27,6 +27,8 @@ Naming rules for every layer of Orleans.Lattice, plus the canonical registry of 
 | Tree-administration control-API gRPC binding test namespace | `Orleans.Lattice.Api.TreeAdmin.Grpc.Tests` | `Orleans.Lattice.Api.TreeAdmin.Grpc.Tests` |
 | Azure Table WAL public API namespace | `Orleans.Lattice.Storage.AzureTable` | `AzureTableWalStorageOptions`, `AzureTableWalStorageProvider`, `LatticeAzureTableServiceCollectionExtensions` |
 | Azure Table WAL test namespace | `Orleans.Lattice.Storage.AzureTable.Tests` | `Orleans.Lattice.Storage.AzureTable.Tests` |
+| File WAL public API namespace | `Orleans.Lattice.Storage.File` | `FileWalStorageOptions`, `FileWalStorageProvider`, `LatticeFileServiceCollectionExtensions` |
+| File WAL test namespace | `Orleans.Lattice.Storage.File.Tests` | `Orleans.Lattice.Storage.File.Tests` |
 | Scaling public API namespace | `Orleans.Lattice.Scaling` | `ILatticeScalingSignal`, `ScalingSignal`, `ComputePressure`, `StoragePressure`, `WalAccountPressure`, `WalRebalanceRecommendation`, `WalPressureClassification`, `LatticeScalingSignalOptions`, `LatticeScalingServiceCollectionExtensions`, `LatticeScalingEndpointRouteBuilderExtensions`, `LatticeScalingHealthCheckOptions`, `LatticeScalingMetrics`, `ScalingTypeAliases` |
 | Scaling test namespace | `Orleans.Lattice.Scaling.Tests` | `Orleans.Lattice.Scaling.Tests` |
 | Grain interface | `I{Name}Grain` (prefix `I`, suffix `Grain`) | `IBPlusLeafGrain` |

@@ -24,6 +24,7 @@ internal static class LatticeApiMcpGroupCapabilityMap
         LatticeApiMcpGroup.Telemetry,
         LatticeApiMcpGroup.Replication,
         LatticeApiMcpGroup.TreeAdmin,
+        LatticeApiMcpGroup.RepoContext,
     };
 
     /// <summary>
@@ -61,6 +62,17 @@ internal static class LatticeApiMcpGroupCapabilityMap
         // Whole-tree administration control plane.
         LatticeApiMcpGroup.TreeAdmin => LatticeOperation.Admin,
 
+        // Repository-context store: a data-plane surface over dedicated Lattice
+        // trees, so it shares the data group's read/write capability mask.
+        LatticeApiMcpGroup.RepoContext => LatticeOperation.Read
+            | LatticeOperation.Write
+            | LatticeOperation.Delete
+            | LatticeOperation.RangeRead
+            | LatticeOperation.RangeDelete
+            | LatticeOperation.CrdtApply
+            | LatticeOperation.AtomicWrite
+            | LatticeOperation.BulkLoad,
+
         _ => LatticeOperation.None,
     };
 
@@ -74,6 +86,7 @@ internal static class LatticeApiMcpGroupCapabilityMap
         LatticeApiMcpGroup.Telemetry => "telemetry",
         LatticeApiMcpGroup.Replication => "replication",
         LatticeApiMcpGroup.TreeAdmin => "treeadmin",
+        LatticeApiMcpGroup.RepoContext => "repocontext",
         _ => group.ToString().ToLowerInvariant(),
     };
 }

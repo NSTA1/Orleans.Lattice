@@ -35,6 +35,7 @@ internal static class CoreDocsSnippetScope
         "docs/lattice.api.backup.grpc",
         "docs/lattice.api.data",
         "docs/lattice.api.mcp",
+        "docs/lattice.api.mcp.repocontext",
         "docs/lattice.api.mcp.telemetry",
         "docs/lattice.api.mcp.telemetry.azure",
         "docs/lattice.api.state",
@@ -50,5 +51,6 @@ internal static class CoreDocsSnippetScope
         "docs/lattice.scaling",
         "docs/lattice.schema",
         "docs/lattice.storage.azuretable",
+        "docs/lattice.storage.file",
     };
 }

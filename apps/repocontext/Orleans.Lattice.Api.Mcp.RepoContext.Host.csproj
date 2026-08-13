@@ -1,0 +1,66 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Orleans.Lattice.Api.Mcp.RepoContext.Host</RootNamespace>
+    <AssemblyName>Orleans.Lattice.Api.Mcp.RepoContext.Host</AssemblyName>
+    <!-- This host is an application image, not a published library. It must not
+         pollute the src/<pkg>+test/<pkg>+docs/<pkg> CI package-discovery globs,
+         so it lives under apps/ and is explicitly non-packable. -->
+    <IsPackable>false</IsPackable>
+    <!-- The bootstrap/ingest path walks filesystem paths and reads file content
+         with ordinal string comparison only; no culture-sensitive formatting or
+         collation is performed, so invariant globalization is safe and trims the
+         chiseled runtime image. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The SQLite ADO.NET invariant scripts this host owns and applies at
+         startup. Baked into the assembly so the chiseled runtime image needs no
+         loose content files. -->
+    <EmbeddedResource Include="Persistence\Sqlite\SQLite-Main.sql" />
+    <EmbeddedResource Include="Persistence\Sqlite\SQLite-Persistence.sql" />
+    <EmbeddedResource Include="Persistence\Sqlite\SQLite-Reminders.sql" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Mcp.RepoContext.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The just-built bits: the new packages are unpublished, so the image
+         ships ProjectReferences into src/, never NuGet PackageReferences. -->
+    <ProjectReference Include="..\..\src\lattice\Orleans.Lattice.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.mcp\Orleans.Lattice.Api.Mcp.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.mcp.repocontext\Orleans.Lattice.Api.Mcp.RepoContext.csproj" />
+    <ProjectReference Include="..\..\src\lattice.membership\Orleans.Lattice.Membership.csproj" />
+    <ProjectReference Include="..\..\src\lattice.auth\Orleans.Lattice.Auth.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.auth\Orleans.Lattice.Api.Auth.csproj" />
+    <ProjectReference Include="..\..\src\lattice.scaling\Orleans.Lattice.Scaling.csproj" />
+    <ProjectReference Include="..\..\src\lattice.storage.file\Orleans.Lattice.Storage.File.csproj" />
+    <ProjectReference Include="..\..\src\lattice.storage.azuretable\Orleans.Lattice.Storage.AzureTable.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Orleans.Server" Version="10.2.0" />
+    <!-- Durability provider assemblies bundled in the single image; zero runtime
+         cost when a profile does not select them. -->
+    <PackageReference Include="Microsoft.Orleans.Persistence.AdoNet" Version="10.2.0" />
+    <PackageReference Include="Microsoft.Orleans.Reminders.AdoNet" Version="10.2.0" />
+    <PackageReference Include="Microsoft.Orleans.Clustering.AzureStorage" Version="10.2.0" />
+    <PackageReference Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.2.0" />
+    <PackageReference Include="Microsoft.Orleans.Reminders.AzureStorage" Version="10.2.0" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.0" />
+    <!-- Security pin: Microsoft.Data.Sqlite 10.0.0 pulls SQLitePCLRaw 2.1.11
+         transitively, whose bundled native e_sqlite3 carries a known high-severity
+         advisory (GHSA-2m69-gcr7-jv3q). Pin the bundle forward to the patched
+         2.1.12 so the vulnerable native lib never resolves. -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />
+    <PackageReference Include="Npgsql" Version="9.0.3" />
+  </ItemGroup>
+
+</Project>

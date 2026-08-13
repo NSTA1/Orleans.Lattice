@@ -63,4 +63,17 @@ public enum LatticeApiMcpGroup
     /// tools land in later work.
     /// </summary>
     TreeAdmin,
+
+    /// <summary>
+    /// The repository-context group supplied by the companion
+    /// <c>Orleans.Lattice.Api.Mcp.RepoContext</c> package: a durable,
+    /// conflict-free store of structural facts, notes, and working memory about a
+    /// codebase, served as MCP tools over dedicated Lattice trees. It is a
+    /// data-plane surface, so it is advertised when the caller holds a data
+    /// read-or-write grant (the same mask that makes the <see cref="Data"/> group
+    /// usable); its mutating tools are contributed only when the host opts writes
+    /// in. This foundation group is discoverable but ships only a health probe
+    /// tool yet; the capture, maintenance, and retrieval tools land in later work.
+    /// </summary>
+    RepoContext,
 }

@@ -1,0 +1,604 @@
+using System.ComponentModel;
+using System.IO;
+using Microsoft.Extensions.DependencyInjection;
+using ModelContextProtocol;
+using ModelContextProtocol.Protocol;
+using ModelContextProtocol.Server;
+
+namespace Orleans.Lattice.Api.Mcp.RepoContext;
+
+/// <summary>
+/// The adapter behind the repository-context tool module. It exposes the
+/// read-only <c>repocontext_health</c> probe - which proves the module is
+/// registered and that the caller cleared the fail-closed authorization gate -
+/// the mutating <c>repocontext_bootstrap</c> onboarding tool that ingests a
+/// codebase into the context store, and the day-to-day capture, maintenance, and
+/// retrieval tools: the read-only <c>repocontext_recall</c>, <c>_scan</c>, and
+/// <c>_list_topics</c>, and the mutating <c>repocontext_remember</c>,
+/// <c>_update</c>, and <c>_forget</c>.
+/// </summary>
+/// <remarks>
+/// The health result is invariant, so it is built once and reused on every call:
+/// the probe adds no per-invocation allocation to the hot path. The bootstrap
+/// handler resolves its coordinator from the request service provider and adds no
+/// authorization path of its own - the fail-closed gate that advertises the
+/// mutating tool only to a write-opted-in caller is inherited from the discovery
+/// core.
+/// </remarks>
+internal static class RepoContextToolHandlers
+{
+    /// <summary>
+    /// The single, shared health result. It carries no caller- or
+    /// request-specific state, so one immutable instance serves every session and
+    /// no allocation occurs per <c>tools/call</c>.
+    /// </summary>
+    private static readonly RepoContextHealthResult Healthy = new()
+    {
+        Available = true,
+        Group = LatticeApiMcpGroupCapabilityMap.DisplayName(LatticeApiMcpGroup.RepoContext),
+        Status = "The Orleans.Lattice repository-context MCP surface is registered and reachable.",
+    };
+
+    /// <summary>
+    /// Reports that the repository-context surface is available to the caller.
+    /// Reaching this handler means the caller was advertised the tool and cleared
+    /// the authorization gate, so it always returns the ready result.
+    /// </summary>
+    /// <returns>The shared, immutable health result.</returns>
+    public static RepoContextHealthResult Health() => Healthy;
+
+    /// <summary>
+    /// Starts (or re-attaches to) an asynchronous indexing job for a repository:
+    /// walks the tree, records a structural node and content digest per file, and
+    /// reconciles the scan against the stored records idempotently (unchanged files
+    /// are skipped, changed files updated, and deleted files pruned). Reaching this
+    /// handler means the caller cleared the fail-closed authorization gate and the
+    /// host opted writes in.
+    /// <para>
+    /// The call returns as soon as the job is durably recorded and handed to the
+    /// background runner - it does not wait for the walk to finish - so a dropped
+    /// MCP stream can never abort the index. Poll <c>repocontext_index_status</c>
+    /// with the returned <c>repoId</c> to follow the run to completion.
+    /// </para>
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the workspace
+    /// guard and the job grain from the request service provider.</param>
+    /// <param name="repoRoot">The absolute path to the repository working tree the
+    /// server should walk.</param>
+    /// <param name="repoId">The stable repository identity records are filed under.</param>
+    /// <param name="includeGlobs">Optional include globs; when non-empty a file is
+    /// ingested only if it matches at least one.</param>
+    /// <param name="excludeGlobs">Optional exclude globs; a match removes a file
+    /// from the walk even when it also matched an include.</param>
+    /// <param name="respectGitignore">When <see langword="true"/> (the default), the
+    /// tree's <c>.gitignore</c> files are honoured so ignored files and directories
+    /// are not ingested.</param>
+    /// <returns>The progress snapshot at acceptance, with the job running.</returns>
+    /// <exception cref="McpException">A required argument is missing, the repository
+    /// root resolves outside the workspace, or it does not exist (caller errors).</exception>
+    public static Task<RepoIndexProgress> BootstrapAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("Absolute path to the repository working tree the server should walk and ingest.")]
+        string repoRoot,
+        [Description("Stable repository identity to file records under, so re-ingesting the same codebase updates the same records.")]
+        string repoId,
+        [Description("Optional include globs (for example 'src/**' or '*.cs'); when non-empty a file is ingested only if it matches at least one. '**' matches any depth, '*' a single path segment.")]
+        IReadOnlyList<string>? includeGlobs = null,
+        [Description("Optional exclude globs; a match removes a file even when it also matched an include. The '.git' directory is always skipped.")]
+        IReadOnlyList<string>? excludeGlobs = null,
+        [Description("When true (the default), the tree's .gitignore files are honoured so ignored files and directories are not ingested. Set false to ingest every file regardless of ignore rules.")]
+        bool respectGitignore = true,
+        [Description("When true (the default), files that look binary (a NUL byte in their leading bytes) are dropped so compiled artefacts, images, and other blobs are not ingested. Set false to ingest binary files too.")]
+        bool excludeBinary = true)
+    {
+        if (string.IsNullOrWhiteSpace(repoRoot))
+        {
+            throw new McpException("The 'repoRoot' parameter is required and must be a non-empty path.");
+        }
+
+        if (string.IsNullOrWhiteSpace(repoId))
+        {
+            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+        }
+
+        return StartIndexAsync(context, repoRoot, repoId.Trim(), includeGlobs, excludeGlobs, respectGitignore, excludeBinary);
+    }
+
+    /// <summary>
+    /// Fetches a single repository-context entry by its full key and projects it.
+    /// A key with no live entry projects with <c>exists=false</c>.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the store.</param>
+    /// <param name="key">The full repository-context key to recall.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    /// <returns>The projected entry view.</returns>
+    /// <exception cref="McpException">The key is missing or malformed.</exception>
+    public static Task<RepoContextEntryView> RecallAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The full repository-context key to fetch, for example 'repo/{repoId}/file/{path}' or 'repo/{repoId}/mem/{topic}/{id}'.")]
+        string key,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            throw new McpException("The 'key' parameter is required and must be a non-empty repository-context key.");
+        }
+
+        return ResolveStore(context).RecallAsync(key, cancellationToken);
+    }
+
+    /// <summary>
+    /// Returns one ordered, paged range of live entries under a repository scope
+    /// (files, packages, symbols, all memory, or a single memory topic).
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the store.</param>
+    /// <param name="repoId">The repository to scan.</param>
+    /// <param name="scope">The range to walk: Files, Packages, Symbols, Memory, or MemoryTopic.</param>
+    /// <param name="topic">The topic, required when scope is MemoryTopic.</param>
+    /// <param name="pathPrefix">An optional directory path prefix, honoured only for the Files scope.</param>
+    /// <param name="continuationToken">An opaque token from a prior page, or null to start at the beginning.</param>
+    /// <param name="pageSize">The maximum entries per page (clamped to [1, 500]).</param>
+    /// <param name="cancellationToken">Cancels the scan.</param>
+    /// <returns>A page of projected entries with a continuation token.</returns>
+    /// <exception cref="McpException">A required argument is missing or the scope is unknown.</exception>
+    public static Task<RepoContextScanResult> ScanAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The repository identifier to scan.")]
+        string repoId,
+        [Description("The range to walk: 'Files', 'Packages', 'Symbols', 'Memory', or 'MemoryTopic'.")]
+        string scope,
+        [Description("The memory topic to scan; required when scope is 'MemoryTopic', otherwise ignored.")]
+        string? topic = null,
+        [Description("An optional directory path prefix to restrict a 'Files' scan to a subtree (for example 'src/'); ignored for other scopes.")]
+        string? pathPrefix = null,
+        [Description("An opaque continuation token from a prior page; omit to start at the beginning of the range.")]
+        string? continuationToken = null,
+        [Description("The maximum number of entries to return on this page. Clamped to the range [1, 500]; defaults to 100.")]
+        int pageSize = 0,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(repoId))
+        {
+            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+        }
+
+        if (!Enum.TryParse<RepoContextScanScope>(scope, ignoreCase: true, out var parsedScope))
+        {
+            throw new McpException(
+                $"The 'scope' value '{scope}' is not recognised. Use one of: Files, Packages, Symbols, Memory, MemoryTopic.");
+        }
+
+        return ResolveStore(context)
+            .ScanAsync(repoId, parsedScope, topic, pathPrefix, continuationToken, pageSize, cancellationToken);
+    }
+
+    /// <summary>
+    /// Enumerates the distinct agent memory topics for a repository with their
+    /// live entry counts.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the store.</param>
+    /// <param name="repoId">The repository whose topics to list.</param>
+    /// <param name="cancellationToken">Cancels the enumeration.</param>
+    /// <returns>The distinct topics and their entry counts.</returns>
+    /// <exception cref="McpException">The repository id is missing.</exception>
+    public static Task<RepoContextTopicsResult> ListTopicsAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The repository identifier whose memory topics to enumerate.")]
+        string repoId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(repoId))
+        {
+            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+        }
+
+        return ResolveStore(context).ListTopicsAsync(repoId, cancellationToken);
+    }
+
+    /// <summary>
+    /// Creates or updates an agent memory or decision entry, merging into any
+    /// existing record at the same key and applying an optional time-to-live.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the store.</param>
+    /// <param name="repoId">The repository the entry belongs to.</param>
+    /// <param name="topic">The topic bucket to file the entry under.</param>
+    /// <param name="id">The per-topic id, or null to generate one (create).</param>
+    /// <param name="kind">The memory kind applied on creation: Decision, Note, or Memory.</param>
+    /// <param name="title">An optional short title.</param>
+    /// <param name="body">An optional free-form body.</param>
+    /// <param name="author">An optional author identity.</param>
+    /// <param name="provenance">An optional provenance descriptor.</param>
+    /// <param name="tags">Optional tags to add to the entry.</param>
+    /// <param name="ttlSeconds">An optional explicit time-to-live in seconds.</param>
+    /// <param name="cancellationToken">Cancels the write.</param>
+    /// <returns>The write outcome.</returns>
+    /// <exception cref="McpException">A required argument is missing, the kind is unknown, or the TTL is not positive.</exception>
+    public static Task<RepoContextRememberResult> RememberAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The repository identifier the entry belongs to.")]
+        string repoId,
+        [Description("The topic bucket to file the memory entry under (for example 'decisions' or 'gotchas').")]
+        string topic,
+        [Description("The per-topic entry id. Omit to create a new entry with a generated id; supply an existing id to update in place.")]
+        string? id = null,
+        [Description("The memory kind applied when the entry is created: 'Decision', 'Note', or 'Memory'. Defaults to 'Note'.")]
+        string? kind = null,
+        [Description("An optional short title for the entry.")]
+        string? title = null,
+        [Description("An optional free-form body for the entry.")]
+        string? body = null,
+        [Description("An optional author identity (the agent or session that wrote the entry).")]
+        string? author = null,
+        [Description("An optional provenance descriptor (where the context came from).")]
+        string? provenance = null,
+        [Description("Optional tags to add to the entry's add-wins tag set.")]
+        IReadOnlyList<string>? tags = null,
+        [Description("An optional explicit time-to-live in seconds. When omitted, a newly created entry uses the repository's default memory TTL (if configured), otherwise it is durable.")]
+        long? ttlSeconds = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(repoId))
+        {
+            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+        }
+
+        if (string.IsNullOrWhiteSpace(topic))
+        {
+            throw new McpException("The 'topic' parameter is required and must be a non-empty identifier.");
+        }
+
+        var memoryKind = MemoryKind.Note;
+        if (!string.IsNullOrWhiteSpace(kind)
+            && !Enum.TryParse(kind, ignoreCase: true, out memoryKind))
+        {
+            throw new McpException(
+                $"The 'kind' value '{kind}' is not recognised. Use one of: Decision, Note, Memory.");
+        }
+
+        return ResolveStore(context).RememberAsync(
+            repoId, topic, id, memoryKind, title, body, author, provenance, tags, ttlSeconds, cancellationToken);
+    }
+
+    /// <summary>
+    /// Patches scalar fields and tags on an existing structural or memory record
+    /// using CRDT-merge semantics (never a blind overwrite).
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the store.</param>
+    /// <param name="key">The full repository-context key of the record to patch.</param>
+    /// <param name="fields">The scalar field patches, keyed by field name.</param>
+    /// <param name="addTags">Tags to add to the record.</param>
+    /// <param name="removeTags">Tags to remove from the record.</param>
+    /// <param name="cancellationToken">Cancels the read-merge-write.</param>
+    /// <returns>The patch outcome.</returns>
+    /// <exception cref="McpException">The key is missing or malformed, no record exists, or a field is invalid.</exception>
+    public static Task<RepoContextUpdateResult> UpdateAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The full repository-context key of the record to patch, for example 'repo/{repoId}/file/{path}'.")]
+        string key,
+        [Description("Scalar field patches keyed by field name (for example {\"digest\":\"...\",\"language\":\"csharp\"}). Valid names depend on the record family.")]
+        IReadOnlyDictionary<string, string>? fields = null,
+        [Description("Tags to add to the record's add-wins set.")]
+        IReadOnlyList<string>? addTags = null,
+        [Description("Tags to remove from the record's add-wins set.")]
+        IReadOnlyList<string>? removeTags = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            throw new McpException("The 'key' parameter is required and must be a non-empty repository-context key.");
+        }
+
+        return ResolveStore(context).UpdateAsync(key, fields, addTags, removeTags, cancellationToken);
+    }
+
+    /// <summary>
+    /// Forgets an entry by hard-deleting it, or by re-writing it with a short
+    /// time-to-live so it lapses on its own.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the store.</param>
+    /// <param name="key">The full repository-context key of the entry to forget.</param>
+    /// <param name="lapse">When true, soft-lapse via a short TTL; otherwise hard delete immediately.</param>
+    /// <param name="lapseSeconds">The lapse window in seconds; defaults to 60 when lapsing.</param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>The forget outcome.</returns>
+    /// <exception cref="McpException">The key is missing or malformed, or the lapse window is not positive.</exception>
+    public static Task<RepoContextForgetResult> ForgetAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The full repository-context key of the entry to forget.")]
+        string key,
+        [Description("When true, re-write the entry with a short time-to-live so it lapses; when false (the default), hard-delete it immediately.")]
+        bool lapse = false,
+        [Description("The lapse window in seconds when 'lapse' is true; defaults to 60. Ignored for a hard delete.")]
+        long? lapseSeconds = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            throw new McpException("The 'key' parameter is required and must be a non-empty repository-context key.");
+        }
+
+        return ResolveStore(context).ForgetAsync(key, lapse, lapseSeconds, cancellationToken);
+    }
+
+    /// <summary>
+    /// Finds the repository-context records most relevant to a natural-language
+    /// query, hydrated from the store of record and ranked best-first. Runs an
+    /// exact semantic search when an embedder and vectors are available and
+    /// otherwise degrades to a keyword/structural scan.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the search service.</param>
+    /// <param name="repoId">The repository to search.</param>
+    /// <param name="query">The natural-language query.</param>
+    /// <param name="k">The maximum number of hits to return (clamped to [1, 100]).</param>
+    /// <param name="cancellationToken">Cancels the search.</param>
+    /// <returns>The ranked hits and the mode that produced them.</returns>
+    /// <exception cref="McpException">The repository id or query is missing.</exception>
+    public static Task<RepoContextSearchResult> SearchAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The repository identifier to search.")]
+        string repoId,
+        [Description("The natural-language query to find relevant repository-context records for.")]
+        string query,
+        [Description("The maximum number of hits to return. Clamped to the range [1, 100]; defaults to 10.")]
+        int k = 0,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(repoId))
+        {
+            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+        }
+
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            throw new McpException("The 'query' parameter is required and must be a non-empty query string.");
+        }
+
+        return ResolveSearchService(context).SearchAsync(repoId, query, k, cancellationToken);
+    }
+
+    /// <summary>
+    /// Registers a repository under the mounted workspace and starts an
+    /// asynchronous indexing job for it: it resolves the requested path against the
+    /// workspace boundary, then hands a durable job to the background runner that
+    /// walks the tree and reconciles the scan against the store idempotently. This
+    /// is the workspace-mode replacement for <c>repocontext_bootstrap</c> - the
+    /// client mounts a broad parent read-only once and adds individual
+    /// repositories beneath it on demand, rather than baking a single repository
+    /// path into the container's configuration. Reaching this handler means the
+    /// caller cleared the fail-closed authorization gate and the host opted writes
+    /// in.
+    /// <para>
+    /// The call returns as soon as the job is durably recorded - it does not wait
+    /// for the walk - so a dropped MCP stream cannot abort the index. Poll
+    /// <c>repocontext_index_status</c> with the repository id to follow the run.
+    /// </para>
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the workspace
+    /// guard and the job grain.</param>
+    /// <param name="path">The path to the repository under the mounted workspace.</param>
+    /// <param name="repoId">The repository identity to file records under, or
+    /// <see langword="null"/> to derive it from the final path segment.</param>
+    /// <param name="includeGlobs">Optional include globs; when non-empty a file is
+    /// ingested only if it matches at least one.</param>
+    /// <param name="excludeGlobs">Optional exclude globs; a match removes a file
+    /// even when it also matched an include.</param>
+    /// <param name="respectGitignore">When <see langword="true"/> (the default), the
+    /// tree's <c>.gitignore</c> files are honoured so ignored files and directories
+    /// are not ingested.</param>
+    /// <returns>The progress snapshot at acceptance, with the job running.</returns>
+    /// <exception cref="McpException">The path is missing, resolves outside the
+    /// workspace, does not exist, or yields no repository id (caller errors).</exception>
+    public static Task<RepoIndexProgress> AddRepoAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("Path to the repository to register, under the mounted workspace root (for example '/workspace/my-repo'). Resolved against the workspace boundary; a path outside it is rejected.")]
+        string path,
+        [Description("Optional stable repository identity to file records under; when omitted it is derived from the final path segment. Re-adding the same id updates the same records.")]
+        string? repoId = null,
+        [Description("Optional include globs (for example 'src/**' or '*.cs'); when non-empty a file is ingested only if it matches at least one. '**' matches any depth, '*' a single path segment.")]
+        IReadOnlyList<string>? includeGlobs = null,
+        [Description("Optional exclude globs; a match removes a file even when it also matched an include. The '.git' directory is always skipped.")]
+        IReadOnlyList<string>? excludeGlobs = null,
+        [Description("When true (the default), the tree's .gitignore files are honoured so ignored files and directories are not ingested. Set false to ingest every file regardless of ignore rules.")]
+        bool respectGitignore = true,
+        [Description("When true (the default), files that look binary (a NUL byte in their leading bytes) are dropped so compiled artefacts, images, and other blobs are not ingested. Set false to ingest binary files too.")]
+        bool excludeBinary = true)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            throw new McpException("The 'path' parameter is required and must be a non-empty path under the workspace root.");
+        }
+
+        var resolvedId = string.IsNullOrWhiteSpace(repoId) ? DeriveRepoId(path) : repoId!.Trim();
+        if (string.IsNullOrWhiteSpace(resolvedId))
+        {
+            throw new McpException(
+                "A repository id could not be derived from the path; supply the 'repoId' parameter explicitly.");
+        }
+
+        return StartIndexAsync(context, path, resolvedId, includeGlobs, excludeGlobs, respectGitignore, excludeBinary);
+    }
+
+    /// <summary>
+    /// Lists every repository currently registered in the context store, each with
+    /// its last-ingested marker and recorded file count, so the caller can discover
+    /// what is queryable before it recalls, scans, searches, or removes a
+    /// repository.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the store.</param>
+    /// <param name="cancellationToken">Cancels the scan.</param>
+    /// <returns>The registered repositories and their count.</returns>
+    public static Task<RepoContextRepoListResult> ListReposAsync(
+        RequestContext<CallToolRequestParams> context,
+        CancellationToken cancellationToken = default)
+        => ResolveStore(context).ListReposAsync(cancellationToken);
+
+    /// <summary>
+    /// Removes every record for a repository from the context store: its
+    /// structural nodes, agent memory, and vector data are tombstoned and the
+    /// repository is dropped from <c>repocontext_list_repos</c>. The working tree
+    /// on disk is never touched. Removing an unknown repository is a no-op that
+    /// reports zero deletions. Reaching this handler means the caller cleared the
+    /// fail-closed authorization gate and the host opted writes in.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the store.</param>
+    /// <param name="repoId">The repository identity whose records to remove.</param>
+    /// <param name="cancellationToken">Cancels the removal.</param>
+    /// <returns>The repository id and the number of entries removed.</returns>
+    /// <exception cref="McpException">The repository id is missing (a caller error).</exception>
+    public static Task<RepoContextRepoRemovalResult> RemoveRepoAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The repository identity whose records to remove from the context store. The working tree on disk is not touched.")]
+        string repoId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(repoId))
+        {
+            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+        }
+
+        return ResolveStore(context).RemoveRepoAsync(repoId, cancellationToken);
+    }
+
+    /// <summary>
+    /// Derives a repository id from the final segment of a path, tolerating
+    /// trailing separators of either platform. Returns an empty string when no
+    /// segment remains (for example a bare root path).
+    /// </summary>
+    /// <param name="path">The repository path.</param>
+    /// <returns>The derived repository id, or an empty string.</returns>
+    private static string DeriveRepoId(string path)
+    {
+        var trimmed = path.Trim().TrimEnd('/', '\\');
+        if (trimmed.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        var lastSeparator = trimmed.LastIndexOfAny(new[] { '/', '\\' });
+        return lastSeparator < 0 ? trimmed : trimmed[(lastSeparator + 1)..];
+    }
+
+    /// <summary>
+    /// Returns the current progress snapshot for a repository's indexing job so a
+    /// caller can follow an asynchronous onboarding pass to completion. Read-only.
+    /// A repository that was never onboarded reports status <c>None</c>.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the job grain.</param>
+    /// <param name="repoId">The repository identity whose indexing job to inspect.</param>
+    /// <returns>The point-in-time progress snapshot.</returns>
+    /// <exception cref="McpException">The repository id is missing (a caller error).</exception>
+    public static Task<RepoIndexProgress> IndexStatusAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The repository identity whose indexing job to inspect. A repository that was never onboarded reports status 'None'.")]
+        string repoId)
+    {
+        if (string.IsNullOrWhiteSpace(repoId))
+        {
+            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+        }
+
+        var runner = context.Services?.GetRequiredService<IRepoIndexRunner>()
+            ?? throw new InvalidOperationException(
+                "The MCP request has no service provider; the repository-context tool cannot resolve the index runner.");
+        return runner.GetProgressAsync(repoId.Trim());
+    }
+
+    /// <summary>
+    /// Resolves and workspace-guards the path synchronously at the tool seam, then
+    /// hands a durable job to the indexing job grain and returns its acceptance
+    /// snapshot without waiting for the run. Guarding here - not inside the
+    /// resumable job - means a persisted, later-resumed job never re-derives a path
+    /// that could escape the workspace.
+    /// </summary>
+    /// <param name="context">The MCP request context.</param>
+    /// <param name="repoRoot">The caller-supplied repository path.</param>
+    /// <param name="repoId">The already-resolved repository identity.</param>
+    /// <param name="includeGlobs">Optional include globs.</param>
+    /// <param name="excludeGlobs">Optional exclude globs.</param>
+    /// <param name="respectGitignore">Whether the tree's <c>.gitignore</c> files are honoured.</param>
+    /// <param name="excludeBinary">Whether files that look binary are dropped from the walk.</param>
+    /// <returns>The progress snapshot at acceptance.</returns>
+    /// <exception cref="McpException">The path resolves outside the workspace or
+    /// does not exist (caller errors).</exception>
+    private static async Task<RepoIndexProgress> StartIndexAsync(
+        RequestContext<CallToolRequestParams> context,
+        string repoRoot,
+        string repoId,
+        IReadOnlyList<string>? includeGlobs,
+        IReadOnlyList<string>? excludeGlobs,
+        bool respectGitignore,
+        bool excludeBinary)
+    {
+        var services = context.Services
+            ?? throw new InvalidOperationException(
+                "The MCP request has no service provider; the onboarding tool cannot resolve its collaborators.");
+
+        var guard = services.GetRequiredService<RepoContextWorkspaceGuard>();
+        string resolvedRoot;
+        try
+        {
+            resolvedRoot = guard.Resolve(repoRoot);
+        }
+        catch (RepoContextWorkspaceViolationException ex)
+        {
+            throw new McpException(ex.Message);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new McpException(ex.Message);
+        }
+
+        if (!Directory.Exists(resolvedRoot))
+        {
+            throw new McpException(
+                $"The repository root '{repoRoot}' does not exist or is not a directory.");
+        }
+
+        var request = new RepoIndexJobRequest
+        {
+            RepoRoot = resolvedRoot,
+            RepoId = repoId,
+            IncludeGlobs = includeGlobs,
+            ExcludeGlobs = excludeGlobs,
+            RespectGitignore = respectGitignore,
+            ExcludeBinary = excludeBinary,
+        };
+
+        // The self-index grain is the single owner of this repository's "reach and
+        // stay fully indexed" guarantee: EnsureRunningAsync arms the durable
+        // per-repository keep-alive reminder and background gap scan, then drives the
+        // initial indexing pass and returns its snapshot. Onboarding and self-heal
+        // recovery therefore funnel through exactly one path, so they can never drift.
+        var grainFactory = services.GetRequiredService<IGrainFactory>();
+        return await grainFactory
+            .GetGrain<IRepoContextSelfIndexGrain>(repoId).EnsureRunningAsync(request).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Resolves the <see cref="RepoContextStore"/> from the MCP request's service
+    /// provider, failing with a clear message when the provider is absent.
+    /// </summary>
+    /// <param name="context">The MCP request context.</param>
+    /// <returns>The resolved store.</returns>
+    private static RepoContextStore ResolveStore(RequestContext<CallToolRequestParams> context)
+    {
+        var services = context.Services
+            ?? throw new InvalidOperationException(
+                "The MCP request has no service provider; the repository-context tool cannot resolve its store.");
+        return services.GetRequiredService<RepoContextStore>();
+    }
+
+    /// <summary>
+    /// Resolves the <see cref="RepoContextSearchService"/> from the MCP request's
+    /// service provider, failing with a clear message when the provider is absent.
+    /// </summary>
+    /// <param name="context">The MCP request context.</param>
+    /// <returns>The resolved search service.</returns>
+    private static RepoContextSearchService ResolveSearchService(RequestContext<CallToolRequestParams> context)
+    {
+        var services = context.Services
+            ?? throw new InvalidOperationException(
+                "The MCP request has no service provider; the repository-context search tool cannot resolve its service.");
+        return services.GetRequiredService<RepoContextSearchService>();
+    }
+}

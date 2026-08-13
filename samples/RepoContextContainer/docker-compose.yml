@@ -1,0 +1,79 @@
+# RepoContext MCP container - "codebase memory in a box" (issue #1435).
+#
+# Brings up the restart-durable MCP host alongside its Onyx embedding companion.
+# The host runs the default `local` durability profile (SQLite grain storage +
+# reminders and the file WAL, all under the /data named volume), so ingested
+# context survives `docker compose restart` and `docker compose down` (without
+# `-v`). See README.md for the start -> bootstrap -> recall -> restart -> verify
+# walkthrough.
+#
+# Build context is the repository root for both images (the host image
+# ProjectReferences the just-built src/ bits). Run from this directory.
+
+services:
+  # The embedding companion stays a SEPARATE container so the MCP host keeps its
+  # single-listener surface. Its baked HEALTHCHECK gates the host's startup.
+  embedder:
+    build:
+      context: ../..
+      dockerfile: apps/embedding/Dockerfile
+    volumes:
+      # Persist the HuggingFace model cache so a restart needs no re-download.
+      - hf-cache:/app/.cache/huggingface
+    expose:
+      - "9000"
+
+  # The RepoContext MCP host: its ONLY application listener is the MCP endpoint on
+  # 8080 (plus the HTTP health probes). No gRPC facade, no Explorer UI.
+  repocontext:
+    build:
+      context: ../..
+      dockerfile: apps/repocontext/Dockerfile
+    depends_on:
+      embedder:
+        condition: service_healthy
+    environment:
+      # Default local, durable, zero-external-dependency profile.
+      LATTICE_DURABILITY: local
+      # All durable local state lives here (a named volume): the file WAL
+      # directory and the SQLite database file.
+      LATTICE_DATA_ROOT: /data
+      LATTICE_MCP_PORT: "8080"
+      # The read-only workspace root. Repositories are registered at runtime by
+      # the client through the repocontext_add_repo tool, and every added path
+      # must resolve under this root - a path escaping it (via `..` or a symlink)
+      # is refused. Mount a broad parent at /workspace (below) and add individual
+      # repositories beneath it on demand.
+      LATTICE_WORKSPACE_ROOT: /workspace
+      # Point the default embedding provider at the separate companion container.
+      LATTICE_EMBEDDING_ENDPOINT: http://embedder:9000
+      # Background-indexing cadence. A short self-index tick and a short reconcile
+      # interval (with no jitter) make the periodic content reconcile effectively
+      # continuous: the walk's directory-modification-time pruning keeps each
+      # reconcile cheap, so edits and deletions are picked up within seconds. The
+      # full-walk interval bounds how long an in-place content edit (which does not
+      # bump a directory's modification time and is invisible to pruning) can go
+      # unnoticed before a forced full sweep re-stats every file.
+      LATTICE_SELFINDEX_TICK_SECONDS: "5"
+      LATTICE_RECONCILE_INTERVAL_SECONDS: "5"
+      LATTICE_RECONCILE_JITTER_SECONDS: "0"
+      LATTICE_FULL_WALK_INTERVAL_SECONDS: "120"
+    ports:
+      # The MCP streamable-HTTP endpoint (and the health probes) on the host.
+      - "8080:8080"
+    volumes:
+      # Durable state survives restart / recreation / image upgrade.
+      - repocontext-data:/data
+      # The workspace the box can see, mounted READ-ONLY so the box can never
+      # mutate the code it ingests. Mount a broad PARENT directory here and let
+      # the client register individual repositories under it with
+      # repocontext_add_repo. Override with REPO_PATH; defaults to this repo's
+      # parent-of-parent (so this repo is one registerable child).
+      - ${REPO_PATH:-../..}:/workspace:ro
+    restart: unless-stopped
+
+volumes:
+  # Durable Lattice state (WAL + SQLite): the heart of "codebase memory in a box".
+  repocontext-data:
+  # The embedder's HuggingFace model cache.
+  hf-cache:

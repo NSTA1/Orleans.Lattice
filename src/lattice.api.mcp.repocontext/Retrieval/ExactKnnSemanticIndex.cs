@@ -1,0 +1,137 @@
+using Orleans.Serialization;
+
+namespace Orleans.Lattice.Api.Mcp.RepoContext;
+
+/// <summary>
+/// The shipped default <see cref="IRepoContextSemanticIndex"/>: a brute-force
+/// exact k-nearest-neighbour search over the vectors a repository holds
+/// authoritatively. It range-scans the <see cref="RepoContextTrees.VectorMetadata"/>
+/// tree for the repository, hydrates each vector's immutable payload from the
+/// <see cref="RepoContextTrees.VectorPayload"/> tree, and ranks the candidates
+/// with <see cref="RepoContextKnnRanker"/>. Because it enumerates the store of
+/// record directly it always reflects the current live set with perfect recall -
+/// the correct default at the local scale the repository-context surface targets.
+/// <para>
+/// The index is a <b>derived projection</b>: it holds no state of its own and is
+/// safe to run against a store rebuilt from enumeration at any time. It is
+/// fail-closed on embedding space - a stored vector whose space does not match the
+/// query is skipped by the ranker before any distance is computed - so a
+/// mixed-space store never produces a meaningless score. A host that needs
+/// approximate search at larger scale binds its own implementation of the seam
+/// instead; that engine is a separate future effort and is not built here.
+/// </para>
+/// </summary>
+internal sealed class ExactKnnSemanticIndex : IRepoContextSemanticIndex
+{
+    private readonly IGrainFactory _grainFactory;
+    private readonly Serializer _serializer;
+
+    /// <summary>Creates the exact kNN index.</summary>
+    /// <param name="grainFactory">The grain factory used to reach the reserved vector trees. Must not be <see langword="null"/>.</param>
+    /// <param name="serializer">The Orleans serializer used to decode vector records. Must not be <see langword="null"/>.</param>
+    /// <exception cref="ArgumentNullException">Any argument is null.</exception>
+    public ExactKnnSemanticIndex(IGrainFactory grainFactory, Serializer serializer)
+    {
+        ArgumentNullException.ThrowIfNull(grainFactory);
+        ArgumentNullException.ThrowIfNull(serializer);
+        _grainFactory = grainFactory;
+        _serializer = serializer;
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<RepoContextVectorMatch>> SearchAsync(
+        string repoId,
+        ReadOnlyMemory<float> query,
+        EmbeddingSpaceTag querySpace,
+        int k,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(k);
+
+        var candidates = await GatherAsync(repoId, querySpace, cancellationToken).ConfigureAwait(false);
+        return RepoContextKnnRanker.Rank(query, querySpace, candidates, k);
+    }
+
+    private async Task<List<RepoContextVectorCandidate>> GatherAsync(
+        string repoId, EmbeddingSpaceTag querySpace, CancellationToken cancellationToken)
+    {
+        var metadataTree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMetadata);
+        var payloadTree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorPayload);
+        var prefix = RepoContextKeys.VectorsPrefix(repoId);
+        var candidates = new List<RepoContextVectorCandidate>();
+
+        string? token = null;
+        do
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var page = await RepoContextPortability
+                .EnumerateAsync(metadataTree, prefix, token, RepoContextPortability.DefaultPageSize, vectorExport: null, cancellationToken)
+                .ConfigureAwait(false);
+
+            foreach (var record in page.Records)
+            {
+                if (record.Value is null)
+                {
+                    continue;
+                }
+
+                var metadata = _serializer.Deserialize<VectorMetadataRecord>(record.Value);
+                if (!VectorSpaceGuard.Matches(metadata.Space, querySpace))
+                {
+                    continue;
+                }
+
+                var candidate = await LoadCandidateAsync(payloadTree, metadata, cancellationToken)
+                    .ConfigureAwait(false);
+                if (candidate is { } value)
+                {
+                    candidates.Add(value);
+                }
+            }
+
+            token = page.HasMore ? page.ContinuationToken : null;
+        }
+        while (token is not null);
+
+        return candidates;
+    }
+
+    private async Task<RepoContextVectorCandidate?> LoadCandidateAsync(
+        ILattice payloadTree, VectorMetadataRecord metadata, CancellationToken cancellationToken)
+    {
+        var contentAddress = RepoContextValues.ReadString(metadata.ContentAddress);
+        if (contentAddress is null)
+        {
+            return null;
+        }
+
+        var payloadKey = RepoContextKeys.VectorPayload(metadata.RepoId, contentAddress);
+        var payloadBytes = await payloadTree.GetAsync(payloadKey, cancellationToken).ConfigureAwait(false);
+        if (payloadBytes is null)
+        {
+            return null;
+        }
+
+        var payload = _serializer.Deserialize<VectorPayloadRecord>(payloadBytes);
+        var encoded = FirstElement(payload.Payload);
+        if (encoded is null)
+        {
+            return null;
+        }
+
+        var sourceKey = RepoContextValues.ReadString(metadata.SourceKey) ?? string.Empty;
+        return new RepoContextVectorCandidate(
+            metadata.VectorId, sourceKey, VectorCodec.Decode(encoded), metadata.Space);
+    }
+
+    private static byte[]? FirstElement(GSet payload)
+    {
+        foreach (var element in payload.Elements)
+        {
+            return Convert.FromBase64String(element);
+        }
+
+        return null;
+    }
+}
