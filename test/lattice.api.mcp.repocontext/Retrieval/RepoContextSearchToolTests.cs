@@ -188,6 +188,33 @@ public sealed class RepoContextSearchToolTests
             "An unreachable embedder degrades to keyword recall rather than throwing.");
     }
 
+    [Test]
+    public async Task Search_falls_back_to_keyword_when_the_semantic_path_throws()
+    {
+        // Regression: the semantic path can throw for reasons beyond an
+        // unavailable embedder or a failed embed result - for example an index
+        // grain activation fault (a stale leaf projection) or a same-silo copier
+        // gap surfacing a non-copyable exception. The read-only search tool must
+        // honour its fail-closed contract and degrade to keyword recall rather
+        // than let the exception escape as a protocol error.
+        var root = NewRepo();
+        Write(root, "src/Widget.cs", "class Widget {}");
+
+        var embedder = new FakeEmbeddingProvider();
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            WithEmbedder(RepoContextMcpAuthPosture.Writer, embedder), Ct);
+        await using var client = await harness.ConnectAsync(Ct);
+
+        // Bootstrap with a working embedder so vectors land, then make the
+        // query-time semantic path throw.
+        await BootstrapAsync(client, root);
+        embedder.ThrowOnEmbed = true;
+
+        var json = await SearchAsync(client, "Widget");
+        Assert.That(json.GetProperty("mode").GetString(), Is.EqualTo("keyword"),
+            "A throw on the semantic path degrades to keyword recall rather than surfacing an error.");
+    }
+
     // -- Bootstrap to vectorisation to search ----------------------------------
 
     [Test]

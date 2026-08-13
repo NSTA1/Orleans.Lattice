@@ -32,6 +32,14 @@ internal sealed class FakeEmbeddingProvider : IEmbeddingProvider
     public bool FailEmbeds { get; set; }
 
     /// <summary>
+    /// When true, every <see cref="EmbedAsync"/> call throws rather than
+    /// returning a result. Lets a test prove the search service catches a
+    /// semantic-path throw and degrades to keyword recall instead of letting
+    /// the exception escape the read-only tool.
+    /// </summary>
+    public bool ThrowOnEmbed { get; set; }
+
+    /// <summary>
     /// When true, a batch that contains any empty or whitespace-only string
     /// fails the whole call - mirroring the real Onyx model server, which
     /// rejects the request with "Empty strings are not allowed for embedding."
@@ -49,6 +57,11 @@ internal sealed class FakeEmbeddingProvider : IEmbeddingProvider
         IReadOnlyList<string> texts, EmbeddingTextType textType, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(texts);
+        if (ThrowOnEmbed)
+        {
+            throw new InvalidOperationException("The fake embedder was configured to throw.");
+        }
+
         if (FailEmbeds)
         {
             return Task.FromResult(EmbeddingResult.Failure(Space, "The fake embedder was configured to fail."));

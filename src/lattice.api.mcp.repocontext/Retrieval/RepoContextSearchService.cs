@@ -83,7 +83,29 @@ internal sealed class RepoContextSearchService
         ArgumentNullException.ThrowIfNull(query);
         var count = k <= 0 ? DefaultResultCount : Math.Min(k, MaxResultCount);
 
-        var semantic = await TrySemanticAsync(repoId, query, count, cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<RepoContextSearchHit>? semantic;
+        try
+        {
+            semantic = await TrySemanticAsync(repoId, query, count, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Fail-closed contract: any fault on the semantic path (an
+            // embed failure, an index/grain activation fault such as a
+            // stale leaf projection, or a same-silo copier gap surfacing a
+            // non-copyable exception) must degrade to keyword recall rather
+            // than propagate out of the read-only search tool.
+            _logger.LogWarning(
+                ex,
+                "repocontext_search for repository {RepoId} falling back to keyword recall: the semantic path threw.",
+                repoId);
+            semantic = null;
+        }
+
         if (semantic is { Count: > 0 })
         {
             return new RepoContextSearchResult
