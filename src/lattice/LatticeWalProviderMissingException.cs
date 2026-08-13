@@ -1,3 +1,5 @@
+using Orleans.Serialization.Cloning;
+
 namespace Orleans.Lattice;
 
 /// <summary>
@@ -70,4 +72,22 @@ public sealed class LatticeWalProviderMissingException : InvalidOperationExcepti
     /// <summary>The unresolved catalog key.</summary>
     [Id(2)]
     public string? ProviderKey { get; }
+}
+
+/// <summary>
+/// Same-silo deep-copier for <see cref="LatticeWalProviderMissingException"/>. Orleans deep-copies a grain result
+/// across an in-process (co-located) boundary instead of serialising it, and the
+/// generated copier for a <c>[GenerateSerializer]</c> exception deriving from a BCL
+/// exception subclass requests a copier for that base type, which Orleans does not
+/// provide - so a same-silo throw would fail with an opaque <c>KeyNotFoundException</c>
+/// ("Could not find a base type copier for ...") and mask the real, actionable fault.
+/// An exception is immutable once constructed, so returning the same instance is a
+/// correct deep copy and keeps the typed exception intact (the cross-silo serialise
+/// path is unaffected).
+/// </summary>
+[RegisterCopier]
+internal sealed class LatticeWalProviderMissingExceptionCopier : IDeepCopier<LatticeWalProviderMissingException>
+{
+    /// <inheritdoc />
+    public LatticeWalProviderMissingException DeepCopy(LatticeWalProviderMissingException input, CopyContext context) => input;
 }

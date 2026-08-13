@@ -1,3 +1,5 @@
+using Orleans.Serialization.Cloning;
+
 namespace Orleans.Lattice.Replication;
 
 /// <summary>
@@ -111,4 +113,22 @@ public sealed class LatticeReplicationModeChangeRejectedException : InvalidOpera
         CurrentMode = currentMode;
         CurrentModeAmbiguous = currentModeAmbiguous;
     }
+}
+
+/// <summary>
+/// Same-silo deep-copier for <see cref="LatticeReplicationModeChangeRejectedException"/>. Orleans deep-copies a grain result
+/// across an in-process (co-located) boundary instead of serialising it, and the
+/// generated copier for a <c>[GenerateSerializer]</c> exception deriving from a BCL
+/// exception subclass requests a copier for that base type, which Orleans does not
+/// provide - so a same-silo throw would fail with an opaque <c>KeyNotFoundException</c>
+/// ("Could not find a base type copier for ...") and mask the real, actionable fault.
+/// An exception is immutable once constructed, so returning the same instance is a
+/// correct deep copy and keeps the typed exception intact (the cross-silo serialise
+/// path is unaffected).
+/// </summary>
+[RegisterCopier]
+internal sealed class LatticeReplicationModeChangeRejectedExceptionCopier : IDeepCopier<LatticeReplicationModeChangeRejectedException>
+{
+    /// <inheritdoc />
+    public LatticeReplicationModeChangeRejectedException DeepCopy(LatticeReplicationModeChangeRejectedException input, CopyContext context) => input;
 }
