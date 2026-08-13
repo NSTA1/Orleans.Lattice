@@ -2,6 +2,8 @@ using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.Primitives;
+using Orleans.Runtime;
+using Orleans.Storage;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
 
@@ -31,7 +33,9 @@ internal sealed class LeafCursorReporter(
     IWalCursorRegistry registry,
     IGrainFactory? grainFactory = null,
     IOptionsMonitor<LatticeOptions>? options = null,
-    ILogger<LeafCursorReporter>? logger = null) : ILeafCursorReporter
+    ILogger<LeafCursorReporter>? logger = null,
+    IGrainStorage? pinStorage = null,
+    Func<string, GrainId>? pinGrainIdResolver = null) : ILeafCursorReporter
 {
     /// <summary>
     /// Minimum wall-clock spacing between durable pin writes for a single
@@ -51,6 +55,20 @@ internal sealed class LeafCursorReporter(
     /// </summary>
     private readonly ConcurrentDictionary<(string TreeName, string ConsumerId), (HybridLogicalClock LastWritten, long LastWriteTickMs)> _durableDebounce =
         new();
+
+    /// <summary>
+    /// Per-durable-pin-shard-key mutual-exclusion gates for the teardown
+    /// direct-store fallback (<see cref="DirectStorePinAsync"/>). During a
+    /// full-silo graceful shutdown several deactivating leaves whose consumer
+    /// ids route to the same pin shard can take the direct-store path
+    /// concurrently; the read-modify-write of a shard's durable
+    /// <see cref="WalMaterialiserPinState"/> must be serialized per shard key so
+    /// concurrent fallbacks monotonic-max merge instead of clobbering one
+    /// another. (There is no live pin activation to race on this path - the
+    /// grain call was rejected precisely because none could be created.)
+    /// </summary>
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _directStoreLocks =
+        new(StringComparer.Ordinal);
 
     /// <inheritdoc />
     public Task ReportAsync(
@@ -382,8 +400,136 @@ internal sealed class LeafCursorReporter(
         }
     }
 
-    private Task SeedShardAsync(string grainKey, IReadOnlyList<MaterialiserPinReport> bucket) =>
-        grainFactory!.GetGrain<IWalMaterialiserPinGrain>(grainKey).SeedManyAsync(bucket);
+    private async Task SeedShardAsync(string grainKey, IReadOnlyList<MaterialiserPinReport> bucket)
+    {
+        try
+        {
+            await grainFactory!.GetGrain<IWalMaterialiserPinGrain>(grainKey)
+                .SeedManyAsync(bucket)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (pinStorage is not null && IsActivationCollectionRejection(ex))
+        {
+            // Full-silo graceful shutdown (issue #1464): the pin-store grain is
+            // itself deactivating and the stopping silo refuses to create its
+            // activation, so this durable retention barrier's grain call is
+            // rejected mid-teardown. That defeats the "fall off the log" floor -
+            // and, when a leaf's FIRST real-frontier checkpoint is produced by
+            // the deactivation flush, defeats BOTH barriers, leaving no durable
+            // floor at all and reintroducing LeafProjectionStaleException on cold
+            // restart. Persist the pins by writing directly to the identical
+            // durable slot the grain would have written, so the floor still
+            // advances to the final frontier during teardown. A genuine
+            // (non-shutdown) transient fault is rethrown so the outer catch keeps
+            // swallowing-and-logging it for re-flush on the next checkpoint.
+            await DirectStorePinAsync(grainKey, bucket).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Teardown fallback for <see cref="SeedShardAsync"/>: writes
+    /// <paramref name="bucket"/>'s pins straight to the durable
+    /// <see cref="WalMaterialiserPinState"/> slot the shard's
+    /// <see cref="IWalMaterialiserPinGrain"/> would own, replicating the grain's
+    /// monotonic-max merge, when the grain call is rejected because the silo is
+    /// stopping. Serialized per shard key so concurrent deactivating leaves that
+    /// route to the same shard converge instead of clobbering one another.
+    /// </summary>
+    private async Task DirectStorePinAsync(string grainKey, IReadOnlyList<MaterialiserPinReport> bucket)
+    {
+        var grainId = ResolvePinGrainId(grainKey);
+        var gate = _directStoreLocks.GetOrAdd(grainKey, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            var grainState = new GrainState<WalMaterialiserPinState>(new WalMaterialiserPinState());
+            await pinStorage!.ReadStateAsync(WalMaterialiserPinState.StateName, grainId, grainState)
+                .ConfigureAwait(false);
+
+            var state = grainState.State ??= new WalMaterialiserPinState();
+            var pins = state.Pins;
+            var changed = false;
+            for (var i = 0; i < bucket.Count; i++)
+            {
+                var report = bucket[i];
+                // Monotonic-max merge, identical to WalMaterialiserPinGrain.Merge:
+                // a report at or below the stored frontier is coalesced.
+                if (!pins.TryGetValue(report.ConsumerId, out var existing) || report.Frontier > existing)
+                {
+                    pins[report.ConsumerId] = report.Frontier;
+                    changed = true;
+                }
+            }
+
+            if (changed)
+            {
+                await pinStorage!.WriteStateAsync(WalMaterialiserPinState.StateName, grainId, grainState)
+                    .ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Resolves the durable-state <see cref="GrainId"/> for a pin shard key.
+    /// Production uses the grain factory (the reference's grain id is the exact
+    /// key the storage bridge writes under); tests inject
+    /// <c>pinGrainIdResolver</c> because <c>GetGrainId()</c> requires a real
+    /// grain reference, which a substituted factory does not return.
+    /// </summary>
+    private GrainId ResolvePinGrainId(string grainKey) =>
+        pinGrainIdResolver is not null
+            ? pinGrainIdResolver(grainKey)
+            : grainFactory!.GetGrain<IWalMaterialiserPinGrain>(grainKey).GetGrainId();
+
+    /// <summary>
+    /// True when <paramref name="exception"/> (or any of its inner or aggregated
+    /// causes) is Orleans rejecting a grain call because the target activation
+    /// could not be created on a stopping silo - the signature of a durable-pin
+    /// grain call issued during full-silo graceful shutdown. Matched by the
+    /// rejection type name and the canonical rejection message fragments rather
+    /// than a hard dependency on an Orleans.Runtime type, so the detection is
+    /// portable and unit-testable with a plain exception carrying the marker.
+    /// </summary>
+    private static bool IsActivationCollectionRejection(Exception exception)
+    {
+        for (var ex = exception; ex is not null; ex = ex.InnerException!)
+        {
+            if (ex.GetType().FullName is { } typeName &&
+                typeName.Contains("MessageRejectionException", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            if (ex.Message is { } message &&
+                (message.Contains("Unable to create local activation", StringComparison.Ordinal) ||
+                 message.Contains("invalid activation", StringComparison.Ordinal)))
+            {
+                return true;
+            }
+
+            if (ex is AggregateException aggregate)
+            {
+                foreach (var inner in aggregate.InnerExceptions)
+                {
+                    if (IsActivationCollectionRejection(inner))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            if (ex.InnerException is null)
+            {
+                break;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// under <paramref name="treeName"/>. Routing is by a stable hash of the

@@ -50,7 +50,7 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     /// <param name="logger">Optional logger.</param>
     public WalMaterialiserPinGrain(
         IGrainContext context,
-        [PersistentState("wal-materialiser-pins", LatticeOptions.StorageProviderName)]
+        [PersistentState(WalMaterialiserPinState.StateName, LatticeOptions.StorageProviderName)]
         IPersistentState<WalMaterialiserPinState> state,
         IOptionsMonitor<LatticeOptions> options,
         ILogger<WalMaterialiserPinGrain>? logger = null)
