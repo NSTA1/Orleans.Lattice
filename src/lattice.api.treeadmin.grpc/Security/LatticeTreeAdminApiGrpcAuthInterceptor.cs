@@ -148,6 +148,7 @@ internal sealed class LatticeTreeAdminApiGrpcAuthInterceptor : Interceptor
             TreeAdminBulkLoadAppendRequest bla => bla.TreeId,
             TreeAdminRestoreRequest r => r.TreeId,
             TreeAdminReshardRequest rsh => rsh.TreeId,
+            TreeAdminResizeRequest rsz => rsz.TreeId,
             TreeRestoreResult rev => rev.TargetTreeId,
             _ => null,
         };

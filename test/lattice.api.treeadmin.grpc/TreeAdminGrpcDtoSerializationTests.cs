@@ -380,6 +380,48 @@ public sealed class TreeAdminGrpcDtoSerializationTests
     }
 
     [Test]
+    public void TreeAdminResizeRequest_round_trips()
+    {
+        var copy = RoundTrip(new TreeAdminResizeRequest
+        {
+            TreeId = "orders",
+            NewMaxLeafKeys = 256,
+            NewMaxInternalChildren = 128,
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TreeId, Is.EqualTo("orders"));
+            Assert.That(copy.NewMaxLeafKeys, Is.EqualTo(256));
+            Assert.That(copy.NewMaxInternalChildren, Is.EqualTo(128));
+        });
+    }
+
+    [Test]
+    public void TreeResizeStatus_response_round_trips_through_the_marshaller()
+    {
+        var copy = RoundTrip(new TreeResizeStatus
+        {
+            TreeId = "orders",
+            InProgress = true,
+            CurrentMaxLeafKeys = 64,
+            CurrentMaxInternalChildren = 32,
+            RequestedMaxLeafKeys = 256,
+            RequestedMaxInternalChildren = 128,
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TreeId, Is.EqualTo("orders"));
+            Assert.That(copy.InProgress, Is.True);
+            Assert.That(copy.CurrentMaxLeafKeys, Is.EqualTo(64));
+            Assert.That(copy.CurrentMaxInternalChildren, Is.EqualTo(32));
+            Assert.That(copy.RequestedMaxLeafKeys, Is.EqualTo(256));
+            Assert.That(copy.RequestedMaxInternalChildren, Is.EqualTo(128));
+        });
+    }
+
+    [Test]
     public void Every_registry_alias_is_unique_and_uses_the_reserved_prefix()
     {
         var aliases = RegistryAliasValues();

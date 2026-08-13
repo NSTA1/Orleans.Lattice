@@ -107,6 +107,15 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
     /// <summary>Reads the online-reshard status from the wrapped facade.</summary>
     public abstract Task<TreeReshardStatus> GetReshardStatus(TreeAdminTreeRequest request, ServerCallContext context);
 
+    /// <summary>Triggers an online resize on the wrapped facade.</summary>
+    public abstract Task<TreeResizeStatus> ResizeTree(TreeAdminResizeRequest request, ServerCallContext context);
+
+    /// <summary>Undoes the most recent completed resize on the wrapped facade.</summary>
+    public abstract Task<TreeResizeStatus> UndoTreeResize(TreeAdminTreeRequest request, ServerCallContext context);
+
+    /// <summary>Reads the online-resize status from the wrapped facade.</summary>
+    public abstract Task<TreeResizeStatus> GetResizeStatus(TreeAdminTreeRequest request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at startup
     /// with <paramref name="serviceImpl"/> set to <see langword="null"/> to record
@@ -153,6 +162,9 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
             binder.AddMethod(methods.RevertTreeRestore, (UnaryServerMethod<TreeRestoreResult, TreeRestoreResult>?)null);
             binder.AddMethod(methods.ReshardTree, (UnaryServerMethod<TreeAdminReshardRequest, TreeReshardStatus>?)null);
             binder.AddMethod(methods.GetReshardStatus, (UnaryServerMethod<TreeAdminTreeRequest, TreeReshardStatus>?)null);
+            binder.AddMethod(methods.ResizeTree, (UnaryServerMethod<TreeAdminResizeRequest, TreeResizeStatus>?)null);
+            binder.AddMethod(methods.UndoTreeResize, (UnaryServerMethod<TreeAdminTreeRequest, TreeResizeStatus>?)null);
+            binder.AddMethod(methods.GetResizeStatus, (UnaryServerMethod<TreeAdminTreeRequest, TreeResizeStatus>?)null);
             return;
         }
 
@@ -183,6 +195,9 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
         binder.AddMethod(methods.RevertTreeRestore, new UnaryServerMethod<TreeRestoreResult, TreeRestoreResult>(serviceImpl.RevertTreeRestore));
         binder.AddMethod(methods.ReshardTree, new UnaryServerMethod<TreeAdminReshardRequest, TreeReshardStatus>(serviceImpl.ReshardTree));
         binder.AddMethod(methods.GetReshardStatus, new UnaryServerMethod<TreeAdminTreeRequest, TreeReshardStatus>(serviceImpl.GetReshardStatus));
+        binder.AddMethod(methods.ResizeTree, new UnaryServerMethod<TreeAdminResizeRequest, TreeResizeStatus>(serviceImpl.ResizeTree));
+        binder.AddMethod(methods.UndoTreeResize, new UnaryServerMethod<TreeAdminTreeRequest, TreeResizeStatus>(serviceImpl.UndoTreeResize));
+        binder.AddMethod(methods.GetResizeStatus, new UnaryServerMethod<TreeAdminTreeRequest, TreeResizeStatus>(serviceImpl.GetResizeStatus));
     }
 }
 
@@ -354,6 +369,18 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
     /// <inheritdoc />
     public override Task<TreeReshardStatus> GetReshardStatus(TreeAdminTreeRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (control, req, ct) => control.GetReshardStatusAsync(req.TreeId, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeResizeStatus> ResizeTree(TreeAdminResizeRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.ResizeTreeAsync(req.TreeId, req.NewMaxLeafKeys, req.NewMaxInternalChildren, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeResizeStatus> UndoTreeResize(TreeAdminTreeRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.UndoTreeResizeAsync(req.TreeId, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeResizeStatus> GetResizeStatus(TreeAdminTreeRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.GetResizeStatusAsync(req.TreeId, ct));
 
     /// <inheritdoc />
     public override Task<AuthSchemeAdvertisement> GetAuthScheme(AuthSchemeAdvertisementRequest request, ServerCallContext context)

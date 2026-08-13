@@ -411,6 +411,65 @@ public sealed class TreeAdminLifecycleToolHandlersTests
     }
 
     [Test]
+    public async Task ResizeTreeAsync_forwards_the_capacity_and_returns_the_status()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeResizeStatus
+        {
+            TreeId = "orders",
+            InProgress = false,
+            CurrentMaxLeafKeys = 256,
+            CurrentMaxInternalChildren = 128,
+            RequestedMaxLeafKeys = 256,
+            RequestedMaxInternalChildren = 128,
+        };
+        admin.ResizeTreeAsync("orders", 256, 128, Arg.Any<CancellationToken>()).Returns(expected);
+
+        var result = await TreeAdminLifecycleToolHandlers.ResizeTreeAsync(admin, "orders", 256, 128, CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).ResizeTreeAsync("orders", 256, 128, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task UndoTreeResizeAsync_forwards_the_tree_id_and_returns_the_status()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeResizeStatus
+        {
+            TreeId = "orders",
+            InProgress = false,
+            CurrentMaxLeafKeys = 64,
+            CurrentMaxInternalChildren = 32,
+        };
+        admin.UndoTreeResizeAsync("orders", Arg.Any<CancellationToken>()).Returns(expected);
+
+        var result = await TreeAdminLifecycleToolHandlers.UndoTreeResizeAsync(admin, "orders", CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).UndoTreeResizeAsync("orders", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task GetResizeStatusAsync_forwards_the_tree_id_and_returns_the_status()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeResizeStatus
+        {
+            TreeId = "orders",
+            InProgress = true,
+            CurrentMaxLeafKeys = 128,
+            CurrentMaxInternalChildren = 128,
+        };
+        admin.GetResizeStatusAsync("orders", Arg.Any<CancellationToken>()).Returns(expected);
+
+        var result = await TreeAdminLifecycleToolHandlers.GetResizeStatusAsync(admin, "orders", CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).GetResizeStatusAsync("orders", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public void Handlers_reject_a_null_facade()
     {
         Assert.Multiple(() =>
@@ -434,6 +493,9 @@ public sealed class TreeAdminLifecycleToolHandlersTests
             Assert.That(() => TreeAdminLifecycleToolHandlers.RevertTreeRestoreAsync(null!, "t", "bk", "op", "s", "p"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.ReshardTreeAsync(null!, "t", 4), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.GetReshardStatusAsync(null!, "t"), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.ResizeTreeAsync(null!, "t", 256, 128), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.UndoTreeResizeAsync(null!, "t"), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.GetResizeStatusAsync(null!, "t"), Throws.ArgumentNullException);
         });
     }
 }

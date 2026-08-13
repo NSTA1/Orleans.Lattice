@@ -379,6 +379,63 @@ public sealed class LatticeTreeAdminGrpcClientE2ETests
             Throws.Exception);
     }
 
+    [Test]
+    public async Task resize_trigger_and_status_round_trip_over_the_client()
+    {
+        // A freshly created, empty tree takes the online-resize empty-tree fast path,
+        // which repins the node capacity on the registry synchronously, so the status
+        // read observes the new capacity and an idle coordinator.
+        const string resizeTree = "resize-e2e";
+        await _host.Client.CreateTreeAsync(resizeTree, shardCount: 2);
+
+        var before = await _host.Client.GetResizeStatusAsync(resizeTree);
+        Assert.Multiple(() =>
+        {
+            Assert.That(before.TreeId, Is.EqualTo(resizeTree));
+            Assert.That(before.InProgress, Is.False);
+            Assert.That(before.RequestedMaxLeafKeys, Is.Null);
+            Assert.That(before.RequestedMaxInternalChildren, Is.Null);
+        });
+
+        var triggered = await _host.Client.ResizeTreeAsync(resizeTree, newMaxLeafKeys: 64, newMaxInternalChildren: 32);
+        Assert.Multiple(() =>
+        {
+            Assert.That(triggered.TreeId, Is.EqualTo(resizeTree));
+            Assert.That(triggered.RequestedMaxLeafKeys, Is.EqualTo(64));
+            Assert.That(triggered.RequestedMaxInternalChildren, Is.EqualTo(32));
+            Assert.That(triggered.InProgress, Is.False);
+            Assert.That(triggered.CurrentMaxLeafKeys, Is.EqualTo(64));
+            Assert.That(triggered.CurrentMaxInternalChildren, Is.EqualTo(32));
+        });
+
+        var after = await _host.Client.GetResizeStatusAsync(resizeTree);
+        Assert.Multiple(() =>
+        {
+            Assert.That(after.InProgress, Is.False);
+            Assert.That(after.CurrentMaxLeafKeys, Is.EqualTo(64));
+            Assert.That(after.CurrentMaxInternalChildren, Is.EqualTo(32));
+        });
+    }
+
+    [Test]
+    public void resize_below_the_minimum_leaf_capacity_is_rejected_over_the_client()
+    {
+        Assert.That(
+            async () => await _host.Client.ResizeTreeAsync("resize-reject-e2e", newMaxLeafKeys: 1, newMaxInternalChildren: 32),
+            Throws.Exception);
+    }
+
+    [Test]
+    public async Task undo_resize_with_no_prior_resize_is_rejected_over_the_client()
+    {
+        const string undoTree = "resize-undo-reject-e2e";
+        await _host.Client.CreateTreeAsync(undoTree, shardCount: 2);
+
+        Assert.That(
+            async () => await _host.Client.UndoTreeResizeAsync(undoTree),
+            Throws.Exception);
+    }
+
     private static IReadOnlyList<Orleans.Lattice.Api.Data.DataEntry> Chunk(params string[] keys)
         => keys.Select(k => new Orleans.Lattice.Api.Data.DataEntry { Key = k, Value = "{}"u8.ToArray() }).ToArray();
 }

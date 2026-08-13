@@ -842,6 +842,83 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         };
     }
 
+    /// <inheritdoc />
+    public async Task<TreeResizeStatus> ResizeTreeAsync(
+        string treeId, int newMaxLeafKeys, int newMaxInternalChildren,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ThrowIfReserved(treeId);
+        await _authorizer.AuthorizeTreeLifecycleAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        // Wrap the public ILattice verb so the tree's own guards (system-tree,
+        // protected-view) and capacity argument validation are inherited rather than
+        // duplicated, and the core re-enforces TreeLifecycle. Orchestration is accepted
+        // synchronously; the online snapshot + alias swap then runs anchored by reminders.
+        await _grainFactory.GetGrain<ILattice>(treeId)
+            .ResizeAsync(newMaxLeafKeys, newMaxInternalChildren, cancellationToken)
+            .ConfigureAwait(false);
+
+        return await ReadResizeStatusAsync(treeId, newMaxLeafKeys, newMaxInternalChildren).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<TreeResizeStatus> UndoTreeResizeAsync(
+        string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ThrowIfReserved(treeId);
+        await _authorizer.AuthorizeTreeLifecycleAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        await _grainFactory.GetGrain<ILattice>(treeId)
+            .UndoResizeAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return await ReadResizeStatusAsync(treeId, requestedMaxLeafKeys: null, requestedMaxInternalChildren: null)
+            .ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<TreeResizeStatus> GetResizeStatusAsync(
+        string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        await _authorizer.AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        return await ReadResizeStatusAsync(treeId, requestedMaxLeafKeys: null, requestedMaxInternalChildren: null)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Projects the tree's observable resize signal - the coordinator's idle/in-flight
+    /// state (via the public <see cref="ILattice.IsResizeCompleteAsync"/> read) and the
+    /// current effective B+ node capacity (via the registry, default-seeded) - onto the
+    /// transport-agnostic <see cref="TreeResizeStatus"/>. The requested-capacity fields
+    /// echo the trigger's target and are <see langword="null"/> for a standalone status
+    /// read or an undo.
+    /// </summary>
+    private async Task<TreeResizeStatus> ReadResizeStatusAsync(
+        string treeId, int? requestedMaxLeafKeys, int? requestedMaxInternalChildren)
+    {
+        var complete = await _grainFactory.GetGrain<ILattice>(treeId)
+            .IsResizeCompleteAsync()
+            .ConfigureAwait(false);
+
+        var entry = await _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId)
+            .GetEntryAsync(treeId)
+            .ConfigureAwait(false);
+
+        return new TreeResizeStatus
+        {
+            TreeId = treeId,
+            InProgress = !complete,
+            CurrentMaxLeafKeys = entry?.MaxLeafKeys ?? LatticeConstants.DefaultMaxLeafKeys,
+            CurrentMaxInternalChildren = entry?.MaxInternalChildren ?? LatticeConstants.DefaultMaxInternalChildren,
+            RequestedMaxLeafKeys = requestedMaxLeafKeys,
+            RequestedMaxInternalChildren = requestedMaxInternalChildren,
+        };
+    }
+
     /// <summary>
     /// Resolves the composed backup/restore engine, throwing a clear
     /// <see cref="InvalidOperationException"/> when no backup add-on is registered so a
