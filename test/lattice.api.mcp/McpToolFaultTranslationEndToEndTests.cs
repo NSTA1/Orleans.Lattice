@@ -166,6 +166,9 @@ public sealed class McpToolFaultTranslationEndToEndTests
         public Task<bool> DeleteAsync(string treeId, string key, CancellationToken cancellationToken = default)
             => throw fault;
 
+        public Task<DataRangeDeleteResult> DeleteRangeAsync(DataRangeDeleteRequest request, CancellationToken cancellationToken = default)
+            => throw fault;
+
         public Task SetManyAtomicAsync(string treeId, DataAtomicBatch batch, string operationId, CancellationToken cancellationToken = default)
             => throw fault;
 

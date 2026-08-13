@@ -13,8 +13,9 @@ namespace Orleans.Lattice.Api.Data.Grpc;
 /// <remarks>
 /// The contract is a flat set of unary RPCs: point writes (<c>Set</c> /
 /// <c>Delete</c>), atomic batches (<c>SetManyAtomic</c> /
-/// <c>SetManyAtomicCrossTree</c>), a point read (<c>Get</c>), and a single-page
-/// bounded range read (<c>ReadRange</c>). A live streaming scan / change feed is
+/// <c>SetManyAtomicCrossTree</c>), a point read (<c>Get</c>), a single-page
+/// bounded range read (<c>ReadRange</c>), and a bounded range delete
+/// (<c>DeleteRange</c>). A live streaming scan / change feed is
 /// intentionally out of scope for v1. Contract-versioning policy: fields on the
 /// wire messages are additive-only (new <c>[Id(n)]</c>); aliases and field
 /// numbers are never renumbered, so a newer response decodes cleanly under an
@@ -46,6 +47,9 @@ internal sealed class LatticeDataApiGrpcMethods
     /// <summary>The unary bounded range-read RPC method name.</summary>
     public const string ReadRangeMethodName = "ReadRange";
 
+    /// <summary>The unary bounded range-delete RPC method name.</summary>
+    public const string DeleteRangeMethodName = "DeleteRange";
+
     /// <summary>The unary unified typed-CRDT write RPC method name.</summary>
     public const string CrdtWriteMethodName = "CrdtWrite";
 
@@ -66,6 +70,8 @@ internal sealed class LatticeDataApiGrpcMethods
         Serializer<DataReadResult> readResultSerializer,
         Serializer<DataRangeRequest> rangeRequestSerializer,
         Serializer<DataRangePage> rangePageSerializer,
+        Serializer<DataRangeDeleteRequest> rangeDeleteRequestSerializer,
+        Serializer<DataRangeDeleteResult> rangeDeleteResultSerializer,
         Serializer<DataSetManyRequest> setManyRequestSerializer,
         Serializer<DataSetManyResponse> setManyResponseSerializer,
         Serializer<CrdtWriteRequest> crdtWriteRequestSerializer,
@@ -85,6 +91,8 @@ internal sealed class LatticeDataApiGrpcMethods
         ArgumentNullException.ThrowIfNull(readResultSerializer);
         ArgumentNullException.ThrowIfNull(rangeRequestSerializer);
         ArgumentNullException.ThrowIfNull(rangePageSerializer);
+        ArgumentNullException.ThrowIfNull(rangeDeleteRequestSerializer);
+        ArgumentNullException.ThrowIfNull(rangeDeleteResultSerializer);
         ArgumentNullException.ThrowIfNull(setManyRequestSerializer);
         ArgumentNullException.ThrowIfNull(setManyResponseSerializer);
         ArgumentNullException.ThrowIfNull(crdtWriteRequestSerializer);
@@ -134,6 +142,13 @@ internal sealed class LatticeDataApiGrpcMethods
             requestMarshaller: LatticeDataApiGrpcMarshallers.Create(rangeRequestSerializer),
             responseMarshaller: LatticeDataApiGrpcMarshallers.Create(rangePageSerializer));
 
+        DeleteRange = new Method<DataRangeDeleteRequest, DataRangeDeleteResult>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: DeleteRangeMethodName,
+            requestMarshaller: LatticeDataApiGrpcMarshallers.Create(rangeDeleteRequestSerializer),
+            responseMarshaller: LatticeDataApiGrpcMarshallers.Create(rangeDeleteResultSerializer));
+
         SetMany = new Method<DataSetManyRequest, DataSetManyResponse>(
             type: MethodType.Unary,
             serviceName: ServiceName,
@@ -174,6 +189,9 @@ internal sealed class LatticeDataApiGrpcMethods
     /// <summary>The unary <c>ReadRange</c> bounded range-read RPC.</summary>
     public Method<DataRangeRequest, DataRangePage> ReadRange { get; }
 
+    /// <summary>The unary <c>DeleteRange</c> bounded range-delete RPC.</summary>
+    public Method<DataRangeDeleteRequest, DataRangeDeleteResult> DeleteRange { get; }
+
     /// <summary>The unary <c>SetMany</c> non-atomic bulk-write RPC.</summary>
     public Method<DataSetManyRequest, DataSetManyResponse> SetMany { get; }
 
@@ -205,6 +223,8 @@ internal sealed class LatticeDataApiGrpcMethods
             serializerProvider.GetRequiredService<Serializer<DataReadResult>>(),
             serializerProvider.GetRequiredService<Serializer<DataRangeRequest>>(),
             serializerProvider.GetRequiredService<Serializer<DataRangePage>>(),
+            serializerProvider.GetRequiredService<Serializer<DataRangeDeleteRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<DataRangeDeleteResult>>(),
             serializerProvider.GetRequiredService<Serializer<DataSetManyRequest>>(),
             serializerProvider.GetRequiredService<Serializer<DataSetManyResponse>>(),
             serializerProvider.GetRequiredService<Serializer<CrdtWriteRequest>>(),

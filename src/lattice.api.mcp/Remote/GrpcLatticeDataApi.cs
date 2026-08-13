@@ -64,6 +64,22 @@ internal sealed partial class GrpcLatticeDataApi : ILatticeDataApi
     }
 
     /// <inheritdoc />
+    public async Task<DataRangeDeleteResult> DeleteRangeAsync(
+        DataRangeDeleteRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        try
+        {
+            return await _client.DeleteRangeAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (RpcException ex) when (ex.StatusCode == StatusCode.PermissionDenied)
+        {
+            throw Denied(ex);
+        }
+    }
+
+    /// <inheritdoc />
     public async Task SetManyAtomicAsync(
         string treeId,
         DataAtomicBatch batch,

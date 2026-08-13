@@ -244,6 +244,18 @@ no duplicates, no gaps, original ordering preserved.
 |--------|-----------|-------------|
 | `ScanKeysAsync` | `IAsyncEnumerable<string> ScanKeysAsync(this ILattice, string? startInclusive, string? endExclusive, bool reverse, bool? prefetch, int? maxAttempts)` | Streams live keys in strict lexicographic order. `prefetch=true` (or `null` with `LatticeOptions.PrefetchKeysScan = true`) overlaps the next page fetch with the current page consumption. `maxAttempts` overrides the wrapper's reconnect budget (default `LatticeExtensions.DefaultScanReconnectAttempts = 8`). A concurrent `SetManyAtomicAsync` is observed atomically across every page of a single enumeration. |
 | `ScanEntriesAsync` | `IAsyncEnumerable<KeyValuePair<string, byte[]>> ScanEntriesAsync(this ILattice, string? startInclusive, string? endExclusive, bool reverse, bool? prefetch, int? maxAttempts)` | Streams live key-value entries in strict lexicographic key order. `prefetch` is gated by `LatticeOptions.PrefetchEntriesScan` (separate flag from keys because entry pages also carry `byte[]` values). Same atomic-visibility and reconnect guarantees as `ScanKeysAsync`. |
+| `DeleteRangeAsync` | `Task<long> DeleteRangeAsync(this ILattice, string startInclusive, string endExclusive, int stepSize = 256, int? maxAttempts = null, CancellationToken cancellationToken = default)` | Resiliently drains a delete-range cursor over the half-open range `[startInclusive, endExclusive)` to completion, returning the total number of keys tombstoned. Deletes in batches of `stepSize` and, if the durable enumerator is lost mid-drain (`EnumerationAbortedException`), transparently reopens a fresh cursor over the same range and continues; already-tombstoned keys are skipped on reopen so the count never double-counts. `maxAttempts` overrides the reconnect budget (default `LatticeExtensions.DefaultScanReconnectAttempts = 8`). Both bounds are required. Authorization is all-or-nothing across the span (`LatticeOperation.RangeDelete`): a caller who may not delete the whole range is denied and nothing is removed. Prefer this one-shot helper over hand-rolling an `OpenDeleteRangeCursorAsync` / `DeleteRangeStepAsync` loop when you simply need a range gone. |
+
+Prefer the resilient `DeleteRangeAsync` drain helper over an
+`OpenDeleteRangeCursorAsync` / `DeleteRangeStepAsync` loop when you
+simply need a whole range removed; it reopens the cursor across a
+transient enumerator loss so a large purge completes rather than
+aborting part-way.
+
+```csharp verify
+long removed = await tree.DeleteRangeAsync("repo/r1/", "repo/r1/\uffff");
+Console.WriteLine($"tombstoned {removed} keys");
+```
 
 #### Scan reliability
 
@@ -400,6 +412,8 @@ Console.WriteLine($"Deleted {total} keys.");
 | `Open*` (point-in-time) | Registry would exceed `LatticeOptions.MaxPinnedSagaDecisions` | `LatticeCursorRegistryPinExhaustedException` |
 | `OpenSnapshot*CursorAsync` | Replay budget exceeded (any shard's `head - 0 > MaxSnapshotReplayEntries`) | `LatticeSnapshotReplayBudgetExceededException` |
 | `Next*` (snapshot) | Snapshot leaf cannot be rebuilt because the WAL prefix was trimmed past the pinned offset | `LatticeSnapshotExpiredException` |
+| `DeleteRangeAsync` (extension) | `startInclusive` or `endExclusive` is `null` | `ArgumentException` |
+| `DeleteRangeAsync` (extension) | Enumerator lost more than `maxAttempts` times | `EnumerationAbortedException` (rethrown after the budget is exhausted) |
 | Any `Open*` | Re-open with a different spec on the same cursor ID | `InvalidOperationException` |
 | `Next*` / `DeleteRangeStep*` | Cursor kind mismatch | `InvalidOperationException` |
 | `Next*` / `DeleteRangeStep*` | Cursor was closed | `InvalidOperationException` |

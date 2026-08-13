@@ -126,4 +126,25 @@ public sealed class DataDtoSerializationTests
             Assert.That(absentCopy.Value, Is.Empty);
         });
     }
+
+    [Test]
+    public void DataRangeDeleteRequest_round_trips()
+    {
+        var original = new DataRangeDeleteRequest
+        {
+            TreeId = "tree-a",
+            StartInclusive = "a",
+            EndExclusive = "m",
+        };
+
+        Assert.That(RoundTrip(original), Is.EqualTo(original));
+    }
+
+    [Test]
+    public void DataRangeDeleteResult_round_trips()
+    {
+        var original = new DataRangeDeleteResult { TreeId = "tree-a", DeletedCount = 42 };
+
+        Assert.That(RoundTrip(original), Is.EqualTo(original));
+    }
 }

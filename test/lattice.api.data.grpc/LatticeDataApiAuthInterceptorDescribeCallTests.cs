@@ -115,6 +115,20 @@ public sealed class LatticeDataApiAuthInterceptorDescribeCallTests
     }
 
     [Test]
+    public void DeleteRange_targets_its_tree()
+    {
+        var result = Describe(
+            LatticeDataApiGrpcMethods.DeleteRangeMethodName,
+            new DataRangeDeleteRequest { TreeId = TreeId, StartInclusive = "a", EndExclusive = "z" });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Operation, Is.EqualTo(LatticeDataApiOperation.DeleteRange));
+            Assert.That(result.TargetTreeId, Is.EqualTo(TreeId));
+        });
+    }
+
+    [Test]
     public void An_unrecognised_method_maps_to_Unknown()
     {
         var result = Describe("SomeFutureRpc", new DataSetRequest { TreeId = TreeId, Key = "k1" });

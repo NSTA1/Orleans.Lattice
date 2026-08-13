@@ -11,9 +11,9 @@ namespace Orleans.Lattice.Api.Mcp;
 /// The data tool module: an <see cref="ILatticeApiMcpToolGroup"/> serving
 /// <see cref="LatticeApiMcpGroup.Data"/> with thin MCP tools over the internal
 /// <see cref="ILatticeDataApi"/> facade. Point reads and a bounded range read are
-/// always contributed; the mutating verbs (set, delete, non-atomic bulk write,
-/// single-tree atomic batch, cross-tree atomic batch) are contributed only when
-/// the host opts writes in.
+/// always contributed; the mutating verbs (set, delete, range delete, non-atomic
+/// bulk write, single-tree atomic batch, cross-tree atomic batch) are contributed
+/// only when the host opts writes in.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -38,13 +38,13 @@ internal sealed partial class DataToolGroup : ILatticeApiMcpToolGroup
     /// Builds the data tool module. When <paramref name="enableWrites"/> is
     /// <see langword="false"/> (the default) only the read tools are contributed
     /// (the two point / range reads plus the thirteen typed-CRDT reads); when
-    /// <see langword="true"/> the mutating tools (five point / batch writes plus
+    /// <see langword="true"/> the mutating tools (six point / batch writes plus
     /// the thirteen typed-CRDT writes) are added.
     /// </summary>
     /// <param name="enableWrites">Whether the mutating data tools are contributed.</param>
     public DataToolGroup(bool enableWrites)
     {
-        var tools = new List<McpServerTool>(enableWrites ? 33 : 15)
+        var tools = new List<McpServerTool>(enableWrites ? 34 : 15)
         {
             BuildGetTool(),
             BuildReadRangeTool(),
@@ -67,6 +67,7 @@ internal sealed partial class DataToolGroup : ILatticeApiMcpToolGroup
         {
             tools.Add(BuildSetTool());
             tools.Add(BuildDeleteTool());
+            tools.Add(BuildDeleteRangeTool());
             tools.Add(BuildSetManyTool());
             tools.Add(BuildSetManyAtomicTool());
             tools.Add(BuildSetManyAtomicCrossTreeTool());
@@ -183,6 +184,28 @@ internal sealed partial class DataToolGroup : ILatticeApiMcpToolGroup
                     + "deleted=false when the key was already absent (an unknown tree also reports "
                     + "deleted=false). Fails closed: a caller who may not delete the key is denied. "
                     + "Destructive.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildDeleteRangeTool()
+        => McpServerTool.Create(
+            DeleteRangeToolAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_data_delete_range",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Delete a range of data entries",
+                Description =
+                    "Deletes every key the caller is authorized to delete in the half-open range "
+                    + "[startInclusive, endExclusive) on a tree, returning deletedCount - the total "
+                    + "tombstoned. Both bounds are required. The delete drains a durable cursor to "
+                    + "completion in bounded batches, transparently reopening on a transient enumerator "
+                    + "loss so a large range completes rather than aborting part-way. Fails closed: a "
+                    + "range delete is all-or-nothing across its span, so a caller who may not delete "
+                    + "the whole range is denied and nothing is removed. An unknown tree reports "
+                    + "deletedCount=0. Destructive.",
                 ReadOnly = false,
                 Destructive = true,
                 UseStructuredContent = true,
@@ -319,6 +342,15 @@ internal sealed partial class DataToolGroup : ILatticeApiMcpToolGroup
         [Description("The entry key to delete.")] string key,
         CancellationToken cancellationToken)
         => DataToolCore.DeleteAsync(ResolveApi(context), treeId, key, cancellationToken);
+
+    private static Task<DataRangeDeleteToolResult> DeleteRangeToolAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("Logical tree identifier.")] string treeId,
+        [Description("Inclusive lower key bound. Required.")] string startInclusive,
+        [Description("Exclusive upper key bound. Required.")] string endExclusive,
+        CancellationToken cancellationToken = default)
+        => DataToolCore.DeleteRangeAsync(
+            ResolveApi(context), treeId, startInclusive, endExclusive, cancellationToken);
 
     private static Task<DataSetManyToolResult> SetManyToolAsync(
         RequestContext<CallToolRequestParams> context,

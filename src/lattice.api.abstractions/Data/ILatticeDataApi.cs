@@ -56,6 +56,23 @@ public interface ILatticeDataApi
     Task<bool> DeleteAsync(string treeId, string key, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Deletes every key the caller is authorized to delete in the half-open
+    /// range <c>[<see cref="DataRangeDeleteRequest.StartInclusive"/>,
+    /// <see cref="DataRangeDeleteRequest.EndExclusive"/>)</c> on the request's
+    /// tree, and returns the total tombstoned. The facade drains a durable
+    /// range-delete cursor to completion in bounded batches, transparently
+    /// reopening a fresh cursor on a transient enumerator loss (silo failover,
+    /// cold start, idle expiry, scale-down) so a large range completes rather
+    /// than aborting part-way. Both bounds are required. Throws
+    /// <see cref="LatticeAuthorizationDeniedException"/> when the caller may not
+    /// delete the whole range - a range delete is all-or-nothing across its span,
+    /// so a partial-coverage authorization tombstones nothing.
+    /// </summary>
+    /// <param name="request">Tree and required half-open key bounds to delete.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<DataRangeDeleteResult> DeleteRangeAsync(DataRangeDeleteRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Commits <paramref name="batch"/> (upserts and deletes) all-or-nothing on
     /// <paramref name="treeId"/>, keyed by <paramref name="operationId"/> for
     /// idempotent retry. Throws

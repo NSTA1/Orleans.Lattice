@@ -26,4 +26,12 @@ public sealed class LatticeApiDataOptions
     /// sizes are clamped down. Defaults to <c>1000</c>.
     /// </summary>
     public int MaxRangePageSize { get; set; } = 1000;
+
+    /// <summary>
+    /// Batch size the facade drains per step when serving a bounded range
+    /// delete. Larger values tombstone more keys per grain hop at the cost of a
+    /// longer single call; the whole range is always drained regardless. Values
+    /// below <c>1</c> fall back to <c>1</c>. Defaults to <c>256</c>.
+    /// </summary>
+    public int RangeDeleteStepSize { get; set; } = 256;
 }

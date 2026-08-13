@@ -125,6 +125,7 @@ internal sealed class LatticeDataApiGrpcAuthInterceptor : Interceptor
             LatticeDataApiGrpcMethods.SetManyAtomicCrossTreeMethodName => LatticeDataApiOperation.SetManyAtomicCrossTree,
             LatticeDataApiGrpcMethods.GetMethodName => LatticeDataApiOperation.GetPoint,
             LatticeDataApiGrpcMethods.ReadRangeMethodName => LatticeDataApiOperation.ReadRange,
+            LatticeDataApiGrpcMethods.DeleteRangeMethodName => LatticeDataApiOperation.DeleteRange,
             _ => LatticeDataApiOperation.Unknown,
         };
 
@@ -135,6 +136,7 @@ internal sealed class LatticeDataApiGrpcAuthInterceptor : Interceptor
             DataAtomicRequest a => a.TreeId,
             DataGetRequest g => g.TreeId,
             DataRangeRequest r => r.TreeId,
+            DataRangeDeleteRequest rd => rd.TreeId,
             // The cross-tree batch spans several trees; present no single target.
             _ => null,
         };

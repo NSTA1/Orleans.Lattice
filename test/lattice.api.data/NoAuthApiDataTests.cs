@@ -146,4 +146,31 @@ public sealed class NoAuthApiDataTests
 
         Assert.That(page.Entries.Select(e => e.Key), Is.EquivalentTo(new[] { "a", "b", "c" }));
     }
+
+    [Test]
+    public async Task bounded_range_delete_drains_the_whole_range_without_auth()
+    {
+        const string tree = "noauth-range-delete";
+        await _fixture.RegisterTreeAsync(tree);
+
+        // Seed more keys than a single step so the drain must loop.
+        for (var i = 0; i < 10; i++)
+        {
+            await _fixture.Api.SetAsync(tree, $"k{i:D2}", new byte[] { (byte)i });
+        }
+        // A key outside the range must survive.
+        await _fixture.Api.SetAsync(tree, "zzz", new byte[] { 99 });
+
+        var result = await _fixture.Api.DeleteRangeAsync(
+            new DataRangeDeleteRequest { TreeId = tree, StartInclusive = "k00", EndExclusive = "k99" });
+
+        var page = await _fixture.Api.ReadRangeAsync(new DataRangeRequest { TreeId = tree, PageSize = 100 });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.TreeId, Is.EqualTo(tree));
+            Assert.That(result.DeletedCount, Is.EqualTo(10));
+            Assert.That(page.Entries.Select(e => e.Key), Is.EquivalentTo(new[] { "zzz" }));
+        });
+    }
 }

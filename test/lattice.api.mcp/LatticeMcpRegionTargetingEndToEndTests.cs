@@ -314,6 +314,9 @@ public sealed class LatticeMcpRegionTargetingEndToEndTests
         public Task<bool> DeleteAsync(string treeId, string key, CancellationToken cancellationToken = default)
             => Task.FromResult(true);
 
+        public Task<DataRangeDeleteResult> DeleteRangeAsync(DataRangeDeleteRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(new DataRangeDeleteResult { TreeId = request.TreeId, DeletedCount = 0 });
+
         public Task SetManyAtomicAsync(string treeId, DataAtomicBatch batch, string operationId, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
 

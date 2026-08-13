@@ -44,6 +44,33 @@ internal sealed partial class LatticeDataApi(
     }
 
     /// <inheritdoc />
+    public async Task<DataRangeDeleteResult> DeleteRangeAsync(
+        DataRangeDeleteRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentException.ThrowIfNullOrEmpty(request.TreeId);
+        ArgumentNullException.ThrowIfNull(request.StartInclusive);
+        ArgumentNullException.ThrowIfNull(request.EndExclusive);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var stepSize = Math.Max(1, _apiOptions.RangeDeleteStepSize);
+        var tree = _grainFactory.GetGrain<ILattice>(request.TreeId);
+        var deleted = await tree.DeleteRangeAsync(
+            request.StartInclusive,
+            request.EndExclusive,
+            stepSize,
+            maxAttempts: null,
+            cancellationToken).ConfigureAwait(false);
+
+        return new DataRangeDeleteResult
+        {
+            TreeId = request.TreeId,
+            DeletedCount = deleted,
+        };
+    }
+
+    /// <inheritdoc />
     public Task SetManyAtomicAsync(
         string treeId,
         DataAtomicBatch batch,

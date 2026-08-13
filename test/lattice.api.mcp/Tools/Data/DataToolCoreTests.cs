@@ -78,6 +78,42 @@ public sealed class DataToolCoreTests
     }
 
     [Test]
+    public async Task DeleteRangeAsync_drains_the_range_and_reports_the_count()
+    {
+        var api = new FakeDataApi();
+        await DataToolCore.SetAsync(api, Tree, "k1", Bytes("1"), CancellationToken.None);
+        await DataToolCore.SetAsync(api, Tree, "k2", Bytes("2"), CancellationToken.None);
+        await DataToolCore.SetAsync(api, Tree, "k3", Bytes("3"), CancellationToken.None);
+        await DataToolCore.SetAsync(api, Tree, "zzz", Bytes("9"), CancellationToken.None);
+
+        var result = await DataToolCore.DeleteRangeAsync(
+            api, Tree, startInclusive: "k1", endExclusive: "k9", CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.TreeId, Is.EqualTo(Tree));
+            Assert.That(result.DeletedCount, Is.EqualTo(3));
+            Assert.That(api.Contains(Tree, "k1"), Is.False);
+            Assert.That(api.Contains(Tree, "zzz"), Is.True);
+        });
+    }
+
+    [Test]
+    public void DeleteRangeAsync_denies_the_whole_range_when_a_key_is_denied()
+    {
+        var api = new FakeDataApi();
+        api.SetAsync(Tree, "k1", Bytes("1"), CancellationToken.None).GetAwaiter().GetResult();
+        api.SetAsync(Tree, "k2", Bytes("2"), CancellationToken.None).GetAwaiter().GetResult();
+        api.Denied.Add((Tree, "k2"));
+
+        Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
+            () => DataToolCore.DeleteRangeAsync(api, Tree, "k1", "k9", CancellationToken.None));
+
+        // All-or-nothing: nothing was removed.
+        Assert.That(api.Contains(Tree, "k1"), Is.True);
+    }
+
+    [Test]
     public async Task ReadRangeAsync_returns_the_authorized_ascending_page()
     {
         var api = new FakeDataApi();

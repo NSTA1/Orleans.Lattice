@@ -154,6 +154,7 @@ public class AbstractionsPublicApiContractTests
     private static readonly IReadOnlyList<string> DataApiCrdtMembers = new[]
     {
         nameof(ILatticeDataApi.SetManyAsync),
+        nameof(ILatticeDataApi.DeleteRangeAsync),
         nameof(ILatticeDataApi.CounterIncrementAsync),
         nameof(ILatticeDataApi.CounterDecrementAsync),
         nameof(ILatticeDataApi.CounterGetAsync),

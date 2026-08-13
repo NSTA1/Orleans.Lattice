@@ -27,6 +27,9 @@ public enum LatticeDataApiOperation
     /// <summary>The <c>ReadRange</c> bounded range-read RPC.</summary>
     ReadRange,
 
+    /// <summary>The <c>DeleteRange</c> bounded range-delete RPC.</summary>
+    DeleteRange,
+
     /// <summary>
     /// A data-API method the interceptor does not recognise (for example a
     /// future RPC added without updating the operation map). Presented to the
