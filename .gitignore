@@ -412,3 +412,7 @@ benchmark/diagnostic-report.pilot.md
 
 # Local RepoContext deployment artifacts (host publish + runtime Dockerfile)
 .deploy/
+
+# Local machine-specific RepoContext deploy overrides (REPO_PATH etc.)
+samples/RepoContextContainer/.env
+

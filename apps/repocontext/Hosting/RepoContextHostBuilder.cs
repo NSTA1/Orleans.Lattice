@@ -138,8 +138,19 @@ public static class RepoContextHostBuilder
         // so its TryAdd-registered HttpContext bridge is skipped and ours wins.
         builder.Services.AddSingleton<ILatticeApiMcpCredentialBridge, LocalTrustedCredentialBridge>();
 
-        // The box is a single trusted local agent, so writes are enabled.
-        builder.Services.AddLatticeMcp(options => options.RequireAuthorization = false);
+        // The box is a single trusted local agent, so writes are enabled. Run the
+        // streamable-HTTP transport STATELESS: this host exposes a fixed
+        // repocontext_* tool set to one local agent (RequireAuthorization is off and
+        // an AllowAll authorizer is wired below), so it needs none of the
+        // permission-scoped per-session tool collections that stateful mode exists to
+        // serve. Stateless makes every request self-contained, so restarting or
+        // recreating the container no longer expires the client's in-memory session
+        // and 404s every subsequent tool call until the client reconnects.
+        builder.Services.AddLatticeMcp(options =>
+        {
+            options.RequireAuthorization = false;
+            options.Stateless = true;
+        });
 
         // Opt in past the default-deny coarse MCP gate. The container stamps every
         // request as the trusted local agent through LocalTrustedCredentialBridge,
