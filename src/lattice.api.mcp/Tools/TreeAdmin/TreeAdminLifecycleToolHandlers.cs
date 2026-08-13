@@ -226,6 +226,64 @@ internal static class TreeAdminLifecycleToolHandlers
         return treeAdmin.CommitBulkLoadAsync(treeId, operationId, cancellationToken);
     }
 
+    /// <summary>Restores a captured backup into a tree via an online, reversible shadow-cutover.</summary>
+    public static Task<TreeRestoreResult> RestoreTreeAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The tree to restore the backup into. Must not be null, empty, or a reserved system tree id.")]
+        string treeId,
+        [Description("The content-addressed id of the backup to restore. Must not be null or empty.")]
+        string backupId,
+        [Description("An optional idempotency key that makes a retried restore a no-op, or null to derive one from the request. Must be non-empty when supplied.")]
+        string? operationId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        return treeAdmin.RestoreTreeAsync(treeId, backupId, operationId, cancellationToken);
+    }
+
+    /// <summary>Restores a captured backup set as a single all-or-nothing unit.</summary>
+    public static async Task<TreeRestoreSetResult> RestoreTreeSetAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The content-addressed id of the backup set to restore. Must not be null or empty.")]
+        string setId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        var results = await treeAdmin.RestoreTreeSetAsync(setId, cancellationToken).ConfigureAwait(false);
+        return new TreeRestoreSetResult { Results = results };
+    }
+
+    /// <summary>Reverts a shadow-cutover restore, swapping the target tree's alias back to its pre-restore physical tree.</summary>
+    public static async Task<TreeRestoreResult> RevertTreeRestoreAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The tree whose restore is being reverted. Must match the restore result's target tree and must not be a reserved system tree id.")]
+        string targetTreeId,
+        [Description("The backup id that was restored, from the tree_restore result.")]
+        string backupId,
+        [Description("The idempotency key from the tree_restore result.")]
+        string operationId,
+        [Description("The physical tree the alias now points at, from the tree_restore result's shadowPhysicalTreeId. Required: a restore with no shadow physical tree is not revertible.")]
+        string shadowPhysicalTreeId,
+        [Description("The physical tree the alias pointed at before the restore, from the tree_restore result's previousPhysicalTreeId. Required to swap the alias back.")]
+        string previousPhysicalTreeId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        var restore = new TreeRestoreResult
+        {
+            BackupId = backupId,
+            TargetTreeId = targetTreeId,
+            Mode = TreeRestoreMode.ShadowCutover,
+            OperationId = operationId,
+            ManifestChain = [],
+            EntriesApplied = 0,
+            ShadowPhysicalTreeId = shadowPhysicalTreeId,
+            PreviousPhysicalTreeId = previousPhysicalTreeId,
+        };
+        await treeAdmin.RevertTreeRestoreAsync(restore, cancellationToken).ConfigureAwait(false);
+        return restore;
+    }
+
     private static List<DataEntry> ToDataEntries(IReadOnlyList<DataEntryDto>? entries)
     {
         if (entries is null || entries.Count == 0)

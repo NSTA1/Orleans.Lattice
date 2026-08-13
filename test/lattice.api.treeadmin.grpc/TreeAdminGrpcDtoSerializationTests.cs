@@ -320,6 +320,30 @@ public sealed class TreeAdminGrpcDtoSerializationTests
     }
 
     [Test]
+    public void TreeAdminRestoreRequest_round_trips()
+    {
+        var copy = RoundTrip(new TreeAdminRestoreRequest
+        {
+            TreeId = "orders",
+            BackupId = "bk-1",
+            OperationId = "restore-1",
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TreeId, Is.EqualTo("orders"));
+            Assert.That(copy.BackupId, Is.EqualTo("bk-1"));
+            Assert.That(copy.OperationId, Is.EqualTo("restore-1"));
+        });
+    }
+
+    [Test]
+    public void TreeAdminRestoreSetRequest_round_trips()
+    {
+        Assert.That(RoundTrip(new TreeAdminRestoreSetRequest { SetId = "nightly" }).SetId, Is.EqualTo("nightly"));
+    }
+
+    [Test]
     public void Every_registry_alias_is_unique_and_uses_the_reserved_prefix()
     {
         var aliases = RegistryAliasValues();

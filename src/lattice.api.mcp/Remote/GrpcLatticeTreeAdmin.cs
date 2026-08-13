@@ -171,4 +171,24 @@ internal sealed class GrpcLatticeTreeAdmin : ILatticeTreeAdmin
         string operationId,
         CancellationToken cancellationToken = default)
         => _client.CommitBulkLoadAsync(treeId, operationId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TreeRestoreResult> RestoreTreeAsync(
+        string treeId,
+        string backupId,
+        string? operationId = null,
+        CancellationToken cancellationToken = default)
+        => _client.RestoreTreeAsync(treeId, backupId, operationId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<TreeRestoreResult>> RestoreTreeSetAsync(
+        string setId,
+        CancellationToken cancellationToken = default)
+        => _client.RestoreTreeSetAsync(setId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task RevertTreeRestoreAsync(
+        TreeRestoreResult restore,
+        CancellationToken cancellationToken = default)
+        => _client.RevertTreeRestoreAsync(restore, cancellationToken);
 }

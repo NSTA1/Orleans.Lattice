@@ -75,6 +75,9 @@ public sealed class TreeAdminToolGroupTests
         "lattice_treeadmin_bulk_load_begin",
         "lattice_treeadmin_bulk_load_append",
         "lattice_treeadmin_bulk_load_commit",
+        "lattice_treeadmin_tree_restore",
+        "lattice_treeadmin_tree_restore_set",
+        "lattice_treeadmin_tree_restore_revert",
     };
 
     /// <summary>The read-only tools always contributed regardless of any opt-in.</summary>
@@ -295,6 +298,9 @@ public sealed class TreeAdminToolGroupTests
             Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_bulk_load_begin"), "operationId"), Is.True);
             Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_bulk_load_append"), "chunkIndex"), Is.True);
             Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_bulk_load_append"), "entries"), Is.True);
+            Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_tree_restore"), "backupId"), Is.True);
+            Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_tree_restore_set"), "setId"), Is.True);
+            Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_tree_restore_revert"), "targetTreeId"), Is.True);
         });
     }
 

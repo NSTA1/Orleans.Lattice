@@ -92,6 +92,15 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
     /// <summary>Closes a bulk-load session and reports its summary. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
     public abstract Task<TreeBulkLoadResult> CommitBulkLoad(TreeAdminBulkLoadSessionRequest request, ServerCallContext context);
 
+    /// <summary>Restores a captured backup into a tree. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
+    public abstract Task<TreeRestoreResult> RestoreTree(TreeAdminRestoreRequest request, ServerCallContext context);
+
+    /// <summary>Restores a captured backup set as a single unit. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
+    public abstract Task<TreeRestoreSetResult> RestoreTreeSet(TreeAdminRestoreSetRequest request, ServerCallContext context);
+
+    /// <summary>Reverts a shadow-cutover restore, echoing back the result. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
+    public abstract Task<TreeRestoreResult> RevertTreeRestore(TreeRestoreResult request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at startup
     /// with <paramref name="serviceImpl"/> set to <see langword="null"/> to record
@@ -133,6 +142,9 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
             binder.AddMethod(methods.BeginBulkLoad, (UnaryServerMethod<TreeAdminBulkLoadSessionRequest, TreeBulkLoadSession>?)null);
             binder.AddMethod(methods.AppendBulkLoad, (UnaryServerMethod<TreeAdminBulkLoadAppendRequest, TreeBulkLoadChunkAck>?)null);
             binder.AddMethod(methods.CommitBulkLoad, (UnaryServerMethod<TreeAdminBulkLoadSessionRequest, TreeBulkLoadResult>?)null);
+            binder.AddMethod(methods.RestoreTree, (UnaryServerMethod<TreeAdminRestoreRequest, TreeRestoreResult>?)null);
+            binder.AddMethod(methods.RestoreTreeSet, (UnaryServerMethod<TreeAdminRestoreSetRequest, TreeRestoreSetResult>?)null);
+            binder.AddMethod(methods.RevertTreeRestore, (UnaryServerMethod<TreeRestoreResult, TreeRestoreResult>?)null);
             return;
         }
 
@@ -158,6 +170,9 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
         binder.AddMethod(methods.BeginBulkLoad, new UnaryServerMethod<TreeAdminBulkLoadSessionRequest, TreeBulkLoadSession>(serviceImpl.BeginBulkLoad));
         binder.AddMethod(methods.AppendBulkLoad, new UnaryServerMethod<TreeAdminBulkLoadAppendRequest, TreeBulkLoadChunkAck>(serviceImpl.AppendBulkLoad));
         binder.AddMethod(methods.CommitBulkLoad, new UnaryServerMethod<TreeAdminBulkLoadSessionRequest, TreeBulkLoadResult>(serviceImpl.CommitBulkLoad));
+        binder.AddMethod(methods.RestoreTree, new UnaryServerMethod<TreeAdminRestoreRequest, TreeRestoreResult>(serviceImpl.RestoreTree));
+        binder.AddMethod(methods.RestoreTreeSet, new UnaryServerMethod<TreeAdminRestoreSetRequest, TreeRestoreSetResult>(serviceImpl.RestoreTreeSet));
+        binder.AddMethod(methods.RevertTreeRestore, new UnaryServerMethod<TreeRestoreResult, TreeRestoreResult>(serviceImpl.RevertTreeRestore));
     }
 }
 
@@ -302,6 +317,25 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
     /// <inheritdoc />
     public override Task<TreeBulkLoadResult> CommitBulkLoad(TreeAdminBulkLoadSessionRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (control, req, ct) => control.CommitBulkLoadAsync(req.TreeId, req.OperationId, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeRestoreResult> RestoreTree(TreeAdminRestoreRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.RestoreTreeAsync(req.TreeId, req.BackupId, req.OperationId, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeRestoreSetResult> RestoreTreeSet(TreeAdminRestoreSetRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static async (control, req, ct) =>
+            new TreeRestoreSetResult { Results = await control.RestoreTreeSetAsync(req.SetId, ct).ConfigureAwait(false) });
+
+    /// <inheritdoc />
+    public override Task<TreeRestoreResult> RevertTreeRestore(TreeRestoreResult request, ServerCallContext context)
+        => InvokeAsync(request, context, static async (control, req, ct) =>
+        {
+            // The facade revert is void; echo the reverted result back as the
+            // completion ack so the unary RPC carries a typed response.
+            await control.RevertTreeRestoreAsync(req, ct).ConfigureAwait(false);
+            return req;
+        });
 
     /// <inheritdoc />
     public override Task<AuthSchemeAdvertisement> GetAuthScheme(AuthSchemeAdvertisementRequest request, ServerCallContext context)

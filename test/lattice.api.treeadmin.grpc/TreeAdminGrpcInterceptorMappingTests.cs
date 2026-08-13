@@ -195,6 +195,46 @@ public sealed class TreeAdminGrpcInterceptorMappingTests
     }
 
     [Test]
+    public void DescribeCall_decodes_the_target_tree_from_the_restore_request_shapes()
+    {
+        // The single-tree restore verbs share the Unknown operation posture of the
+        // other whole-tree lifecycle verbs (real enforcement is in the facade), but
+        // their target tree is still decoded so a per-tree authorizer sees it. The
+        // set-level restore targets no single tree, so it decodes to null.
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.RestoreTreeMethodName),
+                new TreeAdminRestoreRequest { TreeId = "orders", BackupId = "bk", OperationId = "op" }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, "orders")));
+
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.RevertTreeRestoreMethodName),
+                new TreeRestoreResult { TargetTreeId = "orders", BackupId = "bk", OperationId = "op", Mode = TreeRestoreMode.ShadowCutover, ManifestChain = [], EntriesApplied = 0 }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, "orders")));
+
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.RestoreTreeSetMethodName),
+                new TreeAdminRestoreSetRequest { SetId = "nightly" }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, (string?)null)));
+        });
+    }
+
+    [Test]
+    public void IsUnauthenticatedMethod_does_not_exempt_the_restore_rpcs()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.IsUnauthenticatedMethod(
+                Method(LatticeTreeAdminGrpcMethods.RestoreTreeMethodName)), Is.False);
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.IsUnauthenticatedMethod(
+                Method(LatticeTreeAdminGrpcMethods.RestoreTreeSetMethodName)), Is.False);
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.IsUnauthenticatedMethod(
+                Method(LatticeTreeAdminGrpcMethods.RevertTreeRestoreMethodName)), Is.False);
+        });
+    }
+
+    [Test]
     public void DescribeCall_unknown_request_shape_has_no_target()
     {
         var (_, targetId) = LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
