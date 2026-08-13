@@ -510,7 +510,20 @@ public static class LatticeServiceCollectionExtensions
             builder.Services.Remove(coreDefaultReporter);
         }
 
-        builder.Services.TryAddSingleton<ILeafCursorReporter, LeafCursorReporter>();
+        // Inject the keyed durable grain-storage provider so the reporter can
+        // fall back to a direct-store pin write when its IWalMaterialiserPinGrain
+        // call is rejected during full-silo graceful shutdown (issue #1464). The
+        // provider is resolved as an optional keyed service: a host without the
+        // "lattice" storage provider (a pre-WAL / bare-IServiceProvider setup)
+        // simply gets null and the reporter degrades to its prior swallow-and-log
+        // behaviour. TryAdd still lets a host-supplied reporter win.
+        builder.Services.TryAddSingleton<ILeafCursorReporter>(sp =>
+            new LeafCursorReporter(
+                sp.GetRequiredService<IWalCursorRegistry>(),
+                sp.GetService<IGrainFactory>(),
+                sp.GetService<IOptionsMonitor<LatticeOptions>>(),
+                sp.GetService<ILogger<LeafCursorReporter>>(),
+                sp.GetKeyedService<Orleans.Storage.IGrainStorage>(LatticeOptions.StorageProviderName)));
 
         // Reusable per-shard WAL tailing loop shared by every log consumer
         // (materialised views, the replication producer, future change-feed /

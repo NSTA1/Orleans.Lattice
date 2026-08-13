@@ -21,6 +21,16 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 internal sealed class WalMaterialiserPinState
 {
     /// <summary>
+    /// Durable grain-state name under which the pin store is persisted (in the
+    /// <see cref="LatticeOptions.StorageProviderName"/> provider). Defined once
+    /// here so the <see cref="WalMaterialiserPinGrain"/>'s
+    /// <c>[PersistentState]</c> attribute and the
+    /// <see cref="LeafCursorReporter"/>'s teardown direct-store fallback address
+    /// the identical durable slot.
+    /// </summary>
+    public const string StateName = "wal-materialiser-pins";
+
+    /// <summary>
     /// The durable leaf-materialiser pins for this tree, keyed by the
     /// leaf's stable consumer id. The stored value is each leaf's highest
     /// durable checkpoint frontier; <see cref="HybridLogicalClock.Zero"/>
