@@ -236,6 +236,15 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "authorized by the readability of its backing membership tree (tag-{indexName}), which the facade "
                 + "resolves authoritatively; the caller supplies only the index name. A pure read with no side "
                 + "effects. Requires whole-tree read authority over the index's backing tree. Read-only."),
+            Read(services, TreeAdminLifecycleToolHandlers.GetHistoryRetentionAsync, "lattice_treeadmin_retention_get",
+                "Read a tree's durable-history retention policy",
+                "Reads a tree's effective durable-history retention policy: the resolved mode applied to LWW "
+                + "(last-writer-wins) value bytes (MetadataOnly stores a revision's content hash and byte length only; "
+                + "FullValue stores the value bytes; Hybrid stores bytes for recent revisions and metadata for older "
+                + "ones) and the age-bound window in which a revision row is retained (zero means revisions do not "
+                + "expire by age). Reflects the persisted per-tree override, falling back to the defaults "
+                + "(MetadataOnly, no age bound) when none is set. A pure read with no side effects. Requires "
+                + "whole-tree read authority. Read-only."),
         };
 
         if (enableSchemaControl)
@@ -461,6 +470,25 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "counts (trees covered, keys scanned, membership rows scanned, orphan rows removed) and discloses no "
                 + "key or value content. Requires whole-tree admin authority over the index's backing tree. "
                 + "Admin-gated and destructive."));
+            tools.Add(Mutate(services, TreeAdminLifecycleToolHandlers.TriggerShardCompactionAsync, "lattice_treeadmin_compaction_trigger",
+                "Trigger tombstone compaction on a shard",
+                "Triggers an out-of-cycle tombstone-compaction pass on one physical shard of a tree, bypassing the "
+                + "background policy's per-shard cooldown. Compaction reaps only tombstones (deleted-key markers) and "
+                + "TTL-expired entries and never touches live data, so it is mutating but non-destructive to readable "
+                + "state; it is online (no tree pause), idempotent, and reminder-durable. Returns whether the "
+                + "coordinator accepted the pass: false when compaction is disabled for the tree (an infinite "
+                + "tombstone grace period) or a pass was already in flight for the shard. Rejected for a reserved "
+                + "system tree id. Requires whole-tree admin authority. Admin-gated."));
+            tools.Add(Mutate(services, TreeAdminLifecycleToolHandlers.SetHistoryRetentionAsync, "lattice_treeadmin_retention_set",
+                "Set a tree's durable-history retention policy",
+                "Sets or clears a tree's durable-history retention policy - the mode applied to LWW (last-writer-wins) "
+                + "value bytes and the age-bound window after which a revision row expires. Each argument is "
+                + "independent: a null mode clears the mode override (falling back to MetadataOnly) and a null window "
+                + "clears the age bound. Configuration only: it never trips a view rebuild and is absorbed forward "
+                + "(already-written revision rows keep their stamped shape; new rows adopt the new policy), so it is "
+                + "mutating but non-destructive. Returns the effective policy read back after the change. Rejected for "
+                + "a reserved system tree id or a non-positive window. Requires whole-tree admin authority. "
+                + "Admin-gated."));
         }
 
         return tools;
@@ -503,6 +531,26 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 ReadOnly = false,
                 Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool Mutate(
+        IServiceProvider services,
+        Delegate handler,
+        string name,
+        string title,
+        string description)
+        => McpServerTool.Create(
+            handler,
+            new McpServerToolCreateOptions
+            {
+                Services = services,
+                Name = name,
+                Title = title,
+                Description = description,
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                ReadOnly = false,
+                Destructive = false,
                 UseStructuredContent = true,
             });
 }

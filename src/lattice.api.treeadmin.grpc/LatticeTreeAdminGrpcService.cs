@@ -161,6 +161,15 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
     /// <summary>Reconciles a tag index on the wrapped facade.</summary>
     public abstract Task<TreeTagReconcileReport> ReconcileTagIndex(TreeAdminTagIndexRequest request, ServerCallContext context);
 
+    /// <summary>Triggers a shard tombstone-compaction pass on the wrapped facade.</summary>
+    public abstract Task<TreeCompactionTriggerResult> TriggerShardCompaction(TreeAdminShardRequest request, ServerCallContext context);
+
+    /// <summary>Reads a tree's durable-history retention policy from the wrapped facade.</summary>
+    public abstract Task<TreeHistoryRetention> GetHistoryRetention(TreeAdminTreeRequest request, ServerCallContext context);
+
+    /// <summary>Sets a tree's durable-history retention policy on the wrapped facade.</summary>
+    public abstract Task<TreeHistoryRetention> SetHistoryRetention(TreeAdminSetRetentionRequest request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at startup
     /// with <paramref name="serviceImpl"/> set to <see langword="null"/> to record
@@ -225,6 +234,9 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
         binder.AddMethod(methods.ListTagIndexes, (UnaryServerMethod<TreeAdminTagIndexListRequest, TreeTagIndexCatalog>?)null);
         binder.AddMethod(methods.GetTagIndexStatus, (UnaryServerMethod<TreeAdminTagIndexRequest, TreeTagIndexStatus>?)null);
         binder.AddMethod(methods.ReconcileTagIndex, (UnaryServerMethod<TreeAdminTagIndexRequest, TreeTagReconcileReport>?)null);
+        binder.AddMethod(methods.TriggerShardCompaction, (UnaryServerMethod<TreeAdminShardRequest, TreeCompactionTriggerResult>?)null);
+        binder.AddMethod(methods.GetHistoryRetention, (UnaryServerMethod<TreeAdminTreeRequest, TreeHistoryRetention>?)null);
+        binder.AddMethod(methods.SetHistoryRetention, (UnaryServerMethod<TreeAdminSetRetentionRequest, TreeHistoryRetention>?)null);
             return;
         }
 
@@ -273,6 +285,9 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
         binder.AddMethod(methods.ListTagIndexes, new UnaryServerMethod<TreeAdminTagIndexListRequest, TreeTagIndexCatalog>(serviceImpl.ListTagIndexes));
         binder.AddMethod(methods.GetTagIndexStatus, new UnaryServerMethod<TreeAdminTagIndexRequest, TreeTagIndexStatus>(serviceImpl.GetTagIndexStatus));
         binder.AddMethod(methods.ReconcileTagIndex, new UnaryServerMethod<TreeAdminTagIndexRequest, TreeTagReconcileReport>(serviceImpl.ReconcileTagIndex));
+        binder.AddMethod(methods.TriggerShardCompaction, new UnaryServerMethod<TreeAdminShardRequest, TreeCompactionTriggerResult>(serviceImpl.TriggerShardCompaction));
+        binder.AddMethod(methods.GetHistoryRetention, new UnaryServerMethod<TreeAdminTreeRequest, TreeHistoryRetention>(serviceImpl.GetHistoryRetention));
+        binder.AddMethod(methods.SetHistoryRetention, new UnaryServerMethod<TreeAdminSetRetentionRequest, TreeHistoryRetention>(serviceImpl.SetHistoryRetention));
     }
 }
 
@@ -522,6 +537,18 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
     /// <inheritdoc />
     public override Task<TreeTagReconcileReport> ReconcileTagIndex(TreeAdminTagIndexRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (control, req, ct) => control.ReconcileTagIndexAsync(req.IndexName, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeCompactionTriggerResult> TriggerShardCompaction(TreeAdminShardRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.TriggerShardCompactionAsync(req.TreeId, req.ShardIndex, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeHistoryRetention> GetHistoryRetention(TreeAdminTreeRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.GetHistoryRetentionAsync(req.TreeId, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeHistoryRetention> SetHistoryRetention(TreeAdminSetRetentionRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.SetHistoryRetentionAsync(req.TreeId, req.Mode, req.Window, ct));
 
     /// <inheritdoc />
     public override Task<AuthSchemeAdvertisement> GetAuthScheme(AuthSchemeAdvertisementRequest request, ServerCallContext context)

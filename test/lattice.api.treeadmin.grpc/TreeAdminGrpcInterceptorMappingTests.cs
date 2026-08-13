@@ -241,9 +241,33 @@ public sealed class TreeAdminGrpcInterceptorMappingTests
     }
 
     [Test]
+    public void DescribeCall_decodes_the_target_tree_from_the_compaction_and_retention_request_shapes()
+    {        // The resize trigger, undo, and status read share the Unknown operation
+        // Compaction trigger and retention set/read share the Unknown operation posture
+        // of the other whole-tree lifecycle verbs (real enforcement is in the facade),
+        // but their target tree is still decoded so a per-tree authorizer sees it.
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.TriggerShardCompactionMethodName),
+                new TreeAdminShardRequest { TreeId = "orders", ShardIndex = 2 }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, "orders")));
+
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.GetHistoryRetentionMethodName),
+                new TreeAdminTreeRequest { TreeId = "orders" }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, "orders")));
+
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.SetHistoryRetentionMethodName),
+                new TreeAdminSetRetentionRequest { TreeId = "orders", Mode = TreeHistoryRetentionMode.FullValue, Window = TimeSpan.FromDays(1) }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, "orders")));
+        });
+    }
+
+    [Test]
     public void DescribeCall_decodes_the_target_tree_from_the_resize_request_shapes()
-    {
-        // The resize trigger, undo, and status read share the Unknown operation
+    {        // The resize trigger, undo, and status read share the Unknown operation
         // posture of the other whole-tree lifecycle verbs (real enforcement is in the
         // facade), but their target tree is still decoded so a per-tree authorizer sees it.
         Assert.Multiple(() =>
