@@ -464,6 +464,166 @@ public sealed class TreeAdminGrpcDtoSerializationTests
     }
 
     [Test]
+    public void TreeAdminWalMovePlanRequest_round_trips()
+    {
+        var copy = RoundTrip(new TreeAdminWalMovePlanRequest
+        {
+            TreeId = "orders",
+            Partition = 3,
+            TargetProviderKey = "wal-secondary",
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TreeId, Is.EqualTo("orders"));
+            Assert.That(copy.Partition, Is.EqualTo(3));
+            Assert.That(copy.TargetProviderKey, Is.EqualTo("wal-secondary"));
+        });
+    }
+
+    [Test]
+    public void TreeAdminWalMoveExecuteRequest_round_trips_with_options()
+    {
+        var copy = RoundTrip(new TreeAdminWalMoveExecuteRequest
+        {
+            TreeId = "orders",
+            Partition = 1,
+            TargetProviderKey = "wal-secondary",
+            Options = new TreeWalMoveOptions
+            {
+                QuiesceLeaseSeconds = 45,
+                CopyPageSize = 128,
+                DisableVerifyAfterCopy = true,
+            },
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TreeId, Is.EqualTo("orders"));
+            Assert.That(copy.Partition, Is.EqualTo(1));
+            Assert.That(copy.TargetProviderKey, Is.EqualTo("wal-secondary"));
+            Assert.That(copy.Options!.Value.QuiesceLeaseSeconds, Is.EqualTo(45));
+            Assert.That(copy.Options!.Value.CopyPageSize, Is.EqualTo(128));
+            Assert.That(copy.Options!.Value.DisableVerifyAfterCopy, Is.True);
+        });
+    }
+
+    [Test]
+    public void TreeAdminWalReclaimRequest_round_trips()
+    {
+        var copy = RoundTrip(new TreeAdminWalReclaimRequest
+        {
+            TreeId = "orders",
+            Partition = 2,
+            SourceProviderKey = "wal-primary",
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TreeId, Is.EqualTo("orders"));
+            Assert.That(copy.Partition, Is.EqualTo(2));
+            Assert.That(copy.SourceProviderKey, Is.EqualTo("wal-primary"));
+        });
+    }
+
+    [Test]
+    public void TreeWalPlacement_response_round_trips_through_the_marshaller()
+    {
+        var copy = RoundTrip(new TreeWalPlacement
+        {
+            TreeId = "orders",
+            Version = 7,
+            DefaultProviderKey = "wal-primary",
+            Partitions = System.Collections.Immutable.ImmutableArray.Create(
+                new TreeWalPartitionPlacement { Partition = 0, ProviderKey = "wal-primary", ResolvableOnThisSilo = true },
+                new TreeWalPartitionPlacement { Partition = 1, ProviderKey = "wal-secondary", ResolvableOnThisSilo = false }),
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TreeId, Is.EqualTo("orders"));
+            Assert.That(copy.Version, Is.EqualTo(7));
+            Assert.That(copy.Partitions, Has.Length.EqualTo(2));
+            Assert.That(copy.Partitions[1].ProviderKey, Is.EqualTo("wal-secondary"));
+            Assert.That(copy.Partitions[1].ResolvableOnThisSilo, Is.False);
+        });
+    }
+
+    [Test]
+    public void TreeWalPlacementAudit_response_round_trips_through_the_marshaller()
+    {
+        var copy = RoundTrip(new TreeWalPlacementAudit
+        {
+            TreeId = "orders",
+            Version = 3,
+            PartitionCount = 1,
+            Partitions = System.Collections.Immutable.ImmutableArray.Create(
+                new TreeWalPartitionPlacement { Partition = 0, ProviderKey = "wal-primary", ResolvableOnThisSilo = true }),
+            AllResolvableOnThisSilo = false,
+            KnownProviderKeys = System.Collections.Immutable.ImmutableArray.Create("wal-primary", "wal-secondary"),
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.PartitionCount, Is.EqualTo(1));
+            Assert.That(copy.AllResolvableOnThisSilo, Is.False);
+            Assert.That(copy.KnownProviderKeys, Is.EquivalentTo(new[] { "wal-primary", "wal-secondary" }));
+        });
+    }
+
+    [Test]
+    public void TreeWalMovePlan_response_round_trips_through_the_marshaller()
+    {
+        var copy = RoundTrip(new TreeWalMovePlan
+        {
+            TreeId = "orders",
+            Partition = 1,
+            FromProviderKey = "wal-primary",
+            ToProviderKey = "wal-secondary",
+            PlacementVersion = 9,
+            SourceLowestOffset = 0,
+            SourceHighestOffset = 41,
+            EntriesToCopy = 42,
+            TargetResolvableOnThisSilo = true,
+            AlreadyAtTarget = false,
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.EntriesToCopy, Is.EqualTo(42));
+            Assert.That(copy.PlacementVersion, Is.EqualTo(9));
+            Assert.That(copy.TargetResolvableOnThisSilo, Is.True);
+        });
+    }
+
+    [Test]
+    public void TreeWalMoveReceipt_response_round_trips_through_the_marshaller()
+    {
+        var copy = RoundTrip(new TreeWalMoveReceipt
+        {
+            TreeId = "orders",
+            Partition = 1,
+            FromProviderKey = "wal-primary",
+            ToProviderKey = "wal-secondary",
+            PreviousPlacementVersion = 4,
+            NewPlacementVersion = 5,
+            CopiedFromOffset = 0,
+            CopiedThroughOffset = 41,
+            SourceHighestOffset = 41,
+            TargetHighestOffset = 41,
+            SourceRetained = true,
+            Outcome = TreeWalMoveOutcome.Moved,
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.NewPlacementVersion, Is.EqualTo(5));
+            Assert.That(copy.SourceRetained, Is.True);
+            Assert.That(copy.Outcome, Is.EqualTo(TreeWalMoveOutcome.Moved));
+        });
+    }
+
+    [Test]
     public void Every_registry_alias_is_unique_and_uses_the_reserved_prefix()
     {
         var aliases = RegistryAliasValues();

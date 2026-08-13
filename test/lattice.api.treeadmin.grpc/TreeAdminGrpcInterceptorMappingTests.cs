@@ -298,6 +298,55 @@ public sealed class TreeAdminGrpcInterceptorMappingTests
     }
 
     [Test]
+    public void DescribeCall_decodes_the_target_tree_from_the_wal_request_shapes()
+    {
+        // The WAL placement/move verbs share the Unknown operation posture of the other
+        // whole-tree lifecycle verbs (real enforcement is in the facade), but their target
+        // tree is still decoded so a per-tree authorizer sees it.
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.GetWalPlacementMethodName),
+                new TreeAdminTreeRequest { TreeId = "orders" }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, "orders")));
+
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.AuditWalPlacementMethodName),
+                new TreeAdminTreeRequest { TreeId = "orders" }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, "orders")));
+
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.PlanWalMoveMethodName),
+                new TreeAdminWalMovePlanRequest { TreeId = "orders", Partition = 0, TargetProviderKey = "wal-secondary" }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, "orders")));
+
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.ExecuteWalMoveMethodName),
+                new TreeAdminWalMoveExecuteRequest { TreeId = "orders", Partition = 0, TargetProviderKey = "wal-secondary" }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, "orders")));
+
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.ReclaimMovedWalSourceMethodName),
+                new TreeAdminWalReclaimRequest { TreeId = "orders", Partition = 0, SourceProviderKey = "wal-primary" }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, "orders")));
+        });
+    }
+
+    [Test]
+    public void IsUnauthenticatedMethod_does_not_exempt_the_wal_rpcs()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.IsUnauthenticatedMethod(
+                Method(LatticeTreeAdminGrpcMethods.GetWalPlacementMethodName)), Is.False);
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.IsUnauthenticatedMethod(
+                Method(LatticeTreeAdminGrpcMethods.ExecuteWalMoveMethodName)), Is.False);
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.IsUnauthenticatedMethod(
+                Method(LatticeTreeAdminGrpcMethods.ReclaimMovedWalSourceMethodName)), Is.False);
+        });
+    }
+
+    [Test]
     public void IsUnauthenticatedMethod_does_not_exempt_the_reshard_rpcs()
     {
         Assert.Multiple(() =>

@@ -122,6 +122,21 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary read-only snapshot-status RPC method name.</summary>
     public const string GetSnapshotStatusMethodName = "GetSnapshotStatus";
 
+    /// <summary>The unary read-only WAL placement inspection RPC method name.</summary>
+    public const string GetWalPlacementMethodName = "GetWalPlacement";
+
+    /// <summary>The unary read-only WAL placement audit RPC method name.</summary>
+    public const string AuditWalPlacementMethodName = "AuditWalPlacement";
+
+    /// <summary>The unary read-only WAL move plan RPC method name.</summary>
+    public const string PlanWalMoveMethodName = "PlanWalMove";
+
+    /// <summary>The unary WAL move execute trigger RPC method name.</summary>
+    public const string ExecuteWalMoveMethodName = "ExecuteWalMove";
+
+    /// <summary>The unary WAL move reclaim RPC method name.</summary>
+    public const string ReclaimMovedWalSourceMethodName = "ReclaimMovedWalSource";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeTreeAdminGrpcMethods(
         Serializer<TreeAdminTreeRequest> treeRequestSerializer,
@@ -161,7 +176,14 @@ internal sealed class LatticeTreeAdminGrpcMethods
         Serializer<TreeAdminResizeRequest> resizeRequestSerializer,
         Serializer<TreeResizeStatus> resizeStatusSerializer,
         Serializer<TreeAdminSnapshotRequest> snapshotRequestSerializer,
-        Serializer<TreeSnapshotStatus> snapshotStatusSerializer)
+        Serializer<TreeSnapshotStatus> snapshotStatusSerializer,
+        Serializer<TreeAdminWalMovePlanRequest> walMovePlanRequestSerializer,
+        Serializer<TreeAdminWalMoveExecuteRequest> walMoveExecuteRequestSerializer,
+        Serializer<TreeAdminWalReclaimRequest> walReclaimRequestSerializer,
+        Serializer<TreeWalPlacement> walPlacementSerializer,
+        Serializer<TreeWalPlacementAudit> walPlacementAuditSerializer,
+        Serializer<TreeWalMovePlan> walMovePlanSerializer,
+        Serializer<TreeWalMoveReceipt> walMoveReceiptSerializer)
     {
         ArgumentNullException.ThrowIfNull(treeRequestSerializer);
         ArgumentNullException.ThrowIfNull(capabilitiesSerializer);
@@ -201,6 +223,13 @@ internal sealed class LatticeTreeAdminGrpcMethods
         ArgumentNullException.ThrowIfNull(resizeStatusSerializer);
         ArgumentNullException.ThrowIfNull(snapshotRequestSerializer);
         ArgumentNullException.ThrowIfNull(snapshotStatusSerializer);
+        ArgumentNullException.ThrowIfNull(walMovePlanRequestSerializer);
+        ArgumentNullException.ThrowIfNull(walMoveExecuteRequestSerializer);
+        ArgumentNullException.ThrowIfNull(walReclaimRequestSerializer);
+        ArgumentNullException.ThrowIfNull(walPlacementSerializer);
+        ArgumentNullException.ThrowIfNull(walPlacementAuditSerializer);
+        ArgumentNullException.ThrowIfNull(walMovePlanSerializer);
+        ArgumentNullException.ThrowIfNull(walMoveReceiptSerializer);
 
         ProbeCapabilities = new Method<TreeAdminTreeRequest, LatticeTreeAdminCapabilities>(
             type: MethodType.Unary,
@@ -425,6 +454,41 @@ internal sealed class LatticeTreeAdminGrpcMethods
             name: GetSnapshotStatusMethodName,
             requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(treeRequestSerializer),
             responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(snapshotStatusSerializer));
+
+        GetWalPlacement = new Method<TreeAdminTreeRequest, TreeWalPlacement>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: GetWalPlacementMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(treeRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(walPlacementSerializer));
+
+        AuditWalPlacement = new Method<TreeAdminTreeRequest, TreeWalPlacementAudit>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: AuditWalPlacementMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(treeRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(walPlacementAuditSerializer));
+
+        PlanWalMove = new Method<TreeAdminWalMovePlanRequest, TreeWalMovePlan>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: PlanWalMoveMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(walMovePlanRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(walMovePlanSerializer));
+
+        ExecuteWalMove = new Method<TreeAdminWalMoveExecuteRequest, TreeWalMoveReceipt>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: ExecuteWalMoveMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(walMoveExecuteRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(walMoveReceiptSerializer));
+
+        ReclaimMovedWalSource = new Method<TreeAdminWalReclaimRequest, TreeWalMoveReceipt>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: ReclaimMovedWalSourceMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(walReclaimRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(walMoveReceiptSerializer));
     }
 
     /// <summary>The unary <c>ProbeCapabilities</c> capability-probe RPC.</summary>
@@ -523,6 +587,21 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary <c>GetSnapshotStatus</c> read-only snapshot-status RPC.</summary>
     public Method<TreeAdminTreeRequest, TreeSnapshotStatus> GetSnapshotStatus { get; }
 
+    /// <summary>The unary <c>GetWalPlacement</c> read-only WAL placement inspection RPC.</summary>
+    public Method<TreeAdminTreeRequest, TreeWalPlacement> GetWalPlacement { get; }
+
+    /// <summary>The unary <c>AuditWalPlacement</c> read-only WAL placement audit RPC.</summary>
+    public Method<TreeAdminTreeRequest, TreeWalPlacementAudit> AuditWalPlacement { get; }
+
+    /// <summary>The unary <c>PlanWalMove</c> read-only WAL move plan RPC.</summary>
+    public Method<TreeAdminWalMovePlanRequest, TreeWalMovePlan> PlanWalMove { get; }
+
+    /// <summary>The unary <c>ExecuteWalMove</c> WAL move execute trigger RPC.</summary>
+    public Method<TreeAdminWalMoveExecuteRequest, TreeWalMoveReceipt> ExecuteWalMove { get; }
+
+    /// <summary>The unary <c>ReclaimMovedWalSource</c> WAL move reclaim RPC.</summary>
+    public Method<TreeAdminWalReclaimRequest, TreeWalMoveReceipt> ReclaimMovedWalSource { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out of
     /// <paramref name="serializerProvider"/>. Shared by the server-side DI factory
@@ -570,7 +649,14 @@ internal sealed class LatticeTreeAdminGrpcMethods
             serializerProvider.GetRequiredService<Serializer<TreeAdminResizeRequest>>(),
             serializerProvider.GetRequiredService<Serializer<TreeResizeStatus>>(),
             serializerProvider.GetRequiredService<Serializer<TreeAdminSnapshotRequest>>(),
-            serializerProvider.GetRequiredService<Serializer<TreeSnapshotStatus>>());
+            serializerProvider.GetRequiredService<Serializer<TreeSnapshotStatus>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAdminWalMovePlanRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAdminWalMoveExecuteRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAdminWalReclaimRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeWalPlacement>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeWalPlacementAudit>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeWalMovePlan>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeWalMoveReceipt>>());
     }
 }
 

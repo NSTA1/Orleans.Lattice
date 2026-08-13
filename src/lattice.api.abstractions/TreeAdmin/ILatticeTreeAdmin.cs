@@ -620,4 +620,109 @@ public interface ILatticeTreeAdmin
     Task<TreeSnapshotStatus> GetSnapshotStatusAsync(
         string treeId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Inspects the durable <b>WAL placement</b> of <paramref name="treeId"/> - which
+    /// storage provider key backs each WAL partition, plus the placement version and
+    /// per-partition resolvability on the reporting silo - after authorizing whole-tree
+    /// <see cref="LatticeOperation.Read"/> fail-closed. A pure read with no side effects.
+    /// </summary>
+    /// <param name="treeId">The tree to inspect. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tree's WAL partition placement.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the tree.</exception>
+    Task<TreeWalPlacement> GetWalPlacementAsync(
+        string treeId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Audits the WAL placement of <paramref name="treeId"/> against the resolving
+    /// silo's WAL storage provider catalog, surfacing any partition pinned to a
+    /// provider key the silo cannot resolve, after authorizing whole-tree
+    /// <see cref="LatticeOperation.Read"/> fail-closed. A pure read with no side effects.
+    /// </summary>
+    /// <param name="treeId">The tree to audit. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tree's WAL placement audit, including the silo's known provider keys.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the tree.</exception>
+    Task<TreeWalPlacementAudit> AuditWalPlacementAsync(
+        string treeId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Computes a read-only <b>preview</b> of moving WAL partition
+    /// <paramref name="partition"/> of <paramref name="treeId"/> to
+    /// <paramref name="targetProviderKey"/> - the range that would be copied and
+    /// whether the target key resolves - without quiescing the partition or changing
+    /// any placement, after authorizing whole-tree <see cref="LatticeOperation.Read"/>
+    /// fail-closed. A pure read with no side effects.
+    /// </summary>
+    /// <param name="treeId">The tree whose partition would be moved. Must not be <c>null</c> or empty.</param>
+    /// <param name="partition">The WAL partition index to preview. Must be in range for the tree.</param>
+    /// <param name="targetProviderKey">The target storage provider key. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The read-only move plan.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="targetProviderKey"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="partition"/> is out of range for the tree.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the tree.</exception>
+    Task<TreeWalMovePlan> PlanWalMoveAsync(
+        string treeId,
+        int partition,
+        string targetProviderKey,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// <b>Executes an online move</b> of WAL partition <paramref name="partition"/> of
+    /// <paramref name="treeId"/> to <paramref name="targetProviderKey"/>, after
+    /// authorizing the whole-tree <see cref="LatticeOperation.TreeLifecycle"/> capability
+    /// fail-closed. Only the target partition is briefly quiesced while its tail is
+    /// copied and the placement pin is atomically flipped; the source tail is retained
+    /// (never trimmed by the move) until an explicit
+    /// <see cref="ReclaimMovedWalSourceAsync"/> call, so the move is revertible until
+    /// reclaimed. Idempotent: a partition already pinned to the target is an idempotent
+    /// no-copy repair. Reserved system tree ids are rejected.
+    /// </summary>
+    /// <param name="treeId">The tree whose partition to move. Must not be <c>null</c>, empty, or reserved.</param>
+    /// <param name="partition">The WAL partition index to move. Must be in range for the tree.</param>
+    /// <param name="targetProviderKey">The target storage provider key. Must not be <c>null</c> or empty, and must resolve on the executing silo.</param>
+    /// <param name="options">Optional move tunables; <c>null</c> takes the conventional defaults.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The move receipt, recording the copied range and the new placement version.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="targetProviderKey"/> is <c>null</c>, empty, or reserved.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="partition"/> is out of range for the tree.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the tree-lifecycle capability.</exception>
+    Task<TreeWalMoveReceipt> ExecuteWalMoveAsync(
+        string treeId,
+        int partition,
+        string targetProviderKey,
+        TreeWalMoveOptions? options = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// <b>Reclaims</b> the orphaned source tail left behind by a completed
+    /// <see cref="ExecuteWalMoveAsync"/> - discarding partition
+    /// <paramref name="partition"/>'s retained log on
+    /// <paramref name="sourceProviderKey"/> - after authorizing the whole-tree
+    /// <see cref="LatticeOperation.TreeLifecycle"/> capability fail-closed. This is the
+    /// <b>irreversible</b> finalisation step, deliberately separate from the move: once
+    /// reclaimed the move can no longer be reverted by moving the partition back.
+    /// Refused if <paramref name="sourceProviderKey"/> is the partition's live
+    /// placement. Reserved system tree ids are rejected.
+    /// </summary>
+    /// <param name="treeId">The tree whose moved source to reclaim. Must not be <c>null</c>, empty, or reserved.</param>
+    /// <param name="partition">The WAL partition index whose orphaned source to reclaim. Must be in range for the tree.</param>
+    /// <param name="sourceProviderKey">The provider key of the orphaned source tail. Must not be <c>null</c> or empty, and must not be the partition's live placement.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The reclaim receipt.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="sourceProviderKey"/> is <c>null</c>, empty, or reserved.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="partition"/> is out of range for the tree.</exception>
+    /// <exception cref="InvalidOperationException"><paramref name="sourceProviderKey"/> is the partition's live placement.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the tree-lifecycle capability.</exception>
+    Task<TreeWalMoveReceipt> ReclaimMovedWalSourceAsync(
+        string treeId,
+        int partition,
+        string sourceProviderKey,
+        CancellationToken cancellationToken = default);
 }

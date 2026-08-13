@@ -375,6 +375,85 @@ internal static class TreeAdminLifecycleToolHandlers
         return treeAdmin.GetSnapshotStatusAsync(treeId, cancellationToken);
     }
 
+    /// <summary>Inspects a tree's durable WAL placement (which storage provider key backs each WAL partition).</summary>
+    public static Task<TreeWalPlacement> GetWalPlacementAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The tree whose WAL placement to inspect. Must not be null or empty.")]
+        string treeId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        return treeAdmin.GetWalPlacementAsync(treeId, cancellationToken);
+    }
+
+    /// <summary>Audits a tree's WAL placement against the resolving silo's provider catalog, surfacing unresolvable partitions.</summary>
+    public static Task<TreeWalPlacementAudit> AuditWalPlacementAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The tree whose WAL placement to audit. Must not be null or empty.")]
+        string treeId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        return treeAdmin.AuditWalPlacementAsync(treeId, cancellationToken);
+    }
+
+    /// <summary>Previews moving a WAL partition to a target provider key (the range that would be copied), with no side effects.</summary>
+    public static Task<TreeWalMovePlan> PlanWalMoveAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The tree whose WAL partition to preview a move for. Must not be null or empty.")]
+        string treeId,
+        [Description("The WAL partition index to preview. Must be in range for the tree.")]
+        int partition,
+        [Description("The target storage provider key to preview a move to. Must not be null or empty.")]
+        string targetProviderKey,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        return treeAdmin.PlanWalMoveAsync(treeId, partition, targetProviderKey, cancellationToken);
+    }
+
+    /// <summary>Executes an online move of a WAL partition to a target provider key; the source tail is retained until reclaimed.</summary>
+    public static Task<TreeWalMoveReceipt> ExecuteWalMoveAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The tree whose WAL partition to move. Must not be null, empty, or a reserved system tree id.")]
+        string treeId,
+        [Description("The WAL partition index to move. Must be in range for the tree.")]
+        int partition,
+        [Description("The target storage provider key to move the partition to. Must not be null or empty, and must resolve on every silo.")]
+        string targetProviderKey,
+        [Description("Optional quiesce lease in seconds for the fenced cutover. Zero or omitted takes the conventional 30-second default.")]
+        double quiesceLeaseSeconds = 0,
+        [Description("Optional entries copied per page. Zero or omitted takes the conventional 256-entry default.")]
+        int copyPageSize = 0,
+        [Description("Set true to skip verifying the copied target tail before flipping the placement pin. Defaults to false (verify enabled).")]
+        bool disableVerifyAfterCopy = false,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        var options = new TreeWalMoveOptions
+        {
+            QuiesceLeaseSeconds = quiesceLeaseSeconds,
+            CopyPageSize = copyPageSize,
+            DisableVerifyAfterCopy = disableVerifyAfterCopy,
+        };
+        return treeAdmin.ExecuteWalMoveAsync(treeId, partition, targetProviderKey, options, cancellationToken);
+    }
+
+    /// <summary>Reclaims the orphaned source tail left by a completed WAL move; this is the irreversible finalisation step.</summary>
+    public static Task<TreeWalMoveReceipt> ReclaimMovedWalSourceAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The tree whose moved WAL source to reclaim. Must not be null, empty, or a reserved system tree id.")]
+        string treeId,
+        [Description("The WAL partition index whose orphaned source to reclaim. Must be in range for the tree.")]
+        int partition,
+        [Description("The provider key of the orphaned source tail. Must not be null or empty, and must not be the partition's live placement.")]
+        string sourceProviderKey,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        return treeAdmin.ReclaimMovedWalSourceAsync(treeId, partition, sourceProviderKey, cancellationToken);
+    }
+
     private static List<DataEntry> ToDataEntries(IReadOnlyList<DataEntryDto>? entries)
     {
         if (entries is null || entries.Count == 0)

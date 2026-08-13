@@ -502,4 +502,105 @@ public sealed class GrpcLatticeTreeAdminTests
             Assert.That(result.InProgress, Is.False);
         });
     }
+
+    [Test]
+    public async Task GetWalPlacementAsync_forwards_request_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeWalPlacement { TreeId = "orders", Version = 3 });
+
+        var result = await Adapter(invoker).GetWalPlacementAsync("orders");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(((TreeAdminTreeRequest)invoker.LastRequest!).TreeId, Is.EqualTo("orders"));
+            Assert.That(result.Version, Is.EqualTo(3));
+        });
+    }
+
+    [Test]
+    public async Task AuditWalPlacementAsync_forwards_request_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeWalPlacementAudit { TreeId = "orders", PartitionCount = 2 });
+
+        var result = await Adapter(invoker).AuditWalPlacementAsync("orders");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(((TreeAdminTreeRequest)invoker.LastRequest!).TreeId, Is.EqualTo("orders"));
+            Assert.That(result.PartitionCount, Is.EqualTo(2));
+        });
+    }
+
+    [Test]
+    public async Task PlanWalMoveAsync_forwards_request_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeWalMovePlan
+        {
+            TreeId = "orders",
+            Partition = 1,
+            ToProviderKey = "wal-secondary",
+        });
+
+        var result = await Adapter(invoker).PlanWalMoveAsync("orders", 1, "wal-secondary");
+
+        var sent = (TreeAdminWalMovePlanRequest)invoker.LastRequest!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(sent.TreeId, Is.EqualTo("orders"));
+            Assert.That(sent.Partition, Is.EqualTo(1));
+            Assert.That(sent.TargetProviderKey, Is.EqualTo("wal-secondary"));
+            Assert.That(result.ToProviderKey, Is.EqualTo("wal-secondary"));
+        });
+    }
+
+    [Test]
+    public async Task ExecuteWalMoveAsync_forwards_request_with_options_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeWalMoveReceipt
+        {
+            TreeId = "orders",
+            Partition = 1,
+            Outcome = TreeWalMoveOutcome.Moved,
+        });
+
+        var options = new TreeWalMoveOptions
+        {
+            QuiesceLeaseSeconds = 45,
+            CopyPageSize = 128,
+            DisableVerifyAfterCopy = true,
+        };
+        var result = await Adapter(invoker).ExecuteWalMoveAsync("orders", 1, "wal-secondary", options);
+
+        var sent = (TreeAdminWalMoveExecuteRequest)invoker.LastRequest!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(sent.TreeId, Is.EqualTo("orders"));
+            Assert.That(sent.Partition, Is.EqualTo(1));
+            Assert.That(sent.TargetProviderKey, Is.EqualTo("wal-secondary"));
+            Assert.That(sent.Options, Is.EqualTo(options));
+            Assert.That(result.Outcome, Is.EqualTo(TreeWalMoveOutcome.Moved));
+        });
+    }
+
+    [Test]
+    public async Task ReclaimMovedWalSourceAsync_forwards_request_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeWalMoveReceipt
+        {
+            TreeId = "orders",
+            Partition = 1,
+            Outcome = TreeWalMoveOutcome.SourceReclaimed,
+        });
+
+        var result = await Adapter(invoker).ReclaimMovedWalSourceAsync("orders", 1, "wal-primary");
+
+        var sent = (TreeAdminWalReclaimRequest)invoker.LastRequest!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(sent.TreeId, Is.EqualTo("orders"));
+            Assert.That(sent.Partition, Is.EqualTo(1));
+            Assert.That(sent.SourceProviderKey, Is.EqualTo("wal-primary"));
+            Assert.That(result.Outcome, Is.EqualTo(TreeWalMoveOutcome.SourceReclaimed));
+        });
+    }
 }

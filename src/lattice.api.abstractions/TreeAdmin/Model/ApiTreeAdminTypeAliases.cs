@@ -101,4 +101,25 @@ public static class ApiTreeAdminTypeAliases
 
     /// <summary>Alias for <see cref="TreeSnapshotStatus"/>.</summary>
     public const string TreeSnapshotStatus = "oit.ss";
+
+    /// <summary>Alias for <see cref="TreeWalPlacement"/>.</summary>
+    public const string TreeWalPlacement = "oit.wp";
+
+    /// <summary>Alias for <see cref="TreeWalPartitionPlacement"/>.</summary>
+    public const string TreeWalPartitionPlacement = "oit.wq";
+
+    /// <summary>Alias for <see cref="TreeWalPlacementAudit"/>.</summary>
+    public const string TreeWalPlacementAudit = "oit.wa";
+
+    /// <summary>Alias for <see cref="TreeWalMovePlan"/>.</summary>
+    public const string TreeWalMovePlan = "oit.wl";
+
+    /// <summary>Alias for <see cref="TreeWalMoveReceipt"/>.</summary>
+    public const string TreeWalMoveReceipt = "oit.wr";
+
+    /// <summary>Alias for <see cref="TreeWalMoveOutcome"/>.</summary>
+    public const string TreeWalMoveOutcome = "oit.wo";
+
+    /// <summary>Alias for <see cref="TreeWalMoveOptions"/>.</summary>
+    public const string TreeWalMoveOptions = "oit.wt";
 }

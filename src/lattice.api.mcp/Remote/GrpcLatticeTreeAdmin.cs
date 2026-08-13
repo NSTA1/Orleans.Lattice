@@ -240,4 +240,41 @@ internal sealed class GrpcLatticeTreeAdmin : ILatticeTreeAdmin
         string treeId,
         CancellationToken cancellationToken = default)
         => _client.GetSnapshotStatusAsync(treeId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TreeWalPlacement> GetWalPlacementAsync(
+        string treeId,
+        CancellationToken cancellationToken = default)
+        => _client.GetWalPlacementAsync(treeId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TreeWalPlacementAudit> AuditWalPlacementAsync(
+        string treeId,
+        CancellationToken cancellationToken = default)
+        => _client.AuditWalPlacementAsync(treeId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TreeWalMovePlan> PlanWalMoveAsync(
+        string treeId,
+        int partition,
+        string targetProviderKey,
+        CancellationToken cancellationToken = default)
+        => _client.PlanWalMoveAsync(treeId, partition, targetProviderKey, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TreeWalMoveReceipt> ExecuteWalMoveAsync(
+        string treeId,
+        int partition,
+        string targetProviderKey,
+        TreeWalMoveOptions? options = null,
+        CancellationToken cancellationToken = default)
+        => _client.ExecuteWalMoveAsync(treeId, partition, targetProviderKey, options, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TreeWalMoveReceipt> ReclaimMovedWalSourceAsync(
+        string treeId,
+        int partition,
+        string sourceProviderKey,
+        CancellationToken cancellationToken = default)
+        => _client.ReclaimMovedWalSourceAsync(treeId, partition, sourceProviderKey, cancellationToken);
 }
