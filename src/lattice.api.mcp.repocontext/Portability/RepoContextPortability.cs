@@ -59,25 +59,32 @@ internal static class RepoContextPortability
         var startInclusive = continuationToken is null ? prefix : Successor(continuationToken);
         var endExclusive = PrefixUpperBound(prefix);
 
-        var cursorId = await tree
-            .OpenEntryCursorAsync(startInclusive, endExclusive, cancellationToken: cancellationToken)
-            .ConfigureAwait(false);
-
-        LatticeCursorEntriesPage page;
-        try
+        // Resilient page read: ScanEntriesAsync reopens over the still-live range
+        // on a transient EnumerationAbortedException (silo failover, cold start,
+        // idle expiry, scale-down) and resumes without gaps or duplicates. The
+        // page's entries are buffered first so the underlying enumerator is
+        // disposed before any per-record vector payload is resolved from another
+        // tree, matching the original open/next/close-then-resolve ordering. One
+        // extra entry beyond the page bound is probed to derive has-more directly
+        // from the range rather than a conservative cursor flag.
+        var raw = new List<KeyValuePair<string, byte[]>>(pageSize);
+        var hasMore = false;
+        await foreach (var entry in tree
+            .ScanEntriesAsync(startInclusive, endExclusive, cancellationToken: cancellationToken)
+            .ConfigureAwait(false))
         {
-            page = await tree
-                .NextEntriesAsync(cursorId, pageSize, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        finally
-        {
-            await tree.CloseCursorAsync(cursorId, cancellationToken).ConfigureAwait(false);
+            if (raw.Count == pageSize)
+            {
+                hasMore = true;
+                break;
+            }
+
+            raw.Add(entry);
         }
 
-        var records = new List<RepoContextSnapshotRecord>(page.Entries.Count);
+        var records = new List<RepoContextSnapshotRecord>(raw.Count);
         string? lastKey = null;
-        foreach (var entry in page.Entries)
+        foreach (var entry in raw)
         {
             lastKey = entry.Key;
             RepoContextVectorPayload? vector = vectorExport is null
@@ -93,7 +100,6 @@ internal static class RepoContextPortability
             });
         }
 
-        var hasMore = page.HasMore && lastKey is not null;
         return new RepoContextSnapshotPage
         {
             Records = records,
