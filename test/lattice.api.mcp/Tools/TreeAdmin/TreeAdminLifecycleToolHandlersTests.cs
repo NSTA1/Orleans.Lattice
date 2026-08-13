@@ -370,6 +370,47 @@ public sealed class TreeAdminLifecycleToolHandlersTests
     }
 
     [Test]
+    public async Task ReshardTreeAsync_forwards_the_target_and_returns_the_status()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeReshardStatus
+        {
+            TreeId = "orders",
+            InProgress = false,
+            CurrentPhysicalShardCount = 4,
+            VirtualShardCount = 4096,
+            MapVersion = 3,
+            RequestedShardCount = 4,
+        };
+        admin.ReshardTreeAsync("orders", 4, Arg.Any<CancellationToken>()).Returns(expected);
+
+        var result = await TreeAdminLifecycleToolHandlers.ReshardTreeAsync(admin, "orders", 4, CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).ReshardTreeAsync("orders", 4, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task GetReshardStatusAsync_forwards_the_tree_id_and_returns_the_status()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeReshardStatus
+        {
+            TreeId = "orders",
+            InProgress = true,
+            CurrentPhysicalShardCount = 2,
+            VirtualShardCount = 4096,
+            MapVersion = 1,
+        };
+        admin.GetReshardStatusAsync("orders", Arg.Any<CancellationToken>()).Returns(expected);
+
+        var result = await TreeAdminLifecycleToolHandlers.GetReshardStatusAsync(admin, "orders", CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).GetReshardStatusAsync("orders", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public void Handlers_reject_a_null_facade()
     {
         Assert.Multiple(() =>
@@ -391,6 +432,8 @@ public sealed class TreeAdminLifecycleToolHandlersTests
             Assert.That(() => TreeAdminLifecycleToolHandlers.RestoreTreeAsync(null!, "t", "bk"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.RestoreTreeSetAsync(null!, "set"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.RevertTreeRestoreAsync(null!, "t", "bk", "op", "s", "p"), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.ReshardTreeAsync(null!, "t", 4), Throws.ArgumentNullException);
+            Assert.That(() => TreeAdminLifecycleToolHandlers.GetReshardStatusAsync(null!, "t"), Throws.ArgumentNullException);
         });
     }
 }

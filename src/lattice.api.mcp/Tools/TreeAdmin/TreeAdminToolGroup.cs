@@ -172,6 +172,12 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "delete time and the recovery deadline derived from the configured soft-delete window), whether a "
                 + "hard purge is in progress or has completed, and whether it can still be recovered. A pure read "
                 + "with no side effects. Requires whole-tree read authority. Read-only."),
+            Read(services, TreeAdminLifecycleToolHandlers.GetReshardStatusAsync, "lattice_treeadmin_tree_reshard_status",
+                "Read a tree's online-reshard status",
+                "Reads a tree's online-reshard status: whether a reshard is currently in flight, and the tree's "
+                + "current physical shard fan-out and virtual-slot space as observed from its shard map (with the map "
+                + "version). Poll this after triggering tree_reshard to watch the fan-out grow to the target. A pure "
+                + "read with no side effects. Requires whole-tree read authority. Read-only."),
         };
 
         if (enableSchemaControl)
@@ -305,6 +311,16 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "state. Pass the fields from the tree_restore result back verbatim. Idempotent. Rejects a result "
                 + "that did not come from a shadow-cutover restore, a reserved system tree id, or when no backup "
                 + "engine is registered. Restore-gated and destructive."));
+            tools.Add(Write(services, TreeAdminLifecycleToolHandlers.ReshardTreeAsync, "lattice_treeadmin_tree_reshard",
+                "Trigger an online reshard of a tree",
+                "Triggers an online reshard that grows a tree to a target number of distinct physical shards. The "
+                + "tree keeps serving reads and writes throughout: the migration iteratively splits the busiest "
+                + "shards and atomically swaps virtual-slot routing per split, anchored by reminders so it survives "
+                + "silo restarts. Returns once the coordinator accepts the intent; poll tree_reshard_status for "
+                + "completion. Grow-only: the target must exceed the current physical shard count (an empty tree may "
+                + "be re-pinned to any count) and be at most 4096. Idempotent for a matching target. Rejected for a "
+                + "reserved system tree id, or when a resize is already in flight. Tree-lifecycle-gated and "
+                + "destructive."));
         }
 
         return tools;

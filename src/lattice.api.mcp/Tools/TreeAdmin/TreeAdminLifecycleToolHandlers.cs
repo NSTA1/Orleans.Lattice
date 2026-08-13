@@ -284,6 +284,30 @@ internal static class TreeAdminLifecycleToolHandlers
         return restore;
     }
 
+    /// <summary>Triggers an online reshard that grows a tree to a target physical shard count.</summary>
+    public static Task<TreeReshardStatus> ReshardTreeAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The tree to reshard. Must not be null, empty, or a reserved system tree id.")]
+        string treeId,
+        [Description("The desired number of distinct physical shards to grow the tree to. Grow-only: must be greater than the current physical shard count (an empty tree may be re-pinned to any count) and at most 4096. Must be at least 2.")]
+        int targetShardCount,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        return treeAdmin.ReshardTreeAsync(treeId, targetShardCount, cancellationToken);
+    }
+
+    /// <summary>Reads a tree's online-reshard status (in-flight signal plus current shard fan-out).</summary>
+    public static Task<TreeReshardStatus> GetReshardStatusAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The tree whose reshard status to read. Must not be null or empty.")]
+        string treeId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        return treeAdmin.GetReshardStatusAsync(treeId, cancellationToken);
+    }
+
     private static List<DataEntry> ToDataEntries(IReadOnlyList<DataEntryDto>? entries)
     {
         if (entries is null || entries.Count == 0)

@@ -466,4 +466,47 @@ public interface ILatticeTreeAdmin
     Task RevertTreeRestoreAsync(
         TreeRestoreResult restore,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Triggers an <b>online reshard</b> that grows <paramref name="treeId"/> to
+    /// <paramref name="targetShardCount"/> distinct physical shards, after authorizing
+    /// the whole-tree <see cref="LatticeOperation.TreeLifecycle"/> capability
+    /// fail-closed. The tree keeps serving reads and writes throughout: the migration
+    /// iteratively splits the largest-slot-owning shards and atomically swaps
+    /// virtual-slot routing per split, anchored by reminders so it survives silo
+    /// restarts. Returns once the coordinator has accepted the intent; poll completion
+    /// with <see cref="GetReshardStatusAsync"/>. <b>Grow-only</b>: the target must be
+    /// strictly greater than the current physical shard count (an empty tree may be
+    /// re-pinned to any count) and at most the virtual shard space (4096). Idempotent:
+    /// a request for the count the tree is already at, or a matching in-flight target,
+    /// is a no-op. Reserved system tree ids are rejected.
+    /// </summary>
+    /// <param name="treeId">The tree to reshard. Must not be <c>null</c>, empty, or reserved.</param>
+    /// <param name="targetShardCount">The desired number of distinct physical shards. Must be at least 2 and at most the virtual shard space.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tree's reshard status after the trigger, echoing the requested target.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="targetShardCount"/> is out of range or would shrink the tree.</exception>
+    /// <exception cref="InvalidOperationException">A reshard with a different target, or a resize, is already in progress.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the tree-lifecycle capability.</exception>
+    Task<TreeReshardStatus> ReshardTreeAsync(
+        string treeId,
+        int targetShardCount,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads the online-reshard status of <paramref name="treeId"/> - whether a
+    /// reshard is in flight and the tree's current physical shard fan-out as observed
+    /// from its <c>ShardMap</c> - after authorizing whole-tree
+    /// <see cref="LatticeOperation.Read"/> fail-closed. A pure read with no side
+    /// effects.
+    /// </summary>
+    /// <param name="treeId">The tree to inspect. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tree's reshard status.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the tree.</exception>
+    Task<TreeReshardStatus> GetReshardStatusAsync(
+        string treeId,
+        CancellationToken cancellationToken = default);
 }

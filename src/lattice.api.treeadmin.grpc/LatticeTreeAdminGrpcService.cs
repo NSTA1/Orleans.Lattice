@@ -101,6 +101,12 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
     /// <summary>Reverts a shadow-cutover restore, echoing back the result. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
     public abstract Task<TreeRestoreResult> RevertTreeRestore(TreeRestoreResult request, ServerCallContext context);
 
+    /// <summary>Triggers an online reshard on the wrapped facade.</summary>
+    public abstract Task<TreeReshardStatus> ReshardTree(TreeAdminReshardRequest request, ServerCallContext context);
+
+    /// <summary>Reads the online-reshard status from the wrapped facade.</summary>
+    public abstract Task<TreeReshardStatus> GetReshardStatus(TreeAdminTreeRequest request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at startup
     /// with <paramref name="serviceImpl"/> set to <see langword="null"/> to record
@@ -145,6 +151,8 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
             binder.AddMethod(methods.RestoreTree, (UnaryServerMethod<TreeAdminRestoreRequest, TreeRestoreResult>?)null);
             binder.AddMethod(methods.RestoreTreeSet, (UnaryServerMethod<TreeAdminRestoreSetRequest, TreeRestoreSetResult>?)null);
             binder.AddMethod(methods.RevertTreeRestore, (UnaryServerMethod<TreeRestoreResult, TreeRestoreResult>?)null);
+            binder.AddMethod(methods.ReshardTree, (UnaryServerMethod<TreeAdminReshardRequest, TreeReshardStatus>?)null);
+            binder.AddMethod(methods.GetReshardStatus, (UnaryServerMethod<TreeAdminTreeRequest, TreeReshardStatus>?)null);
             return;
         }
 
@@ -173,6 +181,8 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
         binder.AddMethod(methods.RestoreTree, new UnaryServerMethod<TreeAdminRestoreRequest, TreeRestoreResult>(serviceImpl.RestoreTree));
         binder.AddMethod(methods.RestoreTreeSet, new UnaryServerMethod<TreeAdminRestoreSetRequest, TreeRestoreSetResult>(serviceImpl.RestoreTreeSet));
         binder.AddMethod(methods.RevertTreeRestore, new UnaryServerMethod<TreeRestoreResult, TreeRestoreResult>(serviceImpl.RevertTreeRestore));
+        binder.AddMethod(methods.ReshardTree, new UnaryServerMethod<TreeAdminReshardRequest, TreeReshardStatus>(serviceImpl.ReshardTree));
+        binder.AddMethod(methods.GetReshardStatus, new UnaryServerMethod<TreeAdminTreeRequest, TreeReshardStatus>(serviceImpl.GetReshardStatus));
     }
 }
 
@@ -336,6 +346,14 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
             await control.RevertTreeRestoreAsync(req, ct).ConfigureAwait(false);
             return req;
         });
+
+    /// <inheritdoc />
+    public override Task<TreeReshardStatus> ReshardTree(TreeAdminReshardRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.ReshardTreeAsync(req.TreeId, req.TargetShardCount, ct));
+
+    /// <inheritdoc />
+    public override Task<TreeReshardStatus> GetReshardStatus(TreeAdminTreeRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.GetReshardStatusAsync(req.TreeId, ct));
 
     /// <inheritdoc />
     public override Task<AuthSchemeAdvertisement> GetAuthScheme(AuthSchemeAdvertisementRequest request, ServerCallContext context)

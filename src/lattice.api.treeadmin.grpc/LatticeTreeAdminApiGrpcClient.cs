@@ -562,6 +562,44 @@ public sealed class LatticeTreeAdminApiGrpcClient
         await UnaryAsync(_methods.RevertTreeRestore, restore, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Triggers an online reshard that grows <paramref name="treeId"/> to
+    /// <paramref name="targetShardCount"/> distinct physical shards, returning its
+    /// reshard status. Requires the whole-tree lifecycle capability.
+    /// </summary>
+    /// <param name="treeId">The tree to reshard. Must not be <c>null</c> or empty.</param>
+    /// <param name="targetShardCount">The desired number of distinct physical shards.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tree's reshard status after the trigger.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    public Task<TreeReshardStatus> ReshardTreeAsync(
+        string treeId, int targetShardCount, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return UnaryAsync(
+            _methods.ReshardTree,
+            new TreeAdminReshardRequest { TreeId = treeId, TargetShardCount = targetShardCount },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Reads the online-reshard status of <paramref name="treeId"/>, with no side
+    /// effects. Requires whole-tree read authority.
+    /// </summary>
+    /// <param name="treeId">The tree to inspect. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tree's reshard status.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    public Task<TreeReshardStatus> GetReshardStatusAsync(
+        string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return UnaryAsync(
+            _methods.GetReshardStatus,
+            new TreeAdminTreeRequest { TreeId = treeId },
+            cancellationToken);
+    }
+
     private async Task<TResponse> UnaryAsync<TRequest, TResponse>(
         Method<TRequest, TResponse> method,
         TRequest request,

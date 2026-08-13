@@ -221,6 +221,38 @@ public sealed class TreeAdminGrpcInterceptorMappingTests
     }
 
     [Test]
+    public void DescribeCall_decodes_the_target_tree_from_the_reshard_request_shapes()
+    {
+        // The reshard trigger and status read share the Unknown operation posture of
+        // the other whole-tree lifecycle verbs (real enforcement is in the facade),
+        // but their target tree is still decoded so a per-tree authorizer sees it.
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.ReshardTreeMethodName),
+                new TreeAdminReshardRequest { TreeId = "orders", TargetShardCount = 8 }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, "orders")));
+
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTreeAdminGrpcMethods.GetReshardStatusMethodName),
+                new TreeAdminTreeRequest { TreeId = "orders" }),
+                Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, "orders")));
+        });
+    }
+
+    [Test]
+    public void IsUnauthenticatedMethod_does_not_exempt_the_reshard_rpcs()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.IsUnauthenticatedMethod(
+                Method(LatticeTreeAdminGrpcMethods.ReshardTreeMethodName)), Is.False);
+            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.IsUnauthenticatedMethod(
+                Method(LatticeTreeAdminGrpcMethods.GetReshardStatusMethodName)), Is.False);
+        });
+    }
+
+    [Test]
     public void IsUnauthenticatedMethod_does_not_exempt_the_restore_rpcs()
     {
         Assert.Multiple(() =>

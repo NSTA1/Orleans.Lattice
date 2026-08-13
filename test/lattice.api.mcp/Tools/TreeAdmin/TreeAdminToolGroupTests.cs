@@ -62,6 +62,7 @@ public sealed class TreeAdminToolGroupTests
         "lattice_treeadmin_tree_get_config",
         "lattice_treeadmin_tree_get_shard_map",
         "lattice_treeadmin_tree_deletion_status",
+        "lattice_treeadmin_tree_reshard_status",
     };
 
     private static readonly string[] LifecycleWriteToolNames =
@@ -78,6 +79,7 @@ public sealed class TreeAdminToolGroupTests
         "lattice_treeadmin_tree_restore",
         "lattice_treeadmin_tree_restore_set",
         "lattice_treeadmin_tree_restore_revert",
+        "lattice_treeadmin_tree_reshard",
     };
 
     /// <summary>The read-only tools always contributed regardless of any opt-in.</summary>
@@ -301,6 +303,7 @@ public sealed class TreeAdminToolGroupTests
             Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_tree_restore"), "backupId"), Is.True);
             Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_tree_restore_set"), "setId"), Is.True);
             Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_tree_restore_revert"), "targetTreeId"), Is.True);
+            Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_tree_reshard"), "targetShardCount"), Is.True);
         });
     }
 
