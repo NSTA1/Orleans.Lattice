@@ -600,6 +600,69 @@ public sealed class LatticeTreeAdminApiGrpcClient
             cancellationToken);
     }
 
+    /// <summary>
+    /// Triggers an online resize that rebuilds <paramref name="treeId"/> with the given
+    /// B+ node capacity, returning its resize status. Requires the whole-tree lifecycle
+    /// capability.
+    /// </summary>
+    /// <param name="treeId">The tree to resize. Must not be <c>null</c> or empty.</param>
+    /// <param name="newMaxLeafKeys">The new maximum number of keys per leaf node.</param>
+    /// <param name="newMaxInternalChildren">The new maximum number of children per internal node.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tree's resize status after the trigger.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    public Task<TreeResizeStatus> ResizeTreeAsync(
+        string treeId, int newMaxLeafKeys, int newMaxInternalChildren,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return UnaryAsync(
+            _methods.ResizeTree,
+            new TreeAdminResizeRequest
+            {
+                TreeId = treeId,
+                NewMaxLeafKeys = newMaxLeafKeys,
+                NewMaxInternalChildren = newMaxInternalChildren,
+            },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Undoes the most recent completed resize of <paramref name="treeId"/>, returning
+    /// its resize status. Requires the whole-tree lifecycle capability.
+    /// </summary>
+    /// <param name="treeId">The tree to revert. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tree's resize status after the undo.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    public Task<TreeResizeStatus> UndoTreeResizeAsync(
+        string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return UnaryAsync(
+            _methods.UndoTreeResize,
+            new TreeAdminTreeRequest { TreeId = treeId },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Reads the online-resize status of <paramref name="treeId"/>, with no side
+    /// effects. Requires whole-tree read authority.
+    /// </summary>
+    /// <param name="treeId">The tree to inspect. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tree's resize status.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    public Task<TreeResizeStatus> GetResizeStatusAsync(
+        string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return UnaryAsync(
+            _methods.GetResizeStatus,
+            new TreeAdminTreeRequest { TreeId = treeId },
+            cancellationToken);
+    }
+
     private async Task<TResponse> UnaryAsync<TRequest, TResponse>(
         Method<TRequest, TResponse> method,
         TRequest request,

@@ -509,4 +509,67 @@ public interface ILatticeTreeAdmin
     Task<TreeReshardStatus> GetReshardStatusAsync(
         string treeId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Triggers an <b>online resize</b> that rebuilds <paramref name="treeId"/> with a
+    /// new B+ node capacity (<paramref name="newMaxLeafKeys"/> keys per leaf,
+    /// <paramref name="newMaxInternalChildren"/> children per internal node), after
+    /// authorizing the whole-tree <see cref="LatticeOperation.TreeLifecycle"/>
+    /// capability fail-closed. The resize is online: the tree is snapshotted into a
+    /// fresh destination physical tree with the new sizing while live writes are
+    /// shadow-forwarded, then the registry alias is atomically swapped, all anchored by
+    /// reminders so it survives silo restarts. Returns once the coordinator has accepted
+    /// the intent; poll completion with <see cref="GetResizeStatusAsync"/> and reverse
+    /// it within the recovery window with <see cref="UndoTreeResizeAsync"/>. Idempotent:
+    /// a matching in-flight target is a no-op. Reserved system tree ids are rejected.
+    /// </summary>
+    /// <param name="treeId">The tree to resize. Must not be <c>null</c>, empty, or reserved.</param>
+    /// <param name="newMaxLeafKeys">The new maximum number of keys per leaf node. Must be greater than 1.</param>
+    /// <param name="newMaxInternalChildren">The new maximum number of children per internal node. Must be greater than 2.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tree's resize status after the trigger, echoing the requested capacity.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="newMaxLeafKeys"/> or <paramref name="newMaxInternalChildren"/> is out of range.</exception>
+    /// <exception cref="InvalidOperationException">A resize with different parameters, or a reshard, is already in progress.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the tree-lifecycle capability.</exception>
+    Task<TreeResizeStatus> ResizeTreeAsync(
+        string treeId,
+        int newMaxLeafKeys,
+        int newMaxInternalChildren,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Undoes the most recent completed <b>online resize</b> of
+    /// <paramref name="treeId"/> by swapping the registry alias back to the tree's
+    /// pre-resize physical tree and restoring its original sizing, after authorizing the
+    /// whole-tree <see cref="LatticeOperation.TreeLifecycle"/> capability fail-closed.
+    /// Only available while the pre-resize physical tree is still within its
+    /// soft-delete recovery window (before purge completes). Reserved system tree ids
+    /// are rejected.
+    /// </summary>
+    /// <param name="treeId">The tree whose last resize to undo. Must not be <c>null</c>, empty, or reserved.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tree's resize status after the undo.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved.</exception>
+    /// <exception cref="InvalidOperationException">No completed resize exists to undo, or the pre-resize tree has already been purged.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the tree-lifecycle capability.</exception>
+    Task<TreeResizeStatus> UndoTreeResizeAsync(
+        string treeId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads the online-resize status of <paramref name="treeId"/> - whether a resize
+    /// is in flight and the tree's current B+ node capacity as observed from its
+    /// registry configuration - after authorizing whole-tree
+    /// <see cref="LatticeOperation.Read"/> fail-closed. A pure read with no side
+    /// effects.
+    /// </summary>
+    /// <param name="treeId">The tree to inspect. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tree's resize status.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the tree.</exception>
+    Task<TreeResizeStatus> GetResizeStatusAsync(
+        string treeId,
+        CancellationToken cancellationToken = default);
 }

@@ -107,6 +107,15 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary read-only reshard-status RPC method name.</summary>
     public const string GetReshardStatusMethodName = "GetReshardStatus";
 
+    /// <summary>The unary online-resize trigger RPC method name.</summary>
+    public const string ResizeTreeMethodName = "ResizeTree";
+
+    /// <summary>The unary undo-resize RPC method name.</summary>
+    public const string UndoTreeResizeMethodName = "UndoTreeResize";
+
+    /// <summary>The unary read-only resize-status RPC method name.</summary>
+    public const string GetResizeStatusMethodName = "GetResizeStatus";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeTreeAdminGrpcMethods(
         Serializer<TreeAdminTreeRequest> treeRequestSerializer,
@@ -142,7 +151,9 @@ internal sealed class LatticeTreeAdminGrpcMethods
         Serializer<TreeRestoreResult> restoreResultSerializer,
         Serializer<TreeRestoreSetResult> restoreSetResultSerializer,
         Serializer<TreeAdminReshardRequest> reshardRequestSerializer,
-        Serializer<TreeReshardStatus> reshardStatusSerializer)
+        Serializer<TreeReshardStatus> reshardStatusSerializer,
+        Serializer<TreeAdminResizeRequest> resizeRequestSerializer,
+        Serializer<TreeResizeStatus> resizeStatusSerializer)
     {
         ArgumentNullException.ThrowIfNull(treeRequestSerializer);
         ArgumentNullException.ThrowIfNull(capabilitiesSerializer);
@@ -178,6 +189,8 @@ internal sealed class LatticeTreeAdminGrpcMethods
         ArgumentNullException.ThrowIfNull(restoreSetResultSerializer);
         ArgumentNullException.ThrowIfNull(reshardRequestSerializer);
         ArgumentNullException.ThrowIfNull(reshardStatusSerializer);
+        ArgumentNullException.ThrowIfNull(resizeRequestSerializer);
+        ArgumentNullException.ThrowIfNull(resizeStatusSerializer);
 
         ProbeCapabilities = new Method<TreeAdminTreeRequest, LatticeTreeAdminCapabilities>(
             type: MethodType.Unary,
@@ -367,6 +380,27 @@ internal sealed class LatticeTreeAdminGrpcMethods
             name: GetReshardStatusMethodName,
             requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(treeRequestSerializer),
             responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(reshardStatusSerializer));
+
+        ResizeTree = new Method<TreeAdminResizeRequest, TreeResizeStatus>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: ResizeTreeMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(resizeRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(resizeStatusSerializer));
+
+        UndoTreeResize = new Method<TreeAdminTreeRequest, TreeResizeStatus>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: UndoTreeResizeMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(treeRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(resizeStatusSerializer));
+
+        GetResizeStatus = new Method<TreeAdminTreeRequest, TreeResizeStatus>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: GetResizeStatusMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(treeRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(resizeStatusSerializer));
     }
 
     /// <summary>The unary <c>ProbeCapabilities</c> capability-probe RPC.</summary>
@@ -450,6 +484,15 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary <c>GetReshardStatus</c> read-only reshard-status RPC.</summary>
     public Method<TreeAdminTreeRequest, TreeReshardStatus> GetReshardStatus { get; }
 
+    /// <summary>The unary <c>ResizeTree</c> online-resize trigger RPC.</summary>
+    public Method<TreeAdminResizeRequest, TreeResizeStatus> ResizeTree { get; }
+
+    /// <summary>The unary <c>UndoTreeResize</c> undo-resize RPC.</summary>
+    public Method<TreeAdminTreeRequest, TreeResizeStatus> UndoTreeResize { get; }
+
+    /// <summary>The unary <c>GetResizeStatus</c> read-only resize-status RPC.</summary>
+    public Method<TreeAdminTreeRequest, TreeResizeStatus> GetResizeStatus { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out of
     /// <paramref name="serializerProvider"/>. Shared by the server-side DI factory
@@ -493,7 +536,9 @@ internal sealed class LatticeTreeAdminGrpcMethods
             serializerProvider.GetRequiredService<Serializer<TreeRestoreResult>>(),
             serializerProvider.GetRequiredService<Serializer<TreeRestoreSetResult>>(),
             serializerProvider.GetRequiredService<Serializer<TreeAdminReshardRequest>>(),
-            serializerProvider.GetRequiredService<Serializer<TreeReshardStatus>>());
+            serializerProvider.GetRequiredService<Serializer<TreeReshardStatus>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAdminResizeRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeResizeStatus>>());
     }
 }
 

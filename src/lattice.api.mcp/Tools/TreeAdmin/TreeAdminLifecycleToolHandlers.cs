@@ -308,6 +308,43 @@ internal static class TreeAdminLifecycleToolHandlers
         return treeAdmin.GetReshardStatusAsync(treeId, cancellationToken);
     }
 
+    /// <summary>Triggers an online resize that rebuilds a tree with new B+ node capacity.</summary>
+    public static Task<TreeResizeStatus> ResizeTreeAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The tree to resize. Must not be null, empty, or a reserved system tree id.")]
+        string treeId,
+        [Description("The new maximum number of keys per leaf node. Must be at least 2.")]
+        int newMaxLeafKeys,
+        [Description("The new maximum number of children per internal node. Must be at least 3.")]
+        int newMaxInternalChildren,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        return treeAdmin.ResizeTreeAsync(treeId, newMaxLeafKeys, newMaxInternalChildren, cancellationToken);
+    }
+
+    /// <summary>Undoes the most recent completed resize of a tree, reverting to the prior node capacity.</summary>
+    public static Task<TreeResizeStatus> UndoTreeResizeAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The tree whose most recent resize to undo. Must not be null, empty, or a reserved system tree id.")]
+        string treeId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        return treeAdmin.UndoTreeResizeAsync(treeId, cancellationToken);
+    }
+
+    /// <summary>Reads a tree's online-resize status (in-flight signal plus current node capacity).</summary>
+    public static Task<TreeResizeStatus> GetResizeStatusAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The tree whose resize status to read. Must not be null or empty.")]
+        string treeId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        return treeAdmin.GetResizeStatusAsync(treeId, cancellationToken);
+    }
+
     private static List<DataEntry> ToDataEntries(IReadOnlyList<DataEntryDto>? entries)
     {
         if (entries is null || entries.Count == 0)

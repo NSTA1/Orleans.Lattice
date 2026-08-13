@@ -178,6 +178,12 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "current physical shard fan-out and virtual-slot space as observed from its shard map (with the map "
                 + "version). Poll this after triggering tree_reshard to watch the fan-out grow to the target. A pure "
                 + "read with no side effects. Requires whole-tree read authority. Read-only."),
+            Read(services, TreeAdminLifecycleToolHandlers.GetResizeStatusAsync, "lattice_treeadmin_tree_resize_status",
+                "Read a tree's online-resize status",
+                "Reads a tree's online-resize status: whether a resize is currently in flight, and the tree's "
+                + "current effective B+ node capacity (maximum keys per leaf node and maximum children per internal "
+                + "node) as recorded in the registry. Poll this after triggering tree_resize to watch the rebuild "
+                + "complete. A pure read with no side effects. Requires whole-tree read authority. Read-only."),
         };
 
         if (enableSchemaControl)
@@ -321,6 +327,23 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "be re-pinned to any count) and be at most 4096. Idempotent for a matching target. Rejected for a "
                 + "reserved system tree id, or when a resize is already in flight. Tree-lifecycle-gated and "
                 + "destructive."));
+            tools.Add(Write(services, TreeAdminLifecycleToolHandlers.ResizeTreeAsync, "lattice_treeadmin_tree_resize",
+                "Trigger an online resize of a tree",
+                "Triggers an online resize that rebuilds a tree with new B+ node capacity (maximum keys per leaf "
+                + "node and maximum children per internal node). The tree keeps serving reads and writes throughout: "
+                + "the migration snapshots into a shadow tree at the new capacity and atomically swaps the alias, "
+                + "anchored by reminders so it survives silo restarts. Returns once the coordinator accepts the "
+                + "intent; poll tree_resize_status for completion. newMaxLeafKeys must be at least 2 and "
+                + "newMaxInternalChildren at least 3. Idempotent for a matching in-flight target. Rejected for a "
+                + "reserved system tree id, or when a different resize is already in flight. Tree-lifecycle-gated and "
+                + "destructive."));
+            tools.Add(Write(services, TreeAdminLifecycleToolHandlers.UndoTreeResizeAsync, "lattice_treeadmin_tree_resize_undo",
+                "Undo a tree's most recent resize",
+                "Undoes the most recent completed resize of a tree, rebuilding it back to the prior B+ node "
+                + "capacity using the same online shadow-and-swap migration. Returns once the coordinator accepts the "
+                + "intent; poll tree_resize_status for completion. Rejected when there is no completed resize to "
+                + "undo, for a reserved system tree id, or when a different resize is already in flight. "
+                + "Tree-lifecycle-gated and destructive."));
         }
 
         return tools;

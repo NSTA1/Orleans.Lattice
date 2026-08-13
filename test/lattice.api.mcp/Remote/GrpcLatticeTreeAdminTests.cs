@@ -390,4 +390,72 @@ public sealed class GrpcLatticeTreeAdminTests
             Assert.That(result.CurrentPhysicalShardCount, Is.EqualTo(2));
         });
     }
+
+    [Test]
+    public async Task ResizeTreeAsync_forwards_the_capacity_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeResizeStatus
+        {
+            TreeId = "orders",
+            InProgress = false,
+            CurrentMaxLeafKeys = 256,
+            CurrentMaxInternalChildren = 128,
+            RequestedMaxLeafKeys = 256,
+            RequestedMaxInternalChildren = 128,
+        });
+
+        var result = await Adapter(invoker).ResizeTreeAsync("orders", 256, 128);
+
+        var sent = (TreeAdminResizeRequest)invoker.LastRequest!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(sent.TreeId, Is.EqualTo("orders"));
+            Assert.That(sent.NewMaxLeafKeys, Is.EqualTo(256));
+            Assert.That(sent.NewMaxInternalChildren, Is.EqualTo(128));
+            Assert.That(result.CurrentMaxLeafKeys, Is.EqualTo(256));
+            Assert.That(result.RequestedMaxLeafKeys, Is.EqualTo(256));
+        });
+    }
+
+    [Test]
+    public async Task UndoTreeResizeAsync_forwards_request_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeResizeStatus
+        {
+            TreeId = "orders",
+            InProgress = false,
+            CurrentMaxLeafKeys = 64,
+            CurrentMaxInternalChildren = 32,
+        });
+
+        var result = await Adapter(invoker).UndoTreeResizeAsync("orders");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(((TreeAdminTreeRequest)invoker.LastRequest!).TreeId, Is.EqualTo("orders"));
+            Assert.That(result.CurrentMaxLeafKeys, Is.EqualTo(64));
+            Assert.That(result.RequestedMaxLeafKeys, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task GetResizeStatusAsync_forwards_request_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeResizeStatus
+        {
+            TreeId = "orders",
+            InProgress = true,
+            CurrentMaxLeafKeys = 128,
+            CurrentMaxInternalChildren = 128,
+        });
+
+        var result = await Adapter(invoker).GetResizeStatusAsync("orders");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(((TreeAdminTreeRequest)invoker.LastRequest!).TreeId, Is.EqualTo("orders"));
+            Assert.That(result.InProgress, Is.True);
+            Assert.That(result.CurrentMaxLeafKeys, Is.EqualTo(128));
+        });
+    }
 }

@@ -92,4 +92,7 @@ public static class ApiTreeAdminTypeAliases
 
     /// <summary>Alias for <see cref="TreeReshardStatus"/>.</summary>
     public const string TreeReshardStatus = "oit.re";
+
+    /// <summary>Alias for <see cref="TreeResizeStatus"/>.</summary>
+    public const string TreeResizeStatus = "oit.rz";
 }
