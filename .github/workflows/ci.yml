@@ -118,6 +118,89 @@ jobs:
               - 'apps/**'
               - '!apps/**/*.md'
 
+      # Content-aware release-version-bump carve-out. A coordinated release
+      # rewrites the `<Version>` slot of every publishable csproj in one commit
+      # (see docs/RELEASING.md). That edit changes no compileable behaviour, so
+      # fanning it out to the full per-package build/test matrix - which the
+      # path-only `code`/`nonSample` filters above would do, because a csproj is
+      # a non-markdown file under src/<name>/ - just burns runner minutes.
+      #
+      # This step is the ONE place that distinguishes a pure version bump from a
+      # substantive project-file change: it diffs each code-relevant changed
+      # file (the same exclusion set as the `code` filter) and sets
+      # version_only=true only when every such file is a *.csproj whose
+      # added/removed content lines are all `<Version>...</Version>` elements.
+      # Any other csproj edit (a PackageReference/Version="" attribute bump, a
+      # TargetFramework change, an added compile item, ...) or any non-csproj
+      # code change leaves version_only=false and the matrix runs as normal. The
+      # `<Version>` ELEMENT match is deliberately exact so a PackageReference's
+      # `Version=""` ATTRIBUTE never satisfies the carve-out.
+      #
+      # The refArch/apps lanes are intentionally NOT suppressed by this flag:
+      # their files are excluded from the code-relevant set, so a PR that pairs
+      # a version bump with a genuine reference-architecture/** or apps/** change
+      # still runs those lanes (and still sees version_only=true only for the
+      # core library matrix it legitimately skips).
+      - name: Classify version-only change
+        id: verbump
+        if: steps.filter.outputs.code == 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # Code-relevant changed files: mirror the `code` paths-filter
+          # exclusion set exactly (docs / text / benchmark / apps /
+          # reference-architecture / workflow files never gate the library
+          # matrix, so they must not influence the carve-out decision either).
+          mapfile -t files < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA" \
+            | grep -vE '\.md$' \
+            | grep -vE '\.txt$' \
+            | grep -vE '^docs/' \
+            | grep -vE '^benchmark/' \
+            | grep -vE '^apps/' \
+            | grep -vE '^reference-architecture/' \
+            | grep -vE '^\.github/workflows/' || true)
+
+          if [ ${#files[@]} -eq 0 ]; then
+            # `code` was true but nothing survived the exclusion set (e.g. the
+            # only code-relevant edits are workflow files). Not a version bump
+            # to act on; let the normal gates decide.
+            echo "version_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          version_only=true
+          for f in "${files[@]}"; do
+            # A non-csproj code-relevant file disqualifies the carve-out.
+            case "$f" in
+              *.csproj) ;;
+              *) version_only=false; echo "Non-csproj code change: $f"; break ;;
+            esac
+
+            # Every added/removed CONTENT line in this csproj must be a
+            # <Version> element. --unified=0 keeps the hunk bodies to just the
+            # changed lines; strip the +++/--- file headers, then flag any
+            # surviving +/- line that is not a <Version>...</Version> element.
+            offending=$(git diff --unified=0 "$BASE_SHA" "$HEAD_SHA" -- "$f" \
+              | grep -E '^[+-]' \
+              | grep -vE '^(\+\+\+|---)' \
+              | grep -vE '^[+-][[:space:]]*<Version>[^<]*</Version>[[:space:]]*$' \
+              || true)
+            if [ -n "$offending" ]; then
+              version_only=false
+              echo "Non-version csproj change in $f:"
+              echo "$offending"
+              break
+            fi
+          done
+
+          echo "version_only=$version_only" >> "$GITHUB_OUTPUT"
+          if [ "$version_only" = "true" ]; then
+            echo "::notice::Release version-bump-only change detected; skipping the per-package build/test matrix."
+          fi
+
       # Auto-discover packages by convention: each subdirectory of `src/`
       # is a package; tests live at `test/{name}/`; docs at `docs/{name}/`.
       # A package is in scope when any **non-markdown** file under one of
@@ -136,7 +219,7 @@ jobs:
       # automatically.
       - name: Discover changed packages
         id: discover
-        if: steps.filter.outputs.nonSample == 'true'
+        if: steps.filter.outputs.nonSample == 'true' && steps.verbump.outputs.version_only != 'true'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -215,14 +298,14 @@ jobs:
           echo "Packages to test: ${matched[*]}"
 
       - name: Setup .NET
-        if: steps.filter.outputs.code == 'true' || steps.filter.outputs.refArch == 'true' || steps.filter.outputs.apps == 'true'
+        if: steps.filter.outputs.refArch == 'true' || steps.filter.outputs.apps == 'true' || (steps.filter.outputs.code == 'true' && steps.verbump.outputs.version_only != 'true')
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
       # Cache ~/.nuget/packages between runs.
       - name: Cache NuGet packages
-        if: steps.filter.outputs.code == 'true' || steps.filter.outputs.refArch == 'true' || steps.filter.outputs.apps == 'true'
+        if: steps.filter.outputs.refArch == 'true' || steps.filter.outputs.apps == 'true' || (steps.filter.outputs.code == 'true' && steps.verbump.outputs.version_only != 'true')
         uses: actions/cache@v5
         with:
           path: ~/.nuget/packages
@@ -266,7 +349,7 @@ jobs:
       # the previous `samples/**/*.csproj` glob silently missed nested csprojs.
       # The slnx-first / `find`-fallback dispatch below avoids that footgun.
       - name: Build and test samples (samples-only change)
-        if: steps.filter.outputs.code == 'true' && steps.filter.outputs.nonSample != 'true'
+        if: steps.filter.outputs.code == 'true' && steps.filter.outputs.nonSample != 'true' && steps.verbump.outputs.version_only != 'true'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -485,14 +568,14 @@ jobs:
           done
 
       - name: Restore
-        if: steps.filter.outputs.nonSample == 'true'
+        if: steps.filter.outputs.nonSample == 'true' && steps.verbump.outputs.version_only != 'true'
         run: dotnet restore
 
       # Whole-solution build, used only when a shared/root change fanned the
       # test matrix out to every package (build_all=true). One solution build
       # is faster than looping every project separately.
       - name: Build (all packages - shared/root change)
-        if: steps.filter.outputs.nonSample == 'true' && steps.discover.outputs.build_all == 'true'
+        if: steps.filter.outputs.nonSample == 'true' && steps.verbump.outputs.version_only != 'true' && steps.discover.outputs.build_all == 'true'
         run: dotnet build --no-restore --configuration Release
 
       # Selective build: compile only the in-scope packages. Building each
@@ -503,7 +586,7 @@ jobs:
       # still compile-checked. This mirrors the per-package test scoping - a PR
       # that touches one package no longer pays to rebuild the whole solution.
       - name: Build changed packages
-        if: steps.filter.outputs.nonSample == 'true' && steps.discover.outputs.build_all != 'true'
+        if: steps.filter.outputs.nonSample == 'true' && steps.verbump.outputs.version_only != 'true' && steps.discover.outputs.build_all != 'true'
         run: |
           set -euo pipefail
           for name in ${{ steps.discover.outputs.to_test }}; do
@@ -535,7 +618,7 @@ jobs:
       # without a matching test project is silently skipped (e.g. a future
       # `src/foo/` that has no `test/foo/`).
       - name: Test changed packages (chaos first - isolate flaky-prone surface)
-        if: steps.filter.outputs.nonSample == 'true'
+        if: steps.filter.outputs.nonSample == 'true' && steps.verbump.outputs.version_only != 'true'
         # See the deterministic step below for why the digest-settle
         # convergence budget is widened on a loaded CI runner via
         # LATTICE_DIGEST_SETTLE_TIMEOUT_MS. The chaos digest suite leans on
@@ -559,7 +642,7 @@ jobs:
           done
 
       - name: Test changed packages (deterministic)
-        if: steps.filter.outputs.nonSample == 'true'
+        if: steps.filter.outputs.nonSample == 'true' && steps.verbump.outputs.version_only != 'true'
         # The leaf-side projection-digest publish is coalesced behind a
         # short one-shot grain timer, so the digest-settle integration
         # oracles poll the chained-fold aggregate until it converges to
