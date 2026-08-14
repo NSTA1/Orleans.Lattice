@@ -11,7 +11,7 @@ One dedicated tree per record family, so per-tree options (replication, tombston
 | `repo-context-structural` | Repo, package, and file nodes | Low |
 | `repo-context-symbol` | Symbol nodes (type / member / function declarations) | Moderate (code-edit reconcile) |
 | `repo-context-memory` | Agent-authored memory records | Higher (re-write / forget cycles) |
-| `repo-context-vector-membership` | Vector collection membership | Low |
+| `repo-context-vector-membership` | Per-source vector membership (add-wins presence flags) | Low (one flag per embedded source) |
 | `repo-context-vector-payload` | Content-addressed vector payloads | Write-once |
 | `repo-context-vector-metadata` | Vector metadata (source, content address, attributes) | Higher (re-embed cycles) |
 
@@ -38,7 +38,7 @@ Every record is addressed by a hierarchical key rooted at its repository id:
 | Memory | `repo/{repoId}/mem/{topic}/{id}` |
 | Vector metadata | `repo/{repoId}/vec/{vectorId}` |
 | Vector payload | `repo/{repoId}/vpay/{contentAddress}` |
-| Vector membership | `repo/{repoId}/vmem/{collection}` |
+| Vector membership | `repo/{repoId}/vmem/{sourceId}` |
 
 The leading segment after the repository id (`pkg`, `file`, `symbol`, `mem`, `vec`, `vpay`, `vmem`) is the family discriminator, so a key both addresses a record and routes it to the correct tree. Because keys are ordered, a scope like "every file under a repo" or "every memory entry under a topic" is a single bounded range walk.
 
@@ -48,6 +48,14 @@ The store of record is the WAL-backed Lattice tree itself. Each value is a CRDT 
 
 - A write is a read-merge-write through the record's `Merge`, never a blind overwrite, and concurrent writers converge.
 - Field edits (`repocontext_update`) apply each field as a last-writer-wins register at a fresh logical tick, so a later edit wins deterministically and untouched fields are preserved.
-- The vector trees hold discardable, regenerable projections: payloads are content-addressed and write-once, membership is an add-wins set of stable source ids, and metadata carries the embedding-space identity so a wrong-space vector is never compared or stored.
+- The vector trees hold discardable, regenerable projections: payloads are content-addressed and write-once, membership is one add-wins presence flag (`OrFlag`) per stable source id, and metadata carries the embedding-space identity so a wrong-space vector is never compared or stored.
+
+## Membership presence and multi-cluster replication
+
+Vector membership is the answer to "which sources are currently embedded", read on every back-fill pass to detect gaps and written on every embed and retire. It is stored as **one add-wins presence flag per source** at `repo/{repoId}/vmem/{sourceId}`: an embed enables the source's flag; a retire disables it (a causal tombstone, not a key delete, so a delete converges add-wins against a concurrent re-embed on another cluster). A read scans the per-repo `vmem` range and keeps the sources whose flag is enabled.
+
+The format is **always** an `OrFlag`, independent of whether replication is configured, precisely because the embedding index is expensive and must never be re-derived: coupling the on-disk value shape to a runtime replication toggle would corrupt existing membership the moment replication is enabled or disabled. A single-cluster host authors flag dots under a fixed local replica id; enabling replication later is pure configuration - the same rows keep converging, now authored under the configured cluster id, with no migration and no re-index. Because merge is a union of dots, the dot-authoring replica id may change over a repository's lifetime with no format change.
+
+This makes the whole store **config-only multi-cluster**: the expensive index is computed once and the membership, payload, and metadata trees converge across clusters through ordinary Lattice replication when the host opts a tree in. The back-fill gap scanner is a **local heal only** - it repairs missing embeddings a cluster can recompute from its own corpus and is never relied on for cross-cluster convergence, which replication owns.
 
 Because the trees are ordinary Lattice trees, the whole store inherits per-entry TTL, read-time hiding of expired and tombstoned entries, background tombstone compaction, and (where enabled) cross-cluster replication - the module adds none of these itself.

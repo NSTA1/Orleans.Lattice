@@ -50,6 +50,14 @@ public sealed class RepoContextStoreRemovalTests
         await SeedMarkerAsync(harness, repoId, ct);
 
         var payload = new byte[] { 1, 2, 3 };
+
+        // The membership tree stores an enable-wins OrFlag per source, JSON-encoded;
+        // the repo summary path scans and decodes it, so seed a real enabled flag
+        // rather than opaque bytes.
+        var membershipFlag = new OrFlag();
+        membershipFlag.Enable("seed", 1);
+        var membershipValue = JsonLatticeSerializer<OrFlag>.Default.Serialize(membershipFlag);
+
         var seeded = new (string Tree, string Key)[]
         {
             (RepoContextTrees.Structural, RepoContextKeys.File(repoId, "src/A.cs")),
@@ -62,7 +70,8 @@ public sealed class RepoContextStoreRemovalTests
 
         foreach (var (treeName, key) in seeded)
         {
-            await Tree(harness, treeName).SetAsync(key, payload, ct);
+            var value = treeName == RepoContextTrees.VectorMembership ? membershipValue : payload;
+            await Tree(harness, treeName).SetAsync(key, value, ct);
         }
 
         return seeded;

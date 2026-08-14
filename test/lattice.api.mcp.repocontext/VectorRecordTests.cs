@@ -6,8 +6,8 @@ using Orleans.Serialization;
 namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests;
 
 /// <summary>
-/// Tests for the vector record model - <see cref="VectorMetadataRecord"/>,
-/// <see cref="VectorPayloadRecord"/>, and <see cref="VectorMembershipRecord"/>:
+/// Tests for the vector record model - <see cref="VectorMetadataRecord"/> and
+/// <see cref="VectorPayloadRecord"/>:
 /// CRDT-backed merge convergence, preservation of the immutable embedding-space
 /// tag across merges, content-addressed payload idempotence, and Orleans
 /// serialization round-trips.
@@ -32,9 +32,6 @@ public sealed class VectorRecordTests
         => new() { WallClockTicks = ticks, Counter = counter };
 
     private static EmbeddingSpaceTag Space() => new("nomic", 768, VectorNormalization.UnitL2);
-
-    private static IReadOnlyList<string> Decode(OrSet set)
-        => set.Elements().Select(e => Encoding.UTF8.GetString(e)).OrderBy(s => s, StringComparer.Ordinal).ToList();
 
     [Test]
     public void Metadata_concurrent_scalar_and_attribute_edits_converge()
@@ -130,30 +127,6 @@ public sealed class VectorRecordTests
     }
 
     [Test]
-    public void Membership_add_and_remove_converge_add_wins()
-    {
-        var baseline = new VectorMembershipRecord { RepoId = "acme", Collection = "code" };
-
-        var aMembers = new OrSet();
-        aMembers.Add(Encoding.UTF8.GetBytes("v1"), "A", 1);
-        aMembers.Add(Encoding.UTF8.GetBytes("v2"), "A", 2);
-        var a = baseline with { Members = aMembers };
-
-        var bMembers = new OrSet();
-        bMembers.Add(Encoding.UTF8.GetBytes("v3"), "B", 1);
-        var b = baseline with { Members = bMembers };
-
-        var merged = VectorMembershipRecord.Merge(a, b);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(merged.RepoId, Is.EqualTo("acme"));
-            Assert.That(merged.Collection, Is.EqualTo("code"));
-            Assert.That(Decode(merged.Members), Is.EqualTo(new[] { "v1", "v2", "v3" }));
-        });
-    }
-
-    [Test]
     public void Merge_rejects_null_arguments()
     {
         Assert.Multiple(() =>
@@ -163,8 +136,6 @@ public sealed class VectorRecordTests
             Assert.That(() => VectorMetadataRecord.Merge(new VectorMetadataRecord(), null!),
                 Throws.ArgumentNullException);
             Assert.That(() => VectorPayloadRecord.Merge(null!, new VectorPayloadRecord()),
-                Throws.ArgumentNullException);
-            Assert.That(() => VectorMembershipRecord.Merge(null!, new VectorMembershipRecord()),
                 Throws.ArgumentNullException);
         });
     }
@@ -198,17 +169,12 @@ public sealed class VectorRecordTests
     }
 
     [Test]
-    public void Payload_and_membership_round_trip_through_the_orleans_serializer()
+    public void Payload_round_trips_through_the_orleans_serializer()
     {
         var bytes = Encoding.UTF8.GetBytes("vector-bytes");
         var payload = VectorPayloadRecord.Create("acme", "sha256:abc", Space(), bytes);
 
-        var members = new OrSet();
-        members.Add(Encoding.UTF8.GetBytes("v1"), "A", 1);
-        var membership = new VectorMembershipRecord { RepoId = "acme", Collection = "code", Members = members };
-
         var payloadCopy = _serializer.Deserialize<VectorPayloadRecord>(_serializer.SerializeToArray(payload));
-        var membershipCopy = _serializer.Deserialize<VectorMembershipRecord>(_serializer.SerializeToArray(membership));
 
         Assert.Multiple(() =>
         {
@@ -216,9 +182,6 @@ public sealed class VectorRecordTests
             Assert.That(payloadCopy.ContentAddress, Is.EqualTo("sha256:abc"));
             Assert.That(payloadCopy.Space, Is.EqualTo(Space()));
             Assert.That(payloadCopy.Payload.Contains(bytes), Is.True);
-            Assert.That(membershipCopy.RepoId, Is.EqualTo("acme"));
-            Assert.That(membershipCopy.Collection, Is.EqualTo("code"));
-            Assert.That(Decode(membershipCopy.Members), Is.EqualTo(new[] { "v1" }));
         });
     }
 }

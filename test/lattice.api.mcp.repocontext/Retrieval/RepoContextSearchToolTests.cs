@@ -62,8 +62,7 @@ public sealed class RepoContextSearchToolTests
     {
         var writer = harness.Services.GetRequiredService<RepoContextVectorWriter>();
         var members = await writer.LoadEmbeddedMembersAsync(RepoId, ct);
-        return members.Contains(Encoding.UTF8.GetBytes(
-            VectorCodec.SourceId(RepoContextKeys.File(RepoId, relativePath))));
+        return members.Contains(VectorCodec.SourceId(RepoContextKeys.File(RepoId, relativePath)));
     }
 
     private static void Write(string root, string relativePath, string content)
@@ -369,7 +368,7 @@ public sealed class RepoContextSearchToolTests
         var members = await writer.LoadEmbeddedMembersAsync(RepoId, Ct);
         var missing = Enumerable.Range(0, fileCount)
             .Select(i => RepoContextKeys.File(RepoId, $"src/File{i:D3}.cs"))
-            .Where(k => !members.Contains(Encoding.UTF8.GetBytes(VectorCodec.SourceId(k))))
+            .Where(k => !members.Contains(VectorCodec.SourceId(k)))
             .ToList();
         Assert.That(missing, Is.Empty, "Every file must be vectorised across multiple embed batches.");
 
@@ -431,12 +430,8 @@ public sealed class RepoContextSearchToolTests
         }
 
         // Live membership stays bounded: exactly one live source identifier.
-        var membershipTree = harness.GrainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
-        var membershipBytes = await membershipTree.GetAsync(
-            RepoContextKeys.VectorMembership(RepoId, RepoContextVectorWriter.SourceCollection), Ct);
-        Assert.That(membershipBytes, Is.Not.Null);
-        var membership = serializer.Deserialize<VectorMembershipRecord>(membershipBytes!);
-        Assert.That(membership.Members.Elements().Count(), Is.EqualTo(1),
+        var membership = await writer.LoadEmbeddedMembersAsync(RepoId, Ct);
+        Assert.That(membership.Count, Is.EqualTo(1),
             "The stable source identifier is a member exactly once, however many times it re-embeds.");
 
         // Exactly one live metadata (presence) key for the source: the prior ones

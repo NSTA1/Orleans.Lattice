@@ -1,4 +1,3 @@
-using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Lattice.Api.Mcp.RepoContext.Tests.Harness;
@@ -53,7 +52,7 @@ public sealed class EmbeddingRepoContextVectorIngestorSymbolTests
     {
         var writer = harness.Services.GetRequiredService<RepoContextVectorWriter>();
         var members = await writer.LoadEmbeddedMembersAsync(RepoId, ct);
-        return members.Contains(Encoding.UTF8.GetBytes(VectorCodec.SourceId(symbolKey)));
+        return members.Contains(VectorCodec.SourceId(symbolKey));
     }
 
     [Test]

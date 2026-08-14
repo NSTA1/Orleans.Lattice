@@ -68,7 +68,7 @@ internal sealed class RepoContextSelfIndexGrain(
     /// reused across the scan's pages so a multi-page scan does not re-read it every
     /// tick. Cleared when a scan ends so the next scan sees fresh membership.
     /// </summary>
-    private OrSet? _embedded;
+    private IReadOnlySet<string>? _embedded;
 
     /// <inheritdoc />
     public async Task<RepoIndexProgress> EnsureRunningAsync(RepoIndexJobRequest request)

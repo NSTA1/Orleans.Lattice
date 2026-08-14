@@ -190,11 +190,10 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         // A symbol is (re-)embedded when its declaration changed this pass or when
         // it has no live embedding yet (a new symbol, or a back-fill of symbols
         // captured before symbol embedding existed). Presence is judged from the
-        // add-wins membership set, probed in memory with one reused buffer, so an
-        // already-embedded, unchanged symbol is skipped without a read per symbol.
+        // add-wins membership set, probed in memory, so an already-embedded,
+        // unchanged symbol is skipped without a read per symbol.
         var changed = new HashSet<string>(changedSymbolKeys, StringComparer.Ordinal);
         var embeddedMembers = await _writer.LoadEmbeddedMembersAsync(repoId, cancellationToken).ConfigureAwait(false);
-        var probe = new byte[VectorCodec.SourceIdByteLength];
 
         var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.Symbol);
         var prefix = RepoContextKeys.SymbolsPrefix(repoId);
@@ -216,9 +215,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 }
 
                 var sourceKey = record.Key;
-                var sourceId = VectorCodec.SourceId(sourceKey);
-                System.Text.Encoding.UTF8.GetBytes(sourceId, probe);
-                if (!changed.Contains(sourceKey) && embeddedMembers.Contains(probe))
+                if (!changed.Contains(sourceKey) && embeddedMembers.Contains(VectorCodec.SourceId(sourceKey)))
                 {
                     continue;
                 }
@@ -408,13 +405,11 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         }
 
         var embedded = await _writer.LoadEmbeddedMembersAsync(repoId, cancellationToken).ConfigureAwait(false);
-        var probe = new byte[VectorCodec.SourceIdByteLength];
         foreach (var file in unchangedFiles)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var sourceId = VectorCodec.SourceId(RepoContextKeys.File(repoId, file.RelativePath));
-            System.Text.Encoding.UTF8.GetBytes(sourceId, probe);
-            if (!embedded.Contains(probe))
+            if (!embedded.Contains(sourceId))
             {
                 toEmbed.Add(file);
             }
