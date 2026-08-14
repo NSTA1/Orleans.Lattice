@@ -13,6 +13,17 @@ boundary is a write-ahead log (WAL); conflict resolution is algebraic (no locks,
 no consensus). See [README.md](README.md) for the capability overview and
 [llms.txt](llms.txt) for a documentation index.
 
+## Finding things in the repo
+
+For any search, exploration, or recall in this repo, open with a `repocontext_*`
+probe (`repocontext_search`, or a quick `repocontext_health` /
+`repocontext_index_status` check) before `grep` / `glob`. Fall back to
+`grep` / `glob` / `view` only after the probe shows the index is degraded,
+mid-ingest, or absent - never sight-unseen. Canonical rules live in
+`.github/copilot-instructions.md`, the **repocontext** skill
+(`.github/skills/repocontext/SKILL.md`), and
+`.github/instructions/repocontext.instructions.md`.
+
 ## Repository layout
 
 - `src/lattice/` - the core `Orleans.Lattice` library. Grains are `internal`
