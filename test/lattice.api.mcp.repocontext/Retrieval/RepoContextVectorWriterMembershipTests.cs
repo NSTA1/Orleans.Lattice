@@ -1,4 +1,3 @@
-using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Api.Mcp.RepoContext.Tests.Harness;
 using Orleans.Serialization;
@@ -8,11 +7,11 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Retrieval;
 /// <summary>
 /// Integration tests for the membership and retirement surface of
 /// <see cref="RepoContextVectorWriter"/> against a live in-memory Lattice cluster:
-/// <see cref="RepoContextVectorWriter.AddMembersAsync"/> is a batched, idempotent
-/// read-modify-write; <see cref="RepoContextVectorWriter.LoadEmbeddedMembersAsync"/>
-/// returns the add-wins presence set; and
+/// <see cref="RepoContextVectorWriter.AddMembersAsync"/> enables one add-wins
+/// presence flag per source; <see cref="RepoContextVectorWriter.LoadEmbeddedMembersAsync"/>
+/// returns the set of source ids whose flag is enabled; and
 /// <see cref="RepoContextVectorWriter.RetireAsync"/> deletes a source's metadata
-/// presence keys and observed-removes it from the set so a deleted file drops its
+/// presence keys and disables its membership flag so a deleted file drops its
 /// vector and the tally stays honest. These are the invariants the embedding
 /// back-fill's gap detection and the retire-on-delete path rely on.
 /// </summary>
@@ -31,8 +30,8 @@ public sealed class RepoContextVectorWriterMembershipTests
 
     private CancellationToken Ct => TestContext.CurrentContext.CancellationToken;
 
-    private static byte[] SourceIdBytes(string sourceKey)
-        => Encoding.UTF8.GetBytes(VectorCodec.SourceId(sourceKey));
+    private static string SourceId(string sourceKey)
+        => VectorCodec.SourceId(sourceKey);
 
     // The deterministic vector id the writer forms for a source's first (unit 0)
     // passage, so a test can address the stored metadata presence key now that
@@ -60,9 +59,9 @@ public sealed class RepoContextVectorWriterMembershipTests
         var members = await writer.LoadEmbeddedMembersAsync(RepoId, Ct);
         Assert.Multiple(() =>
         {
-            Assert.That(members.Contains(SourceIdBytes(keyA)), Is.True, "A's source id is a live member.");
-            Assert.That(members.Contains(SourceIdBytes(keyB)), Is.True, "B's source id is a live member.");
-            Assert.That(members.Contains(SourceIdBytes(RepoContextKeys.File(RepoId, "src/C.cs"))), Is.False,
+            Assert.That(members.Contains(SourceId(keyA)), Is.True, "A's source id is a live member.");
+            Assert.That(members.Contains(SourceId(keyB)), Is.True, "B's source id is a live member.");
+            Assert.That(members.Contains(SourceId(RepoContextKeys.File(RepoId, "src/C.cs"))), Is.False,
                 "A source never added is not a member.");
         });
     }
@@ -76,7 +75,7 @@ public sealed class RepoContextVectorWriterMembershipTests
 
         var members = await writer.LoadEmbeddedMembersAsync("never-embedded", Ct);
 
-        Assert.That(members.Elements(), Is.Empty, "No membership record yet means an empty presence set, not an error.");
+        Assert.That(members, Is.Empty, "No membership record yet means an empty presence set, not an error.");
     }
 
     [Test]
@@ -93,8 +92,8 @@ public sealed class RepoContextVectorWriterMembershipTests
         var members = await writer.LoadEmbeddedMembersAsync(RepoId, Ct);
         Assert.Multiple(() =>
         {
-            Assert.That(members.Contains(SourceIdBytes(key)), Is.True);
-            Assert.That(members.Elements().Count(), Is.EqualTo(1),
+            Assert.That(members.Contains(SourceId(key)), Is.True);
+            Assert.That(members.Count, Is.EqualTo(1),
                 "Re-adding the same source is a no-op: the set has exactly one member, not a duplicate.");
         });
     }
@@ -109,7 +108,7 @@ public sealed class RepoContextVectorWriterMembershipTests
         await writer.AddMembersAsync(RepoId, Array.Empty<string>(), Ct);
 
         var members = await writer.LoadEmbeddedMembersAsync(RepoId, Ct);
-        Assert.That(members.Elements(), Is.Empty, "An empty batch writes no membership record.");
+        Assert.That(members, Is.Empty, "An empty batch writes no membership record.");
     }
 
     [Test]
@@ -130,7 +129,7 @@ public sealed class RepoContextVectorWriterMembershipTests
         {
             Assert.That(metadata.ExistsAsync(RepoContextKeys.Vector(RepoId, vectorId), Ct).Result, Is.True,
                 "The metadata presence key lands on the store.");
-            Assert.That(members.Contains(SourceIdBytes(key)), Is.False,
+            Assert.That(members.Contains(SourceId(key)), Is.False,
                 "Membership is the caller's per-batch responsibility (AddMembersAsync), not folded by StoreAsync.");
         });
     }
@@ -156,7 +155,7 @@ public sealed class RepoContextVectorWriterMembershipTests
         {
             Assert.That(metadata.ExistsAsync(RepoContextKeys.Vector(RepoId, vectorId), Ct).Result, Is.False,
                 "Retire deletes the source's metadata presence key.");
-            Assert.That(members.Contains(SourceIdBytes(key)), Is.False,
+            Assert.That(members.Contains(SourceId(key)), Is.False,
                 "Retire observed-removes the source from the membership set so the tally stays honest.");
         });
     }
@@ -173,7 +172,7 @@ public sealed class RepoContextVectorWriterMembershipTests
         await writer.RetireAsync(RepoId, RepoContextKeys.File(RepoId, "src/ghost.cs"), Ct);
 
         var members = await writer.LoadEmbeddedMembersAsync(RepoId, Ct);
-        Assert.That(members.Elements(), Is.Empty);
+        Assert.That(members, Is.Empty);
     }
 
     [Test]
@@ -194,8 +193,32 @@ public sealed class RepoContextVectorWriterMembershipTests
         var members = await writer.LoadEmbeddedMembersAsync(RepoId, Ct);
         Assert.Multiple(() =>
         {
-            Assert.That(members.Contains(SourceIdBytes(keyA)), Is.False, "The retired source is gone.");
-            Assert.That(members.Contains(SourceIdBytes(keyB)), Is.True, "The untouched source stays a live member.");
+            Assert.That(members.Contains(SourceId(keyA)), Is.False, "The retired source is gone.");
+            Assert.That(members.Contains(SourceId(keyB)), Is.True, "The untouched source stays a live member.");
+        });
+    }
+
+    [Test]
+    public async Task AddMembersAsync_after_retire_makes_the_source_live_again()
+    {
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+        var (writer, _) = Resolve(harness);
+
+        var key = RepoContextKeys.File(RepoId, "src/A.cs");
+        await writer.AddMembersAsync(RepoId, new[] { key }, Ct);
+        await writer.RetireAsync(RepoId, key, Ct);
+        // Re-adding after a retire must re-enable the flag: the enable authors a
+        // fresh dot that outlives the disable's tombstones, so an add-wins flag
+        // becomes live again rather than staying disabled.
+        await writer.AddMembersAsync(RepoId, new[] { key }, Ct);
+
+        var members = await writer.LoadEmbeddedMembersAsync(RepoId, Ct);
+        Assert.Multiple(() =>
+        {
+            Assert.That(members.Contains(SourceId(key)), Is.True,
+                "A source re-added after retirement is a live member again (enable-wins over the prior disable).");
+            Assert.That(members.Count, Is.EqualTo(1), "There is exactly one live member, not a duplicate.");
         });
     }
 

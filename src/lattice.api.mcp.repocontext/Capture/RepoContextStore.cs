@@ -38,6 +38,7 @@ internal sealed class RepoContextStore
     private readonly IGrainFactory _grainFactory;
     private readonly IRepoIndexRunner _indexRunner;
     private readonly Serializer _serializer;
+    private readonly RepoContextVectorWriter _vectorWriter;
     private readonly IOptionsMonitor<RepoContextTtlOptions> _ttlOptions;
     private readonly TimeProvider _timeProvider;
 
@@ -45,24 +46,28 @@ internal sealed class RepoContextStore
     /// <param name="grainFactory">The grain factory used to reach the named Lattice trees. Must not be <see langword="null"/>.</param>
     /// <param name="indexRunner">The indexing runner, used to drain an in-flight index to a halt before a repository's records are removed. Must not be <see langword="null"/>.</param>
     /// <param name="serializer">The Orleans serializer used to decode and re-encode records. Must not be <see langword="null"/>.</param>
+    /// <param name="vectorWriter">The vector writer that owns the membership layout, used to read the durable embedded-source count. Must not be <see langword="null"/>.</param>
     /// <param name="ttlOptions">The per-repository TTL policy. Must not be <see langword="null"/>.</param>
     /// <param name="timeProvider">The clock used to project remaining life. Must not be <see langword="null"/>.</param>
     public RepoContextStore(
         IGrainFactory grainFactory,
         IRepoIndexRunner indexRunner,
         Serializer serializer,
+        RepoContextVectorWriter vectorWriter,
         IOptionsMonitor<RepoContextTtlOptions> ttlOptions,
         TimeProvider timeProvider)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(indexRunner);
         ArgumentNullException.ThrowIfNull(serializer);
+        ArgumentNullException.ThrowIfNull(vectorWriter);
         ArgumentNullException.ThrowIfNull(ttlOptions);
         ArgumentNullException.ThrowIfNull(timeProvider);
 
         _grainFactory = grainFactory;
         _indexRunner = indexRunner;
         _serializer = serializer;
+        _vectorWriter = vectorWriter;
         _ttlOptions = ttlOptions;
         _timeProvider = timeProvider;
     }
@@ -563,25 +568,15 @@ internal sealed class RepoContextStore
 
     /// <summary>
     /// Reads the durable count of sources with a live embedding for a repository: the
-    /// live size of the add-wins vector-membership set that the vector writer
-    /// maintains as embeddings land. A source is a file or a captured symbol, so this
-    /// counts embedded files plus embedded symbols. It is read from the store of
+    /// number of live presence keys in the vector-membership tree that the vector
+    /// writer maintains as embeddings land. A source is a file or a captured symbol, so
+    /// this counts embedded files plus embedded symbols. It is read from the store of
     /// record (the vector-membership tree), never from a run's in-flight progress, so
-    /// it is a restart-durable diagnostic. Returns <c>0</c> when no membership record
-    /// exists yet (a repository whose embeddings have not started landing).
+    /// it is a restart-durable diagnostic. Returns <c>0</c> when nothing has been
+    /// embedded yet.
     /// </summary>
-    private async Task<long> ReadEmbeddedVectorCountAsync(string repoId, CancellationToken cancellationToken)
-    {
-        var membership = Tree(RepoContextTrees.VectorMembership);
-        var key = RepoContextKeys.VectorMembership(repoId, RepoContextVectorWriter.SourceCollection);
-        var bytes = await membership.GetAsync(key, cancellationToken).ConfigureAwait(false);
-        if (bytes is null)
-        {
-            return 0L;
-        }
-
-        return _serializer.Deserialize<VectorMembershipRecord>(bytes).Members.Count;
-    }
+    private Task<long> ReadEmbeddedVectorCountAsync(string repoId, CancellationToken cancellationToken) =>
+        _vectorWriter.CountEmbeddedAsync(repoId, cancellationToken);
 
     private TimeSpan? ResolveTtl(string repoId, long? ttlSeconds, bool created)
     {

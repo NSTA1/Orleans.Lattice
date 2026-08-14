@@ -22,15 +22,35 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// tree-level tombstones the compactor collects - never a single ever-growing
 /// value. The immutable, content-addressed payload
 /// lands once per content address in the <see cref="RepoContextTrees.VectorPayload"/>
-/// tree (deduplicated and never rewritten), and the low-churn set of live source
-/// identifiers is folded into a bounded add-wins <see cref="VectorMembershipRecord"/>
-/// in the <see cref="RepoContextTrees.VectorMembership"/> tree.
+/// tree (deduplicated and never rewritten), and each live source is recorded as its
+/// own presence key <c>{sourceId}</c> in the
+/// <see cref="RepoContextTrees.VectorMembership"/> tree - one tiny keyed row per
+/// source rather than a single aggregate set - so a write touches only the sources
+/// that changed and never reads or re-ships a growing whole-set value.
+/// </para>
+/// <para>
+/// <b>Config-only multi-cluster.</b> All three vector trees are keyed per unit
+/// (payload per content address, metadata per vector, membership per source), so
+/// enabling cross-cluster replication is pure configuration: enrol the trees in the
+/// replication package and each write ships only its own small keyed delta, never a
+/// whole-set blob, letting one cluster compute the (expensive) embedding index once
+/// and replicate it rather than every cluster re-deriving it. Membership presence is
+/// <b>always</b> an enable-wins <see cref="OrFlag"/> - single-cluster and replicated
+/// hosts share one on-disk format, so the layout never depends on whether replication
+/// happens to be enabled and turning replication on needs no re-index. A source
+/// embedded on one cluster and pruned on another therefore converges add-wins by CRDT
+/// merge rather than by a re-embed, and the gap scanner stays a purely local heal for
+/// interrupted runs, never load-bearing for cross-cluster convergence.
 /// </para>
 /// </summary>
 internal sealed class RepoContextVectorWriter
 {
-    /// <summary>The single membership collection every source identifier is a member of.</summary>
-    internal const string SourceCollection = "sources";
+    /// <summary>The dot-authoring replica id used when the host is not a replicated
+    /// cluster and the replication seam reports no local replica id. A fixed value is
+    /// safe because a single-cluster host is a single logical writer; once replication
+    /// is enabled the seam supplies a real, per-cluster id and the union-based flag
+    /// merge folds the two authors together with no migration.</summary>
+    private const string LocalReplicaFallback = "local";
 
     /// <summary>
     /// The width, in digits, of the zero-padded unit ordinal embedded in a
@@ -41,17 +61,21 @@ internal sealed class RepoContextVectorWriter
 
     private readonly IGrainFactory _grainFactory;
     private readonly Serializer _serializer;
+    private readonly ILatticeReplicationContext _replication;
 
     /// <summary>Creates the vector writer.</summary>
     /// <param name="grainFactory">The grain factory used to reach the reserved vector trees. Must not be <see langword="null"/>.</param>
     /// <param name="serializer">The Orleans serializer used to decode and re-encode vector records. Must not be <see langword="null"/>.</param>
+    /// <param name="replication">The replication context that reports whether, and in what merge mode, the membership tree is replicated. Must not be <see langword="null"/>.</param>
     /// <exception cref="ArgumentNullException">Any argument is null.</exception>
-    public RepoContextVectorWriter(IGrainFactory grainFactory, Serializer serializer)
+    public RepoContextVectorWriter(IGrainFactory grainFactory, Serializer serializer, ILatticeReplicationContext replication)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(serializer);
+        ArgumentNullException.ThrowIfNull(replication);
         _grainFactory = grainFactory;
         _serializer = serializer;
+        _replication = replication;
     }
 
     /// <summary>
@@ -104,11 +128,9 @@ internal sealed class RepoContextVectorWriter
         await RetireStaleAsync(repoId, sourceId, keep, cancellationToken).ConfigureAwait(false);
 
         // Membership is recorded by the caller once per embed batch (see
-        // AddMembersAsync), not per store: folding presence for every source would
-        // read-modify-write the whole growing membership record thousands of times
-        // over a large back-fill. The caller flushes a batch's membership after its
-        // vectors land, so an interrupted run leaves at most one batch of vectors
-        // unrecorded (re-embedded, idempotently, on the next pass).
+        // AddMembersAsync), not per store: a batch's presence keys land in a single
+        // bulk write after its vectors, so an interrupted run leaves at most one
+        // batch of vectors unrecorded (re-embedded, idempotently, on the next pass).
     }
 
     /// <summary>
@@ -133,13 +155,13 @@ internal sealed class RepoContextVectorWriter
 
     /// <summary>
     /// Retires the entire live embedding of <paramref name="sourceKey"/>: every
-    /// metadata presence key for the source is deleted and its identifier is
-    /// observed-removed from the membership set. Used when the source itself is
-    /// removed (its file was pruned), so a deleted file naturally drops its vector
-    /// and the membership set stays an honest tally of live embeddings. The
-    /// immutable, content-addressed payload is left for the per-tree compactor to
-    /// reclaim, since it may be shared by another source with identical content.
-    /// Idempotent: retiring a source with no live vector is a no-op.
+    /// metadata presence key for the source is deleted and its membership presence
+    /// key is removed (deleted in last-writer-wins mode, disabled in flag mode). Used
+    /// when the source itself is removed (its file was pruned), so a deleted file
+    /// naturally drops its vector and the membership tree stays an honest tally of
+    /// live embeddings. The immutable, content-addressed payload is left for the
+    /// per-tree compactor to reclaim, since it may be shared by another source with
+    /// identical content. Idempotent: retiring a source with no live vector is a no-op.
     /// </summary>
     /// <param name="repoId">The repository the source belongs to. Must not be <see langword="null"/>.</param>
     /// <param name="sourceKey">The canonical record key whose embedding to retire. Must not be <see langword="null"/>.</param>
@@ -257,15 +279,15 @@ internal sealed class RepoContextVectorWriter
     }
 
     /// <summary>
-    /// Records embedded presence for a whole batch of sources in a single
-    /// membership read-modify-write. The membership set holds only the 16-character
-    /// source identifiers derived from <paramref name="sourceKeys"/>, never the
-    /// embeddings themselves. Folding presence per source would re-read and rewrite
-    /// the whole growing membership record once per file - thousands of cycles over
-    /// a large back-fill - so a caller stores a batch's vectors and then calls this
-    /// once to fold all of that batch's identifiers in with one read and, at most,
-    /// one write. Re-adding an identifier that is already a live member is a no-op,
-    /// and a batch whose sources are all already present writes nothing.
+    /// Records embedded presence for a whole batch of sources, one enable-wins flag
+    /// per source. Each flag lives at key <c>{sourceId}</c> under the repository's
+    /// membership range and carries only the 16-character source identifier derived
+    /// from <paramref name="sourceKeys"/>, never the embedding itself. Presence is
+    /// always an <see cref="OrFlag"/> so it converges add-wins under concurrent
+    /// active-active enable/disable across clusters - a source embedded on one cluster
+    /// and pruned on another survives by CRDT merge, never by a re-embed - and so the
+    /// on-disk format never depends on whether replication happens to be enabled.
+    /// Re-adding a source that is already present is idempotent.
     /// </summary>
     /// <param name="repoId">The repository the sources belong to. Must not be <see langword="null"/>.</param>
     /// <param name="sourceKeys">The canonical record keys whose embeddings just landed. Must not be <see langword="null"/>.</param>
@@ -283,86 +305,127 @@ internal sealed class RepoContextVectorWriter
         }
 
         var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
-        var key = RepoContextKeys.VectorMembership(repoId, SourceCollection);
-
-        var existing = await tree.GetAsync(key, cancellationToken).ConfigureAwait(false);
-        var record = existing is null
-            ? new VectorMembershipRecord { RepoId = repoId, Collection = SourceCollection }
-            : _serializer.Deserialize<VectorMembershipRecord>(existing);
-
-        var added = false;
+        var replicaId = ReplicaId();
         foreach (var sourceKey in sourceKeys)
         {
-            var element = System.Text.Encoding.UTF8.GetBytes(VectorCodec.SourceId(sourceKey));
-            if (record.Members.Contains(element))
-            {
-                // A stable identifier: a re-embed re-adds the same member, so the
-                // set is already correct for this source and needs no change.
-                continue;
-            }
-
-            record.Members.Add(element, Guid.NewGuid().ToString("N"), 0L);
-            added = true;
+            cancellationToken.ThrowIfCancellationRequested();
+            var key = RepoContextKeys.VectorMembership(repoId, VectorCodec.SourceId(sourceKey));
+            await tree.OrFlag(key).EnableAsync(replicaId, cancellationToken).ConfigureAwait(false);
         }
-
-        if (!added)
-        {
-            // Every source in the batch was already a live member (an idempotent
-            // re-run), so the set is unchanged and needs no rewrite.
-            return;
-        }
-
-        await tree.SetAsync(key, _serializer.SerializeToArray(record), cancellationToken).ConfigureAwait(false);
     }
 
     private async Task RemoveMemberAsync(string repoId, string sourceId, CancellationToken cancellationToken)
     {
         var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
-        var key = RepoContextKeys.VectorMembership(repoId, SourceCollection);
+        var key = RepoContextKeys.VectorMembership(repoId, sourceId);
 
-        var existing = await tree.GetAsync(key, cancellationToken).ConfigureAwait(false);
-        if (existing is null)
-        {
-            // No membership record yet: nothing was ever embedded for this repo.
-            return;
-        }
-
-        var record = _serializer.Deserialize<VectorMembershipRecord>(existing);
-        var element = System.Text.Encoding.UTF8.GetBytes(sourceId);
-        if (!record.Members.Remove(element))
-        {
-            // The source was not a live member (never embedded, or already
-            // retired), so the set is already correct and needs no rewrite.
-            return;
-        }
-
-        await tree.SetAsync(key, _serializer.SerializeToArray(record), cancellationToken).ConfigureAwait(false);
+        // Disable rather than delete so the removal carries causal history and
+        // converges add-wins against a concurrent enable on another cluster.
+        await tree.OrFlag(key).DisableAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
-    /// Loads the set of embedded source identifiers for <paramref name="repoId"/>
-    /// as the raw add-wins membership set, so a caller can probe presence with
-    /// <see cref="OrSet.Contains(byte[])"/> without materialising a separate
-    /// collection. The membership record carries only 16-character source
-    /// identifiers - never the embeddings themselves - so this read never
-    /// transfers a vector payload across the grain boundary; it is a single read
-    /// per repository, not one per source. Returns an empty set when the
-    /// repository has embedded nothing yet.
+    /// Loads the set of embedded source identifiers for <paramref name="repoId"/> so
+    /// a caller can probe presence with <see cref="IReadOnlySet{T}.Contains(string)"/>.
+    /// Presence is an enable-wins flag, so the read decodes each row and keeps only the
+    /// enabled ones (a disabled flag still occupies a key until the compactor reclaims
+    /// it). The membership tree carries only 16-character source identifiers, never the
+    /// embeddings themselves. Returns an empty set when the repository has embedded
+    /// nothing yet.
     /// </summary>
     /// <param name="repoId">The repository whose embedded source identifiers to load. Must not be <see langword="null"/>.</param>
     /// <param name="cancellationToken">Cancels the read.</param>
-    /// <returns>The live membership set of embedded source identifiers.</returns>
+    /// <returns>The set of live embedded source identifiers.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="repoId"/> is null.</exception>
-    public async Task<OrSet> LoadEmbeddedMembersAsync(string repoId, CancellationToken cancellationToken)
+    public async Task<IReadOnlySet<string>> LoadEmbeddedMembersAsync(string repoId, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(repoId);
 
         var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
-        var key = RepoContextKeys.VectorMembership(repoId, SourceCollection);
+        var prefix = RepoContextKeys.VectorMembershipsPrefix(repoId);
+        var endExclusive = RepoContextPortability.PrefixUpperBound(prefix);
+        var members = new HashSet<string>(StringComparer.Ordinal);
+        if (endExclusive is null)
+        {
+            return members;
+        }
 
-        var existing = await tree.GetAsync(key, cancellationToken).ConfigureAwait(false);
-        return existing is null
-            ? new OrSet()
-            : _serializer.Deserialize<VectorMembershipRecord>(existing).Members;
+        await foreach (var entry in tree
+            .ScanEntriesAsync(prefix, endExclusive, cancellationToken: cancellationToken)
+            .ConfigureAwait(false))
+        {
+            if (JsonLatticeSerializer<OrFlag>.Default.Deserialize(entry.Value).IsEnabled
+                && TryReadSourceId(entry.Key, out var sourceId))
+            {
+                members.Add(sourceId);
+            }
+        }
+
+        return members;
+    }
+
+    /// <summary>
+    /// Counts the live embedded sources for <paramref name="repoId"/> - the number of
+    /// enabled membership flags. A disabled flag still occupies a key until the
+    /// compactor reclaims it, so the count decodes each row rather than counting keys.
+    /// Returns zero when nothing is embedded.
+    /// </summary>
+    /// <param name="repoId">The repository whose embedded source count to read. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    /// <returns>The number of live embedded sources.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="repoId"/> is null.</exception>
+    public async Task<long> CountEmbeddedAsync(string repoId, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+
+        var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
+        var prefix = RepoContextKeys.VectorMembershipsPrefix(repoId);
+        var endExclusive = RepoContextPortability.PrefixUpperBound(prefix);
+        if (endExclusive is null)
+        {
+            return 0L;
+        }
+
+        var enabled = 0L;
+        await foreach (var entry in tree
+            .ScanEntriesAsync(prefix, endExclusive, cancellationToken: cancellationToken)
+            .ConfigureAwait(false))
+        {
+            if (JsonLatticeSerializer<OrFlag>.Default.Deserialize(entry.Value).IsEnabled)
+            {
+                enabled++;
+            }
+        }
+
+        return enabled;
+    }
+
+    /// <summary>
+    /// The dot-authoring replica identity for a membership flag enable. When the host
+    /// runs a replicated cluster this is the seam's <see cref="ILatticeReplicationContext.LocalReplicaId"/>
+    /// (a distinct id per cluster, so concurrent enables carry distinct dots and merge
+    /// add-wins); on a single-cluster host, where the seam reports no id, it falls back
+    /// to a fixed local author. Because merge is a union of dots, the author can change
+    /// over a repository's lifetime (single-cluster local id, then a real cluster id
+    /// once replication is enabled) with no migration and no format change.
+    /// </summary>
+    private string ReplicaId()
+    {
+        var replicaId = _replication.LocalReplicaId;
+        return string.IsNullOrEmpty(replicaId) ? LocalReplicaFallback : replicaId;
+    }
+
+    private static bool TryReadSourceId(string membershipKey, out string sourceId)
+    {
+        if (RepoContextKeys.TryParse(membershipKey, out var parsed)
+            && parsed.Kind == RepoContextRecordKind.VectorMembership
+            && parsed.Collection is { Length: > 0 } collection)
+        {
+            sourceId = collection;
+            return true;
+        }
+
+        sourceId = string.Empty;
+        return false;
     }
 }

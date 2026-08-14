@@ -73,8 +73,7 @@ public sealed class EmbeddingRepoContextVectorIngestorBackfillTests
     {
         var writer = harness.Services.GetRequiredService<RepoContextVectorWriter>();
         var members = await writer.LoadEmbeddedMembersAsync(RepoId, ct);
-        var sourceId = System.Text.Encoding.UTF8.GetBytes(
-            VectorCodec.SourceId(RepoContextKeys.File(RepoId, relativePath)));
+        var sourceId = VectorCodec.SourceId(RepoContextKeys.File(RepoId, relativePath));
         return members.Contains(sourceId);
     }
 

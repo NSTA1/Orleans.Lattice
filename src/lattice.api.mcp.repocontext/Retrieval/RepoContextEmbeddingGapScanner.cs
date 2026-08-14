@@ -40,9 +40,9 @@ internal sealed class RepoContextEmbeddingGapScanner
     /// </summary>
     /// <param name="repoId">The repository whose membership to load. Must not be <see langword="null"/>.</param>
     /// <param name="cancellationToken">Cancels the read.</param>
-    /// <returns>The live membership set of embedded source identifiers.</returns>
+    /// <returns>The set of live embedded source identifiers.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="repoId"/> is null.</exception>
-    public Task<OrSet> LoadEmbeddedAsync(string repoId, CancellationToken cancellationToken)
+    public Task<IReadOnlySet<string>> LoadEmbeddedAsync(string repoId, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(repoId);
         return _writer.LoadEmbeddedMembersAsync(repoId, cancellationToken);
@@ -66,7 +66,7 @@ internal sealed class RepoContextEmbeddingGapScanner
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="pageSize"/> is not positive.</exception>
     public async Task<GapScanPage> ScanFilePageAsync(
         string repoId,
-        OrSet embedded,
+        IReadOnlySet<string> embedded,
         string? resumeKeyInclusive,
         int pageSize,
         CancellationToken cancellationToken)
@@ -80,7 +80,6 @@ internal sealed class RepoContextEmbeddingGapScanner
         var start = resumeKeyInclusive ?? filesPrefix;
         var end = RepoContextPortability.PrefixUpperBound(filesPrefix);
 
-        var probe = new byte[VectorCodec.SourceIdByteLength];
         var inspected = 0;
         string? lastKey = null;
 
@@ -92,9 +91,7 @@ internal sealed class RepoContextEmbeddingGapScanner
             lastKey = key;
             inspected++;
 
-            var sourceId = VectorCodec.SourceId(key);
-            System.Text.Encoding.UTF8.GetBytes(sourceId, probe);
-            if (!embedded.Contains(probe))
+            if (!embedded.Contains(VectorCodec.SourceId(key)))
             {
                 // First file with no live embedding: the repository has a gap. The
                 // caller re-drives the whole index, so there is no need to keep
