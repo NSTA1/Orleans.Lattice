@@ -56,4 +56,20 @@ public sealed class NoOpRepoContextVectorIngestorTests
 
         Assert.Pass("The no-op retire completed without touching any store.");
     }
+
+    [Test]
+    public async Task IngestSymbolsAsync_completes_without_embedding_anything()
+    {
+        var ingestor = new NoOpRepoContextVectorIngestor();
+
+        // The default seam owns no embedder, so symbol vectorisation is inert: it
+        // reports zero symbols embedded and ignores both the changed and pruned keys.
+        var embedded = await ingestor.IngestSymbolsAsync(
+            "repo",
+            new[] { "repo/repo/sym/A" },
+            new[] { "repo/repo/sym/B" },
+            TestContext.CurrentContext.CancellationToken);
+
+        Assert.That(embedded, Is.EqualTo(0));
+    }
 }

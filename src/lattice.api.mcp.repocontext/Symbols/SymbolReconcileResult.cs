@@ -5,7 +5,9 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// written (upserted) this run, and, for every file whose structural node the
 /// bootstrap is about to rewrite, the fully-qualified names that file now declares -
 /// so the file node's <see cref="FileNode.DeclaredSymbols"/> register can be stamped
-/// atomically with the rest of the node.
+/// atomically with the rest of the node - together with the symbol record keys the
+/// pass upserted or pruned, so the vector ingestor can refresh or retire exactly
+/// those symbols' embeddings.
 /// </summary>
 /// <param name="SymbolsCaptured">The number of distinct symbols upserted (written as
 /// live) during the pass.</param>
@@ -13,6 +15,13 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// repository-relative file path, covering exactly the added, updated, and
 /// back-filled files whose nodes are being rewritten (and therefore the files whose
 /// node should be stamped as symbol-processed).</param>
+/// <param name="ChangedSymbolKeys">The canonical record keys of the symbols upserted
+/// this pass (a new symbol or a changed declaration), so their embeddings are
+/// refreshed.</param>
+/// <param name="PrunedSymbolKeys">The canonical record keys of the symbols pruned
+/// this pass (no declaring file remains), so their embeddings are retired.</param>
 internal readonly record struct SymbolReconcileResult(
     int SymbolsCaptured,
-    IReadOnlyDictionary<string, IReadOnlyList<string>> DeclaredByPath);
+    IReadOnlyDictionary<string, IReadOnlyList<string>> DeclaredByPath,
+    IReadOnlyList<string> ChangedSymbolKeys,
+    IReadOnlyList<string> PrunedSymbolKeys);

@@ -96,6 +96,8 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         services.TryAddSingleton<IRepoContextVectorIngestor>(sp =>
             new EmbeddingRepoContextVectorIngestor(
                 sp.GetRequiredService<RepoContextVectorWriter>(),
+                sp.GetRequiredService<IGrainFactory>(),
+                sp.GetRequiredService<Orleans.Serialization.Serializer>(),
                 sp.GetRequiredService<ILogger<EmbeddingRepoContextVectorIngestor>>(),
                 sp.GetService<IEmbeddingProvider>()));
         services.TryAddSingleton<RepoContextVectorWriter>();

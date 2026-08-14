@@ -63,4 +63,30 @@ internal interface IRepoContextVectorIngestor
         string repoId,
         IReadOnlyList<string> removedPaths,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Embeds the repository's per-symbol records as their own passages so a
+    /// symbol-level query lands on the declaring symbol. A symbol upserted this pass
+    /// (in <paramref name="changedSymbolKeys"/>) is re-embedded so its passage
+    /// reflects the new declaration; a symbol pruned this pass (in
+    /// <paramref name="prunedSymbolKeys"/>) has its embedding retired; and any symbol
+    /// with no live embedding yet - a new symbol, or one captured before symbol
+    /// embedding existed - is back-filled, so a repository indexed earlier gains
+    /// symbol passages without a re-walk. The default binding ignores the call.
+    /// Retirement runs even when the embedding provider is unavailable (it only
+    /// deletes stored records); embedding is skipped and returns zero when no
+    /// provider is bound or it is unreachable.
+    /// </summary>
+    /// <param name="repoId">The repository identity the symbols belong to.</param>
+    /// <param name="changedSymbolKeys">The canonical record keys of the symbols
+    /// upserted this pass, whose embeddings should be refreshed.</param>
+    /// <param name="prunedSymbolKeys">The canonical record keys of the symbols pruned
+    /// this pass, whose embeddings should be retired.</param>
+    /// <param name="cancellationToken">Cancels the ingest.</param>
+    /// <returns>The number of symbols whose vectors were embedded and stored.</returns>
+    Task<int> IngestSymbolsAsync(
+        string repoId,
+        IReadOnlyCollection<string> changedSymbolKeys,
+        IReadOnlyCollection<string> prunedSymbolKeys,
+        CancellationToken cancellationToken);
 }

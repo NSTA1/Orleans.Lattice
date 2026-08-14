@@ -25,4 +25,11 @@ internal sealed class NoOpRepoContextVectorIngestor : IRepoContextVectorIngestor
         string repoId,
         IReadOnlyList<string> removedPaths,
         CancellationToken cancellationToken) => Task.CompletedTask;
+
+    /// <inheritdoc />
+    public Task<int> IngestSymbolsAsync(
+        string repoId,
+        IReadOnlyCollection<string> changedSymbolKeys,
+        IReadOnlyCollection<string> prunedSymbolKeys,
+        CancellationToken cancellationToken) => Task.FromResult(0);
 }

@@ -562,12 +562,13 @@ internal sealed class RepoContextStore
     }
 
     /// <summary>
-    /// Reads the durable count of files with a live embedding for a repository: the
+    /// Reads the durable count of sources with a live embedding for a repository: the
     /// live size of the add-wins vector-membership set that the vector writer
-    /// maintains as embeddings land. It is read from the store of record (the
-    /// vector-membership tree), never from a run's in-flight progress, so it is a
-    /// restart-durable diagnostic. Returns <c>0</c> when no membership record exists
-    /// yet (a repository whose embeddings have not started landing).
+    /// maintains as embeddings land. A source is a file or a captured symbol, so this
+    /// counts embedded files plus embedded symbols. It is read from the store of
+    /// record (the vector-membership tree), never from a run's in-flight progress, so
+    /// it is a restart-durable diagnostic. Returns <c>0</c> when no membership record
+    /// exists yet (a repository whose embeddings have not started landing).
     /// </summary>
     private async Task<long> ReadEmbeddedVectorCountAsync(string repoId, CancellationToken cancellationToken)
     {

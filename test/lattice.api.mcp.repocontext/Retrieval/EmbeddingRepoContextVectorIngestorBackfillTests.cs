@@ -63,6 +63,8 @@ public sealed class EmbeddingRepoContextVectorIngestorBackfillTests
         RepoContextMcpHarness harness, IEmbeddingProvider? provider)
         => new(
             harness.Services.GetRequiredService<RepoContextVectorWriter>(),
+            harness.GrainFactory,
+            harness.Services.GetRequiredService<Orleans.Serialization.Serializer>(),
             NullLogger<EmbeddingRepoContextVectorIngestor>.Instance,
             provider);
 

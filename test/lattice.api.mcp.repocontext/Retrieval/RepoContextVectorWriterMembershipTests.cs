@@ -34,6 +34,15 @@ public sealed class RepoContextVectorWriterMembershipTests
     private static byte[] SourceIdBytes(string sourceKey)
         => Encoding.UTF8.GetBytes(VectorCodec.SourceId(sourceKey));
 
+    // The deterministic vector id the writer forms for a source's first (unit 0)
+    // passage, so a test can address the stored metadata presence key now that
+    // StoreAsync writes per-unit keys and no longer returns the id.
+    private static string ExpectedVectorId(string sourceKey, ReadOnlyMemory<float> vector)
+    {
+        var contentAddress = VectorCodec.ContentAddress(VectorCodec.Encode(vector));
+        return RepoContextVectorWriter.FormatVectorId(VectorCodec.SourceId(sourceKey), 0, contentAddress);
+    }
+
     private static (RepoContextVectorWriter Writer, IGrainFactory Grains) Resolve(RepoContextMcpHarness harness)
         => (harness.Services.GetRequiredService<RepoContextVectorWriter>(), harness.GrainFactory);
 
@@ -111,7 +120,9 @@ public sealed class RepoContextVectorWriterMembershipTests
         var (writer, grains) = Resolve(harness);
 
         var key = RepoContextKeys.File(RepoId, "src/A.cs");
-        var vectorId = await writer.StoreAsync(RepoId, key, Space, new float[] { 1f, 0f, 0f, 0f }, Ct);
+        var vector = new float[] { 1f, 0f, 0f, 0f };
+        await writer.StoreAsync(RepoId, key, Space, new ReadOnlyMemory<float>[] { vector }, Ct);
+        var vectorId = ExpectedVectorId(key, vector);
 
         var metadata = grains.GetGrain<ILattice>(RepoContextTrees.VectorMetadata);
         var members = await writer.LoadEmbeddedMembersAsync(RepoId, Ct);
@@ -132,7 +143,9 @@ public sealed class RepoContextVectorWriterMembershipTests
         var (writer, grains) = Resolve(harness);
 
         var key = RepoContextKeys.File(RepoId, "src/A.cs");
-        var vectorId = await writer.StoreAsync(RepoId, key, Space, new float[] { 1f, 0f, 0f, 0f }, Ct);
+        var vector = new float[] { 1f, 0f, 0f, 0f };
+        await writer.StoreAsync(RepoId, key, Space, new ReadOnlyMemory<float>[] { vector }, Ct);
+        var vectorId = ExpectedVectorId(key, vector);
         await writer.AddMembersAsync(RepoId, new[] { key }, Ct);
 
         await writer.RetireAsync(RepoId, key, Ct);
@@ -172,8 +185,8 @@ public sealed class RepoContextVectorWriterMembershipTests
 
         var keyA = RepoContextKeys.File(RepoId, "src/A.cs");
         var keyB = RepoContextKeys.File(RepoId, "src/B.cs");
-        await writer.StoreAsync(RepoId, keyA, Space, new float[] { 1f, 0f, 0f, 0f }, Ct);
-        await writer.StoreAsync(RepoId, keyB, Space, new float[] { 0f, 1f, 0f, 0f }, Ct);
+        await writer.StoreAsync(RepoId, keyA, Space, new ReadOnlyMemory<float>[] { new float[] { 1f, 0f, 0f, 0f } }, Ct);
+        await writer.StoreAsync(RepoId, keyB, Space, new ReadOnlyMemory<float>[] { new float[] { 0f, 1f, 0f, 0f } }, Ct);
         await writer.AddMembersAsync(RepoId, new[] { keyA, keyB }, Ct);
 
         await writer.RetireAsync(RepoId, keyA, Ct);
@@ -184,5 +197,108 @@ public sealed class RepoContextVectorWriterMembershipTests
             Assert.That(members.Contains(SourceIdBytes(keyA)), Is.False, "The retired source is gone.");
             Assert.That(members.Contains(SourceIdBytes(keyB)), Is.True, "The untouched source stays a live member.");
         });
+    }
+
+    [Test]
+    public async Task StoreAsync_persists_one_presence_key_per_passage()
+    {
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+        var (writer, _) = Resolve(harness);
+
+        var key = RepoContextKeys.File(RepoId, "src/A.cs");
+        var vectors = new ReadOnlyMemory<float>[]
+        {
+            new float[] { 1f, 0f, 0f, 0f },
+            new float[] { 0f, 1f, 0f, 0f },
+            new float[] { 0f, 0f, 1f, 0f },
+        };
+        await writer.StoreAsync(RepoId, key, Space, vectors, Ct);
+
+        var live = await LiveVectorKeysAsync(harness, key);
+        Assert.That(live, Has.Count.EqualTo(3),
+            "A three-passage source stores three live metadata presence keys, one per unit.");
+    }
+
+    [Test]
+    public async Task StoreAsync_retires_units_the_source_no_longer_has_when_it_shrinks()
+    {
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+        var (writer, _) = Resolve(harness);
+
+        var key = RepoContextKeys.File(RepoId, "src/A.cs");
+        await writer.StoreAsync(RepoId, key, Space, new ReadOnlyMemory<float>[]
+        {
+            new float[] { 1f, 0f, 0f, 0f },
+            new float[] { 0f, 1f, 0f, 0f },
+            new float[] { 0f, 0f, 1f, 0f },
+        }, Ct);
+
+        // Re-embed with fewer passages: the source lost content, so the trailing
+        // units must be retired and only the current set left live.
+        await writer.StoreAsync(RepoId, key, Space, new ReadOnlyMemory<float>[]
+        {
+            new float[] { 1f, 0f, 0f, 0f },
+        }, Ct);
+
+        var live = await LiveVectorKeysAsync(harness, key);
+        Assert.That(live, Has.Count.EqualTo(1),
+            "Shrinking the passage set retires the units the source no longer has.");
+    }
+
+    [Test]
+    public async Task StoreAsync_replaces_a_units_key_when_its_content_changes()
+    {
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+        var (writer, _) = Resolve(harness);
+
+        var key = RepoContextKeys.File(RepoId, "src/A.cs");
+        var first = new float[] { 1f, 0f, 0f, 0f };
+        await writer.StoreAsync(RepoId, key, Space, new ReadOnlyMemory<float>[] { first }, Ct);
+        var firstId = ExpectedVectorId(key, first);
+
+        var second = new float[] { 0f, 1f, 0f, 0f };
+        await writer.StoreAsync(RepoId, key, Space, new ReadOnlyMemory<float>[] { second }, Ct);
+        var secondId = ExpectedVectorId(key, second);
+
+        var live = await LiveVectorKeysAsync(harness, key);
+        Assert.Multiple(() =>
+        {
+            Assert.That(live, Has.Count.EqualTo(1), "A content-changed unit leaves exactly one live key.");
+            Assert.That(live, Does.Contain(RepoContextKeys.Vector(RepoId, secondId)),
+                "The live key addresses the new content.");
+            Assert.That(live, Does.Not.Contain(RepoContextKeys.Vector(RepoId, firstId)),
+                "The superseded content address is retired.");
+        });
+    }
+
+    [Test]
+    public void FormatVectorId_zero_pads_the_unit_and_groups_by_source_prefix()
+    {
+        var id = RepoContextVectorWriter.FormatVectorId("0123456789abcdef", 7, "deadbeef");
+
+        Assert.That(id, Is.EqualTo("0123456789abcdef.0007.deadbeef"),
+            "The unit ordinal is fixed-width so lexical order matches numeric order under the shared source prefix.");
+    }
+
+    private static async Task<List<string>> LiveVectorKeysAsync(RepoContextMcpHarness harness, string sourceKey)
+    {
+        var sourceId = VectorCodec.SourceId(sourceKey);
+        var prefix = $"{RepoContextKeys.VectorsPrefix(RepoId)}{sourceId}.";
+        var tree = harness.GrainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMetadata);
+        var keys = new List<string>();
+        string? token = null;
+        do
+        {
+            var page = await RepoContextPortability.EnumerateAsync(
+                tree, prefix, token, RepoContextPortability.DefaultPageSize, vectorExport: null, CancellationToken.None);
+            keys.AddRange(page.Records.Select(r => r.Key));
+            token = page.HasMore ? page.ContinuationToken : null;
+        }
+        while (token is not null);
+
+        return keys;
     }
 }

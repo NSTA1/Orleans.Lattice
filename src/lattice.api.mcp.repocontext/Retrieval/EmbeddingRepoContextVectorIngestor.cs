@@ -1,15 +1,24 @@
 using System.IO;
 using Microsoft.Extensions.Logging;
+using Orleans.Serialization;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext;
 
 /// <summary>
 /// The real bootstrap-time vectorisation seam: the
 /// <see cref="IRepoContextVectorIngestor"/> that embeds the files a bootstrap run
-/// added or updated and stores their vectors on the reserved vector trees. It
-/// replaces the default <see cref="NoOpRepoContextVectorIngestor"/> so a run wires
-/// straight through from the structural walk to a searchable semantic index, with
-/// no change to the bootstrap coordinator or the tool.
+/// added or updated - and the per-symbol records the reconcile captured - and
+/// stores their vectors on the reserved vector trees. It replaces the default
+/// <see cref="NoOpRepoContextVectorIngestor"/> so a run wires straight through from
+/// the structural walk to a searchable semantic index, with no change to the tool.
+/// <para>
+/// <b>Chunked and symbol-granular.</b> A file is embedded as several overlapping
+/// windows (see <see cref="RepoContextTextChunker"/>) rather than one leading-window
+/// vector, so content deep in a large file is searchable; each window is a passage
+/// whose canonical record is the file, so a hit hydrates and de-duplicates to the
+/// file. A symbol is embedded as its own single passage (kind, name, and signature)
+/// so a symbol-level query lands on the declaring symbol.
+/// </para>
 /// <para>
 /// <b>Fail-closed and honest.</b> When no <see cref="IEmbeddingProvider"/> is
 /// configured, the provider is unreachable
@@ -23,40 +32,52 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIngestor
 {
     /// <summary>
-    /// The maximum number of characters of a file's content that are embedded. A
-    /// file longer than this is truncated to its leading window, which bounds the
-    /// per-embed request size and keeps a single large file from dominating a run.
+    /// The maximum number of characters of a file's content that are read for
+    /// embedding. A file longer than this is truncated to its leading window before
+    /// chunking, which bounds the memory a single very large file uses; the
+    /// chunker's own per-file window cap bounds how many of those characters are
+    /// actually embedded.
     /// </summary>
-    internal const int MaxEmbedChars = 8192;
+    internal const int MaxEmbedChars = 64 * 1024;
 
     /// <summary>
-    /// The maximum number of files embedded in a single request to the provider.
-    /// A bootstrap run over a real repository has hundreds or thousands of files;
-    /// embedding them all in one call builds a multi-megabyte request that can
-    /// exceed the provider's HTTP timeout and fail-close the whole run. Chunking
-    /// bounds each request's size and duration and lets vectors land
-    /// incrementally, so a slow or partial provider still yields a searchable
-    /// index instead of nothing.
+    /// The maximum number of passages embedded in a single request to the provider.
+    /// A bootstrap run over a real repository has thousands of passages once files
+    /// are chunked and symbols are embedded; sending them all in one call builds a
+    /// multi-megabyte request that can exceed the provider's HTTP timeout and
+    /// fail-close the whole run. Batching bounds each request's size and duration
+    /// and lets vectors land incrementally, so a slow or partial provider still
+    /// yields a searchable index instead of nothing.
     /// </summary>
     internal const int EmbedBatchSize = 32;
 
     private readonly RepoContextVectorWriter _writer;
+    private readonly IGrainFactory _grainFactory;
+    private readonly Serializer _serializer;
     private readonly IEmbeddingProvider? _embeddingProvider;
     private readonly ILogger<EmbeddingRepoContextVectorIngestor> _logger;
 
     /// <summary>Creates the embedding vector ingestor.</summary>
     /// <param name="writer">The writer that persists vectors onto the reserved trees. Must not be <see langword="null"/>.</param>
+    /// <param name="grainFactory">The grain factory used to enumerate the symbol tree for symbol embedding. Must not be <see langword="null"/>.</param>
+    /// <param name="serializer">The Orleans serializer used to decode symbol records during symbol embedding. Must not be <see langword="null"/>.</param>
     /// <param name="logger">The logger used to record fail-closed fallbacks. Must not be <see langword="null"/>.</param>
     /// <param name="embeddingProvider">The embedding provider, or <see langword="null"/> when the host bound none (search then degrades to keyword recall).</param>
-    /// <exception cref="ArgumentNullException"><paramref name="writer"/> or <paramref name="logger"/> is null.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="writer"/>, <paramref name="grainFactory"/>, <paramref name="serializer"/>, or <paramref name="logger"/> is null.</exception>
     public EmbeddingRepoContextVectorIngestor(
         RepoContextVectorWriter writer,
+        IGrainFactory grainFactory,
+        Serializer serializer,
         ILogger<EmbeddingRepoContextVectorIngestor> logger,
         IEmbeddingProvider? embeddingProvider = null)
     {
         ArgumentNullException.ThrowIfNull(writer);
+        ArgumentNullException.ThrowIfNull(grainFactory);
+        ArgumentNullException.ThrowIfNull(serializer);
         ArgumentNullException.ThrowIfNull(logger);
         _writer = writer;
+        _grainFactory = grainFactory;
+        _serializer = serializer;
         _logger = logger;
         _embeddingProvider = embeddingProvider;
     }
@@ -98,8 +119,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             return 0;
         }
 
-        var sourceKeys = new List<string>(toEmbed.Count);
-        var texts = new List<string>(toEmbed.Count);
+        var sources = new List<EmbeddingSource>(toEmbed.Count);
         foreach (var file in toEmbed)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -107,77 +127,24 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             if (string.IsNullOrWhiteSpace(text))
             {
                 // Skip a file that could not be read (null) or that carries no
-                // embeddable content (empty or whitespace-only). An empty string
-                // is not merely useless to embed: the embedding server rejects a
-                // batch that contains one, which would fail-close the whole run's
-                // vectorisation. A contentless file still has its structural
+                // embeddable content. A contentless file still has its structural
                 // record from the walk, so keyword recall keeps covering it.
                 continue;
             }
 
-            sourceKeys.Add(RepoContextKeys.File(repoId, file.RelativePath));
-            texts.Add(text);
-        }
-
-        if (texts.Count == 0)
-        {
-            return 0;
-        }
-
-        // Embed and store in bounded chunks. Each chunk is an independent request,
-        // so a large repository never builds one oversized, slow call that trips
-        // the provider's HTTP timeout, and vectors from earlier chunks survive
-        // even if a later chunk's embed fails - search then covers whatever landed
-        // and degrades to keyword recall only for the remainder.
-        var embedded = 0;
-        for (var start = 0; start < texts.Count; start += EmbedBatchSize)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var count = Math.Min(EmbedBatchSize, texts.Count - start);
-            var batchTexts = texts.GetRange(start, count);
-
-            var result = await _embeddingProvider
-                .EmbedAsync(batchTexts, EmbeddingTextType.Passage, cancellationToken)
-                .ConfigureAwait(false);
-            if (!result.Succeeded || result.Vectors.Count != batchTexts.Count)
+            var windows = RepoContextTextChunker.Chunk(text);
+            if (windows.Count == 0)
             {
-                _logger.LogInformation(
-                    "Bootstrap vectorisation for repository {RepoId} skipped a batch of {Count} file(s): the embedding call did not succeed ({Error}). Those files fall back to keyword recall.",
-                    repoId,
-                    count,
-                    result.Error ?? "no vectors returned");
                 continue;
             }
 
-            for (var i = 0; i < count; i++)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                await _writer
-                    .StoreAsync(repoId, sourceKeys[start + i], result.Space, result.Vectors[i], cancellationToken)
-                    .ConfigureAwait(false);
-            }
-
-            // Record membership for the whole batch in one read-modify-write after
-            // its vectors have landed, rather than folding presence per file. This
-            // flush is per batch, not once at the end, so an interruption leaves at
-            // most this batch's vectors unrecorded - they are simply re-embedded on
-            // the next pass - while presence still implies a durable vector.
-            await _writer
-                .AddMembersAsync(repoId, sourceKeys.GetRange(start, count), cancellationToken)
-                .ConfigureAwait(false);
-
-            embedded += count;
-
-            // Surface incremental progress after each batch lands, so a long
-            // vectorisation pass (hundreds or thousands of files, embedded on CPU)
-            // reports a rising count instead of appearing frozen until it finishes.
-            if (onProgress is not null)
-            {
-                await onProgress(embedded, cancellationToken).ConfigureAwait(false);
-            }
+            sources.Add(new EmbeddingSource(RepoContextKeys.File(repoId, file.RelativePath), windows));
         }
 
-        if (embedded == 0)
+        var embedded = await EmbedAndStoreAsync(repoId, sources, onProgress, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (embedded == 0 && sources.Count > 0)
         {
             _logger.LogInformation(
                 "Skipping bootstrap vectorisation for repository {RepoId}: no embedding batch succeeded. Search will use keyword recall.",
@@ -185,6 +152,212 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         }
 
         return embedded;
+    }
+
+    /// <inheritdoc />
+    public async Task<int> IngestSymbolsAsync(
+        string repoId,
+        IReadOnlyCollection<string> changedSymbolKeys,
+        IReadOnlyCollection<string> prunedSymbolKeys,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentNullException.ThrowIfNull(changedSymbolKeys);
+        ArgumentNullException.ThrowIfNull(prunedSymbolKeys);
+
+        // Retire a pruned symbol's embedding regardless of the provider: a symbol
+        // the reconcile removed must drop its vector, or the membership count drifts
+        // high. Retirement only deletes stored records, so it needs no embedder.
+        foreach (var key in prunedSymbolKeys)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await _writer.RetireAsync(repoId, key, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (_embeddingProvider is null)
+        {
+            return 0;
+        }
+
+        if (!await _embeddingProvider.IsAvailableAsync(cancellationToken).ConfigureAwait(false))
+        {
+            _logger.LogInformation(
+                "Skipping symbol vectorisation for repository {RepoId}: the embedding provider is unavailable. Search will use keyword recall.",
+                repoId);
+            return 0;
+        }
+
+        // A symbol is (re-)embedded when its declaration changed this pass or when
+        // it has no live embedding yet (a new symbol, or a back-fill of symbols
+        // captured before symbol embedding existed). Presence is judged from the
+        // add-wins membership set, probed in memory with one reused buffer, so an
+        // already-embedded, unchanged symbol is skipped without a read per symbol.
+        var changed = new HashSet<string>(changedSymbolKeys, StringComparer.Ordinal);
+        var embeddedMembers = await _writer.LoadEmbeddedMembersAsync(repoId, cancellationToken).ConfigureAwait(false);
+        var probe = new byte[VectorCodec.SourceIdByteLength];
+
+        var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.Symbol);
+        var prefix = RepoContextKeys.SymbolsPrefix(repoId);
+        var sources = new List<EmbeddingSource>();
+
+        string? token = null;
+        do
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var page = await RepoContextPortability
+                .EnumerateAsync(tree, prefix, token, RepoContextPortability.DefaultPageSize, vectorExport: null, cancellationToken)
+                .ConfigureAwait(false);
+
+            foreach (var record in page.Records)
+            {
+                if (record.Value is null)
+                {
+                    continue;
+                }
+
+                var sourceKey = record.Key;
+                var sourceId = VectorCodec.SourceId(sourceKey);
+                System.Text.Encoding.UTF8.GetBytes(sourceId, probe);
+                if (!changed.Contains(sourceKey) && embeddedMembers.Contains(probe))
+                {
+                    continue;
+                }
+
+                var text = BuildSymbolText(_serializer.Deserialize<SymbolRecord>(record.Value));
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    continue;
+                }
+
+                sources.Add(new EmbeddingSource(sourceKey, new[] { text }));
+            }
+
+            token = page.HasMore ? page.ContinuationToken : null;
+        }
+        while (token is not null);
+
+        return await EmbedAndStoreAsync(repoId, sources, onProgress: null, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Embeds every source's passages in bounded batches and stores each source's
+    /// vectors as a unit once all of its passages have landed. Batching is flat
+    /// across sources, so a call that mixes many small files with a few large ones
+    /// still packs full requests; a source whose passages span a failed and a
+    /// succeeded batch is left incomplete and re-embedded on the next pass, so a
+    /// stored source always carries its whole current passage set. Membership is
+    /// recorded after each batch, so an interruption leaves at most one batch of
+    /// vectors unrecorded while presence still implies a durable vector.
+    /// </summary>
+    private async Task<int> EmbedAndStoreAsync(
+        string repoId,
+        IReadOnlyList<EmbeddingSource> sources,
+        Func<int, CancellationToken, ValueTask>? onProgress,
+        CancellationToken cancellationToken)
+    {
+        if (sources.Count == 0)
+        {
+            return 0;
+        }
+
+        // Flatten every source's passages into one unit list, remembering each
+        // unit's owning source and slot, so a source's vectors can be reassembled
+        // in order once its units land - even across batch boundaries.
+        var unitTexts = new List<string>();
+        var unitOwner = new List<int>();
+        var unitSlot = new List<int>();
+        var slots = new ReadOnlyMemory<float>[sources.Count][];
+        var filled = new int[sources.Count];
+        var spaces = new EmbeddingSpace?[sources.Count];
+        for (var s = 0; s < sources.Count; s++)
+        {
+            var units = sources[s].Units;
+            slots[s] = new ReadOnlyMemory<float>[units.Count];
+            for (var u = 0; u < units.Count; u++)
+            {
+                unitTexts.Add(units[u]);
+                unitOwner.Add(s);
+                unitSlot.Add(u);
+            }
+        }
+
+        var embedded = 0;
+        var pendingMembers = new List<string>();
+        for (var start = 0; start < unitTexts.Count; start += EmbedBatchSize)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var count = Math.Min(EmbedBatchSize, unitTexts.Count - start);
+            var batchTexts = unitTexts.GetRange(start, count);
+
+            var result = await _embeddingProvider!
+                .EmbedAsync(batchTexts, EmbeddingTextType.Passage, cancellationToken)
+                .ConfigureAwait(false);
+            if (!result.Succeeded || result.Vectors.Count != count)
+            {
+                _logger.LogInformation(
+                    "Bootstrap vectorisation for repository {RepoId} skipped a batch of {Count} passage(s): the embedding call did not succeed ({Error}). Those sources fall back to keyword recall.",
+                    repoId,
+                    count,
+                    result.Error ?? "no vectors returned");
+                continue;
+            }
+
+            var completed = new List<int>();
+            for (var i = 0; i < count; i++)
+            {
+                var owner = unitOwner[start + i];
+                slots[owner][unitSlot[start + i]] = result.Vectors[i];
+                spaces[owner] = result.Space;
+                if (++filled[owner] == slots[owner].Length)
+                {
+                    completed.Add(owner);
+                }
+            }
+
+            foreach (var owner in completed)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await _writer
+                    .StoreAsync(repoId, sources[owner].SourceKey, spaces[owner]!, slots[owner], cancellationToken)
+                    .ConfigureAwait(false);
+                pendingMembers.Add(sources[owner].SourceKey);
+                embedded++;
+            }
+
+            if (pendingMembers.Count > 0)
+            {
+                // Record membership for the sources completed in this batch in one
+                // read-modify-write, after their vectors have landed.
+                await _writer.AddMembersAsync(repoId, pendingMembers, cancellationToken).ConfigureAwait(false);
+                pendingMembers.Clear();
+            }
+
+            // Surface incremental progress after each batch lands, so a long
+            // vectorisation pass reports a rising count instead of appearing frozen.
+            if (onProgress is not null)
+            {
+                await onProgress(embedded, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        return embedded;
+    }
+
+    /// <summary>
+    /// Builds the passage text for a symbol: its kind, fully-qualified name, and -
+    /// when present - its declaration signature. The name and signature carry the
+    /// symbol's meaning for retrieval; the kind disambiguates a type from a member
+    /// of the same name.
+    /// </summary>
+    private static string BuildSymbolText(SymbolRecord record)
+    {
+        var kind = record.Kind == SymbolKind.Unspecified
+            ? "symbol"
+            : record.Kind.ToString();
+        var signature = RepoContextValues.ReadString(record.Signature);
+        return string.IsNullOrWhiteSpace(signature)
+            ? $"{kind} {record.FullyQualifiedName}"
+            : $"{kind} {record.FullyQualifiedName}\n{signature}";
     }
 
     private static async Task<string?> ReadContentAsync(
@@ -270,4 +443,11 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 .ConfigureAwait(false);
         }
     }
+
+    /// <summary>
+    /// A source to embed: the canonical record key its vectors hydrate to, and the
+    /// ordered passages (a file's overlapping windows, or a symbol's single
+    /// passage) that become its unit vectors.
+    /// </summary>
+    private readonly record struct EmbeddingSource(string SourceKey, IReadOnlyList<string> Units);
 }

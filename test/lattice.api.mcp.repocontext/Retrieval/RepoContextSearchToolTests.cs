@@ -57,6 +57,15 @@ public sealed class RepoContextSearchToolTests
         return root;
     }
 
+    private static async Task<bool> FileEmbeddedAsync(
+        RepoContextMcpHarness harness, string relativePath, CancellationToken ct)
+    {
+        var writer = harness.Services.GetRequiredService<RepoContextVectorWriter>();
+        var members = await writer.LoadEmbeddedMembersAsync(RepoId, ct);
+        return members.Contains(Encoding.UTF8.GetBytes(
+            VectorCodec.SourceId(RepoContextKeys.File(RepoId, relativePath))));
+    }
+
     private static void Write(string root, string relativePath, string content)
     {
         var full = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
@@ -233,7 +242,14 @@ public sealed class RepoContextSearchToolTests
 
         // The vectors must have landed on the reserved metadata tree.
         var metadata = await CollectKeysAsync(harness, RepoContextTrees.VectorMetadata, RepoContextKeys.VectorsPrefix(RepoId));
-        Assert.That(metadata, Has.Count.EqualTo(2), "Both files were embedded and stored as vectors.");
+        Assert.That(metadata, Is.Not.Empty, "Files and their symbols were embedded and stored as vectors.");
+        var orderEmbedded = await FileEmbeddedAsync(harness, "src/OrderService.cs", Ct);
+        var paymentEmbedded = await FileEmbeddedAsync(harness, "src/PaymentGateway.cs", Ct);
+        Assert.Multiple(() =>
+        {
+            Assert.That(orderEmbedded, Is.True, "The order-service file is embedded.");
+            Assert.That(paymentEmbedded, Is.True, "The payment-gateway file is embedded.");
+        });
 
         var json = await SearchAsync(client, "class OrderService PlaceOrder");
 
@@ -248,6 +264,43 @@ public sealed class RepoContextSearchToolTests
                 Does.Contain("OrderService"));
             Assert.That(hits[0].GetProperty("vectorId").GetString(), Is.Not.Null.And.Not.Empty,
                 "A semantic hit carries the identity of the matched vector.");
+        });
+    }
+
+    [Test]
+    public async Task Search_deduplicates_multiple_chunk_hits_from_one_file_to_a_single_result()
+    {
+        // A file large enough to chunk into several overlapping window passages,
+        // each carrying the same distinctive tokens, so many of its passages match
+        // the query. The over-fetch-and-dedup in the search service must collapse
+        // those sibling passage hits to a single result for the file.
+        var root = NewRepo();
+        var body = string.Concat(Enumerable.Repeat(
+            "    void PostLedgerEntry() { /* ledger reconcile posting balance */ }\n", 200));
+        Write(root, "src/LedgerService.cs", "class LedgerService {\n" + body + "}\n");
+        Write(root, "src/Unrelated.cs", "class Unrelated { void Nothing() {} }");
+
+        var embedder = new FakeEmbeddingProvider();
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            WithEmbedder(RepoContextMcpAuthPosture.Writer, embedder), Ct);
+        await using var client = await harness.ConnectAsync(Ct);
+
+        await BootstrapAsync(client, root);
+
+        var metadata = await CollectKeysAsync(harness, RepoContextTrees.VectorMetadata, RepoContextKeys.VectorsPrefix(RepoId));
+        Assert.That(metadata.Count, Is.GreaterThan(2),
+            "The large file must chunk into several passage vectors for the dedup to be exercised.");
+
+        var json = await SearchAsync(client, "LedgerService PostLedgerEntry ledger reconcile posting");
+
+        var ledgerKey = RepoContextKeys.File(RepoId, "src/LedgerService.cs");
+        var occurrences = json.GetProperty("hits").EnumerateArray()
+            .Count(h => h.GetProperty("entry").GetProperty("key").GetString() == ledgerKey);
+        Assert.Multiple(() =>
+        {
+            Assert.That(json.GetProperty("mode").GetString(), Is.EqualTo("semantic"));
+            Assert.That(occurrences, Is.EqualTo(1),
+                "Several chunk matches from one file collapse to a single hit for that file.");
         });
     }
 
@@ -273,8 +326,15 @@ public sealed class RepoContextSearchToolTests
 
         // Only the one file with content is embedded; the empty and
         // whitespace-only files are skipped rather than poisoning the batch.
-        var metadata = await CollectKeysAsync(harness, RepoContextTrees.VectorMetadata, RepoContextKeys.VectorsPrefix(RepoId));
-        Assert.That(metadata, Has.Count.EqualTo(1), "Only the contentful file is vectorised; empty files are skipped.");
+        var contentEmbedded = await FileEmbeddedAsync(harness, "src/OrderService.cs", Ct);
+        var emptyEmbedded = await FileEmbeddedAsync(harness, "src/Empty.cs", Ct);
+        var whitespaceEmbedded = await FileEmbeddedAsync(harness, "src/Whitespace.cs", Ct);
+        Assert.Multiple(() =>
+        {
+            Assert.That(contentEmbedded, Is.True, "The contentful file is vectorised.");
+            Assert.That(emptyEmbedded, Is.False, "The empty file is skipped, not embedded.");
+            Assert.That(whitespaceEmbedded, Is.False, "The whitespace-only file is skipped, not embedded.");
+        });
 
         var json = await SearchAsync(client, "class OrderService PlaceOrder");
         Assert.That(json.GetProperty("mode").GetString(), Is.EqualTo("semantic"),
@@ -303,9 +363,15 @@ public sealed class RepoContextSearchToolTests
 
         await BootstrapAsync(client, root);
 
-        var metadata = await CollectKeysAsync(harness, RepoContextTrees.VectorMetadata, RepoContextKeys.VectorsPrefix(RepoId));
-        Assert.That(metadata, Has.Count.EqualTo(fileCount),
-            "Every file must be vectorised across multiple embed batches.");
+        // Every file's vector must land across the batches. Symbols are embedded
+        // too, so assert on file-source membership rather than a raw vector count.
+        var writer = harness.Services.GetRequiredService<RepoContextVectorWriter>();
+        var members = await writer.LoadEmbeddedMembersAsync(RepoId, Ct);
+        var missing = Enumerable.Range(0, fileCount)
+            .Select(i => RepoContextKeys.File(RepoId, $"src/File{i:D3}.cs"))
+            .Where(k => !members.Contains(Encoding.UTF8.GetBytes(VectorCodec.SourceId(k))))
+            .ToList();
+        Assert.That(missing, Is.Empty, "Every file must be vectorised across multiple embed batches.");
 
         var json = await SearchAsync(client, "class File042 Method042");
         Assert.That(json.GetProperty("mode").GetString(), Is.EqualTo("semantic"),
@@ -326,13 +392,17 @@ public sealed class RepoContextSearchToolTests
         await BootstrapAsync(client, root);
         var json = await SearchAsync(client, "class OrderService PlaceOrder");
 
-        var entry = json.GetProperty("hits")[0].GetProperty("entry");
+        // Symbols are embedded alongside the file, so a symbol passage may rank at
+        // the top. This test pins hydration of the file's canonical record, so find
+        // the file hit among the results and assert it resolved from the store.
+        var fileKey = RepoContextKeys.File(RepoId, "src/OrderService.cs");
+        var entry = json.GetProperty("hits").EnumerateArray()
+            .Select(h => h.GetProperty("entry"))
+            .First(e => e.GetProperty("key").GetString() == fileKey);
         Assert.Multiple(() =>
         {
             Assert.That(entry.GetProperty("exists").GetBoolean(), Is.True,
                 "The hit is hydrated from the live canonical record, not a copy held by the index.");
-            Assert.That(entry.GetProperty("key").GetString(),
-                Is.EqualTo(RepoContextKeys.File(RepoId, "src/OrderService.cs")));
             Assert.That(entry.GetProperty("kind").GetString(), Is.EqualTo("File"));
         });
     }
@@ -356,7 +426,7 @@ public sealed class RepoContextSearchToolTests
         for (var i = 0; i < 6; i++)
         {
             var vector = new[] { 0.1f * i, 1f - (0.1f * i), 0.25f, 0.5f };
-            await writer.StoreAsync(RepoId, sourceKey, space, vector, Ct);
+            await writer.StoreAsync(RepoId, sourceKey, space, new ReadOnlyMemory<float>[] { vector }, Ct);
             await writer.AddMembersAsync(RepoId, new[] { sourceKey }, Ct);
         }
 
