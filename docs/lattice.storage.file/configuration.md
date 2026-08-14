@@ -13,7 +13,7 @@ Every knob on `FileWalStorageOptions`, its default, and the validation rules the
 
 ## Validation
 
-Construction fails fast when `RootDirectory` is null, empty, or whitespace. The paired options validator additionally rejects an invalid configuration at first resolve, so a misconfigured host surfaces the error at startup rather than on the first write.
+Construction fails fast when `RootDirectory` is null, empty, or whitespace. The paired options validator additionally rejects an invalid configuration at first resolve, so a misconfigured host surfaces the error at startup rather than on the first write. The validator rejects a `CompactionThreshold` that is `NaN` or less than or equal to zero (use `1.0` or greater to disable trim-triggered compaction), and rejects a negative `CompactionMinimumDeadBytes`.
 
 ## Full example
 

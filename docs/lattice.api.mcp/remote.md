@@ -1,6 +1,6 @@
 # Remote hosting
 
-The MCP server can run **in the silo** (co-hosted with the facades it binds, resolving them in-process) or **out of the silo** as a standalone host that reaches the cluster over the network. `AddLatticeMcpRemote(...)` wires the out-of-silo topology: the same five tool modules, bound over the `Orleans.Lattice.Api.*.Grpc` clients instead of the in-process facades.
+The MCP server can run **in the silo** (co-hosted with the facades it binds, resolving them in-process) or **out of the silo** as a standalone host that reaches the cluster over the network. `AddLatticeMcpRemote(...)` wires the out-of-silo topology: the same six built-in tool modules, bound over the `Orleans.Lattice.Api.*.Grpc` clients instead of the in-process facades.
 
 ## When to use it
 
@@ -41,7 +41,7 @@ Each `LatticeApiMcpRemoteEndpoint` names the served `Endpoint` (surfaced verbati
 | `CredentialHeaderName` | Header the resolved caller credential is stamped onto for the outbound call. Defaults to `authorization`. |
 | `CredentialScheme` | Scheme prefix prepended to the outbound token (`"{scheme} {token}"`). Defaults to `Bearer`; empty sends the bare token. |
 | `AdministratorCredential` | The **static** admin service credential used for trusted, read-only permission introspection of each caller. See [discovery](#discovery-requires-the-auth-endpoint) below. For a long-lived server prefer a self-refreshing managed-identity token (see [Refreshing administrator token](#refreshing-the-administrator-token)). |
-| `EnableDataWrites` / `EnableBackupControl` / `EnableAuthAdministration` / `EnableReplicationControl` / `EnableSchemaControl` / `EnableLifecycleControl` | Forward the destructive-verb opt-in to the corresponding tool module. Ignored when that group's endpoint is unset. `EnableSchemaControl` gates the mutating `lattice_treeadmin_schema_*` tools and `EnableLifecycleControl` gates the mutating `lattice_treeadmin_tree_*` lifecycle tools; both are ignored when `TreeAdmin` is unset. |
+| `EnableDataWrites` / `EnableBackupControl` / `EnableAuthAdministration` / `EnableReplicationControl` / `EnableSchemaControl` / `EnableLifecycleControl` | Forward the destructive-verb opt-in to the corresponding tool module. Ignored when that group's endpoint is unset. `EnableSchemaControl` gates the mutating `lattice_treeadmin_schema_*` tools and `EnableLifecycleControl` gates the tree-administration lifecycle/control mutation tools; both are ignored when `TreeAdmin` is unset. |
 | `RegionId` | The id of the current (default) region a call targets when no `region` selector is supplied. Defaults to `current`. |
 | `ClusterId` | The Orleans cluster id of the current region, surfaced in `lattice_list_regions`. Optional advertisement metadata. |
 | `Regions` | Additional peer regions a caller may target with the optional per-call `region` argument. Each is a `LatticeApiMcpRemoteRegionOptions` with its own `RegionId`, optional `ClusterId`, and per-group endpoints. |
@@ -109,13 +109,15 @@ The in-silo permission-scoped discovery relies on a **system-origin bypass** to 
 ```csharp
 using Azure.Identity;
 
-services.AddLatticeMcpRemote(o =>
+var builder = WebApplication.CreateBuilder();
+
+builder.Services.AddLatticeMcpRemote(o =>
 {
     o.Auth = new LatticeApiMcpRemoteEndpoint { Endpoint = "https://cluster.internal:5001" };
     // No static o.AdministratorCredential needed.
 });
 
-services.AddLatticeMcpManagedIdentityAdministrator(o =>
+builder.Services.AddLatticeMcpManagedIdentityAdministrator(o =>
 {
     o.Credential = new ManagedIdentityCredential();      // or DefaultAzureCredential()
     o.Scope = "api://<silo-app-id>/.default";            // the remote silo audience

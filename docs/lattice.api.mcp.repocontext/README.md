@@ -15,7 +15,7 @@ Every record is stored as a CRDT value on a named Lattice tree, so concurrent up
 
 ## Fail-closed and permission-scoped
 
-The module adds no authorization path of its own. The permission-aware discovery core advertises its tools only to a caller holding the repository-context group grant (the same data read-or-write mask that makes the built-in data group usable), and the fail-closed gate enforces the verdict at both advertisement and invocation. The mutating tools (`bootstrap`, `remember`, `update`, `forget`) are contributed only when the host opts writes in via `AddRepoContextTools(enableWrites: true)`; a reader-only caller never sees them.
+The module adds no authorization path of its own. The permission-aware discovery core advertises its tools only to a caller holding one of the data-plane operations that makes the built-in data group usable, and the fail-closed gate enforces the verdict at both advertisement and invocation. The mutating tools (`bootstrap`, `remember`, `update`, `forget`) are contributed only when the host opts writes in via `AddRepoContextTools(enableWrites: true)`; a reader-only caller never sees them.
 
 ## Quick Start
 

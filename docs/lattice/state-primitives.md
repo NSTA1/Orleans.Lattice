@@ -2,7 +2,7 @@
 
 All state in the tree is designed to advance monotonically - it can move forward but never backwards. This makes operations idempotent and crash-safe.
 
-See [CRDT Primitives](../crdt/readme.md) for a beginner-friendly introduction to the concepts and terminology - read below for a more detailed explanation..
+See [CRDT Primitives](../crdt/readme.md) for a beginner-friendly introduction to the concepts and terminology - read below for a more detailed explanation.
 
 
 ## Hybrid Logical Clock (HLC)
@@ -65,7 +65,7 @@ The merge operation is `max()` - once a node reaches `SplitComplete`, no message
 Each leaf node maintains a `VersionVector` - a map from replica ID (the grain's string identity) to the highest `HLC` value produced by that replica:
 
 ```
-VersionVector = { "grain/abc" → HLC(100:3), "grain/def" → HLC(95:0) }
+VersionVector = { "grain/abc" -> HLC(100:3), "grain/def" -> HLC(95:0) }
 ```
 
 The version vector is ticked on every write (insert, update, or delete). This enables **delta extraction**: a consumer can present its own version vector and ask "give me everything that changed since this point." The leaf compares each entry's timestamp against the consumer's clock for the relevant replica and returns only the newer entries.
@@ -73,7 +73,7 @@ The version vector is ticked on every write (insert, update, or delete). This en
 Merge is **pointwise-max** across all replica IDs:
 
 ```
-Merge({r1→10, r2→5}, {r1→8, r3→3}) = {r1→10, r2→5, r3→3}
+Merge({r1->10, r2->5}, {r1->8, r3->3}) = {r1->10, r2->5, r3->3}
 ```
 
 This is commutative, associative, and idempotent - making it safe for uncoordinated consumers to merge version vectors from multiple sources.
@@ -86,13 +86,13 @@ A `StateDelta` is a snapshot of changes extracted from a leaf:
 
 ```
 StateDelta = {
-    Entries:  { key → LwwValue }   // only entries newer than the caller's version
+    Entries:  { key -> LwwValue }   // only entries newer than the caller's version
     Version:  VersionVector          // the leaf's version at extraction time
     SplitKey: string?                // non-null if the leaf has split since the caller's version
 }
 ```
 
-When `SplitKey` is present, it signals that the leaf has split and all entries ≥ `SplitKey` have moved to a new sibling. Consumers (e.g. `LeafCacheGrain`) use this to **prune** stale entries from their local cache that now belong to the sibling.
+When `SplitKey` is present, it signals that the leaf has split and all entries >= `SplitKey` have moved to a new sibling. Consumers (e.g. `LeafCacheGrain`) use this to **prune** stale entries from their local cache that now belong to the sibling.
 
 The delta extraction flow:
 
@@ -117,6 +117,59 @@ Because both `LwwValue.Merge` and `VersionVector.Merge` are lattice operations, 
 The CRDT primitives described below are **opt-in**. Plain writes - `SetAsync`, `SetManyAsync`, and friends - are last-writer-wins: a later timestamp silently overwrites a concurrent write. To get convergent, no-lost-update behaviour you write through the typed CRDT accessors on `ILattice`, which pick the right merge mode for the key.
 
 The [Conflict-Free Merges sample](../../samples/ConflictFreeMerges/README.md) is a runnable tour of every accessor, including convergence under concurrent threads.
+
+## Grow-Only Counter (G-Counter)
+
+`GCounter` is a **grow-only counter**. Each replica owns a monotonically increasing component, and the visible value is the sum of every component:
+
+```
+GCounter = { replicaId -> long }
+Value = sum(GCounter.Values)
+```
+
+`Increment(replicaId, amount)` accepts only non-negative amounts and advances that replica's component. Merge is **pointwise-max** per replica, so re-delivering an older component cannot move the counter backwards and concurrent increments from different replicas accumulate without double-counting.
+
+**Example use case:** page views, bytes ingested, or any event tally that can only increase. Use `GCounter` when decrement is impossible and you want the smallest counter state. Use `PnCounter` when the value must also move down.
+
+## Grow-Only Set (G-Set)
+
+`GSet` is a **grow-only set** of opaque `byte[]` elements. Elements are compared by byte content and encoded internally as base64 strings for stable serialization:
+
+```
+GSet = { elementBytes }
+```
+
+`Add(element)` is idempotent and there is no remove operation. Merge is **set union**, so every concurrent add survives and duplicate delivery is harmless. Because it carries no causal dots and no tombstones, it is the cheapest set primitive for append-only membership.
+
+**Example use case:** seen-id sets, append-only tags, or an accumulating audience list. Use `OrSet` or `RwSet` when elements must be removable.
+
+## Remove-Wins Set (RW-Set)
+
+`RwSet` is a **remove-wins observed-remove set** of opaque `byte[]` elements. For each element it tracks add dots, remove dots, and tombstones for remove dots that an observed add has cancelled:
+
+```
+RwSet = {
+    Adds:       { element -> [OrSetDot(replicaId, counter)] }
+    Removes:    { element -> [OrSetDot(replicaId, counter)] }
+    Tombstones: { element -> [OrSetDot] }   // remove dots observed-and-cancelled by an add
+}
+```
+
+An element is present only when it has at least one add dot and no live remove dot. `Remove(element, replicaId, counter)` is additive: it mints a remove dot. `Add(element, replicaId, counter)` mints an add dot and tombstones remove dots it has already observed. A concurrent remove that the add did not observe survives the merge and keeps the element out. Merge is the pointwise union of add, remove, and tombstone dots, followed by the same membership test.
+
+**Example use case:** revocation lists, blocklists, and other fail-closed membership where a removal must win a race against a stale re-add. Use `OrSet` when a concurrent add should win instead.
+
+## Bounded Registers (Max-Register and Min-Register)
+
+`BoundedRegister` is the shared state shape behind the typed `MaxRegister<T>` and `MinRegister<T>` accessors. It stores a single opaque value with an order-preserving byte key and a durable direction bit:
+
+```
+BoundedRegister = (Value, OrderKey, HasValue, IsMin)
+```
+
+A Max-register keeps the candidate with the greatest `OrderKey`; a Min-register keeps the candidate with the smallest `OrderKey`. The producer supplies the order key through the typed accessor's `orderKeySelector`, and receivers compare keys with unsigned lexicographic byte order, tie-breaking on value bytes so the result is deterministic. Merge and delta apply are directional max/min folds over that total order, so backwards writes and duplicate deliveries are no-ops.
+
+**Example use case:** high-water marks, version ceilings, max-seen sensor readings, min-seen latency floors, first-seen timestamps, or lowest-price watermarks. Use `MvRegister` instead when concurrent values must all be preserved for application-level resolution.
 
 ## Observed-Remove Set (OR-Set)
 

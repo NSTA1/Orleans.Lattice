@@ -77,11 +77,7 @@ public sealed class ConsoleAuditSink : ILatticeAuthAuditSink
 }
 ```
 
-Register the sink in DI so the gate picks it up:
-
-```csharp
-siloBuilder.Services.AddSingleton<ILatticeAuthAuditSink, ConsoleAuditSink>();
-```
+Register the sink in DI so the gate picks it up, for example with `siloBuilder.Services.AddSingleton<ILatticeAuthAuditSink, ConsoleAuditSink>();`.
 
 A `LatticeAuthDecisionEvent` exposes the subject id, the operation, the tree id, the effect, the matched rule id and scope, the policy epoch, an optional key / range, an optional reason, and the UTC timestamp.
 

@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Api.Backup</PackageId>
-    <Version>8.0.0</Version>
+    <Version>9.0.0</Version>
     <Description>Optional transport-agnostic control facade add-on for Orleans.Lattice backup and restore. Scaffolding release: reserves the package and its serialization-alias prefix so the backup admin surface (list, create, and restore backups) can be layered by later releases. No runtime behaviour yet.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>

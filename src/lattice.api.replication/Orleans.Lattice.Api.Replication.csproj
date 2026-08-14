@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Api.Replication</PackageId>
-    <Version>8.0.0</Version>
+    <Version>9.0.0</Version>
     <Description>Optional transport-agnostic control facade add-on for Orleans.Lattice runtime per-tree replication configuration. Implements the ILatticeReplicationControl contract over the replication engine's config-authoring seam: an authorized operator can enable replication for a tree (fixing its wire merge mode), disable it, and inspect the runtime replicated-tree set. Authoring is authorized fail-closed through the shared Lattice access gate (default-deny anonymous); the gRPC and MCP transports adapt over this single surface.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>

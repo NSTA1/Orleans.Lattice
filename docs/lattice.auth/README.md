@@ -51,7 +51,7 @@ var rule = new LatticeAuthorizationRule(
 ```
 
 - **Subject selector** (`LatticeSubjectSelector`) targets a `User(id)` or a `Group(id)`.
-- **Operations** (`LatticeOperation`, a `[Flags]` set) name the classes covered: `Read`, `Write`, `Delete`, `RangeRead`, `RangeDelete`, `CrdtApply`, `AtomicWrite`, `BulkLoad`, and `Admin`. Grants do not imply each other: a `Write` grant does not confer `Delete`.
+- **Operations** (`LatticeOperation`, a `[Flags]` set) name the capability classes covered: `Read`, `Write`, `Delete`, `RangeRead`, `RangeDelete`, `CrdtApply`, `AtomicWrite`, `BulkLoad`, `Admin`, `Backup`, `Restore`, `SchemaAdmin`, `Telemetry`, `Replication`, and `TreeLifecycle`. Grants do not imply each other unless the enum member explicitly says so: for example, `Write` does not confer `Delete`, `Admin` does not confer `Telemetry`, and `Restore` authorizes populating the target scope from a backup without a separate `Write` or `BulkLoad` grant.
 - **Effect** (`LatticeEffect`) is `Allow` or `Deny`.
 
 Rules are authored through the policy store, resolved from the silo's service provider:
@@ -135,4 +135,3 @@ Every authorization decision, the decision latency, and the compiled-snapshot ep
 - [`Orleans.Lattice.Membership`](../lattice.membership/README.md) - the identity directory and subject-resolution pipeline this layer authorizes against.
 - [`Orleans.Lattice.Api.Auth`](../lattice.api.auth/README.md) - the transport-agnostic control facade for administering membership and policy and explaining decisions.
 - [`Orleans.Lattice.Replication`](../lattice.replication/README.md) - the system-tree replication that converges policy and membership across clusters.
-
