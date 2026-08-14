@@ -25,7 +25,7 @@ Each module registration is idempotent, and within a module the destructive verb
 | Backup | `AddBackupTools(enableControl)` | always | capture / restore / delete, gated by `enableControl` |
 | Auth | `AddAuthTools(enableAdministration)` | always | user / group / rule mutation, gated by `enableAdministration` |
 | Replication | `AddReplicationTools(enableControl)` | always | enable / disable replication, gated by `enableControl` |
-| TreeAdmin | `AddTreeAdminTools(enableSchemaControl, enableLifecycle)` | always | schema policy / version / remediation mutation, gated by `enableSchemaControl`; tree create / set-alias / set-config, gated by `enableLifecycle` |
+| TreeAdmin | `AddTreeAdminTools(enableSchemaControl, enableLifecycle)` | always | schema policy / version / remediation mutation, gated by `enableSchemaControl`; tree lifecycle, restore, bulk-load, WAL-move, view, tag-index, compaction, and retention control, gated by `enableLifecycle` |
 
 Read tools carry `readOnlyHint = true`; destructive tools carry `destructiveHint = true` and `readOnlyHint = false`, so a well-behaved MCP client can surface the distinction to the operator. Enabling a destructive verb only advertises it - it stays subject to the same fail-closed access gate the facade enforces (see [Security](security.md)).
 
@@ -100,13 +100,18 @@ These surface the replicated CRDT primitives directly, so a caller reads and wri
 | Type | Write tool | Read tool | Merge rule |
 |---|---|---|---|
 | PN-Counter | `lattice_data_pncounter` (increment / decrement) | `lattice_data_pncounter_get` | Per-replica signed sum. |
+| G-Counter | `lattice_data_gcounter` (increment) | `lattice_data_gcounter_get` | Per-replica grow-only sum. |
 | OR-Set | `lattice_data_orset` (add / remove) | `lattice_data_orset_get` | Add-wins, observed-remove. |
 | OR-Flag | `lattice_data_orflag` (enable / disable) | `lattice_data_orflag_get` | Enable-wins. |
 | RW-Flag | `lattice_data_rwflag` (enable / disable) | `lattice_data_rwflag_get` | Disable-wins. |
+| RW-Set | `lattice_data_rwset` (add / remove) | `lattice_data_rwset_get` | Remove-wins observed set. |
 | Version Vector | `lattice_data_version_vector_tick` | `lattice_data_version_vector_get` | Per-replica max clock. |
 | MV-Register | `lattice_data_mvregister_set` | `lattice_data_mvregister_get` | Keep concurrent values. |
+| Max-Register | `lattice_data_maxregister_set` | `lattice_data_maxregister_get` | Keep the greatest observed value. |
+| Min-Register | `lattice_data_minregister_set` | `lattice_data_minregister_get` | Keep the least observed value. |
 | Sequence | `lattice_data_sequence` (insert-at / remove-at) | `lattice_data_sequence_get` | Ordered insert / tombstone. |
 | OR-Map | `lattice_data_ormap` (set / remove) | `lattice_data_ormap_get` | Recursive per-key merge. |
+| G-Set | `lattice_data_gset` (add) | `lattice_data_gset_get` | Grow-only set. |
 
 The OR-Map tools operate on an `OrMap<string, MvRegister>` (string field keys; each field value a multi-value register of base64 bytes). The host must register that shape for the target tree name (`AddOrMapShape<string, MvRegister>(treeName)`) for these tools to resolve.
 
@@ -210,9 +215,11 @@ Every tool carries `readOnlyHint = true` and `destructiveHint = false`. `lattice
 
 This module is served under both topologies. In-silo it delegates to the co-hosted `ILatticeTreeAdmin` facade directly; over the remote (out-of-silo) topology the `AddLatticeMcpRemote` composition wires `GrpcLatticeTreeAdmin` - a tree-administration-API gRPC adapter - off the `RemoteOptions.TreeAdmin` endpoint. Caller credentials are forwarded on every gRPC call by the shared credential-forwarding interceptor, so the remote cluster re-runs the facade's own fail-closed access gate.
 
-## TreeAdmin lifecycle tools (`lattice_treeadmin_tree_*`)
+## TreeAdmin lifecycle and control tools (`lattice_treeadmin_*`)
 
-Explicit tree lifecycle and per-tree registry configuration over `ILatticeTreeAdmin`, surfaced under the tree-administration group. Registered by `AddTreeAdminTools(enableLifecycle: true)`. The read-only lifecycle tools are always exposed; the mutating lifecycle tools require `enableLifecycle: true`. Each tool wraps the existing internal tree registry (`ILatticeRegistry`) rather than re-implementing registration or per-tree config, and every tool remains subject to the facade's own fail-closed access gate: the read verbs authorize on whole-tree `LatticeOperation.Read` authority, and the mutating verbs authorize on whole-tree `LatticeOperation.Admin` authority. Registration is idempotent under matching parameters, and a reserved system tree id (the `_lattice_` namespace) is rejected for the mutating verbs. The group is discovered only by a caller granted `LatticeOperation.Admin`.
+Explicit tree lifecycle, per-tree registry configuration, bulk-load, restore, WAL placement, view, tag-index, compaction, and retention operations over `ILatticeTreeAdmin`, surfaced under the tree-administration group. Registered by `AddTreeAdminTools(enableLifecycle: true)`. The read-only lifecycle/control tools are always exposed; the mutating lifecycle/control tools require `enableLifecycle: true`. Each tool delegates to the tree-administration facade instead of re-implementing registry or shard fan-out behaviour, and every tool remains subject to the facade's own fail-closed access gate. The group is advertised to callers whose effective permissions include one of the tree-administration group capabilities (`Admin`, `TreeLifecycle`, `BulkLoad`, or `Restore`); individual verbs are still authorized by the facade at call time. Registration is idempotent under matching parameters, and reserved system tree ids in the `_lattice_` namespace are rejected for mutating verbs.
+
+### Tree lifecycle and registry
 
 | Tool | Kind | Purpose |
 |---|---|---|
@@ -220,13 +227,56 @@ Explicit tree lifecycle and per-tree registry configuration over `ILatticeTreeAd
 | `lattice_treeadmin_tree_resolve_alias` | read | Resolve the physical tree a logical tree maps to. |
 | `lattice_treeadmin_tree_get_config` | read | Read a tree's registry-backed configuration (sizing, alias, per-tree overrides). |
 | `lattice_treeadmin_tree_get_shard_map` | read | Read a tree's registry-persisted shard map (custom-map flag, version, virtual/physical shard counts). |
-| `lattice_treeadmin_tree_create` | manage | Explicitly create (register) a tree with an optional initial sizing. Idempotent; reserved ids rejected. |
-| `lattice_treeadmin_tree_set_alias` | manage | Point a logical tree at a physical tree. Reserved ids rejected. |
-| `lattice_treeadmin_tree_set_config` | manage | Apply a partial per-tree configuration update (publish-events, projection-digest, history-retention), each override written only when its apply flag is set. Reserved ids rejected. |
+| `lattice_treeadmin_tree_deletion_status` | read | Read a tree's soft-deletion state, recovery window, and purge status. |
+| `lattice_treeadmin_tree_reshard_status` | read | Read the current online-reshard state and shard-map fan-out. |
+| `lattice_treeadmin_tree_resize_status` | read | Read the current online-resize state and effective B+ node capacities. |
+| `lattice_treeadmin_tree_snapshot_status` | read | Read whether a point-in-time snapshot capture is in flight for a tree. |
+| `lattice_treeadmin_tree_create` | manage | Explicitly create or register a tree with optional initial sizing. |
+| `lattice_treeadmin_tree_set_alias` | manage | Point a logical tree at a physical tree. |
+| `lattice_treeadmin_tree_set_config` | manage | Apply per-tree configuration overrides. |
+| `lattice_treeadmin_tree_delete` | manage | Soft-delete a tree. |
+| `lattice_treeadmin_tree_recover` | manage | Recover a soft-deleted tree within its recovery window. |
+| `lattice_treeadmin_tree_purge` | manage | Hard-purge a soft-deleted tree. |
+| `lattice_treeadmin_tree_reshard` | manage | Start an online reshard to a target physical shard count. |
+| `lattice_treeadmin_tree_resize` | manage | Start an online B+ node-capacity resize. |
+| `lattice_treeadmin_tree_resize_undo` | manage | Undo an in-flight or staged tree resize when supported. |
+| `lattice_treeadmin_tree_snapshot` | manage | Capture a point-in-time tree snapshot. |
 
-The read tools carry `readOnlyHint = true` and `destructiveHint = false`; the manage tools carry `destructiveHint = true` and `readOnlyHint = false`. `lattice_treeadmin_tree_create` takes a `treeId` and optional `shardCount` / `maxLeafKeys` / `maxInternalChildren` sizing (honoured only on first creation); `lattice_treeadmin_tree_set_alias` takes a `treeId` and `physicalTreeId`; `lattice_treeadmin_tree_set_config` exposes the update as flat `apply*` / value parameter pairs; the remaining tools take a `treeId`. The registry-persisted shard-map read is distinct from the diagnostics `lattice_treeadmin_shard_map_inspect` tool, which inspects live routing rather than the durable registry map. Shard-map mutation is out of scope here (it is driven by the reshard / resize operations); only the read is exposed.
+### Bulk load, restore, and WAL placement
 
-This module is served under both topologies. In-silo it delegates to the co-hosted `ILatticeTreeAdmin` facade directly; over the remote (out-of-silo) topology the `AddLatticeMcpRemote` composition wires `GrpcLatticeTreeAdmin` off the `RemoteOptions.TreeAdmin` endpoint, with the mutating lifecycle tools additionally requiring `RemoteOptions.EnableLifecycleControl = true` (which maps onto `enableLifecycle`). Caller credentials are forwarded on every gRPC call by the shared credential-forwarding interceptor, so the remote cluster re-runs the facade's own fail-closed access gate.
+| Tool | Kind | Purpose |
+|---|---|---|
+| `lattice_treeadmin_bulk_load_begin` | manage | Begin a streamed bulk-load session. |
+| `lattice_treeadmin_bulk_load_append` | manage | Append a batch to an active bulk-load session. |
+| `lattice_treeadmin_bulk_load_commit` | manage | Commit an active bulk-load session. |
+| `lattice_treeadmin_tree_restore` | manage | Restore one tree from a backup. |
+| `lattice_treeadmin_tree_restore_set` | manage | Restore a set of trees from a backup set. |
+| `lattice_treeadmin_tree_restore_revert` | manage | Revert a shadow-cutover restore. |
+| `lattice_treeadmin_wal_placement_inspect` | read | Inspect a tree's durable WAL placement. |
+| `lattice_treeadmin_wal_placement_audit` | read | Audit WAL placement against the reporting silo's storage-provider catalog. |
+| `lattice_treeadmin_wal_move_plan` | read | Preview moving a WAL partition to a target storage provider. |
+| `lattice_treeadmin_wal_move_execute` | manage | Execute a planned WAL partition move. |
+| `lattice_treeadmin_wal_move_reclaim` | manage | Reclaim source WAL storage after a move. |
+
+### Views, tag indexes, compaction, and retention
+
+| Tool | Kind | Purpose |
+|---|---|---|
+| `lattice_treeadmin_view_list` | read | List runtime-registered materialised views. |
+| `lattice_treeadmin_view_status` | read | Read one materialised view's source, lag, and active generation. |
+| `lattice_treeadmin_view_rebuild` | manage | Rebuild a materialised view. |
+| `lattice_treeadmin_view_reconcile` | manage | Reconcile a materialised view. |
+| `lattice_treeadmin_view_drop` | manage | Drop a runtime materialised view. |
+| `lattice_treeadmin_tag_index_list` | read | List tag indexes and their backing membership trees. |
+| `lattice_treeadmin_tag_index_status` | read | Read one tag index's backing tree, covered trees, and reconcile state. |
+| `lattice_treeadmin_tag_index_reconcile` | manage | Reconcile a tag index. |
+| `lattice_treeadmin_compaction_trigger` | manage | Trigger shard compaction for a tree. |
+| `lattice_treeadmin_retention_get` | read | Read a tree's durable-history retention policy. |
+| `lattice_treeadmin_retention_set` | manage | Set a tree's durable-history retention policy. |
+
+The read tools carry `readOnlyHint = true` and `destructiveHint = false`; the manage tools carry `destructiveHint = true` and `readOnlyHint = false`. The registry-persisted shard-map read is distinct from the diagnostics `lattice_treeadmin_shard_map_inspect` tool, which inspects live routing rather than the durable registry map.
+
+This module is served under both topologies. In-silo it delegates to the co-hosted `ILatticeTreeAdmin` facade directly; over the remote (out-of-silo) topology the `AddLatticeMcpRemote` composition wires `GrpcLatticeTreeAdmin` off the `RemoteOptions.TreeAdmin` endpoint, with the mutating lifecycle/control tools additionally requiring `RemoteOptions.EnableLifecycleControl = true` (which maps onto `enableLifecycle`). Caller credentials are forwarded on every gRPC call by the shared credential-forwarding interceptor, so the remote cluster re-runs the facade's own fail-closed access gate.
 
 ## Error handling
 

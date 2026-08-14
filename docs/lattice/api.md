@@ -213,7 +213,7 @@ affect tree availability.
 | `SetIfVersionAsync` | `Task<bool> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion)` | Atomic compare-and-set: writes only when the entry's current version equals `expectedVersion`. Returns `true` on success, `false` on version mismatch. Pass `HybridLogicalClock.Zero` for a key that must not exist. Throws `LatticeReplicationModeMismatchException` when the tree is declared for cross-cluster replication as a typed CRDT mode (see [Replication modes - Single shape per tree](../lattice.replication/replication-modes.md#single-shape-per-tree)). |
 | `GetOrSetAsync` | `Task<byte[]?> GetOrSetAsync(string key, byte[] value)` | Inserts `value` only when `key` is absent or tombstoned. Returns the existing value when live, or `null` when the new value was written. No read-then-write race. Throws `LatticeReplicationModeMismatchException` when the tree is declared for cross-cluster replication as a typed CRDT mode (see [Replication modes - Single shape per tree](../lattice.replication/replication-modes.md#single-shape-per-tree)). |
 | `DeleteAsync` | `Task<bool> DeleteAsync(string key)` | Tombstones `key`. Returns `true` if the key was live. See [Tombstone Compaction](tombstone-compaction.md) for retention. Throws `LatticeReplicationModeMismatchException` when the tree is declared for cross-cluster replication as a typed CRDT mode (see [Replication modes - Single shape per tree](../lattice.replication/replication-modes.md#single-shape-per-tree)). |
-| `ApplyCrdtDeltaAsync` | `Task<HybridLogicalClock> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes)` | Applies a producer-side typed CRDT delta to `key` under the declared `mode`. The owning leaf resolves the registered `CrdtShape`, folds the delta into the current state via the shape's `MergeDelta`, and appends a single WAL record carrying only the delta bytes. Returns the `HybridLogicalClock` stamped on the committed entry. CRDT merges are convergent, so this surface deliberately omits the optimistic-CAS guard `SetIfVersionAsync` carries. `LatticeMergeMode.OrMap` requires a per-tree shape registered via `ISiloBuilder.AddOrMapShape<TKey, TValue>(treeName)`; the closed-shape modes (`OrSet`, `PnCounter`, `VersionVector`, `MvRegister`, `Sequence`, `OrFlag`, `RwFlag`) resolve through the registry's global fallback without per-tree registration. An OR-Map verb against a tree with no registered shape throws `LatticeCrdtShapeNotRegisteredException` (a subclass of `InvalidOperationException`), a deterministic host-configuration precondition that the API bindings map to a client-error status rather than a server fault. `LatticeMergeMode.LwwRegister` is rejected with `ArgumentException` - use `SetAsync` for LWW. Typed accessors (`OrSetAccessor`, `PnCounterAccessor`, `MvRegisterAccessor`, `OrMapAccessor`, `OrFlagAccessor`, `RwFlagAccessor`) wrap this surface and are the recommended caller-facing seam; see [CRDT value-surface accessors](#crdt-value-surface-accessors). Throws `LatticeReplicationModeMismatchException` when the tree is declared for cross-cluster replication under a mode other than `mode` (see [Replication modes - Single shape per tree](../lattice.replication/replication-modes.md#single-shape-per-tree)). |
+| `ApplyCrdtDeltaAsync` | `Task<HybridLogicalClock> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes)` | Applies a producer-side typed CRDT delta to `key` under the declared `mode`. The owning leaf resolves the registered `CrdtShape`, folds the delta into the current state via the shape's `MergeDelta`, and appends a single WAL record carrying only the delta bytes. Returns the `HybridLogicalClock` stamped on the committed entry. CRDT merges are convergent, so this surface deliberately omits the optimistic-CAS guard `SetIfVersionAsync` carries. `LatticeMergeMode.OrMap` requires a per-tree shape registered via `ISiloBuilder.AddOrMapShape<TKey, TValue>(treeName)`; the closed-shape modes (`OrSet`, `PnCounter`, `VersionVector`, `MvRegister`, `Sequence`, `OrFlag`, `RwFlag`, `GCounter`, `GSet`, `RwSet`, `MaxRegister`, and `MinRegister`) resolve through the registry's global fallback without per-tree registration. An OR-Map verb against a tree with no registered shape throws `LatticeCrdtShapeNotRegisteredException` (a subclass of `InvalidOperationException`), a deterministic host-configuration precondition that the API bindings map to a client-error status rather than a server fault. `LatticeMergeMode.LwwRegister` is rejected with `ArgumentException` - use `SetAsync` for LWW. The typed accessors listed under [CRDT value-surface accessors](#crdt-value-surface-accessors) wrap this surface and are the recommended caller-facing seam. Throws `LatticeReplicationModeMismatchException` when the tree is declared for cross-cluster replication under a mode other than `mode` (see [Replication modes - Single shape per tree](../lattice.replication/replication-modes.md#single-shape-per-tree)). |
 
 Single-key operations transparently retry on topology-change
 exceptions (`StaleShardRoutingException`, `StaleTreeRoutingException`).
@@ -491,9 +491,9 @@ maintenance windows accordingly.
 |--------|-----------|-------------|
 | `TreeExistsAsync` | `Task<bool> TreeExistsAsync()` | Returns `true` if this tree is registered. |
 | `GetAllTreeIdsAsync` | `Task<IReadOnlyList<string>> GetAllTreeIdsAsync()` | Returns all registered tree IDs in sorted order. System trees (`_lattice_*`) are excluded. Physical trees created by `ResizeAsync` / `SnapshotAsync` are included. |
-| `DeleteTreeAsync` | `Task DeleteTreeAsync()` | Soft-deletes the tree. Data is retained for `LatticeOptions.SoftDeleteDuration` before purge. Idempotent. ⚠️ **Takes the tree offline** - reads and writes throw `InvalidOperationException` until `RecoverTreeAsync`. Throws `InvalidOperationException` when one or more materialised views derive from this tree; tear those views down first via `ILatticeViewFactory.DeleteAsync` (see [Materialised views](materialised-views.md#deleting-a-source-tree-that-has-views)). See [Tree Deletion](tree-deletion.md). |
+| `DeleteTreeAsync` | `Task DeleteTreeAsync()` | Soft-deletes the tree. Data is retained for `LatticeOptions.SoftDeleteDuration` before purge. Idempotent. WARNING: **Takes the tree offline** - reads and writes throw `InvalidOperationException` until `RecoverTreeAsync`. Throws `InvalidOperationException` when one or more materialised views derive from this tree; tear those views down first via `ILatticeViewFactory.DeleteAsync` (see [Materialised views](materialised-views.md#deleting-a-source-tree-that-has-views)). See [Tree Deletion](tree-deletion.md). |
 | `RecoverTreeAsync` | `Task RecoverTreeAsync()` | Recovers a soft-deleted tree before purge completes. |
-| `PurgeTreeAsync` | `Task PurgeTreeAsync()` | Immediately purges a soft-deleted tree without waiting for the retention window. ⚠️ **Permanently destroys all data.** |
+| `PurgeTreeAsync` | `Task PurgeTreeAsync()` | Immediately purges a soft-deleted tree without waiting for the retention window. WARNING: **Permanently destroys all data.** |
 
 #### Resize and reshard
 
@@ -513,7 +513,7 @@ maintenance windows accordingly.
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `SnapshotAsync` | `Task SnapshotAsync(string destinationTreeId, SnapshotMode mode, int? maxLeafKeys, int? maxInternalChildren)` | Creates a point-in-time copy of the tree into `destinationTreeId`. In `Offline` mode the source is locked during the copy; in `Online` mode the source remains available throughout. Optional sizing overrides apply to the destination. TTL metadata and source HLC versions are preserved verbatim. ⚠️ **`Offline` mode takes the tree offline.** See [Snapshots](snapshots.md). |
+| `SnapshotAsync` | `Task SnapshotAsync(string destinationTreeId, SnapshotMode mode, int? maxLeafKeys, int? maxInternalChildren)` | Creates a point-in-time copy of the tree into `destinationTreeId`. In `Offline` mode the source is locked during the copy; in `Online` mode the source remains available throughout. Optional sizing overrides apply to the destination. TTL metadata and source HLC versions are preserved verbatim. WARNING: **`Offline` mode takes the tree offline.** See [Snapshots](snapshots.md). |
 
 #### Operation status
 
@@ -804,6 +804,30 @@ infrastructure fans a system-origin sub-operation out from within a turn
 that did carry a user credential, it wraps that sub-operation in
 `LatticeCredentialContext.Suppress()` so the ambient credential is stripped
 for the duration and cannot leak onto a system-authored call.
+
+### Access-gate operation flags
+
+A host that registers an `ILatticeAccessGate` receives one `LatticeOperation` flag for the logical operation being authorized. Composite calls can carry the union of several flags. The core flags are:
+
+| Flag | Value | Authorizes |
+|---|---:|---|
+| `Read` | 1 | Single-key reads. |
+| `Write` | 2 | Single-key writes. |
+| `Delete` | 4 | Single-key deletes. |
+| `RangeRead` | 8 | Contiguous range reads and scans. |
+| `RangeDelete` | 16 | Contiguous range deletes. |
+| `CrdtApply` | 32 | Applying a CRDT delta or merge to a key. |
+| `AtomicWrite` | 64 | Initiating a multi-key or cross-tree atomic write. Individual legs still require their own write/delete grant. |
+| `BulkLoad` | 128 | Bulk-load or snapshot-restore writes that populate a tree in bulk. |
+| `Admin` | 256 | Routine tree administration such as create, exists, alias, or reconfigure. |
+| `Backup` | 512 | Capturing a tree, prefix, or key for backup. |
+| `Restore` | 1024 | Restoring a captured backup into a target tree, prefix, or key. |
+| `SchemaAdmin` | 2048 | Schema-management changes. |
+| `Telemetry` | 4096 | Cluster-wide telemetry reads. |
+| `Replication` | 8192 | Runtime replication-management operations. |
+| `TreeLifecycle` | 16384 | Destructive or structural whole-tree lifecycle operations: drop, purge, reshard, resize, or WAL-placement moves. |
+
+`Telemetry`, `Replication`, and `TreeLifecycle` are deliberately separate from `Admin`; granting one does not imply any other capability.
 
 ### Trusted system-origin scope
 
@@ -1253,10 +1277,9 @@ clusters), identical to the live accessor path. See
 ## CRDT value-surface accessors
 
 The CRDT value-surface methods on `ILattice` return lightweight,
-allocation-free accessors that read and write a single key under
-optimistic concurrency. Each accessor exposes the primitive's natural
-mutation API instead of forcing callers to hand-roll byte arrays and CAS
-retry loops. The underlying state types are CRDTs whose `Merge` is
+allocation-free accessors that read and write a single key through the
+primitive's natural mutation API instead of forcing callers to hand-roll
+byte arrays or CRDT deltas. The underlying state types are CRDTs whose `Merge` is
 commutative, associative, and idempotent, so concurrent updates from
 multiple replicas converge without coordination. Each accessor writes
 through `ApplyCrdtDeltaAsync`, so writing through an accessor whose mode
@@ -1357,6 +1380,15 @@ await tree.RwFlag("access/order:42").DisableAsync(replicaId: "siloB");
 | `PnCounterAccessor` | `Task IncrementAsync(string replicaId, long amount = 1)` | Advances the positive component for `replicaId`. `amount` must be non-negative. |
 | `PnCounterAccessor` | `Task DecrementAsync(string replicaId, long amount = 1)` | Advances the negative component for `replicaId`. `amount` must be non-negative. |
 | `PnCounterAccessor` | `Task MergeAsync(PnCounter other)` | Merges `other` into the stored state under CAS. |
+| `GCounterAccessor` | `Task<GCounter> GetAsync()` | Reads the current grow-only counter state. |
+| `GCounterAccessor` | `Task<long> ValueAsync()` | Reads the current scalar value: the sum of all replica components. |
+| `GCounterAccessor` | `Task IncrementAsync(string replicaId, long amount = 1)` | Advances the grow-only component for `replicaId`. `amount` must be non-negative. |
+| `GCounterAccessor` | `Task MergeAsync(GCounter other)` | Merges `other` into the stored state by pointwise-max per replica. |
+| `GSetAccessor` | `Task<GSet> GetAsync()` | Reads the current grow-only set state. |
+| `GSetAccessor` | `Task AddAsync(byte[] element)` | Adds `element`; duplicate adds are idempotent. |
+| `GSetAccessor` | `Task<bool> ContainsAsync(byte[] element)` | Returns `true` when `element` is in the set. |
+| `GSetAccessor` | `Task<IReadOnlyList<byte[]>> ToListAsync()` | Reads members in deterministic order. |
+| `GSetAccessor` | `Task MergeAsync(GSet other)` | Merges `other` into the stored state by set union. |
 | `VersionVectorAccessor` | `Task<VersionVector> GetAsync()` | Reads the current vector state. |
 | `VersionVectorAccessor` | `Task TickAsync(string replicaId)` | Advances the entry for `replicaId` and persists the result. |
 | `VersionVectorAccessor` | `Task MergeAsync(VersionVector other)` | Merges `other` into the stored state under CAS. |
@@ -1387,9 +1419,26 @@ await tree.RwFlag("access/order:42").DisableAsync(replicaId: "siloB");
 | `RwFlagAccessor` | `Task EnableAsync(string replicaId)` | Mints a fresh enable dot and tombstones every disable dot currently observed. A concurrent disable the enabler never saw still suppresses the flag (remove-wins). |
 | `RwFlagAccessor` | `Task DisableAsync(string replicaId)` | Mints a fresh disable dot. Additive - the disable survives until an enable observes and tombstones it. |
 | `RwFlagAccessor` | `Task MergeAsync(RwFlag other)` | Merges `other` into the stored state under CAS. |
+| `RwSetAccessor` | `Task<RwSet> GetAsync()` | Reads the current remove-wins set state. |
+| `RwSetAccessor` | `Task AddAsync(byte[] element, string replicaId)` | Adds `element` with a fresh causal dot and cancels observed removes. Concurrent unobserved removes still win. |
+| `RwSetAccessor` | `Task RemoveAsync(byte[] element, string replicaId)` | Mints a fresh remove dot. A concurrent add that did not observe it is suppressed. |
+| `RwSetAccessor` | `Task<bool> ContainsAsync(byte[] element)` | Returns `true` when `element` has an add dot and no live remove dot. |
+| `RwSetAccessor` | `Task<IReadOnlyList<byte[]>> ToListAsync()` | Reads the current live members. |
+| `RwSetAccessor` | `Task MergeAsync(RwSet other)` | Merges add, remove, and tombstone dots from `other`. |
+| `MaxRegisterAccessor<T>` | `Task SetAsync(T value)` | Proposes `value`; the register advances only if its order key is greater than the current key. |
+| `MaxRegisterAccessor<T>` | `Task<T?> GetAsync()` | Reads the greatest value seen, or `default` when never written. |
+| `MaxRegisterAccessor<T>` | `Task<bool> HasValueAsync()` | Returns whether the register has been written at least once. |
+| `MaxRegisterAccessor<T>` | `Task<BoundedRegister> GetRegisterAsync()` | Reads the raw bounded-register state. |
+| `MaxRegisterAccessor<T>` | `Task MergeAsync(BoundedRegister other)` | Merges `other` under the max direction. |
+| `MinRegisterAccessor<T>` | `Task SetAsync(T value)` | Proposes `value`; the register advances only if its order key is less than the current key. |
+| `MinRegisterAccessor<T>` | `Task<T?> GetAsync()` | Reads the smallest value seen, or `default` when never written. |
+| `MinRegisterAccessor<T>` | `Task<bool> HasValueAsync()` | Returns whether the register has been written at least once. |
+| `MinRegisterAccessor<T>` | `Task<BoundedRegister> GetRegisterAsync()` | Reads the raw bounded-register state. |
+| `MinRegisterAccessor<T>` | `Task MergeAsync(BoundedRegister other)` | Merges `other` under the min direction. |
 
-Each accessor also exposes a `Stage*` counterpart for every live
-mutator. A `Stage*` method reads the key's current snapshot once, mints
+Accessors that support cross-tree staged CRDT writes expose a `Stage*`
+counterpart for their live mutators. A `Stage*` method reads the key's
+current snapshot once, mints
 the typed CRDT delta **once** (the same dot-minting logic the live
 mutator uses), folds the delta into the snapshot to produce the merged
 state, and returns a `LatticeStagedCrdtWrite` carrying the key, the
@@ -1405,6 +1454,8 @@ See [Atomic Writes - Coupling a CRDT mutation into an atomic write](atomic-write
 | `OrSetAccessor` | `Task<LatticeStagedCrdtWrite> StageRemoveAsync(byte[] element, CancellationToken = default)` |
 | `PnCounterAccessor` | `Task<LatticeStagedCrdtWrite> StageIncrementAsync(string replicaId, long amount = 1, CancellationToken = default)` |
 | `PnCounterAccessor` | `Task<LatticeStagedCrdtWrite> StageDecrementAsync(string replicaId, long amount = 1, CancellationToken = default)` |
+| `GCounterAccessor` | `Task<LatticeStagedCrdtWrite> StageIncrementAsync(string replicaId, long amount = 1, CancellationToken = default)` |
+| `GSetAccessor` | `Task<LatticeStagedCrdtWrite> StageAddAsync(byte[] element, CancellationToken = default)` |
 | `VersionVectorAccessor` | `Task<LatticeStagedCrdtWrite> StageTickAsync(string replicaId, CancellationToken = default)` |
 | `MvRegisterAccessor<T>` | `Task<LatticeStagedCrdtWrite> StageSetAsync(T value, string replicaId, CancellationToken = default)` |
 | `RgaAccessor<T>` | `Task<LatticeStagedCrdtWrite> StageInsertAtAsync(int index, string replicaId, T value, CancellationToken = default)` |
@@ -1420,9 +1471,10 @@ See [Atomic Writes - Coupling a CRDT mutation into an atomic write](atomic-write
 `Value`, `Delta`) consumed synchronously by the atomic-write builder. It
 never crosses the wire and is not an Orleans-serializable type.
 
-Mutating methods retry on CAS failure up to the accessor's per-call budget
-(default 16). When the budget is exhausted the accessor throws
-`InvalidOperationException`; raise the budget or reduce contention. Values
+Accessors that use read-modify-write CAS retry conflicting writes up to their
+per-call budget (default 16). Delta-only and directional-register writes
+validate the same budget parameter for API parity but apply through a single
+`ApplyCrdtDeltaAsync` call. Values
 are JSON-serialized via
 `JsonLatticeSerializer<T>`, so the bytes are inspectable through
 `ILattice.GetAsync`.
@@ -1503,7 +1555,7 @@ constraints, and per-tree overrides via the
 | `WalAppendDispatchTimeout` | `TimeSpan` | 30 s | Hard ceiling on a single writer-side outbound WAL shard append-batch / append dispatch. A dispatch that exceeds it is abandoned and surfaced as a `TimeoutException` so the request pipeline releases its slot rather than back-filling behind a wedged shard until the Orleans response deadline (default 3 minutes). Does **not** fix any wedge mechanism - the grain-side flush / activation deadlines already bound their own regions - it bounds the symptom on the writer side and makes every wedge attributable to a specific `(tree, shard)` via the `orleans.lattice.wal.append_dispatch.timeouts` counter in O(timeout) instead of O(response timeout) time. `InfiniteTimeSpan` restores the historical unbounded await. |
 | `WalDrainBudget` | `TimeSpan` | 75 s | Hard ceiling on how long a per-shard WAL grain's `OnDeactivateAsync` drain may run before the remaining in-flight slots are force-faulted and the chain is released so the activation can finish tearing down. Bounds the host-level SIGTERM drain so the silo's shutdown accounting always settles within bounded time of the SIGTERM, regardless of whether the storage provider is healthy. The drain signals every in-flight flush's linked cancellation token at drain entry (so a co-operative provider gives up promptly), waits for the chain to settle naturally for up to this budget, and then force-faults any slot that has not unlinked with a typed `TimeoutException` so callers parked on `AppendAsync` / `AppendBatchAsync` are released. The matching `orleans.lattice.wal.shard.drain.budget.expirations` counter and `orleans.lattice.wal.shard.drain.budget.force_faulted_slots` histogram attribute the trip per `(tree, shard)`. `InfiniteTimeSpan` restores the historical unbounded-drain behaviour. |
 | `WalRetention` | `TimeSpan?` | `null` | Optional wall-clock hard ceiling for WAL retention. `null` means retention is bounded purely by consumer cursors. Trimmed by a WAL GC driver: the built-in `WalGcInterval` scheduler (on by default), or the replication maintenance grain for replicated trees. |
-| `WalGcInterval` | `TimeSpan` | 1 hour (enabled) | Cadence at which the per-silo core WAL garbage-collection scheduler runs `ILatticeWalGc.RunOnceAsync` over every registered tree, so a durable-WAL host gets bounded WAL retention without the replication package and for non-replicated trees. Default-on (hourly) makes `WalRetention` effective out of the box; a pass is retention housekeeping, so the coarse default keeps the storage cost low (cost scales with `trees × WalPartitions` per silo). Composes with the replication maintenance grain - `RunOnceAsync` and the underlying WAL `TrimAsync` are idempotent, and the pass honours the minimum consumer cursor and leaf-materialiser checkpoint floor, so it never over-trims. Global knob read from the default (unnamed) options; per-tree overrides do not apply. `TimeSpan.Zero` or a negative value disables the scheduler. |
+| `WalGcInterval` | `TimeSpan` | 1 hour (enabled) | Cadence at which the per-silo core WAL garbage-collection scheduler runs `ILatticeWalGc.RunOnceAsync` over every registered tree, so a durable-WAL host gets bounded WAL retention without the replication package and for non-replicated trees. Default-on (hourly) makes `WalRetention` effective out of the box; a pass is retention housekeeping, so the coarse default keeps the storage cost low (cost scales with `trees x WalPartitions` per silo). Composes with the replication maintenance grain - `RunOnceAsync` and the underlying WAL `TrimAsync` are idempotent, and the pass honours the minimum consumer cursor and leaf-materialiser checkpoint floor, so it never over-trims. Global knob read from the default (unnamed) options; per-tree overrides do not apply. `TimeSpan.Zero` or a negative value disables the scheduler. |
 | `WalMaxRetainedBytes` | `long?` | `null` | Optional advisory ceiling on retained WAL bytes per tree. When set, each `ILatticeWalGc.RunOnceAsync` pass samples retained bytes before and after its safe trim; if the pre-trim total exceeds the ceiling the policy schedules a byte-pressure trim (`BytePressureTriggered`), and `BytePressureOverThreshold` reports whether the tree is still over after the trim. Advisory only - the GC never trims past the safe frontier to honour it. `null` disables the policy. |
 | `WalBytePressureReclaimTarget` | `double` | 0.8 | Fraction of `WalMaxRetainedBytes` a byte-pressure trim aims to reclaim toward. Ignored when `WalMaxRetainedBytes` is `null`. |
 | `StorageUsageCacheTtl` | `TimeSpan` | 10 s | Cache lifetime for `ILattice.GetStorageUsageAsync` reports. `TimeSpan.Zero` disables caching. |

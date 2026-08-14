@@ -53,7 +53,7 @@ app.MapLatticeMcp();
 | `Stateless` | `bool` | `false` | Whether the HTTP transport runs stateless. The permission-scoped per-session tool collections rely on the stateful (default) mode; enable only for a horizontally-scaled deployment with a fixed tool set. |
 | `CredentialHeaderName` | `string` | `authorization` | The inbound header carrying the caller's credential token, bridged onto the ambient Lattice credential. |
 | `CredentialScheme` | `string` | `Bearer` | The scheme stamped on the bridged credential; a case-insensitive scheme prefix (for example `"Bearer "`) is stripped from the header value before the remaining token is used. |
-| `EnableStateTools` / `EnableDataTools` / `EnableBackupTools` / `EnableBackupControlTools` / `EnableAuthTools` / `EnableAuthAdministration` / `EnableReplicationTools` / `EnableReplicationControlTools` | `bool` | `false` | Per-module enable flags. Set by the `AddXTools(...)` extensions; a host normally toggles them through those calls rather than directly. |
+| `EnableStateTools` / `EnableDataTools` / `EnableBackupTools` / `EnableBackupControlTools` / `EnableAuthTools` / `EnableAuthAdministration` / `EnableReplicationTools` / `EnableReplicationControlTools` / `EnableTreeAdminSchemaControlTools` / `EnableTreeAdminLifecycleTools` | `bool` | `false` | Per-module enable flags. Set by the `AddXTools(...)` extensions; a host normally toggles them through those calls rather than directly. The tree-administration group is registered by `AddTreeAdminTools(...)`; these two flags opt in its mutating schema-management and lifecycle/control tools. |
 | `ProtectedResourceMetadata` | `LatticeApiMcpProtectedResourceMetadata?` | `null` | Opt into OAuth 2.0 Protected Resource Metadata (RFC 9728). When set, an anonymous metadata document is served at `/.well-known/oauth-protected-resource` and the `401` bearer challenge carries a `resource_metadata` hint. See [OAuth discovery](#oauth-discovery-rfc-9728). |
 
 ## Add the tool modules
@@ -82,6 +82,6 @@ builder.Services.AddLatticeMcp(o =>
 
 ## Next
 
-- [Tools](tools.md) - the five modules and every tool they expose.
+- [Tools](tools.md) - the six built-in modules and every tool they expose.
 - [Security](security.md) - the fail-closed posture and the credential bridge.
 - [Remote hosting](remote.md) - serving the surface out-of-silo over gRPC.

@@ -21,14 +21,19 @@ Core WAL semantics, the provider seam, and placement are covered in [WAL Storage
 - **Batch atomicity.** A successful append is visible as a complete batch; a torn or uncommitted trailing batch leaves no visible partial state after recovery.
 - **Crash recoverability.** Interrupted appends are reconciled before normal reads and writes rely on the stored tail.
 - **Self-compacting.** Trimmed payload bytes are physically reclaimed by rewriting a shard's segment file once enough dead space accumulates.
+- **Not yet published to NuGet.** Build from source today; do not use `dotnet add package` until the package is published.
+
+## Public surface
+
+| Type or member | Role |
+|---|---|
+| `FileWalStorageProvider` | Public `IWalStorageProvider` implementation that stores one `wal.log` per `(tree, shard)` stream under `FileWalStorageOptions.RootDirectory`. |
+| `FileWalStorageOptions` | Public options type for the root directory, flush policy, and compaction thresholds. |
+| `LatticeFileServiceCollectionExtensions.AddFileWalStorage` | Registration extension that installs the file WAL provider and durable-WAL garbage-collection wiring on an `ISiloBuilder`. |
 
 ## Quick Start
 
-Install the package and register it on the silo that owns the WAL:
-
-```shell
-dotnet add package Orleans.Lattice.Storage.File
-```
+Reference the source project, because the package is not yet published to NuGet, and register it on the silo that owns the WAL:
 
 ```csharp verify
 using Orleans.Lattice.Storage.File;

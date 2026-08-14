@@ -4,7 +4,7 @@ The module contributes the `repocontext_*` MCP tools in two host-selected shapes
 
 ## Read-only tools
 
-Always contributed (to a caller with a read grant), regardless of the `enableWrites` flag.
+Always contributed to a caller whose effective permissions include a data-plane operation that unlocks the repository-context group, regardless of the `enableWrites` flag.
 
 | Tool | What it does |
 |---|---|
@@ -73,4 +73,4 @@ When `excludeBinary` is on, a file whose leading bytes look non-text - a `NUL` b
 
 ## Discovery and gating
 
-Tool advertisement and invocation both defer to the core permission-aware discovery filter and the fail-closed gate - the module registers exactly one tool group and adds no per-session state. A caller with no repository-context grant sees none of these tools; a caller with only a read grant sees the read-only tools (the six always-on tools, plus `repocontext_list_repos` in workspace mode); the mutating tools appear only when the host enabled writes. See the [MCP server](../lattice.api.mcp/README.md) docs for the credential bridge and grant model.
+Tool advertisement and invocation both defer to the core permission-aware discovery filter and the fail-closed gate - the module registers exactly one tool group and adds no per-session state. A caller with no matching data-plane capability sees none of these tools; a caller whose permissions only allow reads sees the read-only tools (the six always-on tools, plus `repocontext_list_repos` in workspace mode); the mutating tools appear only when the host enabled writes. See the [MCP server](../lattice.api.mcp/README.md) docs for the credential bridge and grant model.

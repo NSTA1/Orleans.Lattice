@@ -8,7 +8,7 @@ A write-capable external data-plane add-on for [Orleans.Lattice](../../README.md
 
 It is the write-capable sibling of the read-only [`Orleans.Lattice.Api.State`](../lattice.api.state/README.md) package, and is built the same way, in two layers:
 
-- **A transport-agnostic facade.** `ILatticeDataApi` (a public contract in the shared `Orleans.Lattice.Api.Abstractions` package) exposes point set/delete, single-tree atomic batch, cross-tree atomic batch, point read, and a single bounded range-read page over plain request/response records. The facade has no wire dependency, so the same surface serves an in-process consumer and a remote one.
+- **A transport-agnostic facade.** `ILatticeDataApi` (a public contract in the shared `Orleans.Lattice.Api.Abstractions` package) exposes point set/delete, bounded range delete, non-atomic bulk upsert, single-tree atomic batch, cross-tree atomic batch, point read, a single bounded range-read page, and typed CRDT verbs over plain request/response records. The facade has no wire dependency, so the same surface serves an in-process consumer and a remote one.
 - **A code-first gRPC binding.** `Orleans.Lattice.Api.Data.Grpc` projects the facade onto a gRPC service whose messages are the same Orleans-serialized records, plus a public `LatticeDataApiGrpcClient`. Remote consumers talk to the cluster over HTTP/2 with no hand-rolled `.proto`.
 
 Every operation is served by fetching the cluster grain with `GetGrain<ILattice>(treeId)` and calling the **same public `ILattice` method** the in-cluster client calls. Authorization is therefore inherited, not re-implemented: the per-tree / per-key enforcement wired at the core grain fires automatically once the caller identity flows on the ambient credential context.
@@ -17,7 +17,7 @@ Every operation is served by fetching the cluster grain with `GetGrain<ILattice>
 
 - **Opt-in and absent by default.** Nothing registers unless the host calls `AddLatticeDataApi()` on the silo and `AddLatticeDataApiGrpc()` / `MapLatticeDataApiGrpc()` on the web host. A cluster that does not add the package has no external write surface.
 - **Fail-closed.** An unresolved or anonymous caller is denied every mutation and read. Because calls route through the gated `ILattice` surface with the caller identity on the credential context, an anonymous subject is default-denied by the core authorization gate - the package adds no bypass.
-- **Authorization inherited, never re-implemented.** Writes and deletes throw on denial; point reads of a denied key report absent; range reads prune to the authorized subset; atomic and cross-tree batches authorize every leg before any apply. None of this logic lives in this package - it is the core gate, reached through `ILattice`.
+- **Authorization inherited, never re-implemented.** Writes, deletes, range deletes, bulk upserts, and typed CRDT writes throw on denial; point reads and typed CRDT reads of a denied key report an empty value; range reads prune to the authorized subset; atomic and cross-tree batches authorize every leg before any apply. None of this logic lives in this package - it is the core gate, reached through `ILattice`.
 - **Transport-agnostic.** The facade is the contract; gRPC is one binding. The same records flow to an in-process consumer and a remote one.
 
 ## Surface (v1)
@@ -27,10 +27,13 @@ Every operation is served by fetching the cluster grain with `GetGrain<ILattice>
 | Point write | `SetAsync` | `Set` | `SetAsync(key, value)` |
 | Point delete | `DeleteAsync` | `Delete` | `DeleteAsync(key)` |
 | Range delete | `DeleteRangeAsync` | `DeleteRange` | the resilient range-delete drain (`DeleteRangeAsync(startInclusive, endExclusive)` extension over the delete-range cursor) |
+| Non-atomic bulk upsert | `SetManyAsync` | `SetMany` | `SetManyAsync(pairs)` |
 | Single-tree atomic batch | `SetManyAtomicAsync` | `SetManyAtomic` | `SetManyAtomicAsync(upserts, deletes, operationId)` |
 | Cross-tree atomic batch | `SetManyAtomicCrossTreeAsync` | `SetManyAtomicCrossTree` | the cross-tree atomic coordinator surface |
 | Point read | `GetAsync` | `Get` | `GetAsync(key)` |
 | Bounded range-read page | `ReadRangeAsync` | `ReadRange` | the paged entry-cursor surface (`OpenEntryCursorAsync` / `NextEntriesAsync` / `CloseCursorAsync`) |
+| Typed CRDT write | `CounterIncrementAsync`, `SetAddAsync`, `OrFlagEnableAsync`, `RwFlagEnableAsync`, `GCounterIncrementAsync`, `GSetAddAsync`, `RwSetAddAsync`, `VersionVectorTickAsync`, `RegisterSetAsync`, `MaxRegisterSetAsync`, `MinRegisterSetAsync`, `SequenceInsertAtAsync`, `MapSetAsync`, and their matching mutation verbs | `CrdtWrite` | the typed CRDT facade extension surface |
+| Typed CRDT read | `CounterGetAsync`, `SetGetAsync`, `OrFlagGetAsync`, `RwFlagGetAsync`, `GCounterGetAsync`, `GSetGetAsync`, `RwSetGetAsync`, `VersionVectorGetAsync`, `RegisterGetAsync`, `MaxRegisterGetAsync`, `MinRegisterGetAsync`, `SequenceGetAsync`, `MapGetAsync` | `CrdtRead` | the typed CRDT read surface |
 
 ### Explicitly deferred
 
@@ -103,13 +106,13 @@ This is a write-capable external surface, so its default posture is closed:
 - **Two independent gates.** A coarse transport-level authorizer (`ILatticeDataApiAuthorizer`, default `DenyAllDataApiAuthorizer`) runs first and rejects the whole call before it reaches the facade; then the per-tree / per-key core gate authorizes every leg of the actual operation. The coarse gate is the endpoint-level on/off switch; the core gate is the fine-grained rights check. Both must pass.
 - **Anonymous is denied.** A call with no resolvable credential is default-denied by the core gate (writes and reads alike), because the anonymous subject has no grant. This is verified by tests rather than by a bespoke check in this package.
 - **Denial carries no value.** When the core gate denies a call, the gRPC service maps it to `PermissionDenied` and attaches only the non-sensitive fields of the denial - the tree id, the operation, the subject, and the reason - as response trailers. The entry value is never included in a denial.
-- **Identity bridge.** The caller identity is lifted from request metadata by `ILatticeDataApiCredentialBridge`. The default is header-based: it reads the `authorization` header and strips a leading `Bearer ` prefix case-insensitively. Replace the seam to source identity differently.
+- **Identity bridge.** The caller identity is lifted from request metadata by `ILatticeDataApiCredentialBridge`. The default is header-based: it reads the `authorization` header and strips a leading `Bearer` prefix case-insensitively. Replace the seam to source identity differently.
 
 ## Reference
 
 - [Configuration](configuration.md) - every public options property, its type, and its default.
 - Facade registration: `AddLatticeDataApi()` on the silo builder, configured with `LatticeApiDataOptions`.
 - gRPC registration: `AddLatticeDataApiGrpc()` and `MapLatticeDataApiGrpc()`, configured with `LatticeDataApiGrpcOptions`.
-- Public client: `LatticeDataApiGrpcClient` (`Set`, `Delete`, `DeleteRange`, `SetManyAtomic`, `SetManyAtomicCrossTree`, `Get`, `ReadRange`).
+- Public client: `LatticeDataApiGrpcClient` (`SetAsync`, `DeleteAsync`, `DeleteRangeAsync`, `SetManyAsync`, `SetManyAtomicAsync`, `SetManyAtomicCrossTreeAsync`, `GetAsync`, `ReadRangeAsync`, `CrdtWriteAsync`, `CrdtReadAsync`).
 - Authorization seam: `ILatticeDataApiAuthorizer` (`DenyAllDataApiAuthorizer`, `AllowAllDataApiAuthorizer`).
 - Identity seam: `ILatticeDataApiCredentialBridge`.

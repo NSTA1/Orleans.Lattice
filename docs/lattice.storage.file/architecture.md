@@ -33,7 +33,7 @@ Caller-assigned offsets are stored verbatim. The provider never assumes contigui
 
 ## Crash recovery
 
-`ReconcileAsync` runs at grain activation, before the WAL grain reads the highest offset. It scans the segment file, rolls every committed batch forward, discards any torn or uncommitted trailing batch, and reclaims previously-trimmed space. After reconciliation the shard tail is contiguous and durable, so normal reads and writes rely on a consistent view. This is the local-disk analogue of the Azure Table provider's phase-1/phase-2 orphan repair.
+`ReconcileAsync` runs at grain activation, before the WAL grain reads the highest offset. It scans the segment file, rolls every committed batch forward, discards any torn or uncommitted trailing batch, and reclaims previously-trimmed space. After reconciliation the retained shard entries are sorted by offset and durable, preserving any honest gaps from failed or out-of-order appends, so normal reads and writes rely on a consistent view. This is the local-disk analogue of the Azure Table provider's phase-1/phase-2 orphan repair.
 
 ## Durable WAL garbage collection
 

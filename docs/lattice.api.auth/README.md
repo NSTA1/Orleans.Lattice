@@ -56,6 +56,14 @@ It is the authorization sibling of the read-only [`Orleans.Lattice.Api.State`](.
 | Explain a verdict | `ExplainAsync` | Returns the gate's allow/deny verdict for a subject / operation / scope, plus the authored rules that apply (including cluster-wide `Tree:*` wildcard rules that govern the target tree) - for debugging policy. Pass `subjectKind: LatticeSubjectSelectorKind.Group` to explain the decision for a *group* (evaluated as a member of that group and its ancestors); the default is `User`. |
 | Resolve effective permissions | `EffectivePermissionsAsync` | Returns the rules currently in effect for a subject (matched directly or through a group) - for dashboards and UX. Pass `subjectKind: LatticeSubjectSelectorKind.Group` to resolve a group's own rules; the default is `User`. |
 
+### Identity directory and access model
+
+| Operation | Facade method | Purpose |
+|---|---|---|
+| Search or browse principals | `SearchDirectoryAsync` | Searches the configured identity directory for matching users and groups. |
+| Resolve one principal | `ResolveDirectoryPrincipalAsync` | Resolves a single directory principal by id, returning no principal when none exists. |
+| Read access-model posture | `GetAccessModelAsync` | Returns the cluster's best-effort access model descriptor, including the live all-trees and access-administration-delegation posture flags. |
+
 ### Access administration delegation
 
 By default the only subjects who can administer access (manage groups, membership, and policy rules) are the cluster's **bootstrap administrators** - the statically-configured `LatticeAuthOptions.BootstrapAdministrators` root of trust. "Access administration" is the `Admin` capability on the reserved policy tree `sys-auth-policy` (its id is the public constant `LatticeAuthReservedTrees.PolicyTreeId`); the enforcement gate requires whole-tree `Admin` on that tree to authorize every control-plane call.

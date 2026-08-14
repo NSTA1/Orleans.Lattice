@@ -41,6 +41,9 @@ Administering authorization is the most sensitive surface in the cluster, so the
 | `ListRulesForTree` | `ListRulesForTreeAsync` |
 | `Explain` | `ExplainAsync` |
 | `EffectivePermissions` | `EffectivePermissionsAsync` |
+| `SearchDirectory` | `SearchDirectoryAsync` |
+| `ResolveDirectoryPrincipal` | `ResolveDirectoryPrincipalAsync` |
+| `GetAccessModel` | `GetAccessModelAsync` |
 
 ## Public surface
 
@@ -54,6 +57,7 @@ Administering authorization is the most sensitive surface in the cluster, so the
 | `LatticeAuthApiAuthorizationContext` | Per-call description handed to the authorizer (operation, target id, call context). |
 | `LatticeAuthApiOperation` | Enumerates the operation behind each RPC. |
 | `ILatticeAuthApiCredentialBridge` | Identity seam that lifts the inbound credential onto the ambient context. |
+| `Auth*` request/response records | Public request and response DTOs for the unary RPCs. |
 | `AddLatticeAuthApiGrpc` / `MapLatticeAuthApiGrpc` | Registration and endpoint-routing extensions. |
 
 ## Two-layer authorization
@@ -69,31 +73,49 @@ A denial from the facade check is mapped to `PermissionDenied` with response tra
 
 Register the binding on a silo that already has `AddLatticeAuthApi`, then map its routes:
 
-```csharp
+```csharp verify
+using Orleans.Lattice.Api.Auth.Grpc;
+
 var builder = WebApplication.CreateBuilder();
 builder.Services.AddLatticeAuthApiGrpc(o => o.RequireAuthorization = true);
 builder.Services.AddSingleton<ILatticeAuthApiAuthorizer, AllowAllAuthApiAuthorizer>();
 
 var app = builder.Build();
 app.MapLatticeAuthApiGrpc();
-app.Run();
 ```
 
 The host must expose `ILatticeAuthAdmin` in the same service provider - typically by co-hosting Orleans with `AddLattice(...).AddLatticeAuth(...).AddLatticeAuthApi()` on the same host.
 
 ## Client
 
-```csharp
-var channel = GrpcChannel.ForAddress("https://admin.example:443");
-var client = LatticeAuthApiGrpcClient.Create(channel.CreateCallInvoker(), serializerProvider);
+```csharp verify
+using Grpc.Net.Client;
+using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice.Api.Auth;
+using Orleans.Lattice.Api.Auth.Grpc;
+using Orleans.Serialization;
 
-await client.UpsertGroupAsync(new AuthGroup { GroupId = "admins", DisplayName = "Admins" });
-await client.PutRuleAsync(new AuthPutRule { Rule = rule });
-var explanation = await client.ExplainAsync(new AuthExplainQuery
+var services = new ServiceCollection();
+services.AddSerializer();
+var serializerProvider = services.BuildServiceProvider();
+using var channel = GrpcChannel.ForAddress("https://admin.example:443");
+var authClient = LatticeAuthApiGrpcClient.Create(channel.CreateCallInvoker(), serializerProvider);
+
+await authClient.UpsertGroupAsync(new AuthGroup { GroupId = "admins", DisplayName = "Admins" });
+await authClient.PutRuleAsync(new AuthPutRule
+{
+    Rule = new LatticeAuthorizationRule(
+        "admins-read-orders",
+        LatticeSubjectSelector.Group("admins"),
+        LatticeScope.Tree("orders"),
+        LatticeOperation.Read,
+        LatticeEffect.Allow),
+});
+var explanation = await authClient.ExplainAsync(new AuthExplainQuery
 {
     SubjectId = "alice",
     Operation = LatticeOperation.Read,
-    Scope = scope,
+    Scope = LatticeScope.Tree("orders"),
 });
 ```
 

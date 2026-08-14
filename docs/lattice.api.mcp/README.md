@@ -10,7 +10,7 @@ It is built from four parts:
 
 - **A front door.** `AddLatticeMcp(...)` registers the MCP server, the streamable-HTTP transport, a fail-closed authorizer seam, and the credential bridge; `MapLatticeMcp()` maps the endpoint. The server starts with **no** tools - each tool module is opt-in.
 - **Permission-scoped discovery.** A per-session configurator computes the tool list from the authenticated caller's effective permissions and adds a `lattice_capabilities` meta-tool. A caller sees and can invoke only the tools its grants allow; an ungranted tool is never listed.
-- **Five tool modules.** `AddStateTools()`, `AddDataTools()`, `AddBackupTools()`, `AddAuthTools()`, and `AddReplicationTools()` each register a group of thin adapters over the matching facade, named `lattice_<group>_<verb>`. Destructive verbs (writes, backup control, auth administration, replication control) are opt-in. Every module is served under both the in-silo and remote topologies.
+- **Six built-in tool modules.** `AddStateTools()`, `AddDataTools()`, `AddBackupTools()`, `AddAuthTools()`, `AddReplicationTools()`, and `AddTreeAdminTools()` each register a group of thin adapters over the matching facade, named `lattice_<group>_<verb>`. Destructive verbs (writes, backup control, auth administration, replication control, schema management, and tree lifecycle/control operations) are opt-in. Every built-in module is served under both the in-silo and remote topologies.
 - **In-silo or remote hosting.** Co-host the server on a silo that exposes the facades in-process, or run it out-of-silo with `AddLatticeMcpRemote(...)`, which binds the same tool modules over the `Orleans.Lattice.Api.*.Grpc` clients to front a cluster it is not co-located with.
 
 ## Core properties
@@ -57,7 +57,7 @@ For a complete, runnable co-hosted silo that serves the MCP endpoint, see the [`
 ## Reference
 
 - [Setup](setup.md) - registering the front door, the options, and mapping the endpoint.
-- [Tools](tools.md) - the five tool modules, their opt-in flags, and the full tool catalogue.
+- [Tools](tools.md) - the six built-in tool modules, their opt-in flags, and the full tool catalogue.
 - [Security](security.md) - the fail-closed posture, the authorizer seam, the credential bridge, and permission-scoped discovery.
 - [Remote hosting](remote.md) - running the server out-of-silo over the gRPC clients with `AddLatticeMcpRemote(...)`.
 

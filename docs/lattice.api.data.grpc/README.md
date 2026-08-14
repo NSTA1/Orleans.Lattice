@@ -8,7 +8,7 @@ Code-first gRPC binding for [Orleans.Lattice.Api.Data](../lattice.api.data/READM
 
 It provides:
 
-- **A code-first gRPC service.** A unary RPC per data-API verb - point read, range read, set, delete, range delete, and the two atomic multi-key writes (single-tree and cross-tree) - bound from C# definitions rather than a `.proto`.
+- **A code-first gRPC service.** Ten unary RPCs - point read, range read, set, delete, range delete, non-atomic bulk upsert, the two atomic multi-key writes (single-tree and cross-tree), typed CRDT write, and typed CRDT read - bound from C# definitions rather than a `.proto`.
 - **A public typed client.** `LatticeDataApiGrpcClient` exposes one method per RPC over a caller-supplied gRPC channel.
 - **Shared Orleans marshalling.** Every message is one of the package's `[GenerateSerializer]` records, serialized with the Orleans binary serializer, so client and server stay in lock-step by construction.
 - **Fail-closed authorization.** A per-call `ILatticeDataApiAuthorizer` seam gates every RPC; the default denies all traffic until a host configures one.
@@ -17,7 +17,7 @@ The package has no external broker and no `.proto` file to maintain.
 
 ## Core Properties
 
-- **Write-capable, opt-in.** The binding exposes reads plus mutating verbs (set, delete, atomic single-tree and cross-tree writes); every mutation runs through the same fail-closed access gate as a read.
+- **Write-capable, opt-in.** The binding exposes reads plus mutating verbs (set, delete, range delete, non-atomic bulk upsert, atomic single-tree and cross-tree writes, and typed CRDT writes); every mutation runs through the same fail-closed access gate as a read.
 - **Public client, internal service.** Callers consume `LatticeDataApiGrpcClient`; the service, marshallers, and method definitions are internal.
 - **No transport policy in the client.** Address, TLS, retries, deadlines, and credentials live on the caller's `GrpcChannel` / `CallInvoker`.
 - **Fail-closed.** Unconfigured, the binding denies every call: the default `DenyAllDataApiAuthorizer` is registered via `TryAdd`, so a host must register a real `ILatticeDataApiAuthorizer` (or turn enforcement off) before any call succeeds.
@@ -42,7 +42,7 @@ var app = builder.Build();
 app.MapLatticeDataApiGrpc();
 ```
 
-The public client wraps a caller-supplied channel and exposes one method per RPC - `GetAsync`, `ReadRangeAsync`, `SetAsync`, `DeleteAsync`, `DeleteRangeAsync`, `SetManyAtomicAsync`, and `SetManyAtomicCrossTreeAsync`. A mutating call the caller is not permitted to make surfaces as a `PermissionDenied` `RpcException` rather than an unhandled error.
+The public client wraps a caller-supplied channel and exposes one method per RPC - `GetAsync`, `ReadRangeAsync`, `SetAsync`, `DeleteAsync`, `DeleteRangeAsync`, `SetManyAsync`, `SetManyAtomicAsync`, `SetManyAtomicCrossTreeAsync`, `CrdtWriteAsync`, and `CrdtReadAsync`. A mutating call the caller is not permitted to make surfaces as a `PermissionDenied` `RpcException` rather than an unhandled error.
 
 See the [`Orleans.Lattice.Api.Data` overview](../lattice.api.data/README.md) for the full facade, its surfaces, and the shared authorization model.
 
