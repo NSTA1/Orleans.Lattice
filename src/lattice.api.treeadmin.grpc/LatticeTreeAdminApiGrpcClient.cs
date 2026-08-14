@@ -6,10 +6,15 @@ namespace Orleans.Lattice.Api.TreeAdmin.Grpc;
 /// <summary>
 /// Strongly-typed client for the tree-administration control-API gRPC surface.
 /// Wraps a gRPC <see cref="CallInvoker"/> and the code-first method definitions,
-/// re-exposing the transport-agnostic <see cref="ILatticeTreeAdmin"/> facade
-/// surface over the wire: the capability probe and auth-scheme discovery. A
-/// management surface (dashboard, CLI) consumes the API through this client rather
-/// than hand-rolling channel calls.
+/// re-exposing the full transport-agnostic <see cref="ILatticeTreeAdmin"/> facade
+/// surface over the wire - the capability probe and auth-scheme discovery alongside
+/// the whole-tree administration operations (create, configure, and resolve
+/// aliases; inspect and diagnose; soft-delete, recover, and purge; online reshard,
+/// resize, and snapshot; restore and revert; streamed resumable bulk-load; WAL
+/// placement audit and online partition move; materialised-view and tag-index
+/// management; shard compaction; and history retention). A management surface
+/// (dashboard, CLI) consumes the API through this client rather than hand-rolling
+/// channel calls.
 /// </summary>
 /// <remarks>
 /// The client carries no transport policy of its own: address, TLS, retries,
@@ -17,10 +22,9 @@ namespace Orleans.Lattice.Api.TreeAdmin.Grpc;
 /// / <c>GrpcChannel</c> the caller supplies. Build one with
 /// <see cref="Create(CallInvoker, IServiceProvider)"/>, passing a service provider
 /// that has Orleans serialization registered (<c>AddSerializer()</c>) so the wire
-/// marshallers match the server exactly. The whole-tree lifecycle operations land
-/// in later releases; when they do, this client grows a method per RPC and can
-/// adopt region-aware call routing without restructuring, because every call
-/// already flows through the single <see cref="CallInvoker"/> seam.
+/// marshallers match the server exactly. Every operation flows through the single
+/// <see cref="CallInvoker"/> seam, so the client can adopt region-aware call
+/// routing without restructuring.
 /// </remarks>
 public sealed class LatticeTreeAdminApiGrpcClient
 {
