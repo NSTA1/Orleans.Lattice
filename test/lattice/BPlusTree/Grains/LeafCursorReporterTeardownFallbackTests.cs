@@ -56,7 +56,7 @@ public sealed class LeafCursorReporterTeardownFallbackTests
         var list = new List<MaterialiserPinReport>(pins.Length);
         foreach (var (consumer, frontier) in pins)
         {
-            list.Add(new MaterialiserPinReport(consumer, frontier));
+            list.Add(new MaterialiserPinReport(consumer, frontier, -1));
         }
         return list;
     }
@@ -195,6 +195,9 @@ public sealed class LeafCursorReporterTeardownFallbackTests
         public Task<IReadOnlyDictionary<string, HybridLogicalClock>> GetPinsAsync() =>
             Task.FromResult<IReadOnlyDictionary<string, HybridLogicalClock>>(
                 new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal));
+        public Task<IReadOnlyDictionary<string, long>> GetPinOffsetsAsync() =>
+            Task.FromResult<IReadOnlyDictionary<string, long>>(
+                new Dictionary<string, long>(StringComparer.Ordinal));
         public Task RemoveAsync(string consumerId) => Task.CompletedTask;
         public Task ClearAsync() => Task.CompletedTask;
     }
@@ -256,7 +259,11 @@ public sealed class LeafCursorReporterTeardownFallbackTests
         }
 
         private static WalMaterialiserPinState Clone(WalMaterialiserPinState source) =>
-            new() { Pins = new Dictionary<string, HybridLogicalClock>(source.Pins, StringComparer.Ordinal) };
+            new()
+            {
+                Pins = new Dictionary<string, HybridLogicalClock>(source.Pins, StringComparer.Ordinal),
+                Offsets = new Dictionary<string, long>(source.Offsets, StringComparer.Ordinal),
+            };
 
         private static string MakeKey(string stateName, GrainId grainId) => $"{stateName}/{grainId}";
     }

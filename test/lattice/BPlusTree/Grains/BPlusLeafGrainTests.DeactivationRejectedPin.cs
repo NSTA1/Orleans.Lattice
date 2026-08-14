@@ -113,6 +113,8 @@ public partial class BPlusLeafGrainTests
         public Task SeedManyAsync(IReadOnlyList<MaterialiserPinReport> reports) => Reject();
         public Task<IReadOnlyDictionary<string, HybridLogicalClock>> GetPinsAsync() => Reject()
             .ContinueWith<IReadOnlyDictionary<string, HybridLogicalClock>>(_ => null!);
+        public Task<IReadOnlyDictionary<string, long>> GetPinOffsetsAsync() => Reject()
+            .ContinueWith<IReadOnlyDictionary<string, long>>(_ => null!);
         public Task RemoveAsync(string consumerId) => Reject();
         public Task ClearAsync() => Reject();
     }
@@ -168,7 +170,11 @@ public partial class BPlusLeafGrainTests
         }
 
         private static WalMaterialiserPinState Clone(WalMaterialiserPinState source) =>
-            new() { Pins = new Dictionary<string, HybridLogicalClock>(source.Pins, StringComparer.Ordinal) };
+            new()
+            {
+                Pins = new Dictionary<string, HybridLogicalClock>(source.Pins, StringComparer.Ordinal),
+                Offsets = new Dictionary<string, long>(source.Offsets, StringComparer.Ordinal),
+            };
 
         private static string MakeKey(string stateName, GrainId grainId) => $"{stateName}/{grainId}";
     }

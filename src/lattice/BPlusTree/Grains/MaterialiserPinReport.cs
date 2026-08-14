@@ -34,13 +34,27 @@ internal readonly record struct MaterialiserPinReport
     public HybridLogicalClock Frontier { get; init; }
 
     /// <summary>
+    /// The highest WAL <b>offset</b> the consumer has durably applied (its
+    /// projection checkpoint offset). Unlike <see cref="Frontier"/> - which is
+    /// HLC-space and can move non-monotonically with respect to offset when a
+    /// tombstone-compaction reap re-emits an old timestamp at a new WAL offset -
+    /// this is the offset-space frontier the WAL GC must never trim past. The
+    /// <c>-1</c> sentinel marks a leaf that has activated but not yet applied
+    /// anything (a "block" pin), for which nothing may be trimmed by offset.
+    /// </summary>
+    [Id(2)]
+    public long CheckpointOffset { get; init; }
+
+    /// <summary>
     /// Creates a pin report.
     /// </summary>
     /// <param name="consumerId">The stable leaf-materialiser consumer id.</param>
     /// <param name="frontier">The highest durable checkpoint frontier.</param>
-    public MaterialiserPinReport(string consumerId, HybridLogicalClock frontier)
+    /// <param name="checkpointOffset">The highest durably-applied WAL offset, or <c>-1</c> for a never-applied block pin.</param>
+    public MaterialiserPinReport(string consumerId, HybridLogicalClock frontier, long checkpointOffset)
     {
         ConsumerId = consumerId;
         Frontier = frontier;
+        CheckpointOffset = checkpointOffset;
     }
 }

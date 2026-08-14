@@ -12,6 +12,11 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), labelled per project. See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
 
+### Fixed
+
+- **The WAL GC no longer trims a low-HLC / high-offset tombstone-compaction reap past a lagging materialiser leaf's checkpoint.** A tombstone-compaction reap envelope reuses the reaped entry's older (lower) hybrid-logical clock but is appended at a higher WAL offset, which breaks the HLC-monotonic-in-offset assumption the HLC trim floor relied on: the reap's low HLC was trim-eligible under any positive cursor, so the GC could reclaim it before a lagging leaf applied it, tripping the offset-space fall-off detector (`LeafProjectionStaleException`) and wedging the affected consumer's ingest (observed as a repocontext semantic index that never populated, so search silently degraded to keyword mode). The durable materialiser pin store now records each leaf's applied checkpoint offset alongside its frontier, and the WAL GC floors its trim so it never reclaims an entry above the lowest durably-applied leaf checkpoint offset. The floor only ever retains more WAL, so healthy trees are unaffected, and consumers with no WAL-replay dependency (never-checkpointed block pins and in-memory-seeded split siblings) are excluded so steady-state trimming is unchanged. ([#1482](https://github.com/NSTA1/Orleans.Lattice/pull/1482))
+
+
 ## Released
 
 Published releases, newest first. Each section is keyed by its publish date; within a date, packages advance on their own patch digits per [`docs/RELEASING.md`](docs/RELEASING.md).

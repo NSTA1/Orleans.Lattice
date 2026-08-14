@@ -73,7 +73,7 @@ public sealed class WalCursorRegistryDurabilityTests
         var treeId = "wcr-note-" + Guid.NewGuid().ToString("N")[..8];
         var consumerId = ILeafCursorReporter.MaterialiserConsumerIdPrefix + treeId + "_leaf0";
         var frontier = new HybridLogicalClock { WallClockTicks = DateTime.UtcNow.Ticks, Counter = 1 };
-        reporter!.NoteDurableMaterialiserFrontier(treeId, consumerId, frontier);
+        reporter!.NoteDurableMaterialiserFrontier(treeId, consumerId, frontier, 42);
 
         var pins = await WaitForPinAsync(treeId, consumerId);
         Assert.That(pins, Does.ContainKey(consumerId),

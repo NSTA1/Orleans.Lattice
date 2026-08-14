@@ -50,10 +50,13 @@ internal sealed class LeafCursorReporter(
 
     /// <summary>
     /// Per-<c>(treeName, consumerId)</c> debounce state for the durable pin
-    /// mirror. Holds the last frontier written through and the wall-clock
-    /// tick at which it was written.
+    /// mirror. Holds the last frontier and last checkpoint offset written
+    /// through and the wall-clock tick at which they were written. The offset
+    /// is tracked alongside the HLC so an offset-only advance (a
+    /// tombstone-compaction reap moves the applied offset while the HLC stays
+    /// flat) is not coalesced away by the HLC-only comparison.
     /// </summary>
-    private readonly ConcurrentDictionary<(string TreeName, string ConsumerId), (HybridLogicalClock LastWritten, long LastWriteTickMs)> _durableDebounce =
+    private readonly ConcurrentDictionary<(string TreeName, string ConsumerId), (HybridLogicalClock LastWritten, long LastWrittenOffset, long LastWriteTickMs)> _durableDebounce =
         new();
 
     /// <summary>
@@ -152,7 +155,8 @@ internal sealed class LeafCursorReporter(
     public void NoteDurableMaterialiserFrontier(
         string treeName,
         string consumerId,
-        HybridLogicalClock frontier)
+        HybridLogicalClock frontier,
+        long checkpointOffset)
     {
         if (grainFactory is null)
         {
@@ -173,8 +177,12 @@ internal sealed class LeafCursorReporter(
 
         if (_durableDebounce.TryGetValue(key, out var current))
         {
-            // Only advances matter; a stale/equal frontier is coalesced.
-            if (frontier <= current.LastWritten)
+            // Only advances matter, but an advance of EITHER the HLC frontier
+            // or the applied offset counts. A reap advances the offset while
+            // the HLC stays flat, so an HLC-only coalesce would drop the very
+            // advance the offset floor needs; a stale/equal report on both
+            // axes is coalesced.
+            if (frontier <= current.LastWritten && checkpointOffset <= current.LastWrittenOffset)
             {
                 return;
             }
@@ -188,14 +196,17 @@ internal sealed class LeafCursorReporter(
                 return;
             }
 
-            _durableDebounce[key] = (frontier, now);
+            _durableDebounce[key] = (
+                frontier > current.LastWritten ? frontier : current.LastWritten,
+                Math.Max(checkpointOffset, current.LastWrittenOffset),
+                now);
         }
         else
         {
             // First note for this consumer: always write through so the
             // durable pin is seeded (including a Zero "block" pin).
             shouldWrite = true;
-            _durableDebounce[key] = (frontier, now);
+            _durableDebounce[key] = (frontier, checkpointOffset, now);
         }
 
         if (shouldWrite)
@@ -203,7 +214,7 @@ internal sealed class LeafCursorReporter(
             // Fire-and-forget: the durable write must never add synchronous
             // latency to the leaf's checkpoint/foreground path. A lagging or
             // dropped durable pin only retains more WAL, which is safe.
-            _ = WriteDurablePinAsync(treeName, consumerId, frontier);
+            _ = WriteDurablePinAsync(treeName, consumerId, frontier, checkpointOffset);
         }
     }
 
@@ -231,7 +242,7 @@ internal sealed class LeafCursorReporter(
             // Zero (or stale) seed a no-op once a real frontier has landed, so
             // this is idempotent and safe on a recovery-path re-call.
             await PinGrain(treeName, consumerId)
-                .ReportAsync(consumerId, frontier)
+                .ReportManyAsync(new[] { new MaterialiserPinReport(consumerId, frontier, -1) })
                 .ConfigureAwait(false);
 
             // Record the seed in the debounce state so a subsequent
@@ -244,12 +255,12 @@ internal sealed class LeafCursorReporter(
             {
                 if (frontier > current.LastWritten)
                 {
-                    _durableDebounce[key] = (frontier, Environment.TickCount64);
+                    _durableDebounce[key] = (frontier, Math.Max(-1, current.LastWrittenOffset), Environment.TickCount64);
                 }
             }
             else
             {
-                _durableDebounce[key] = (frontier, Environment.TickCount64);
+                _durableDebounce[key] = (frontier, -1, Environment.TickCount64);
             }
         }
         catch (Exception ex)
@@ -351,14 +362,17 @@ internal sealed class LeafCursorReporter(
             var debounceKey = (treeName, report.ConsumerId);
             if (_durableDebounce.TryGetValue(debounceKey, out var current))
             {
-                if (report.Frontier > current.LastWritten)
+                if (report.Frontier > current.LastWritten || report.CheckpointOffset > current.LastWrittenOffset)
                 {
-                    _durableDebounce[debounceKey] = (report.Frontier, Environment.TickCount64);
+                    _durableDebounce[debounceKey] = (
+                        report.Frontier > current.LastWritten ? report.Frontier : current.LastWritten,
+                        Math.Max(report.CheckpointOffset, current.LastWrittenOffset),
+                        Environment.TickCount64);
                 }
             }
             else
             {
-                _durableDebounce[debounceKey] = (report.Frontier, Environment.TickCount64);
+                _durableDebounce[debounceKey] = (report.Frontier, report.CheckpointOffset, Environment.TickCount64);
             }
         }
 
@@ -448,15 +462,23 @@ internal sealed class LeafCursorReporter(
 
             var state = grainState.State ??= new WalMaterialiserPinState();
             var pins = state.Pins;
+            var offsets = state.Offsets;
             var changed = false;
             for (var i = 0; i < bucket.Count; i++)
             {
                 var report = bucket[i];
                 // Monotonic-max merge, identical to WalMaterialiserPinGrain.Merge:
-                // a report at or below the stored frontier is coalesced.
+                // a report at or below the stored frontier/offset is coalesced,
+                // and each axis advances independently.
                 if (!pins.TryGetValue(report.ConsumerId, out var existing) || report.Frontier > existing)
                 {
                     pins[report.ConsumerId] = report.Frontier;
+                    changed = true;
+                }
+
+                if (!offsets.TryGetValue(report.ConsumerId, out var existingOffset) || report.CheckpointOffset > existingOffset)
+                {
+                    offsets[report.ConsumerId] = report.CheckpointOffset;
                     changed = true;
                 }
             }
@@ -542,12 +564,12 @@ internal sealed class LeafCursorReporter(
         return grainFactory!.GetGrain<IWalMaterialiserPinGrain>(key);
     }
 
-    private async Task WriteDurablePinAsync(string treeName, string consumerId, HybridLogicalClock frontier)
+    private async Task WriteDurablePinAsync(string treeName, string consumerId, HybridLogicalClock frontier, long checkpointOffset)
     {
         try
         {
             await PinGrain(treeName, consumerId)
-                .ReportAsync(consumerId, frontier)
+                .ReportManyAsync(new[] { new MaterialiserPinReport(consumerId, frontier, checkpointOffset) })
                 .ConfigureAwait(false);
         }
         catch (Exception ex)

@@ -111,10 +111,12 @@ internal interface ILeafCursorReporter
     /// <param name="treeName">Logical tree id whose leaf is reporting.</param>
     /// <param name="consumerId">Stable leaf-materialiser consumer id (the same id reported to the in-memory registry).</param>
     /// <param name="frontier">The leaf's durable checkpoint frontier; <see cref="HybridLogicalClock.Zero"/> seeds a never-checkpointed block pin.</param>
+    /// <param name="checkpointOffset">The leaf's highest durably-applied WAL offset for the partition, or <c>-1</c> for a never-applied block pin. Advances the durable offset floor independently of <paramref name="frontier"/> so a reap that moves the applied offset while the HLC stays flat is still recorded.</param>
     void NoteDurableMaterialiserFrontier(
         string treeName,
         string consumerId,
-        HybridLogicalClock frontier);
+        HybridLogicalClock frontier,
+        long checkpointOffset);
 
     /// <summary>
     /// Durably seeds a leaf-materialiser <paramref name="frontier"/> pin

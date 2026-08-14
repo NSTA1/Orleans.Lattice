@@ -77,7 +77,7 @@ public sealed class InMemoryLeafCursorReporterTests
         // No grain factory / durable pin store is wired in; the lightweight
         // reporter must simply do nothing rather than throw.
         Assert.DoesNotThrow(() =>
-            reporter.NoteDurableMaterialiserFrontier(Tree, "consumer", Hlc(99)));
+            reporter.NoteDurableMaterialiserFrontier(Tree, "consumer", Hlc(99), 99));
     }
 
     [Test]
@@ -89,7 +89,7 @@ public sealed class InMemoryLeafCursorReporterTests
         await reporter.SeedDurableMaterialiserBlockAsync(Tree, "consumer", HybridLogicalClock.Zero, CancellationToken.None);
         await reporter.SeedDurableMaterialiserBlockManyAsync(
             Tree,
-            new[] { new MaterialiserPinReport("consumer", HybridLogicalClock.Zero) },
+            new[] { new MaterialiserPinReport("consumer", HybridLogicalClock.Zero, -1) },
             CancellationToken.None);
 
         // No durable backing means no pin is published anywhere; nothing leaks

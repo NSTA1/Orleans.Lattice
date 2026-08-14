@@ -71,7 +71,7 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     public async Task ReportAsync(string consumerId, HybridLogicalClock frontier)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(consumerId);
-        if (Merge(consumerId, frontier))
+        if (Merge(consumerId, frontier, checkpointOffset: -1))
         {
             await ScheduleOrFlushAsync();
         }
@@ -86,7 +86,7 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         {
             var report = reports[i];
             ArgumentException.ThrowIfNullOrWhiteSpace(report.ConsumerId);
-            changed |= Merge(report.ConsumerId, report.Frontier);
+            changed |= Merge(report.ConsumerId, report.Frontier, report.CheckpointOffset);
         }
 
         if (changed)
@@ -104,7 +104,7 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         {
             var report = reports[i];
             ArgumentException.ThrowIfNullOrWhiteSpace(report.ConsumerId);
-            changed |= Merge(report.ConsumerId, report.Frontier);
+            changed |= Merge(report.ConsumerId, report.Frontier, report.CheckpointOffset);
         }
 
         // Birth path: persist through durably (awaited) so the block pin is
@@ -121,11 +121,18 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
             new Dictionary<string, HybridLogicalClock>(_state.State.Pins, StringComparer.Ordinal));
 
     /// <inheritdoc />
+    public Task<IReadOnlyDictionary<string, long>> GetPinOffsetsAsync() =>
+        Task.FromResult<IReadOnlyDictionary<string, long>>(
+            new Dictionary<string, long>(_state.State.Offsets, StringComparer.Ordinal));
+
+    /// <inheritdoc />
     public async Task RemoveAsync(string consumerId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(consumerId);
 
-        if (_state.State.Pins.Remove(consumerId))
+        var removed = _state.State.Pins.Remove(consumerId);
+        removed |= _state.State.Offsets.Remove(consumerId);
+        if (removed)
         {
             _dirty = true;
             await PersistNowAsync();
@@ -135,12 +142,13 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     /// <inheritdoc />
     public async Task ClearAsync()
     {
-        if (_state.State.Pins.Count == 0)
+        if (_state.State.Pins.Count == 0 && _state.State.Offsets.Count == 0)
         {
             return;
         }
 
         _state.State.Pins.Clear();
+        _state.State.Offsets.Clear();
         _dirty = true;
         await PersistNowAsync();
     }
@@ -173,21 +181,39 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     }
 
     /// <summary>
-    /// Monotonic-max merge of a single pin into the in-memory state. Returns
-    /// <see langword="true"/> when the stored value changed (a new consumer or
-    /// a strictly-greater frontier), <see langword="false"/> when the report
-    /// was coalesced (at or below the stored frontier).
+    /// Monotonic-max merge of a single pin into the in-memory state. Merges the
+    /// HLC <paramref name="frontier"/> and the <paramref name="checkpointOffset"/>
+    /// independently, each monotonic-max: neither ever rolls back. Returns
+    /// <see langword="true"/> when <b>either</b> the stored frontier or the
+    /// stored offset advanced (a new consumer, a strictly-greater frontier, or a
+    /// strictly-greater offset), <see langword="false"/> when both were coalesced
+    /// (at or below the stored values). The offset must advance independently of
+    /// the frontier: a tombstone-compaction reap advances a leaf's applied offset
+    /// while its HLC checkpoint stays flat, so an offset-only advance still has to
+    /// move the durable floor.
     /// </summary>
-    private bool Merge(string consumerId, HybridLogicalClock frontier)
+    private bool Merge(string consumerId, HybridLogicalClock frontier, long checkpointOffset)
     {
-        if (_state.State.Pins.TryGetValue(consumerId, out var existing) && frontier <= existing)
+        var changed = false;
+
+        if (!_state.State.Pins.TryGetValue(consumerId, out var existing) || frontier > existing)
         {
-            return false;
+            _state.State.Pins[consumerId] = frontier;
+            changed = true;
         }
 
-        _state.State.Pins[consumerId] = frontier;
-        _dirty = true;
-        return true;
+        if (!_state.State.Offsets.TryGetValue(consumerId, out var existingOffset) || checkpointOffset > existingOffset)
+        {
+            _state.State.Offsets[consumerId] = checkpointOffset;
+            changed = true;
+        }
+
+        if (changed)
+        {
+            _dirty = true;
+        }
+
+        return changed;
     }
 
     /// <summary>

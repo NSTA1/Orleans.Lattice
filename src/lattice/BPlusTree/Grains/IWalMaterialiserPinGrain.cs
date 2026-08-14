@@ -78,6 +78,20 @@ internal interface IWalMaterialiserPinGrain : IGrainWithStringKey
     Task<IReadOnlyDictionary<string, HybridLogicalClock>> GetPinsAsync();
 
     /// <summary>
+    /// Returns a snapshot of every durable leaf-materialiser checkpoint
+    /// <b>offset</b> for this tree, keyed by consumer id. The WAL GC reads this
+    /// to floor its trim point under the lowest durably-applied offset so a
+    /// low-HLC / high-offset entry (a tombstone-compaction reap that re-emits an
+    /// old timestamp at a new WAL offset) is never trimmed before the slowest
+    /// leaf has applied it - a case the HLC-space <see cref="GetPinsAsync"/>
+    /// floor alone cannot cover because the WAL is not HLC-monotonic in offset
+    /// once reaps are in play. An absent consumer (never reported an offset) or
+    /// a <c>-1</c> value marks a leaf that has applied nothing yet, which pins
+    /// the offset floor so nothing is trimmed by offset for the tree.
+    /// </summary>
+    Task<IReadOnlyDictionary<string, long>> GetPinOffsetsAsync();
+
+    /// <summary>
     /// Removes <paramref name="consumerId"/>'s durable pin. Idempotent: a
     /// no-op when the consumer has no pin. Reserved for terminal lifecycle
     /// events (leaf eviction during a purge) so a deleted leaf does not pin

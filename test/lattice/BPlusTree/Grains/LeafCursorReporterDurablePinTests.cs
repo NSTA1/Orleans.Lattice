@@ -51,7 +51,7 @@ public sealed class LeafCursorReporterDurablePinTests
     {
         var (reporter, _, pin) = Create();
 
-        reporter.NoteDurableMaterialiserFrontier(Tree, Consumer, Hlc(100));
+        reporter.NoteDurableMaterialiserFrontier(Tree, Consumer, Hlc(100), 100);
 
         await WaitUntilAsync(() => pin.Reports.Count >= 1);
         Assert.That(pin.Reports.ToArray(), Does.Contain((Consumer, Hlc(100))));
@@ -62,11 +62,11 @@ public sealed class LeafCursorReporterDurablePinTests
     {
         var (reporter, _, pin) = Create();
 
-        reporter.NoteDurableMaterialiserFrontier(Tree, Consumer, Hlc(100));
+        reporter.NoteDurableMaterialiserFrontier(Tree, Consumer, Hlc(100), 100);
         await WaitUntilAsync(() => pin.Reports.Count >= 1);
 
         // A lower report within the debounce window must be dropped.
-        reporter.NoteDurableMaterialiserFrontier(Tree, Consumer, Hlc(50));
+        reporter.NoteDurableMaterialiserFrontier(Tree, Consumer, Hlc(50), 50);
         await Task.Delay(150);
 
         Assert.That(pin.Reports.Count, Is.EqualTo(1),
@@ -79,12 +79,12 @@ public sealed class LeafCursorReporterDurablePinTests
         var (reporter, _, pin) = Create();
 
         // Activation seeds a Zero block pin...
-        reporter.NoteDurableMaterialiserFrontier(Tree, Consumer, HybridLogicalClock.Zero);
+        reporter.NoteDurableMaterialiserFrontier(Tree, Consumer, HybridLogicalClock.Zero, -1);
         await WaitUntilAsync(() => pin.Reports.Count >= 1);
 
         // ...and the first real checkpoint frontier must write through promptly
         // even inside the debounce window, leaving the Zero block behind.
-        reporter.NoteDurableMaterialiserFrontier(Tree, Consumer, Hlc(100));
+        reporter.NoteDurableMaterialiserFrontier(Tree, Consumer, Hlc(100), 100);
         await WaitUntilAsync(() => pin.Reports.Count >= 2);
 
         var reports = pin.Reports.ToArray();
@@ -102,7 +102,7 @@ public sealed class LeafCursorReporterDurablePinTests
         var reporter = new LeafCursorReporter(registry);
 
         Assert.That(
-            () => reporter.NoteDurableMaterialiserFrontier(Tree, Consumer, Hlc(100)),
+            () => reporter.NoteDurableMaterialiserFrontier(Tree, Consumer, Hlc(100), 100),
             Throws.Nothing);
     }
 
@@ -197,6 +197,10 @@ public sealed class LeafCursorReporterDurablePinTests
                     new Dictionary<string, HybridLogicalClock>(_pins, StringComparer.Ordinal));
             }
         }
+
+        public Task<IReadOnlyDictionary<string, long>> GetPinOffsetsAsync() =>
+            Task.FromResult<IReadOnlyDictionary<string, long>>(
+                new Dictionary<string, long>(StringComparer.Ordinal));
 
         public Task RemoveAsync(string consumerId)
         {
