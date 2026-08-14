@@ -157,6 +157,22 @@ mid-task.
 - A missing or expired key returns `exists: false`, so you can tell an absent
   entry from an empty one.
 
+### neighbors - walk knowledge-linking edges
+
+- `neighbors` walks the typed knowledge-linking edges out of a memory entry (see
+  [Knowledge linking](#knowledge-linking---typed-edges-between-memory-entries))
+  and returns the adjacent entries, hydrated from the store, as a bounded
+  breadth-first traversal. Use it to explore the curated concept graph past
+  sessions captured - "what does this concept relate to?" - rather than to search
+  free text.
+- Bound the walk: `relation` restricts it to one edge type (e.g. `broader`);
+  `depth` is clamped to `[1, 3]` (default 1, immediate neighbors); `maxNodes` is
+  clamped to `[1, 100]` (default 50). The result's `truncated` flag reports when
+  the node cap stopped the walk.
+- A seed key with no live entry returns `exists: false`; a dangling edge whose
+  target has no live value is still returned as a neighbor with its own
+  `exists: false`, so you can see broken links.
+
 ## Capture - durable agent memory
 
 ### remember
@@ -165,7 +181,9 @@ mid-task.
   required). Omit `id` to create a new entry with a generated id; pass an
   existing `id` to **CRDT-merge in place** rather than blind-overwrite.
 - Useful fields: `title`, `body`, `kind` (`Decision` / `Note` / `Memory`),
-  `tags`, `author`, `provenance`, and `ttlSeconds`.
+  `tags`, `author`, `provenance`, and `ttlSeconds`. To relate one entry to
+  another, pass `addLinks` / `removeLinks` (see
+  [Knowledge linking](#knowledge-linking---typed-edges-between-memory-entries)).
 - **TTL - when to set it.** Default to **no `ttlSeconds`** (durable, or the repo
   default): decisions, gotchas, conventions, and glossary are meant to outlive
   the session, and when one goes wrong you `update` or `forget` it rather than
@@ -216,11 +234,49 @@ topiced, and carries the rationale:
 
 - `update` - CRDT-patches scalar `fields` and `tags` on an **existing** record
   (preserves any remaining TTL; fails if the key does not exist). Use it to
-  correct or re-tag, not to recreate.
+  correct or re-tag, not to recreate. On a memory record it also patches
+  knowledge-linking edges via `addLinks` / `removeLinks`.
 - `forget` - removes an entry. Default is an immediate hard delete; pass
   `lapse: true` (optionally with `lapseSeconds`) to re-write it with a short TTL
   so concurrent readers drain gracefully. Prefer `lapse` when another session
   may be reading.
+
+### Knowledge linking - typed edges between memory entries
+
+A memory entry can carry typed, directional **links** to other repository-context
+keys: a small knowledge graph over your captured concepts, layered on top of the
+same CRDT-merged store. Use it to connect a glossary/concept entry to the ones it
+generalises, specialises, or relates to, so a later session can *walk* the graph
+with `neighbors` instead of guessing search terms.
+
+- **Write edges** with `remember` or `update` using `addLinks` / `removeLinks`:
+  a map from a **relation name** to a list of **target keys**. Links are a
+  memory-record feature only; supplying them for a structural (file/symbol)
+  record is rejected. Every target must be a well-formed key
+  (`repo/{repoId}/...`) or the whole write is rejected before any change is made;
+  the target need not exist yet (dangling edges are allowed and surface as
+  `exists: false` when walked).
+- **Read edges** with `recall` (the entry's `links` map) or walk them with
+  `neighbors`.
+- **Relation vocabulary - keep it small and stable**, the same discipline as
+  topics. Prefer this fixed set (a lightweight SKOS-style derivation), authored
+  from the **more general** entry outward:
+  - `broader` - the target is a more general concept (this is a kind of target).
+  - `narrower` - the target is a more specific concept (inverse of `broader`).
+  - `related` - a non-hierarchical association.
+  - `partOf` - the target is a whole this entry is a component of.
+  Author one direction and let the reader infer the inverse; do not write both
+  `broader` and `narrower` for the same pair.
+- **What to link.** Connect durable concept/glossary entries into a navigable
+  graph (e.g. `Orleans.Lattice` --`narrower`--> `WAL`, `CRDT`, `Shard`). Do not
+  link transient notes or use links as a second tag system - a link asserts a
+  relationship between two concepts, not a label on one.
+
+**Example.** Capture two concepts and relate them:
+
+- `remember(topic: "glossary", id: "wal", title: "Write-ahead log", body: "...")`
+- `remember(topic: "glossary", id: "tree", title: "B+ tree", body: "...", addLinks: { "related": ["repo/{repoId}/mem/glossary/wal"] })`
+- later: `neighbors(key: "repo/{repoId}/mem/glossary/tree", relation: "related")` returns the WAL entry.
 
 ## Write-tool safety
 

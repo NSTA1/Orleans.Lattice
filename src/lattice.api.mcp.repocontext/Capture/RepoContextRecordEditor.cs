@@ -25,8 +25,10 @@ internal static class RepoContextRecordEditor
     /// <param name="FieldsUpdated">The number of scalar fields set to a new value.</param>
     /// <param name="TagsAdded">The number of tags added to the record's set.</param>
     /// <param name="TagsRemoved">The number of tags removed from the record's set.</param>
+    /// <param name="LinksAdded">The number of knowledge-linking edges added (memory records only).</param>
+    /// <param name="LinksRemoved">The number of knowledge-linking edges removed (memory records only).</param>
     internal readonly record struct PatchResult(
-        byte[] Merged, int FieldsUpdated, int TagsAdded, int TagsRemoved);
+        byte[] Merged, int FieldsUpdated, int TagsAdded, int TagsRemoved, int LinksAdded, int LinksRemoved);
 
     /// <summary>
     /// Patches the record decoded from <paramref name="existing"/> at
@@ -37,21 +39,31 @@ internal static class RepoContextRecordEditor
     /// <param name="fields">The scalar field patches (field name to value), or <see langword="null"/>.</param>
     /// <param name="addTags">Tags to add, or <see langword="null"/>.</param>
     /// <param name="removeTags">Tags to remove, or <see langword="null"/>.</param>
+    /// <param name="addLinks">Knowledge-linking edges to add (relation to target keys), or <see langword="null"/>. Memory records only.</param>
+    /// <param name="removeLinks">Knowledge-linking edges to remove (relation to target keys), or <see langword="null"/>. Memory records only.</param>
     /// <param name="clock">The hybrid logical clock the patched registers are authored at.</param>
     /// <param name="serializer">The Orleans serializer. Must not be <see langword="null"/>.</param>
     /// <returns>The patch outcome.</returns>
-    /// <exception cref="McpException">A field name is not valid for the record family, or an integer field value does not parse.</exception>
+    /// <exception cref="McpException">A field name is not valid for the record family, an integer field value does not parse, a link target is not a well-formed key, or links were supplied for a non-memory record.</exception>
     internal static PatchResult Patch(
         RepoContextKey key,
         byte[] existing,
         IReadOnlyDictionary<string, string>? fields,
         IReadOnlyList<string>? addTags,
         IReadOnlyList<string>? removeTags,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? addLinks,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? removeLinks,
         HybridLogicalClock clock,
         Serializer serializer)
     {
         ArgumentNullException.ThrowIfNull(existing);
         ArgumentNullException.ThrowIfNull(serializer);
+
+        if (key.Kind != RepoContextRecordKind.Memory && (HasLinks(addLinks) || HasLinks(removeLinks)))
+        {
+            throw new McpException(
+                $"Knowledge-linking edges are only supported on memory records, not on a {key.Kind} record.");
+        }
 
         return key.Kind switch
         {
@@ -59,7 +71,7 @@ internal static class RepoContextRecordEditor
             RepoContextRecordKind.Package => PatchPackage(key, existing, fields, addTags, removeTags, clock, serializer),
             RepoContextRecordKind.File => PatchFile(key, existing, fields, addTags, removeTags, clock, serializer),
             RepoContextRecordKind.Symbol => PatchSymbol(key, existing, fields, addTags, removeTags, clock, serializer),
-            RepoContextRecordKind.Memory => PatchMemory(key, existing, fields, addTags, removeTags, clock, serializer),
+            RepoContextRecordKind.Memory => PatchMemory(key, existing, fields, addTags, removeTags, addLinks, removeLinks, clock, serializer),
             _ => throw new McpException(
                 $"The key kind '{key.Kind}' is not a patchable record; only structural and memory records can be updated."),
         };
@@ -88,7 +100,7 @@ internal static class RepoContextRecordEditor
 
         var merged = RepoNode.Merge(delta, current);
         var (added, removed) = ApplyTags(merged.Tags, addTags, removeTags);
-        return new PatchResult(serializer.SerializeToArray(merged), updated, added, removed);
+        return new PatchResult(serializer.SerializeToArray(merged), updated, added, removed, 0, 0);
     }
 
     private static PatchResult PatchPackage(
@@ -114,7 +126,7 @@ internal static class RepoContextRecordEditor
 
         var merged = PackageNode.Merge(delta, current);
         var (added, removed) = ApplyTags(merged.Tags, addTags, removeTags);
-        return new PatchResult(serializer.SerializeToArray(merged), updated, added, removed);
+        return new PatchResult(serializer.SerializeToArray(merged), updated, added, removed, 0, 0);
     }
 
     private static PatchResult PatchFile(
@@ -141,7 +153,7 @@ internal static class RepoContextRecordEditor
 
         var merged = FileNode.Merge(delta, current);
         var (added, removed) = ApplyTags(merged.Tags, addTags, removeTags);
-        return new PatchResult(serializer.SerializeToArray(merged), updated, added, removed);
+        return new PatchResult(serializer.SerializeToArray(merged), updated, added, removed, 0, 0);
     }
 
     private static PatchResult PatchSymbol(
@@ -169,12 +181,14 @@ internal static class RepoContextRecordEditor
 
         var merged = SymbolRecord.Merge(delta, current);
         var (added, removed) = ApplyTags(merged.Tags, addTags, removeTags);
-        return new PatchResult(serializer.SerializeToArray(merged), updated, added, removed);
+        return new PatchResult(serializer.SerializeToArray(merged), updated, added, removed, 0, 0);
     }
 
     private static PatchResult PatchMemory(
         RepoContextKey key, byte[] existing, IReadOnlyDictionary<string, string>? fields,
         IReadOnlyList<string>? addTags, IReadOnlyList<string>? removeTags,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? addLinks,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? removeLinks,
         HybridLogicalClock clock, Serializer serializer)
     {
         var current = serializer.Deserialize<MemoryRecord>(existing);
@@ -195,8 +209,10 @@ internal static class RepoContextRecordEditor
         }
 
         var merged = MemoryRecord.Merge(delta, current);
-        var (added, removed) = ApplyTags(merged.Tags, addTags, removeTags);
-        return new PatchResult(serializer.SerializeToArray(merged), updated, added, removed);
+        var (tagsAdded, tagsRemoved) = ApplyTags(merged.Tags, addTags, removeTags);
+        var (linksAdded, linksRemoved) = ApplyLinks(merged.Links, addLinks, removeLinks);
+        return new PatchResult(
+            serializer.SerializeToArray(merged), updated, tagsAdded, tagsRemoved, linksAdded, linksRemoved);
     }
 
     /// <summary>
@@ -240,6 +256,125 @@ internal static class RepoContextRecordEditor
         }
 
         return (added, removed);
+    }
+
+    /// <summary>
+    /// Adds and removes knowledge-linking edges on <paramref name="links"/>, an
+    /// observed-remove map from a relation name to an add-wins set of target keys.
+    /// Each addition mints a fresh causal dot so concurrent additions of the same
+    /// edge both survive; a removal tombstones the currently-observed dots for that
+    /// target under the relation. Target keys are validated up front (fail closed),
+    /// so a malformed target aborts the whole patch before any mutation.
+    /// </summary>
+    /// <param name="links">The record's link map. Must not be <see langword="null"/>.</param>
+    /// <param name="addLinks">Edges to add (relation to target keys), or <see langword="null"/>.</param>
+    /// <param name="removeLinks">Edges to remove (relation to target keys), or <see langword="null"/>.</param>
+    /// <returns>The number of edges added and removed.</returns>
+    /// <exception cref="McpException">A relation name is empty or a target is not a well-formed repository-context key.</exception>
+    internal static (int Added, int Removed) ApplyLinks(
+        OrMap<string, OrSet> links,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? addLinks,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? removeLinks)
+    {
+        ArgumentNullException.ThrowIfNull(links);
+
+        // Validate the whole request before mutating anything so a single bad
+        // target never leaves a half-applied edge set behind.
+        ValidateLinks(addLinks);
+        ValidateLinks(removeLinks);
+
+        var relations = new HashSet<string>(StringComparer.Ordinal);
+        if (addLinks is not null) { foreach (var relation in addLinks.Keys) { relations.Add(relation); } }
+        if (removeLinks is not null) { foreach (var relation in removeLinks.Keys) { relations.Add(relation); } }
+
+        var added = 0;
+        var removed = 0;
+        foreach (var relation in relations)
+        {
+            var current = links.Get(relation) ?? new OrSet();
+            var mutated = false;
+
+            if (addLinks is not null && addLinks.TryGetValue(relation, out var toAdd) && toAdd is not null)
+            {
+                foreach (var target in toAdd)
+                {
+                    current.Add(Encoding.UTF8.GetBytes(target), Guid.NewGuid().ToString("N"), 0L);
+                    added++;
+                    mutated = true;
+                }
+            }
+
+            if (removeLinks is not null && removeLinks.TryGetValue(relation, out var toRemove) && toRemove is not null)
+            {
+                foreach (var target in toRemove)
+                {
+                    if (current.Remove(Encoding.UTF8.GetBytes(target)))
+                    {
+                        removed++;
+                        mutated = true;
+                    }
+                }
+            }
+
+            if (mutated)
+            {
+                // Snapshot the mutated relation set back under a fresh map dot; the
+                // record's OrMap merge folds every live snapshot's OrSet, so the
+                // edit converges with concurrent edits under the same relation.
+                links.Set(relation, Guid.NewGuid().ToString("N"), current);
+            }
+        }
+
+        return (added, removed);
+    }
+
+    private static bool HasLinks(IReadOnlyDictionary<string, IReadOnlyList<string>>? links)
+    {
+        if (links is null)
+        {
+            return false;
+        }
+
+        foreach (var (_, targets) in links)
+        {
+            if (targets is { Count: > 0 })
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static void ValidateLinks(IReadOnlyDictionary<string, IReadOnlyList<string>>? links)
+    {
+        if (links is null)
+        {
+            return;
+        }
+
+        foreach (var (relation, targets) in links)
+        {
+            if (string.IsNullOrWhiteSpace(relation))
+            {
+                throw new McpException("A link relation name must be a non-empty string.");
+            }
+
+            if (targets is null)
+            {
+                continue;
+            }
+
+            foreach (var target in targets)
+            {
+                if (string.IsNullOrWhiteSpace(target) || !RepoContextKeys.TryParse(target, out _))
+                {
+                    throw new McpException(
+                        $"The link target '{target}' under relation '{relation}' is not a well-formed "
+                        + "repository-context key (expected 'repo/{repoId}/...').");
+                }
+            }
+        }
     }
 
     private static IEnumerable<KeyValuePair<string, string>> Enumerate(

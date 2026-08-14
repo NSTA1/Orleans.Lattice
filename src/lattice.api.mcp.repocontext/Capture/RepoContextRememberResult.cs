@@ -31,4 +31,10 @@ public sealed record RepoContextRememberResult
 
     /// <summary>The entry's absolute expiry in UTC <see cref="DateTime.Ticks"/>, or <c>0</c> when it never expires.</summary>
     public required long ExpiresAtTicks { get; init; }
+
+    /// <summary>The number of knowledge-linking edges the write added to the entry.</summary>
+    public int LinksAdded { get; init; }
+
+    /// <summary>The number of knowledge-linking edges the write removed from the entry.</summary>
+    public int LinksRemoved { get; init; }
 }

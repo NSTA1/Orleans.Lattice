@@ -28,9 +28,11 @@ forget* a standing fact, decision, or convention as a `repocontext_remember`
 request - persist it durably under the right topic rather than only
 acknowledging it in your reply; "remember" here means the durable store, not
 just this conversation. Keep it in-conversation only when it is genuinely
-task-scoped (or give it a short TTL). See the
-**repocontext** skill for the capture rules (topic vocabulary, TTL, and what is
-and is not worth storing).
+task-scoped (or give it a short TTL). Related concept and glossary entries can be
+connected into a navigable knowledge graph with typed links
+(`addLinks` / `removeLinks`, walked via `repocontext_neighbors`); see the
+**repocontext** skill for the capture rules (topic vocabulary, TTL, knowledge
+linking, and what is and is not worth storing).
 
 ## Solution Layout
 src/lattice/               → Main library (Orleans.Lattice)  
