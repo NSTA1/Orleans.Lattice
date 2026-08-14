@@ -211,6 +211,14 @@ public sealed class LatticeWalGc(
         // without this floor the GC would trim past a leaf's durable
         // checkpoint and lose its committed-but-not-yet-checkpointed WAL tail.
         minCursor = await ApplyDurableMaterialiserFloorAsync(treeName, minCursor, cancellationToken).ConfigureAwait(false);
+        // Offset-space retention floor. The HLC floor above cannot protect a
+        // low-HLC / high-offset WAL entry (a tombstone-compaction reap re-emits
+        // an old timestamp at a new offset, so the WAL is not HLC-monotonic in
+        // offset): such an entry is HLC-eligible under any positive cursor yet
+        // sits above a lagging leaf's applied checkpoint offset. Flooring the
+        // trim at the lowest durably-applied offset keeps every not-yet-applied
+        // entry readable so the leaf never falls off its own log.
+        var offsetFloor = await ComputeMaterialiserOffsetFloorAsync(treeName).ConfigureAwait(false);
         var causalStable = await cursors.GetCausalStableAsync(treeName, cancellationToken).ConfigureAwait(false);
         var blockedFloor = await cursors.GetBlockedFloorAsync(treeName, cancellationToken).ConfigureAwait(false);
         HybridLogicalClock? ttlCeiling = null;
@@ -282,7 +290,7 @@ public sealed class LatticeWalGc(
                 // skip trimming it here.
                 continue;
             }
-            totalTrimmed += await TrimShardAsync(partitionProvider, treeName, partition, minCursor, ttlCeiling, causalStable, blockedFloor, cancellationToken).ConfigureAwait(false);
+            totalTrimmed += await TrimShardAsync(partitionProvider, treeName, partition, minCursor, ttlCeiling, causalStable, blockedFloor, offsetFloor, cancellationToken).ConfigureAwait(false);
         }
 
         if (totalTrimmed > 0)
@@ -434,7 +442,131 @@ public sealed class LatticeWalGc(
 
         return union;
     }
+
     /// <summary>
+    /// Computes the offset-space retention floor for <paramref name="treeName"/>:
+    /// the lowest durably-applied leaf-materialiser checkpoint offset across every
+    /// pin shard. The WAL GC must never trim an entry at or above this offset,
+    /// because a leaf whose applied checkpoint sits there has not yet consumed the
+    /// entries above it - including a low-HLC / high-offset tombstone-compaction
+    /// reap that the HLC floor alone would wrongly consider trim-eligible.
+    /// Returns <see langword="null"/> when the durable pin store is unavailable,
+    /// carries no offsets (state predating this field, or a host that never
+    /// reports offsets), so the GC degrades cleanly to the pre-existing HLC-only
+    /// behaviour. A single global minimum is applied to every WAL partition:
+    /// exact for the common single-partition layout and conservatively safe
+    /// (over-retains) across partitions, whose offsets are otherwise incomparable.
+    /// </summary>
+    private async Task<long?> ComputeMaterialiserOffsetFloorAsync(string treeName)
+    {
+        var factory = GrainFactory;
+        if (factory is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            var offsets = await ReadDurablePinOffsetsAsync(factory, treeName).ConfigureAwait(false);
+            if (offsets is null)
+            {
+                return null;
+            }
+
+            long? floor = null;
+            foreach (var offset in offsets.Values)
+            {
+                // Skip the "-1" sentinel: a consumer reports -1 when it has no
+                // WAL-replay dependency at all - either a never-checkpointed
+                // Zero-HLC block pin (whose WAL retention is already enforced by
+                // the HLC block-pin branch, which disables the cursor trim
+                // entirely) or a split sibling that received its data via an
+                // in-memory handoff rather than WAL replay. Letting a -1 collapse
+                // the floor would wedge the trim for the whole tree; only real
+                // applied checkpoints (offset >= 0) constrain the offset floor.
+                if (offset < 0)
+                {
+                    continue;
+                }
+
+                if (floor is not { } current || offset < current)
+                {
+                    floor = offset;
+                }
+            }
+
+            return floor;
+        }
+        catch
+        {
+            // Durable pin store unavailable on this pass (including an older
+            // pin grain without GetPinOffsetsAsync during a rolling upgrade):
+            // fall back to no offset floor. The HLC floor still constrains the
+            // trim, and the next pass retries once the store is reachable.
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Reads and unions the durable leaf-materialiser checkpoint offsets for
+    /// <paramref name="treeName"/> across every shard activation plus the legacy
+    /// unsuffixed key, mirroring <see cref="ReadDurablePinsAsync"/>. Per consumer
+    /// id the lowest (most conservative) offset wins so a stale duplicate can only
+    /// retain more WAL. A grain that returns <see langword="null"/> (an older
+    /// activation predating the offset contract, surfaced by a substitute in
+    /// tests) contributes nothing rather than faulting the read.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<string, long>> ReadDurablePinOffsetsAsync(
+        IGrainFactory factory,
+        string treeName)
+    {
+        var shardCount = WalMaterialiserPinRouting.ResolveShardCount(optionsMonitor);
+        var keys = WalMaterialiserPinRouting.EnumerateReadKeys(treeName, shardCount);
+        if (keys.Count == 1)
+        {
+            return await factory.GetGrain<IWalMaterialiserPinGrain>(keys[0]).GetPinOffsetsAsync().ConfigureAwait(false)
+                ?? EmptyOffsets;
+        }
+
+        var reads = new Task<IReadOnlyDictionary<string, long>>[keys.Count];
+        for (var i = 0; i < keys.Count; i++)
+        {
+            reads[i] = factory.GetGrain<IWalMaterialiserPinGrain>(keys[i]).GetPinOffsetsAsync();
+        }
+
+        var results = await Task.WhenAll(reads).ConfigureAwait(false);
+        var union = new Dictionary<string, long>(StringComparer.Ordinal);
+        for (var i = 0; i < results.Length; i++)
+        {
+            if (results[i] is null)
+            {
+                continue;
+            }
+
+            foreach (var (consumerId, offset) in results[i])
+            {
+                if (union.TryGetValue(consumerId, out var existing))
+                {
+                    if (offset < existing)
+                    {
+                        union[consumerId] = offset;
+                    }
+                }
+                else
+                {
+                    union[consumerId] = offset;
+                }
+            }
+        }
+
+        return union;
+    }
+
+    private static readonly IReadOnlyDictionary<string, long> EmptyOffsets =
+        new Dictionary<string, long>(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Finalises the byte-pressure accounting for a completed WAL GC
     /// trim pass and returns whether the post-trim footprint still breaches
     /// the ceiling. When a byte-pressure trigger reclaimed bytes
     /// (<paramref name="retainedBefore"/> &gt; <paramref name="retainedAfter"/>),
@@ -599,6 +731,7 @@ public sealed class LatticeWalGc(
         HybridLogicalClock? ttlCeiling,
         VersionVector? causalStable,
         HybridLogicalClock? blockedFloor,
+        long? offsetFloor,
         CancellationToken cancellationToken)
     {
         long lastEligibleOffset = -1;
@@ -618,6 +751,21 @@ public sealed class LatticeWalGc(
             {
                 pageEntries++;
                 lastSeenOffset = walEntry.Offset;
+
+                // Offset-space retention floor: never trim an entry ABOVE the
+                // lowest durably-applied leaf checkpoint offset, even when it is
+                // HLC-eligible. This is what keeps a low-HLC / high-offset reap
+                // entry readable until the slowest leaf has applied it. The
+                // checkpoint offset itself is last-applied and trimmable (the
+                // HLC floor already trims through it for a healthy WAL), so the
+                // floor only diverges from HLC eligibility for entries strictly
+                // above it. Offsets are scanned ascending, so the first entry
+                // above the floor stops the pass just like a non-eligible entry.
+                if (offsetFloor is { } floor && walEntry.Offset > floor)
+                {
+                    stop = true;
+                    break;
+                }
 
                 if (IsEligible(walEntry.Mutation, minCursor, ttlCeiling, causalStable, blockedFloor))
                 {

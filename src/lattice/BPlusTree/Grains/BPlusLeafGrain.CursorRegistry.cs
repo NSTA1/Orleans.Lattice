@@ -151,7 +151,8 @@ internal sealed partial class BPlusLeafGrain
             for (var partition = 0; partition < partitionCount; partition++)
             {
                 var consumerId = BuildConsumerId(idBase, partition, partitionCount);
-                reporter.NoteDurableMaterialiserFrontier(treeId, consumerId, clock);
+                reporter.NoteDurableMaterialiserFrontier(
+                    treeId, consumerId, clock, GetCurrentCheckpointForPartition(partition));
             }
         }
     }
@@ -199,7 +200,8 @@ internal sealed partial class BPlusLeafGrain
         for (var partition = 0; partition < partitionCount; partition++)
         {
             var consumerId = BuildConsumerId(idBase, partition, partitionCount);
-            reports[partition] = new MaterialiserPinReport(consumerId, clock);
+            reports[partition] = new MaterialiserPinReport(
+                consumerId, clock, GetCurrentCheckpointForPartition(partition));
         }
 
         await reporter.FlushDurableMaterialiserFrontierAsync(
@@ -244,7 +246,8 @@ internal sealed partial class BPlusLeafGrain
         for (var partition = 0; partition < partitionCount; partition++)
         {
             var consumerId = BuildConsumerId(idBase, partition, partitionCount);
-            reporter.NoteDurableMaterialiserFrontier(treeId, consumerId, clock);
+            reporter.NoteDurableMaterialiserFrontier(
+                treeId, consumerId, clock, GetCurrentCheckpointForPartition(partition));
         }
     }
 
@@ -286,7 +289,7 @@ internal sealed partial class BPlusLeafGrain
         for (var partition = 0; partition < partitionCount; partition++)
         {
             var consumerId = BuildConsumerId(idBase, partition, partitionCount);
-            reports[partition] = new MaterialiserPinReport(consumerId, HybridLogicalClock.Zero);
+            reports[partition] = new MaterialiserPinReport(consumerId, HybridLogicalClock.Zero, -1);
         }
 
         await reporter.SeedDurableMaterialiserBlockManyAsync(

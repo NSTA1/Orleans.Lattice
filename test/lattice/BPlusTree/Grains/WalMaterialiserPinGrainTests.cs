@@ -202,8 +202,8 @@ public sealed class WalMaterialiserPinGrainTests
 
         await grain.ReportManyAsync(new[]
         {
-            new MaterialiserPinReport(Consumer, Hlc(100)),
-            new MaterialiserPinReport("_lattice_materialiser_tree-1_leaf-8", Hlc(50)),
+            new MaterialiserPinReport(Consumer, Hlc(100), 100),
+            new MaterialiserPinReport("_lattice_materialiser_tree-1_leaf-8", Hlc(50), 50),
         });
 
         Assert.Multiple(() =>
@@ -216,6 +216,59 @@ public sealed class WalMaterialiserPinGrainTests
     }
 
     [Test]
+    public async Task ReportManyAsync_records_checkpoint_offsets_readable_via_GetPinOffsets()
+    {
+        var (grain, _) = CreateGrain();
+
+        await grain.ReportManyAsync(new[]
+        {
+            new MaterialiserPinReport(Consumer, Hlc(100), 100),
+            new MaterialiserPinReport("_lattice_materialiser_tree-1_leaf-8", Hlc(50), 50),
+        });
+
+        var offsets = await grain.GetPinOffsetsAsync();
+        Assert.Multiple(() =>
+        {
+            Assert.That(offsets[Consumer], Is.EqualTo(100L));
+            Assert.That(offsets["_lattice_materialiser_tree-1_leaf-8"], Is.EqualTo(50L));
+        });
+    }
+
+    [Test]
+    public async Task ReportManyAsync_offset_advances_monotonically_even_when_frontier_is_flat()
+    {
+        // A tombstone-compaction reap advances the applied WAL offset while the
+        // HLC frontier stays flat (the reap reuses the reaped entry's old HLC).
+        // The offset axis must still advance (an advance on EITHER axis is a
+        // real advance) so the WAL GC offset floor tracks the reap.
+        var (grain, state) = CreateGrain();
+        await grain.ReportManyAsync(new[] { new MaterialiserPinReport(Consumer, Hlc(100), 5) });
+
+        await grain.ReportManyAsync(new[] { new MaterialiserPinReport(Consumer, Hlc(100), 9) });
+
+        var offsets = await grain.GetPinOffsetsAsync();
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.Pins[Consumer], Is.EqualTo(Hlc(100)), "The flat frontier is retained.");
+            Assert.That(offsets[Consumer], Is.EqualTo(9L), "The offset advances even though the frontier did not.");
+            Assert.That(state.WriteCount, Is.EqualTo(2), "An offset-only advance is a real advance and is persisted.");
+        });
+    }
+
+    [Test]
+    public async Task ReportManyAsync_offset_never_regresses_on_a_stale_report()
+    {
+        var (grain, _) = CreateGrain();
+        await grain.ReportManyAsync(new[] { new MaterialiserPinReport(Consumer, Hlc(100), 100) });
+
+        // A stale/duplicate report with a lower offset must not lower the pin.
+        await grain.ReportManyAsync(new[] { new MaterialiserPinReport(Consumer, Hlc(100), 40) });
+
+        var offsets = await grain.GetPinOffsetsAsync();
+        Assert.That(offsets[Consumer], Is.EqualTo(100L));
+    }
+
+    [Test]
     public async Task ReportManyAsync_all_coalesced_writes_nothing()
     {
         var (grain, state) = CreateGrain();
@@ -223,8 +276,8 @@ public sealed class WalMaterialiserPinGrainTests
 
         await grain.ReportManyAsync(new[]
         {
-            new MaterialiserPinReport(Consumer, Hlc(100)),
-            new MaterialiserPinReport(Consumer, HybridLogicalClock.Zero),
+            new MaterialiserPinReport(Consumer, Hlc(100), -1),
+            new MaterialiserPinReport(Consumer, HybridLogicalClock.Zero, -1),
         });
 
         Assert.That(state.WriteCount, Is.EqualTo(1));
@@ -237,8 +290,8 @@ public sealed class WalMaterialiserPinGrainTests
 
         await grain.SeedManyAsync(new[]
         {
-            new MaterialiserPinReport(Consumer, HybridLogicalClock.Zero),
-            new MaterialiserPinReport("_lattice_materialiser_tree-1_leaf-8", HybridLogicalClock.Zero),
+            new MaterialiserPinReport(Consumer, HybridLogicalClock.Zero, -1),
+            new MaterialiserPinReport("_lattice_materialiser_tree-1_leaf-8", HybridLogicalClock.Zero, -1),
         });
 
         Assert.Multiple(() =>
@@ -255,7 +308,7 @@ public sealed class WalMaterialiserPinGrainTests
         var (grain, state) = CreateGrain();
         await grain.ReportAsync(Consumer, Hlc(100));
 
-        await grain.SeedManyAsync(new[] { new MaterialiserPinReport(Consumer, HybridLogicalClock.Zero) });
+        await grain.SeedManyAsync(new[] { new MaterialiserPinReport(Consumer, HybridLogicalClock.Zero, -1) });
 
         Assert.Multiple(() =>
         {

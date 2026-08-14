@@ -71,7 +71,8 @@ internal sealed class InMemoryLeafCursorReporter(IWalCursorRegistry registry) : 
     public void NoteDurableMaterialiserFrontier(
         string treeName,
         string consumerId,
-        HybridLogicalClock frontier)
+        HybridLogicalClock frontier,
+        long checkpointOffset)
     {
         // No durable backing: the cross-restart GC trim-floor pin is provided
         // by the full LeafCursorReporter, wired only through AddWalCursorRegistry.

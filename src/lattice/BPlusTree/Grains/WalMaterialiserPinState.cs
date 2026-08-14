@@ -41,4 +41,23 @@ internal sealed class WalMaterialiserPinState
     [Id(0)]
     public Dictionary<string, HybridLogicalClock> Pins { get; set; } =
         new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The durable leaf-materialiser checkpoint <b>offsets</b> for this tree,
+    /// keyed by the same leaf consumer id as <see cref="Pins"/>. The stored
+    /// value is each leaf's highest durably-applied WAL offset; <c>-1</c> marks
+    /// a leaf that has activated but never applied anything (a "block" pin).
+    /// The WAL GC floors its trim point under the lowest offset here so a
+    /// low-HLC / high-offset entry (a tombstone-compaction reap re-emitting an
+    /// old timestamp at a new offset) is never trimmed before the slowest leaf
+    /// has applied it - a case the HLC-space <see cref="Pins"/> floor alone
+    /// cannot protect because it is not monotonic in offset. Persisted parallel
+    /// to <see cref="Pins"/> under a distinct <see cref="IdAttribute"/> so
+    /// state written before this field existed deserialises with an empty map
+    /// and is treated conservatively (no offset floor) until the leaves
+    /// re-report.
+    /// </summary>
+    [Id(1)]
+    public Dictionary<string, long> Offsets { get; set; } =
+        new(StringComparer.Ordinal);
 }
