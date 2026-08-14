@@ -1,0 +1,283 @@
+---
+applyTo: "**"
+---
+
+# Repository-context MCP (repocontext)
+
+This file is the **single master** for how to use the `repocontext` MCP server in
+Orleans.Lattice. The `repocontext` skill (`.github/skills/repocontext/SKILL.md`)
+points here rather than restating these rules, so there is one place to change
+and nothing to drift.
+
+`repocontext` is a repository-context store that indexes a repository into queryable records - structural nodes
+(files / packages / symbols) with content digests and vector embeddings - plus a
+durable **agent-memory** layer (notes, decisions, gotchas) keyed by topic. Read
+tools are safe and read-only; write tools are **destructive and fail-closed**.
+
+**Tool names.** For brevity this guide names the retrieval and capture tools by
+their bare verb (`search`, `recall`, `remember`, and so on); the real tool ids
+carry the `repocontext_` prefix, as do the health / status / list tools
+(`repocontext_health`, `repocontext_index_status`), so any bare `index_status`
+in the prose means the same tool.
+
+## Use it as the primary recall and search mechanism
+
+`repocontext` is the **default first move** for finding things in this repo and
+for recalling what past sessions learned. For any discovery task - locating
+code, docs, symbols, or a prior decision - reach for `search` / `scan` / `recall`
+*before* `grep` / `glob`, even when you think you know the path. Do not default
+to `grep` / `glob` for repo-wide discovery.
+
+(Availability: if the `repocontext_*` tools are not in your toolset - or
+`repocontext_health` does not report the surface reachable - then it is simply
+not wired up in this environment; fall back to `grep` / `glob` / `view` and do
+not mention or block on it. Everything below applies when the surface is
+present.)
+
+The two jobs it is your first move for:
+
+- **Discovery across the whole repo** - lead with a natural-language `search`, or
+  a `scan` when you want completeness (every file under a path, every memory
+  entry). Use it even when you have a rough idea of the filename; it is faster
+  than guessing paths.
+- **Durable cross-session memory** - check what past sessions captured
+  (decisions, gotchas, conventions, glossary) before rediscovering it. Note that
+  `search` ranks across code *and* memory together and has no memory-only
+  filter, so for a memory-only sweep use `scan` with scope `Memory` (or
+  `MemoryTopic` for a single topic).
+
+A typical retrieval loop: `search` for the question, take the best hit's `path`,
+`view` that file to read the real content, and (optionally) `remember` any
+durable gotcha you uncovered.
+
+Two guardrails make it safe to lean on as primary - follow both every time:
+
+1. **Locate with `repocontext`, read the real file with `view`.** The index
+   reflects the **last ingest, not your uncommitted edits**. Treat every hit as a
+   pointer: once `repocontext` tells you *where*, `view` (or `grep`) the actual
+   file before you quote, rely on, or edit its content. Never edit from an index
+   digest.
+2. **Fall back only after a probe shows it is degraded - never sight-unseen.**
+   Every trigger below is a signal you can read **only from a `repocontext`
+   call**, so a discovery task must *open* with a `repocontext` probe
+   (a `repocontext_search`, or a quick `repocontext_health` / `index_status`
+   check) and may drop to `grep` / `glob` only once that probe shows one of
+   these. Opening with `grep` without probing `repocontext` first is **not** a
+   valid fallback - it is skipping the primary tool, and is the one thing this
+   guardrail exists to stop. Drop to `grep` / `glob` for a query when any of
+   these hold:
+   - `search` returns `mode: keyword` (semantic index unhealthy);
+   - `index_status` reports `status: Failed`;
+   - the index is **mid-ingest** (`status: Running` with
+     `filesEmbedded < filesScanned`): `mode: semantic` still answers, but it only
+     covers the already-embedded slice, so a *missing* hit does **not** mean the
+     code is absent (see "Health and degraded mode");
+   - the newest hit's `lastIngested` (or `index_status`'s `updatedAt`) predates
+     committed work you are relying on. Note the index never reflects
+     *uncommitted* edits - that is guardrail 1's job to handle, not a reason to
+     fall back.
+
+   A stale, keyword-only, or partially-embedded index is a worse locator than a
+   direct search, so do not force it - but confirm that with a probe first
+   rather than assuming it.
+
+Only skip `repocontext` outright for a lookup you can nail in one or two direct
+calls on a file you already know by path - there the hop is pure overhead.
+
+**First-use smoke check.** The first time you reach for it in a session, spend
+one round to learn which mode you are in: `repocontext_health`, then
+`repocontext_index_status {repoId}`, then one representative `search`. That tells
+you up front whether you have full `semantic` coverage, a still-`Vectorising`
+index that is only partially embedded, or a `keyword` / `Failed` degraded state -
+so you calibrate how hard to lean on it, instead of discovering a weak index
+mid-task.
+
+## The repo id
+
+- **Derivation.** A repository's `repoId` defaults to the **final path segment of
+  the indexed path** - the repo's own folder name - unless an explicit `repoId`
+  was passed to `repocontext_add_repo`. Do not assume it; confirm with
+  `repocontext_list_repos`. Examples in this file write it as `{repoId}` -
+  substitute the value you derived.
+- **Disambiguation.** If `repocontext_list_repos` returns more than one repo,
+  select the one whose id matches the workspace you are working in and ignore
+  unrelated indexes (for example throwaway test fixtures).
+- **Fields.** `repocontext_list_repos` reports one row per repo, but the fields
+  it returns depend on ingest state: expect at least `repoId` and
+  `embeddedVectorCount` (how many file chunks are vector-embedded), and treat a
+  per-repo `lastIngested` / `fileCount` as **best-effort - they can be absent
+  while an ingest is still running**. Do not rely on `list_repos` alone to judge
+  staleness. The dependable freshness signals are the per-hit `lastIngested` on
+  `search` results and `index_status`'s `updatedAt` (see "Health and degraded
+  mode").
+
+## Retrieval
+
+### search - relevance-ranked, natural language
+
+- Pass a natural-language `query` and a small `k` (1-100, default 10); start
+  small and widen only if needed.
+- **Always read the `mode` field on the result:**
+  - `semantic` - vector nearest-neighbour search (the good path).
+  - `keyword` - degraded deterministic token/structural scan because the vector
+    index is unavailable or stale. Hits are literal token matches and ranking
+    can be poor (a "write-ahead log" query returning benchmark dashboards). When
+    you see `keyword`, narrow to distinctive tokens or fall back to `grep`.
+  - `empty` - no matches.
+- Hits carry `key`, `path`, `fields` (`digest`, `language`, `sizeBytes`,
+  `lastIngested`), `tags`, and `links` (structural cross-references between
+  records - informational; there is no client tool to set them). **`search` does
+  not return file contents** - `view` the file (or `recall` the record) for the
+  body.
+- Results are verbose - each hit carries full metadata, and the server returns
+  every payload as both structured and text content - so keep `k` small and
+  prefer a targeted `scan` (with `pathPrefix`) when you want breadth without the
+  per-hit weight.
+
+### scan - ordered, complete enumeration
+
+- Deterministic paged walk of a `scope`: `Files`, `Packages`, `Symbols`,
+  `Memory`, or `MemoryTopic` (with `topic`).
+- Restrict a `Files` scan to a subtree with `pathPrefix`, e.g.
+  `src/lattice/Primitives/`.
+- Page with the returned `continuationToken` while `hasMore` is true;
+  `pageSize` is 1-500 (default 100).
+- Reach for `scan` when you want **completeness** (audit every file under a path,
+  list every memory entry in a topic) rather than relevance.
+
+### recall - one record by key
+
+- Fetch a single record by its full key. Key shapes:
+  - File: `repo/{repoId}/file/{path}` - e.g.
+    `repo/{repoId}/file/src/lattice/Primitives/GCounter.cs`
+  - Memory: `repo/{repoId}/mem/{topic}/{id}`
+- `recall` returns the stored record - its flattened `fields`, `tags`, `links`,
+  and remaining TTL - not live file content; per guardrail 1, `view` the file for
+  the current body.
+- A missing or expired key returns `exists: false`, so you can tell an absent
+  entry from an empty one.
+
+## Capture - durable agent memory
+
+### remember
+
+- Creates or updates a memory entry under a `topic` (both `repoId` and `topic`
+  required). Omit `id` to create a new entry with a generated id; pass an
+  existing `id` to **CRDT-merge in place** rather than blind-overwrite.
+- Useful fields: `title`, `body`, `kind` (`Decision` / `Note` / `Memory`),
+  `tags`, `author`, `provenance`, and `ttlSeconds`.
+- **TTL - when to set it.** Default to **no `ttlSeconds`** (durable, or the repo
+  default): decisions, gotchas, conventions, and glossary are meant to outlive
+  the session, and when one goes wrong you `update` or `forget` it rather than
+  let it lapse. Set a TTL only when the entry has a **known natural expiry and
+  its silent disappearance is acceptable** - for example a time-boxed fact ("CI
+  flaky on X until #123 lands"), short-lived coordination for sibling sessions
+  working the same task right now, or provisional state you expect to supersede
+  shortly. Never TTL something whose loss would be a problem: expiry is silent
+  and unlogged, so correctness-critical memory must be retired deliberately with
+  `forget`, not left to time out.
+
+### Keep the topic vocabulary small and stable
+
+Prefer a fixed set so related notes stay groupable instead of fragmenting into
+synonyms (`decision` vs `decisions`):
+
+- `decisions` - a design choice **with its rationale** (use `kind: Decision`).
+- `gotchas` - a non-obvious pitfall a future agent would trip on.
+- `conventions` - a project norm not obvious from a single file.
+- `glossary` - a domain term.
+- `todo` - a cross-session follow-up.
+- or a stable component/feature name (e.g. `wal`, `replication`).
+
+### What to capture (and what not)
+
+- **Do** capture non-obvious decisions with rationale, hard-won gotchas,
+  cross-session TODOs, and domain glossary - things that outlive this session.
+  Keep each entry short and self-contained: enough context to act on without the
+  originating conversation.
+- **Do not** capture secrets or credentials, anything already committed to
+  `docs/` or `AGENTS.md` (link to it instead), transient within-turn state, or
+  large blobs. Memory is not a scratchpad for the current turn.
+- **A user telling you to remember counts as a capture request.** When the user
+  says *remember* / *note* / *keep in mind* / *don't forget* a standing fact,
+  decision, or convention, that is a `repocontext_remember` request - not a cue
+  to merely hold it in the current chat. Persist it under the right topic and
+  confirm briefly, rather than only acknowledging it. Skip persistence only when
+  the instruction is plainly task-scoped (keep it in-conversation, or give it a
+  short TTL).
+
+**Example - good vs. weak.** A good entry is short, self-contained, correctly
+topiced, and carries the rationale:
+
+- Good: `remember(topic: "gotchas", kind: Note, title: "WAL shard read path returns ValueTask", body: "IWalShardGrain.ReadAsync / ReadShippingAsync / GetNextSequenceAsync return ValueTask (not Task) for the same-silo fast path the shipper polls; add .AsTask() only at Task.WhenAll fan-out sites. Reverting to Task reintroduces a real per-poll allocation.")` - actionable months later without this conversation.
+- Weak: `remember(topic: "notes", body: "looked at the WAL, seems fine")` - vague, no rationale, transient, and filed under a catch-all topic instead of a stable one.
+
+### update / forget
+
+- `update` - CRDT-patches scalar `fields` and `tags` on an **existing** record
+  (preserves any remaining TTL; fails if the key does not exist). Use it to
+  correct or re-tag, not to recreate.
+- `forget` - removes an entry. Default is an immediate hard delete; pass
+  `lapse: true` (optionally with `lapseSeconds`) to re-write it with a short TTL
+  so concurrent readers drain gracefully. Prefer `lapse` when another session
+  may be reading.
+
+## Write-tool safety
+
+- Every write tool (`add_repo`, `remove_repo`, `remember`, `update`, `forget`)
+  is **destructive and fail-closed** - offered only when the host opted writes
+  in. Never call one speculatively.
+- Do not write memory without a clear durable reason, and never `remove_repo`
+  the repo you are working in.
+
+## Freshness and re-ingest
+
+Freshness is mostly automatic. Once a repository is onboarded, its
+per-repository self-index grain keeps the index converged with no client call: a
+continuous background reconcile walks the tree, diffs it against the stored
+records, and applies exactly the delta, so files added, edited, and deleted on
+disk are picked up on their own. Directory-modification-time pruning keeps that
+cheap, and a pure in-place content edit (which does not bump its directory's
+mtime) is caught by a periodic full sweep - so the index trails on-disk state
+only by a bounded reconcile / full-walk interval, not until some manual
+re-ingest. That bounded lag is exactly why guardrail 1 still holds: locate with
+the index, then read the live file with `view`.
+
+You therefore rarely need to re-ingest by hand. `repocontext_add_repo` is
+idempotent and resumable and re-ingests only what changed (pruning deleted
+files); its one edge over the background reconcile is that it forces an
+*immediate* full, exact walk, so reach for it only when you cannot wait out the
+reconcile bound after a large change. A re-add (like the initial onboard) starts
+an async job - poll `index_status` and read its two progress fractions
+separately: `chunksCommitted` / `chunksTotal` is the structural **apply** phase,
+while `filesEmbedded` / `filesScanned` is the slower **embedding** phase that
+follows it, so chunks reaching completion while `filesEmbedded` still climbs is
+normal, not a contradiction (embeddings also require a healthy vector projection
+- see "Health and degraded mode"). A still-`Running` job whose `filesEmbedded` or
+`updatedAt` keeps advancing is healthy; only a stalled `updatedAt` or
+`status: Failed` warrants giving up on it.
+
+## Health and degraded mode
+
+- `repocontext_health` - is the surface registered and reachable.
+- `repocontext_index_status {repoId}` - `status` / `phase` / counters
+  (`filesScanned`, `filesEmbedded`, `chunksCommitted`, `updatedAt`). Read it two
+  ways:
+  - **Degraded:** `status: Failed`, or `filesEmbedded: 0` alongside a
+    stale-projection error, means semantic search has degraded to `keyword` -
+    retrieval still works but ranking is literal. Report it and fall back to
+    `grep`; do not try to repair projection state from here - it needs an
+    operator-driven rebuild.
+  - **Partially embedded (mid-ingest):** `status: Running` with
+    `0 < filesEmbedded < filesScanned` means vectorising is still in flight.
+    `search` returns `mode: semantic`, but only the already-embedded files are
+    reachable by vector, so a confident-looking result can silently omit
+    not-yet-embedded files. For **completeness** while an ingest runs, do not
+    trust a single `search` - also `scan` the relevant `pathPrefix` (or `grep`),
+    and re-run the `search` once `filesEmbedded` reaches `filesScanned`.
+
+## Regions
+
+- Every tool accepts an optional `region`; omit it to target the current region.
+  Set it only when you are deliberately working against a named peer region
+  (see `lattice_list_regions`).

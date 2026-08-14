@@ -4,6 +4,34 @@
 
 Orleans.Lattice is a distributed B+ tree built on top of [Microsoft Orleans](https://learn.microsoft.com/dotnet/orleans/). It provides a sharded, CRDT-backed key-value store where every key is a `string` and every value is `byte[]`.
 
+## Finding things in the repo
+
+For any search, exploration, or recall in this repo, open with a `repocontext_*`
+probe before `grep` / `glob`: lead with `repocontext_search` (or a quick
+`repocontext_health` / `repocontext_index_status` check). Fall back to
+`grep` / `glob` / `view` only after that probe shows the index is degraded,
+mid-ingest, or absent - never sight-unseen, because "the index is a worse
+locator" is a conclusion you can only reach by first calling `repocontext` and
+reading its `mode` / `status`. Full rules live in the **repocontext** skill
+(`.github/skills/repocontext/SKILL.md`) and its master file
+(`.github/instructions/repocontext.instructions.md`).
+
+The same tools are also this repo's **durable cross-session memory**. At the
+start of non-trivial work, recall what earlier sessions already learned
+(`repocontext_search`, or `repocontext_scan` with scope `Memory` /
+`MemoryTopic`) before rediscovering it; and when you reach a decision, hit a
+non-obvious gotcha, or pin down a convention worth keeping, capture it with
+`repocontext_remember` (topics such as `decisions`, `gotchas`, `conventions`,
+`glossary`) so the next session inherits it instead of relearning it. Treat an
+explicit user instruction to *remember*, *note*, *keep in mind*, or *don't
+forget* a standing fact, decision, or convention as a `repocontext_remember`
+request - persist it durably under the right topic rather than only
+acknowledging it in your reply; "remember" here means the durable store, not
+just this conversation. Keep it in-conversation only when it is genuinely
+task-scoped (or give it a short TTL). See the
+**repocontext** skill for the capture rules (topic vocabulary, TTL, and what is
+and is not worth storing).
+
 ## Solution Layout
 src/lattice/               → Main library (Orleans.Lattice)  
   BPlusTree/               → Tree structures, options, grain interfaces  
@@ -93,6 +121,10 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
 
 ## Branching and Pull Requests
 
+- **Use the NSTA1 account and the GitHub CLI (`gh`) for every GitHub interaction on this repo.** Do not use the app's `create_issue` / `create_pull_request` / `update_pull_request` tools or the GitHub MCP write tools: they authenticate as the EMU account (`staudtnathan_microsoft` via `GH_TOKEN`), so they act under the wrong identity and PR creation 403s trying to fork. The pattern is `$env:GH_TOKEN = (gh auth token --user NSTA1)` before the `gh` command (`gh issue create`, `gh pr create`, `gh issue edit --body-file`, ...). Do not use the git credential helper.
+- Do not add author attribution or `Co-authored-by` / `Copilot-Session` trailers to commits.
+- Branch names use a type prefix (`feat/`, `docs/`, `fix/`, ...), never a username.
+- When a PR fully implements an issue, add a `Closes XXX` line to the PR body.
 - Never push directly to main. All changes must go through a branch and pull request.
 - The main branch has branch protection enabled with a required 'build-and-test' status check.
 - When creating a pull request, apply one of the following labels so the GitHub release API categorizes it correctly:
@@ -104,7 +136,7 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
   - `breaking` - breaking changes. Judge "breaking" by the affected package's **release status**: a behavioural or API change in a package that has never shipped a release tag (verify with `git tag | Select-String <package>`) cannot break an existing consumer and is an `enhancement`/`security` change, not `breaking`. An opt-in change guarded by a default-off flag on a released package is additive, not breaking.
 - Also apply a **package label** (one per `src/<package>/` directory, named exactly after it) for every package the pull request touches. The changed-files -> package mapping and the label-naming rule live in the **pr-labels** skill (`.github/skills/pr-labels/SKILL.md`); the equivalent rule for issues lives in the **issue-labels** skill (`.github/skills/issue-labels/SKILL.md`).
 - Do not commit, push, or create PRs unless explicitly requested.
-- **Never round-trip a GitHub issue or PR body through in-memory PowerShell string editing.** To update a body, write the full markdown to a file and pass it with `gh issue edit <n> --body-file <file>` / `gh pr edit <n> --body-file <file>` (or use the `update_pull_request` tool), which preserve newlines byte-for-byte. Do **not** capture a body with `$b = gh issue view <n> -q .body`, mutate `$b`, and re-upload it: PowerShell captures multi-line command output as a **string array**, and writing it with `Set-Content -NoNewline` joins the elements with no separator, collapsing every newline and flattening the whole body to a single line. If you must transform captured text, read it as one string (`Get-Content -Raw`) and never write it with `-NoNewline`.
+- **Never round-trip a GitHub issue or PR body through in-memory PowerShell string editing.** To update a body, write the full markdown to a file and pass it with `gh issue edit <n> --body-file <file>` / `gh pr edit <n> --body-file <file>`, which preserve newlines byte-for-byte. Do **not** capture a body with `$b = gh issue view <n> -q .body`, mutate `$b`, and re-upload it: PowerShell captures multi-line command output as a **string array**, and writing it with `Set-Content -NoNewline` joins the elements with no separator, collapsing every newline and flattening the whole body to a single line. If you must transform captured text, read it as one string (`Get-Content -Raw`) and never write it with `-NoNewline`.
 
 ## Testing
 
