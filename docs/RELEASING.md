@@ -47,7 +47,7 @@ The package family ships from this repository:
 | `Orleans.Lattice.Explorer.Entra` | `src/lattice.explorer.entra/Orleans.Lattice.Explorer.Entra.csproj` |
 | `Orleans.Lattice.Explorer.Entra.Web` | `src/lattice.explorer.entra.web/Orleans.Lattice.Explorer.Entra.Web.csproj` |
 | `Orleans.Lattice.Caching.AzureBlob` | `src/lattice.caching.azureblob/Orleans.Lattice.Caching.AzureBlob.csproj` |
-| `Orleans.Lattice.Scaling` | `src/lattice.scaling/Orleans.Lattice.Scaling.csproj` | across the family. Patch digits may advance independently per package.
+| `Orleans.Lattice.Scaling` | `src/lattice.scaling/Orleans.Lattice.Scaling.csproj` |
 
 ## Tag shape
 
