@@ -141,7 +141,7 @@ Each optional add-on has its own documentation set, anchored by a package README
 
 | Package | Description | Docs |
 |---|---|---|
-| `Orleans.Lattice.Api.Abstractions` | The shared, transport-agnostic API contract: the five facade service interfaces (state, data, auth, backup, schema) and their request/response DTOs, referenced by the facade implementations, the gRPC bindings, and the MCP server without cross-package internal-visibility grants. | [README](docs/lattice.api.abstractions/README.md) |
+| `Orleans.Lattice.Api.Abstractions` | The shared, transport-agnostic API contract: the seven facade service interfaces (state, data, auth, backup, schema, replication, tree administration) and their request/response DTOs, referenced by the facade implementations, the gRPC bindings, and the MCP server without cross-package internal-visibility grants. | [README](docs/lattice.api.abstractions/README.md) |
 | `Orleans.Lattice.Api.Auth` | Transport-agnostic control facade for administering membership and policy and explaining authorization decisions. | [README](docs/lattice.api.auth/README.md) |
 | `Orleans.Lattice.Api.Auth.Grpc` | The code-first gRPC binding and public client for the authorization control facade. | [README](docs/lattice.api.auth.grpc/README.md) |
 | `Orleans.Lattice.Api.Backup` | Transport-agnostic control facade for driving backup capture, restore, catalog listing, chain describe, and retention. | [README](docs/lattice.api.backup/README.md) |
