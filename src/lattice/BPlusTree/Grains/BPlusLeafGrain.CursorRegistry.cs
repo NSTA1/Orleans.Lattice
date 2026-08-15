@@ -148,11 +148,14 @@ internal sealed partial class BPlusLeafGrain
         }
         else
         {
+            var partitionsWithLiveData = ComputePartitionsWithLiveData(partitionCount);
             for (var partition = 0; partition < partitionCount; partition++)
             {
                 var consumerId = BuildConsumerId(idBase, partition, partitionCount);
+                var (frontier, offset) = ResolveDurablePinForPartition(
+                    partition, clock, partitionsWithLiveData);
                 reporter.NoteDurableMaterialiserFrontier(
-                    treeId, consumerId, clock, GetCurrentCheckpointForPartition(partition));
+                    treeId, consumerId, frontier, offset);
             }
         }
     }
@@ -196,12 +199,14 @@ internal sealed partial class BPlusLeafGrain
         var treeId = state.State.TreeId!;
         var options = await GetOptionsAsync();
         var partitionCount = Math.Max(1, options.WalPartitions);
+        var partitionsWithLiveData = ComputePartitionsWithLiveData(partitionCount);
         var reports = new MaterialiserPinReport[partitionCount];
         for (var partition = 0; partition < partitionCount; partition++)
         {
             var consumerId = BuildConsumerId(idBase, partition, partitionCount);
-            reports[partition] = new MaterialiserPinReport(
-                consumerId, clock, GetCurrentCheckpointForPartition(partition));
+            var (frontier, offset) = ResolveDurablePinForPartition(
+                partition, clock, partitionsWithLiveData);
+            reports[partition] = new MaterialiserPinReport(consumerId, frontier, offset);
         }
 
         await reporter.FlushDurableMaterialiserFrontierAsync(
@@ -329,4 +334,66 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private static string BuildConsumerId(string idBase, int partition, int partitionCount)
         => partitionCount == 1 ? idBase : $"{idBase}_{partition}";
+
+    /// <summary>
+    /// Computes, in a single cache pass, which WAL partitions this leaf holds
+    /// live data for - any cache row (a live value or a not-yet-reaped
+    /// tombstone) whose key routes to the partition via
+    /// <see cref="WalPartitionHash.Compute"/>. Used by
+    /// <see cref="ResolveDurablePinForPartition"/> to distinguish a genuinely
+    /// empty partition (safe to release its WAL trim block) from one that holds
+    /// committed-but-not-yet-checkpointed data (which still depends on the whole
+    /// WAL and must keep its block).
+    /// </summary>
+    private bool[] ComputePartitionsWithLiveData(int partitionCount)
+    {
+        var hasData = new bool[partitionCount];
+        var remaining = partitionCount;
+        foreach (var (key, _) in Cache.EnumerateRows())
+        {
+            var partition = WalPartitionHash.Compute(key, partitionCount);
+            if (!hasData[partition])
+            {
+                hasData[partition] = true;
+                if (--remaining == 0)
+                    break;
+            }
+        }
+        return hasData;
+    }
+
+    /// <summary>
+    /// Resolves the durable materialiser pin (frontier HLC and checkpoint
+    /// offset) this leaf reports for <paramref name="partition"/>.
+    /// <para>
+    /// A partition that has never durably checkpointed (offset &lt; 0) but still
+    /// holds live data in this leaf's cache depends on the entire WAL from
+    /// offset 0. Reporting its live <paramref name="clock"/> as a
+    /// <c>(clock, -1)</c> frontier would advance the durable pin past the seeded
+    /// <see cref="HybridLogicalClock.Zero"/> block pin, and because
+    /// <c>ComputeMaterialiserOffsetFloorAsync</c> skips <c>-1</c> offsets the
+    /// shared-shard WAL GC's cross-partition offset floor (a global minimum over
+    /// the checkpointed partitions) would then authorise trimming this
+    /// partition's low-offset entries - losing the data on the leaf's next cold
+    /// rebuild (an idle deactivation then reactivation replays the WAL past its
+    /// checkpoint and the trimmed entries are simply gone). Such a partition
+    /// therefore retains the Zero block pin.
+    /// </para>
+    /// <para>
+    /// A genuinely empty partition (no cache key routes to it) has nothing to
+    /// protect, so it releases the block by reporting the real
+    /// <c>(clock, -1)</c> frontier exactly as before - keeping WAL trim live for
+    /// the ubiquitous empty-partition pins a multi-partition leaf produces.
+    /// </para>
+    /// </summary>
+    private (HybridLogicalClock Frontier, long Offset) ResolveDurablePinForPartition(
+        int partition, HybridLogicalClock clock, bool[] partitionsWithLiveData)
+    {
+        var checkpoint = GetCurrentCheckpointForPartition(partition);
+        if (checkpoint < 0 && partitionsWithLiveData[partition])
+        {
+            return (HybridLogicalClock.Zero, -1L);
+        }
+        return (clock, checkpoint);
+    }
 }
