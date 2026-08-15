@@ -42,9 +42,23 @@ public partial class BPlusLeafGrainTests
     [Test]
     public async Task First_real_frontier_checkpoint_awaits_durable_pin_write()
     {
-        // Barrier A: a leaf that has checkpointed once must already have a
-        // durable real-frontier pin, without relying on the debounced
-        // fire-and-forget mirror landing (which an ungraceful crash could lose).
+        // REWRITTEN for the coverage-gated durable pin (residual cold-restart
+        // prefix-loss fix). The ORIGINAL #1453 assertion required the first
+        // checkpoint to persist a durable pin at the leaf's REAL frontier
+        // (Has.All.GreaterThan(Zero)). That assertion encoded the UNSAFE
+        // "trim-at-checkpoint-without-snapshot-coverage" mechanism: a real
+        // frontier pin authorises the WAL GC to trim the checkpointed prefix
+        // [0, checkpoint], but this rig wires NO snapshot store, so the
+        // checkpointed prefix has NO durable copy other than the WAL itself.
+        // Trimming it is exactly the residual loss - on the next cold rebuild
+        // the empty cache replays from -1 over a WAL whose prefix is gone.
+        // Under the fix a data-bearing, checkpointed-but-uncovered partition
+        // retains its Zero BLOCK pin (a retention barrier), which is the
+        // STRENGTHENED no-loss contract: the durable pin still lands (barrier
+        // A still awaits the write), but it pins the WAL rather than licensing
+        // its truncation. The block lifts to a real frontier only once a
+        // durable snapshot covers the prefix (proved by the invariant-(b)
+        // test in BPlusLeafGrainTests.ColdRestartResidualPin.cs).
         var (leaf, pinGrain, _, _) =
             CreateLeafWithDurablePinStore(leafKey: "deact-pin-leaf-A", treeId: PinSeamTreeId);
 
@@ -53,8 +67,10 @@ public partial class BPlusLeafGrainTests
         var pins = await pinGrain.GetPinsAsync();
         Assert.That(pins, Is.Not.Empty,
             "The first real-frontier checkpoint must synchronously (awaited) persist a durable pin.");
-        Assert.That(pins.Values, Has.All.GreaterThan(HybridLogicalClock.Zero),
-            "The durable pin must record the leaf's real checkpoint frontier, not a Zero block pin.");
+        Assert.That(pins.Values, Has.All.EqualTo(HybridLogicalClock.Zero),
+            "With no snapshot covering the checkpointed prefix, the durable pin must be a Zero block "
+            + "pin that RETAINS the WAL - not a real frontier that would authorise trimming an "
+            + "unrecoverable prefix.");
     }
 
     [Test]
@@ -88,14 +104,19 @@ public partial class BPlusLeafGrainTests
     [Test]
     public async Task Dormant_leaf_pin_survives_registry_wipe_and_blocks_trim_past_checkpoint()
     {
-        // End-to-end "fall off the log" regression: a leaf checkpoints at HLC
-        // 20 and deactivates; the in-memory registry is then wiped (simulating a
-        // full container restart); a forward consumer (shipper) sits at the WAL
-        // head (40). Without the deactivation durable-pin barrier the GC would
-        // floor only under the shipper and trim past the leaf's checkpoint,
-        // discarding entries the next cold activation must replay. The durable
-        // pin at 20 must floor the trim so every entry above the checkpoint
-        // survives.
+        // REWRITTEN for the coverage-gated durable pin (residual cold-restart
+        // prefix-loss fix). The ORIGINAL #1453 assertion expected the dormant
+        // leaf to floor the trim at its real checkpoint frontier (MinCursor ==
+        // HLC 20) and retain only the entries ABOVE the checkpoint (offsets 2
+        // and 3), i.e. it assumed the checkpointed prefix [0, 1] was safe to
+        // trim. That assumption is the residual defect: this rig wires NO
+        // snapshot store, so the checkpointed prefix has no durable copy and a
+        // cold rebuild (empty cache -> replay from -1) would silently lose it.
+        // Under the fix the data-bearing, uncovered leaf reports a Zero BLOCK
+        // pin, which disables the WAL GC cursor trim entirely (MinCursor null)
+        // and retains the WHOLE WAL - the strengthened, provably-lossless
+        // contract. Trimming resumes only once a durable snapshot covers the
+        // prefix (invariant (b), see BPlusLeafGrainTests.ColdRestartResidualPin.cs).
         var (leaf, _, registry, factory) =
             CreateLeafWithDurablePinStore(leafKey: "deact-pin-leaf-C", treeId: PinSeamTreeId);
 
@@ -108,8 +129,8 @@ public partial class BPlusLeafGrainTests
         // dormant leaf is ABSENT from it and only its durable pin remains.
         var freshRegistry = new InMemoryWalCursorRegistry();
 
-        // WAL holds four entries; the leaf checkpointed at HLC 20 so it still
-        // needs to replay the entries above 20 (offsets 2 and 3).
+        // WAL holds four entries; the leaf checkpointed at HLC 20 but, with no
+        // snapshot covering the prefix, its Zero block pin protects EVERY entry.
         var provider = new InMemoryWalStorageProvider();
         await provider.AppendBatchAsync(
             PinSeamTreeId,
@@ -134,11 +155,13 @@ public partial class BPlusLeafGrainTests
 
         var report = await gc.RunOnceAsync(PinSeamTreeId);
 
-        Assert.That(report.MinCursor, Is.EqualTo(PinHlc(20)),
-            "The dormant leaf's durable pin (20) must floor the trim under the forward consumer (40).");
+        Assert.That(report.MinCursor, Is.Null,
+            "The dormant leaf's Zero block pin (no snapshot coverage) must DISABLE the cursor trim "
+            + "entirely, not floor it at the checkpoint - the checkpointed prefix is unrecoverable.");
 
         var survivors = await SurvivingPinOffsetsAsync(provider);
-        Assert.That(survivors, Does.Contain(2L).And.Contain(3L),
-            "Every WAL entry above the leaf's durable checkpoint must survive the restart GC pass.");
+        Assert.That(survivors, Does.Contain(0L).And.Contain(1L).And.Contain(2L).And.Contain(3L),
+            "With no snapshot covering the prefix, EVERY WAL entry - including the checkpointed "
+            + "prefix [0, 1] - must survive the restart GC pass so a cold rebuild can replay from 0.");
     }
 }

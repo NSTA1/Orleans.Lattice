@@ -22,6 +22,44 @@ internal sealed class LeafSnapshotStorageGrain(
 {
     IGrainContext IGrainBase.GrainContext => context;
 
+    /// <summary>
+    /// True when <paramref name="blob"/> carries a durably-captured prefix that
+    /// a leaf can rehydrate from. The scalar <see cref="LeafSnapshotBlob.SnapshotOffset"/>
+    /// only describes partition 0; under the default <c>WalPartitions = 8</c> a
+    /// leaf whose live keys hash entirely to a non-zero partition captures a
+    /// blob whose scalar offset is the <c>-1</c> "partition 0 idle" sentinel yet
+    /// whose <see cref="LeafSnapshotBlob.SnapshotOffsetsByPartition"/> covers the
+    /// busy partition. Keying the load/clear guards on the scalar alone would
+    /// discard that blob on cold restart - and because the coverage-gated WAL GC
+    /// has already trimmed the busy partition's covered prefix, discarding the
+    /// sole durable copy silently loses it. Treat a blob as captured when the
+    /// scalar is non-negative OR any per-partition slot is. Legacy blobs
+    /// (persisted before the per-partition slot existed) decode
+    /// <see cref="LeafSnapshotBlob.SnapshotOffsetsByPartition"/> as <c>null</c>
+    /// and so fall back to the scalar-only check, exactly as before.
+    /// </summary>
+    private static bool HasCapturedPrefix(LeafSnapshotBlob blob)
+    {
+        if (blob.SnapshotOffset >= 0)
+        {
+            return true;
+        }
+
+        var perPartition = blob.SnapshotOffsetsByPartition;
+        if (perPartition is not null)
+        {
+            foreach (var offset in perPartition)
+            {
+                if (offset >= 0)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     /// <inheritdoc />
     public async Task SaveAsync(LeafSnapshotBlob blob, CancellationToken cancellationToken)
     {
@@ -37,12 +75,12 @@ internal sealed class LeafSnapshotStorageGrain(
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        // SnapshotOffset == -1 is the "nothing captured" sentinel
-        // baked into LeafSnapshotBlob's default. Distinguishing it
-        // from a default-allocated state instance is the only way to
-        // tell "no snapshot has ever been written" apart from "a
-        // freshly-defaulted state row was returned by the provider".
-        if (state.State.SnapshotOffset < 0)
+        // SnapshotOffset == -1 is the "nothing captured" sentinel baked into
+        // LeafSnapshotBlob's default, but the scalar only describes partition 0.
+        // A blob captured for a leaf whose live data is in a non-zero partition
+        // (partition 0 idle) carries a -1 scalar yet a >= 0 per-partition slot;
+        // it is loadable and MUST NOT be discarded (see HasCapturedPrefix).
+        if (!HasCapturedPrefix(state.State))
         {
             return Task.FromResult<LeafSnapshotBlob?>(null);
         }
@@ -55,7 +93,7 @@ internal sealed class LeafSnapshotStorageGrain(
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (state.State.SnapshotOffset < 0)
+        if (!HasCapturedPrefix(state.State))
         {
             return Task.FromResult(0L);
         }
@@ -87,7 +125,7 @@ internal sealed class LeafSnapshotStorageGrain(
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (state.State.SnapshotOffset < 0)
+        if (!HasCapturedPrefix(state.State))
         {
             // Nothing to clear; ClearStateAsync still touches the
             // provider, so short-circuit to keep idempotent calls

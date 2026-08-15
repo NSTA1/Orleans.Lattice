@@ -82,30 +82,52 @@ public sealed class WalCursorRegistryDurabilityTests
     }
 
     [Test]
-    public async Task Leaf_checkpoint_persists_a_real_durable_materialiser_pin()
+    public async Task Leaf_checkpoint_without_snapshot_publishes_a_Zero_block_pin_not_a_trimmable_frontier()
     {
+        // #1453/#919 REWRITE. The original assertion ("A checkpointed leaf must
+        // publish a non-Zero durable frontier") encoded the pre-residual-fix
+        // mechanism: it treated a durable *checkpoint* alone as sufficient to
+        // authorise trimming [0, checkpoint]. That is the residual cold-restart
+        // loss (finding 2026-08-15-C): the leaf's projection cache is
+        // per-activation and NOT persisted, so a cold restart replays from offset
+        // 0 - if the checkpointed prefix was trimmed it is gone. A checkpoint is a
+        // safe trim floor only once a durable snapshot COVERS that prefix. The
+        // strengthened contract: a checkpointed-but-uncovered partition publishes a
+        // Zero block pin that pins the GC at the head of the log, never a trimmable
+        // real frontier. This never weakens no-loss; it retains strictly more WAL.
         var treeId = "wcr-pin-" + Guid.NewGuid().ToString("N")[..8];
         var setup = await SeedCheckpointedHeadWithLiveTailAsync(treeId, captureSnapshot: false);
 
-        Assert.That(setup.DurableFrontier, Is.GreaterThan(HybridLogicalClock.Zero),
-            "A checkpointed leaf must publish a non-Zero durable frontier.");
+        Assert.That(setup.DurableFrontier, Is.EqualTo(HybridLogicalClock.Zero),
+            "An uncovered checkpointed leaf must publish a Zero block pin, not a trimmable frontier.");
 
         var pins = await GetPinsAsync(treeId);
         Assert.That(pins, Is.Not.Empty,
-            "A real leaf checkpoint must seed at least one durable materialiser pin.");
+            "A real leaf checkpoint must still seed a durable materialiser (block) pin.");
         foreach (var (consumerId, frontier) in pins)
         {
             Assert.That(consumerId, Does.StartWith(ILeafCursorReporter.MaterialiserConsumerIdPrefix),
                 "Only leaf-materialiser consumers may write to the durable pin store.");
-            Assert.That(frontier, Is.GreaterThan(HybridLogicalClock.Zero));
+            Assert.That(frontier, Is.EqualTo(HybridLogicalClock.Zero),
+                "Without snapshot coverage the pin must be the Zero block, holding the whole WAL.");
         }
     }
 
     [Test]
     public async Task Durable_pin_floors_gc_after_registry_wipe_so_committed_tail_is_retained()
     {
+        // #1453/#919 REWRITE. The original test asserted the checkpointed prefix
+        // WAS trimmed (lowestAfter > lowestBefore) after a registry wipe with NO
+        // snapshot coverage. That is exactly the residual defect (finding
+        // 2026-08-15-C): trimming an uncovered checkpointed prefix drops it on the
+        // next cold restart, whose replay starts at offset 0 over the resulting
+        // hole. The strengthened contract: with no snapshot the durable pin is the
+        // Zero block, so the GC retains the ENTIRE log - both the still-live tail
+        // AND the uncovered prefix (its sole durable copy). No-loss is preserved
+        // and strengthened; the prefix becomes trimmable only once covered (see the
+        // captureSnapshot=true sibling, Reactivated_leaf_replays_live_tail...).
         var treeId = "wcr-floor-" + Guid.NewGuid().ToString("N")[..8];
-        var setup = await SeedCheckpointedHeadWithLiveTailAsync(treeId, captureSnapshot: false);
+        _ = await SeedCheckpointedHeadWithLiveTailAsync(treeId, captureSnapshot: false);
 
         var provider = RequireSiloServices().GetRequiredService<IWalStorageProvider>();
         var (lowestBefore, highestBefore) = await WalBoundsAsync(provider, treeId);
@@ -126,31 +148,43 @@ public sealed class WalCursorRegistryDurabilityTests
             "After the wipe the bare registry minimum is the forward shipper cursor.");
 
         var gc = RequireSiloServices().GetRequiredService<ILatticeWalGc>();
-        var report = await gc.RunOnceAsync(treeId);
+        await gc.RunOnceAsync(treeId);
 
         var (lowestAfter, highestAfter) = await WalBoundsAsync(provider, treeId);
         Assert.Multiple(() =>
         {
-            Assert.That(report.MinCursor, Is.EqualTo(setup.DurableFrontier),
-                "The WAL GC must floor its trim point at the durable leaf pin, not the forward shipper, after a registry wipe.");
-            Assert.That(report.MinCursor, Is.LessThan(forwardShipper),
-                "The durable floor must hold the trim point strictly below the forward shipper cursor.");
-            // The committed-but-not-yet-checkpointed tail must survive: the
-            // forward shipper alone would have trimmed it.
+            // The live tail must not be trimmed (the original #919 no-loss guard).
             Assert.That(highestAfter, Is.EqualTo(highestBefore),
                 "The WAL head (the live tail) must not be trimmed.");
-            Assert.That(lowestAfter, Is.GreaterThan(lowestBefore),
-                "The checkpointed prefix must be trimmed.");
-            Assert.That(lowestAfter, Is.GreaterThanOrEqualTo((long)BatchSize),
-                "Only the checkpointed prefix may be trimmed; the live tail must remain.");
+            // Strengthened: the UNCOVERED checkpointed prefix must ALSO survive,
+            // because the Zero block pin floors the GC at the head of the log. It
+            // is the only durable copy of that prefix until a snapshot covers it.
+            Assert.That(lowestAfter, Is.EqualTo(lowestBefore),
+                "Without snapshot coverage the checkpointed prefix (sole durable copy) must be retained, not trimmed.");
         });
     }
 
     [Test]
     public async Task Reactivated_leaf_replays_live_tail_after_gc_following_registry_wipe()
     {
+        // #1453/#919 REWRITE (mechanism, not intent). #919's invariant - a
+        // committed key survives a full restart that wipes the in-memory registry
+        // - is PRESERVED. What changed: the checkpointed prefix is trimmable only
+        // once a durable snapshot covers it (finding 2026-08-15-C, the residual
+        // cold-restart loss). SeedCheckpointedHeadWithLiveTailAsync(captureSnapshot:
+        // true) now captures that covering snapshot and flushes the leaf's
+        // snapshot-COVERED (real, trimmable) frontier, so the GC may safely trim the
+        // covered prefix while the durable floor still retains the live tail. Both
+        // invariants hold and are asserted below: (a) no loss - the tail replays and
+        // the covered head rehydrates from the snapshot; (b) bounded WAL - the
+        // covered prefix IS trimmed.
         var treeId = "wcr-read-" + Guid.NewGuid().ToString("N")[..8];
         var setup = await SeedCheckpointedHeadWithLiveTailAsync(treeId, captureSnapshot: true);
+        Assert.That(setup.DurableFrontier, Is.GreaterThan(HybridLogicalClock.Zero),
+            "A snapshot-covered checkpoint must publish a real (trimmable) durable frontier.");
+
+        var provider = RequireSiloServices().GetRequiredService<IWalStorageProvider>();
+        var (lowestBefore, _) = await WalBoundsAsync(provider, treeId);
 
         var registry = RequireSiloServices().GetRequiredService<IWalCursorRegistry>();
         await WipeInMemoryLeafPinsAsync(registry, treeId);
@@ -161,13 +195,20 @@ public sealed class WalCursorRegistryDurabilityTests
         Assert.That(report.MinCursor, Is.EqualTo(setup.DurableFrontier),
             "The GC must floor at the durable leaf pin so the live tail survives the trim.");
 
-        // Force the leaf to cold-restart. The committed-but-uncheckpointed
-        // tail (batch B, the exact write shape #919 lost) lives only in the
-        // WAL above the leaf's checkpoint. The durable floor kept those WAL
-        // entries, so the activation-time replay over (checkpoint, head]
-        // must reconstruct them with neither a LeafProjectionStaleException
-        // (which the bug's too-aggressive trim would raise: the first
-        // needed offset would be gone) nor a silent drop of the tail keys.
+        // Bounded-WAL invariant (b): the snapshot-covered prefix is trimmed, so
+        // the retained WAL cannot grow unbounded across checkpoints.
+        var (lowestAfter, _) = await WalBoundsAsync(provider, treeId);
+        Assert.That(lowestAfter, Is.GreaterThan(lowestBefore),
+            "The snapshot-covered checkpointed prefix must be trimmed (bounded WAL).");
+
+        // No-loss invariant (a): force the leaf to cold-restart. The
+        // committed-but-uncheckpointed tail (batch B, the exact write shape #919
+        // lost) lives only in the WAL above the leaf's checkpoint; the covered
+        // head lives only in the snapshot (its WAL prefix was just trimmed). The
+        // activation-time snapshot rehydrate restores the head and the durable
+        // floor kept the tail's WAL entries, so the replay over (checkpoint, head]
+        // reconstructs the tail with neither a LeafProjectionStaleException nor a
+        // silent drop of the tail keys.
         await setup.Leaf.ForceDeactivateAsync();
 
         var tree = _cluster.Client.GetGrain<ILattice>(treeId);
@@ -219,15 +260,20 @@ public sealed class WalCursorRegistryDurabilityTests
         // checkpoint advance + cursor report + durable-pin write.
         await tree.GetAsync(batchA[0]);
 
-        var pins = await WaitForAnyRealPinAsync(treeId);
+        var pins = await WaitForAnyPinAsync(treeId);
         var durableFrontier = MinFrontier(pins);
 
         if (captureSnapshot)
         {
-            // Snapshot the checkpointed prefix so the leaf can rehydrate it
-            // after the trimmed prefix is GC'd, while the live tail below is
-            // recovered from the retained WAL.
+            // Snapshot the checkpointed prefix so it is durably recoverable, then
+            // force a deactivation flush so the leaf re-reports its now
+            // snapshot-COVERED (real, trimmable) durable frontier in place of the
+            // conservative Zero block it published while the prefix was uncovered.
+            // Coverage is restored on the next reactivation via snapshot rehydrate.
             await leaf.CaptureSnapshotAsync();
+            await leaf.ForceDeactivateAsync();
+            var coveredPins = await WaitForAnyRealPinAsync(treeId);
+            durableFrontier = MinFrontier(coveredPins);
         }
 
         // Second batch: stays live in the WAL with no checkpoint advance, so
@@ -320,6 +366,22 @@ public sealed class WalCursorRegistryDurabilityTests
         }
 
         return await GetPinsAsync(treeId);
+    }
+
+    private async Task<IReadOnlyDictionary<string, HybridLogicalClock>> WaitForAnyPinAsync(string treeId)
+    {
+        // Accepts ANY durable pin, including the Zero block pin an uncovered
+        // checkpointed partition legitimately publishes, so the uncovered-case
+        // seeds don't spin the full real-pin timeout.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        var pins = await GetPinsAsync(treeId);
+        while (DateTime.UtcNow < deadline && pins.Count == 0)
+        {
+            await Task.Delay(50);
+            pins = await GetPinsAsync(treeId);
+        }
+
+        return pins;
     }
 
     private async Task<IReadOnlyDictionary<string, HybridLogicalClock>> WaitForPinAsync(string treeId, string consumerId)

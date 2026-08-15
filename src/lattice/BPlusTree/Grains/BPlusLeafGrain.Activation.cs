@@ -469,9 +469,16 @@ internal sealed partial class BPlusLeafGrain
             // this is the legitimate "durable floor kept the live tail" shape
             // (issue #919), which must replay cleanly, not throw. Loss is real
             // only when the first needed offset itself fell off the log, i.e.
-            // tail > checkpoint + 1. The detector can use the looser formula
-            // because it only steers a rebuild policy; this guard always throws,
-            // so it must be exact.
+            // tail > checkpoint + 1. This guard and the fall-off-log detector's
+            // WAL-trim trigger (LatticeFallOffLogDetector.ClassifyAsync) must use
+            // the SAME exact boundary: the detector's SnapshotThenWal decision is
+            // NOT a soft rebuild-policy hint - it throws LeafProjectionStaleException
+            // below (the SnapshotThenWal/FullRebuild recovery paths are not yet
+            // integrated). Before the coverage-gated WAL GC, the detector's looser
+            // tail > checkpoint formula never bit because a snapshot-covered leaf
+            // could not settle at tail == checkpoint + 1; now it can (the offset
+            // floor trims the already-applied checkpoint entry once covered), so
+            // the detector was aligned to tail > checkpoint + 1 to match this guard.
             if (checkpointOverride is { } coldReplayStart
                 && coldReplayStart < persistedCheckpoint
                 && persistedCheckpoint > 0)

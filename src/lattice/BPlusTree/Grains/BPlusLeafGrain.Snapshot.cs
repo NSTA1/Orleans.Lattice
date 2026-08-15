@@ -62,19 +62,6 @@ internal sealed partial class BPlusLeafGrain
     private int _checkpointPersistCountSinceRecheck;
 
     /// <summary>
-    /// Checkpoint offset at the moment the most recent proactive
-    /// capture landed. The periodic recheck uses this as a cheap
-    /// "we already snapshotted this projection" filter: when the
-    /// post-flush checkpoint equals the last-captured checkpoint, the
-    /// recheck short-circuits before the classifier RPCs (which would
-    /// re-fetch the WAL head and tail, then re-classify, and at best
-    /// drive a redundant capture of an identical projection). Set to
-    /// the snapshot's offset on a successful capture; never reset
-    /// across the activation lifetime.
-    /// </summary>
-    private long _lastCapturedCheckpointOffset = long.MinValue;
-
-    /// <summary>
     /// Byte-accurate footprint of the most recently persisted snapshot
     /// for this leaf, or <c>0</c> when no snapshot has been captured this
     /// activation. Mirrors the value written into
@@ -85,6 +72,73 @@ internal sealed partial class BPlusLeafGrain
     /// storage read on the persist hot path.
     /// </summary>
     private long _lastCapturedSnapshotBytes;
+
+    /// <summary>
+    /// Per-partition WAL offset that a durable leaf snapshot is known to
+    /// cover for this activation, or <see langword="null"/> when no snapshot
+    /// coverage is known. Slot <c>p</c> holds the highest offset a durable
+    /// snapshot covers for partition <c>p</c>; <c>-1</c> (or an absent slot)
+    /// means "no durable snapshot covers this partition", so the WAL prefix
+    /// is the only durable copy and must not be trimmed.
+    /// <para>
+    /// Set from a loaded <see cref="LeafSnapshotBlob"/> at activation
+    /// (rehydrate, both accept and decline paths - a loaded blob is durable
+    /// regardless of whether it repopulates the cache) and advanced after a
+    /// successful <see cref="CaptureSnapshotAsync"/>. Read by
+    /// <c>ResolveDurablePinForPartition</c> to gate the durable materialiser
+    /// pin at <c>min(checkpoint, coveredOffset)</c> so the WAL GC never
+    /// authorises trimming a checkpointed prefix that no snapshot covers.
+    /// </para>
+    /// </summary>
+    private long[]? _durableSnapshotOffsetsByPartition;
+
+    /// <summary>
+    /// Returns the highest WAL offset a durable snapshot is known to cover
+    /// for <paramref name="partition"/> this activation, or <c>-1</c> when no
+    /// durable snapshot covers it. Consumed by the coverage-gated durable-pin
+    /// resolution.
+    /// </summary>
+    internal long DurableSnapshotCoverageForPartition(int partition)
+    {
+        var arr = _durableSnapshotOffsetsByPartition;
+        if (arr is null || partition < 0 || partition >= arr.Length)
+            return -1L;
+        return arr[partition];
+    }
+
+    /// <summary>
+    /// Records that a durable snapshot covers each partition through the
+    /// offsets in <paramref name="blob"/>. A blob predating the
+    /// per-partition field (legacy) is treated as covering partition 0 only,
+    /// through its scalar <see cref="LeafSnapshotBlob.SnapshotOffset"/>.
+    /// Coverage only ever advances (per-partition max) so an out-of-order or
+    /// stale load can never lower a known covered offset.
+    /// </summary>
+    private void RecordDurableSnapshotCoverage(LeafSnapshotBlob blob)
+    {
+        var perPartition = blob.SnapshotOffsetsByPartition;
+        if (perPartition is null || perPartition.Length == 0)
+        {
+            // Legacy blob: only partition 0 coverage is known.
+            perPartition = new[] { blob.SnapshotOffset };
+        }
+
+        var current = _durableSnapshotOffsetsByPartition;
+        if (current is null || current.Length < perPartition.Length)
+        {
+            var grown = new long[perPartition.Length];
+            for (var i = 0; i < grown.Length; i++)
+            {
+                var existing = current is not null && i < current.Length ? current[i] : -1L;
+                grown[i] = Math.Max(existing, perPartition[i]);
+            }
+            _durableSnapshotOffsetsByPartition = grown;
+            return;
+        }
+
+        for (var i = 0; i < perPartition.Length; i++)
+            current[i] = Math.Max(current[i], perPartition[i]);
+    }
     /// <inheritdoc />
     public async Task CaptureSnapshotAsync()
     {
@@ -99,11 +153,26 @@ internal sealed partial class BPlusLeafGrain
 
         // The "nothing applied" sentinel (-1) means the leaf has not
         // yet absorbed any WAL entry into its projection; capturing
-        // an empty cache at offset -1 would create a snapshot the
-        // activation path is required to ignore (every checkpoint
-        // >= -1), so the work is pure overhead. Skip.
+        // an empty cache would create a snapshot the activation path
+        // is required to ignore, so the work is pure overhead. But the
+        // check MUST be per-partition: gating on partition 0's scalar
+        // checkpoint alone (the historical behaviour) starves every
+        // leaf whose live keys hash only to non-zero partitions -
+        // partition 0 stays at -1 forever while a non-zero partition
+        // holds committed, block-pinned, un-trimmable WAL, so coverage
+        // never advances and that partition's WAL grows unbounded
+        // (reopening the #1489/#1490 growth class). Proceed when ANY
+        // partition has absorbed at least one entry.
+        var resolved = await GetOptionsAsync();
+        var partitionCount = Math.Max(1, resolved.WalPartitions);
         var checkpoint = state.State.ProjectionCheckpointOffset;
-        if (checkpoint < 0)
+        var anyPartitionCheckpointed = checkpoint >= 0;
+        for (var p = 1; p < partitionCount && !anyPartitionCheckpointed; p++)
+        {
+            if (GetCurrentCheckpointForPartition(p) >= 0)
+                anyPartitionCheckpointed = true;
+        }
+        if (!anyPartitionCheckpointed)
         {
             return;
         }
@@ -133,6 +202,18 @@ internal sealed partial class BPlusLeafGrain
                 rows.Add(new LeafSnapshotRow(kv.Key, kv.Value, Cache.GetMergeMode(kv.Key)));
             }
 
+            // Per-partition coverage. Under the default WalPartitions = 8
+            // the scalar SnapshotOffset only describes partition 0, but the
+            // snapshot rows are the full entry cache and therefore cover the
+            // checkpointed prefix of EVERY partition. Stamp each partition's
+            // current checkpoint so the coverage-gated trim floor can
+            // authorise trimming each partition's prefix independently. Slot
+            // 0 mirrors the scalar SnapshotOffset for wire-compat.
+            var perPartitionOffsets = new long[partitionCount];
+            perPartitionOffsets[0] = checkpoint;
+            for (var p = 1; p < partitionCount; p++)
+                perPartitionOffsets[p] = GetCurrentCheckpointForPartition(p);
+
             var blob = new LeafSnapshotBlob
             {
                 SnapshotOffset = checkpoint,
@@ -143,13 +224,22 @@ internal sealed partial class BPlusLeafGrain
                 // use the cache's incrementally-maintained running total
                 // rather than re-walking every row at capture time.
                 SnapshotBytes = Cache.StateBytes,
+                SnapshotOffsetsByPartition = perPartitionOffsets,
             };
 
             var snapshotGrain = grainFactory.GetGrain<ILeafSnapshotStorageGrain>(
                 context.GrainId.GetGuidKey());
             await snapshotGrain.SaveAsync(blob, CancellationToken.None);
-            _lastCapturedCheckpointOffset = checkpoint;
             _lastCapturedSnapshotBytes = blob.SnapshotBytes;
+            // The blob is now durable, so the checkpointed prefix it covers
+            // is recoverable independently of the WAL. Advance the coverage
+            // view; the NEXT durable-pin flush will then authorise trimming
+            // up to min(checkpoint, coveredOffset) per partition. Advancing
+            // coverage only AFTER a confirmed SaveAsync (and the pin lagging
+            // by design - the cursor report precedes this capture in
+            // FlushPendingCheckpointAsync) keeps the pin conservative: it can
+            // never license a trim ahead of durable coverage.
+            RecordDurableSnapshotCoverage(blob);
         }
         finally
         {
@@ -223,56 +313,51 @@ internal sealed partial class BPlusLeafGrain
             return;
         }
 
-        // Cheap short-circuit: if the persisted checkpoint has not
-        // advanced since the most recent successful capture, the
-        // classifier would just re-derive an identical (or strictly
-        // weaker) decision and any follow-on capture would write a
-        // byte-identical blob. Skip the classifier RPCs and the
-        // potential redundant SaveAsync.
-        if (state.State.ProjectionCheckpointOffset == _lastCapturedCheckpointOffset)
+        // Per-partition "already covered" debounce. A capture is worth
+        // running only when SOME partition's current checkpoint has advanced
+        // beyond the offset a durable snapshot already covers for it. Gating
+        // on partition 0's scalar checkpoint alone (the historical behaviour)
+        // froze coverage whenever partition 0 idled while other partitions
+        // took writes past the threshold: the busy partition's durable pin
+        // stayed pinned at its stale covered offset (min(checkpoint, covered)
+        // == covered) and its retained WAL grew unbounded. Compare each
+        // partition's current checkpoint against its recorded durable coverage
+        // so no partition can be starved of capture, and so a projection that
+        // is already fully covered still short-circuits without a redundant
+        // byte-identical blob write.
+        var recheckPartitionCount = Math.Max(1, resolved.WalPartitions);
+        var anyPartitionNeedsCapture = false;
+        for (var p = 0; p < recheckPartitionCount; p++)
         {
-            return;
-        }
-
-        var detector = context.ActivationServices?.GetService<ILatticeFallOffLogDetector>();
-        if (detector is null)
-        {
-            return;
-        }
-
-        try
-        {
-            // Per-partition classification: under multi-partition WAL
-            // any partition raising SnapshotPending warrants a
-            // proactive whole-leaf capture (the capture is partition-
-            // independent - it serialises the full entry cache).
-            var partitionCount = Math.Max(1, resolved.WalPartitions);
-            for (var partition = 0; partition < partitionCount; partition++)
+            if (GetCurrentCheckpointForPartition(p) > DurableSnapshotCoverageForPartition(p))
             {
-                var decision = await detector.ClassifyAsync(
-                    state.State.TreeId,
-                    partition,
-                    GetPersistedCheckpointForPartition(partition),
-                    TimeSpan.Zero,
-                    resolved,
-                    CancellationToken.None);
-                if (decision == FallOffLogDecision.SnapshotPending)
-                {
-                    await TryCaptureSnapshotForAdvisoryAsync();
-                    return;
-                }
+                anyPartitionNeedsCapture = true;
+                break;
             }
         }
-        catch (Exception ex)
+        if (!anyPartitionNeedsCapture)
         {
-            var logger = context.ActivationServices?
-                .GetService<ILoggerFactory>()?
-                .CreateLogger<BPlusLeafGrain>();
-            logger?.LogWarning(
-                ex,
-                "Periodic snapshot recheck for leaf {GrainId} failed; will retry on next cadence.",
-                context.GrainId);
+            return;
         }
+
+        // Unconditional cadence capture (issue: cold-restart residual
+        // prefix loss). Historically this path re-ran the fall-off-log
+        // classifier and captured ONLY when it raised the SnapshotPending
+        // advisory. That gate is unsafe under the coverage-gated trim floor:
+        // the durable pin now BLOCKS trimming a checkpointed prefix that no
+        // snapshot covers, so the WAL tail stays low and the classifier's
+        // proximity heuristic (tail near checkpoint) never fires - the block
+        // would then be held forever and the WAL would grow unbounded,
+        // reintroducing the #1489/#1490 growth class. Capturing on the fixed
+        // checkpoint cadence instead guarantees every blocked prefix is
+        // covered by a durable snapshot within at most
+        // LeafSnapshotReClassifyEveryNCheckpoints checkpoints, after which
+        // the pin advances to min(checkpoint, coveredOffset) and the WAL GC
+        // trims the now-covered prefix. This is what keeps retention bounded
+        // (invariant b) while the coverage gate keeps it lossless
+        // (invariant a). The single-flight guard above and the SaveAsync
+        // best-effort try/catch bound the cost of a slow snapshot store.
+        await TryCaptureSnapshotForAdvisoryAsync();
     }
 
     /// <summary>
@@ -329,13 +414,38 @@ internal sealed partial class BPlusLeafGrain
             return false;
         }
 
+        // A loaded blob is durable regardless of whether it repopulates the
+        // cache below. Record its coverage NOW - on both the accept and the
+        // decline path - so the coverage-gated durable pin
+        // (ResolveDurablePinForPartition) knows which checkpointed prefixes a
+        // snapshot already protects and can authorise the WAL GC to trim
+        // them. Missing this on the decline path is exactly what would keep a
+        // block pin from ever lifting (unbounded WAL).
+        RecordDurableSnapshotCoverage(blob);
+
         var checkpoint = state.State.ProjectionCheckpointOffset;
         if (blob.SnapshotOffset <= checkpoint)
         {
-            // Snapshot is older than the persisted checkpoint; the
-            // leaf has already applied past the snapshot via the
-            // foreground path. Ignore the blob.
-            return false;
+            // The snapshot is at or behind the persisted partition-0
+            // checkpoint. Historically this always declined ("we already
+            // absorbed everything the snapshot contains via the WAL"). That
+            // is only true when the WAL prefix the snapshot covers is still
+            // readable. Under the coverage-gated trim floor the WAL GC trims a
+            // checkpointed prefix precisely BECAUSE a snapshot covers it, so
+            // in the cold-restart steady state the snapshot can be the ONLY
+            // durable copy of [0, checkpoint]. Probe the WAL tail per
+            // partition: if any partition's oldest readable offset has
+            // advanced past 0 the covered prefix has been trimmed and this
+            // snapshot MUST rehydrate it; if every tail is still 0 the WAL is
+            // intact and the snapshot is redundant, so decline to avoid a
+            // pointless cache replace (preserving issue #919's
+            // Activation_ignores_snapshot_at_equal_offset intent for the
+            // WAL-intact case). See the residual cold-restart prefix-loss
+            // finding.
+            if (!await AnyPartitionWalPrefixTrimmedAsync(cancellationToken))
+            {
+                return false;
+            }
         }
 
         // Bulk-load the canonical byte rows. We bypass StoreEntry
@@ -366,9 +476,32 @@ internal sealed partial class BPlusLeafGrain
             }
         }
 
-        // Advance the persisted checkpoint to match the snapshot.
-        // The WAL tail replay below picks up at (SnapshotOffset, head].
-        state.State.ProjectionCheckpointOffset = blob.SnapshotOffset;
+        // Advance the persisted checkpoint per partition to match the
+        // snapshot EXACTLY - including resetting a partition to -1 when the
+        // snapshot predates that partition's checkpoint. After Cache.Clear()
+        // above the in-memory cache holds ONLY the snapshot's rows, so every
+        // partition's checkpoint must equal what the reloaded cache actually
+        // contains for it. The old `if (perPartition[p] >= 0)` skip left an
+        // uncovered partition's checkpoint AHEAD of the reloaded cache: the
+        // tail replay then resumed at (checkpoint_p, head] and silently
+        // skipped [0, checkpoint_p], dropping every entry the snapshot did not
+        // carry. Resetting to -1 is loss-free precisely because the coverage
+        // gate never trims an uncovered partition: perPartition[p] == -1 on
+        // the latest blob means partition p was never snapshot-covered, so
+        // ResolveDurablePinForPartition held its block pin and its full WAL
+        // [0, checkpoint_p] survives - the from-zero replay rebuilds it
+        // intact. (Coverage is monotonic and we always load the latest blob,
+        // so an ever-covered partition would carry perPartition[p] >= 0.)
+        var perPartition = blob.SnapshotOffsetsByPartition;
+        if (perPartition is not null && perPartition.Length > 0)
+        {
+            for (var p = 0; p < perPartition.Length; p++)
+                SetPersistedCheckpointForPartition(p, perPartition[p]);
+        }
+        else
+        {
+            state.State.ProjectionCheckpointOffset = blob.SnapshotOffset;
+        }
 
         // Invalidate the digest so EnsureProjectionHashInitialized's
         // lazy backfill path recomputes the canonical full-walk hash
@@ -390,6 +523,45 @@ internal sealed partial class BPlusLeafGrain
         _lastCapturedSnapshotBytes = blob.SnapshotBytes;
 
         return true;
+    }
+
+    /// <summary>
+    /// Best-effort probe: has any WAL partition's oldest still-readable
+    /// offset advanced past <c>0</c> (i.e. has the WAL GC trimmed a prefix)?
+    /// Used by <see cref="TryRehydrateFromSnapshotAsync"/> to decide whether
+    /// a snapshot at or behind the persisted checkpoint is the sole durable
+    /// copy of a trimmed prefix (rehydrate) or redundant against an intact
+    /// WAL (decline). Mirrors the #945 fall-off guard's coordinator
+    /// resolution (<c>{treeId}/{partition}</c>, <c>GetTailOffsetAsync</c>).
+    /// A transient coordinator failure is swallowed and treated as "not
+    /// trimmed": the caller then declines the at/behind snapshot and the
+    /// normal WAL replay (plus the #945 guard) still protects against loss.
+    /// </summary>
+    private async Task<bool> AnyPartitionWalPrefixTrimmedAsync(CancellationToken cancellationToken)
+    {
+        var treeId = state.State.TreeId;
+        if (string.IsNullOrEmpty(treeId))
+            return false;
+
+        try
+        {
+            var resolved = await GetOptionsAsync();
+            var partitionCount = Math.Max(1, resolved.WalPartitions);
+            for (var partition = 0; partition < partitionCount; partition++)
+            {
+                var coordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
+                    $"{treeId}/{partition}");
+                var tail = await coordinator.GetTailOffsetAsync(cancellationToken);
+                if (tail > 0)
+                    return true;
+            }
+        }
+        catch
+        {
+            return false;
+        }
+
+        return false;
     }
 
     /// <inheritdoc />
