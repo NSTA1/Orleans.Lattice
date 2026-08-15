@@ -29,7 +29,7 @@ public sealed class RepoContextKeywordSearchTests
             Tags = tags ?? Array.Empty<string>(),
             Links = new Dictionary<string, IReadOnlyList<string>>(),
             Expires = false,
-            ExpiresAtTicks = 0,
+            ExpiresAtUtc = null,
             RemainingSeconds = null,
             HasExpired = false,
         };

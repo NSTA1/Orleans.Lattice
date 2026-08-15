@@ -19,7 +19,7 @@ public sealed class RepoContextSearchResultTests
             Tags = Array.Empty<string>(),
             Links = new Dictionary<string, IReadOnlyList<string>>(),
             Expires = false,
-            ExpiresAtTicks = 0,
+            ExpiresAtUtc = null,
             HasExpired = false,
         };
 

@@ -29,6 +29,12 @@ public sealed record RepoContextRememberResult
     /// <summary>Whether the entry carries a finite expiry after the write.</summary>
     public required bool Expires { get; init; }
 
-    /// <summary>The entry's absolute expiry in UTC <see cref="DateTime.Ticks"/>, or <c>0</c> when it never expires.</summary>
-    public required long ExpiresAtTicks { get; init; }
+    /// <summary>The entry's absolute expiry as an ISO-8601 UTC timestamp (round-trip "O" format), or <see langword="null"/> when it never expires.</summary>
+    public string? ExpiresAtUtc { get; init; }
+
+    /// <summary>The number of knowledge-linking edges the write added to the entry.</summary>
+    public int LinksAdded { get; init; }
+
+    /// <summary>The number of knowledge-linking edges the write removed from the entry.</summary>
+    public int LinksRemoved { get; init; }
 }

@@ -209,10 +209,12 @@ internal static class RepoContextToolHandlers
     /// <param name="author">An optional author identity.</param>
     /// <param name="provenance">An optional provenance descriptor.</param>
     /// <param name="tags">Optional tags to add to the entry.</param>
+    /// <param name="addLinks">Optional knowledge-linking edges to add (relation to target keys).</param>
+    /// <param name="removeLinks">Optional knowledge-linking edges to remove (relation to target keys).</param>
     /// <param name="ttlSeconds">An optional explicit time-to-live in seconds.</param>
     /// <param name="cancellationToken">Cancels the write.</param>
     /// <returns>The write outcome.</returns>
-    /// <exception cref="McpException">A required argument is missing, the kind is unknown, or the TTL is not positive.</exception>
+    /// <exception cref="McpException">A required argument is missing, the kind is unknown, the TTL is not positive, or a link target is malformed.</exception>
     public static Task<RepoContextRememberResult> RememberAsync(
         RequestContext<CallToolRequestParams> context,
         [Description("The repository identifier the entry belongs to.")]
@@ -233,6 +235,10 @@ internal static class RepoContextToolHandlers
         string? provenance = null,
         [Description("Optional tags to add to the entry's add-wins tag set.")]
         IReadOnlyList<string>? tags = null,
+        [Description("Optional knowledge-linking edges to add, as a map from relation name (for example 'broader', 'narrower', 'related', 'partOf') to the target repository-context keys the entry links to. Memory entries only; each target must be a well-formed key.")]
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? addLinks = null,
+        [Description("Optional knowledge-linking edges to remove, as a map from relation name to the target keys to unlink. Memory entries only.")]
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? removeLinks = null,
         [Description("An optional explicit time-to-live in seconds. When omitted, a newly created entry uses the repository's default memory TTL (if configured), otherwise it is durable.")]
         long? ttlSeconds = null,
         CancellationToken cancellationToken = default)
@@ -256,7 +262,8 @@ internal static class RepoContextToolHandlers
         }
 
         return ResolveStore(context).RememberAsync(
-            repoId, topic, id, memoryKind, title, body, author, provenance, tags, ttlSeconds, cancellationToken);
+            repoId, topic, id, memoryKind, title, body, author, provenance, tags,
+            addLinks, removeLinks, ttlSeconds, cancellationToken);
     }
 
     /// <summary>
@@ -268,9 +275,11 @@ internal static class RepoContextToolHandlers
     /// <param name="fields">The scalar field patches, keyed by field name.</param>
     /// <param name="addTags">Tags to add to the record.</param>
     /// <param name="removeTags">Tags to remove from the record.</param>
+    /// <param name="addLinks">Knowledge-linking edges to add (relation to target keys). Memory records only.</param>
+    /// <param name="removeLinks">Knowledge-linking edges to remove (relation to target keys). Memory records only.</param>
     /// <param name="cancellationToken">Cancels the read-merge-write.</param>
     /// <returns>The patch outcome.</returns>
-    /// <exception cref="McpException">The key is missing or malformed, no record exists, or a field is invalid.</exception>
+    /// <exception cref="McpException">The key is missing or malformed, no record exists, a field is invalid, or a link target is malformed.</exception>
     public static Task<RepoContextUpdateResult> UpdateAsync(
         RequestContext<CallToolRequestParams> context,
         [Description("The full repository-context key of the record to patch, for example 'repo/{repoId}/file/{path}'.")]
@@ -281,6 +290,10 @@ internal static class RepoContextToolHandlers
         IReadOnlyList<string>? addTags = null,
         [Description("Tags to remove from the record's add-wins set.")]
         IReadOnlyList<string>? removeTags = null,
+        [Description("Knowledge-linking edges to add, as a map from relation name (for example 'broader', 'narrower', 'related', 'partOf') to target repository-context keys. Memory records only; each target must be a well-formed key.")]
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? addLinks = null,
+        [Description("Knowledge-linking edges to remove, as a map from relation name to the target keys to unlink. Memory records only.")]
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? removeLinks = null,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(key))
@@ -288,7 +301,41 @@ internal static class RepoContextToolHandlers
             throw new McpException("The 'key' parameter is required and must be a non-empty repository-context key.");
         }
 
-        return ResolveStore(context).UpdateAsync(key, fields, addTags, removeTags, cancellationToken);
+        return ResolveStore(context).UpdateAsync(
+            key, fields, addTags, removeTags, addLinks, removeLinks, cancellationToken);
+    }
+
+    /// <summary>
+    /// Walks the knowledge-linking edges out of a memory entry and returns the
+    /// adjacent entries, hydrated from the store of record, as a bounded
+    /// breadth-first traversal.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the store.</param>
+    /// <param name="key">The seed key to traverse from.</param>
+    /// <param name="relation">An optional relation to restrict the walk to.</param>
+    /// <param name="depth">The maximum number of hops, clamped to [1, 3].</param>
+    /// <param name="maxNodes">The maximum number of neighbors to return, clamped to [1, 100].</param>
+    /// <param name="cancellationToken">Cancels the traversal.</param>
+    /// <returns>The reached neighbors and whether the walk was truncated.</returns>
+    /// <exception cref="McpException">The key is missing or malformed.</exception>
+    public static Task<RepoContextNeighborsResult> NeighborsAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The seed repository-context key to walk knowledge-linking edges from, for example 'repo/{repoId}/mem/{topic}/{id}'.")]
+        string key,
+        [Description("An optional relation name to restrict the walk to (for example 'broader' or 'related'); omit to follow every relation.")]
+        string? relation = null,
+        [Description("The maximum number of hops to traverse. Clamped to the range [1, 3]; defaults to 1 (immediate neighbors).")]
+        int depth = 1,
+        [Description("The maximum number of neighbor entries to return. Clamped to the range [1, 100]; defaults to 50.")]
+        int maxNodes = 50,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            throw new McpException("The 'key' parameter is required and must be a non-empty repository-context key.");
+        }
+
+        return ResolveStore(context).NeighborsAsync(key, relation, depth, maxNodes, cancellationToken);
     }
 
     /// <summary>

@@ -14,10 +14,11 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// </summary>
 /// <remarks>
 /// <para>
-/// In the default single-repository mode the group contributes six always-on
+/// In the default single-repository mode the group contributes seven always-on
 /// read-only tools (<c>repocontext_health</c>, <c>repocontext_recall</c>,
 /// <c>repocontext_scan</c>, <c>repocontext_list_topics</c>,
-/// <c>repocontext_search</c>, and <c>repocontext_index_status</c>) and - when the
+/// <c>repocontext_search</c>, <c>repocontext_index_status</c>, and
+/// <c>repocontext_neighbors</c>) and - when the
 /// host opts writes in - the mutating onboarding tool <c>repocontext_bootstrap</c>
 /// together with <c>repocontext_remember</c>, <c>repocontext_update</c>, and
 /// <c>repocontext_forget</c>. In workspace mode the read-only
@@ -57,7 +58,7 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
     /// tools replace the single-repository onboarding tool.</param>
     public RepoContextToolGroup(bool enableWrites = false, bool workspaceMode = false)
     {
-        var capacity = 6
+        var capacity = 7
             + (workspaceMode ? 1 : 0)
             + (enableWrites ? (workspaceMode ? 5 : 4) : 0);
         var tools = new List<McpServerTool>(capacity)
@@ -83,6 +84,7 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
             BuildListTopicsTool(),
             BuildSearchTool(),
             BuildIndexStatusTool(),
+            BuildNeighborsTool(),
         };
 
         if (workspaceMode)
@@ -143,7 +145,10 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                 Description =
                     "Walks an ordered range of repository-context entries under a scope (all files, packages, "
                     + "or symbols; all memory; or the memory under one topic) and returns one page at a time with "
-                    + "an opaque continuation token. Expired and tombstoned entries are never returned. Use the "
+                    + "an opaque continuation token. Expired and tombstoned entries are never returned. Because a "
+                    + "scan is a bulk read it does not evaluate each entry's time-to-live, so the expiry fields "
+                    + "('expires', 'hasExpired', 'expiresAtUtc', 'remainingSeconds') are reported as null ('not "
+                    + "evaluated'); call 'repocontext_recall' on a key for its authoritative expiry. Use the "
                     + "returned token as the next call's 'continuationToken' to page through the whole range. "
                     + "Read-only.",
                 ReadOnly = true,
@@ -200,6 +205,27 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     + "timing. Because onboarding runs in the background and survives a client disconnect or a "
                     + "host restart, poll this tool with the repository id to follow a long onboarding pass to "
                     + "completion. A repository that was never onboarded reports status 'none'. Read-only.",
+                ReadOnly = true,
+                Destructive = false,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildNeighborsTool()
+        => McpServerTool.Create(
+            RepoContextToolHandlers.NeighborsAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "repocontext_neighbors",
+                Title = "Walk knowledge-linking edges",
+                Description =
+                    "Walks the typed knowledge-linking edges out of a memory entry and returns the adjacent "
+                    + "entries, hydrated from the store of record, as a bounded breadth-first traversal. Follows "
+                    + "each entry's link relations (for example 'broader', 'narrower', 'related', 'partOf') up to "
+                    + "'depth' hops - optionally restricted to a single 'relation' - and stops once 'maxNodes' "
+                    + "distinct neighbors have been collected, reporting 'truncated' when the cap was hit. A seed "
+                    + "key with no live entry returns 'exists=false'; a dangling edge whose target has no live "
+                    + "value is still returned with its own 'exists=false' so it is observable. Use it to explore "
+                    + "the curated concept graph an agent has captured across sessions. Read-only.",
                 ReadOnly = true,
                 Destructive = false,
                 UseStructuredContent = true,

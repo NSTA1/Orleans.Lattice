@@ -59,18 +59,36 @@ public sealed record RepoContextEntryView
     /// </summary>
     public required IReadOnlyDictionary<string, IReadOnlyList<string>> Links { get; init; }
 
-    /// <summary>Whether the entry carries a finite expiry (a time-to-live was applied at write time).</summary>
-    public required bool Expires { get; init; }
+    /// <summary>
+    /// Whether the entry carries a finite expiry (a time-to-live was applied at
+    /// write time), or <see langword="null"/> when this read did not evaluate
+    /// expiry. A bulk read (<c>repocontext_scan</c> or a keyword search) does not
+    /// read each entry's expiry, so it reports <see langword="null"/> here; call
+    /// <c>repocontext_recall</c> for an authoritative value. Such a bulk read
+    /// still only yields live (non-expired, non-tombstoned) entries.
+    /// </summary>
+    public bool? Expires { get; init; }
 
-    /// <summary>The absolute expiry in UTC <see cref="DateTime.Ticks"/>, or <c>0</c> when the entry never expires.</summary>
-    public required long ExpiresAtTicks { get; init; }
+    /// <summary>
+    /// The absolute expiry as an ISO-8601 UTC timestamp (round-trip "O" format), or
+    /// <see langword="null"/> when the entry never expires or this read did not
+    /// evaluate expiry (see <see cref="Expires"/>). Emitted as a string rather
+    /// than raw <see cref="DateTime.Ticks"/> so it stays within the safe integer
+    /// range of JSON consumers.
+    /// </summary>
+    public string? ExpiresAtUtc { get; init; }
 
     /// <summary>
     /// The entry's remaining life in seconds at the instant it was read, clamped to
-    /// be non-negative, or <see langword="null"/> when the entry never expires.
+    /// be non-negative, or <see langword="null"/> when the entry never expires or
+    /// this read did not evaluate expiry (see <see cref="Expires"/>).
     /// </summary>
     public double? RemainingSeconds { get; init; }
 
-    /// <summary>Whether the entry carries an expiry that the read instant has reached or passed.</summary>
-    public required bool HasExpired { get; init; }
+    /// <summary>
+    /// Whether the entry carries an expiry that the read instant has reached or
+    /// passed, or <see langword="null"/> when this read did not evaluate expiry
+    /// (see <see cref="Expires"/>).
+    /// </summary>
+    public bool? HasExpired { get; init; }
 }

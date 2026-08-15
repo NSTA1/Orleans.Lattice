@@ -24,4 +24,10 @@ public sealed record RepoContextUpdateResult
 
     /// <summary>The number of tags the patch removed from the record's add-wins set.</summary>
     public required int TagsRemoved { get; init; }
+
+    /// <summary>The number of knowledge-linking edges the patch added to the record.</summary>
+    public int LinksAdded { get; init; }
+
+    /// <summary>The number of knowledge-linking edges the patch removed from the record.</summary>
+    public int LinksRemoved { get; init; }
 }

@@ -26,13 +26,20 @@ internal static class RepoContextEntryProjection
     /// <param name="key">The parsed key components.</param>
     /// <param name="value">The stored value bytes, or <see langword="null"/> when absent/expired.</param>
     /// <param name="serializer">The Orleans serializer used to decode the record. Must not be <see langword="null"/>.</param>
-    /// <param name="life">The entry's projected remaining life.</param>
+    /// <param name="life">
+    /// The entry's projected remaining life, or <see langword="null"/> when this
+    /// read did not evaluate expiry. A point read (recall) passes the real life;
+    /// a bulk enumeration (scan or keyword search) cannot cheaply read each
+    /// entry's expiry and passes <see langword="null"/>, which projects the
+    /// expiry fields as <see langword="null"/> ("not evaluated") rather than
+    /// falsely asserting a durable entry.
+    /// </param>
     /// <returns>The flattened entry view.</returns>
     internal static RepoContextEntryView Project(
         RepoContextKey key,
         byte[]? value,
         Serializer serializer,
-        RepoContextRemainingLife life)
+        RepoContextRemainingLife? life)
     {
         ArgumentNullException.ThrowIfNull(serializer);
 
@@ -77,10 +84,10 @@ internal static class RepoContextEntryProjection
             Fields = fields,
             Tags = tags,
             Links = links,
-            Expires = life.Expires,
-            ExpiresAtTicks = life.ExpiresAtTicks,
-            RemainingSeconds = life.Expires ? life.Remaining.TotalSeconds : null,
-            HasExpired = life.HasExpired,
+            Expires = life?.Expires,
+            ExpiresAtUtc = life?.ExpiresAtUtc?.ToString("O"),
+            RemainingSeconds = life is { Expires: true } evaluated ? evaluated.Remaining.TotalSeconds : null,
+            HasExpired = life?.HasExpired,
         };
     }
 

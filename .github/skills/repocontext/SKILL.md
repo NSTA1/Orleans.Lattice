@@ -26,10 +26,13 @@ to drift. It covers:
   safe (locate with `repocontext` but read the real file with `view`; fall back
   when the index is degraded or stale).
 - **Retrieval** - `search` (relevance, and how to read the `mode` field),
-  `scan` (ordered completeness over Files / Packages / Symbols / Memory), and
-  `recall` (one record by key), plus the `repo/{repoId}/...` key shapes.
+  `scan` (ordered completeness over Files / Packages / Symbols / Memory),
+  `recall` (one record by key), and `neighbors` (walk the knowledge-linking
+  edges out of a memory entry), plus the `repo/{repoId}/...` key shapes.
 - **Capture** - durable agent memory via `remember` / `update` / `forget`, the
-  small stable topic vocabulary, TTL and CRDT-merge semantics, and what is and
+  small stable topic vocabulary, knowledge-linking edges between entries
+  (`addLinks` / `removeLinks` with a small `broader` / `narrower` / `related` /
+  `partOf` relation vocabulary), TTL and CRDT-merge semantics, and what is and
   is not worth capturing.
 - **Safety and health** - write tools are destructive and fail-closed;
   `repocontext_health` and `repocontext_index_status`; and what a `keyword` /

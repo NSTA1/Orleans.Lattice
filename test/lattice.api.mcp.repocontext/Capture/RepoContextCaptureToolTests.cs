@@ -31,7 +31,7 @@ public sealed class RepoContextCaptureToolTests
         ["repocontext_remember", "repocontext_update", "repocontext_forget"];
 
     private static readonly string[] ReadToolNames =
-        ["repocontext_recall", "repocontext_scan", "repocontext_list_topics"];
+        ["repocontext_recall", "repocontext_scan", "repocontext_list_topics", "repocontext_neighbors"];
 
     private CancellationToken Ct => TestContext.CurrentContext.CancellationToken;
 
@@ -201,7 +201,19 @@ public sealed class RepoContextCaptureToolTests
         Assert.Multiple(() =>
         {
             Assert.That(created.GetProperty("expires").GetBoolean(), Is.True);
-            Assert.That(created.GetProperty("expiresAtTicks").GetInt64(), Is.GreaterThan(0));
+            // The expiry must serialize as a JSON string, not a raw DateTime.Ticks
+            // number: a tick count exceeds the safe integer range of JSON consumers
+            // and crashes a BigInt-parsing MCP client on read.
+            Assert.That(
+                created.GetProperty("expiresAtUtc").ValueKind,
+                Is.EqualTo(System.Text.Json.JsonValueKind.String));
+            Assert.That(
+                DateTimeOffset.TryParse(
+                    created.GetProperty("expiresAtUtc").GetString(),
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind,
+                    out _),
+                Is.True);
         });
     }
 
@@ -279,6 +291,129 @@ public sealed class RepoContextCaptureToolTests
         Assert.That(result.IsError, Is.True);
     }
 
+    // -- Knowledge linking (typed edges + neighbor walk) -----------------------
+
+    [Test]
+    public async Task Remember_writes_links_that_recall_projects()
+    {
+        await using var harness = await StartAsync(RepoContextMcpAuthPosture.Writer, Ct);
+        await using var client = await harness.ConnectAsync(Ct);
+        var tree = RepoContextKeys.Memory(RepoId, "glossary", "tree");
+        var wal = RepoContextKeys.Memory(RepoId, "glossary", "wal");
+
+        await CallAsync(client, "repocontext_remember", new()
+        {
+            ["repoId"] = RepoId,
+            ["topic"] = "glossary",
+            ["id"] = "wal",
+            ["title"] = "Write-ahead log",
+        });
+
+        var linked = await CallAsync(client, "repocontext_remember", new()
+        {
+            ["repoId"] = RepoId,
+            ["topic"] = "glossary",
+            ["id"] = "tree",
+            ["title"] = "B+ tree",
+            ["addLinks"] = new Dictionary<string, string[]> { ["related"] = new[] { wal } },
+        });
+        Assert.That(linked.GetProperty("linksAdded").GetInt32(), Is.EqualTo(1));
+
+        var recalled = await CallAsync(client, "repocontext_recall", new() { ["key"] = tree });
+        var related = recalled.GetProperty("links").GetProperty("related")
+            .EnumerateArray().Select(t => t.GetString()).ToArray();
+        Assert.That(related, Is.EqualTo(new[] { wal }));
+    }
+
+    [Test]
+    public async Task Update_rejects_a_malformed_link_target()
+    {
+        await using var harness = await StartAsync(RepoContextMcpAuthPosture.Writer, Ct);
+        await using var client = await harness.ConnectAsync(Ct);
+        var key = RepoContextKeys.Memory(RepoId, "glossary", "shard");
+
+        await CallAsync(client, "repocontext_remember", new()
+        {
+            ["repoId"] = RepoId,
+            ["topic"] = "glossary",
+            ["id"] = "shard",
+            ["title"] = "Shard",
+        });
+
+        var result = await client.CallToolAsync("repocontext_update", new Dictionary<string, object?>
+        {
+            ["key"] = key,
+            ["addLinks"] = new Dictionary<string, string[]> { ["broader"] = new[] { "not a valid key" } },
+        }, cancellationToken: Ct);
+
+        Assert.That(result.IsError, Is.True, "A malformed link target is a caller-input error.");
+    }
+
+    [Test]
+    public async Task Neighbors_walks_typed_edges_from_a_seed()
+    {
+        await using var harness = await StartAsync(RepoContextMcpAuthPosture.Writer, Ct);
+        await using var client = await harness.ConnectAsync(Ct);
+        var root = RepoContextKeys.Memory(RepoId, "concepts", "lattice");
+        var crdt = RepoContextKeys.Memory(RepoId, "concepts", "crdt");
+        var wal = RepoContextKeys.Memory(RepoId, "concepts", "wal");
+
+        foreach (var (id, title) in new[] { ("crdt", "CRDT"), ("wal", "WAL") })
+        {
+            await CallAsync(client, "repocontext_remember", new()
+            {
+                ["repoId"] = RepoId,
+                ["topic"] = "concepts",
+                ["id"] = id,
+                ["title"] = title,
+            });
+        }
+
+        await CallAsync(client, "repocontext_remember", new()
+        {
+            ["repoId"] = RepoId,
+            ["topic"] = "concepts",
+            ["id"] = "lattice",
+            ["title"] = "Orleans.Lattice",
+            ["addLinks"] = new Dictionary<string, string[]> { ["narrower"] = new[] { crdt, wal } },
+        });
+
+        var walk = await CallAsync(client, "repocontext_neighbors", new()
+        {
+            ["key"] = root,
+            ["relation"] = "narrower",
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(walk.GetProperty("exists").GetBoolean(), Is.True);
+            Assert.That(walk.GetProperty("truncated").GetBoolean(), Is.False);
+            var reached = walk.GetProperty("neighbors").EnumerateArray()
+                .Select(n => n.GetProperty("key").GetString())
+                .OrderBy(k => k, StringComparer.Ordinal)
+                .ToArray();
+            Assert.That(reached, Is.EqualTo(new[] { crdt, wal }.OrderBy(k => k, StringComparer.Ordinal).ToArray()));
+        });
+    }
+
+    [Test]
+    public async Task Neighbors_reports_a_missing_seed_as_absent()
+    {
+        await using var harness = await StartAsync(RepoContextMcpAuthPosture.Writer, Ct);
+        await using var client = await harness.ConnectAsync(Ct);
+
+        var walk = await CallAsync(client, "repocontext_neighbors", new()
+        {
+            ["key"] = RepoContextKeys.Memory(RepoId, "concepts", "absent"),
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(walk.GetProperty("exists").GetBoolean(), Is.False);
+            Assert.That(walk.GetProperty("neighbors").GetArrayLength(), Is.EqualTo(0));
+        });
+    }
+
     // -- Forget (hard delete + soft lapse) -------------------------------------
 
     [Test]
@@ -333,7 +468,13 @@ public sealed class RepoContextCaptureToolTests
         {
             Assert.That(lapsed.GetProperty("mode").GetString(), Is.EqualTo("lapse"));
             Assert.That(lapsed.GetProperty("existed").GetBoolean(), Is.True);
-            Assert.That(lapsed.GetProperty("expiresAtTicks").GetInt64(), Is.GreaterThan(0));
+            Assert.That(
+                DateTimeOffset.TryParse(
+                    lapsed.GetProperty("expiresAtUtc").GetString(),
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind,
+                    out _),
+                Is.True);
         });
 
         // The entry is still live immediately after the lapse, but now carries an expiry.

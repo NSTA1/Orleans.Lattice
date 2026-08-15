@@ -91,6 +91,113 @@ internal sealed class RepoContextStore
         return RepoContextEntryProjection.Project(parsed, versioned.Value, _serializer, life);
     }
 
+    /// <summary>The hard ceiling on knowledge-linking traversal depth.</summary>
+    private const int MaxNeighborDepth = 3;
+
+    /// <summary>The hard ceiling on the number of neighbor entries a traversal returns.</summary>
+    private const int MaxNeighborNodes = 100;
+
+    /// <summary>
+    /// Walks the knowledge-linking edges out of the memory entry (or any linkable
+    /// record) at <paramref name="key"/> and returns the adjacent entries, hydrated
+    /// from the store of record. A breadth-first walk follows each entry's
+    /// <c>Links</c> relations up to <paramref name="depth"/> hops, optionally
+    /// restricted to a single <paramref name="relation"/>, and stops once
+    /// <paramref name="maxNodes"/> distinct neighbors have been collected. It is the
+    /// read convenience behind <c>repocontext_neighbors</c>: an agent could walk the
+    /// same edges by recalling each target key itself, but this removes the round
+    /// trips for a bounded walk.
+    /// </summary>
+    /// <param name="key">The seed key to traverse from. Must be a well-formed key.</param>
+    /// <param name="relation">An optional relation to restrict the walk to; when <see langword="null"/> every relation is followed.</param>
+    /// <param name="depth">The maximum number of hops, clamped to [1, <see cref="MaxNeighborDepth"/>].</param>
+    /// <param name="maxNodes">The maximum number of neighbors to return, clamped to [1, <see cref="MaxNeighborNodes"/>].</param>
+    /// <param name="cancellationToken">Cancels the traversal.</param>
+    /// <returns>The seed key, whether it exists, the reached neighbors best-first by discovery order, and whether the walk was truncated by the node cap.</returns>
+    /// <exception cref="McpException">The seed key is malformed.</exception>
+    public async Task<RepoContextNeighborsResult> NeighborsAsync(
+        string key,
+        string? relation,
+        int depth,
+        int maxNodes,
+        CancellationToken cancellationToken)
+    {
+        _ = ParseKey(key);
+        var clampedDepth = Math.Clamp(depth <= 0 ? 1 : depth, 1, MaxNeighborDepth);
+        var clampedMax = Math.Clamp(maxNodes <= 0 ? MaxNeighborNodes : maxNodes, 1, MaxNeighborNodes);
+
+        var seed = await RecallAsync(key, cancellationToken).ConfigureAwait(false);
+        if (!seed.Exists)
+        {
+            return new RepoContextNeighborsResult
+            {
+                Key = key,
+                Exists = false,
+                Neighbors = Array.Empty<RepoContextEntryView>(),
+                Truncated = false,
+            };
+        }
+
+        var visited = new HashSet<string>(StringComparer.Ordinal) { key };
+        var neighbors = new List<RepoContextEntryView>();
+        var frontier = new Queue<(RepoContextEntryView View, int Depth)>();
+        frontier.Enqueue((seed, 0));
+        var truncated = false;
+
+        while (frontier.Count > 0 && !truncated)
+        {
+            var (view, currentDepth) = frontier.Dequeue();
+            if (currentDepth >= clampedDepth)
+            {
+                continue;
+            }
+
+            foreach (var (edgeRelation, targets) in view.Links)
+            {
+                if (relation is not null && !string.Equals(edgeRelation, relation, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                foreach (var target in targets)
+                {
+                    // Edges are validated on write, but a stored target could still be
+                    // unparseable after a schema change; skip it rather than fail the walk.
+                    if (!RepoContextKeys.TryParse(target, out _) || !visited.Add(target))
+                    {
+                        continue;
+                    }
+
+                    if (neighbors.Count >= clampedMax)
+                    {
+                        truncated = true;
+                        break;
+                    }
+
+                    var neighbor = await RecallAsync(target, cancellationToken).ConfigureAwait(false);
+                    neighbors.Add(neighbor);
+                    if (neighbor.Exists)
+                    {
+                        frontier.Enqueue((neighbor, currentDepth + 1));
+                    }
+                }
+
+                if (truncated)
+                {
+                    break;
+                }
+            }
+        }
+
+        return new RepoContextNeighborsResult
+        {
+            Key = key,
+            Exists = true,
+            Neighbors = neighbors,
+            Truncated = truncated,
+        };
+    }
+
     /// <summary>
     /// Returns one ordered, paged range of live entries under the scope's prefix.
     /// </summary>
@@ -129,8 +236,12 @@ internal sealed class RepoContextStore
                 continue;
             }
 
+            // A bulk scan enumerates key+value bytes only; it cannot cheaply read
+            // each entry's expiry, so it projects expiry as "not evaluated" (null)
+            // rather than falsely asserting a durable entry. The enumerator still
+            // yields only live (non-expired, non-tombstoned) entries.
             entries.Add(RepoContextEntryProjection.Project(
-                parsed, record.Value, _serializer, RepoContextRemainingLife.NeverExpires));
+                parsed, record.Value, _serializer, life: null));
         }
 
         return new RepoContextScanResult
@@ -205,10 +316,12 @@ internal sealed class RepoContextStore
     /// <param name="author">An optional last-writer-wins author.</param>
     /// <param name="provenance">An optional last-writer-wins provenance descriptor.</param>
     /// <param name="tags">Optional tags to add to the entry's set.</param>
+    /// <param name="addLinks">Optional knowledge-linking edges to add (relation to target keys).</param>
+    /// <param name="removeLinks">Optional knowledge-linking edges to remove (relation to target keys).</param>
     /// <param name="ttlSeconds">An explicit time-to-live in seconds, or <see langword="null"/>.</param>
     /// <param name="cancellationToken">Cancels the write.</param>
     /// <returns>The write outcome.</returns>
-    /// <exception cref="McpException">A required argument is empty, or the TTL is not positive.</exception>
+    /// <exception cref="McpException">A required argument is empty, the TTL is not positive, or a link target is malformed.</exception>
     public async Task<RepoContextRememberResult> RememberAsync(
         string repoId,
         string topic,
@@ -219,6 +332,8 @@ internal sealed class RepoContextStore
         string? author,
         string? provenance,
         IReadOnlyList<string>? tags,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? addLinks,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? removeLinks,
         long? ttlSeconds,
         CancellationToken cancellationToken)
     {
@@ -252,6 +367,7 @@ internal sealed class RepoContextStore
 
         var merged = created ? delta : MemoryRecord.Merge(delta, _serializer.Deserialize<MemoryRecord>(existing!));
         RepoContextRecordEditor.ApplyTags(merged.Tags, tags, removeTags: null);
+        var (linksAdded, linksRemoved) = RepoContextRecordEditor.ApplyLinks(merged.Links, addLinks, removeLinks);
         var bytes = _serializer.SerializeToArray(merged);
 
         var ttl = ResolveTtl(repoId, ttlSeconds, created);
@@ -273,7 +389,9 @@ internal sealed class RepoContextStore
             Id = entryId,
             Created = created,
             Expires = versioned.ExpiresAtTicks != 0L,
-            ExpiresAtTicks = versioned.ExpiresAtTicks,
+            ExpiresAtUtc = ToExpiryIso(versioned.ExpiresAtTicks),
+            LinksAdded = linksAdded,
+            LinksRemoved = linksRemoved,
         };
     }
 
@@ -285,14 +403,18 @@ internal sealed class RepoContextStore
     /// <param name="fields">The scalar field patches (field name to value), or <see langword="null"/>.</param>
     /// <param name="addTags">Tags to add, or <see langword="null"/>.</param>
     /// <param name="removeTags">Tags to remove, or <see langword="null"/>.</param>
+    /// <param name="addLinks">Knowledge-linking edges to add (relation to target keys), or <see langword="null"/>. Memory records only.</param>
+    /// <param name="removeLinks">Knowledge-linking edges to remove (relation to target keys), or <see langword="null"/>. Memory records only.</param>
     /// <param name="cancellationToken">Cancels the read-merge-write.</param>
     /// <returns>The patch outcome.</returns>
-    /// <exception cref="McpException">The key is malformed, no record exists at it, or a field is invalid.</exception>
+    /// <exception cref="McpException">The key is malformed, no record exists at it, a field is invalid, or a link target is malformed.</exception>
     public async Task<RepoContextUpdateResult> UpdateAsync(
         string key,
         IReadOnlyDictionary<string, string>? fields,
         IReadOnlyList<string>? addTags,
         IReadOnlyList<string>? removeTags,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? addLinks,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? removeLinks,
         CancellationToken cancellationToken)
     {
         var parsed = ParseKey(key);
@@ -307,7 +429,7 @@ internal sealed class RepoContextStore
 
         var clock = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
         var patch = RepoContextRecordEditor.Patch(
-            parsed, existing, fields, addTags, removeTags, clock, _serializer);
+            parsed, existing, fields, addTags, removeTags, addLinks, removeLinks, clock, _serializer);
 
         var remainingTtl = RemainingTtl(versioned.ExpiresAtTicks);
         if (remainingTtl is { } window)
@@ -326,6 +448,8 @@ internal sealed class RepoContextStore
             FieldsUpdated = patch.FieldsUpdated,
             TagsAdded = patch.TagsAdded,
             TagsRemoved = patch.TagsRemoved,
+            LinksAdded = patch.LinksAdded,
+            LinksRemoved = patch.LinksRemoved,
         };
     }
 
@@ -357,7 +481,7 @@ internal sealed class RepoContextStore
                 Key = key,
                 Mode = "delete",
                 Existed = deleted,
-                ExpiresAtTicks = 0L,
+                ExpiresAtUtc = null,
             };
         }
 
@@ -375,7 +499,7 @@ internal sealed class RepoContextStore
                 Key = key,
                 Mode = "lapse",
                 Existed = false,
-                ExpiresAtTicks = 0L,
+                ExpiresAtUtc = null,
             };
         }
 
@@ -386,7 +510,7 @@ internal sealed class RepoContextStore
             Key = key,
             Mode = "lapse",
             Existed = true,
-            ExpiresAtTicks = lapsed.ExpiresAtTicks,
+            ExpiresAtUtc = ToExpiryIso(lapsed.ExpiresAtTicks),
         };
     }
 
@@ -608,6 +732,18 @@ internal sealed class RepoContextStore
         var remaining = expiresAtTicks - _timeProvider.GetUtcNow().UtcDateTime.Ticks;
         return remaining > 0L ? TimeSpan.FromTicks(remaining) : null;
     }
+
+    /// <summary>
+    /// Formats an absolute UTC expiry tick as an ISO-8601 UTC timestamp (round-trip
+    /// "O" format), or <see langword="null"/> when the entry never expires. The
+    /// string form keeps the value within the safe integer range of JSON consumers
+    /// that would otherwise parse a raw <see cref="DateTime.Ticks"/> count as an
+    /// out-of-range BigInt.
+    /// </summary>
+    private static string? ToExpiryIso(long expiresAtTicks) =>
+        expiresAtTicks == 0L
+            ? null
+            : new DateTime(expiresAtTicks, DateTimeKind.Utc).ToString("O");
 
     private static (string TreeName, string Prefix) ResolveScope(
         string repoId, RepoContextScanScope scope, string? topic, string? pathPrefix)
