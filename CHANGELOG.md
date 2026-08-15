@@ -16,6 +16,14 @@ Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.
 
 Published releases, newest first. Each section is keyed by its publish date; within a date, packages advance on their own patch digits per [`docs/RELEASING.md`](docs/RELEASING.md).
 
+## [2026-08-15]
+
+A same-day per-package patch advances `Orleans.Lattice` to `9.0.2` (see Fixed); all other packages remain at their `9.0.x`/`9.0.0` versions.
+
+### Fixed
+
+- **The WAL GC no longer trims committed-but-not-yet-checkpointed data for a WAL partition whose protective block pin was overwritten on another partition's first checkpoint.** The durable-materialiser pin offset `-1` is overloaded: it means both "empty partition, safe to trim" and "partition holds committed WAL data never durably checkpointed, so it depends on the whole WAL from offset 0". On the first checkpoint of any partition the leaf upgraded *every* partition's pin to `(clock, checkpoint)`, replacing a data-bearing un-checkpointed partition's protective `(Zero, -1)` block pin with `(clock, -1)`; because the WAL GC skips `-1` offsets when computing the cross-partition offset floor, the global-min floor from the checkpointed partitions then authorised trimming that partition's live low-offset entries, silently losing them on the leaf's next cold rebuild (no restart needed, since foreground writes never checkpoint). Both pin-reporting branches now route through a leaf-side resolver that keeps the `(Zero, -1)` block pin when a partition is un-checkpointed and still holds live cache data (detected via a single `WalPartitionHash.Compute` pass, tombstones counting as live); genuinely empty partitions still report `(clock, -1)` so normal trim proceeds. Distinct from and complementary to the 9.0.1 offset-floor fix. (`Orleans.Lattice` 9.0.2, [#1489](https://github.com/NSTA1/Orleans.Lattice/issues/1489), [#1490](https://github.com/NSTA1/Orleans.Lattice/pull/1490))
+
 ## [2026-08-14]
 
 Coordinated family major release - every package in the family advances in lockstep to `9.0.0`. This major consolidates a whole-tree administration control plane, completes the convergent-type primitive catalogue, and re-gates the highest-blast-radius tree operations behind a dedicated capability. The full, per-entry detail of every change is preserved in the v8.x archive's `## Unreleased` section ([`CHANGELOG.old.v8.md`](CHANGELOG.old.v8.md)); the headlines follow.
