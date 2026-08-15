@@ -191,8 +191,25 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
-    public async Task Periodic_recheck_does_not_capture_when_advisory_does_not_fire()
+    public async Task Periodic_recheck_captures_on_Nth_persist_unconditionally_regardless_of_advisory()
     {
+        // REWRITTEN for the guaranteed-cadence snapshot capture (residual
+        // cold-restart prefix-loss fix, Part 2). This test was originally
+        // `Periodic_recheck_does_not_capture_when_advisory_does_not_fire`: it
+        // asserted the periodic recheck captures ONLY when the fall-off-log
+        // classifier raises the SnapshotPending advisory. That advisory gate
+        // is UNSAFE under the coverage-gated durable pin. The pin now BLOCKS
+        // trimming a checkpointed prefix until a snapshot covers it, so the WAL
+        // tail stays low and the classifier's proximity heuristic (tail near
+        // checkpoint) never fires - meaning the block would be held forever and
+        // the WAL would grow unbounded, reintroducing the #1489/#1490 growth
+        // class. The fix drives capture on the fixed checkpoint CADENCE,
+        // unconditionally, so every blocked prefix is covered within at most
+        // LeafSnapshotReClassifyEveryNCheckpoints checkpoints and the pin can
+        // then advance and the GC trim. The strengthened contract this test now
+        // pins: the Nth checkpoint persist captures regardless of the
+        // classifier decision (here TailReplay, which previously SUPPRESSED
+        // capture).
         const int threshold = 2;
         var (grain, _, snapshotStub, _) = CreateGrainForProactiveCapture(
             activationDecision: FallOffLogDecision.TailReplay,
@@ -202,11 +219,19 @@ public partial class BPlusLeafGrainTests
             periodicDecision: FallOffLogDecision.TailReplay);
 
         await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+
+        // Activation alone did not capture (activation-advisory path is
+        // unchanged: TailReplay does not latch a pending capture).
+        await snapshotStub.DidNotReceive().SaveAsync(
+            Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>());
+
         var projection = (ILeafProjection)grain;
         await projection.SetCheckpointOffsetAsync(1, CancellationToken.None);
         await projection.SetCheckpointOffsetAsync(2, CancellationToken.None);
 
-        await snapshotStub.DidNotReceive().SaveAsync(
+        // The 2nd persist hits the cadence threshold and captures even though
+        // the classifier decision is TailReplay - the advisory no longer gates.
+        await snapshotStub.Received().SaveAsync(
             Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>());
     }
 

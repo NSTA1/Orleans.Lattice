@@ -364,36 +364,65 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>
     /// Resolves the durable materialiser pin (frontier HLC and checkpoint
-    /// offset) this leaf reports for <paramref name="partition"/>.
+    /// offset) this leaf reports for <paramref name="partition"/>. This is the
+    /// coverage-gated trim floor: the pin may only authorise the shared-shard
+    /// WAL GC to trim as far as the checkpointed prefix is durably
+    /// recoverable, which for a data-bearing partition means as far as a
+    /// durable leaf snapshot actually covers.
     /// <para>
-    /// A partition that has never durably checkpointed (offset &lt; 0) but still
-    /// holds live data in this leaf's cache depends on the entire WAL from
-    /// offset 0. Reporting its live <paramref name="clock"/> as a
-    /// <c>(clock, -1)</c> frontier would advance the durable pin past the seeded
-    /// <see cref="HybridLogicalClock.Zero"/> block pin, and because
-    /// <c>ComputeMaterialiserOffsetFloorAsync</c> skips <c>-1</c> offsets the
-    /// shared-shard WAL GC's cross-partition offset floor (a global minimum over
-    /// the checkpointed partitions) would then authorise trimming this
-    /// partition's low-offset entries - losing the data on the leaf's next cold
-    /// rebuild (an idle deactivation then reactivation replays the WAL past its
-    /// checkpoint and the trimmed entries are simply gone). Such a partition
-    /// therefore retains the Zero block pin.
+    /// The decision folds two block regimes into one coherent rule so the
+    /// WAL GC never trims a prefix a cold rebuild could not replay:
     /// </para>
-    /// <para>
-    /// A genuinely empty partition (no cache key routes to it) has nothing to
-    /// protect, so it releases the block by reporting the real
-    /// <c>(clock, -1)</c> frontier exactly as before - keeping WAL trim live for
-    /// the ubiquitous empty-partition pins a multi-partition leaf produces.
-    /// </para>
+    /// <list type="bullet">
+    /// <item><description>
+    /// <b>Empty partition</b> (no cache key routes to it): nothing to lose, so
+    /// it releases any block and reports the real <c>(clock, checkpoint)</c>
+    /// frontier exactly as before - keeping WAL trim live for the ubiquitous
+    /// empty-partition pins a multi-partition leaf produces.
+    /// </description></item>
+    /// <item><description>
+    /// <b>Data-bearing, not durably recoverable</b>: the partition holds live
+    /// data whose only durable copy is the WAL prefix from offset 0, because
+    /// it either never durably checkpointed (offset <c>&lt; 0</c>, the
+    /// original #1490 un-checkpointed-data case) or checkpointed but has no
+    /// snapshot covering the checkpointed prefix (the residual cold-restart
+    /// prefix-loss case). Both retain the <see cref="HybridLogicalClock.Zero"/>
+    /// block pin so the whole prefix stays replayable.
+    /// </description></item>
+    /// <item><description>
+    /// <b>Data-bearing and snapshot-covered</b>: a durable snapshot covers the
+    /// checkpointed prefix, so the pin authorises trimming up to
+    /// <c>min(checkpoint, coveredOffset)</c> - never past what the snapshot
+    /// durably holds. The guaranteed cadence capture (see
+    /// <c>MaybeRunPeriodicSnapshotRecheckAsync</c>) ensures a block pin always
+    /// has a bounded path to coverage and trim, so retention stays bounded.
+    /// </description></item>
+    /// </list>
     /// </summary>
     private (HybridLogicalClock Frontier, long Offset) ResolveDurablePinForPartition(
         int partition, HybridLogicalClock clock, bool[] partitionsWithLiveData)
     {
         var checkpoint = GetCurrentCheckpointForPartition(partition);
-        if (checkpoint < 0 && partitionsWithLiveData[partition])
+
+        // Empty partition: nothing to protect - report the real frontier and
+        // let WAL trim proceed (preserves #1490's empty-partition narrowness).
+        if (!partitionsWithLiveData[partition])
         {
+            return (clock, checkpoint);
+        }
+
+        // Data-bearing partition. Authorise trimming only as far as the
+        // checkpointed prefix is durably recoverable from a snapshot.
+        var covered = DurableSnapshotCoverageForPartition(partition);
+        var safeOffset = Math.Min(checkpoint, covered);
+        if (safeOffset < 0)
+        {
+            // Never checkpointed (checkpoint < 0, #1490) OR checkpointed but
+            // uncovered (covered < 0, the residual): the whole WAL from offset
+            // 0 is the only durable copy - retain the Zero block pin.
             return (HybridLogicalClock.Zero, -1L);
         }
-        return (clock, checkpoint);
+
+        return (clock, safeOffset);
     }
 }

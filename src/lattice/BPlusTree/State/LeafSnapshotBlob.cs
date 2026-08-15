@@ -62,4 +62,27 @@ internal sealed class LeafSnapshotBlob
     /// converges to the correct value without forcing a re-capture.
     /// </summary>
     [Id(3)] public long SnapshotBytes { get; set; }
+
+    /// <summary>
+    /// Per-partition WAL offset the projection in <see cref="Rows"/> is
+    /// consistent through, under the same "applied through offset N
+    /// inclusive" semantics as the scalar <see cref="SnapshotOffset"/>.
+    /// Slot <c>p</c> holds the checkpoint offset partition <c>p</c> was
+    /// captured at; slot <c>0</c> mirrors <see cref="SnapshotOffset"/>.
+    /// A partition that had never checkpointed at capture time holds the
+    /// <c>-1</c> "nothing applied" sentinel.
+    /// <para>
+    /// This exists because under the default <c>WalPartitions = 8</c> the
+    /// scalar <see cref="SnapshotOffset"/> only describes partition 0; the
+    /// coverage-gated WAL-GC trim floor (see
+    /// <c>BPlusLeafGrain.ResolveDurablePinForPartition</c>) needs the
+    /// per-partition covered offset to authorise trimming each partition's
+    /// checkpointed prefix, and the rehydrate path needs it to advance each
+    /// partition's persisted checkpoint independently. Wire-compatible:
+    /// legacy blobs captured before this field decode to <see langword="null"/>,
+    /// which the readers treat as "only partition 0 is covered, at
+    /// <see cref="SnapshotOffset"/>".
+    /// </para>
+    /// </summary>
+    [Id(4)] public long[]? SnapshotOffsetsByPartition { get; set; }
 }

@@ -58,8 +58,22 @@ public partial class BPlusLeafGrainTests
         Assert.That(storage.TryReadAnyPin(treeId, out var pinned), Is.True,
             "A leaf whose first checkpoint occurs during graceful deactivation must still leave a durable floor "
             + "via the direct-store fallback, even though every pin-grain call is rejected mid-teardown.");
-        Assert.That(pinned, Is.EqualTo(PinHlc(55)),
-            "The durable floor must record the leaf's final checkpoint frontier.");
+        // REWRITTEN for the coverage-gated durable pin (residual cold-restart
+        // prefix-loss fix). The ORIGINAL #1464 assertion required the durable
+        // floor to record the leaf's REAL final frontier (PinHlc(55)). That
+        // encoded the unsafe trim-at-checkpoint-without-coverage mechanism:
+        // this rig wires NO snapshot store, so a real frontier pin would
+        // license trimming a checkpointed prefix that has no durable copy -
+        // the residual loss. The #1464 CONTRACT under test - that the reporter
+        // falls back to a direct durable-store write when the pin grain is
+        // rejected mid-teardown - is fully preserved (TryReadAnyPin is True:
+        // the fallback still lands a durable pin). Only the pinned VALUE
+        // changes: with no coverage it is a Zero BLOCK pin (retention barrier),
+        // which is the strengthened no-loss contract - the WAL prefix is
+        // retained rather than trimmed.
+        Assert.That(pinned, Is.EqualTo(HybridLogicalClock.Zero),
+            "With no snapshot covering the checkpointed prefix, the durable floor the fallback persists "
+            + "must be a Zero block pin that retains the WAL, not a real frontier that would trim it.");
     }
 
     private static (BPlusLeafGrain Leaf, string TreeId) CreateLeafWithRejectingPinStore(

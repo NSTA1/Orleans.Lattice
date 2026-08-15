@@ -218,6 +218,95 @@ public sealed class LeafSnapshotStorageGrainTests
             "the precomputed SnapshotBytes slot must be served directly so a deep read is constant-time");
     }
 
+    // ------------------------------------------------------------------
+    // HasCapturedPrefix per-partition-slot recognition (the residual
+    // cold-restart fix). The scalar SnapshotOffset only describes partition
+    // 0; under the default WalPartitions = 8 a leaf whose live keys hash
+    // entirely to a non-zero partition captures a blob whose scalar offset
+    // is the -1 "partition 0 idle" sentinel yet whose
+    // SnapshotOffsetsByPartition covers the busy partition. Keying the
+    // load/clear/size guards on the scalar alone would discard that blob on
+    // cold restart, and because the coverage-gated WAL GC has already
+    // trimmed the covered prefix, discarding the sole durable copy silently
+    // loses it. Legacy blobs (SnapshotOffsetsByPartition == null) must keep
+    // the scalar-only semantics exactly.
+    // ------------------------------------------------------------------
+
+    private static LeafSnapshotBlob PerPartitionBlob(long scalar, long[] perPartition, params (string key, byte[] value)[] rows)
+    {
+        var blob = NewBlob(scalar, rows);
+        blob.SnapshotOffsetsByPartition = perPartition;
+        return blob;
+    }
+
+    [Test]
+    public async Task LoadAsync_returns_blob_when_scalar_is_idle_sentinel_but_a_per_partition_slot_is_covered()
+    {
+        // The partition-0-idle capture shape: scalar SnapshotOffset is the -1
+        // sentinel, but a non-zero partition slot is covered at offset 3. The
+        // load guard MUST recognise this as captured, otherwise cold restart
+        // discards the sole durable copy of an already-trimmed prefix.
+        var perPartition = new long[] { -1, -1, -1, 3, -1, -1, -1, -1 };
+        var state = new FakePersistentState<LeafSnapshotBlob>
+        {
+            State = PerPartitionBlob(-1L, perPartition, ("busy", [7])),
+        };
+        var (grain, _) = CreateGrain(state);
+
+        var loaded = await grain.LoadAsync(CancellationToken.None);
+
+        Assert.That(loaded, Is.Not.Null,
+            "a blob covering any non-zero partition must load even when partition 0's scalar offset is the -1 sentinel");
+        Assert.That(loaded!.SnapshotOffsetsByPartition, Is.EqualTo(perPartition));
+    }
+
+    [Test]
+    public async Task LoadAsync_returns_null_when_scalar_and_all_per_partition_slots_are_negative()
+    {
+        // A per-partition array present but wholly uncovered is genuinely
+        // "nothing captured" and must remain a null load, exactly like the
+        // default-state scalar sentinel.
+        var state = new FakePersistentState<LeafSnapshotBlob>
+        {
+            State = PerPartitionBlob(-1L, new long[] { -1, -1, -1, -1 }),
+        };
+        var (grain, _) = CreateGrain(state);
+
+        Assert.That(await grain.LoadAsync(CancellationToken.None), Is.Null);
+    }
+
+    [Test]
+    public async Task ClearAsync_drops_a_per_partition_only_blob()
+    {
+        // A per-partition-only blob is captured content, so ClearAsync must
+        // reach the provider and drop it rather than short-circuit as a no-op.
+        var state = new FakePersistentState<LeafSnapshotBlob>
+        {
+            State = PerPartitionBlob(-1L, new long[] { -1, 2, -1, -1 }, ("k", [1])),
+        };
+        var (grain, _) = CreateGrain(state);
+
+        await grain.ClearAsync(CancellationToken.None);
+
+        Assert.That(await grain.LoadAsync(CancellationToken.None), Is.Null);
+    }
+
+    [Test]
+    public async Task GetSnapshotByteSizeAsync_computes_for_a_per_partition_only_blob()
+    {
+        // "busy" (4) + value [1,2,3] (3) = 7. A per-partition-only blob is
+        // captured, so the size guard must not short-circuit to zero.
+        var state = new FakePersistentState<LeafSnapshotBlob>
+        {
+            State = PerPartitionBlob(-1L, new long[] { -1, -1, 5, -1 }, ("busy", [1, 2, 3])),
+        };
+        var (grain, _) = CreateGrain(state);
+
+        var bytes = await grain.GetSnapshotByteSizeAsync(CancellationToken.None);
+
+        Assert.That(bytes, Is.EqualTo(7));
+    }
+
     [Test]
     public async Task GetSnapshotByteSizeAsync_returns_zero_after_clear()
     {

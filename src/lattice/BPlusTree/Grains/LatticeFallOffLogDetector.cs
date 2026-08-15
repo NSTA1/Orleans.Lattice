@@ -61,7 +61,26 @@ internal sealed class LatticeFallOffLogDetector(IServiceProvider services) : ILa
         var tail = await reader.GetTailOffsetAsync(treeId, shardIndex, cancellationToken).ConfigureAwait(false);
 
         // Trigger 1: WAL trimmed past the leaf''s persisted checkpoint.
-        var walTrimmedPastCheckpoint = checkpointOffset > 0 && tail > checkpointOffset;
+        //
+        // The loss boundary is tail > checkpoint + 1, NOT the looser
+        // tail > checkpoint. checkpoint is the last-APPLIED offset, so the
+        // first offset this leaf still needs is checkpoint + 1; the entry AT
+        // the checkpoint is already applied and harmless to lose. When
+        // tail == checkpoint + 1 only that already-applied entry was trimmed
+        // and the entire needed (checkpoint, head] window survives - a clean
+        // tail replay, never a rebuild. This is exactly the boundary the
+        // activation-time #945 loss guard uses
+        // (BPlusLeafGrain.Activation.cs: "tail > persistedCheckpoint + 1");
+        // the two must agree or the guard passes a shape the detector then
+        // rejects. The coverage-gated WAL GC makes this boundary reachable in
+        // steady state: the offset floor deliberately permits trimming the
+        // already-applied checkpoint entry once a snapshot covers the prefix
+        // (see LatticeWalGc.TrimShardAsync: only offsets strictly ABOVE the
+        // floor are protected), so a snapshot-covered leaf routinely settles at
+        // tail == checkpoint + 1 and must cold-restart via a clean tail replay,
+        // not throw LeafProjectionStaleException. Genuine loss (the first
+        // needed offset itself fell off) is still tail > checkpoint + 1.
+        var walTrimmedPastCheckpoint = checkpointOffset > 0 && tail > checkpointOffset + 1;
 
         // Trigger 2: replay budget exceeded.
         //

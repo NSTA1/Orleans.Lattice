@@ -16,6 +16,14 @@ Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.
 
 Published releases, newest first. Each section is keyed by its publish date; within a date, packages advance on their own patch digits per [`docs/RELEASING.md`](docs/RELEASING.md).
 
+## [2026-08-16]
+
+A per-package patch advances `Orleans.Lattice` to `9.0.3` (see Fixed); all other packages remain at their `9.0.x`/`9.0.0` versions.
+
+### Fixed
+
+- **The WAL GC no longer trims a leaf's durably-checkpointed prefix that no durable snapshot covers, closing a cold-restart data-loss path that survived 9.0.2.** A partition can durably advance its checkpoint to offset `N` while the leaf has persisted no snapshot materialising the rows in `[0, N]`; the durable-materialiser pin then reported `(clock, N)`, authorising the shared-shard WAL GC to trim `[0, N]`. Because the leaf's per-activation projection cache is not persisted (it is rebuilt from the WAL on every activation), the next cold rebuild replayed from offset 0 over the trimmed WAL and silently lost the checkpointed prefix - a bounded but permanent loss per cold cycle, distinct from the unbounded-growth class fixed in 9.0.2. The durable pin is now coverage-gated: it authorises trimming only up to `min(checkpoint, snapshotCoveredOffset)` and reports the `(Zero, -1)` block pin for a partition whose checkpointed prefix is not yet snapshot-covered, so the WAL prefix is retained until a covering snapshot exists. Cadence capture is made unconditional (it proceeds whenever any partition has a checkpoint `>= 0`) and records per-partition snapshot offsets (`LeafSnapshotBlob.SnapshotOffsetsByPartition`, wire-compatible - legacy blobs decode with a null array and fall back to the scalar-only path byte-for-byte) so a busy non-zero partition is covered even when partition 0 is idle. A companion `LeafSnapshotStorageGrain.HasCapturedPrefix` guard recognises such a per-partition-only blob (any slot `>= 0` is loadable) across the load, size, and clear seams, so the partition-0-idle scalar `-1` sentinel no longer discards the sole durable copy on cold restart. Verified end-to-end against the local RepoContext container under repeated abrupt `SIGKILL`/restart cycles. (`Orleans.Lattice` 9.0.3, [#1492](https://github.com/NSTA1/Orleans.Lattice/issues/1492))
+
 ## [2026-08-15]
 
 A same-day per-package patch advances `Orleans.Lattice` to `9.0.2` (see Fixed); all other packages remain at their `9.0.x`/`9.0.0` versions.
