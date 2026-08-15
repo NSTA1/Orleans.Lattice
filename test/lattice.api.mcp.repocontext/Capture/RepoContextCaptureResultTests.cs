@@ -26,7 +26,7 @@ public sealed class RepoContextCaptureResultTests
             Tags = new[] { "x" },
             Links = new Dictionary<string, IReadOnlyList<string>>(),
             Expires = false,
-            ExpiresAtTicks = 0,
+            ExpiresAtUtc = null,
             RemainingSeconds = null,
             HasExpired = false,
         };
@@ -85,13 +85,13 @@ public sealed class RepoContextCaptureResultTests
             Id = "1",
             Created = true,
             Expires = true,
-            ExpiresAtTicks = 42,
+            ExpiresAtUtc = "2027-01-01T00:00:00.0000000Z",
         };
 
         Assert.Multiple(() =>
         {
             Assert.That(result.Created, Is.True);
-            Assert.That(result.ExpiresAtTicks, Is.EqualTo(42));
+            Assert.That(result.ExpiresAtUtc, Is.EqualTo("2027-01-01T00:00:00.0000000Z"));
         });
     }
 
@@ -123,14 +123,14 @@ public sealed class RepoContextCaptureResultTests
             Key = "repo/acme/mem/notes/1",
             Mode = "lapse",
             Existed = true,
-            ExpiresAtTicks = 99,
+            ExpiresAtUtc = "2027-01-01T00:00:00.0000000Z",
         };
 
         Assert.Multiple(() =>
         {
             Assert.That(result.Mode, Is.EqualTo("lapse"));
             Assert.That(result.Existed, Is.True);
-            Assert.That(result.ExpiresAtTicks, Is.EqualTo(99));
+            Assert.That(result.ExpiresAtUtc, Is.EqualTo("2027-01-01T00:00:00.0000000Z"));
         });
     }
 }

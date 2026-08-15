@@ -78,7 +78,7 @@ internal static class RepoContextEntryProjection
             Tags = tags,
             Links = links,
             Expires = life.Expires,
-            ExpiresAtTicks = life.ExpiresAtTicks,
+            ExpiresAtUtc = life.ExpiresAtUtc?.ToString("O"),
             RemainingSeconds = life.Expires ? life.Remaining.TotalSeconds : null,
             HasExpired = life.HasExpired,
         };

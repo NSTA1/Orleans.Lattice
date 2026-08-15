@@ -62,8 +62,13 @@ public sealed record RepoContextEntryView
     /// <summary>Whether the entry carries a finite expiry (a time-to-live was applied at write time).</summary>
     public required bool Expires { get; init; }
 
-    /// <summary>The absolute expiry in UTC <see cref="DateTime.Ticks"/>, or <c>0</c> when the entry never expires.</summary>
-    public required long ExpiresAtTicks { get; init; }
+    /// <summary>
+    /// The absolute expiry as an ISO-8601 UTC timestamp (round-trip "O" format), or
+    /// <see langword="null"/> when the entry never expires. Emitted as a string
+    /// rather than raw <see cref="DateTime.Ticks"/> so it stays within the safe
+    /// integer range of JSON consumers.
+    /// </summary>
+    public string? ExpiresAtUtc { get; init; }
 
     /// <summary>
     /// The entry's remaining life in seconds at the instant it was read, clamped to

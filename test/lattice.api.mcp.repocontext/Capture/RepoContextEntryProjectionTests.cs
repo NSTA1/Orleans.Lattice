@@ -125,7 +125,7 @@ public sealed class RepoContextEntryProjectionTests
             Assert.That(view.Expires, Is.True);
             Assert.That(view.HasExpired, Is.False);
             Assert.That(view.RemainingSeconds, Is.EqualTo(300).Within(1));
-            Assert.That(view.ExpiresAtTicks, Is.EqualTo(now.AddMinutes(5).Ticks));
+            Assert.That(view.ExpiresAtUtc, Is.EqualTo(now.AddMinutes(5).ToString("O")));
         });
     }
 }

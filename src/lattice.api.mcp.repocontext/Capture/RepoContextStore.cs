@@ -385,7 +385,7 @@ internal sealed class RepoContextStore
             Id = entryId,
             Created = created,
             Expires = versioned.ExpiresAtTicks != 0L,
-            ExpiresAtTicks = versioned.ExpiresAtTicks,
+            ExpiresAtUtc = ToExpiryIso(versioned.ExpiresAtTicks),
             LinksAdded = linksAdded,
             LinksRemoved = linksRemoved,
         };
@@ -477,7 +477,7 @@ internal sealed class RepoContextStore
                 Key = key,
                 Mode = "delete",
                 Existed = deleted,
-                ExpiresAtTicks = 0L,
+                ExpiresAtUtc = null,
             };
         }
 
@@ -495,7 +495,7 @@ internal sealed class RepoContextStore
                 Key = key,
                 Mode = "lapse",
                 Existed = false,
-                ExpiresAtTicks = 0L,
+                ExpiresAtUtc = null,
             };
         }
 
@@ -506,7 +506,7 @@ internal sealed class RepoContextStore
             Key = key,
             Mode = "lapse",
             Existed = true,
-            ExpiresAtTicks = lapsed.ExpiresAtTicks,
+            ExpiresAtUtc = ToExpiryIso(lapsed.ExpiresAtTicks),
         };
     }
 
@@ -728,6 +728,18 @@ internal sealed class RepoContextStore
         var remaining = expiresAtTicks - _timeProvider.GetUtcNow().UtcDateTime.Ticks;
         return remaining > 0L ? TimeSpan.FromTicks(remaining) : null;
     }
+
+    /// <summary>
+    /// Formats an absolute UTC expiry tick as an ISO-8601 UTC timestamp (round-trip
+    /// "O" format), or <see langword="null"/> when the entry never expires. The
+    /// string form keeps the value within the safe integer range of JSON consumers
+    /// that would otherwise parse a raw <see cref="DateTime.Ticks"/> count as an
+    /// out-of-range BigInt.
+    /// </summary>
+    private static string? ToExpiryIso(long expiresAtTicks) =>
+        expiresAtTicks == 0L
+            ? null
+            : new DateTime(expiresAtTicks, DateTimeKind.Utc).ToString("O");
 
     private static (string TreeName, string Prefix) ResolveScope(
         string repoId, RepoContextScanScope scope, string? topic, string? pathPrefix)

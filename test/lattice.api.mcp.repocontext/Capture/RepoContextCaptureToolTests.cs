@@ -201,7 +201,19 @@ public sealed class RepoContextCaptureToolTests
         Assert.Multiple(() =>
         {
             Assert.That(created.GetProperty("expires").GetBoolean(), Is.True);
-            Assert.That(created.GetProperty("expiresAtTicks").GetInt64(), Is.GreaterThan(0));
+            // The expiry must serialize as a JSON string, not a raw DateTime.Ticks
+            // number: a tick count exceeds the safe integer range of JSON consumers
+            // and crashes a BigInt-parsing MCP client on read.
+            Assert.That(
+                created.GetProperty("expiresAtUtc").ValueKind,
+                Is.EqualTo(System.Text.Json.JsonValueKind.String));
+            Assert.That(
+                DateTimeOffset.TryParse(
+                    created.GetProperty("expiresAtUtc").GetString(),
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind,
+                    out _),
+                Is.True);
         });
     }
 
@@ -456,7 +468,13 @@ public sealed class RepoContextCaptureToolTests
         {
             Assert.That(lapsed.GetProperty("mode").GetString(), Is.EqualTo("lapse"));
             Assert.That(lapsed.GetProperty("existed").GetBoolean(), Is.True);
-            Assert.That(lapsed.GetProperty("expiresAtTicks").GetInt64(), Is.GreaterThan(0));
+            Assert.That(
+                DateTimeOffset.TryParse(
+                    lapsed.GetProperty("expiresAtUtc").GetString(),
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind,
+                    out _),
+                Is.True);
         });
 
         // The entry is still live immediately after the lapse, but now carries an expiry.

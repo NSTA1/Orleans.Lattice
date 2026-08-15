@@ -27,8 +27,9 @@ public sealed record RepoContextForgetResult
     public required bool Existed { get; init; }
 
     /// <summary>
-    /// For a soft lapse, the absolute UTC expiry the entry was re-written with, in
-    /// <see cref="DateTime.Ticks"/>; <c>0</c> for a hard delete or an absent key.
+    /// For a soft lapse, the absolute UTC expiry the entry was re-written with, as
+    /// an ISO-8601 UTC timestamp (round-trip "O" format); <see langword="null"/> for
+    /// a hard delete or an absent key.
     /// </summary>
-    public required long ExpiresAtTicks { get; init; }
+    public string? ExpiresAtUtc { get; init; }
 }
