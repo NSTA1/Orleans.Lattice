@@ -236,8 +236,12 @@ internal sealed class RepoContextStore
                 continue;
             }
 
+            // A bulk scan enumerates key+value bytes only; it cannot cheaply read
+            // each entry's expiry, so it projects expiry as "not evaluated" (null)
+            // rather than falsely asserting a durable entry. The enumerator still
+            // yields only live (non-expired, non-tombstoned) entries.
             entries.Add(RepoContextEntryProjection.Project(
-                parsed, record.Value, _serializer, RepoContextRemainingLife.NeverExpires));
+                parsed, record.Value, _serializer, life: null));
         }
 
         return new RepoContextScanResult

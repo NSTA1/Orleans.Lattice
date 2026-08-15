@@ -145,7 +145,10 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                 Description =
                     "Walks an ordered range of repository-context entries under a scope (all files, packages, "
                     + "or symbols; all memory; or the memory under one topic) and returns one page at a time with "
-                    + "an opaque continuation token. Expired and tombstoned entries are never returned. Use the "
+                    + "an opaque continuation token. Expired and tombstoned entries are never returned. Because a "
+                    + "scan is a bulk read it does not evaluate each entry's time-to-live, so the expiry fields "
+                    + "('expires', 'hasExpired', 'expiresAtUtc', 'remainingSeconds') are reported as null ('not "
+                    + "evaluated'); call 'repocontext_recall' on a key for its authoritative expiry. Use the "
                     + "returned token as the next call's 'continuationToken' to page through the whole range. "
                     + "Read-only.",
                 ReadOnly = true,

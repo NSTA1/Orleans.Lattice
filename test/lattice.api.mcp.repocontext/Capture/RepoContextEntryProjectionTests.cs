@@ -128,4 +128,25 @@ public sealed class RepoContextEntryProjectionTests
             Assert.That(view.ExpiresAtUtc, Is.EqualTo(now.AddMinutes(5).ToString("O")));
         });
     }
+
+    [Test]
+    public void Project_with_unevaluated_life_reports_null_expiry_fields()
+    {
+        var key = Parse(RepoContextKeys.Memory("acme", "notes", "1"));
+        var record = new MemoryRecord { RepoId = "acme", Topic = "notes", Id = "1" };
+
+        // A bulk scan / keyword search passes life: null - expiry was not evaluated,
+        // so every expiry field is null ("not evaluated"), not a false durable claim.
+        var view = RepoContextEntryProjection.Project(
+            key, Serializer.SerializeToArray(record), Serializer, life: null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(view.Exists, Is.True);
+            Assert.That(view.Expires, Is.Null);
+            Assert.That(view.HasExpired, Is.Null);
+            Assert.That(view.RemainingSeconds, Is.Null);
+            Assert.That(view.ExpiresAtUtc, Is.Null);
+        });
+    }
 }

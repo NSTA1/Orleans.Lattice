@@ -259,8 +259,11 @@ internal sealed class RepoContextSearchService
                     continue;
                 }
 
+                // Keyword search is a bulk enumeration like scan: it cannot cheaply
+                // read each entry's expiry, so it projects expiry as "not evaluated"
+                // (null) rather than falsely asserting a durable entry.
                 entries.Add(RepoContextEntryProjection.Project(
-                    parsed, record.Value, _serializer, RepoContextRemainingLife.NeverExpires));
+                    parsed, record.Value, _serializer, life: null));
 
                 if (entries.Count >= MaxKeywordScan)
                 {

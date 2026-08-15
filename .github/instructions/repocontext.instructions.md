@@ -144,6 +144,12 @@ mid-task.
   `pageSize` is 1-500 (default 100).
 - Reach for `scan` when you want **completeness** (audit every file under a path,
   list every memory entry in a topic) rather than relevance.
+- **Expiry is not evaluated by a bulk read.** A `scan` (and a degraded
+  `keyword`-mode `search`) enumerates key+value only, so its expiry fields
+  (`expires`, `hasExpired`, `expiresAtUtc`, `remainingSeconds`) come back `null`
+  ("not evaluated") - this is by design, not a durable claim. A scan still yields
+  only live (non-expired, non-tombstoned) entries. To read an entry's authoritative
+  TTL, `recall` it (or use a `semantic` `search`, whose hits are hydrated per-key).
 
 ### recall - one record by key
 
