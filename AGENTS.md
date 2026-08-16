@@ -29,24 +29,23 @@ mid-ingest, or absent - never sight-unseen. Canonical rules live in
 - `src/lattice/` - the core `Orleans.Lattice` library. Grains are `internal`
   under `BPlusTree/Grains/`; persistent state POCOs under `BPlusTree/State/`;
   CRDT and low-level types under `Primitives/`.
-- `src/lattice.replication/`, `src/lattice.replication.grpc/` - cross-cluster
-  replication engine and its gRPC transport.
-- `src/lattice.api.abstractions/` - the shared, public API contract (the facade
-  service interfaces and their request/response DTOs) that the facade impls, the
-  gRPC bindings, and the MCP server all reference.
-- `src/lattice.api.state/`, `src/lattice.api.state.grpc/` - read-only cluster
-  state API and its gRPC binding.
-- `src/lattice.storage.azuretable/` - durable Azure Table WAL backend.
-- `src/lattice.schema/` - opt-in schema enforcement and versioning companion.
-- `src/lattice.dashboards/` - bundled Grafana dashboards.
-- `src/lattice.explorer/` - the state-explorer app; its libraries ship as
-  published packages (`Orleans.Lattice.Explorer.*`).
+- The optional add-on packages (replication, the API facade family and their
+  gRPC bindings, auth and membership, backup, storage backends, schema, scaling,
+  caching, dashboards, and the Explorer) are **not enumerated here** to avoid
+  drift. The authoritative, maintained inventory - one row per shipped package,
+  with a one-line description and a docs link - is the **Child Packages** table
+  in [README.md](README.md#child-packages). Consult it to learn what a package
+  is; it is updated whenever a package is added.
 - `test/<package>/` - the NUnit test project for each `src/<package>/`.
-- `docs/<package>/` - Markdown documentation for each package.
+- `docs/<package>/` - Markdown documentation for each package (plus a docs-only
+  `docs/crdt/` conceptual topic with no `src/`/`test/` counterpart).
 - `samples/`, `benchmark/` - runnable samples and the throughput rig.
 
 Convention: package `foo` has code at `src/foo/`, tests at `test/foo/`, docs at
-`docs/foo/`. CI discovers packages from this layout automatically.
+`docs/foo/`. CI discovers packages from this layout automatically. Note the
+Child Packages table lists some packages at finer (per-assembly) granularity
+than `src/` - for example the single `src/lattice.explorer/` directory ships
+several `Orleans.Lattice.Explorer.*` assemblies.
 
 ## Build and test
 

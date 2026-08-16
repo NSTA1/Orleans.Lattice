@@ -46,6 +46,14 @@ test/lattice/              → NUnit test project (Orleans.Lattice.Tests)
   Fakes/                   → Test doubles (e.g. FakePersistentState<T>)  
   Primitives/              → Unit tests for primitive types  
 
+The tree above covers the core `src/lattice/` library and its test project only.
+For the full set of optional add-on packages (replication, the API facade family
+and gRPC bindings, auth/membership, backup, storage backends, schema, scaling,
+caching, dashboards, and the Explorer), see the **Child Packages** table in
+[README.md](../README.md#child-packages) - the authoritative, maintained
+inventory. Convention: package `foo` lives at `src/foo/`, `test/foo/`, and
+`docs/foo/` (`docs/crdt/` is a docs-only conceptual topic with no code).
+
 ## Target Framework & Language
 
 - **.NET 10** (`net10.0`), C# with nullable reference types and implicit usings enabled.
@@ -123,7 +131,12 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
 
 ## Branching and Pull Requests
 
-- **Use the NSTA1 account and the GitHub CLI (`gh`) for every GitHub interaction on this repo.** Do not use the app's `create_issue` / `create_pull_request` / `update_pull_request` tools or the GitHub MCP write tools: they authenticate as the EMU account (`staudtnathan_microsoft` via `GH_TOKEN`), so they act under the wrong identity and PR creation 403s trying to fork. The pattern is `$env:GH_TOKEN = (gh auth token --user NSTA1)` before the `gh` command (`gh issue create`, `gh pr create`, `gh issue edit --body-file`, ...). Do not use the git credential helper.
+- **Use the GitHub CLI (`gh`) for every GitHub interaction on this repo, authenticated as your own intended GitHub account.** Do not use the app's `create_issue` / `create_pull_request` / `update_pull_request` tools or the GitHub MCP write tools: they authenticate with the ambient `GH_TOKEN` / app identity, which is often not the account you intend to act as, so they can act under the wrong identity and PR creation may 403 (for example when the ambient identity must fork). Which account to use for this repo is a per-user preference and belongs in your personal/global configuration, not in this shared file. Select it explicitly for each command: put the intended account's token on the command, e.g. `$env:GH_TOKEN = (gh auth token --user <your-account>)` before the `gh` command (`gh issue create`, `gh pr create`, `gh issue edit --body-file`, ...). Do not use the git credential helper. **`git push` needs the same care and `GH_TOKEN` alone does not fix it** - a plain `git push` over HTTPS ignores `GH_TOKEN` and falls through to the credential helper, which can authenticate as an unintended identity and 403 ("Permission ... denied to ..."). Push with your intended account's token embedded in the URL and the helper disabled for that one command:
+  ```powershell
+  $tok = (gh auth token --user <your-account>)
+  git -c credential.helper= push -u "https://x-access-token:$tok@github.com/<owner>/<repo>.git" <branch>
+  ```
+  Do **not** try `-c http.<url>.extraheader="AUTHORIZATION: bearer $tok"` - it collides with the helper's own header and fails with "unable to get password from user". The tokenized-URL form above is the one that works.
 - Do not add author attribution or `Co-authored-by` / `Copilot-Session` trailers to commits.
 - Branch names use a type prefix (`feat/`, `docs/`, `fix/`, ...), never a username.
 - When a PR fully implements an issue, add a `Closes XXX` line to the PR body.
