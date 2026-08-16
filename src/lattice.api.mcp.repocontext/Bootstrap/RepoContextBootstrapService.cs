@@ -57,6 +57,7 @@ internal sealed class RepoContextBootstrapService
     private readonly Serializer<RepoNode> _repoNodeSerializer;
     private readonly IRepoContextVectorIngestor _vectorIngestor;
     private readonly RepoContextSymbolReconciler _symbolReconciler;
+    private readonly RepoContextContentReconciler _contentReconciler;
     private readonly ISymbolExtractor _symbolExtractor;
     private readonly RepoContextWorkspaceGuard _workspaceGuard;
     private readonly TimeProvider _timeProvider;
@@ -86,6 +87,10 @@ internal sealed class RepoContextBootstrapService
     /// <param name="symbolReconciler">The per-symbol structural reconciler that
     /// extracts and prunes symbol records for changed and removed files. Must not be
     /// <see langword="null"/>.</param>
+    /// <param name="contentReconciler">The per-file content-projection reconciler that
+    /// projects and prunes searchable body text for changed and removed files, so the
+    /// keyword search path can rank over file content. Must not be
+    /// <see langword="null"/>.</param>
     /// <param name="symbolExtractor">The language-dispatching symbol extractor, used
     /// to decide which content-unchanged files are symbol back-fill candidates. Must
     /// not be <see langword="null"/>.</param>
@@ -106,6 +111,7 @@ internal sealed class RepoContextBootstrapService
         Serializer<RepoNode> repoNodeSerializer,
         IRepoContextVectorIngestor vectorIngestor,
         RepoContextSymbolReconciler symbolReconciler,
+        RepoContextContentReconciler contentReconciler,
         ISymbolExtractor symbolExtractor,
         RepoContextWorkspaceGuard workspaceGuard,
         TimeProvider timeProvider,
@@ -117,6 +123,7 @@ internal sealed class RepoContextBootstrapService
         ArgumentNullException.ThrowIfNull(repoNodeSerializer);
         ArgumentNullException.ThrowIfNull(vectorIngestor);
         ArgumentNullException.ThrowIfNull(symbolReconciler);
+        ArgumentNullException.ThrowIfNull(contentReconciler);
         ArgumentNullException.ThrowIfNull(symbolExtractor);
         ArgumentNullException.ThrowIfNull(workspaceGuard);
         ArgumentNullException.ThrowIfNull(timeProvider);
@@ -128,6 +135,7 @@ internal sealed class RepoContextBootstrapService
         _repoNodeSerializer = repoNodeSerializer;
         _vectorIngestor = vectorIngestor;
         _symbolReconciler = symbolReconciler;
+        _contentReconciler = contentReconciler;
         _symbolExtractor = symbolExtractor;
         _workspaceGuard = workspaceGuard;
         _timeProvider = timeProvider;
@@ -298,13 +306,25 @@ internal sealed class RepoContextBootstrapService
             // the metadata-changed loop.
             var symbolBackfill = SelectSymbolBackfill(plan.Unchanged, storedMeta);
 
-            if (!plan.IsNoOp || symbolBackfill.Count > 0)
+            // The content back-fill self-heal: content-unchanged text files whose node
+            // was never content-processed (it predates the content projection, or a
+            // prior run stopped before the content phase). Projecting them lets a
+            // repository indexed before this feature converge on a complete content
+            // projection without re-reading the files that already have one. Like the
+            // symbol back-fill it is drawn from the pure-unchanged set only, and it is a
+            // different file set (content covers every text file; symbols only supported
+            // languages), so the two lists are unified before the file nodes are written
+            // to guarantee each node is rewritten exactly once.
+            var contentBackfill = SelectContentBackfill(plan.Unchanged, storedMeta);
+            var backfill = UnifyBackfill(symbolBackfill, contentBackfill);
+
+            if (!plan.IsNoOp || backfill.Count > 0)
             {
                 phase = RepoIndexPhase.Applying;
-                var chunksTotal = ComputeChunkCount(plan, symbolBackfill.Count);
+                var chunksTotal = ComputeChunkCount(plan, backfill.Count);
                 _logger.LogInformation(
-                    "Repo {RepoId}: plan - {Added} added, {Updated} updated, {MetadataChanged} anchor-refreshed, {Removed} removed, {Unchanged} unchanged, {Backfill} symbol back-fill; {Chunks} chunk(s) to commit.",
-                    repoId, plan.Added.Count, plan.Updated.Count, plan.MetadataChanged.Count, plan.RemovedPaths.Count, plan.Unchanged.Count, symbolBackfill.Count, chunksTotal);
+                    "Repo {RepoId}: plan - {Added} added, {Updated} updated, {MetadataChanged} anchor-refreshed, {Removed} removed, {Unchanged} unchanged, {SymbolBackfill} symbol back-fill, {ContentBackfill} content back-fill; {Chunks} chunk(s) to commit.",
+                    repoId, plan.Added.Count, plan.Updated.Count, plan.MetadataChanged.Count, plan.RemovedPaths.Count, plan.Unchanged.Count, symbolBackfill.Count, contentBackfill.Count, chunksTotal);
                 await ReportAsync(
                     progress,
                     new RepoIndexProgressUpdate
@@ -342,16 +362,32 @@ internal sealed class RepoContextBootstrapService
                 symbolsCaptured = symbolResult.SymbolsCaptured;
                 changedSymbolKeys = symbolResult.ChangedSymbolKeys;
                 prunedSymbolKeys = symbolResult.PrunedSymbolKeys;
-                var declaredEncoded = BuildDeclaredEncoded(
-                    symbolResult.DeclaredByPath, plan.MetadataChanged, storedMeta);
 
-                // Exactly the files the reconcile extracted (supported and readable)
-                // are stamped as symbol-processed, so a file it could not read is not
-                // marked and is retried on the next pass.
-                var processedPaths = new HashSet<string>(symbolResult.DeclaredByPath.Keys, StringComparer.Ordinal);
+                // Reconcile the per-file content projection in the same pass, before the
+                // file nodes are rewritten. It is decoupled from embeddings on purpose -
+                // its whole point is to give the keyword/degraded search path file
+                // content to rank over - and resumable for the same reason as symbols: a
+                // node written without the content marker is re-selected by the content
+                // back-fill next pass.
+                var contentResult = await _contentReconciler.ReconcileAsync(
+                    repoId, repoRoot, plan.Added, plan.Updated, plan.RemovedPaths, contentBackfill, cancellationToken)
+                    .ConfigureAwait(false);
+                await ReportAsync(
+                    progress,
+                    new RepoIndexProgressUpdate { FilesContentProjected = contentResult.ContentCaptured },
+                    cancellationToken).ConfigureAwait(false);
+
+                var declaredEncoded = BuildDeclaredEncoded(
+                    symbolResult.DeclaredByPath, plan.MetadataChanged, backfill, storedMeta);
+
+                // Exactly the files each reconcile processed (supported and readable)
+                // are stamped with the matching processed marker, so a file it could not
+                // read is not marked and is retried on the next pass.
+                var symbolProcessedPaths = new HashSet<string>(symbolResult.DeclaredByPath.Keys, StringComparer.Ordinal);
+                var contentProcessedPaths = contentResult.ProcessedPaths;
 
                 await ApplyPlanAsync(
-                    tree, repoId, plan, symbolBackfill, declaredEncoded, processedPaths, storedMeta, progress, cancellationToken)
+                    tree, repoId, plan, backfill, declaredEncoded, symbolProcessedPaths, contentProcessedPaths, storedMeta, progress, cancellationToken)
                     .ConfigureAwait(false);
             }
             else
@@ -495,15 +531,75 @@ internal sealed class RepoContextBootstrapService
     }
 
     /// <summary>
-    /// The number of atomic write chunks <see cref="ApplyPlanAsync"/> will commit
+    /// Selects the content back-fill candidates from the content-unchanged set: text
+    /// files whose stored node was never stamped as content-processed. These are
+    /// files indexed before the content projection existed (or a file a prior run
+    /// stopped short of processing), so projecting them lets a pre-existing index
+    /// converge on a complete content projection without re-reading the files that
+    /// already have one. Every walked file is a text file (the walk excludes binary),
+    /// so - unlike the symbol back-fill - there is no language filter. Drawing only
+    /// from the pure-unchanged set guarantees a back-filled node is written exactly
+    /// once per pass.
+    /// </summary>
+    /// <param name="unchanged">The content-unchanged files from the plan.</param>
+    /// <param name="storedMeta">The stored per-file metadata, consulted for the
+    /// content-processed marker.</param>
+    /// <returns>The unchanged files eligible for content back-fill.</returns>
+    private static List<RepoFileEntry> SelectContentBackfill(
+        IReadOnlyList<RepoFileEntry> unchanged, IReadOnlyDictionary<string, StoredFileMeta> storedMeta)
+    {
+        var backfill = new List<RepoFileEntry>();
+        foreach (var entry in unchanged)
+        {
+            if (!StoredContentProcessed(storedMeta, entry.RelativePath))
+            {
+                backfill.Add(entry);
+            }
+        }
+
+        return backfill;
+    }
+
+    /// <summary>
+    /// Unifies the symbol and content back-fill lists into a single distinct set of
+    /// files (by repository-relative path), so a file selected by both back-fills has
+    /// its node rewritten exactly once with both markers resolved. Order is preserved
+    /// from the symbol list first, then the content-only additions.
+    /// </summary>
+    /// <param name="symbolBackfill">The symbol back-fill candidates.</param>
+    /// <param name="contentBackfill">The content back-fill candidates.</param>
+    /// <returns>The distinct union of the two lists.</returns>
+    private static List<RepoFileEntry> UnifyBackfill(
+        IReadOnlyList<RepoFileEntry> symbolBackfill, IReadOnlyList<RepoFileEntry> contentBackfill)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var unified = new List<RepoFileEntry>(symbolBackfill.Count + contentBackfill.Count);
+        foreach (var entry in symbolBackfill)
+        {
+            if (seen.Add(entry.RelativePath))
+            {
+                unified.Add(entry);
+            }
+        }
+
+        foreach (var entry in contentBackfill)
+        {
+            if (seen.Add(entry.RelativePath))
+            {
+                unified.Add(entry);
+            }
+        }
+
+        return unified;
+    }
     /// for a plan: one per <see cref="WriteChunkSize"/> upserts, where the upserts
     /// are the repository root marker plus every added, updated, and
-    /// anchor-refreshed file, plus every symbol back-fill file whose node is being
+    /// anchor-refreshed file, plus every back-fill file whose node is being
     /// rewritten. Deletes ride with the first chunk (the marker guarantees at least
     /// one), so they add no chunk of their own.
     /// </summary>
     /// <param name="plan">The reconciliation plan.</param>
-    /// <param name="backfillCount">The number of symbol back-fill files whose nodes
+    /// <param name="backfillCount">The number of back-fill files whose nodes
     /// are being rewritten in this pass.</param>
     /// <returns>The total chunk count.</returns>
     private static int ComputeChunkCount(RepoContextBootstrapPlan plan, int backfillCount)
@@ -630,7 +726,8 @@ internal sealed class RepoContextBootstrapService
                     RepoContextValues.ReadInt64(node.SizeBytes) ?? -1,
                     RepoContextValues.ReadHlcWallTicks(node.Digest) ?? 0,
                     DeclaredSymbolNames.Decode(RepoContextValues.ReadString(node.DeclaredSymbols)),
-                    RepoContextValues.ReadString(node.SymbolsProcessed) is not null);
+                    RepoContextValues.ReadString(node.SymbolsProcessed) is not null,
+                    RepoContextValues.ReadString(node.ContentProcessed) is not null);
             }
         }
 
@@ -641,9 +738,10 @@ internal sealed class RepoContextBootstrapService
         ILattice tree,
         string repoId,
         RepoContextBootstrapPlan plan,
-        IReadOnlyList<RepoFileEntry> symbolBackfill,
+        IReadOnlyList<RepoFileEntry> backfill,
         IReadOnlyDictionary<string, string> declaredEncoded,
-        IReadOnlySet<string> processedPaths,
+        IReadOnlySet<string> symbolProcessedPaths,
+        IReadOnlySet<string> contentProcessedPaths,
         IReadOnlyDictionary<string, StoredFileMeta> storedMeta,
         IRepoIndexProgressSink? progress,
         CancellationToken cancellationToken)
@@ -652,7 +750,7 @@ internal sealed class RepoContextBootstrapService
         var clock = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
 
         var upserts = new List<KeyValuePair<string, byte[]>>(
-            plan.Added.Count + plan.Updated.Count + plan.MetadataChanged.Count + symbolBackfill.Count + 1);
+            plan.Added.Count + plan.Updated.Count + plan.MetadataChanged.Count + backfill.Count + 1);
 
         // Refresh the repository root marker in the same pass that mutates its
         // files. The live file count is the full scanned set, so list_repos can
@@ -666,7 +764,9 @@ internal sealed class RepoContextBootstrapService
             clock = HybridLogicalClock.Tick(clock);
             upserts.Add(new KeyValuePair<string, byte[]>(
                 RepoContextKeys.File(repoId, entry.RelativePath),
-                BuildFileNode(repoId, entry, DeclaredFor(declaredEncoded, entry), processedPaths.Contains(entry.RelativePath), ingestToken, clock)));
+                BuildFileNode(repoId, entry, DeclaredFor(declaredEncoded, entry),
+                    symbolProcessedPaths.Contains(entry.RelativePath),
+                    contentProcessedPaths.Contains(entry.RelativePath), ingestToken, clock)));
         }
 
         foreach (var entry in plan.Updated)
@@ -674,38 +774,48 @@ internal sealed class RepoContextBootstrapService
             clock = HybridLogicalClock.Tick(clock);
             upserts.Add(new KeyValuePair<string, byte[]>(
                 RepoContextKeys.File(repoId, entry.RelativePath),
-                BuildFileNode(repoId, entry, DeclaredFor(declaredEncoded, entry), processedPaths.Contains(entry.RelativePath), ingestToken, clock)));
+                BuildFileNode(repoId, entry, DeclaredFor(declaredEncoded, entry),
+                    symbolProcessedPaths.Contains(entry.RelativePath),
+                    contentProcessedPaths.Contains(entry.RelativePath), ingestToken, clock)));
         }
 
         // Metadata-changed files are content-identical, so rewriting their node with
         // a fresh clock advances the ingest anchor (the register order key) without
-        // changing any value - the fast-path skips them on the next reconcile. The
-        // reconcile did not re-extract them, so their prior symbol-processed marker
-        // is carried forward from the stored node rather than recomputed.
+        // changing any value - the fast-path skips them on the next reconcile. Neither
+        // reconcile re-processed them, so their prior symbol- and content-processed
+        // markers are carried forward from the stored node rather than recomputed.
         foreach (var entry in plan.MetadataChanged)
         {
             clock = HybridLogicalClock.Tick(clock);
             upserts.Add(new KeyValuePair<string, byte[]>(
                 RepoContextKeys.File(repoId, entry.RelativePath),
-                BuildFileNode(repoId, entry, DeclaredFor(declaredEncoded, entry), StoredProcessed(storedMeta, entry.RelativePath), ingestToken, clock)));
+                BuildFileNode(repoId, entry, DeclaredFor(declaredEncoded, entry),
+                    StoredProcessed(storedMeta, entry.RelativePath),
+                    StoredContentProcessed(storedMeta, entry.RelativePath), ingestToken, clock)));
         }
 
-        // Symbol back-fill files are content-unchanged, so rewriting their node adds
-        // the freshly extracted declared set and stamps the processed marker without
-        // otherwise altering the file. Only files the reconcile actually extracted
-        // (present in processedPaths) are written, so a file it could not read is
-        // left unmarked and retried on the next pass.
-        foreach (var entry in symbolBackfill)
+        // Back-fill files are content-unchanged, so rewriting their node stamps
+        // whichever processed markers this pass earned (freshly, from the symbol or
+        // content reconcile) or carries forward from the stored node, without
+        // otherwise altering the file. A node is written only when at least one
+        // reconcile actually processed the file this pass; a file neither reconcile
+        // could read is left untouched and retried on the next pass.
+        foreach (var entry in backfill)
         {
-            if (!processedPaths.Contains(entry.RelativePath))
+            var path = entry.RelativePath;
+            var symbolNow = symbolProcessedPaths.Contains(path);
+            var contentNow = contentProcessedPaths.Contains(path);
+            if (!symbolNow && !contentNow)
             {
                 continue;
             }
 
             clock = HybridLogicalClock.Tick(clock);
             upserts.Add(new KeyValuePair<string, byte[]>(
-                RepoContextKeys.File(repoId, entry.RelativePath),
-                BuildFileNode(repoId, entry, DeclaredFor(declaredEncoded, entry), symbolsProcessed: true, ingestToken, clock)));
+                RepoContextKeys.File(repoId, path),
+                BuildFileNode(repoId, entry, DeclaredFor(declaredEncoded, entry),
+                    symbolNow || StoredProcessed(storedMeta, path),
+                    contentNow || StoredContentProcessed(storedMeta, path), ingestToken, clock)));
         }
 
         var deletes = new List<string>(plan.RemovedPaths.Count);
@@ -748,7 +858,7 @@ internal sealed class RepoContextBootstrapService
     }
 
     private byte[] BuildFileNode(
-        string repoId, RepoFileEntry entry, string? declaredEncoded, bool symbolsProcessed, string ingestToken, HybridLogicalClock clock)
+        string repoId, RepoFileEntry entry, string? declaredEncoded, bool symbolsProcessed, bool contentProcessed, string ingestToken, HybridLogicalClock clock)
     {
         var node = new FileNode
         {
@@ -773,16 +883,34 @@ internal sealed class RepoContextBootstrapService
             node = node with { SymbolsProcessed = RepoContextValues.Lww("1", clock) };
         }
 
+        // Stamp the content-processed presence marker, which keeps the content
+        // back-fill scan from re-selecting a file whose body text was already
+        // projected into the content tree.
+        if (contentProcessed)
+        {
+            node = node with { ContentProcessed = RepoContextValues.Lww("1", clock) };
+        }
+
         return _fileNodeSerializer.SerializeToArray(node);
     }
 
     /// <summary>
     /// Whether the stored node for <paramref name="path"/> already carries the
     /// symbol-processed marker, used to carry that marker forward when an
-    /// anchor-refreshed file's node is rewritten without re-extraction.
+    /// anchor-refreshed or content-only back-filled file's node is rewritten without
+    /// symbol re-extraction.
     /// </summary>
     private static bool StoredProcessed(IReadOnlyDictionary<string, StoredFileMeta> storedMeta, string path) =>
         storedMeta.TryGetValue(path, out var meta) && meta.SymbolsProcessed;
+
+    /// <summary>
+    /// Whether the stored node for <paramref name="path"/> already carries the
+    /// content-processed marker, used to carry that marker forward when an
+    /// anchor-refreshed or symbol-only back-filled file's node is rewritten without
+    /// content re-projection.
+    /// </summary>
+    private static bool StoredContentProcessed(IReadOnlyDictionary<string, StoredFileMeta> storedMeta, string path) =>
+        storedMeta.TryGetValue(path, out var meta) && meta.ContentProcessed;
 
     /// <summary>
     /// Resolves the encoded declared-symbol string a file node should carry, or
@@ -795,13 +923,16 @@ internal sealed class RepoContextBootstrapService
     /// <summary>
     /// Builds the per-file encoded declared-symbol projection to stamp onto the
     /// rewritten file nodes: the freshly extracted set for every added and updated
-    /// file, plus the carried-forward stored set for each content-unchanged
-    /// metadata-refreshed file (whose node is rewritten but which the reconcile did
-    /// not re-extract, so its prior declared set must be preserved).
+    /// file, plus the carried-forward stored set for each content-unchanged file
+    /// whose node is rewritten but which the symbol reconcile did not re-extract - the
+    /// anchor-refreshed metadata-changed files and the back-fill files (a content-only
+    /// back-fill file has no fresh symbol extraction, so its prior declared set must
+    /// be preserved rather than blanked by the full-node overwrite).
     /// </summary>
     private static Dictionary<string, string> BuildDeclaredEncoded(
         IReadOnlyDictionary<string, IReadOnlyList<string>> declaredByPath,
         IReadOnlyList<RepoFileEntry> metadataChanged,
+        IReadOnlyList<RepoFileEntry> backfill,
         IReadOnlyDictionary<string, StoredFileMeta> storedMeta)
     {
         var map = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -810,7 +941,23 @@ internal sealed class RepoContextBootstrapService
             map[path] = DeclaredSymbolNames.Encode(names);
         }
 
-        foreach (var entry in metadataChanged)
+        CarryForwardStoredDeclared(map, metadataChanged, storedMeta);
+        CarryForwardStoredDeclared(map, backfill, storedMeta);
+        return map;
+    }
+
+    /// <summary>
+    /// Carries forward the stored declared-symbol set for each file in
+    /// <paramref name="entries"/> that this pass did not freshly extract, so a
+    /// full-node overwrite of a file whose symbols were not re-read preserves its
+    /// prior declared set instead of blanking it.
+    /// </summary>
+    private static void CarryForwardStoredDeclared(
+        Dictionary<string, string> map,
+        IReadOnlyList<RepoFileEntry> entries,
+        IReadOnlyDictionary<string, StoredFileMeta> storedMeta)
+    {
+        foreach (var entry in entries)
         {
             if (map.ContainsKey(entry.RelativePath))
             {
@@ -822,8 +969,6 @@ internal sealed class RepoContextBootstrapService
                 map[entry.RelativePath] = DeclaredSymbolNames.Encode(meta.DeclaredSymbols);
             }
         }
-
-        return map;
     }
 
     private byte[] BuildRepoNode(string repoId, int liveFileCount, string ingestToken, HybridLogicalClock clock)

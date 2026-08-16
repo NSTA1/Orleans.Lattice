@@ -80,6 +80,21 @@ internal sealed record FileNode
     public BoundedRegister SymbolsProcessed { get; init; } = new();
 
     /// <summary>
+    /// Last-writer-wins marker recording that this file has been content-processed -
+    /// its searchable body text was projected into the
+    /// <see cref="RepoContextTrees.Content"/> tree (even when the file is empty). It
+    /// is the presence signal the background content back-fill probes: a text file
+    /// whose node predates the content projection (or was written by a run that never
+    /// reached the content phase) carries no marker, so the reconciler projects it
+    /// without re-processing files that already have one. Decoupled from
+    /// <see cref="SymbolsProcessed"/> because content is projected for every text
+    /// file while symbols are extracted only for supported languages, so the two
+    /// back-fills cover different file sets.
+    /// </summary>
+    [Id(10)]
+    public BoundedRegister ContentProcessed { get; init; } = new();
+
+    /// <summary>
     /// Lattice merge of two replicas of the same file node. Identity is preserved
     /// from <paramref name="left"/>; every mutable field is folded through its
     /// CRDT join, so the result is commutative, associative, and idempotent.
@@ -102,6 +117,7 @@ internal sealed record FileNode
             ContentBlobs = GSet.Merge(left.ContentBlobs, right.ContentBlobs),
             DeclaredSymbols = BoundedRegister.Merge(left.DeclaredSymbols, right.DeclaredSymbols),
             SymbolsProcessed = BoundedRegister.Merge(left.SymbolsProcessed, right.SymbolsProcessed),
+            ContentProcessed = BoundedRegister.Merge(left.ContentProcessed, right.ContentProcessed),
         };
     }
 }

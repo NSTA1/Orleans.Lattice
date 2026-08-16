@@ -21,6 +21,7 @@ public sealed class RepoContextCompactionTests
                 RepoContextHostTrees.VectorMetadata,
                 RepoContextHostTrees.Structural,
                 RepoContextHostTrees.Symbol,
+                RepoContextHostTrees.Content,
             }));
 
     [Test]
@@ -35,6 +36,7 @@ public sealed class RepoContextCompactionTests
             {
                 RepoContextHostTrees.Structural,
                 RepoContextHostTrees.Symbol,
+                RepoContextHostTrees.Content,
                 RepoContextHostTrees.Memory,
                 RepoContextHostTrees.VectorMembership,
                 RepoContextHostTrees.VectorMetadata,
@@ -47,6 +49,7 @@ public sealed class RepoContextCompactionTests
         {
             Assert.That(RepoContextHostTrees.Structural, Is.EqualTo("repo-context-structural"));
             Assert.That(RepoContextHostTrees.Symbol, Is.EqualTo("repo-context-symbol"));
+            Assert.That(RepoContextHostTrees.Content, Is.EqualTo("repo-context-content"));
             Assert.That(RepoContextHostTrees.Memory, Is.EqualTo("repo-context-memory"));
             Assert.That(RepoContextHostTrees.VectorMembership, Is.EqualTo("repo-context-vector-membership"));
             Assert.That(RepoContextHostTrees.VectorMetadata, Is.EqualTo("repo-context-vector-metadata"));

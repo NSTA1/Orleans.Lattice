@@ -46,6 +46,7 @@ internal static class RepoContextRecordMerge
             RepoContextRecordKind.File => Fold<FileNode>(serializer, existing, incoming, FileNode.Merge),
             RepoContextRecordKind.Symbol => Fold<SymbolRecord>(serializer, existing, incoming, SymbolRecord.Merge),
             RepoContextRecordKind.Memory => Fold<MemoryRecord>(serializer, existing, incoming, MemoryRecord.Merge),
+            RepoContextRecordKind.Content => Fold<ContentRecord>(serializer, existing, incoming, ContentRecord.Merge),
             _ => incoming,
         };
     }

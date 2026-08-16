@@ -27,6 +27,9 @@ internal enum RepoContextRecordKind
     /// <summary>An agent-authored memory record (<c>repo/{repoId}/mem/{topic}/{id}</c>).</summary>
     Memory,
 
+    /// <summary>A per-file searchable-content projection record (<c>repo/{repoId}/content/{path}</c>).</summary>
+    Content,
+
     /// <summary>A vector metadata record (<c>repo/{repoId}/vec/{vectorId}</c>).</summary>
     VectorMetadata,
 

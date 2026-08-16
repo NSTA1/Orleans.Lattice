@@ -17,6 +17,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 ///   <item><description><c>repo/{repoId}/file/{path}</c> - a source-file node.</description></item>
 ///   <item><description><c>repo/{repoId}/symbol/{fqName}</c> - a symbol record.</description></item>
 ///   <item><description><c>repo/{repoId}/mem/{topic}/{id}</c> - an agent memory record.</description></item>
+///   <item><description><c>repo/{repoId}/content/{path}</c> - a per-file searchable-content projection record.</description></item>
 ///   <item><description><c>repo/{repoId}/vec/{vectorId}</c> - a vector metadata record.</description></item>
 ///   <item><description><c>repo/{repoId}/vpay/{contentAddress}</c> - a content-addressed vector payload.</description></item>
 ///   <item><description><c>repo/{repoId}/vmem/{collection}</c> - a vector collection membership record.</description></item>
@@ -53,6 +54,9 @@ internal static class RepoContextKeys
 
     /// <summary>The memory segment token.</summary>
     internal const string MemorySegment = "mem";
+
+    /// <summary>The content-projection segment token.</summary>
+    internal const string ContentSegment = "content";
 
     /// <summary>The vector-metadata segment token.</summary>
     internal const string VectorSegment = "vec";
@@ -119,6 +123,15 @@ internal static class RepoContextKeys
         return $"{RepoScanPrefix(repoId)}{SymbolSegment}{Separator}{EncodeComponent(fullyQualifiedName)}";
     }
 
+    /// <summary>Builds the key for a per-file content projection record: <c>repo/{repoId}/content/{path}</c>.</summary>
+    /// <param name="repoId">The repository identifier. Must not be <see langword="null"/>.</param>
+    /// <param name="path">The file path relative to the repository root. Must not be <see langword="null"/>.</param>
+    internal static string Content(string repoId, string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        return $"{RepoScanPrefix(repoId)}{ContentSegment}{Separator}{EncodePath(path)}";
+    }
+
     /// <summary>Builds the key for a memory record: <c>repo/{repoId}/mem/{topic}/{id}</c>.</summary>
     /// <param name="repoId">The repository identifier. Must not be <see langword="null"/>.</param>
     /// <param name="topic">The memory topic bucket. Must not be <see langword="null"/>.</param>
@@ -171,6 +184,11 @@ internal static class RepoContextKeys
     /// <param name="repoId">The repository identifier. Must not be <see langword="null"/>.</param>
     internal static string SymbolsPrefix(string repoId) =>
         $"{RepoScanPrefix(repoId)}{SymbolSegment}{Separator}";
+
+    /// <summary>Builds the range-scan prefix for all content projection records in a repository: <c>repo/{repoId}/content/</c>.</summary>
+    /// <param name="repoId">The repository identifier. Must not be <see langword="null"/>.</param>
+    internal static string ContentPrefix(string repoId) =>
+        $"{RepoScanPrefix(repoId)}{ContentSegment}{Separator}";
 
     /// <summary>Builds the range-scan prefix for all memory records in a repository: <c>repo/{repoId}/mem/</c>.</summary>
     /// <param name="repoId">The repository identifier. Must not be <see langword="null"/>.</param>
@@ -292,6 +310,15 @@ internal static class RepoContextKeys
                 result = new RepoContextKey
                 {
                     Kind = RepoContextRecordKind.Package,
+                    RepoId = repoId,
+                    Path = DecodePath(payload),
+                };
+                return true;
+
+            case ContentSegment:
+                result = new RepoContextKey
+                {
+                    Kind = RepoContextRecordKind.Content,
                     RepoId = repoId,
                     Path = DecodePath(payload),
                 };

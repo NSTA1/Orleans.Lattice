@@ -24,6 +24,11 @@ public sealed class RepoContextKeysTests
             Is.EqualTo("repo/acme/pkg/src/app"));
 
     [Test]
+    public void Content_builds_the_hierarchical_key_preserving_slashes()
+        => Assert.That(RepoContextKeys.Content("acme", "src/app/main.cs"),
+            Is.EqualTo("repo/acme/content/src/app/main.cs"));
+
+    [Test]
     public void Symbol_builds_the_key_preserving_dotted_names()
         => Assert.That(RepoContextKeys.Symbol("acme", "Acme.App.Program.Main"),
             Is.EqualTo("repo/acme/symbol/Acme.App.Program.Main"));
@@ -69,6 +74,24 @@ public sealed class RepoContextKeysTests
             Assert.That(parsed.Path, Is.EqualTo("src/app"));
         });
     }
+
+    [Test]
+    public void Content_round_trips_through_TryParse()
+    {
+        var key = RepoContextKeys.Content("acme", "src/app/main.cs");
+        Assert.That(RepoContextKeys.TryParse(key, out var parsed), Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(parsed.Kind, Is.EqualTo(RepoContextRecordKind.Content));
+            Assert.That(parsed.RepoId, Is.EqualTo("acme"));
+            Assert.That(parsed.Path, Is.EqualTo("src/app/main.cs"));
+        });
+    }
+
+    [Test]
+    public void ContentPrefix_bounds_the_content_family_for_a_repo()
+        => Assert.That(RepoContextKeys.Content("acme", "x.cs"),
+            Does.StartWith(RepoContextKeys.ContentPrefix("acme")));
 
     [Test]
     public void Symbol_round_trips_through_TryParse()
@@ -212,6 +235,7 @@ public sealed class RepoContextKeysTests
         {
             Assert.That(() => RepoContextKeys.Repo(null!), Throws.ArgumentNullException);
             Assert.That(() => RepoContextKeys.File("acme", null!), Throws.ArgumentNullException);
+            Assert.That(() => RepoContextKeys.Content("acme", null!), Throws.ArgumentNullException);
             Assert.That(() => RepoContextKeys.Symbol("acme", null!), Throws.ArgumentNullException);
             Assert.That(() => RepoContextKeys.Memory("acme", "t", null!), Throws.ArgumentNullException);
         });

@@ -72,6 +72,7 @@ internal sealed class RepoIndexJobGrain(
         state.State.ChunksTotal = 0;
         state.State.ChunksCommitted = 0;
         state.State.FilesEmbedded = 0;
+        state.State.FilesContentProjected = 0;
         state.State.Attempt += 1;
         state.State.StartedAt = now;
         state.State.UpdatedAt = now;
@@ -150,9 +151,9 @@ internal sealed class RepoIndexJobGrain(
 
         await UnregisterResumeReminderAsync().ConfigureAwait(true);
         logger.LogInformation(
-            "Repo {RepoId}: indexing job completed in {Elapsed} ms ({Added} added, {Updated} updated, {Removed} removed, {Unchanged} unchanged, {Embedded} embedded).",
+            "Repo {RepoId}: indexing job completed in {Elapsed} ms ({Added} added, {Updated} updated, {Removed} removed, {Unchanged} unchanged, {Embedded} embedded, {ContentProjected} content projected).",
             RepoId, elapsedMilliseconds, state.State.FilesAdded, state.State.FilesUpdated,
-            state.State.FilesRemoved, state.State.FilesUnchanged, state.State.FilesEmbedded);
+            state.State.FilesRemoved, state.State.FilesUnchanged, state.State.FilesEmbedded, state.State.FilesContentProjected);
     }
 
     /// <inheritdoc />
@@ -215,6 +216,7 @@ internal sealed class RepoIndexJobGrain(
         if (update.ChunksTotal is { } chunksTotal) state.State.ChunksTotal = chunksTotal;
         if (update.ChunksCommitted is { } chunksCommitted) state.State.ChunksCommitted = chunksCommitted;
         if (update.FilesEmbedded is { } embedded) state.State.FilesEmbedded = embedded;
+        if (update.FilesContentProjected is { } contentProjected) state.State.FilesContentProjected = contentProjected;
     }
 
     private async Task RegisterResumeReminderAsync()

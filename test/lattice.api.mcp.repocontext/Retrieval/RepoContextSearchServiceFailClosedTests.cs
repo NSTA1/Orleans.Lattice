@@ -43,7 +43,8 @@ public sealed class RepoContextSearchServiceFailClosedTests
             grainFactory,
             Substitute.For<IRepoIndexRunner>(),
             Serializer,
-            new RepoContextVectorWriter(grainFactory, Serializer, Substitute.For<ILatticeReplicationContext>()),
+            new RepoContextVectorWriter(grainFactory, Serializer, Substitute.For<ILatticeReplicationContext>(),
+                new RepoContextVectorCache(TimeProvider.System, new RepoContextIndexingOptions())),
             Substitute.For<IOptionsMonitor<RepoContextTtlOptions>>(),
             TimeProvider.System);
 

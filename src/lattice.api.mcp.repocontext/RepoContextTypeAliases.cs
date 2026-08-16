@@ -37,6 +37,9 @@ internal static class RepoContextTypeAliases
     /// <summary>Alias for <see cref="MemoryRecord"/>.</summary>
     internal const string MemoryRecord = "ol.rcm";
 
+    /// <summary>Alias for <see cref="ContentRecord"/>.</summary>
+    internal const string ContentRecord = "ol.rcc";
+
     /// <summary>Alias for <see cref="RepoContext.SymbolKind"/>.</summary>
     internal const string SymbolKind = "ol.rck";
 

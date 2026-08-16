@@ -9,7 +9,8 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 /// constants (which are not part of the public surface, so they cannot be
 /// referenced here): <c>repo-context-structural</c>, <c>repo-context-symbol</c>,
 /// <c>repo-context-memory</c>, <c>repo-context-vector-membership</c>,
-/// <c>repo-context-vector-metadata</c>, and <c>repo-context-vector-payload</c>.
+/// <c>repo-context-vector-metadata</c>, <c>repo-context-vector-payload</c>, and
+/// <c>repo-context-content</c>.
 /// If a package accessor is ever exposed, prefer it over these literals.
 /// </summary>
 public static class RepoContextHostTrees
@@ -46,13 +47,17 @@ public static class RepoContextHostTrees
     /// <summary>The content-addressed, write-once vector-payload tree.</summary>
     public const string VectorPayload = "repo-context-vector-payload";
 
+    /// <summary>The per-file searchable-content projection tree.</summary>
+    public const string Content = "repo-context-content";
+
     /// <summary>
     /// The churn trees whose re-embed / prune / forget cycles create tombstones
     /// that must be reaped: memory, the two vector projections, structural (which
-    /// the bootstrap prunes), and the symbol tree (which the bootstrap re-writes
-    /// and prunes on every re-index of a changed file). The content-addressed
-    /// vector-payload tree is write-once with no in-place deletes, so it is
-    /// excluded - it needs no aggressive compaction.
+    /// the bootstrap prunes), the symbol tree (which the bootstrap re-writes
+    /// and prunes on every re-index of a changed file), and the content projection
+    /// (which the bootstrap re-writes on a changed file and deletes on a removed
+    /// file). The content-addressed vector-payload tree is write-once with no
+    /// in-place deletes, so it is excluded - it needs no aggressive compaction.
     /// </summary>
     public static IReadOnlyList<string> ChurnTrees { get; } = new[]
     {
@@ -61,6 +66,7 @@ public static class RepoContextHostTrees
         VectorMetadata,
         Structural,
         Symbol,
+        Content,
     };
 
     /// <summary>Every repository-context tree the box grants the local agent access to.</summary>
@@ -72,6 +78,7 @@ public static class RepoContextHostTrees
         VectorMembership,
         VectorMetadata,
         VectorPayload,
+        Content,
     };
 }
 

@@ -12,6 +12,11 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), labelled per project. See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
 
+### Added
+
+- **`repocontext_search`'s keyword fallback now ranks over file content, not just filenames and identifiers.** When no embedding provider is bound (or it is unavailable), the degraded keyword scan previously matched only each record's key, path, fully-qualified name, topic, tags, and scalar fields, so search was effectively filename/symbol-name matching. A new per-file **content projection** (a rebuildable `repo-context-content` tree, one bounded `ContentRecord` per text file) is now populated during the structural indexing walk - decoupled from the embedder on purpose - and folded into the keyword haystack, so a query token that appears only inside a file's body still matches. A repository indexed before this feature self-heals through an idempotent content back-fill carried by the per-repository self-index grain, with no client call. (`Orleans.Lattice.Api.Mcp.RepoContext`)
+- **A warm in-memory vector cache behind the exact-kNN semantic index.** Semantic search previously range-scanned all vector metadata and decoded every vector payload from the store on every query. A new cache holds the decoded candidate set per repository and embedding space, so repeated queries between writes skip the re-scan and re-decode while returning byte-identical ranking and recall. It is kept correct by precise invalidation on every local vector write and a bounded time-to-live backstop (default 30s, configurable via `LATTICE_VECTOR_CACHE_TTL_SECONDS`) for changes that bypass the local writer, such as vectors landing through cross-cluster replication; setting the TTL to zero disables the cache. (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
 ## Released
 
 Published releases, newest first. Each section is keyed by its publish date; within a date, packages advance on their own patch digits per [`docs/RELEASING.md`](docs/RELEASING.md).

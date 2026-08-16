@@ -100,6 +100,7 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
                 sp.GetRequiredService<Orleans.Serialization.Serializer>(),
                 sp.GetRequiredService<ILogger<EmbeddingRepoContextVectorIngestor>>(),
                 sp.GetService<IEmbeddingProvider>()));
+        services.TryAddSingleton<RepoContextVectorCache>();
         services.TryAddSingleton<RepoContextVectorWriter>();
         services.TryAddSingleton<RepoContextEmbeddingGapScanner>();
         services.TryAddSingleton<IRepoContextSemanticIndex, ExactKnnSemanticIndex>();
@@ -124,6 +125,12 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
             ServiceDescriptor.Singleton<ILanguageSymbolExtractor, CSharpSymbolExtractor>());
         services.TryAddSingleton<ISymbolExtractor, SymbolExtractorDispatcher>();
         services.TryAddSingleton<RepoContextSymbolReconciler>();
+
+        // The content-projection reconcile seam: projects each text file's bounded
+        // body text into the dedicated content tree during the structural reconcile
+        // (decoupled from embeddings) so the keyword/degraded search path can rank
+        // over file content. TryAdd means a host or test harness can substitute it.
+        services.TryAddSingleton<RepoContextContentReconciler>();
         services.TryAddSingleton(RepoContextIndexingOptions.FromEnvironment());
         services.TryAddSingleton<RepoContextStore>();
 
