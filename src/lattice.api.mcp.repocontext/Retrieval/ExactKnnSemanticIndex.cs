@@ -6,8 +6,10 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// The shipped default <see cref="IRepoContextSemanticIndex"/>: a brute-force
 /// exact k-nearest-neighbour search over the vectors a repository holds
 /// authoritatively. It range-scans the <see cref="RepoContextTrees.VectorMetadata"/>
-/// tree for the repository, hydrates each vector's immutable payload from the
-/// <see cref="RepoContextTrees.VectorPayload"/> tree, and ranks the candidates
+/// tree for the repository, hydrates the vectors' immutable payloads from the
+/// <see cref="RepoContextTrees.VectorPayload"/> tree - one batched multi-get per
+/// metadata page rather than a round-trip per vector, deduplicating the
+/// content-addressed payloads a page shares - and ranks the candidates
 /// with <see cref="RepoContextKnnRanker"/>. Because it enumerates the store of
 /// record directly it always reflects the current live set with perfect recall -
 /// the correct default at the local scale the repository-context surface targets.
@@ -61,6 +63,12 @@ internal sealed class ExactKnnSemanticIndex : IRepoContextSemanticIndex
         var prefix = RepoContextKeys.VectorsPrefix(repoId);
         var candidates = new List<RepoContextVectorCandidate>();
 
+        // A payload is content-addressed, so many vectors (chunks and symbols that
+        // hash to identical bytes) can share one payload key. Decode each distinct
+        // payload at most once across the whole scan and reuse the decoded array by
+        // reference - the ranker only reads it.
+        var decoded = new Dictionary<string, float[]>(StringComparer.Ordinal);
+
         string? token = null;
         do
         {
@@ -69,6 +77,10 @@ internal sealed class ExactKnnSemanticIndex : IRepoContextSemanticIndex
                 .EnumerateAsync(metadataTree, prefix, token, RepoContextPortability.DefaultPageSize, vectorExport: null, cancellationToken)
                 .ConfigureAwait(false);
 
+            // Pass 1: decode the page's metadata, keep only vectors in the query's
+            // embedding space, and record the payload key each survivor needs.
+            var pending = new List<PendingVector>(page.Records.Count);
+            List<string>? toFetch = null;
             foreach (var record in page.Records)
             {
                 if (record.Value is null)
@@ -82,11 +94,49 @@ internal sealed class ExactKnnSemanticIndex : IRepoContextSemanticIndex
                     continue;
                 }
 
-                var candidate = await LoadCandidateAsync(payloadTree, metadata, cancellationToken)
-                    .ConfigureAwait(false);
-                if (candidate is { } value)
+                var contentAddress = RepoContextValues.ReadString(metadata.ContentAddress);
+                if (contentAddress is null)
                 {
-                    candidates.Add(value);
+                    continue;
+                }
+
+                var payloadKey = RepoContextKeys.VectorPayload(metadata.RepoId, contentAddress);
+                var sourceKey = RepoContextValues.ReadString(metadata.SourceKey) ?? string.Empty;
+                pending.Add(new PendingVector(metadata.VectorId, sourceKey, payloadKey, metadata.Space));
+
+                if (!decoded.ContainsKey(payloadKey))
+                {
+                    (toFetch ??= new List<string>()).Add(payloadKey);
+                }
+            }
+
+            // Pass 2: fetch every payload this page still needs in a single batched
+            // fan-out to the payload shards, instead of one serial round-trip per
+            // vector. Deduplicate keys so a payload shared within the page is asked
+            // for once.
+            if (toFetch is { Count: > 0 })
+            {
+                var distinct = toFetch.Count == 1 ? toFetch : toFetch.Distinct(StringComparer.Ordinal).ToList();
+                var fetched = await payloadTree.GetManyAsync(distinct, cancellationToken).ConfigureAwait(false);
+                foreach (var (payloadKey, payloadBytes) in fetched)
+                {
+                    var vector = DecodePayload(payloadBytes);
+                    if (vector is not null)
+                    {
+                        decoded[payloadKey] = vector;
+                    }
+                }
+            }
+
+            // Pass 3: emit a candidate per surviving vector, reusing decoded payloads.
+            // A vector whose payload could not be loaded is dropped, exactly as the
+            // prior per-vector load did.
+            foreach (var item in pending)
+            {
+                if (decoded.TryGetValue(item.PayloadKey, out var vector))
+                {
+                    candidates.Add(new RepoContextVectorCandidate(
+                        item.VectorId, item.SourceKey, vector, item.Space));
                 }
             }
 
@@ -97,33 +147,15 @@ internal sealed class ExactKnnSemanticIndex : IRepoContextSemanticIndex
         return candidates;
     }
 
-    private async Task<RepoContextVectorCandidate?> LoadCandidateAsync(
-        ILattice payloadTree, VectorMetadataRecord metadata, CancellationToken cancellationToken)
+    private float[]? DecodePayload(byte[] payloadBytes)
     {
-        var contentAddress = RepoContextValues.ReadString(metadata.ContentAddress);
-        if (contentAddress is null)
-        {
-            return null;
-        }
-
-        var payloadKey = RepoContextKeys.VectorPayload(metadata.RepoId, contentAddress);
-        var payloadBytes = await payloadTree.GetAsync(payloadKey, cancellationToken).ConfigureAwait(false);
-        if (payloadBytes is null)
-        {
-            return null;
-        }
-
         var payload = _serializer.Deserialize<VectorPayloadRecord>(payloadBytes);
         var encoded = FirstElement(payload.Payload);
-        if (encoded is null)
-        {
-            return null;
-        }
-
-        var sourceKey = RepoContextValues.ReadString(metadata.SourceKey) ?? string.Empty;
-        return new RepoContextVectorCandidate(
-            metadata.VectorId, sourceKey, VectorCodec.Decode(encoded), metadata.Space);
+        return encoded is null ? null : VectorCodec.Decode(encoded);
     }
+
+    private readonly record struct PendingVector(
+        string VectorId, string SourceKey, string PayloadKey, EmbeddingSpaceTag Space);
 
     private static byte[]? FirstElement(GSet payload)
     {

@@ -59,4 +59,7 @@ disagree with the master file, the master file wins.
   do not force it.
 - **Writes are destructive and fail-closed.** Never call `remember` / `update` /
   `forget` / `add_repo` / `remove_repo` speculatively, and never `remove_repo`
-  the `lattice` repo.
+  the `lattice` repo. `remove_repo` in particular requires **explicit user
+  consent** - it drops a repository's entire indexed context, so only run it when
+  the user has explicitly asked for that repository to be removed; otherwise ask
+  first.
