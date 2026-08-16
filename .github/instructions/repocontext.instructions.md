@@ -291,6 +291,12 @@ with `neighbors` instead of guessing search terms.
   in. Never call one speculatively.
 - Do not write memory without a clear durable reason, and never `remove_repo`
   the repo you are working in.
+- **`remove_repo` requires explicit user consent.** It drops a repository's
+  entire indexed context (structural nodes, memory, and vectors), so never call
+  it on your own initiative, as a cleanup step, or to "reset" an index. Invoke it
+  only when the user has explicitly asked for that specific repository to be
+  removed; if a task seems to need it but the user has not asked, stop and ask
+  first rather than assuming consent.
 
 ## Freshness and re-ingest
 
