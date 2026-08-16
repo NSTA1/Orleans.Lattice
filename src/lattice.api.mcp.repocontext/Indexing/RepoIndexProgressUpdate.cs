@@ -46,4 +46,12 @@ public readonly record struct RepoIndexProgressUpdate
     /// <summary>Changed files whose vectors have been stored, or null.</summary>
     [Id(8)]
     public int? FilesEmbedded { get; init; }
+
+    /// <summary>
+    /// Files whose searchable content projection was written this run (added,
+    /// updated, and back-filled files), or null. The content-phase analogue of
+    /// <see cref="FilesEmbedded"/>.
+    /// </summary>
+    [Id(9)]
+    public int? FilesContentProjected { get; init; }
 }

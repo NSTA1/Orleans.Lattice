@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Logging;
@@ -33,6 +34,17 @@ internal sealed class RepoContextContentReconciler
 {
     private const int WriteChunkSize = 256;
     private const long MaxReadBytes = 4L * 1024 * 1024;
+
+    /// <summary>
+    /// How many additional files must be projected between content-projection
+    /// heartbeat log lines. Mirrors the vectorising phase's heartbeat: a large
+    /// content back-fill (a repository indexed before the content projection existed
+    /// re-reads every text file) is otherwise a single silent await, so throttling
+    /// one line per this many freshly read files keeps the back-fill observable in
+    /// the log without emitting a line per file. A normal incremental pass touches
+    /// far fewer files than this and so stays silent.
+    /// </summary>
+    private const int ProgressHeartbeatInterval = 500;
 
     private readonly IGrainFactory _grainFactory;
     private readonly Serializer<ContentRecord> _contentSerializer;
@@ -98,6 +110,9 @@ internal sealed class RepoContextContentReconciler
         var processed = new HashSet<string>(StringComparer.Ordinal);
         var writes = new List<KeyValuePair<string, byte[]>>();
         var clock = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
+        var total = added.Count + updated.Count + backfill.Count;
+        var stopwatch = Stopwatch.StartNew();
+        var lastHeartbeat = 0;
 
         foreach (var entry in Concat(added, updated, backfill))
         {
@@ -118,6 +133,14 @@ internal sealed class RepoContextContentReconciler
             writes.Add(new KeyValuePair<string, byte[]>(
                 RepoContextKeys.Content(repoId, path), _contentSerializer.SerializeToArray(record)));
             processed.Add(path);
+
+            if (processed.Count - lastHeartbeat >= ProgressHeartbeatInterval)
+            {
+                lastHeartbeat = processed.Count;
+                _logger.LogInformation(
+                    "Repo {RepoId}: content projection progress - {Written} of {Total} file(s) projected after {Elapsed} ms.",
+                    repoId, processed.Count, total, stopwatch.ElapsedMilliseconds);
+            }
         }
 
         var deletes = new List<string>(removedPaths.Count);
@@ -127,6 +150,14 @@ internal sealed class RepoContextContentReconciler
         }
 
         await CommitAsync(repoId, writes, deletes, cancellationToken).ConfigureAwait(false);
+
+        if (writes.Count > 0 || deletes.Count > 0)
+        {
+            _logger.LogInformation(
+                "Repo {RepoId}: projected {Written} file content record(s), {Deleted} deleted, in {Elapsed} ms.",
+                repoId, writes.Count, deletes.Count, stopwatch.ElapsedMilliseconds);
+        }
+
         return new ContentReconcileResult(processed, writes.Count);
     }
 

@@ -372,6 +372,10 @@ internal sealed class RepoContextBootstrapService
                 var contentResult = await _contentReconciler.ReconcileAsync(
                     repoId, repoRoot, plan.Added, plan.Updated, plan.RemovedPaths, contentBackfill, cancellationToken)
                     .ConfigureAwait(false);
+                await ReportAsync(
+                    progress,
+                    new RepoIndexProgressUpdate { FilesContentProjected = contentResult.ContentCaptured },
+                    cancellationToken).ConfigureAwait(false);
 
                 var declaredEncoded = BuildDeclaredEncoded(
                     symbolResult.DeclaredByPath, plan.MetadataChanged, backfill, storedMeta);

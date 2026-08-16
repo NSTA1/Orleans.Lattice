@@ -95,4 +95,14 @@ public sealed record RepoIndexProgress
     /// </summary>
     [Id(16)]
     public string? Error { get; init; }
+
+    /// <summary>
+    /// The number of files whose searchable content projection was written during
+    /// this run (added, updated, and content back-filled files). The content-phase
+    /// analogue of <see cref="FilesEmbedded"/>: it lets a caller watch a large
+    /// content back-fill - a repository indexed before the content projection
+    /// existed re-reads every text file - converge alongside the embedding count.
+    /// </summary>
+    [Id(17)]
+    public int FilesContentProjected { get; init; }
 }

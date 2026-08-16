@@ -1,5 +1,6 @@
 using System.Text;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Api.Mcp.RepoContext.Tests.Harness;
 using Orleans.Serialization;
 
@@ -146,5 +147,61 @@ public sealed class RepoContextContentReconcilerTests
             Assert.That(RepoContextValues.ReadString(record.Text), Does.Not.Contain("First"),
                 "Re-projection overwrites the prior body with the current one.");
         });
+    }
+
+    [Test]
+    public async Task Projecting_files_logs_a_completion_line()
+    {
+        var capturing = new CapturingLoggerProvider();
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions
+            {
+                Posture = RepoContextMcpAuthPosture.Writer,
+                ConfigureServices = services => services.AddSingleton<ILoggerProvider>(capturing),
+            },
+            Ct);
+
+        var file = WriteFile("src/Logged.cs", "namespace N; public class Logged { }");
+
+        await Reconciler(harness).ReconcileAsync(
+            RepoId, _repoRoot, added: [file], updated: [], removedPaths: [], backfill: [], Ct);
+
+        Assert.That(
+            capturing.Entries.Any(e =>
+                e.Message.Contains("projected 1 file content record(s)", StringComparison.Ordinal)),
+            Is.True,
+            "A pass that writes content records emits an embedding-style completion line naming the count.");
+    }
+
+    [Test]
+    public async Task A_large_pass_logs_a_content_projection_progress_heartbeat()
+    {
+        var capturing = new CapturingLoggerProvider();
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions
+            {
+                Posture = RepoContextMcpAuthPosture.Writer,
+                ConfigureServices = services => services.AddSingleton<ILoggerProvider>(capturing),
+            },
+            Ct);
+
+        // One more than the heartbeat interval so at least one heartbeat fires
+        // mid-pass, proving a large back-fill is observable rather than a single
+        // silent await.
+        const int FileCount = 501;
+        var added = new List<RepoFileEntry>(FileCount);
+        for (var i = 0; i < FileCount; i++)
+        {
+            added.Add(WriteFile($"src/Bulk{i}.cs", $"namespace N; public class Bulk{i} {{ }}"));
+        }
+
+        await Reconciler(harness).ReconcileAsync(
+            RepoId, _repoRoot, added: added, updated: [], removedPaths: [], backfill: [], Ct);
+
+        Assert.That(
+            capturing.Entries.Any(e =>
+                e.Message.Contains("content projection progress", StringComparison.Ordinal)),
+            Is.True,
+            "A pass larger than the heartbeat interval emits a progress heartbeat so a big back-fill is observable.");
     }
 }

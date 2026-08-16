@@ -83,6 +83,14 @@ internal sealed class RepoIndexJobState
     public string? Error { get; set; }
 
     /// <summary>
+    /// The number of files whose searchable content projection was written during
+    /// this run (added, updated, and content back-filled files). The content-phase
+    /// analogue of <see cref="FilesEmbedded"/>.
+    /// </summary>
+    [Id(17)]
+    public int FilesContentProjected { get; set; }
+
+    /// <summary>
     /// Projects the durable state into the immutable snapshot returned to callers.
     /// </summary>
     /// <param name="repoId">The repository identity carried in the grain key.</param>
@@ -100,6 +108,7 @@ internal sealed class RepoIndexJobState
         ChunksTotal = ChunksTotal,
         ChunksCommitted = ChunksCommitted,
         FilesEmbedded = FilesEmbedded,
+        FilesContentProjected = FilesContentProjected,
         Attempt = Attempt,
         StartedAt = StartedAt,
         UpdatedAt = UpdatedAt,

@@ -122,6 +122,8 @@ public sealed class RepoContextSelfIndexGrainTests
             Assert.That(terminal.Status, Is.EqualTo(RepoIndexStatus.Completed),
                 "The onboarding run the grain drives settles Completed.");
             Assert.That(terminal.FilesAdded, Is.EqualTo(2), "Both files are ingested by the driven run.");
+            Assert.That(terminal.FilesContentProjected, Is.EqualTo(2),
+                "Both ingested files have their searchable content projected, and the count surfaces in index status.");
         });
     }
 

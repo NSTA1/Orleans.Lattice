@@ -86,6 +86,7 @@ public sealed class RepoIndexModelTests
             Assert.That(update.ChunksTotal, Is.Null);
             Assert.That(update.ChunksCommitted, Is.Null);
             Assert.That(update.FilesEmbedded, Is.Null);
+            Assert.That(update.FilesContentProjected, Is.Null);
         });
     }
 
@@ -97,6 +98,7 @@ public sealed class RepoIndexModelTests
             Phase = RepoIndexPhase.Applying,
             ChunksTotal = 4,
             ChunksCommitted = 2,
+            FilesContentProjected = 12,
         };
 
         Assert.Multiple(() =>
@@ -104,6 +106,7 @@ public sealed class RepoIndexModelTests
             Assert.That(update.Phase, Is.EqualTo(RepoIndexPhase.Applying));
             Assert.That(update.ChunksTotal, Is.EqualTo(4));
             Assert.That(update.ChunksCommitted, Is.EqualTo(2));
+            Assert.That(update.FilesContentProjected, Is.EqualTo(12));
             Assert.That(update.FilesAdded, Is.Null);
         });
     }
@@ -145,6 +148,7 @@ public sealed class RepoIndexModelTests
             ChunksTotal = 5,
             ChunksCommitted = 5,
             FilesEmbedded = 7,
+            FilesContentProjected = 9,
             Attempt = 2,
             StartedAt = started,
             UpdatedAt = updated,
@@ -168,6 +172,7 @@ public sealed class RepoIndexModelTests
             Assert.That(progress.ChunksTotal, Is.EqualTo(5));
             Assert.That(progress.ChunksCommitted, Is.EqualTo(5));
             Assert.That(progress.FilesEmbedded, Is.EqualTo(7));
+            Assert.That(progress.FilesContentProjected, Is.EqualTo(9));
             Assert.That(progress.Attempt, Is.EqualTo(2));
             Assert.That(progress.StartedAt, Is.EqualTo(started));
             Assert.That(progress.UpdatedAt, Is.EqualTo(updated));
