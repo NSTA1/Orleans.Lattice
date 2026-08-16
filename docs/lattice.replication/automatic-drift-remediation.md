@@ -26,6 +26,8 @@ Every stage ships **dark**. With defaults unchanged, a host runs ordinary replic
 
 The flags are layered AND-gates. Localisation only runs on a detected mismatch; repair only runs on a localised leaf; the bootstrap fallback only runs when leaf re-replay could not reach the localised divergence (see [the bootstrap-snapshot fallback](anti-entropy-bootstrap-fallback.md) for the exact trigger conditions); and `AutoRemediateOnDigestMismatch` is an additional master gate in front of *both* repair stages. Detection and localisation are never gated by the repair controls, so you can observe drift without sending any repair traffic.
 
+One case is not left to operator discretion: enabling a WAL retention ceiling (`WalRetention`) on a replicated tree lets the sender garbage-collect entries a lagging cross-cluster shipper has not shipped yet, which - unlike a local consumer's fall-off - is invisible to the fall-off detector and would diverge the receiver silently. The silo therefore **refuses to start** with that combination unless the detection stage (`DigestProbeEnabled`) is enabled or the risk is explicitly acknowledged via `AllowWalRetentionWithoutAntiEntropy`. See [`WalRetention`](configuration.md#walretention) for the full rule.
+
 ## The pipeline, stage by stage
 
 1. **Detect.** The digest probe is a low-frequency, read-only background pass that compares each shard's local content digest against every peer's digest. A sustained `Mismatch` for a `(tree, shard, peer)` triple is the signal that those clusters have genuinely diverged. The probe never mutates data and never advances a replication cursor.

@@ -428,6 +428,39 @@ public class LatticeReplicationOptions
     public TimeSpan? WalRetention { get; set; }
 
     /// <summary>
+    /// Escape hatch that permits an effective
+    /// <see cref="LatticeOptions.WalRetention"/> to be set on a
+    /// <see cref="ReplicatedTrees">replicated</see> tree while the
+    /// anti-entropy detection backstop
+    /// (<see cref="DigestProbeEnabled"/>) is disabled. Defaults to
+    /// <see cref="DefaultAllowWalRetentionWithoutAntiEntropy"/>
+    /// (<see langword="false"/>), so the combination is rejected at silo
+    /// start by <see cref="LatticeWalRetentionReplicationStartupValidator"/>.
+    /// <para>
+    /// WAL retention lets the sender's garbage collector trim entries a
+    /// lagging <i>cross-cluster</i> shipper has not shipped yet, past the
+    /// shipper's cursor. Unlike a local materialiser, the shipper does not
+    /// surface that trim as a fall-off-the-log event, so without an
+    /// independent backstop the receiver silently and permanently diverges
+    /// for the trimmed range (see the anti-entropy digest probe, which
+    /// compares content digests out-of-band and therefore detects a
+    /// garbage-collected divergence). The default fail-closed rule forces
+    /// the operator to either enable <see cref="DigestProbeEnabled"/> - so
+    /// the gap becomes observable and, with the repair stages enabled,
+    /// self-healing - or remove <see cref="WalRetention"/> from the tree.
+    /// </para>
+    /// <para>
+    /// Set this to <see langword="true"/> only when the silent-divergence
+    /// risk is knowingly acceptable - for example a strictly unidirectional
+    /// deployment where the retention-trimming cluster is never a receiver,
+    /// or where drift is reconciled by an out-of-band mechanism. It is a
+    /// deliberate, audited acknowledgement, not a convenience default.
+    /// </para>
+    /// </summary>
+    public bool AllowWalRetentionWithoutAntiEntropy { get; set; }
+        = DefaultAllowWalRetentionWithoutAntiEntropy;
+
+    /// <summary>
     /// Whether the receiver-side fall-off-the-log detector
     /// (<see cref="ILatticeFallOffLogDetector"/>) automatically calls
     /// <see cref="ILatticeBootstrapCoordinator.BootstrapAsync"/> when
@@ -1763,6 +1796,16 @@ public class LatticeReplicationOptions
     /// host that has not enabled it.
     /// </summary>
     public const bool DefaultDigestProbeEnabled = false;
+
+    /// <summary>
+    /// Default value for <see cref="AllowWalRetentionWithoutAntiEntropy"/>:
+    /// <see langword="false"/>. Setting an effective
+    /// <see cref="LatticeOptions.WalRetention"/> on a replicated tree
+    /// without the <see cref="DigestProbeEnabled"/> anti-entropy backstop
+    /// is rejected at silo start by default, so the silent cross-cluster
+    /// divergence footgun cannot be armed unknowingly.
+    /// </summary>
+    public const bool DefaultAllowWalRetentionWithoutAntiEntropy = false;
 
     /// <summary>
     /// Default value for <see cref="DigestProbeInterval"/>: 5 minutes.

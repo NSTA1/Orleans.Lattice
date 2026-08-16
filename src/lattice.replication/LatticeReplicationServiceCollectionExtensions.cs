@@ -223,6 +223,14 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         // when no startup views are declared.
         builder.Services.AddSingleton<IHostedService, LatticeViewReplicationStartupValidator>();
 
+        // Fail fast at silo start when a replicated tree has an effective WAL
+        // retention ceiling but the anti-entropy detection backstop is off - the
+        // combination that lets the sender trim entries a lagging cross-cluster
+        // shipper has not shipped yet, silently and permanently diverging the
+        // receiver with no metric and no repair. Refuses the footgun unless the
+        // operator enables DigestProbeEnabled or explicitly acknowledges the risk.
+        builder.Services.AddSingleton<IHostedService, LatticeWalRetentionReplicationStartupValidator>();
+
         builder.Services.TryAddSingleton<IReplicationBatchEncoder, OrleansBinaryReplicationBatchEncoder>();
 
         // Framing-tail compressor registry. Each algorithm-specific

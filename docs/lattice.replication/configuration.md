@@ -59,6 +59,7 @@ Startup options validation rejects empty cluster ids, invalid replicated-tree de
 | [`WalMaxBatchBytes`](#walmaxbatchbytes) | `long` | 4 MiB |
 | [`WalMaxPendingBatches`](#walmaxpendingbatches) | `int` | 4 |
 | [`WalRetention`](#walretention) | `TimeSpan?` | `null` |
+| [`AllowWalRetentionWithoutAntiEntropy`](#allowwalretentionwithoutantientropy) | `bool` | `false` |
 | [`MaintenanceGcInterval`](#maintenancegcinterval) | `TimeSpan` | 5 seconds |
 
 ### Apply and causal buffer
@@ -230,6 +231,14 @@ Enables actual payload elision for repeated content. It is off by default becaus
 ### `WalRetention`
 
 Optional wall-clock hard ceiling on retained WAL. `null` means consumers and cursors drive retention. If set too low, lagging peers may fall off the log and require bootstrap.
+
+For a local consumer, a fall-off is self-healing: the next read surfaces the trimmed prefix to the auto-bootstrap trigger. A **cross-cluster shipper is different** - it advances past a trimmed prefix without emitting a fall-off event, and the receiver-side fall-off detector only compares against its own local WAL, so it never sees entries it never received. Setting `WalRetention` on a replicated tree can therefore let the sender trim entries a lagging shipper has not shipped yet, silently and permanently diverging the receiver for the trimmed range with no metric and no repair.
+
+To prevent that footgun, the silo **refuses to start** when a replicated tree (declared in [`ReplicatedTrees`](#replicatedtrees)) has an effective `WalRetention` set while the anti-entropy detection backstop [`DigestProbeEnabled`](#digestprobeenabled) is off. Resolve it by one of: enable `DigestProbeEnabled` (and, for automatic repair, the remaining [anti-entropy stages](automatic-drift-remediation.md)) so the divergence is detected and healed out-of-band; remove `WalRetention` from the tree so a lagging shipper pins the WAL until it catches up; or set [`AllowWalRetentionWithoutAntiEntropy`](#allowwalretentionwithoutantientropy) to acknowledge the risk explicitly. The effective retention is read from the per-tree core `LatticeOptions.WalRetention`, which already reflects any value mirrored from this replication-side `WalRetention`, so the rule catches retention configured on either surface.
+
+### `AllowWalRetentionWithoutAntiEntropy`
+
+Escape hatch (default `false`) that permits `WalRetention` on a replicated tree while `DigestProbeEnabled` is off, suppressing the startup guard described above. Set it to `true` only when the silent-divergence risk is knowingly acceptable - for example a strictly unidirectional deployment where the retention-trimming cluster is never a receiver, or where drift is reconciled out of band. It is a deliberate, audited acknowledgement, not a convenience default.
 
 ### `AutoBootstrapOnFallOffLog`
 
