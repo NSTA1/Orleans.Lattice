@@ -155,4 +155,25 @@ public sealed class RepoContextToolGroupTests
             }
         });
     }
+
+    [TestCase(false, false)]
+    [TestCase(true, false)]
+    [TestCase(false, true)]
+    [TestCase(true, true)]
+    public void Every_tool_is_wrapped_in_the_invocation_logger(bool enableWrites, bool workspaceMode)
+    {
+        var tools = new RepoContextToolGroup(enableWrites, workspaceMode).Tools;
+
+        Assert.That(tools, Is.Not.Empty);
+        Assert.Multiple(() =>
+        {
+            foreach (var tool in tools)
+            {
+                Assert.That(
+                    tool,
+                    Is.InstanceOf<RepoContextToolInvocationLogger>(),
+                    tool.ProtocolTool.Name);
+            }
+        });
+    }
 }

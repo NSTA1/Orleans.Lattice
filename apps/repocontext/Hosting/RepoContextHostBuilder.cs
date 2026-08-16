@@ -232,6 +232,17 @@ public static class RepoContextHostBuilder
     /// <param name="logging">The host's logging builder.</param>
     private static void ConfigureContainerLogging(ILoggingBuilder logging)
     {
+        // Timestamp every console line (UTC, millisecond precision) so each tool
+        // call and each indexing-activity line carries a wall-clock reference in
+        // `docker logs`. The Simple console formatter is registered through
+        // TryAddEnumerable, so this configures the console provider the host
+        // already adds rather than attaching a second, duplicate sink.
+        logging.AddSimpleConsole(options =>
+        {
+            options.TimestampFormat = "yyyy-MM-ddTHH:mm:ss.fffZ ";
+            options.UseUtcTimestamp = true;
+        });
+
         // Orleans warns when a grain turn runs longer than its turn-length
         // threshold. Under CPU-bound embedding load the WAL commit turns routinely
         // cross one second; that is expected back-pressure here, not a fault, so it
