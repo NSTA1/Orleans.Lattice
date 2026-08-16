@@ -46,6 +46,14 @@ test/lattice/              → NUnit test project (Orleans.Lattice.Tests)
   Fakes/                   → Test doubles (e.g. FakePersistentState<T>)  
   Primitives/              → Unit tests for primitive types  
 
+The tree above covers the core `src/lattice/` library and its test project only.
+For the full set of optional add-on packages (replication, the API facade family
+and gRPC bindings, auth/membership, backup, storage backends, schema, scaling,
+caching, dashboards, and the Explorer), see the **Child Packages** table in
+[README.md](../README.md#child-packages) - the authoritative, maintained
+inventory. Convention: package `foo` lives at `src/foo/`, `test/foo/`, and
+`docs/foo/` (`docs/crdt/` is a docs-only conceptual topic with no code).
+
 ## Target Framework & Language
 
 - **.NET 10** (`net10.0`), C# with nullable reference types and implicit usings enabled.
