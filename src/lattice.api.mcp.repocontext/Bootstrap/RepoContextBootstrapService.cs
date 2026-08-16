@@ -38,6 +38,14 @@ internal sealed class RepoContextBootstrapService
     private const int WriteChunkSize = 256;
 
     /// <summary>
+    /// How many additional files must embed between vectorising heartbeat log
+    /// lines. The vectorising pass reports progress per embedding batch; throttling
+    /// the log to one line per this many freshly embedded files keeps a large
+    /// re-embed observable in the log without emitting a line per batch.
+    /// </summary>
+    private const int VectorisingHeartbeatInterval = 100;
+
+    /// <summary>
     /// How often the concurrent walk-progress pump samples and reports the running
     /// hashed-file count while the (synchronous) walk is in flight. Short enough to
     /// feel live, long enough that a fast walk emits only a handful of reports.
@@ -369,13 +377,25 @@ internal sealed class RepoContextBootstrapService
             _logger.LogInformation(
                 "Repo {RepoId}: vectorising {Changed} changed file(s); scanning {Unchanged} unchanged for embedding gaps.",
                 repoId, changed.Count, unchangedForBackfill.Count);
+            var lastVectorisingHeartbeat = 0;
             var embedded = await _vectorIngestor.IngestAsync(
                 repoId,
                 repoRoot,
                 changed,
                 unchangedForBackfill,
-                (count, ct) => ReportAsync(
-                    progress, new RepoIndexProgressUpdate { FilesEmbedded = count }, ct),
+                (count, ct) =>
+                {
+                    if (count - lastVectorisingHeartbeat >= VectorisingHeartbeatInterval)
+                    {
+                        lastVectorisingHeartbeat = count;
+                        _logger.LogInformation(
+                            "Repo {RepoId}: vectorising progress - {Embedded} file(s) embedded after {Elapsed} ms.",
+                            repoId, count, stopwatch.ElapsedMilliseconds);
+                    }
+
+                    return ReportAsync(
+                        progress, new RepoIndexProgressUpdate { FilesEmbedded = count }, ct);
+                },
                 cancellationToken).ConfigureAwait(false);
             await ReportAsync(progress, new RepoIndexProgressUpdate { FilesEmbedded = embedded }, cancellationToken)
                 .ConfigureAwait(false);

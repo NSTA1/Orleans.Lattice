@@ -109,6 +109,14 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
             tools.Add(BuildForgetTool());
         }
 
+        // Bracket every tool call with a timestamped start / completion line. The
+        // decorator forwards name, schema, annotations, and metadata unchanged, so
+        // the wrapped list is indistinguishable from the raw tools to discovery.
+        for (var i = 0; i < tools.Count; i++)
+        {
+            tools[i] = new RepoContextToolInvocationLogger(tools[i]);
+        }
+
         Tools = tools;
     }
 
