@@ -81,14 +81,148 @@ internal sealed class RepoContextStore
     /// <param name="cancellationToken">Cancels the read.</param>
     /// <returns>The projected entry view.</returns>
     /// <exception cref="McpException">The key is not a well-formed repository-context key.</exception>
-    public async Task<RepoContextEntryView> RecallAsync(string key, CancellationToken cancellationToken)
+    public Task<RepoContextEntryView> RecallAsync(string key, CancellationToken cancellationToken)
+        => RecallAsync(key, evaluateStaleness: false, cancellationToken);
+
+    /// <summary>
+    /// Fetches the live record at <paramref name="key"/> and projects it, optionally
+    /// evaluating the link staleness of a memory entry. When
+    /// <paramref name="evaluateStaleness"/> is <see langword="true"/> and the key
+    /// addresses a memory record, each captured structural link digest is compared
+    /// against the target's current digest and the result is surfaced through
+    /// <see cref="RepoContextEntryView.Stale"/> and
+    /// <see cref="RepoContextEntryView.StaleLinks"/>; otherwise those fields stay
+    /// <see langword="null"/> ("not evaluated"), the bulk-read convention.
+    /// </summary>
+    /// <param name="key">The full repository-context key. Must be a well-formed key.</param>
+    /// <param name="evaluateStaleness">Whether to evaluate memory link staleness on this read.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    /// <returns>The projected entry view.</returns>
+    /// <exception cref="McpException">The key is not a well-formed repository-context key.</exception>
+    public async Task<RepoContextEntryView> RecallAsync(
+        string key, bool evaluateStaleness, CancellationToken cancellationToken)
     {
         var parsed = ParseKey(key);
         var tree = Tree(RepoContextTrees.ForKind(parsed.Kind));
 
         var versioned = await tree.GetWithVersionAsync(key, cancellationToken).ConfigureAwait(false);
         var life = RepoContextRemainingLife.FromVersionedValue(versioned, _timeProvider.GetUtcNow().UtcDateTime);
-        return RepoContextEntryProjection.Project(parsed, versioned.Value, _serializer, life);
+        var view = RepoContextEntryProjection.Project(parsed, versioned.Value, _serializer, life);
+
+        if (evaluateStaleness
+            && parsed.Kind == RepoContextRecordKind.Memory
+            && versioned.Value is { } bytes)
+        {
+            view = await EvaluateStalenessAsync(view, _serializer.Deserialize<MemoryRecord>(bytes), cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        return view;
+    }
+
+    /// <summary>
+    /// Compares each captured structural link digest of <paramref name="record"/>
+    /// against its target's current digest and returns <paramref name="view"/> with
+    /// <see cref="RepoContextEntryView.Stale"/> and
+    /// <see cref="RepoContextEntryView.StaleLinks"/> populated. Only targets that are
+    /// both currently linked and carry a captured digest are evaluated, so an
+    /// unlinked-but-still-recorded digest never produces a phantom flag.
+    /// </summary>
+    private async Task<RepoContextEntryView> EvaluateStalenessAsync(
+        RepoContextEntryView view, MemoryRecord record, CancellationToken cancellationToken)
+    {
+        HashSet<string>? linked = null;
+        foreach (var (_, targets) in view.Links)
+        {
+            foreach (var target in targets)
+            {
+                (linked ??= new HashSet<string>(StringComparer.Ordinal)).Add(target);
+            }
+        }
+
+        List<string>? stale = null;
+        foreach (var target in record.LinkDigests.Keys())
+        {
+            if (linked is null || !linked.Contains(target))
+            {
+                continue;
+            }
+
+            var register = record.LinkDigests.Get(target);
+            var captured = register is null ? null : RepoContextValues.ReadString(register);
+            if (captured is null)
+            {
+                continue;
+            }
+
+            var targetView = await RecallAsync(target, cancellationToken).ConfigureAwait(false);
+            string? current = null;
+            if (targetView.Exists)
+            {
+                targetView.Fields.TryGetValue("digest", out current);
+            }
+
+            if (!string.Equals(captured, current, StringComparison.Ordinal))
+            {
+                (stale ??= new List<string>()).Add(target);
+            }
+        }
+
+        stale?.Sort(StringComparer.Ordinal);
+        return view with
+        {
+            Stale = stale is { Count: > 0 },
+            StaleLinks = stale,
+        };
+    }
+
+    /// <summary>
+    /// Reads the current content digest of each newly-linked structural target (a
+    /// file or symbol) so a later read can detect drift. Only file and symbol
+    /// targets carry a digest; a memory-to-memory edge or an absent target is
+    /// skipped. The result maps a target key to its captured digest, or
+    /// <see langword="null"/> when no structural target was captured.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<string, string>?> CaptureLinkDigestsAsync(
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? addLinks, CancellationToken cancellationToken)
+    {
+        if (addLinks is null)
+        {
+            return null;
+        }
+
+        Dictionary<string, string>? captured = null;
+        foreach (var (_, targets) in addLinks)
+        {
+            if (targets is null)
+            {
+                continue;
+            }
+
+            foreach (var target in targets)
+            {
+                if (captured is not null && captured.ContainsKey(target))
+                {
+                    continue;
+                }
+
+                if (!RepoContextKeys.TryParse(target, out var parsedTarget)
+                    || parsedTarget.Kind is not (RepoContextRecordKind.File or RepoContextRecordKind.Symbol))
+                {
+                    continue;
+                }
+
+                var targetView = await RecallAsync(target, cancellationToken).ConfigureAwait(false);
+                if (targetView.Exists
+                    && targetView.Fields.TryGetValue("digest", out var digest)
+                    && digest.Length != 0)
+                {
+                    (captured ??= new Dictionary<string, string>(StringComparer.Ordinal))[target] = digest;
+                }
+            }
+        }
+
+        return captured;
     }
 
     /// <summary>The hard ceiling on knowledge-linking traversal depth.</summary>
@@ -174,7 +308,7 @@ internal sealed class RepoContextStore
                         break;
                     }
 
-                    var neighbor = await RecallAsync(target, cancellationToken).ConfigureAwait(false);
+                    var neighbor = await RecallAsync(target, evaluateStaleness: true, cancellationToken).ConfigureAwait(false);
                     neighbors.Add(neighbor);
                     if (neighbor.Exists)
                     {
@@ -368,6 +502,8 @@ internal sealed class RepoContextStore
         var merged = created ? delta : MemoryRecord.Merge(delta, _serializer.Deserialize<MemoryRecord>(existing!));
         RepoContextRecordEditor.ApplyTags(merged.Tags, tags, removeTags: null);
         var (linksAdded, linksRemoved) = RepoContextRecordEditor.ApplyLinks(merged.Links, addLinks, removeLinks);
+        var capturedDigests = await CaptureLinkDigestsAsync(addLinks, cancellationToken).ConfigureAwait(false);
+        RepoContextRecordEditor.ApplyLinkDigests(merged.LinkDigests, capturedDigests, removeLinks, clock);
         var bytes = _serializer.SerializeToArray(merged);
 
         var ttl = ResolveTtl(repoId, ttlSeconds, created);
@@ -428,8 +564,9 @@ internal sealed class RepoContextStore
         }
 
         var clock = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
+        var capturedDigests = await CaptureLinkDigestsAsync(addLinks, cancellationToken).ConfigureAwait(false);
         var patch = RepoContextRecordEditor.Patch(
-            parsed, existing, fields, addTags, removeTags, addLinks, removeLinks, clock, _serializer);
+            parsed, existing, fields, addTags, removeTags, addLinks, removeLinks, clock, _serializer, capturedDigests);
 
         var remainingTtl = RemainingTtl(versioned.ExpiresAtTicks);
         if (remainingTtl is { } window)

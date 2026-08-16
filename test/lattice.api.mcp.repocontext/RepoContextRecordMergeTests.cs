@@ -224,6 +224,31 @@ public sealed class RepoContextRecordMergeTests
     }
 
     [Test]
+    public void MemoryRecord_merge_folds_link_digests_last_writer_wins()
+    {
+        var baseline = new MemoryRecord { RepoId = "acme", Topic = "t", Id = "1" };
+        var target = RepoContextKeys.File("acme", "src/A.cs");
+
+        var aDigests = new OrMap<string, BoundedRegister>();
+        aDigests.Set(target, "A", RepoContextValues.Lww("old", Clock(100)));
+        var a = baseline with { LinkDigests = aDigests };
+
+        var bDigests = new OrMap<string, BoundedRegister>();
+        bDigests.Set(target, "B", RepoContextValues.Lww("new", Clock(200)));
+        var b = baseline with { LinkDigests = bDigests };
+
+        var forward = MemoryRecord.Merge(a, b);
+        var backward = MemoryRecord.Merge(b, a);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(RepoContextValues.ReadString(forward.LinkDigests.Get(target)!), Is.EqualTo("new"));
+            Assert.That(RepoContextValues.ReadString(backward.LinkDigests.Get(target)!), Is.EqualTo("new"),
+                "The higher-clock captured digest wins regardless of merge order.");
+        });
+    }
+
+    [Test]
     public void RepoNode_and_PackageNode_merge_scalars_and_tags()
     {
         var repoMerged = RepoNode.Merge(

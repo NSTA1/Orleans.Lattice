@@ -319,4 +319,59 @@ public sealed class RepoContextRecordEditorTests
         set.Add(Encoding.UTF8.GetBytes(target), "seed", 0L);
         return set;
     }
+
+    [Test]
+    public void ApplyLinkDigests_records_a_captured_digest_per_target()
+    {
+        var digests = new OrMap<string, BoundedRegister>();
+        var target = RepoContextKeys.File("acme", "src/A.cs");
+
+        RepoContextRecordEditor.ApplyLinkDigests(
+            digests,
+            capturedDigests: new Dictionary<string, string> { [target] = "abc123" },
+            removeLinks: null,
+            Clock(100));
+
+        Assert.That(RepoContextValues.ReadString(digests.Get(target)!), Is.EqualTo("abc123"));
+    }
+
+    [Test]
+    public void ApplyLinkDigests_drops_the_digest_of_a_removed_target()
+    {
+        var digests = new OrMap<string, BoundedRegister>();
+        var target = RepoContextKeys.File("acme", "src/A.cs");
+        RepoContextRecordEditor.ApplyLinkDigests(
+            digests, new Dictionary<string, string> { [target] = "abc123" }, removeLinks: null, Clock(100));
+
+        RepoContextRecordEditor.ApplyLinkDigests(
+            digests,
+            capturedDigests: null,
+            removeLinks: new Dictionary<string, IReadOnlyList<string>> { ["related"] = new[] { target } },
+            Clock(200));
+
+        Assert.That(digests.Get(target), Is.Null, "A removed edge tombstones its captured digest.");
+    }
+
+    [Test]
+    public void ApplyLinkDigests_rejects_a_null_map()
+        => Assert.Throws<ArgumentNullException>(
+            () => RepoContextRecordEditor.ApplyLinkDigests(null!, null, null, Clock(100)));
+
+    [Test]
+    public void Patch_captures_supplied_link_digests_into_a_memory_record()
+    {
+        var key = Parse(RepoContextKeys.Memory("acme", "glossary", "tree"));
+        var target = RepoContextKeys.File("acme", "src/A.cs");
+        var existing = Serializer.SerializeToArray(
+            new MemoryRecord { RepoId = "acme", Topic = "glossary", Id = "tree" });
+
+        var result = RepoContextRecordEditor.Patch(
+            key, existing, fields: null, addTags: null, removeTags: null,
+            addLinks: new Dictionary<string, IReadOnlyList<string>> { ["related"] = new[] { target } },
+            removeLinks: null, Clock(100), Serializer,
+            capturedLinkDigests: new Dictionary<string, string> { [target] = "abc123" });
+
+        var merged = Serializer.Deserialize<MemoryRecord>(result.Merged);
+        Assert.That(RepoContextValues.ReadString(merged.LinkDigests.Get(target)!), Is.EqualTo("abc123"));
+    }
 }

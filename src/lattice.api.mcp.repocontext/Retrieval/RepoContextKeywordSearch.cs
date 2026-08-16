@@ -1,28 +1,59 @@
-using System.Text;
-
 namespace Orleans.Lattice.Api.Mcp.RepoContext;
 
 /// <summary>
 /// The structural/keyword fallback ranker for repository-context search. When no
 /// semantic index or embedding provider is configured, or the embedder is
-/// unreachable, search degrades to this deterministic token-overlap scorer over
-/// the projected records the structural walk already captured, so a query always
-/// returns the best structural matches rather than throwing.
+/// unreachable, search degrades to this deterministic ranker over the projected
+/// records the structural walk already captured, so a query always returns the
+/// best structural matches rather than throwing.
 /// <para>
-/// A record's score is the number of distinct query tokens that appear (as a
-/// case-insensitive substring) in its searchable text - its key, path,
-/// fully-qualified name, topic, tags, and scalar field values, which for a
-/// per-file content-projection record include the file's bounded body text - with
-/// a small bonus for a whole-token match. The scorer holds no state and touches no
-/// store, so its recall behaviour is unit-testable in isolation.
+/// Records are ranked with Okapi BM25 computed over the bounded candidate set the
+/// caller supplies: a term's contribution rises with its frequency in a record
+/// (saturating, so a single flooded field cannot dominate), is normalised by the
+/// record's length against the candidate-set average, and is weighted by inverse
+/// document frequency so a distinctive term outranks a ubiquitous one - the
+/// deficiency of a flat token-overlap count. A record's searchable text is folded
+/// from its key, path, fully-qualified name, topic, tags, and scalar field values
+/// (which for a per-file content-projection record include the file's bounded body
+/// text), with high-signal name-like fields weighted above body text. Text is
+/// tokenised identifier-aware (splitting <c>camelCase</c> and letter/digit
+/// boundaries and lower-casing), so a query term matches a sub-token of a compound
+/// identifier. The ranker holds no state and touches no store, so its behaviour is
+/// unit-testable in isolation.
 /// </para>
 /// </summary>
 internal static class RepoContextKeywordSearch
 {
+    /// <summary>The BM25 term-frequency saturation parameter.</summary>
+    private const double K1 = 1.2d;
+
+    /// <summary>The BM25 length-normalisation parameter.</summary>
+    private const double B = 0.75d;
+
+    // Field weights fold high-signal, name-like fields above body text so a name
+    // match outranks an incidental body mention. Pure-noise fields (content
+    // digests, sizes, line numbers, timestamps) are omitted entirely by returning
+    // a zero weight, keeping them out of both term frequency and length.
+    private static readonly Dictionary<string, double> FieldWeights = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["title"] = 3d,
+        ["signature"] = 2d,
+        ["filePath"] = 2d,
+        ["displayName"] = 2d,
+        ["references"] = 1d,
+        ["body"] = 1d,
+        ["text"] = 1d,
+        ["language"] = 1d,
+        ["version"] = 1d,
+        ["defaultBranch"] = 1d,
+        ["kind"] = 1d,
+    };
+
     /// <summary>
     /// Tokenizes <paramref name="query"/> into distinct lower-case terms, splitting
-    /// on non-alphanumeric characters. Returns an empty list for a null or blank
-    /// query.
+    /// on non-alphanumeric characters and on identifier boundaries (a
+    /// <c>camelCase</c> hump or a letter/digit transition). Returns an empty list
+    /// for a null or blank query.
     /// </summary>
     /// <param name="query">The free-text query to tokenize.</param>
     /// <returns>The distinct lower-case query tokens.</returns>
@@ -35,70 +66,51 @@ internal static class RepoContextKeywordSearch
 
         var tokens = new List<string>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        var builder = new StringBuilder();
-        foreach (var ch in query)
+        var buffer = new char[32];
+        var length = 0;
+        var previous = '\0';
+        for (var i = 0; i <= query.Length; i++)
         {
-            if (char.IsLetterOrDigit(ch))
+            var atEnd = i == query.Length;
+            var current = atEnd ? '\0' : query[i];
+            if (!atEnd && char.IsLetterOrDigit(current))
             {
-                builder.Append(char.ToLowerInvariant(ch));
+                if (length > 0 && IsBoundary(previous, current))
+                {
+                    FlushQueryToken(buffer, length, tokens, seen);
+                    length = 0;
+                }
+
+                if (length == buffer.Length)
+                {
+                    Array.Resize(ref buffer, buffer.Length * 2);
+                }
+
+                buffer[length++] = char.ToLowerInvariant(current);
+                previous = current;
             }
-            else if (builder.Length > 0)
+            else if (length > 0)
             {
-                Flush(builder, tokens, seen);
+                FlushQueryToken(buffer, length, tokens, seen);
+                length = 0;
+                previous = '\0';
             }
         }
 
-        Flush(builder, tokens, seen);
         return tokens;
     }
 
     /// <summary>
-    /// Scores a single projected entry against the query tokens: the count of
-    /// distinct tokens found as a case-insensitive substring of the entry's
-    /// searchable text, plus a unit bonus per whole-token (word-boundary) match.
-    /// Returns <c>0</c> when nothing matches.
-    /// </summary>
-    /// <param name="entry">The projected entry to score. Must not be <see langword="null"/>.</param>
-    /// <param name="tokens">The query tokens produced by <see cref="Tokenize(string?)"/>. Must not be <see langword="null"/>.</param>
-    /// <returns>The match score, higher meaning a better structural match.</returns>
-    /// <exception cref="ArgumentNullException"><paramref name="entry"/> or <paramref name="tokens"/> is null.</exception>
-    internal static double Score(RepoContextEntryView entry, IReadOnlyList<string> tokens)
-    {
-        ArgumentNullException.ThrowIfNull(entry);
-        ArgumentNullException.ThrowIfNull(tokens);
-        if (tokens.Count == 0)
-        {
-            return 0;
-        }
-
-        var haystack = BuildHaystack(entry);
-        double score = 0;
-        foreach (var token in tokens)
-        {
-            var index = haystack.IndexOf(token, StringComparison.Ordinal);
-            if (index < 0)
-            {
-                continue;
-            }
-
-            score += 1;
-            if (IsWholeToken(haystack, index, token.Length))
-            {
-                score += 1;
-            }
-        }
-
-        return score;
-    }
-
-    /// <summary>
-    /// Ranks <paramref name="entries"/> against <paramref name="tokens"/> and
-    /// returns up to <paramref name="k"/> scored hits in descending score order,
-    /// dropping entries that match nothing. Ties keep the ordinal key order the
-    /// entries were supplied in, so the result is deterministic.
+    /// Ranks <paramref name="entries"/> against <paramref name="tokens"/> with BM25
+    /// and returns up to <paramref name="k"/> scored hits in descending score order,
+    /// dropping entries that match no query term. Document frequency, average length,
+    /// and per-term inverse document frequency are computed over the supplied
+    /// candidate set, so ranking reflects the whole bounded scan rather than any one
+    /// record in isolation. Ties keep ordinal key order, so the result is
+    /// deterministic.
     /// </summary>
     /// <param name="entries">The projected entries to rank. Must not be <see langword="null"/>.</param>
-    /// <param name="tokens">The query tokens. Must not be <see langword="null"/>.</param>
+    /// <param name="tokens">The query tokens produced by <see cref="Tokenize(string?)"/>. Must not be <see langword="null"/>.</param>
     /// <param name="k">The maximum number of hits to return. Must be positive.</param>
     /// <returns>The best structural matches, at most <paramref name="k"/>.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="entries"/> or <paramref name="tokens"/> is null.</exception>
@@ -110,13 +122,96 @@ internal static class RepoContextKeywordSearch
         ArgumentNullException.ThrowIfNull(tokens);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(k);
 
-        var scored = new List<RepoContextSearchHit>();
-        foreach (var entry in entries)
+        var documentCount = entries.Count;
+        if (documentCount == 0 || tokens.Count == 0)
         {
-            var score = Score(entry, tokens);
-            if (score > 0)
+            return Array.Empty<RepoContextSearchHit>();
+        }
+
+        // Distinct query terms with a stable index; the term index doubles as the
+        // corpus alphabet for term-frequency and document-frequency accounting.
+        var termIndex = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var token in tokens)
+        {
+            if (token.Length != 0 && !termIndex.ContainsKey(token))
             {
-                scored.Add(new RepoContextSearchHit { Score = score, Entry = entry, VectorId = null });
+                termIndex[token] = termIndex.Count;
+            }
+        }
+
+        var termCount = termIndex.Count;
+        if (termCount == 0)
+        {
+            return Array.Empty<RepoContextSearchHit>();
+        }
+
+        var termLookup = termIndex.GetAlternateLookup<ReadOnlySpan<char>>();
+        var documentFrequency = new int[termCount];
+        var documentTermFrequencies = new double[documentCount][];
+        var documentLengths = new double[documentCount];
+        var totalLength = 0d;
+        var buffer = new char[64];
+
+        for (var d = 0; d < documentCount; d++)
+        {
+            double[]? termFrequency = null;
+            var documentLength = 0d;
+            AccumulateEntry(entries[d], termLookup, termCount, ref termFrequency, ref documentLength, ref buffer);
+
+            documentTermFrequencies[d] = termFrequency!;
+            documentLengths[d] = documentLength;
+            totalLength += documentLength;
+
+            if (termFrequency is not null)
+            {
+                for (var t = 0; t < termCount; t++)
+                {
+                    if (termFrequency[t] > 0d)
+                    {
+                        documentFrequency[t]++;
+                    }
+                }
+            }
+        }
+
+        var averageLength = totalLength / documentCount;
+        if (averageLength <= 0d)
+        {
+            return Array.Empty<RepoContextSearchHit>();
+        }
+
+        var inverseDocumentFrequency = new double[termCount];
+        for (var t = 0; t < termCount; t++)
+        {
+            inverseDocumentFrequency[t] =
+                Math.Log(1d + ((documentCount - documentFrequency[t] + 0.5d) / (documentFrequency[t] + 0.5d)));
+        }
+
+        var scored = new List<RepoContextSearchHit>();
+        for (var d = 0; d < documentCount; d++)
+        {
+            var termFrequency = documentTermFrequencies[d];
+            if (termFrequency is null)
+            {
+                continue;
+            }
+
+            var normalization = K1 * (1d - B + (B * documentLengths[d] / averageLength));
+            var score = 0d;
+            for (var t = 0; t < termCount; t++)
+            {
+                var frequency = termFrequency[t];
+                if (frequency <= 0d)
+                {
+                    continue;
+                }
+
+                score += inverseDocumentFrequency[t] * (frequency * (K1 + 1d)) / (frequency + normalization);
+            }
+
+            if (score > 0d)
+            {
+                scored.Add(new RepoContextSearchHit { Score = score, Entry = entries[d], VectorId = null });
             }
         }
 
@@ -129,55 +224,116 @@ internal static class RepoContextKeywordSearch
         return scored.Count > k ? scored.GetRange(0, k) : scored;
     }
 
-    private static string BuildHaystack(RepoContextEntryView entry)
+    private static void AccumulateEntry(
+        RepoContextEntryView entry,
+        Dictionary<string, int>.AlternateLookup<ReadOnlySpan<char>> termLookup,
+        int termCount,
+        ref double[]? termFrequency,
+        ref double documentLength,
+        ref char[] buffer)
     {
-        var builder = new StringBuilder();
-        Append(builder, entry.Key);
-        Append(builder, entry.Path);
-        Append(builder, entry.FullyQualifiedName);
-        Append(builder, entry.Topic);
-        Append(builder, entry.Id);
+        Accumulate(entry.Path, 3d, termLookup, termCount, ref termFrequency, ref documentLength, ref buffer);
+        Accumulate(entry.FullyQualifiedName, 3d, termLookup, termCount, ref termFrequency, ref documentLength, ref buffer);
+        Accumulate(entry.Topic, 2d, termLookup, termCount, ref termFrequency, ref documentLength, ref buffer);
+        Accumulate(entry.Id, 1d, termLookup, termCount, ref termFrequency, ref documentLength, ref buffer);
+        Accumulate(entry.Key, 1d, termLookup, termCount, ref termFrequency, ref documentLength, ref buffer);
+
         foreach (var tag in entry.Tags)
         {
-            Append(builder, tag);
+            Accumulate(tag, 2d, termLookup, termCount, ref termFrequency, ref documentLength, ref buffer);
         }
 
-        foreach (var value in entry.Fields.Values)
+        foreach (var (name, value) in entry.Fields)
         {
-            Append(builder, value);
-        }
-
-        return builder.ToString().ToLowerInvariant();
-    }
-
-    private static void Append(StringBuilder builder, string? value)
-    {
-        if (!string.IsNullOrEmpty(value))
-        {
-            builder.Append(value).Append('\n');
+            var weight = FieldWeights.TryGetValue(name, out var configured) ? configured : 0d;
+            if (weight > 0d)
+            {
+                Accumulate(value, weight, termLookup, termCount, ref termFrequency, ref documentLength, ref buffer);
+            }
         }
     }
 
-    private static bool IsWholeToken(string haystack, int index, int length)
+    private static void Accumulate(
+        string? text,
+        double weight,
+        Dictionary<string, int>.AlternateLookup<ReadOnlySpan<char>> termLookup,
+        int termCount,
+        ref double[]? termFrequency,
+        ref double documentLength,
+        ref char[] buffer)
     {
-        var before = index == 0 || !char.IsLetterOrDigit(haystack[index - 1]);
-        var afterIndex = index + length;
-        var after = afterIndex >= haystack.Length || !char.IsLetterOrDigit(haystack[afterIndex]);
-        return before && after;
-    }
-
-    private static void Flush(StringBuilder builder, List<string> tokens, HashSet<string> seen)
-    {
-        if (builder.Length == 0)
+        if (string.IsNullOrEmpty(text))
         {
             return;
         }
 
-        var token = builder.ToString();
-        builder.Clear();
+        var length = 0;
+        var previous = '\0';
+        for (var i = 0; i <= text.Length; i++)
+        {
+            var atEnd = i == text.Length;
+            var current = atEnd ? '\0' : text[i];
+            if (!atEnd && char.IsLetterOrDigit(current))
+            {
+                if (length > 0 && IsBoundary(previous, current))
+                {
+                    Emit(buffer, length, weight, termLookup, termCount, ref termFrequency, ref documentLength);
+                    length = 0;
+                }
+
+                if (length == buffer.Length)
+                {
+                    Array.Resize(ref buffer, buffer.Length * 2);
+                }
+
+                buffer[length++] = char.ToLowerInvariant(current);
+                previous = current;
+            }
+            else if (length > 0)
+            {
+                Emit(buffer, length, weight, termLookup, termCount, ref termFrequency, ref documentLength);
+                length = 0;
+                previous = '\0';
+            }
+        }
+    }
+
+    private static void Emit(
+        char[] buffer,
+        int length,
+        double weight,
+        Dictionary<string, int>.AlternateLookup<ReadOnlySpan<char>> termLookup,
+        int termCount,
+        ref double[]? termFrequency,
+        ref double documentLength)
+    {
+        documentLength += weight;
+        if (termLookup.TryGetValue(buffer.AsSpan(0, length), out var index))
+        {
+            termFrequency ??= new double[termCount];
+            termFrequency[index] += weight;
+        }
+    }
+
+    private static void FlushQueryToken(char[] buffer, int length, List<string> tokens, HashSet<string> seen)
+    {
+        var token = new string(buffer, 0, length);
         if (seen.Add(token))
         {
             tokens.Add(token);
         }
+    }
+
+    // A sub-token boundary inside a run of letters and digits: a camelCase hump
+    // (lower-to-upper) or a letter/digit transition. Both arguments are known to be
+    // letters or digits, so the digit test alone distinguishes a letter/digit edge.
+    private static bool IsBoundary(char previous, char current)
+    {
+        if (char.IsLower(previous) && char.IsUpper(current))
+        {
+            return true;
+        }
+
+        return char.IsDigit(previous) != char.IsDigit(current);
     }
 }

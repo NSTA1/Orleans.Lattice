@@ -91,4 +91,21 @@ public sealed record RepoContextEntryView
     /// (see <see cref="Expires"/>).
     /// </summary>
     public bool? HasExpired { get; init; }
+
+    /// <summary>
+    /// For a memory entry read per-key, whether any of its structural link targets
+    /// has drifted from the content digest captured when the edge was written;
+    /// <see langword="false"/> when every captured link is still fresh, and
+    /// <see langword="null"/> when this read did not evaluate staleness. Only a
+    /// per-key read (<c>repocontext_recall</c>, or a <c>repocontext_neighbors</c>
+    /// hop) evaluates it; a bulk read (<c>repocontext_scan</c> or a search) reports
+    /// <see langword="null"/> here, mirroring the expiry "not evaluated" convention.
+    /// </summary>
+    public bool? Stale { get; init; }
+
+    /// <summary>
+    /// The captured link targets found to have drifted, in ordinal order, when
+    /// <see cref="Stale"/> is <see langword="true"/>; otherwise <see langword="null"/>.
+    /// </summary>
+    public IReadOnlyList<string>? StaleLinks { get; init; }
 }

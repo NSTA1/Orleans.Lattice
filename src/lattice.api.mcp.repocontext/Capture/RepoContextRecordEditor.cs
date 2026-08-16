@@ -41,6 +41,7 @@ internal static class RepoContextRecordEditor
     /// <param name="removeTags">Tags to remove, or <see langword="null"/>.</param>
     /// <param name="addLinks">Knowledge-linking edges to add (relation to target keys), or <see langword="null"/>. Memory records only.</param>
     /// <param name="removeLinks">Knowledge-linking edges to remove (relation to target keys), or <see langword="null"/>. Memory records only.</param>
+    /// <param name="capturedLinkDigests">For a memory patch, the content digest each newly-added structural link target currently carries (target key to digest), captured by the caller which has store access; or <see langword="null"/>. Ignored for non-memory records.</param>
     /// <param name="clock">The hybrid logical clock the patched registers are authored at.</param>
     /// <param name="serializer">The Orleans serializer. Must not be <see langword="null"/>.</param>
     /// <returns>The patch outcome.</returns>
@@ -54,7 +55,8 @@ internal static class RepoContextRecordEditor
         IReadOnlyDictionary<string, IReadOnlyList<string>>? addLinks,
         IReadOnlyDictionary<string, IReadOnlyList<string>>? removeLinks,
         HybridLogicalClock clock,
-        Serializer serializer)
+        Serializer serializer,
+        IReadOnlyDictionary<string, string>? capturedLinkDigests = null)
     {
         ArgumentNullException.ThrowIfNull(existing);
         ArgumentNullException.ThrowIfNull(serializer);
@@ -71,7 +73,7 @@ internal static class RepoContextRecordEditor
             RepoContextRecordKind.Package => PatchPackage(key, existing, fields, addTags, removeTags, clock, serializer),
             RepoContextRecordKind.File => PatchFile(key, existing, fields, addTags, removeTags, clock, serializer),
             RepoContextRecordKind.Symbol => PatchSymbol(key, existing, fields, addTags, removeTags, clock, serializer),
-            RepoContextRecordKind.Memory => PatchMemory(key, existing, fields, addTags, removeTags, addLinks, removeLinks, clock, serializer),
+            RepoContextRecordKind.Memory => PatchMemory(key, existing, fields, addTags, removeTags, addLinks, removeLinks, capturedLinkDigests, clock, serializer),
             _ => throw new McpException(
                 $"The key kind '{key.Kind}' is not a patchable record; only structural and memory records can be updated."),
         };
@@ -189,6 +191,7 @@ internal static class RepoContextRecordEditor
         IReadOnlyList<string>? addTags, IReadOnlyList<string>? removeTags,
         IReadOnlyDictionary<string, IReadOnlyList<string>>? addLinks,
         IReadOnlyDictionary<string, IReadOnlyList<string>>? removeLinks,
+        IReadOnlyDictionary<string, string>? capturedLinkDigests,
         HybridLogicalClock clock, Serializer serializer)
     {
         var current = serializer.Deserialize<MemoryRecord>(existing);
@@ -211,6 +214,7 @@ internal static class RepoContextRecordEditor
         var merged = MemoryRecord.Merge(delta, current);
         var (tagsAdded, tagsRemoved) = ApplyTags(merged.Tags, addTags, removeTags);
         var (linksAdded, linksRemoved) = ApplyLinks(merged.Links, addLinks, removeLinks);
+        ApplyLinkDigests(merged.LinkDigests, capturedLinkDigests, removeLinks, clock);
         return new PatchResult(
             serializer.SerializeToArray(merged), updated, tagsAdded, tagsRemoved, linksAdded, linksRemoved);
     }
@@ -326,6 +330,51 @@ internal static class RepoContextRecordEditor
         }
 
         return (added, removed);
+    }
+
+    /// <summary>
+    /// Records the captured content digest of each newly-linked structural target
+    /// on <paramref name="linkDigests"/>, and drops the captured digest of each
+    /// removed target. Each captured digest is authored as a fresh last-writer-wins
+    /// register at <paramref name="clock"/> so concurrent captures converge; a
+    /// removal tombstones the target's map entry. Only a captured digest is stored,
+    /// so memory-to-memory edges (which the caller does not capture) leave no entry.
+    /// </summary>
+    /// <param name="linkDigests">The record's link-digest map. Must not be <see langword="null"/>.</param>
+    /// <param name="capturedDigests">The digest each newly-added target currently carries (target key to digest), or <see langword="null"/>.</param>
+    /// <param name="removeLinks">The edges being removed, whose captured digests are dropped, or <see langword="null"/>.</param>
+    /// <param name="clock">The hybrid logical clock the captured digests are authored at.</param>
+    internal static void ApplyLinkDigests(
+        OrMap<string, BoundedRegister> linkDigests,
+        IReadOnlyDictionary<string, string>? capturedDigests,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? removeLinks,
+        HybridLogicalClock clock)
+    {
+        ArgumentNullException.ThrowIfNull(linkDigests);
+
+        if (capturedDigests is not null)
+        {
+            foreach (var (target, digest) in capturedDigests)
+            {
+                linkDigests.Set(target, Guid.NewGuid().ToString("N"), RepoContextValues.Lww(digest, clock));
+            }
+        }
+
+        if (removeLinks is not null)
+        {
+            foreach (var (_, targets) in removeLinks)
+            {
+                if (targets is null)
+                {
+                    continue;
+                }
+
+                foreach (var target in targets)
+                {
+                    linkDigests.Remove(target);
+                }
+            }
+        }
     }
 
     private static bool HasLinks(IReadOnlyDictionary<string, IReadOnlyList<string>>? links)

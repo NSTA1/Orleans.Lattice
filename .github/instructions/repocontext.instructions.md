@@ -119,10 +119,13 @@ mid-task.
   small and widen only if needed.
 - **Always read the `mode` field on the result:**
   - `semantic` - vector nearest-neighbour search (the good path).
-  - `keyword` - degraded deterministic token/structural scan because the vector
-    index is unavailable or stale. Hits are literal token matches and ranking
-    can be poor (a "write-ahead log" query returning benchmark dashboards). When
-    you see `keyword`, narrow to distinctive tokens or fall back to `grep`.
+  - `keyword` - deterministic BM25 keyword/structural scan, used because the
+    vector index is unavailable or stale. Ranking is corpus-relative BM25 over
+    file content and names (a distinctive term outweighs a ubiquitous one), so it
+    is a capable literal-term search - but it matches tokens, not meaning, so a
+    purely conceptual query with no shared vocabulary can still rank poorly. When
+    you see `keyword`, prefer distinctive identifier-like terms, and fall back to
+    `grep` only if the terms you have are too generic.
   - `empty` - no matches.
 - Hits carry `key`, `path`, `fields` (`digest`, `language`, `sizeBytes`,
   `lastIngested`), `tags`, and `links` (structural cross-references between
@@ -144,12 +147,14 @@ mid-task.
   `pageSize` is 1-500 (default 100).
 - Reach for `scan` when you want **completeness** (audit every file under a path,
   list every memory entry in a topic) rather than relevance.
-- **Expiry is not evaluated by a bulk read.** A `scan` (and a degraded
-  `keyword`-mode `search`) enumerates key+value only, so its expiry fields
-  (`expires`, `hasExpired`, `expiresAtUtc`, `remainingSeconds`) come back `null`
+- **Expiry and link staleness are not evaluated by a bulk read.** A `scan` (and a
+  degraded `keyword`-mode `search`) enumerates key+value only, so its expiry
+  fields (`expires`, `hasExpired`, `expiresAtUtc`, `remainingSeconds`) and its
+  memory link-staleness fields (`stale`, `staleLinks`) come back `null`
   ("not evaluated") - this is by design, not a durable claim. A scan still yields
   only live (non-expired, non-tombstoned) entries. To read an entry's authoritative
-  TTL, `recall` it (or use a `semantic` `search`, whose hits are hydrated per-key).
+  TTL or link staleness, `recall` it (or, for TTL, use a `semantic` `search`,
+  whose hits are hydrated per-key).
 
 ### recall - one record by key
 
@@ -160,6 +165,13 @@ mid-task.
 - `recall` returns the stored record - its flattened `fields`, `tags`, `links`,
   and remaining TTL - not live file content; per guardrail 1, `view` the file for
   the current body.
+- **`recall` evaluates memory link staleness.** For a memory entry, `recall`
+  compares each structural link (to a file or symbol) against the target's
+  current content digest, captured when the link was made, and reports drift
+  through `stale` (any linked target changed or was deleted) and `staleLinks`
+  (the specific target keys). A `stale` link is a cue to re-read the target and
+  refresh or retire the note. `neighbors` evaluates the same per walked entry.
+  Bulk reads do not (see below), so `stale`/`staleLinks` come back `null` there.
 - A missing or expired key returns `exists: false`, so you can tell an absent
   entry from an empty one.
 
@@ -178,6 +190,9 @@ mid-task.
 - A seed key with no live entry returns `exists: false`; a dangling edge whose
   target has no live value is still returned as a neighbor with its own
   `exists: false`, so you can see broken links.
+- Each walked neighbor that is a memory entry is returned with its link staleness
+  evaluated (`stale` / `staleLinks`), exactly as `recall` does, so a graph walk
+  surfaces which linked concepts point at drifted code.
 
 ## Capture - durable agent memory
 
@@ -264,6 +279,13 @@ with `neighbors` instead of guessing search terms.
   `exists: false` when walked).
 - **Read edges** with `recall` (the entry's `links` map) or walk them with
   `neighbors`.
+- **A link to code is tracked for staleness.** When you link a memory entry to a
+  structural target (a file or symbol), the store captures that target's content
+  digest at link time. A later `recall` (or `neighbors` walk) flags the entry
+  `stale` when the target has drifted or been deleted, so a note that anchors a
+  decision to a specific file tells a future session when the file has moved on.
+  Prefer linking a durable note to the code it depends on for exactly this signal;
+  a memory-to-memory edge carries no digest and is never stale.
 - **Relation vocabulary - keep it small and stable**, the same discipline as
   topics. Prefer this fixed set (a lightweight SKOS-style derivation), authored
   from the **more general** entry outward:

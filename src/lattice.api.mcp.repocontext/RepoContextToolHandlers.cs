@@ -105,8 +105,10 @@ internal static class RepoContextToolHandlers
     }
 
     /// <summary>
-    /// Fetches a single repository-context entry by its full key and projects it.
-    /// A key with no live entry projects with <c>exists=false</c>.
+    /// Fetches a single repository-context entry by its full key and projects it,
+    /// evaluating memory link staleness (the target-digest drift surfaced through
+    /// <c>stale</c> / <c>staleLinks</c>) for a memory record. A key with no live
+    /// entry projects with <c>exists=false</c>.
     /// </summary>
     /// <param name="context">The MCP request context, used to resolve the store.</param>
     /// <param name="key">The full repository-context key to recall.</param>
@@ -124,7 +126,7 @@ internal static class RepoContextToolHandlers
             throw new McpException("The 'key' parameter is required and must be a non-empty repository-context key.");
         }
 
-        return ResolveStore(context).RecallAsync(key, cancellationToken);
+        return ResolveStore(context).RecallAsync(key, evaluateStaleness: true, cancellationToken);
     }
 
     /// <summary>
