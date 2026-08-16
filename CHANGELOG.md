@@ -12,6 +12,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), labelled per project. See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
 
+### Fixed
+
+- **A silo now refuses to start when `WalRetention` is set on a replicated tree without the anti-entropy detection backstop, closing a silent cross-cluster divergence path.** A WAL retention ceiling lets the sender's WAL GC trim entries a lagging cross-cluster shipper has not shipped yet (the TTL ceiling is a union with the consumer-cursor floor, so it trims past the shipper's pinned cursor). Unlike a local materialiser - whose next read surfaces the trimmed prefix to the auto-bootstrap trigger - the shipper advances past the trimmed prefix without emitting a fall-off-the-log event, and the receiver-side detector only compares against its own local WAL, so the receiver silently and permanently diverged for the trimmed range with no metric and no repair. A new fail-closed startup validator (`LatticeWalRetentionReplicationStartupValidator`) rejects the combination unless `DigestProbeEnabled` is enabled (the digest probe detects a garbage-collected divergence out-of-band) or the new opt-in `LatticeReplicationOptions.AllowWalRetentionWithoutAntiEntropy` acknowledgement (default `false`) is set. Effective retention is read from the per-tree core `LatticeOptions.WalRetention`, which already reflects any value mirrored from the replication-side `WalRetention`, so the rule catches retention configured on either surface; non-replicated trees are unaffected and the safe default posture (`WalRetention` unset) is unchanged. (`Orleans.Lattice.Replication`, [#1496](https://github.com/NSTA1/Orleans.Lattice/issues/1496), [#1499](https://github.com/NSTA1/Orleans.Lattice/pull/1499))
+
 ## Released
 
 Published releases, newest first. Each section is keyed by its publish date; within a date, packages advance on their own patch digits per [`docs/RELEASING.md`](docs/RELEASING.md).
