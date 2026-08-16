@@ -33,6 +33,9 @@ internal sealed class RepoContextIndexingOptions
     /// <summary>Environment variable overriding <see cref="FullWalkInterval"/> (in seconds).</summary>
     public const string FullWalkIntervalSecondsKey = "LATTICE_FULL_WALK_INTERVAL_SECONDS";
 
+    /// <summary>Environment variable overriding <see cref="VectorCacheTtl"/> (in seconds).</summary>
+    public const string VectorCacheTtlSecondsKey = "LATTICE_VECTOR_CACHE_TTL_SECONDS";
+
     /// <summary>The self-index grain tick cadence; each tick does at most one unit of work.</summary>
     public TimeSpan TickInterval { get; init; } = TimeSpan.FromSeconds(15);
 
@@ -55,6 +58,18 @@ internal sealed class RepoContextIndexingOptions
     public TimeSpan FullWalkInterval { get; init; } = TimeSpan.FromMinutes(5);
 
     /// <summary>
+    /// How long a warm decoded-vector candidate set is trusted in the
+    /// <see cref="RepoContextVectorCache"/> before it is re-gathered from the store.
+    /// Local writes invalidate the cache precisely and immediately, so this bound
+    /// only backstops a change that bypasses the local writer - a vector landing via
+    /// cross-cluster replication - which the invalidation cannot observe. A short
+    /// default keeps such a change visible quickly while still absorbing repeated
+    /// queries between writes. A value of zero (or negative) disables the cache: every
+    /// query re-gathers, exactly as the uncached path did.
+    /// </summary>
+    public TimeSpan VectorCacheTtl { get; init; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
     /// Resolves the options from environment variables, falling back to the defaults (the
     /// original behaviour) for any variable that is absent or malformed.
     /// </summary>
@@ -68,6 +83,7 @@ internal sealed class RepoContextIndexingOptions
             ReconcileInterval = ReadSeconds(ReconcileIntervalSecondsKey, defaults.ReconcileInterval),
             ReconcileIntervalJitter = ReadSeconds(ReconcileJitterSecondsKey, defaults.ReconcileIntervalJitter),
             FullWalkInterval = ReadSeconds(FullWalkIntervalSecondsKey, defaults.FullWalkInterval),
+            VectorCacheTtl = ReadSeconds(VectorCacheTtlSecondsKey, defaults.VectorCacheTtl),
         };
     }
 

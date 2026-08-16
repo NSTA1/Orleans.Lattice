@@ -8,8 +8,8 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Capture;
 /// Integration tests for <see cref="RepoContextStore.RemoveRepoAsync"/> and the
 /// repository enumeration it is verified against. Removal drains every reserved
 /// context tree's <c>repo/{repoId}/</c> subtree through the resilient range-delete
-/// helper and then deletes the bare root marker, so a purge must empty all five
-/// trees, drop the marker, exclude the repository from <c>list_repos</c>, and
+/// helper and then deletes the bare root marker, so a purge must empty every
+/// reserved tree, drop the marker, exclude the repository from <c>list_repos</c>, and
 /// leave a sibling repository untouched. The sibling-visibility test also pins the
 /// enumeration fix: a hyphenated sibling id sorts between a shorter id's marker and
 /// its subtree, so it must still be discovered.
@@ -62,6 +62,7 @@ public sealed class RepoContextStoreRemovalTests
         {
             (RepoContextTrees.Structural, RepoContextKeys.File(repoId, "src/A.cs")),
             (RepoContextTrees.Symbol, RepoContextKeys.Symbol(repoId, "Acme.A")),
+            (RepoContextTrees.Content, RepoContextKeys.Content(repoId, "src/A.cs")),
             (RepoContextTrees.Memory, RepoContextKeys.Memory(repoId, "notes", "1")),
             (RepoContextTrees.VectorMembership, RepoContextKeys.VectorMembership(repoId, "default")),
             (RepoContextTrees.VectorPayload, RepoContextKeys.VectorPayload(repoId, "cafe")),
@@ -91,8 +92,8 @@ public sealed class RepoContextStoreRemovalTests
         Assert.Multiple(() =>
         {
             Assert.That(result.RepoId, Is.EqualTo("acme"));
-            // Six subtree records plus the bare root marker.
-            Assert.That(result.EntriesDeleted, Is.EqualTo(7));
+            // Seven subtree records plus the bare root marker.
+            Assert.That(result.EntriesDeleted, Is.EqualTo(8));
         });
 
         foreach (var (treeName, key) in seeded)

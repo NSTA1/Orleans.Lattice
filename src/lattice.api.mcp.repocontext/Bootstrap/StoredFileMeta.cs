@@ -35,10 +35,16 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// have already been extracted. False for a node written before symbol extraction
 /// existed, which is what makes the background back-fill pick it up. A file that
 /// declares no symbols but has been processed is still <see langword="true"/>.</param>
+/// <param name="ContentProcessed">Whether the stored file node carries the
+/// <see cref="FileNode.ContentProcessed"/> marker - that is, whether its searchable
+/// body text has already been projected into the content tree. False for a node
+/// written before the content projection existed, which is what makes the background
+/// content back-fill pick it up.</param>
 internal readonly record struct StoredFileMeta(
     string Digest,
     string Language,
     long SizeBytes,
     long IngestWallTicks,
     IReadOnlyList<string> DeclaredSymbols,
-    bool SymbolsProcessed = false);
+    bool SymbolsProcessed = false,
+    bool ContentProcessed = false);

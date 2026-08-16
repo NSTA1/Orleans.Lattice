@@ -66,6 +66,22 @@ public sealed class RepoContextKeywordSearchTests
     }
 
     [Test]
+    public void Score_matches_a_token_present_only_in_the_content_field()
+    {
+        // The content projection places the file body in a field; a token present
+        // only in the body (not the key, path, or fqn) must still score, which is the
+        // whole point of the content projection for the no-embedder path.
+        var entry = Entry(
+            "repo/r/content/src/A.cs",
+            path: "src/A.cs",
+            fields: new Dictionary<string, string> { ["text"] = "the quick brown widget jumps" });
+        var tokens = RepoContextKeywordSearch.Tokenize("widget");
+
+        Assert.That(RepoContextKeywordSearch.Score(entry, tokens), Is.EqualTo(2d),
+            "A whole-token match inside the folded content body scores substring plus bonus.");
+    }
+
+    [Test]
     public void Score_is_zero_when_nothing_matches()
         => Assert.That(
             RepoContextKeywordSearch.Score(Entry("repo/r/file/a.cs"), RepoContextKeywordSearch.Tokenize("zzz")),

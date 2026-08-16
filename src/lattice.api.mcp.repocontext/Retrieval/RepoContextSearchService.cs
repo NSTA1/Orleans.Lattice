@@ -235,6 +235,14 @@ internal sealed class RepoContextSearchService
             RepoContextTrees.Memory, RepoContextKeys.MemoryPrefix(repoId), entries, cancellationToken)
             .ConfigureAwait(false);
 
+        // Fold the per-file content projection in so keyword search ranks over file
+        // body text, not just filenames and symbol names. The content tree is
+        // separate from the structural tree, so it is scanned explicitly. The shared
+        // MaxKeywordScan bound still caps the total candidate set.
+        await ScanTreeAsync(
+            RepoContextTrees.Content, RepoContextKeys.ContentPrefix(repoId), entries, cancellationToken)
+            .ConfigureAwait(false);
+
         return RepoContextKeywordSearch.Rank(entries, tokens, k);
     }
 

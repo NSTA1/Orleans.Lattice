@@ -43,6 +43,11 @@ public sealed class RepoContextTreesTests
             Throws.TypeOf<ArgumentOutOfRangeException>());
 
     [Test]
+    public void Content_kind_maps_to_the_content_tree()
+        => Assert.That(RepoContextTrees.ForKind(RepoContextRecordKind.Content),
+            Is.EqualTo(RepoContextTrees.Content));
+
+    [Test]
     public void All_contains_every_named_tree_with_no_duplicates()
     {
         Assert.Multiple(() =>
@@ -51,6 +56,7 @@ public sealed class RepoContextTreesTests
             {
                 RepoContextTrees.Structural,
                 RepoContextTrees.Symbol,
+                RepoContextTrees.Content,
                 RepoContextTrees.Memory,
                 RepoContextTrees.VectorMembership,
                 RepoContextTrees.VectorPayload,

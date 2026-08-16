@@ -27,17 +27,21 @@ internal sealed class ExactKnnSemanticIndex : IRepoContextSemanticIndex
 {
     private readonly IGrainFactory _grainFactory;
     private readonly Serializer _serializer;
+    private readonly RepoContextVectorCache _cache;
 
     /// <summary>Creates the exact kNN index.</summary>
     /// <param name="grainFactory">The grain factory used to reach the reserved vector trees. Must not be <see langword="null"/>.</param>
     /// <param name="serializer">The Orleans serializer used to decode vector records. Must not be <see langword="null"/>.</param>
+    /// <param name="cache">The warm decoded-candidate cache consulted before the store is scanned. Must not be <see langword="null"/>.</param>
     /// <exception cref="ArgumentNullException">Any argument is null.</exception>
-    public ExactKnnSemanticIndex(IGrainFactory grainFactory, Serializer serializer)
+    public ExactKnnSemanticIndex(IGrainFactory grainFactory, Serializer serializer, RepoContextVectorCache cache)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(serializer);
+        ArgumentNullException.ThrowIfNull(cache);
         _grainFactory = grainFactory;
         _serializer = serializer;
+        _cache = cache;
     }
 
     /// <inheritdoc />
@@ -51,7 +55,18 @@ internal sealed class ExactKnnSemanticIndex : IRepoContextSemanticIndex
         ArgumentNullException.ThrowIfNull(repoId);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(k);
 
+        // A cache hit is filtered to exactly this (repoId, space), so the ranker over
+        // the cached set produces byte-identical results to the uncached scan.
+        if (_cache.TryGet(repoId, querySpace, out var cached))
+        {
+            return RepoContextKnnRanker.Rank(query, querySpace, cached, k);
+        }
+
+        // Capture the generation before gathering so a write that lands during the
+        // scan invalidates this result rather than caching a stale set.
+        var generation = _cache.CaptureGeneration(repoId);
         var candidates = await GatherAsync(repoId, querySpace, cancellationToken).ConfigureAwait(false);
+        _cache.Store(repoId, querySpace, candidates, generation);
         return RepoContextKnnRanker.Rank(query, querySpace, candidates, k);
     }
 

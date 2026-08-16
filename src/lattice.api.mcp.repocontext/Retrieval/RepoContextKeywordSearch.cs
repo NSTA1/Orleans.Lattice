@@ -11,9 +11,10 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// <para>
 /// A record's score is the number of distinct query tokens that appear (as a
 /// case-insensitive substring) in its searchable text - its key, path,
-/// fully-qualified name, topic, tags, and scalar field values - with a small bonus
-/// for a whole-token match. The scorer holds no state and touches no store, so its
-/// recall behaviour is unit-testable in isolation.
+/// fully-qualified name, topic, tags, and scalar field values, which for a
+/// per-file content-projection record include the file's bounded body text - with
+/// a small bonus for a whole-token match. The scorer holds no state and touches no
+/// store, so its recall behaviour is unit-testable in isolation.
 /// </para>
 /// </summary>
 internal static class RepoContextKeywordSearch

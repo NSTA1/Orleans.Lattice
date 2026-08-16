@@ -42,6 +42,17 @@ internal static class RepoContextTrees
     /// </summary>
     internal const string Memory = "repo-context-memory";
 
+    /// <summary>
+    /// Tree holding the per-file searchable-content projection: one record per
+    /// text file carrying its bounded body text, keyed by
+    /// <c>repo/{repoId}/content/{path}</c>. It is a rebuildable projection (like the
+    /// vector trees), not store-of-record - it lets the keyword/degraded search path
+    /// rank over file <b>content</b> rather than filenames and symbol names alone. It
+    /// churns as files change and are pruned, so the host configures finite tombstone
+    /// compaction here.
+    /// </summary>
+    internal const string Content = "repo-context-content";
+
     /// <summary>Reserved tree for vector membership (the retrieval surface, built later).</summary>
     internal const string VectorMembership = "repo-context-vector-membership";
 
@@ -60,6 +71,7 @@ internal static class RepoContextTrees
         Structural,
         Symbol,
         Memory,
+        Content,
         VectorMembership,
         VectorPayload,
         VectorMetadata,
@@ -82,6 +94,7 @@ internal static class RepoContextTrees
             or RepoContextRecordKind.File => Structural,
         RepoContextRecordKind.Symbol => Symbol,
         RepoContextRecordKind.Memory => Memory,
+        RepoContextRecordKind.Content => Content,
         RepoContextRecordKind.VectorMetadata => VectorMetadata,
         RepoContextRecordKind.VectorPayload => VectorPayload,
         RepoContextRecordKind.VectorMembership => VectorMembership,

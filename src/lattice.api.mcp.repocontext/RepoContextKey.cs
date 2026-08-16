@@ -6,7 +6,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// component fields are populated depends on <see cref="Kind"/>:
 /// <list type="bullet">
 ///   <item><description><see cref="RepoContextRecordKind.Repo"/>: <see cref="RepoId"/> only.</description></item>
-///   <item><description><see cref="RepoContextRecordKind.Package"/> / <see cref="RepoContextRecordKind.File"/>: <see cref="RepoId"/> and <see cref="Path"/>.</description></item>
+///   <item><description><see cref="RepoContextRecordKind.Package"/> / <see cref="RepoContextRecordKind.File"/> / <see cref="RepoContextRecordKind.Content"/>: <see cref="RepoId"/> and <see cref="Path"/>.</description></item>
 ///   <item><description><see cref="RepoContextRecordKind.Symbol"/>: <see cref="RepoId"/> and <see cref="FullyQualifiedName"/>.</description></item>
 ///   <item><description><see cref="RepoContextRecordKind.Memory"/>: <see cref="RepoId"/>, <see cref="Topic"/>, and <see cref="Id"/>.</description></item>
 ///   <item><description><see cref="RepoContextRecordKind.VectorMetadata"/>: <see cref="RepoId"/> and <see cref="VectorId"/>.</description></item>

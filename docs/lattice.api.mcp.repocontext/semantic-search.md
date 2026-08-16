@@ -5,9 +5,17 @@
 ## The two paths
 
 - **Semantic.** When an embedding provider is bound and vectors exist for the repository, the query is embedded and matched against the stored vectors with an exact nearest-neighbour (kNN) search. The result's `mode` is `semantic`.
-- **Keyword.** When no embedding provider is bound, the provider is unavailable, or the query fails to embed, search degrades to a deterministic keyword/structural scan over the store. The result's `mode` is `keyword`.
+- **Keyword.** When no embedding provider is bound, the provider is unavailable, or the query fails to embed, search degrades to a deterministic keyword/structural scan over the store. The scan ranks over each record's key, path, fully-qualified name, topic, tags, and - via the per-file **content projection** - the file's body text, so a keyword query matches file **content**, not just filenames and identifiers. The result's `mode` is `keyword`.
 
 If nothing matches at all, `mode` is `empty`. The path that answered is always reported, so a caller can tell meaning-based retrieval from a fallback scan.
+
+## Keyword search over file content
+
+The keyword path is not limited to filenames and symbol names. During the structural reconcile, every text file's bounded body text is written to the dedicated [content projection tree](record-model.md#content-projection) at `repo/{repoId}/content/{path}`. The keyword scanner folds that body text into each candidate's searchable haystack, so a query token present only inside a file (not in its path or any declared identifier) still matches. This is deliberately **decoupled from the embedding provider**: the content projection is populated by the indexing walk regardless of whether an embedder is bound, precisely so the no-embedder path is more than filename matching. A repository indexed before the content projection existed is healed by an idempotent content back-fill (see [record-model.md](record-model.md#content-projection)). The scan keeps its existing bounded-candidate safety limit, so folding in content does not change its cost profile.
+
+## Warm vector cache behind the exact-kNN index
+
+The semantic path range-scans all vector metadata and decodes every vector payload for a repository on each query. A warm in-memory cache sits behind the exact-kNN index and holds the decoded candidate set per `(repoId, embedding space)`, so repeated queries between writes skip the re-scan and re-decode. The cache is transparent: a hit is filtered by the query's embedding space exactly as the uncached scan is, so it produces byte-identical ranking and recall. It is kept correct two ways - a local write to a repository's vectors invalidates its cached sets immediately and precisely, and a bounded time-to-live (default 30s, configurable via `LATTICE_VECTOR_CACHE_TTL_SECONDS`) backstops any change that bypasses the local writer, such as a vector landing through cross-cluster replication. Setting the TTL to zero disables the cache, reproducing the original scan-every-query behaviour.
 
 ## The embedding seam
 

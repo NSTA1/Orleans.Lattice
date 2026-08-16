@@ -66,6 +66,9 @@ internal static class RepoContextEntryProjection
                 case RepoContextRecordKind.Memory:
                     ProjectMemory(serializer.Deserialize<MemoryRecord>(value), fields, tags, links);
                     break;
+                case RepoContextRecordKind.Content:
+                    ProjectContent(serializer.Deserialize<ContentRecord>(value), fields);
+                    break;
                 default:
                     break;
             }
@@ -98,6 +101,7 @@ internal static class RepoContextEntryProjection
         RepoContextRecordKind.File => RepoContextKeys.File(key.RepoId, key.Path!),
         RepoContextRecordKind.Symbol => RepoContextKeys.Symbol(key.RepoId, key.FullyQualifiedName!),
         RepoContextRecordKind.Memory => RepoContextKeys.Memory(key.RepoId, key.Topic!, key.Id!),
+        RepoContextRecordKind.Content => RepoContextKeys.Content(key.RepoId, key.Path!),
         RepoContextRecordKind.VectorMetadata => RepoContextKeys.Vector(key.RepoId, key.VectorId!),
         RepoContextRecordKind.VectorPayload => RepoContextKeys.VectorPayload(key.RepoId, key.ContentAddress!),
         RepoContextRecordKind.VectorMembership => RepoContextKeys.VectorMembership(key.RepoId, key.Collection!),
@@ -127,6 +131,13 @@ internal static class RepoContextEntryProjection
         AddInt(fields, "sizeBytes", node.SizeBytes);
         AddString(fields, "lastIngested", node.LastIngested);
         AddTags(tags, node.Tags);
+    }
+
+    private static void ProjectContent(ContentRecord node, Dictionary<string, string> fields)
+    {
+        // The bounded body text is surfaced under a plain field so the keyword
+        // search haystack (which folds every field value) ranks over file content.
+        AddString(fields, "text", node.Text);
     }
 
     private static void ProjectSymbol(SymbolRecord node, Dictionary<string, string> fields, List<string> tags)

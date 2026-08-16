@@ -62,20 +62,28 @@ internal sealed class RepoContextVectorWriter
     private readonly IGrainFactory _grainFactory;
     private readonly Serializer _serializer;
     private readonly ILatticeReplicationContext _replication;
+    private readonly RepoContextVectorCache _cache;
 
     /// <summary>Creates the vector writer.</summary>
     /// <param name="grainFactory">The grain factory used to reach the reserved vector trees. Must not be <see langword="null"/>.</param>
     /// <param name="serializer">The Orleans serializer used to decode and re-encode vector records. Must not be <see langword="null"/>.</param>
     /// <param name="replication">The replication context that reports whether, and in what merge mode, the membership tree is replicated. Must not be <see langword="null"/>.</param>
+    /// <param name="cache">The warm decoded-candidate cache invalidated after every local mutation. Must not be <see langword="null"/>.</param>
     /// <exception cref="ArgumentNullException">Any argument is null.</exception>
-    public RepoContextVectorWriter(IGrainFactory grainFactory, Serializer serializer, ILatticeReplicationContext replication)
+    public RepoContextVectorWriter(
+        IGrainFactory grainFactory,
+        Serializer serializer,
+        ILatticeReplicationContext replication,
+        RepoContextVectorCache cache)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(serializer);
         ArgumentNullException.ThrowIfNull(replication);
+        ArgumentNullException.ThrowIfNull(cache);
         _grainFactory = grainFactory;
         _serializer = serializer;
         _replication = replication;
+        _cache = cache;
     }
 
     /// <summary>
@@ -127,6 +135,10 @@ internal sealed class RepoContextVectorWriter
 
         await RetireStaleAsync(repoId, sourceId, keep, cancellationToken).ConfigureAwait(false);
 
+        // The metadata/payload trees the exact-kNN gather scans just changed for this
+        // repository, so drop any warm cached candidate set precisely and immediately.
+        _cache.Invalidate(repoId);
+
         // Membership is recorded by the caller once per embed batch (see
         // AddMembersAsync), not per store: a batch's presence keys land in a single
         // bulk write after its vectors, so an interrupted run leaves at most one
@@ -176,6 +188,10 @@ internal sealed class RepoContextVectorWriter
 
         await DeleteVectorsAsync(repoId, sourceId, cancellationToken).ConfigureAwait(false);
         await RemoveMemberAsync(repoId, sourceId, cancellationToken).ConfigureAwait(false);
+
+        // The metadata tree the exact-kNN gather scans just lost this source's
+        // vectors, so drop any warm cached candidate set precisely and immediately.
+        _cache.Invalidate(repoId);
     }
 
     private async Task DeleteVectorsAsync(string repoId, string sourceId, CancellationToken cancellationToken)
@@ -312,6 +328,11 @@ internal sealed class RepoContextVectorWriter
             var key = RepoContextKeys.VectorMembership(repoId, VectorCodec.SourceId(sourceKey));
             await tree.OrFlag(key).EnableAsync(replicaId, cancellationToken).ConfigureAwait(false);
         }
+
+        // Membership does not feed the gather, but a batch's membership write always
+        // trails its StoreAsync vectors, so invalidate defensively to keep the cache
+        // consistent with any future gather that consults membership.
+        _cache.Invalidate(repoId);
     }
 
     private async Task RemoveMemberAsync(string repoId, string sourceId, CancellationToken cancellationToken)
