@@ -680,6 +680,46 @@ internal sealed partial class BPlusLeafGrain
         // budget disables the yield (replay runs to completion uninterrupted).
         var recordsSinceYield = 0;
 
+        // Resumable replay (issue #1513): historically the persisted
+        // checkpoint was only advanced by the post-pass-2 reconciliation in
+        // ReplayWalSinceCheckpointAsync, so a replay that could not finish
+        // within its activation window (a large un-snapshotted WAL prefix
+        // relative to the ~30 s RuntimeRequested budget) made no durable
+        // progress: the deactivation discarded every applied entry and the
+        // next activation restarted from the same offset, so the leaf never
+        // converged and the coverage-gated WAL GC could never trim the
+        // prefix. Flush the checkpoint incrementally over the strictly
+        // contiguous, fully-applied prefix instead, at each slice boundary.
+        // A deactivation then loses at most one flush interval, and the
+        // checkpoint persist drives the existing periodic snapshot capture
+        // (MaybeRunPeriodicSnapshotRecheckAsync) so the next activation can
+        // rehydrate from a snapshot and resume from the last durable offset
+        // rather than replaying from zero.
+        //
+        // The advance is bounded so it can NEVER pass an offset that is not
+        // yet durably applied (the data-loss class #1492 guards), via two
+        // clamps that together hold the checkpoint at the highest offset
+        // below which every entry - inline, deferred, and cross-partition
+        // saga - is applied:
+        //   (a) below the lowest DEFERRED terminal / DeleteRange offset seen
+        //       in this partition, since those mutations are applied only in
+        //       pass 2 (see the DeferredTerminal docstring); and
+        //   (b) below any unresolved saga prepare in this partition
+        //       (MinUnresolvedPrepareOffsetForPartition), because the
+        //       matching terminal - even one routed to this same partition -
+        //       is itself deferred to pass 2, so _pendingTx must be
+        //       reconstructed by a resumed replay that re-reads the prepare.
+        // SetCheckpointOffsetAsync applies clamp (b) internally too; applying
+        // it here as well keeps the per-slice cadence from issuing redundant
+        // force-flushes while a prepare sits open below maxApplied.
+        //
+        // lastFlushedCeiling starts at the partition's current durable
+        // position so a resumed cold replay that re-applies an
+        // already-checkpointed prefix (rehydrate declined, cache empty) never
+        // re-persists it or trips SetCheckpointOffsetAsync's monotonic guard.
+        long lowestDeferredOffset = long.MaxValue;
+        var lastFlushedCeiling = GetCurrentCheckpointForPartition(partition);
+
         while (fromExclusive < head)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -723,6 +763,8 @@ internal sealed partial class BPlusLeafGrain
                         or MutationKind.DeleteRange)
                     {
                         deferredTerminals.Add(new DeferredTerminal(partition, entry.Offset, entry.Mutation));
+                        if (entry.Offset < lowestDeferredOffset)
+                            lowestDeferredOffset = entry.Offset;
                     }
                     else
                     {
@@ -756,23 +798,54 @@ internal sealed partial class BPlusLeafGrain
             if (lastOffset <= fromExclusive)
                 break;
             fromExclusive = lastOffset;
+
+            // Incremental checkpoint flush over the safe contiguous prefix
+            // (issue #1513). deferredCeiling holds the advance below the
+            // lowest deferred terminal / DeleteRange in this partition;
+            // prepareCeiling holds it below any unresolved saga prepare.
+            // safeCeiling is the min of both and the highest applied offset,
+            // so it can never license a checkpoint (or the materialiser pin)
+            // past a not-yet-durably-applied offset. Only issue the flush
+            // when it strictly advances the partition's durable position,
+            // which coalesces per MaterialiserCheckpointInterval /
+            // MaterialiserCheckpointEntries inside SetCheckpointOffsetAsync
+            // and drives the periodic snapshot capture on persist.
+            var deferredCeiling = lowestDeferredOffset == long.MaxValue
+                ? maxApplied
+                : Math.Min(maxApplied, lowestDeferredOffset - 1);
+            var prepareCeiling = MinUnresolvedPrepareOffsetForPartition(partition) is long minPrepare
+                ? minPrepare - 1
+                : long.MaxValue;
+            var safeCeiling = Math.Min(deferredCeiling, prepareCeiling);
+            if (safeCeiling > lastFlushedCeiling)
+            {
+                using (LatticeApplyOffsetContext.BeginScope(partition, safeCeiling))
+                {
+                    await projection.SetCheckpointOffsetAsync(safeCeiling, cancellationToken);
+                }
+                lastFlushedCeiling = safeCeiling;
+            }
         }
 
-        // The actual checkpoint advance (SetCheckpointOffsetAsync) is
-        // deferred to the post-pass-2 reconciliation step in
-        // ReplayWalSinceCheckpointAsync. That step waits until every
-        // deferred terminal has applied (lifting pending-tx clamps)
-        // and only then advances each partition's persisted checkpoint
-        // to the corresponding maxApplied. The pass-1 advance was
-        // unsafe because: (a) a partition that observed a prepare in
-        // pass 1 would clamp its checkpoint behind the prepare's
-        // offset, but the matching terminal would only land in pass
-        // 2; (b) a partition with no prepares but the same maxApplied
-        // would over-eagerly advance past offsets the deferred
-        // terminals must still be observed at by future activations.
-        // Returning the per-partition maxApplied here gives the
-        // caller the data it needs to do the post-pass-2 advance
-        // with full knowledge of every partition's outcome.
+        // Pass 1 now flushes the checkpoint incrementally over the strictly
+        // contiguous, fully-applied prefix (the safeCeiling clamp above), so
+        // partial replay progress is durable across a mid-replay teardown
+        // (issue #1513). What it deliberately does NOT do here is advance the
+        // checkpoint to the FULL maxApplied: a partition may still hold a
+        // deferred terminal or an unresolved prepare below maxApplied, so the
+        // remaining advance up to maxApplied is left to the post-pass-2
+        // reconciliation step in ReplayWalSinceCheckpointAsync, which waits
+        // until every deferred terminal has applied (lifting the pending-tx
+        // clamps) before advancing each partition's persisted checkpoint to
+        // its maxApplied. The incremental flush is bounded strictly below
+        // those pending offsets by construction, so it never over-advances:
+        // (a) a partition that observed a prepare in pass 1 is held behind the
+        // prepare's offset, and (b) a partition that emitted a deferred
+        // terminal is held behind that terminal's offset - the full advance
+        // past both only happens once pass 2 has applied them. Returning the
+        // per-partition maxApplied here gives the caller the data it needs to
+        // do the post-pass-2 advance with full knowledge of every partition's
+        // outcome.
         return (Advanced: maxApplied > checkpoint, MaxApplied: maxApplied);
     }
 
