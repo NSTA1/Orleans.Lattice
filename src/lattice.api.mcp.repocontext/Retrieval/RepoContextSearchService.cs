@@ -128,10 +128,11 @@ internal sealed class RepoContextSearchService
         }
         catch (Exception ex)
         {
-            // Fail-closed contract: if the keyword/structural fallback itself
-            // faults (for example the same stale-leaf-projection activation fault
-            // that can trip the semantic path, since the keyword scan walks the
-            // structural and memory trees), the read-only search tool degrades to
+            // Fail-closed backstop. Per-tree isolation in KeywordAsync already
+            // degrades a terminal single-tree materialisation fault (for example a
+            // stale-leaf-projection activation fault) to the remaining healthy
+            // trees, so this outer guard now only catches an unexpected fault in
+            // the shared setup or ranking. The read-only search tool degrades to
             // the terminal empty result rather than propagating a protocol error.
             _logger.LogWarning(
                 ex,
@@ -227,23 +228,69 @@ internal sealed class RepoContextSearchService
             return Array.Empty<RepoContextSearchHit>();
         }
 
+        // Each context tree is scanned independently and in isolation: a terminal
+        // fault materialising one tree must degrade the keyword corpus to the
+        // remaining healthy trees, not sink the whole fallback. The underlying
+        // RepoContextPortability scan already recovers transparently from a
+        // transient EnumerationAbortedException (silo failover, cold start, idle
+        // expiry, scale-down) via its retry budget; this guard is for the
+        // orthogonal terminal case - for example a LeafProjectionStaleException
+        // when a leaf's durable projection checkpoint has fallen off the WAL and
+        // awaits an operator-driven rebuild - which the retry budget rightly does
+        // not swallow because retrying cannot recover it.
         var entries = new List<RepoContextEntryView>();
-        await ScanTreeAsync(
-            RepoContextTrees.Structural, RepoContextKeys.RepoScanPrefix(repoId), entries, cancellationToken)
+        await TryScanTreeAsync(
+            RepoContextTrees.Structural, RepoContextKeys.RepoScanPrefix(repoId), entries, repoId, cancellationToken)
             .ConfigureAwait(false);
-        await ScanTreeAsync(
-            RepoContextTrees.Memory, RepoContextKeys.MemoryPrefix(repoId), entries, cancellationToken)
+        await TryScanTreeAsync(
+            RepoContextTrees.Memory, RepoContextKeys.MemoryPrefix(repoId), entries, repoId, cancellationToken)
             .ConfigureAwait(false);
 
         // Fold the per-file content projection in so keyword search ranks over file
         // body text, not just filenames and symbol names. The content tree is
         // separate from the structural tree, so it is scanned explicitly. The shared
         // MaxKeywordScan bound still caps the total candidate set.
-        await ScanTreeAsync(
-            RepoContextTrees.Content, RepoContextKeys.ContentPrefix(repoId), entries, cancellationToken)
+        await TryScanTreeAsync(
+            RepoContextTrees.Content, RepoContextKeys.ContentPrefix(repoId), entries, repoId, cancellationToken)
             .ConfigureAwait(false);
 
         return RepoContextKeywordSearch.Rank(entries, tokens, k);
+    }
+
+    /// <summary>
+    /// Scans one context tree into <paramref name="entries"/>, isolating a
+    /// terminal per-tree materialisation fault so it degrades the keyword corpus
+    /// to the remaining healthy trees rather than aborting the whole fallback.
+    /// Cancellation is never swallowed. Any entries the tree yielded before it
+    /// faulted are retained.
+    /// </summary>
+    private async Task TryScanTreeAsync(
+        string treeName,
+        string prefix,
+        List<RepoContextEntryView> entries,
+        string repoId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await ScanTreeAsync(treeName, prefix, entries, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // A single tree failing to materialise (most often a content or leaf
+            // projection awaiting an operator-driven rebuild) must not sink the
+            // keyword fallback: keep whatever the healthy trees yielded and rank
+            // over the narrower corpus.
+            _logger.LogWarning(
+                ex,
+                "repocontext_search keyword scan for repository {RepoId} skipped tree {Tree}: it could not be enumerated.",
+                repoId,
+                treeName);
+        }
     }
 
     private async Task ScanTreeAsync(
