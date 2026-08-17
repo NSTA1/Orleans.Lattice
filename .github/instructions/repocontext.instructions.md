@@ -365,6 +365,17 @@ normal, not a contradiction (embeddings also require a healthy vector projection
     not-yet-embedded files. For **completeness** while an ingest runs, do not
     trust a single `search` - also `scan` the relevant `pathPrefix` (or `grep`),
     and re-run the `search` once `filesEmbedded` reaches `filesScanned`.
+  - **Stale content projection (body-text ranking only):** the per-file content
+    projection is a separate, rebuildable tree from the vector index. If it is
+    terminally stale (its leaf checkpoint fell off the write-ahead log awaiting an
+    operator rebuild), the store degrades gracefully rather than failing: ingest
+    still completes (structural, symbol, and vector passes are independent and the
+    content back-fill retries the skipped files once the tree is healed), and
+    keyword `search` still ranks over filenames, identifiers, and memory - it just
+    loses file-body matches until the rebuild lands. So a `keyword` result that
+    misses a term you know is inside a file body (but not its path or symbols) can
+    mean a stale content tree, not an absent match; confirm with `grep` before
+    concluding the code is gone.
 
 ## Regions
 

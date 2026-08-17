@@ -36,6 +36,15 @@ internal sealed class RepoContextContentReconciler
     private const long MaxReadBytes = 4L * 1024 * 1024;
 
     /// <summary>
+    /// The empty processed-path set returned when content projection is skipped this
+    /// pass because the content tree is terminally stale. Every affected file is then
+    /// left unmarked so the content back-fill re-projects it once the tree is healed.
+    /// A shared immutable instance keeps the degraded path allocation-free.
+    /// </summary>
+    private static readonly IReadOnlySet<string> EmptyProcessed =
+        new HashSet<string>(StringComparer.Ordinal);
+
+    /// <summary>
     /// How many additional files must be projected between content-projection
     /// heartbeat log lines. Mirrors the vectorising phase's heartbeat: a large
     /// content back-fill (a repository indexed before the content projection existed
@@ -149,7 +158,32 @@ internal sealed class RepoContextContentReconciler
             deletes.Add(RepoContextKeys.Content(repoId, path));
         }
 
-        await CommitAsync(repoId, writes, deletes, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await CommitAsync(repoId, writes, deletes, cancellationToken).ConfigureAwait(false);
+        }
+        catch (LeafProjectionStaleException stale)
+        {
+            // The content tree is a rebuildable derived projection, not a store of
+            // record (see RepoContextTrees.Content), so a terminally-stale content
+            // leaf - one whose durable projection checkpoint fell off its write-ahead
+            // log with no covering snapshot - must never fail the whole repository
+            // index. Skip content projection this pass and leave every file unmarked
+            // so the content back-fill re-projects it once the content tree is healed
+            // out of band. Structural, symbol, and semantic ingest are independent and
+            // proceed, and the keyword search path already isolates a faulting content
+            // tree, so retrieval stays correct (minus body ranking) in the meantime.
+            // This tolerance is scoped to the content tree because CommitAsync only
+            // ever writes there; a store-of-record tree keeps the throwing default.
+            _logger.LogWarning(
+                stale,
+                "Repo {RepoId}: content projection is stale and could not be written (the content " +
+                "tree's durable checkpoint fell off its write-ahead log); skipping content projection " +
+                "this pass. {Written} pending record(s) were dropped and their files left unmarked so " +
+                "the back-fill retries them once the content tree is healed.",
+                repoId, writes.Count);
+            return new ContentReconcileResult(EmptyProcessed, 0);
+        }
 
         if (writes.Count > 0 || deletes.Count > 0)
         {
