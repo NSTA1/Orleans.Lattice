@@ -71,11 +71,12 @@ public sealed class GSet : ICrdt<GSet>
         {
             Convert.TryToBase64Chars(element, buffer, out var written);
             var key = buffer[..written];
-            var lookup = Elements.GetAlternateLookup<ReadOnlySpan<char>>();
-            // Only materialise the base64 string when the element is genuinely
-            // new; a re-add of an existing element hits the span lookup with no
-            // allocation.
-            return !lookup.Contains(key) && Elements.Add(new string(key));
+            // Single-probe insert: the span alternate-lookup hashes the base64
+            // key once and materialises the string only when the element is
+            // genuinely new (returning true), so a re-add allocates nothing and
+            // hits the set exactly once. This avoids the extra Contains probe
+            // the previous Contains-then-Add form paid on every add.
+            return Elements.GetAlternateLookup<ReadOnlySpan<char>>().Add(key);
         }
         finally
         {
