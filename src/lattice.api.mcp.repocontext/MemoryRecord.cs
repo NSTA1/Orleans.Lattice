@@ -13,9 +13,11 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// <see cref="Author"/>, <see cref="Provenance"/>, <see cref="CreatedAt"/>) are
 /// last-writer-wins registers; <see cref="Tags"/> is an add-wins observed-remove
 /// set; <see cref="Links"/> is an observed-remove map of relation to a set of
-/// target keys; and <see cref="Revisions"/> is a grow-only, content-addressed set
-/// of prior payloads that must never be lost. Merge with
-/// <see cref="Merge(MemoryRecord, MemoryRecord)"/>.
+/// target keys; <see cref="LinkDigests"/> captures the content digest each
+/// structural link target carried when the edge was written, so a later read can
+/// flag a link whose target has since drifted; and <see cref="Revisions"/> is a
+/// grow-only, content-addressed set of prior payloads that must never be lost.
+/// Merge with <see cref="Merge(MemoryRecord, MemoryRecord)"/>.
 /// </para>
 /// <para>
 /// Time-to-live / expiry semantics are intentionally out of scope for this record
@@ -82,6 +84,17 @@ internal sealed record MemoryRecord
     public GSet Revisions { get; init; } = new();
 
     /// <summary>
+    /// Last-writer-wins map from a structural link target key (a file or symbol)
+    /// to the content digest that target carried when the edge was written. On a
+    /// per-key read the captured digest is compared against the target's current
+    /// digest so a linked file or symbol that has since changed can be surfaced as
+    /// stale, without mutating the link itself. Only structural targets carry a
+    /// digest; memory-to-memory edges are not tracked here.
+    /// </summary>
+    [Id(12)]
+    public OrMap<string, BoundedRegister> LinkDigests { get; init; } = new();
+
+    /// <summary>
     /// Lattice merge of two replicas of the same memory record. Identity and the
     /// immutable <see cref="Kind"/> are preserved from <paramref name="left"/>
     /// (falling back to <paramref name="right"/> only when the left side is
@@ -108,6 +121,7 @@ internal sealed record MemoryRecord
             Tags = OrSet.Merge(left.Tags, right.Tags),
             Links = OrMap<string, OrSet>.Merge(left.Links, right.Links),
             Revisions = GSet.Merge(left.Revisions, right.Revisions),
+            LinkDigests = OrMap<string, BoundedRegister>.Merge(left.LinkDigests, right.LinkDigests),
         };
     }
 }

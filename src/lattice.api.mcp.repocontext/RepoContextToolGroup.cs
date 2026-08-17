@@ -136,8 +136,10 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                 Description =
                     "Fetches a single repository-context record by its full key - a structural node, a symbol, "
                     + "or an agent memory entry - and returns its flattened fields, tags, links, and remaining "
-                    + "life. A key with no live entry returns 'exists=false' so the caller can tell an absent or "
-                    + "expired entry from an empty one. Read-only.",
+                    + "life. For a memory entry it also evaluates link staleness: each structural link (to a file "
+                    + "or symbol) whose target's content digest has drifted since the link was made is reported "
+                    + "through 'stale' and 'staleLinks'. A key with no live entry returns 'exists=false' so the "
+                    + "caller can tell an absent or expired entry from an empty one. Read-only.",
                 ReadOnly = true,
                 Destructive = false,
                 UseStructuredContent = true,
@@ -154,9 +156,10 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     "Walks an ordered range of repository-context entries under a scope (all files, packages, "
                     + "or symbols; all memory; or the memory under one topic) and returns one page at a time with "
                     + "an opaque continuation token. Expired and tombstoned entries are never returned. Because a "
-                    + "scan is a bulk read it does not evaluate each entry's time-to-live, so the expiry fields "
-                    + "('expires', 'hasExpired', 'expiresAtUtc', 'remainingSeconds') are reported as null ('not "
-                    + "evaluated'); call 'repocontext_recall' on a key for its authoritative expiry. Use the "
+                    + "scan is a bulk read it does not evaluate each entry's time-to-live or memory link staleness, "
+                    + "so the expiry fields ('expires', 'hasExpired', 'expiresAtUtc', 'remainingSeconds') and the "
+                    + "staleness fields ('stale', 'staleLinks') are reported as null ('not evaluated'); call "
+                    + "'repocontext_recall' on a key for its authoritative expiry and staleness. Use the "
                     + "returned token as the next call's 'continuationToken' to page through the whole range. "
                     + "Read-only.",
                 ReadOnly = true,
@@ -191,9 +194,9 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     "Finds the repository-context records most relevant to a natural-language query and returns "
                     + "them hydrated from the store of record, ranked best-first. When an embedding provider and "
                     + "vectors are available it runs an exact semantic (nearest-neighbour) search; otherwise it "
-                    + "degrades to a deterministic keyword/structural scan, so a query always returns the best "
-                    + "available matches instead of failing. The result's 'mode' reports which path answered "
-                    + "('semantic', 'keyword', or 'empty'). Read-only.",
+                    + "degrades to a deterministic BM25 keyword/structural scan over record names and file content, "
+                    + "so a query always returns the best available matches instead of failing. The result's 'mode' "
+                    + "reports which path answered ('semantic', 'keyword', or 'empty'). Read-only.",
                 ReadOnly = true,
                 Destructive = false,
                 UseStructuredContent = true,
@@ -232,7 +235,9 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     + "'depth' hops - optionally restricted to a single 'relation' - and stops once 'maxNodes' "
                     + "distinct neighbors have been collected, reporting 'truncated' when the cap was hit. A seed "
                     + "key with no live entry returns 'exists=false'; a dangling edge whose target has no live "
-                    + "value is still returned with its own 'exists=false' so it is observable. Use it to explore "
+                    + "value is still returned with its own 'exists=false' so it is observable. Each walked memory "
+                    + "entry has its link staleness evaluated ('stale' / 'staleLinks'), as 'repocontext_recall' "
+                    + "does, so the walk surfaces which linked concepts point at drifted code. Use it to explore "
                     + "the curated concept graph an agent has captured across sessions. Read-only.",
                 ReadOnly = true,
                 Destructive = false,

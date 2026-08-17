@@ -27,7 +27,8 @@ to drift. It covers:
   when the index is degraded or stale).
 - **Retrieval** - `search` (relevance, and how to read the `mode` field),
   `scan` (ordered completeness over Files / Packages / Symbols / Memory),
-  `recall` (one record by key), and `neighbors` (walk the knowledge-linking
+  `recall` (one record by key, and memory link-staleness `stale` / `staleLinks`),
+  and `neighbors` (walk the knowledge-linking
   edges out of a memory entry), plus the `repo/{repoId}/...` key shapes.
 - **Capture** - durable agent memory via `remember` / `update` / `forget`, the
   small stable topic vocabulary, knowledge-linking edges between entries
@@ -54,9 +55,10 @@ disagree with the master file, the master file wins.
 - **Guardrail 1 - locate here, read with `view`.** The index reflects the last
   ingest, not your uncommitted edits; treat every hit as a pointer and `view` the
   real file before quoting, relying on, or editing it.
-- **Guardrail 2 - fall back when weak.** `mode: keyword`, `status: Failed`, or a
-  stale / mid-ingest (partially embedded) index is a worse locator than `grep` -
-  do not force it.
+- **Guardrail 2 - fall back when weak.** `mode: keyword` (a capable BM25 literal
+  scan, but tokens not meaning), `status: Failed`, or a stale / mid-ingest
+  (partially embedded) index can be a worse locator than `grep` - prefer
+  distinctive terms, and do not force it when your terms are too generic.
 - **Writes are destructive and fail-closed.** Never call `remember` / `update` /
   `forget` / `add_repo` / `remove_repo` speculatively, and never `remove_repo`
   the `lattice` repo. `remove_repo` in particular requires **explicit user
