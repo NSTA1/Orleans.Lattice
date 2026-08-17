@@ -58,6 +58,26 @@ public class MapLatticeExplorerTests
         Assert.That(atRoot.StatusCode, Is.EqualTo(HttpStatusCode.NotFound), "nothing should be mapped at the root when a base path is set");
     }
 
+    [Test]
+    public void MapLatticeExplorer_onto_a_non_pipeline_route_group_throws_rather_than_dropping_the_security_headers()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddLatticeExplorerWeb();
+        builder.Services.AddSingleton(Substitute.For<IExplorerAuthSession>());
+        using var app = builder.Build();
+
+        // A nested route group is an IEndpointRouteBuilder but not an
+        // IApplicationBuilder pipeline, so the baseline security-response headers
+        // cannot be registered on it. That must fail loudly rather than silently
+        // serve the admin console without its clickjacking/sniffing protections.
+        var nested = app.MapGroup("/nested");
+
+        Assert.That(
+            () => nested.MapLatticeExplorer(),
+            Throws.InvalidOperationException.With.Message.Contains("security"));
+    }
+
     private static FormUrlEncodedContent EmptyForm() =>
         new(new Dictionary<string, string>());
 

@@ -58,15 +58,30 @@ public static class LatticeExplorerWebEndpointRouteBuilderExtensions
     /// the explorer's Content-Security-Policy. At the root the prefix is empty,
     /// which every request path starts with, so all responses are covered. The
     /// predicate closure is allocated once at registration, not per request. The
-    /// middleware is only registrable when the endpoint route builder is also the
-    /// application's middleware pipeline (the minimal-hosting
-    /// <see cref="WebApplication"/> that every explorer host uses).
+    /// middleware can only be registered when the endpoint route builder is also
+    /// the application's middleware pipeline (the minimal-hosting
+    /// <see cref="WebApplication"/> that every explorer host uses); if it is not -
+    /// for example when the explorer is mapped onto a nested route group that is
+    /// not itself a pipeline - registration <b>fails loudly</b> rather than
+    /// silently serving the admin console without its clickjacking and
+    /// content-sniffing protections. Failing closed is deliberate: a security
+    /// header set that is quietly dropped is worse than a startup error a host can
+    /// see and correct.
     /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// The supplied <paramref name="endpoints"/> is not also an
+    /// <see cref="IApplicationBuilder"/>, so the baseline security-response-header
+    /// middleware cannot be registered and the explorer would be served without it.
+    /// </exception>
     private static void UseExplorerSecurityHeaders(IEndpointRouteBuilder endpoints, string routePrefix)
     {
         if (endpoints is not IApplicationBuilder app)
         {
-            return;
+            throw new InvalidOperationException(
+                "Orleans.Lattice Explorer cannot register its baseline security-response headers " +
+                $"(Content-Security-Policy, X-Frame-Options, X-Content-Type-Options, Referrer-Policy) because the endpoint route builder is not also an {nameof(IApplicationBuilder)} middleware pipeline. " +
+                "Map the explorer directly onto the application (for example 'app.MapLatticeExplorer()' on a WebApplication) rather than onto a nested route group, and configure the mount point with LatticeExplorerWebOptions.BasePath. " +
+                "Serving the admin console without these headers is refused rather than done silently.");
         }
 
         var prefix = new PathString(routePrefix.Length == 0 ? null : routePrefix);
