@@ -51,6 +51,20 @@ public sealed class MvRegister : ICrdt<MvRegister>
     [Id(1)]
     public Dictionary<string, long> Context { get; set; } = [];
 
+    /// <summary>
+    /// Cached materialised snapshot of the single-valued read produced by
+    /// <see cref="Values"/>. The register's values are immutable by
+    /// convention, so a steady-state (single-valued) register can hand the
+    /// same one-element list to repeated reads between writes instead of
+    /// allocating a fresh array each call. Reset to <c>null</c> by every
+    /// mutation that can change the live entry (<see cref="Set"/>,
+    /// <see cref="MergeFrom"/>, <see cref="MergeDelta"/>). Not serialised
+    /// (no <c>[Id]</c>): it is derived state that rebuilds lazily on the
+    /// next read after a copy or deserialize.
+    /// </summary>
+    [NonSerialized]
+    private IReadOnlyList<byte[]>? _singleValueSnapshot;
+
     /// <summary>Returns <c>true</c> when no live values remain.</summary>
     public bool IsEmpty => Entries.Count == 0;
 
@@ -84,27 +98,36 @@ public sealed class MvRegister : ICrdt<MvRegister>
 
         var nextCounter = NextCounter(replicaId);
 
-        // Drop every entry the writer has observed. An entry whose dot
-        // is dominated by the writer's context is by construction one
-        // the writer saw and is now superseding; the surviving entries
-        // are exactly the concurrent writes from other replicas the
-        // writer has not yet observed.
-        var survivors = new List<MvRegisterEntry>(Entries.Count + 1);
-        foreach (var entry in Entries)
+        // Drop every entry the writer has observed by compacting Entries in
+        // place, then append the new dot. An entry whose dot is dominated by
+        // the writer's context is by construction one the writer saw and is
+        // now superseding; the surviving entries are exactly the concurrent
+        // writes from other replicas the writer has not yet observed. In the
+        // steady state the register is single-valued and that lone entry is
+        // observed-and-dropped, so this reuses the existing one-element list
+        // instead of allocating a fresh list + backing array on every write.
+        var entries = Entries;
+        var write = 0;
+        for (var read = 0; read < entries.Count; read++)
         {
+            var entry = entries[read];
             if (!IsObserved(entry, Context))
             {
-                survivors.Add(entry);
+                entries[write++] = entry;
             }
         }
-        survivors.Add(new MvRegisterEntry
+        if (write < entries.Count)
+        {
+            entries.RemoveRange(write, entries.Count - write);
+        }
+        entries.Add(new MvRegisterEntry
         {
             ReplicaId = replicaId,
             Counter = nextCounter,
             Value = value,
         });
-        Entries = survivors;
         Context[replicaId] = nextCounter;
+        _singleValueSnapshot = null;
     }
 
     /// <summary>
@@ -121,7 +144,11 @@ public sealed class MvRegister : ICrdt<MvRegister>
 
         // Steady-state fast path: a single-valued register needs neither a
         // sort nor a LINQ pipeline - the lone value is already "ordered".
-        if (count == 1) return new[] { Entries[0].Value };
+        // The one-element snapshot is cached and reused across repeated reads
+        // between writes (the values are immutable by convention), so a
+        // read-heavy single-valued register allocates the array once rather
+        // than on every read. Any mutation resets the cache.
+        if (count == 1) return _singleValueSnapshot ??= new[] { Entries[0].Value };
 
         // Multi-value (transient concurrent-write) path: copy the entries
         // out and sort with a single comparer that replicates the former
@@ -261,7 +288,11 @@ public sealed class MvRegister : ICrdt<MvRegister>
 
         // Only replace Entries when a structural change was made; an
         // idempotent merge leaves the local entry list as-is.
-        if (survivors is not null) Entries = survivors;
+        if (survivors is not null)
+        {
+            Entries = survivors;
+            _singleValueSnapshot = null;
+        }
     }
 
     /// <summary>Creates a deep copy of this register.</summary>
@@ -404,6 +435,10 @@ public sealed class MvRegister : ICrdt<MvRegister>
 
         // Only replace Entries when a structural change was made; an
         // idempotent delta leaves the local entry list as-is.
-        if (survivors is not null) Entries = survivors;
+        if (survivors is not null)
+        {
+            Entries = survivors;
+            _singleValueSnapshot = null;
+        }
     }
 }

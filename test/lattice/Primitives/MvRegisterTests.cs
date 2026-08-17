@@ -204,6 +204,77 @@ public class MvRegisterTests
     }
 
     [Test]
+    public void Values_single_value_reads_reuse_cached_snapshot()
+    {
+        var r = new MvRegister();
+        r.Set("r1", B("alpha"));
+        var first = r.Values();
+        var second = r.Values();
+        // The immutable single-value snapshot is cached and handed to
+        // repeated reads between writes, so no fresh array is allocated.
+        Assert.That(second, Is.SameAs(first));
+    }
+
+    [Test]
+    public void Values_snapshot_is_invalidated_by_set()
+    {
+        var r = new MvRegister();
+        r.Set("r1", B("alpha"));
+        var before = r.Values();
+        r.Set("r1", B("beta"));
+        var after = r.Values();
+        Assert.That(after, Is.Not.SameAs(before));
+        Assert.That(ValuesAsStrings(r), Is.EquivalentTo(new[] { "beta" }));
+    }
+
+    [Test]
+    public void Values_snapshot_is_invalidated_by_merge_from()
+    {
+        var a = new MvRegister();
+        a.Set("r1", B("alpha"));
+        var before = a.Values();
+
+        var b = new MvRegister();
+        b.Set("r2", B("beta"));
+        a.MergeFrom(b);
+
+        var after = a.Values();
+        Assert.That(after, Is.Not.SameAs(before));
+        Assert.That(ValuesAsStrings(a), Is.EquivalentTo(new[] { "alpha", "beta" }));
+    }
+
+    [Test]
+    public void Values_snapshot_is_invalidated_by_merge_delta()
+    {
+        var local = new MvRegister();
+        local.Set("r1", B("a1"));
+        var before = local.Values();
+
+        // A later write on r1 the local side has not seen supersedes a1.
+        var newer = local.Clone();
+        newer.Set("r1", B("a2"));
+        local.MergeDelta(DeltaFrom(newer));
+
+        var after = local.Values();
+        Assert.That(after, Is.Not.SameAs(before));
+        Assert.That(ValuesAsStrings(local), Is.EquivalentTo(new[] { "a2" }));
+    }
+
+    [Test]
+    public void Set_reuses_entries_list_in_steady_state()
+    {
+        var r = new MvRegister();
+        r.Set("r1", B("a"));
+        var list = r.Entries;
+        // A same-replica steady-state write compacts in place: the drop of
+        // the observed prior entry and the append reuse the existing list.
+        r.Set("r1", B("b"));
+        Assert.That(r.Entries, Is.SameAs(list));
+        Assert.That(r.Count, Is.EqualTo(1));
+        Assert.That(ValuesAsStrings(r), Is.EquivalentTo(new[] { "b" }));
+    }
+
+    [Test]
     public void Values_ordering_matches_orderby_replicaid_ordinal_then_counter()
     {
         // Hand-build a transient multi-value state with entries deliberately
