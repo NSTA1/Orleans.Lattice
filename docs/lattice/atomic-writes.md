@@ -273,6 +273,21 @@ decision into its tombstone retention window, and calling
 that re-invokes the same grain key receives the original failure via
 `InvalidOperationException`.
 
+The terminal write also **releases the staged batch payload** from the
+persisted state. A completed saga is retained only so an idempotent
+re-entry (or a reminder-driven reactivation) can re-derive its
+lightweight outcome - `Phase`, `FailureMessage`, `KeyFingerprint`,
+`TransactionId` - none of which need the value-bearing staged batch. The
+byte-array fields (`Entries`, `PreValues`, and the per-entry delta/delete
+carries) are emptied in the same checkpoint that flips `Phase` to
+`Completed`, so a completed saga's persisted row is bounded to its outcome
+fields rather than pinning the full batch value payload for the whole
+retention window. The small scalar/metadata fields (`TouchedShards`,
+`Guard`, `VectorClock`) carry no value bytes and are kept. The release is
+crash-safe: if the terminal persist fails, the released fields are restored
+verbatim so the same activation can retry and a reactivation re-reads the
+intact pre-terminal record from disk.
+
 `ForgetAsync` does **not** evict the decision record immediately - it
 stamps a tombstone in the per-tree `ITxRegistryGrain` with a `ForgottenAt`
 timestamp and retains the committed/aborted verdict for
@@ -317,7 +332,12 @@ splitting.
 - The saga's persisted state is stored under the Lattice storage provider
   (`"OrleansLattice"`). The saga grain deactivates on completion, so the
   storage row is typically read exactly once (on activation) and written
-  four times (Prepare -> Execute -> ... -> Completed).
+  four times (Prepare -> Execute -> ... -> Completed). The final
+  (`Completed`) write also releases the staged batch payload, so a
+  completed saga's persisted footprint is bounded to its lightweight
+  outcome fields for the retention window rather than the full batch value
+  payload - which matters most for high-cardinality bulk workloads that
+  produce one saga per touched key.
 - Readers observing a saga in flight pay one extra registry RPC per
   pending key: a per-leaf pending-status resolve for direct
   single-key reads, a single batched pending-status resolve per leaf for
@@ -441,12 +461,16 @@ Both constraints throw `ArgumentException` at submission time.
 
 Completed saga state is retained for
 `LatticeOptions.AtomicWriteRetention` (default 48 hours) so delayed
-retries within the window still observe the original outcome. After
+retries within the window still observe the original outcome. Only the
+lightweight outcome fields are retained; the staged batch payload is
+released on the terminal checkpoint (see [Phase 4 - Complete](#phase-4---complete)),
+so the retained footprint per completed saga is bounded to its outcome and
+does not scale with the batch's value size. After
 the window, the saga grain's state is cleared and its activation
 deactivates - the same `operationId` then becomes eligible for a fresh
 saga. Set the option to `Timeout.InfiniteTimeSpan` to disable
 retention cleanup (completed saga state then lives forever, at the
-cost of unbounded storage growth).
+cost of unbounded growth in the number of retained outcome rows).
 
 ## Ambient context capture-once
 

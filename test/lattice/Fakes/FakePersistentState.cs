@@ -76,6 +76,16 @@ internal sealed class FakePersistentState<T> : IPersistentState<T> where T : new
     /// </summary>
     public Action<FakePersistentState<T>>? OnReadState { get; set; }
 
+    /// <summary>
+    /// When set, every successful <see cref="WriteStateAsync"/> invokes this
+    /// hook with the current <see cref="State"/> after incrementing
+    /// <see cref="WriteCount"/>. Lets a test capture a per-checkpoint snapshot
+    /// of the persisted state - for example a saga's Prepare-phase snapshot,
+    /// which is no longer readable from the final <see cref="State"/> once the
+    /// grain releases its heavy staged fields on the terminal write.
+    /// </summary>
+    public Action<T>? OnWriteState { get; set; }
+
     public Task ClearStateAsync()
     {
         if (ThrowOnClear is { } ex)
@@ -105,6 +115,7 @@ internal sealed class FakePersistentState<T> : IPersistentState<T> where T : new
         if (!SimulateEtagChecks)
         {
             WriteCount++;
+            OnWriteState?.Invoke(State);
             return;
         }
 
@@ -153,5 +164,6 @@ internal sealed class FakePersistentState<T> : IPersistentState<T> where T : new
         }
 
         WriteCount++;
+        OnWriteState?.Invoke(State);
     }
 }

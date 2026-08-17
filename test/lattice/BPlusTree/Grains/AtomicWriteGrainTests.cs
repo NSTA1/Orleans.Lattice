@@ -140,6 +140,28 @@ public partial class AtomicWriteGrainTests
         return list;
     }
 
+    /// <summary>
+    /// Registers a write hook on <paramref name="state"/> that captures the
+    /// first persisted <see cref="AtomicWriteState.PreValues"/> snapshot with
+    /// at least one entry - i.e. the Prepare-phase checkpoint. The saga
+    /// releases its staged payload on the terminal Completed write, so this is
+    /// how a test observes what Prepare captured. The returned box's
+    /// <c>Value</c> is populated by the time <c>ExecuteAsync</c> returns.
+    /// </summary>
+    private static System.Runtime.CompilerServices.StrongBox<List<AtomicPreValue>?> CapturePreValueSnapshot(
+        FakePersistentState<AtomicWriteState> state)
+    {
+        var box = new System.Runtime.CompilerServices.StrongBox<List<AtomicPreValue>?>(null);
+        state.OnWriteState = s =>
+        {
+            if (box.Value is null && s.PreValues.Count > 0)
+            {
+                box.Value = s.PreValues;
+            }
+        };
+        return box;
+    }
+
     // --- Input validation ---
 
     [Test]
@@ -234,16 +256,27 @@ public partial class AtomicWriteGrainTests
         StubPreValue(shard, "a", [9, 9]);
         StubPreValue(shard, "b", null);
 
+        // The saga releases its staged payload (Entries/PreValues) on the
+        // terminal Completed checkpoint, so the captured snapshot is no
+        // longer readable from the final state. Grab the Prepare-phase
+        // snapshot as it is persisted instead.
+        var capturedPreValues = CapturePreValueSnapshot(state);
+
         var entries = MakeEntries(("a", [1]), ("b", [2]));
         await grain.ExecuteAsync(TreeId, entries);
 
-        Assert.That(state.State.PreValues, Has.Count.EqualTo(2));
-        Assert.That(state.State.PreValues[0].Key, Is.EqualTo("a"));
-        Assert.That(state.State.PreValues[0].Existed, Is.True);
-        Assert.That(state.State.PreValues[0].Value, Is.EqualTo(new byte[] { 9, 9 }));
-        Assert.That(state.State.PreValues[1].Key, Is.EqualTo("b"));
-        Assert.That(state.State.PreValues[1].Existed, Is.False);
-        Assert.That(state.State.PreValues[1].Value, Is.Null);
+        Assert.That(capturedPreValues.Value, Is.Not.Null);
+        Assert.That(capturedPreValues.Value, Has.Count.EqualTo(2));
+        Assert.That(capturedPreValues.Value![0].Key, Is.EqualTo("a"));
+        Assert.That(capturedPreValues.Value[0].Existed, Is.True);
+        Assert.That(capturedPreValues.Value[0].Value, Is.EqualTo(new byte[] { 9, 9 }));
+        Assert.That(capturedPreValues.Value[1].Key, Is.EqualTo("b"));
+        Assert.That(capturedPreValues.Value[1].Existed, Is.False);
+        Assert.That(capturedPreValues.Value[1].Value, Is.Null);
+
+        // The terminal checkpoint released the staged payload.
+        Assert.That(state.State.Phase, Is.EqualTo(AtomicWritePhase.Completed));
+        Assert.That(state.State.PreValues, Is.Empty);
     }
 
     [Test]
@@ -298,7 +331,9 @@ public partial class AtomicWriteGrainTests
     public async Task ExecuteAsync_captures_OriginClusterId_and_VectorClock_from_pre_saga_entry()
     {
         // PrepareAsync is private - drive it through a successful ExecuteAsync
-        // and inspect the captured pre-value snapshot afterwards.
+        // and inspect the captured pre-value snapshot. The saga releases its
+        // staged payload on the terminal Completed checkpoint, so capture the
+        // Prepare-phase snapshot as it is persisted.
         var (grain, state, _, lattice, shard) = CreateGrain();
         var hlc = new HybridLogicalClock { WallClockTicks = DateTimeOffset.UtcNow.UtcTicks, Counter = 0 };
         var vc = new VersionVector();
@@ -310,16 +345,18 @@ public partial class AtomicWriteGrainTests
         // All forward writes succeed so we observe the captured PreValues
         // without compensation rewriting them.
         lattice.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()).Returns(Task.CompletedTask);
+        var capturedPreValues = CapturePreValueSnapshot(state);
 
         var entries = MakeEntries(("a", [1]), ("b", [2]));
         await grain.ExecuteAsync(TreeId, entries);
 
-        var pre = state.State.PreValues.Single(p => p.Key == "a");
+        Assert.That(capturedPreValues.Value, Is.Not.Null);
+        var pre = capturedPreValues.Value!.Single(p => p.Key == "a");
         Assert.That(pre.Existed, Is.True);
         Assert.That(pre.OriginClusterId, Is.EqualTo("origin-peer"));
         Assert.That(pre.VectorClock, Is.SameAs(vc));
 
-        var preB = state.State.PreValues.Single(p => p.Key == "b");
+        var preB = capturedPreValues.Value!.Single(p => p.Key == "b");
         Assert.That(preB.Existed, Is.False);
         Assert.That(preB.OriginClusterId, Is.Null);
         Assert.That(preB.VectorClock, Is.Null);

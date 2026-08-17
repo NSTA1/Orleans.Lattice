@@ -2720,16 +2720,37 @@ internal sealed class AtomicWriteGrain(
     /// </summary>
     private async Task CompleteSagaAsync(bool success)
     {
+        // Capture the batch size before the staged payload is released below.
+        // The AtomicWriteBatchSize histogram (recorded after the terminal
+        // persist) reports this saga's entry count, which is no longer
+        // readable from state.State.Entries once ReleaseStagedPayload has
+        // emptied it.
+        var completedBatchSize = state.State.Entries.Count;
+
         // Class B snapshot/restore at Site 8 (CompleteSagaAsync terminal
         // persist). A failure here would leave Phase=Completed in memory
         // while disk still says Execute. The ExecuteAsync L159
         // Phase==Completed short-circuit then reports false success on
         // every retry from the same activation, but a reactivation finds
         // disk at Execute and re-runs the entire saga.
+        //
+        // The terminal checkpoint also releases the heavy staged batch (see
+        // ReleaseStagedPayload) so a Completed saga's persisted footprint
+        // stays lightweight for the whole retention window. Snapshot those
+        // byte[]-bearing fields alongside Phase: a failed "complete" persist
+        // must restore the full pre-terminal state so the same activation can
+        // retry (and a reactivation re-reads the intact Execute/Compensate
+        // state from disk), exactly as the Phase rollback already guarantees.
         var prevPhase = state.State.Phase;
         var prevRetriesOnCurrentStep = state.State.RetriesOnCurrentStep;
+        var prevEntries = state.State.Entries;
+        var prevPreValues = state.State.PreValues;
+        var prevEntryDeltas = state.State.EntryDeltas;
+        var prevEntryDeletes = state.State.EntryDeletes;
+        var prevDelta = state.State.Delta;
         state.State.Phase = AtomicWritePhase.Completed;
         state.State.RetriesOnCurrentStep = 0;
+        ReleaseStagedPayload();
         try
         {
             await WriteSagaStateAsync("complete");
@@ -2738,6 +2759,11 @@ internal sealed class AtomicWriteGrain(
         {
             state.State.Phase = prevPhase;
             state.State.RetriesOnCurrentStep = prevRetriesOnCurrentStep;
+            state.State.Entries = prevEntries;
+            state.State.PreValues = prevPreValues;
+            state.State.EntryDeltas = prevEntryDeltas;
+            state.State.EntryDeletes = prevEntryDeletes;
+            state.State.Delta = prevDelta;
             throw;
         }
         await UnregisterKeepaliveAsync();
@@ -2787,7 +2813,7 @@ internal sealed class AtomicWriteGrain(
                 new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, outcome));
         }
 
-        LatticeMetrics.AtomicWriteBatchSize.Record(state.State.Entries.Count,
+        LatticeMetrics.AtomicWriteBatchSize.Record(completedBatchSize,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId),
             new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, outcome));
 
@@ -2824,6 +2850,50 @@ internal sealed class AtomicWriteGrain(
         }
 
         this.DeactivateOnIdle();
+    }
+
+    /// <summary>
+    /// Releases the heavy staged-batch payload from the persisted saga state as
+    /// part of the terminal (<see cref="AtomicWritePhase.Completed"/>)
+    /// checkpoint. A completed saga is retained only so that an idempotent
+    /// re-entry - or a reminder-driven reactivation - can re-derive its
+    /// lightweight <c>outcome</c>: <see cref="AtomicWriteState.Phase"/>,
+    /// <see cref="AtomicWriteState.FailureMessage"/>,
+    /// <see cref="AtomicWriteState.KeyFingerprint"/> and
+    /// <see cref="AtomicWriteState.TransactionId"/>. None of those need the
+    /// byte[]-bearing staged batch, and every consumer that does
+    /// (compensation's pre-value restore, the per-leaf terminal broadcast, the
+    /// batch-size metric) has already run by the time this checkpoint is
+    /// reached.
+    /// <para>
+    /// Left in place, the batch - the new values in
+    /// <see cref="AtomicWriteState.Entries"/>, the pre-saga snapshots in
+    /// <see cref="AtomicWriteState.PreValues"/>, and the optional per-entry
+    /// delta/delete channels - would pin the saga's full value payload in the
+    /// grain store for the entire
+    /// <see cref="LatticeOptions.AtomicWriteRetention"/> window (default 48h),
+    /// until the retention reminder clears the record. Across a
+    /// high-cardinality bulk re-projection (one saga per touched key) that
+    /// retained payload dominates the persisted footprint. Clearing it here
+    /// bounds a completed saga to its outcome fields.
+    /// </para>
+    /// <para>
+    /// The small scalar/metadata fields (<see cref="AtomicWriteState.TouchedShards"/>,
+    /// <see cref="AtomicWriteState.Guard"/>, <see cref="AtomicWriteState.VectorClock"/>,
+    /// <see cref="AtomicWriteState.CrossTreeParticipants"/>) are intentionally
+    /// retained: they carry no value bytes, so they contribute nothing to the
+    /// footprint. Fresh empty collections are assigned (rather than the shared
+    /// instances cleared in place) so the caller can snapshot the prior
+    /// references and restore them verbatim if the terminal persist fails.
+    /// </para>
+    /// </summary>
+    private void ReleaseStagedPayload()
+    {
+        state.State.Entries = [];
+        state.State.PreValues = [];
+        state.State.EntryDeltas = null;
+        state.State.EntryDeletes = null;
+        state.State.Delta = null;
     }
 
     /// <summary>

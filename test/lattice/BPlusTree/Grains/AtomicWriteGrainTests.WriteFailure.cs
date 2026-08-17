@@ -290,11 +290,25 @@ public partial class AtomicWriteGrainTests
         existing.State.KeyFingerprint = ComputeFingerprint(("k1", [1]));
         existing.State.AtomicBatchSize = 1;
         existing.State.SagaStartedAtTicks = DateTimeOffset.UtcNow.UtcTicks;
+        // Seed the byte[]-bearing carry fields so the terminal persist has a
+        // non-trivial staged payload to release - and restore on failure.
+        existing.State.Delta = new byte[] { 7, 7 };
+        existing.State.EntryDeltas = [new byte[] { 9 }];
+        existing.State.EntryDeletes = [false];
 
         var (grain, state, _, _, _) = CreateGrain(existingState: existing);
 
         var prevPhase = state.State.Phase;
         var prevRetries = state.State.RetriesOnCurrentStep;
+        // CompleteSagaAsync releases the staged payload before the terminal
+        // persist; a persist failure must restore every released field verbatim
+        // so a same-activation retry (and a reactivation off the intact
+        // Execute-phase disk record) sees the full pre-terminal state.
+        var prevEntries = state.State.Entries;
+        var prevPreValues = state.State.PreValues;
+        var prevEntryDeltas = state.State.EntryDeltas;
+        var prevEntryDeletes = state.State.EntryDeletes;
+        var prevDelta = state.State.Delta;
         state.ThrowOnWrite = new InvalidOperationException("storage transient");
 
         var ex = Assert.ThrowsAsync<InvalidOperationException>(
@@ -307,6 +321,13 @@ public partial class AtomicWriteGrainTests
                 "Phase must revert to Execute so the ExecuteAsync Completed short-circuit does not report false success on retry.");
             Assert.That(state.State.RetriesOnCurrentStep, Is.EqualTo(prevRetries),
                 "RetriesOnCurrentStep must revert so the reset is observable only after a successful CompleteSaga persist.");
+            Assert.That(state.State.Entries, Is.SameAs(prevEntries),
+                "Entries must be restored verbatim after a failed terminal persist.");
+            Assert.That(state.State.PreValues, Is.SameAs(prevPreValues),
+                "PreValues must be restored verbatim after a failed terminal persist.");
+            Assert.That(state.State.EntryDeltas, Is.SameAs(prevEntryDeltas));
+            Assert.That(state.State.EntryDeletes, Is.SameAs(prevEntryDeletes));
+            Assert.That(state.State.Delta, Is.SameAs(prevDelta));
             Assert.That(state.WriteCount, Is.Zero);
         });
     }
