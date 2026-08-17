@@ -259,6 +259,15 @@ public class LatticeMicroBenchmarks
     private readonly MvRegister _mvRegisterSingle = BuildMvRegisterWithValues("replica-a", 1);
     private readonly MvRegister _mvRegisterMulti = BuildMvRegisterWithValues("replica", 8);
 
+    // ===== MvRegister.Set() write-path instrument =====
+    // A steady-state single-valued register written repeatedly by the same
+    // replica. Each Set observes-and-drops the prior lone entry and appends
+    // the new dot; the optimised write compacts Entries in place, so the
+    // steady-state write allocates only the appended MvRegisterEntry rather
+    // than a fresh List + backing array every call. Surfaced as
+    // microbench_crdt_mvregister_set_alloc_b.
+    private readonly MvRegister _mvRegisterSetTarget = BuildMvRegisterWithValues("replica-a", 1);
+
     private static MvRegister BuildMvRegisterWithValues(string replicaPrefix, int liveValues)
     {
         var register = new MvRegister();
@@ -1395,6 +1404,28 @@ public class LatticeMicroBenchmarks
     [Benchmark(Description = "Crdt mvregister values multi")]
     public IReadOnlyList<byte[]> CrdtMvRegisterValuesMulti() =>
         _mvRegisterMulti.Values();
+
+    /// <summary>
+    /// Single <see cref="MvRegister.Set(string, byte[])"/> write on a
+    /// steady-state single-valued register by the same replica - the
+    /// overwhelmingly common write shape. Each write observes-and-drops the
+    /// lone prior entry and appends the new dot; the optimised write compacts
+    /// <c>Entries</c> in place, so the steady-state cost is the appended
+    /// <see cref="MvRegisterEntry"/> alone rather than a fresh
+    /// <c>List&lt;MvRegisterEntry&gt;</c> + backing array every call. The
+    /// register stays single-valued across iterations (only its dot counter
+    /// advances), so the measured per-iteration allocation is the steady-state
+    /// write cost. Surfaced as
+    /// <c>microbench_crdt_mvregister_set_alloc_b</c>.
+    /// </summary>
+    [Benchmark(Description = "Crdt mvregister set")]
+    public MvRegister CrdtMvRegisterSet()
+    {
+        _mvRegisterSetTarget.Set("replica-a", SingleValueBytes);
+        return _mvRegisterSetTarget;
+    }
+
+    private static readonly byte[] SingleValueBytes = new byte[16];
 
     /// <summary>
     /// Single <see cref="PnCounter.Merge(PnCounter, PnCounter)"/> of two
