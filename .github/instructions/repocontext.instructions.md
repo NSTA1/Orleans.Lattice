@@ -102,13 +102,24 @@ mid-task.
 - **Disambiguation.** If `repocontext_list_repos` returns more than one repo,
   select the one whose id matches the workspace you are working in and ignore
   unrelated indexes (for example throwaway test fixtures).
+- **Visibility during a first ingest.** `list_repos` enumerates **committed,
+  materialised structural records**, which is a different source from the live
+  progress counters `index_status` reads. A repository still in its **first**
+  ingest can therefore be **absent from `list_repos` entirely** - and not yet
+  answer `scan` or `search` - while `index_status` already reports it `Running`
+  with advancing counters, because its structural writes are durable in the WAL
+  but have not yet materialised into the readable projection. So do **not** infer
+  "not indexed" from an empty `list_repos`: `index_status {repoId}` is the
+  authority for an onboarding still in progress, and a repo surfaces in
+  `list_repos` only once its structural records materialise.
 - **Fields.** `repocontext_list_repos` reports one row per repo, but the fields
   it returns depend on ingest state: expect at least `repoId` and
-  `embeddedVectorCount` (how many file chunks are vector-embedded), and treat a
-  per-repo `lastIngested` / `fileCount` as **best-effort - they can be absent
-  while an ingest is still running**. Do not rely on `list_repos` alone to judge
-  staleness. The dependable freshness signals are the per-hit `lastIngested` on
-  `search` results and `index_status`'s `updatedAt` (see "Health and degraded
+  `embeddedVectorCount` (how many **sources** - files and captured symbols - have
+  a landed embedding, so it can exceed the file count once symbols are embedded),
+  and treat a per-repo `lastIngested` / `fileCount` as **best-effort - they can be
+  absent while an ingest is still running**. Do not rely on `list_repos` alone to
+  judge staleness. The dependable freshness signals are the per-hit `lastIngested`
+  on `search` results and `index_status`'s `updatedAt` (see "Health and degraded
   mode").
 
 ## Retrieval
