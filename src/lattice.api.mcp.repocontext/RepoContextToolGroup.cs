@@ -14,7 +14,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// </summary>
 /// <remarks>
 /// <para>
-/// In the default single-repository mode the group contributes seven always-on
+/// In the default single-repository mode the group contributes the always-on
 /// read-only tools (<c>repocontext_health</c>, <c>repocontext_recall</c>,
 /// <c>repocontext_scan</c>, <c>repocontext_list_topics</c>,
 /// <c>repocontext_search</c>, <c>repocontext_index_status</c>, and
@@ -279,7 +279,13 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     "Lists every repository currently registered in the context store, each with its "
                     + "last-ingested marker and recorded file count, in ascending id order. Use it to discover "
                     + "which repositories under the mounted workspace are queryable before recalling, scanning, "
-                    + "searching, or removing one. Read-only.",
+                    + "searching, or removing one. It enumerates committed, materialised structural records, "
+                    + "which is a different source from the live progress counters 'repocontext_index_status' "
+                    + "reports: a repository still in its first ingest can already show status 'Running' there "
+                    + "while it is absent here - and not yet answering scan or search - until its structural "
+                    + "records materialise, so treat 'repocontext_index_status' as the authority for an "
+                    + "onboarding still in progress. The per-row marker and file count are likewise best-effort "
+                    + "while an ingest runs. Read-only.",
                 ReadOnly = true,
                 Destructive = false,
                 UseStructuredContent = true,
