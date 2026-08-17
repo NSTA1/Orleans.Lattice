@@ -4229,6 +4229,25 @@ public class LatticeMicroBenchmarks
     public GSet GSet_Clone() => _gSetLeft.Clone();
 
     /// <summary>
+    /// Write-path instrument: inserts a batch of distinct fresh elements into an
+    /// empty grow-only <see cref="GSet"/> - the fold <see cref="GSet.MergeDelta"/>
+    /// runs when a delta of adds lands. Each new element is committed with a
+    /// single span alternate-lookup <c>Add</c> (one hash of the stack-buffer
+    /// base64 key), rather than the Contains-probe-then-Add pair the earlier form
+    /// paid on a genuine insert. The materialised key strings and backing set are
+    /// unchanged, so allocation is identical and the win is the halved per-insert
+    /// probe/hash count.
+    /// </summary>
+    [Benchmark(Description = "Crdt gset add (fresh inserts)")]
+    public GSet GSet_Add()
+    {
+        var set = new GSet();
+        var elements = _gSetProbeElements;
+        for (var i = 0; i < elements.Length; i++) set.Add(elements[i]);
+        return set;
+    }
+
+    /// <summary>
     /// Read-path instrument: repeated <see cref="GSet.Contains(byte[])"/> against
     /// a pre-seeded set. The span-keyed alternate lookup keys each probe through
     /// the stack buffer, so a hit allocates nothing.
