@@ -492,6 +492,49 @@ and falls into the standard recovery path (`SnapshotThenWal` /
 `ProjectionRebuildPolicy` if a hard trigger fires. The snapshot-on-
 fall-off path is a safety net for **active** leaves.
 
+### Resumable cold replay
+
+The activation-time WAL replay that rebuilds a leaf's projection cache
+is **resumable**. A leaf rebuilds its cache from the WAL on every
+activation, but the persisted `ProjectionCheckpointOffset` is what
+survives across activations. Historically the checkpoint was advanced
+only by a single reconciliation step at the very *end* of the replay,
+so a leaf whose un-snapshotted prefix could not be drained inside one
+activation window - a large WAL relative to Orleans' ~30s
+`RuntimeRequested` deactivation budget - made no durable progress: a
+mid-replay deactivation discarded every applied entry, the next
+activation restarted from the same offset, and because the
+coverage-gated WAL GC (correctly) refuses to trim an un-snapshotted
+prefix, the WAL grew without bound while the leaf never converged.
+
+The replay now flushes the checkpoint **incrementally**, at each
+replay slice boundary, over the strictly contiguous, fully-applied
+prefix. Because a checkpoint persist drives the periodic snapshot
+recheck above, this also captures an incremental snapshot as the
+replay progresses. A mid-replay teardown therefore loses at most one
+flush interval; the next activation rehydrates from the incremental
+snapshot and resumes from the last durable offset instead of replaying
+from zero, and the now snapshot-covered prefix becomes trimmable so
+retention stays bounded.
+
+The incremental advance is clamped so it can never license a
+checkpoint (or the materialiser pin) past a not-yet-durably-applied
+offset:
+
+- below the lowest **deferred** saga terminal (`TxCommit` / `TxAbort`)
+  or `DeleteRange` in the partition, since those mutations are applied
+  only in the replay's second pass; and
+- below any **unresolved saga prepare** in the partition, because the
+  matching terminal is itself deferred, so the pending-transaction
+  bucket must be reconstructed by a resumed replay that re-reads the
+  prepare.
+
+Steady-state activations are unaffected: a single-slice replay with no
+deferred terminals still flushes exactly once at the end of the first
+pass, the same net timing as the old end-of-replay reconciliation.
+Only a multi-slice replay of a large prefix sees the extra intermediate
+persists - which is exactly the case the resumability guarantees.
+
 ### Configuration
 
 ```csharp verify
