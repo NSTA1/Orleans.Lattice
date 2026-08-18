@@ -53,6 +53,11 @@
     <PackageReference Include="Orleans.Lattice.Api.Data.Grpc" Version="9.0.0" />
     <PackageReference Include="Orleans.Lattice.Api.Auth" Version="9.0.0" />
     <PackageReference Include="Orleans.Lattice.Api.Auth.Grpc" Version="9.0.0" />
+    <PackageReference Include="Orleans.Lattice.Schema" Version="9.0.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Schema" Version="9.0.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Schema.Grpc" Version="9.0.0" />
+    <PackageReference Include="Orleans.Lattice.Api.TreeAdmin" Version="9.0.0" />
+    <PackageReference Include="Orleans.Lattice.Api.TreeAdmin.Grpc" Version="9.0.0" />
     <PackageReference Include="Orleans.Lattice.Auth" Version="9.0.0" />
     <PackageReference Include="Orleans.Lattice.Membership" Version="9.0.0" />
     <PackageReference Include="Orleans.Lattice.Membership.Entra" Version="9.0.0" />

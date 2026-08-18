@@ -12,8 +12,12 @@ using Orleans.Lattice.Api.Data;
 using Orleans.Lattice.Api.Data.Grpc;
 using Orleans.Lattice.Api.Replication;
 using Orleans.Lattice.Api.Replication.Grpc;
+using Orleans.Lattice.Api.Schema;
+using Orleans.Lattice.Api.Schema.Grpc;
 using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Api.State.Grpc;
+using Orleans.Lattice.Api.TreeAdmin;
+using Orleans.Lattice.Api.TreeAdmin.Grpc;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Backup;
 using Orleans.Lattice.Backup.AzureBlob;
@@ -25,6 +29,7 @@ using Orleans.Lattice.ReferenceArchitecture.Silo;
 using Orleans.Lattice.Replication;
 using Orleans.Lattice.Replication.Grpc;
 using Orleans.Lattice.Scaling;
+using Orleans.Lattice.Schema;
 using Orleans.Lattice.Storage.AzureTable;
 
 // ---------------------------------------------------------------------------
@@ -333,6 +338,19 @@ builder.Host.UseOrleans(silo =>
     });
     silo.AddLatticeAuthApi();
 
+    // -- Schema enforcement + tree-administration control API -------------
+    // Co-host the schema-enforcement layer and the schema / tree-administration
+    // control facades so the MCP head's remote treeadmin group (which dials the
+    // same silo gRPC endpoint as State) can reach them. Schema enforcement is
+    // zero-overhead until a per-tree policy is authored - a tree with no policy
+    // short-circuits the interceptor - so co-hosting it does not alter existing
+    // data-plane writes. Ordering is load-bearing: AddLatticeSchemaApi consumes
+    // the ILatticeSchemaAdmin registered by enforcement, and AddLatticeTreeAdminApi
+    // consumes the ILatticeSchemaControl registered by the schema API.
+    silo.AddLatticeSchemaEnforcement();
+    silo.AddLatticeSchemaApi();
+    silo.AddLatticeTreeAdminApi();
+
     // -- Entra-backed authentication for the exposed facades --------------
     if (entraEnabled)
     {
@@ -534,6 +552,30 @@ if (enableRuntimeReplicationConfig)
     }
 }
 
+// The schema-control and tree-administration control-API gRPC bindings,
+// co-hosted on the same silo gRPC port. The MCP head's remote treeadmin group
+// dials a SINGLE endpoint for both ILatticeTreeAdmin and ILatticeSchemaControl,
+// so both services must be mapped here. The coarse transport gate is opened
+// (AllowAll*ApiAuthorizer) because the real enforcement is the deny-by-default
+// per-tree/per-operation access gate the facades apply afterwards on the caller's
+// Entra-resolved subject: tree reads need Read, administration needs Admin,
+// irreversible/structural lifecycle ops need TreeLifecycle, bulk-load needs
+// BulkLoad, restore needs Restore, and schema mutation needs SchemaAdmin. Only a
+// subject holding the authored grant (the seeded bootstrap administrator) passes.
+// RequireAuthorization still fails the binding closed when enforcement is on and
+// no authorizer is registered; the local compose harness runs it open.
+builder.Services.AddLatticeSchemaApiGrpc(options => options.RequireAuthorization = requireApiAuthorization);
+if (requireApiAuthorization)
+{
+    builder.Services.AddSingleton<ILatticeSchemaApiAuthorizer, AllowAllSchemaApiAuthorizer>();
+}
+
+builder.Services.AddLatticeTreeAdminApiGrpc(options => options.RequireAuthorization = requireApiAuthorization);
+if (requireApiAuthorization)
+{
+    builder.Services.AddSingleton<ILatticeTreeAdminApiAuthorizer, AllowAllTreeAdminApiAuthorizer>();
+}
+
 // Export the whole orleans.lattice meter family over Prometheus at /metrics so a
 // scraper (the local compose Prometheus, or Azure Managed Prometheus) can collect
 // the cluster telemetry that backs the bundled Grafana dashboards and the MCP
@@ -599,6 +641,11 @@ if (enableRuntimeReplicationConfig)
     // engine's shipper/receiver transport.
     app.MapLatticeReplicationApiGrpc();
 }
+
+// The schema-control and tree-administration control-API gRPC endpoints the MCP
+// head's remote treeadmin group dials (both off the same silo gRPC endpoint).
+app.MapLatticeSchemaApiGrpc();
+app.MapLatticeTreeAdminApiGrpc();
 
 // Compute-axis scaling signal for the KEDA Prometheus scaler (default route
 // /lattice/scale) and a liveness probe. Both are plain HTTP so ACA can probe
