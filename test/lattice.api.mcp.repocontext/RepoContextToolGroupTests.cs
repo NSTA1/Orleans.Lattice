@@ -17,7 +17,8 @@ public sealed class RepoContextToolGroupTests
         [
             "repocontext_health", "repocontext_recall", "repocontext_scan",
             "repocontext_list_topics", "repocontext_search", "repocontext_index_status",
-            "repocontext_neighbors",
+            "repocontext_neighbors", "repocontext_outline", "repocontext_changed",
+            "repocontext_related", "repocontext_context", "repocontext_stats",
         ];
 
     private static readonly string[] WriteToolNames =
@@ -27,7 +28,8 @@ public sealed class RepoContextToolGroupTests
         [
             "repocontext_health", "repocontext_recall", "repocontext_scan",
             "repocontext_list_topics", "repocontext_search", "repocontext_index_status",
-            "repocontext_neighbors", "repocontext_list_repos",
+            "repocontext_neighbors", "repocontext_outline", "repocontext_changed",
+            "repocontext_related", "repocontext_context", "repocontext_stats", "repocontext_list_repos",
         ];
 
     private static readonly string[] WorkspaceWriteToolNames =

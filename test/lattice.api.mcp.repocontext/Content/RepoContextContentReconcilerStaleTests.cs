@@ -84,7 +84,9 @@ public sealed class RepoContextContentReconcilerStaleTests
         using var loggerFactory = LoggerFactory.Create(b => b.AddProvider(log));
         var logger = loggerFactory.CreateLogger<RepoContextContentReconciler>();
 
-        return (new RepoContextContentReconciler(grainFactory, ContentSerializer, logger), log);
+        var tokenCounter = Substitute.For<IRepoContextTokenCounter>();
+
+        return (new RepoContextContentReconciler(grainFactory, ContentSerializer, tokenCounter, logger), log);
     }
 
     [Test]

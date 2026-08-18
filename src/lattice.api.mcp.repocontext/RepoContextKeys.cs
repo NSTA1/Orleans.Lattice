@@ -58,6 +58,12 @@ internal static class RepoContextKeys
     /// <summary>The content-projection segment token.</summary>
     internal const string ContentSegment = "content";
 
+    /// <summary>The reverse cross-reference segment token.</summary>
+    internal const string CrossReferenceSegment = "xref";
+
+    /// <summary>The per-session reuse-bookkeeping segment token.</summary>
+    internal const string SessionSegment = "session";
+
     /// <summary>The vector-metadata segment token.</summary>
     internal const string VectorSegment = "vec";
 
@@ -132,6 +138,19 @@ internal static class RepoContextKeys
         return $"{RepoScanPrefix(repoId)}{ContentSegment}{Separator}{EncodePath(path)}";
     }
 
+    /// <summary>
+    /// Builds the key for a reverse cross-reference projection record:
+    /// <c>repo/{repoId}/xref/{name}</c>. The <paramref name="name"/> is a simple
+    /// (unqualified) type-name and is treated as an opaque component.
+    /// </summary>
+    /// <param name="repoId">The repository identifier. Must not be <see langword="null"/>.</param>
+    /// <param name="name">The referenced simple type-name. Must not be <see langword="null"/>.</param>
+    internal static string CrossReference(string repoId, string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return $"{RepoScanPrefix(repoId)}{CrossReferenceSegment}{Separator}{EncodeComponent(name)}";
+    }
+
     /// <summary>Builds the key for a memory record: <c>repo/{repoId}/mem/{topic}/{id}</c>.</summary>
     /// <param name="repoId">The repository identifier. Must not be <see langword="null"/>.</param>
     /// <param name="topic">The memory topic bucket. Must not be <see langword="null"/>.</param>
@@ -141,6 +160,15 @@ internal static class RepoContextKeys
         ArgumentNullException.ThrowIfNull(topic);
         ArgumentNullException.ThrowIfNull(id);
         return $"{RepoScanPrefix(repoId)}{MemorySegment}{Separator}{EncodeComponent(topic)}{Separator}{EncodeComponent(id)}";
+    }
+
+    /// <summary>Builds the key for a per-session reuse-bookkeeping record: <c>repo/{repoId}/session/{sessionId}</c>.</summary>
+    /// <param name="repoId">The repository identifier. Must not be <see langword="null"/>.</param>
+    /// <param name="sessionId">The opaque caller session identifier. Must not be <see langword="null"/>.</param>
+    internal static string Session(string repoId, string sessionId)
+    {
+        ArgumentNullException.ThrowIfNull(sessionId);
+        return $"{RepoScanPrefix(repoId)}{SessionSegment}{Separator}{EncodeComponent(sessionId)}";
     }
 
     /// <summary>Builds the key for a vector metadata record: <c>repo/{repoId}/vec/{vectorId}</c>.</summary>
@@ -189,6 +217,11 @@ internal static class RepoContextKeys
     /// <param name="repoId">The repository identifier. Must not be <see langword="null"/>.</param>
     internal static string ContentPrefix(string repoId) =>
         $"{RepoScanPrefix(repoId)}{ContentSegment}{Separator}";
+
+    /// <summary>Builds the range-scan prefix for all reverse cross-reference records in a repository: <c>repo/{repoId}/xref/</c>.</summary>
+    /// <param name="repoId">The repository identifier. Must not be <see langword="null"/>.</param>
+    internal static string CrossReferencePrefix(string repoId) =>
+        $"{RepoScanPrefix(repoId)}{CrossReferenceSegment}{Separator}";
 
     /// <summary>Builds the range-scan prefix for all memory records in a repository: <c>repo/{repoId}/mem/</c>.</summary>
     /// <param name="repoId">The repository identifier. Must not be <see langword="null"/>.</param>

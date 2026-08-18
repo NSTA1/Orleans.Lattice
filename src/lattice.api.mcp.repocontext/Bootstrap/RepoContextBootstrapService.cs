@@ -316,15 +316,28 @@ internal sealed class RepoContextBootstrapService
             // languages), so the two lists are unified before the file nodes are written
             // to guarantee each node is rewritten exactly once.
             var contentBackfill = SelectContentBackfill(plan.Unchanged, storedMeta);
-            var backfill = UnifyBackfill(symbolBackfill, contentBackfill);
+
+            // The cross-reference back-fill self-heal: content-unchanged,
+            // symbol-processed files whose node was never cross-referenced (it predates
+            // the reverse cross-reference index). Their symbol records already carry
+            // the outbound references, but because their content never changes the
+            // incremental delta never fires, so their reverse edges are never built -
+            // leaving inbound-dependent and test lookups permanently empty for a
+            // pre-existing index. Force-seeding the reverse edges from the stored
+            // records converges the index without re-parsing the files, and it is drawn
+            // from the pure-unchanged set only so a back-filled node is written exactly
+            // once. It is unified with the other back-fills so a file selected by more
+            // than one has its node rewritten a single time with every marker resolved.
+            var xrefBackfill = SelectXrefBackfill(plan.Unchanged, storedMeta);
+            var backfill = UnifyBackfill(symbolBackfill, contentBackfill, xrefBackfill);
 
             if (!plan.IsNoOp || backfill.Count > 0)
             {
                 phase = RepoIndexPhase.Applying;
                 var chunksTotal = ComputeChunkCount(plan, backfill.Count);
                 _logger.LogInformation(
-                    "Repo {RepoId}: plan - {Added} added, {Updated} updated, {MetadataChanged} anchor-refreshed, {Removed} removed, {Unchanged} unchanged, {SymbolBackfill} symbol back-fill, {ContentBackfill} content back-fill; {Chunks} chunk(s) to commit.",
-                    repoId, plan.Added.Count, plan.Updated.Count, plan.MetadataChanged.Count, plan.RemovedPaths.Count, plan.Unchanged.Count, symbolBackfill.Count, contentBackfill.Count, chunksTotal);
+                    "Repo {RepoId}: plan - {Added} added, {Updated} updated, {MetadataChanged} anchor-refreshed, {Removed} removed, {Unchanged} unchanged, {SymbolBackfill} symbol back-fill, {ContentBackfill} content back-fill, {XrefBackfill} xref back-fill; {Chunks} chunk(s) to commit.",
+                    repoId, plan.Added.Count, plan.Updated.Count, plan.MetadataChanged.Count, plan.RemovedPaths.Count, plan.Unchanged.Count, symbolBackfill.Count, contentBackfill.Count, xrefBackfill.Count, chunksTotal);
                 await ReportAsync(
                     progress,
                     new RepoIndexProgressUpdate
@@ -363,6 +376,20 @@ internal sealed class RepoContextBootstrapService
                 changedSymbolKeys = symbolResult.ChangedSymbolKeys;
                 prunedSymbolKeys = symbolResult.PrunedSymbolKeys;
 
+                // Force-seed the reverse cross-reference edges for the back-fill files
+                // whose symbol records were populated before the reverse index existed.
+                // It runs after the symbol reconcile so any records that pass upserted
+                // are already in place, and before the file nodes are rewritten so a
+                // crash between the seed and the node write leaves the file without its
+                // cross-referenced marker and the next run re-selects it (the seed is
+                // idempotent, so re-driving it is safe). Freshly symbol-processed files
+                // (added, updated, or symbol back-fill) already have their reverse edges
+                // built by the incremental delta above, so only the xref-only back-fill
+                // set is seeded here.
+                var crossSeededPaths = await _symbolReconciler.SeedCrossReferencesAsync(
+                    repoId, xrefBackfill, storedMeta, cancellationToken)
+                    .ConfigureAwait(false);
+
                 // Reconcile the per-file content projection in the same pass, before the
                 // file nodes are rewritten. It is decoupled from embeddings on purpose -
                 // its whole point is to give the keyword/degraded search path file
@@ -386,8 +413,15 @@ internal sealed class RepoContextBootstrapService
                 var symbolProcessedPaths = new HashSet<string>(symbolResult.DeclaredByPath.Keys, StringComparer.Ordinal);
                 var contentProcessedPaths = contentResult.ProcessedPaths;
 
+                // The files whose reverse edges are live after this pass: those the
+                // xref back-fill force-seeded, plus every file the symbol reconcile
+                // freshly processed (its edges were built by the incremental delta), so
+                // both sets stamp the cross-referenced marker and neither is re-selected.
+                var crossReferencedPaths = new HashSet<string>(crossSeededPaths, StringComparer.Ordinal);
+                crossReferencedPaths.UnionWith(symbolProcessedPaths);
+
                 await ApplyPlanAsync(
-                    tree, repoId, plan, backfill, declaredEncoded, symbolProcessedPaths, contentProcessedPaths, storedMeta, progress, cancellationToken)
+                    tree, repoId, plan, backfill, declaredEncoded, symbolProcessedPaths, contentProcessedPaths, crossReferencedPaths, contentResult.TokenCountsByPath, storedMeta, progress, cancellationToken)
                     .ConfigureAwait(false);
             }
             else
@@ -532,18 +566,20 @@ internal sealed class RepoContextBootstrapService
 
     /// <summary>
     /// Selects the content back-fill candidates from the content-unchanged set: text
-    /// files whose stored node was never stamped as content-processed. These are
-    /// files indexed before the content projection existed (or a file a prior run
-    /// stopped short of processing), so projecting them lets a pre-existing index
-    /// converge on a complete content projection without re-reading the files that
-    /// already have one. Every walked file is a text file (the walk excludes binary),
-    /// so - unlike the symbol back-fill - there is no language filter. Drawing only
-    /// from the pure-unchanged set guarantees a back-filled node is written exactly
-    /// once per pass.
+    /// files whose stored node was never stamped as content-processed, plus files
+    /// projected before the token-count register existed (their stored token count is
+    /// negative). These are files indexed before the content projection - or the token
+    /// count - existed (or a file a prior run stopped short of processing), so
+    /// projecting them lets a pre-existing index converge on a complete content
+    /// projection and complete token counts without re-reading the files that already
+    /// have both. Every walked file is a text file (the walk excludes binary), so -
+    /// unlike the symbol back-fill - there is no language filter. Drawing only from the
+    /// pure-unchanged set guarantees a back-filled node is written exactly once per
+    /// pass.
     /// </summary>
     /// <param name="unchanged">The content-unchanged files from the plan.</param>
     /// <param name="storedMeta">The stored per-file metadata, consulted for the
-    /// content-processed marker.</param>
+    /// content-processed marker and the stored token count.</param>
     /// <returns>The unchanged files eligible for content back-fill.</returns>
     private static List<RepoFileEntry> SelectContentBackfill(
         IReadOnlyList<RepoFileEntry> unchanged, IReadOnlyDictionary<string, StoredFileMeta> storedMeta)
@@ -551,7 +587,14 @@ internal sealed class RepoContextBootstrapService
         var backfill = new List<RepoFileEntry>();
         foreach (var entry in unchanged)
         {
-            if (!StoredContentProcessed(storedMeta, entry.RelativePath))
+            // Select a file whose content was never projected, and also one that was
+            // projected before the token-count register existed (its stored count is
+            // negative): re-reading it now computes and stamps the missing count, so a
+            // pre-existing index converges on complete token counts. A file already
+            // carrying both markers is skipped, so the migration re-reads each file at
+            // most once.
+            if (!StoredContentProcessed(storedMeta, entry.RelativePath)
+                || StoredTokenCount(storedMeta, entry.RelativePath) is null)
             {
                 backfill.Add(entry);
             }
@@ -561,19 +604,63 @@ internal sealed class RepoContextBootstrapService
     }
 
     /// <summary>
-    /// Unifies the symbol and content back-fill lists into a single distinct set of
-    /// files (by repository-relative path), so a file selected by both back-fills has
-    /// its node rewritten exactly once with both markers resolved. Order is preserved
-    /// from the symbol list first, then the content-only additions.
+    /// Selects the cross-reference back-fill candidates from the content-unchanged set:
+    /// supported-language files whose stored node was stamped symbol-processed but never
+    /// cross-referenced. These are files indexed before the reverse cross-reference
+    /// index existed - their symbol records already carry the outbound references, but
+    /// because their content never changes the incremental delta never rebuilds the
+    /// reverse edges, so the reverse index stays empty for them. Force-seeding those
+    /// edges from the stored records lets a pre-existing index converge on a complete
+    /// reverse projection without re-parsing the files. The language filter mirrors the
+    /// symbol back-fill (only supported files ever declare symbols), and drawing only
+    /// from the pure-unchanged set guarantees a back-filled node is written exactly once
+    /// per pass.
+    /// </summary>
+    /// <param name="unchanged">The content-unchanged files from the plan.</param>
+    /// <param name="storedMeta">The stored per-file metadata, consulted for the
+    /// symbol-processed and cross-referenced markers.</param>
+    /// <returns>The unchanged files eligible for cross-reference back-fill.</returns>
+    private List<RepoFileEntry> SelectXrefBackfill(
+        IReadOnlyList<RepoFileEntry> unchanged, IReadOnlyDictionary<string, StoredFileMeta> storedMeta)
+    {
+        var backfill = new List<RepoFileEntry>();
+        foreach (var entry in unchanged)
+        {
+            // A file must be symbol-processed (so its records and stored references
+            // exist) yet not cross-referenced (so its reverse edges were never built)
+            // to be a seed candidate. A file still awaiting symbol back-fill is covered
+            // by the symbol path, which builds its reverse edges through the delta, so
+            // it is intentionally excluded here.
+            if (_symbolExtractor.Supports(entry.Language)
+                && StoredProcessed(storedMeta, entry.RelativePath)
+                && !StoredCrossReferenced(storedMeta, entry.RelativePath))
+            {
+                backfill.Add(entry);
+            }
+        }
+
+        return backfill;
+    }
+
+    /// <summary>
+    /// Unifies the symbol, content, and cross-reference back-fill lists into a single
+    /// distinct set of files (by repository-relative path), so a file selected by more
+    /// than one back-fill has its node rewritten exactly once with every marker
+    /// resolved. Order is preserved from the symbol list first, then the content-only
+    /// additions, then the cross-reference-only additions.
     /// </summary>
     /// <param name="symbolBackfill">The symbol back-fill candidates.</param>
     /// <param name="contentBackfill">The content back-fill candidates.</param>
-    /// <returns>The distinct union of the two lists.</returns>
+    /// <param name="xrefBackfill">The cross-reference back-fill candidates.</param>
+    /// <returns>The distinct union of the three lists.</returns>
     private static List<RepoFileEntry> UnifyBackfill(
-        IReadOnlyList<RepoFileEntry> symbolBackfill, IReadOnlyList<RepoFileEntry> contentBackfill)
+        IReadOnlyList<RepoFileEntry> symbolBackfill,
+        IReadOnlyList<RepoFileEntry> contentBackfill,
+        IReadOnlyList<RepoFileEntry> xrefBackfill)
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        var unified = new List<RepoFileEntry>(symbolBackfill.Count + contentBackfill.Count);
+        var unified = new List<RepoFileEntry>(
+            symbolBackfill.Count + contentBackfill.Count + xrefBackfill.Count);
         foreach (var entry in symbolBackfill)
         {
             if (seen.Add(entry.RelativePath))
@@ -583,6 +670,14 @@ internal sealed class RepoContextBootstrapService
         }
 
         foreach (var entry in contentBackfill)
+        {
+            if (seen.Add(entry.RelativePath))
+            {
+                unified.Add(entry);
+            }
+        }
+
+        foreach (var entry in xrefBackfill)
         {
             if (seen.Add(entry.RelativePath))
             {
@@ -727,7 +822,9 @@ internal sealed class RepoContextBootstrapService
                     RepoContextValues.ReadHlcWallTicks(node.Digest) ?? 0,
                     DeclaredSymbolNames.Decode(RepoContextValues.ReadString(node.DeclaredSymbols)),
                     RepoContextValues.ReadString(node.SymbolsProcessed) is not null,
-                    RepoContextValues.ReadString(node.ContentProcessed) is not null);
+                    RepoContextValues.ReadString(node.ContentProcessed) is not null,
+                    RepoContextValues.ReadInt64(node.TokenCount) ?? -1,
+                    RepoContextValues.ReadString(node.CrossReferenced) is not null);
             }
         }
 
@@ -742,6 +839,8 @@ internal sealed class RepoContextBootstrapService
         IReadOnlyDictionary<string, string> declaredEncoded,
         IReadOnlySet<string> symbolProcessedPaths,
         IReadOnlySet<string> contentProcessedPaths,
+        IReadOnlySet<string> crossReferencedPaths,
+        IReadOnlyDictionary<string, int> tokenCountsByPath,
         IReadOnlyDictionary<string, StoredFileMeta> storedMeta,
         IRepoIndexProgressSink? progress,
         CancellationToken cancellationToken)
@@ -766,7 +865,10 @@ internal sealed class RepoContextBootstrapService
                 RepoContextKeys.File(repoId, entry.RelativePath),
                 BuildFileNode(repoId, entry, DeclaredFor(declaredEncoded, entry),
                     symbolProcessedPaths.Contains(entry.RelativePath),
-                    contentProcessedPaths.Contains(entry.RelativePath), ingestToken, clock)));
+                    contentProcessedPaths.Contains(entry.RelativePath),
+                    ResolveTokenCount(entry.RelativePath, contentProcessedPaths.Contains(entry.RelativePath), tokenCountsByPath, storedMeta),
+                    crossReferencedPaths.Contains(entry.RelativePath),
+                    ingestToken, clock)));
         }
 
         foreach (var entry in plan.Updated)
@@ -776,7 +878,10 @@ internal sealed class RepoContextBootstrapService
                 RepoContextKeys.File(repoId, entry.RelativePath),
                 BuildFileNode(repoId, entry, DeclaredFor(declaredEncoded, entry),
                     symbolProcessedPaths.Contains(entry.RelativePath),
-                    contentProcessedPaths.Contains(entry.RelativePath), ingestToken, clock)));
+                    contentProcessedPaths.Contains(entry.RelativePath),
+                    ResolveTokenCount(entry.RelativePath, contentProcessedPaths.Contains(entry.RelativePath), tokenCountsByPath, storedMeta),
+                    crossReferencedPaths.Contains(entry.RelativePath),
+                    ingestToken, clock)));
         }
 
         // Metadata-changed files are content-identical, so rewriting their node with
@@ -791,7 +896,10 @@ internal sealed class RepoContextBootstrapService
                 RepoContextKeys.File(repoId, entry.RelativePath),
                 BuildFileNode(repoId, entry, DeclaredFor(declaredEncoded, entry),
                     StoredProcessed(storedMeta, entry.RelativePath),
-                    StoredContentProcessed(storedMeta, entry.RelativePath), ingestToken, clock)));
+                    StoredContentProcessed(storedMeta, entry.RelativePath),
+                    ResolveTokenCount(entry.RelativePath, false, tokenCountsByPath, storedMeta),
+                    StoredCrossReferenced(storedMeta, entry.RelativePath),
+                    ingestToken, clock)));
         }
 
         // Back-fill files are content-unchanged, so rewriting their node stamps
@@ -805,7 +913,8 @@ internal sealed class RepoContextBootstrapService
             var path = entry.RelativePath;
             var symbolNow = symbolProcessedPaths.Contains(path);
             var contentNow = contentProcessedPaths.Contains(path);
-            if (!symbolNow && !contentNow)
+            var crossNow = crossReferencedPaths.Contains(path);
+            if (!symbolNow && !contentNow && !crossNow)
             {
                 continue;
             }
@@ -815,7 +924,10 @@ internal sealed class RepoContextBootstrapService
                 RepoContextKeys.File(repoId, path),
                 BuildFileNode(repoId, entry, DeclaredFor(declaredEncoded, entry),
                     symbolNow || StoredProcessed(storedMeta, path),
-                    contentNow || StoredContentProcessed(storedMeta, path), ingestToken, clock)));
+                    contentNow || StoredContentProcessed(storedMeta, path),
+                    ResolveTokenCount(path, contentNow, tokenCountsByPath, storedMeta),
+                    crossNow || StoredCrossReferenced(storedMeta, path),
+                    ingestToken, clock)));
         }
 
         var deletes = new List<string>(plan.RemovedPaths.Count);
@@ -858,7 +970,7 @@ internal sealed class RepoContextBootstrapService
     }
 
     private byte[] BuildFileNode(
-        string repoId, RepoFileEntry entry, string? declaredEncoded, bool symbolsProcessed, bool contentProcessed, string ingestToken, HybridLogicalClock clock)
+        string repoId, RepoFileEntry entry, string? declaredEncoded, bool symbolsProcessed, bool contentProcessed, long? tokenCount, bool crossReferenced, string ingestToken, HybridLogicalClock clock)
     {
         var node = new FileNode
         {
@@ -891,6 +1003,23 @@ internal sealed class RepoContextBootstrapService
             node = node with { ContentProcessed = RepoContextValues.Lww("1", clock) };
         }
 
+        // Stamp the per-file token count - either freshly computed this pass or carried
+        // forward from the stored node - so a full-node rewrite never drops it. A null
+        // count (a brand-new file the reconcile could not read, or a legacy node with
+        // none stored) leaves the register empty for the back-fill to fill later.
+        if (tokenCount is { } tokens)
+        {
+            node = node with { TokenCount = RepoContextValues.Lww(tokens, clock) };
+        }
+
+        // Stamp the cross-referenced presence marker, which keeps the cross-reference
+        // back-fill scan from re-selecting a file whose declared symbols' reverse edges
+        // were already projected into the cross-reference index.
+        if (crossReferenced)
+        {
+            node = node with { CrossReferenced = RepoContextValues.Lww("1", clock) };
+        }
+
         return _fileNodeSerializer.SerializeToArray(node);
     }
 
@@ -911,6 +1040,48 @@ internal sealed class RepoContextBootstrapService
     /// </summary>
     private static bool StoredContentProcessed(IReadOnlyDictionary<string, StoredFileMeta> storedMeta, string path) =>
         storedMeta.TryGetValue(path, out var meta) && meta.ContentProcessed;
+
+    /// <summary>
+    /// Whether the stored node for <paramref name="path"/> already carries the
+    /// cross-referenced marker, used both to keep the cross-reference back-fill from
+    /// re-selecting an already-seeded file and to carry that marker forward when an
+    /// anchor-refreshed or other back-filled file's node is rewritten without
+    /// re-seeding its reverse edges.
+    /// </summary>
+    private static bool StoredCrossReferenced(IReadOnlyDictionary<string, StoredFileMeta> storedMeta, string path) =>
+        storedMeta.TryGetValue(path, out var meta) && meta.CrossReferenced;
+
+    /// <summary>
+    /// The token count stored for <paramref name="path"/>'s node, or
+    /// <see langword="null"/> when none was recorded (a node written before the
+    /// token-count register existed, whose stored count is negative). Used both to
+    /// re-select such a node for the content back-fill and to carry its count forward
+    /// when a node is rewritten without re-reading the file.
+    /// </summary>
+    private static long? StoredTokenCount(IReadOnlyDictionary<string, StoredFileMeta> storedMeta, string path) =>
+        storedMeta.TryGetValue(path, out var meta) && meta.TokenCount >= 0 ? meta.TokenCount : null;
+
+    /// <summary>
+    /// Resolves the token count to stamp on a rewritten file node: the count freshly
+    /// computed by the content reconcile this pass when the file was content-processed,
+    /// otherwise the count carried forward from the stored node (which is
+    /// <see langword="null"/> for a legacy or brand-new node with none stored, leaving
+    /// the register empty for a later back-fill).
+    /// </summary>
+    /// <param name="path">The repository-relative file path.</param>
+    /// <param name="contentProcessedThisPass">Whether the content reconcile projected
+    /// this file this pass (so a fresh count exists for it).</param>
+    /// <param name="freshCounts">The per-path token counts computed this pass.</param>
+    /// <param name="storedMeta">The stored per-file metadata, consulted for a
+    /// carry-forward count.</param>
+    private static long? ResolveTokenCount(
+        string path,
+        bool contentProcessedThisPass,
+        IReadOnlyDictionary<string, int> freshCounts,
+        IReadOnlyDictionary<string, StoredFileMeta> storedMeta) =>
+        contentProcessedThisPass && freshCounts.TryGetValue(path, out var fresh)
+            ? fresh
+            : StoredTokenCount(storedMeta, path);
 
     /// <summary>
     /// Resolves the encoded declared-symbol string a file node should carry, or

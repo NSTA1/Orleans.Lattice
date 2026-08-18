@@ -274,4 +274,153 @@ public sealed class RepoContextKeywordSearchTests
             Assert.Throws<ArgumentNullException>(
                 () => RepoContextKeywordSearch.Rank(Array.Empty<RepoContextEntryView>(), null!, 1));
         });
+
+    [Test]
+    public void Rank_attaches_a_path_name_reason()
+    {
+        var ranked = RepoContextKeywordSearch.Rank(
+            new[] { Entry("repo/r/file/src/WidgetService.cs", path: "src/WidgetService.cs") },
+            RepoContextKeywordSearch.Tokenize("widget"),
+            k: 5);
+
+        Assert.That(ranked[0].Reasons, Does.Contain("path-name-match"));
+    }
+
+    [Test]
+    public void Rank_attaches_a_symbol_reason_carrying_the_fully_qualified_name()
+    {
+        var ranked = RepoContextKeywordSearch.Rank(
+            new[] { Entry("repo/r/sym/Widget", fqn: "Acme.Widget") },
+            RepoContextKeywordSearch.Tokenize("widget"),
+            k: 5);
+
+        Assert.That(ranked[0].Reasons, Does.Contain("symbol:Acme.Widget"));
+    }
+
+    [Test]
+    public void Rank_attaches_a_tag_reason_for_each_matched_tag_in_ordinal_order()
+    {
+        var ranked = RepoContextKeywordSearch.Rank(
+            new[] { Entry("repo/r/mem/t/a", tags: new[] { "widget", "gadget", "widgetry" }) },
+            RepoContextKeywordSearch.Tokenize("widget gadget"),
+            k: 5);
+
+        // "widget" and "gadget" match their own tags; "widgetry" does not tokenize to
+        // either term, so it is not a reason. Tags keep the entry's ordinal order.
+        Assert.That(
+            ranked[0].Reasons.Where(r => r.StartsWith("tag:", StringComparison.Ordinal)),
+            Is.EqualTo(new[] { "tag:widget", "tag:gadget" }));
+    }
+
+    [Test]
+    public void Rank_attaches_a_topic_reason()
+    {
+        var ranked = RepoContextKeywordSearch.Rank(
+            new[] { Entry("repo/r/mem/widget/a", topic: "widget") },
+            RepoContextKeywordSearch.Tokenize("widget"),
+            k: 5);
+
+        Assert.That(ranked[0].Reasons, Does.Contain("topic-match"));
+    }
+
+    [Test]
+    public void Rank_attaches_a_content_reason_for_a_body_only_match()
+    {
+        var ranked = RepoContextKeywordSearch.Rank(
+            new[]
+            {
+                Entry(
+                    "repo/r/content/src/A.cs",
+                    fields: new Dictionary<string, string> { ["body"] = "the quick brown widget" }),
+            },
+            RepoContextKeywordSearch.Tokenize("widget"),
+            k: 5);
+
+        Assert.That(ranked[0].Reasons, Does.Contain("content-match"));
+    }
+
+    [Test]
+    public void Rank_attaches_a_key_reason_when_only_the_key_carries_the_term()
+    {
+        // The token appears only in the key path segment, not in any projected
+        // path/fqn/topic/tag/content field, so key-match is the sole attribution.
+        var ranked = RepoContextKeywordSearch.Rank(
+            new[] { Entry("repo/r/mem/notes/widget") },
+            RepoContextKeywordSearch.Tokenize("widget"),
+            k: 5);
+
+        Assert.That(ranked[0].Reasons, Is.EqualTo(new[] { "key-match" }));
+    }
+
+    [Test]
+    public void Rank_orders_reasons_high_signal_first()
+    {
+        // One entry matches on every attributable field at once. Reasons must come
+        // back in the fixed high-signal-first order: path, symbol, tag, topic,
+        // content, key.
+        var ranked = RepoContextKeywordSearch.Rank(
+            new[]
+            {
+                Entry(
+                    "repo/r/file/widget",
+                    path: "src/widget.cs",
+                    fqn: "Acme.Widget",
+                    topic: "widget",
+                    tags: new[] { "widget" },
+                    fields: new Dictionary<string, string> { ["body"] = "widget" }),
+            },
+            RepoContextKeywordSearch.Tokenize("widget"),
+            k: 5);
+
+        Assert.That(
+            ranked[0].Reasons,
+            Is.EqualTo(new[]
+            {
+                "path-name-match",
+                "symbol:Acme.Widget",
+                "tag:widget",
+                "topic-match",
+                "content-match",
+                "key-match",
+            }));
+    }
+
+    [Test]
+    public void Rank_caps_reasons_at_the_maximum_dropping_lowest_signal_first()
+    {
+        // Path plus many matching tags would exceed the cap; the ranker keeps the
+        // highest-signal reasons (path, then tags in order) up to the cap and drops
+        // the rest deterministically.
+        var tags = Enumerable.Range(0, 10).Select(i => $"widget{i}").ToArray();
+        var ranked = RepoContextKeywordSearch.Rank(
+            new[] { Entry("repo/r/file/widget", path: "widget.cs", topic: "widget", tags: tags) },
+            RepoContextKeywordSearch.Tokenize("widget " + string.Join(' ', tags)),
+            k: 5);
+
+        var reasons = ranked[0].Reasons;
+        Assert.Multiple(() =>
+        {
+            Assert.That(reasons, Has.Count.EqualTo(RepoContextSearchReasons.MaxReasons));
+            Assert.That(reasons[0], Is.EqualTo("path-name-match"));
+            Assert.That(
+                reasons.Skip(1),
+                Is.EqualTo(new[] { "tag:widget0", "tag:widget1", "tag:widget2", "tag:widget3", "tag:widget4" }),
+                "Tags fill the remaining slots in ordinal order; lower-signal topic is dropped.");
+        });
+    }
+
+    [Test]
+    public void Rank_reasons_are_deterministic_across_repeated_runs()
+    {
+        var entries = new[]
+        {
+            Entry("repo/r/file/widget", path: "src/widget.cs", tags: new[] { "widget" }),
+        };
+        var tokens = RepoContextKeywordSearch.Tokenize("widget");
+
+        var first = RepoContextKeywordSearch.Rank(entries, tokens, k: 5)[0].Reasons;
+        var second = RepoContextKeywordSearch.Rank(entries, tokens, k: 5)[0].Reasons;
+
+        Assert.That(second, Is.EqualTo(first));
+    }
 }

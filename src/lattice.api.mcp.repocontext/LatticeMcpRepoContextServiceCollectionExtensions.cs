@@ -117,6 +117,33 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         services.TryAddSingleton<RepoContextBootstrapService>();
         services.TryAddSingleton(TimeProvider.System);
 
+        // The read-only structural-graph adapter behind the outline / changed / related
+        // tools. It is a pure projection over the file, symbol, content, and reverse
+        // cross-reference records the reconcilers maintain, and reaches the workspace
+        // (for changed) only through the fail-closed RepoContextWorkspaceGuard. TryAdd
+        // means a host or test harness can substitute it.
+        services.TryAddSingleton<RepoContextGraphService>();
+
+        // The per-session reuse-bookkeeping store behind repocontext_context's reuse
+        // economics. It persists, per (repoId, sessionId), exactly what a prior bundle
+        // call delivered so a later call never re-charges for it. TryAdd means a host or
+        // test harness can substitute it.
+        services.TryAddSingleton<RepoContextSessionStore>();
+
+        // The usage-accounting recorder behind repocontext_stats. It records, per answered
+        // context call, the exact response tokens spent and a conservative estimate of the
+        // whole-file reads replaced, keeps a bounded in-memory window for the read-only stats
+        // tool, and emits the same figures as telemetry counters. TryAdd means a host or test
+        // harness can substitute it (for example with an in-memory capturing double).
+        services.TryAddSingleton<IRepoContextUsageRecorder>(
+            sp => new RepoContextUsageRecorder(sp.GetRequiredService<TimeProvider>()));
+
+        // The read-only budgeted context-bundle adapter behind repocontext_context. It
+        // composes the search and graph services with the shared token counter to pack a
+        // ranked, explained bundle under a hard token ceiling. TryAdd means a host or
+        // test harness can substitute it.
+        services.TryAddSingleton<RepoContextBundleService>();
+
         // The symbol-structural reconcile seam: a language-dispatching extractor
         // (only C#/Roslyn is registered today; other languages fall through to no
         // output) and the reconciler that upserts and prunes per-symbol records as
@@ -133,6 +160,13 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         services.TryAddSingleton<RepoContextContentReconciler>();
         services.TryAddSingleton(RepoContextIndexingOptions.FromEnvironment());
         services.TryAddSingleton<RepoContextStore>();
+
+        // The shared BPE token counter: constructs its tiktoken tokenizer once from the
+        // configured tokenizer profile and is reused by the reconcile path (per-file
+        // token counts) and the retrieval surface (token budgets). TryAdd means a host
+        // or test harness that registers its own counter first wins.
+        services.TryAddSingleton<IRepoContextTokenCounter>(sp =>
+            new TiktokenRepoContextTokenCounter(sp.GetRequiredService<RepoContextIndexingOptions>()));
 
         // The background indexing runner runs each onboarding pass off the request
         // thread, bound to the host lifetime, so a client disconnect never aborts an

@@ -101,6 +101,8 @@ public sealed class AddRepoContextToolsTests
             {
                 "repocontext_health", "repocontext_recall", "repocontext_scan", "repocontext_list_topics",
                 "repocontext_search", "repocontext_index_status", "repocontext_neighbors",
+                "repocontext_outline", "repocontext_changed", "repocontext_related", "repocontext_context",
+                "repocontext_stats",
             }));
     }
 
@@ -119,6 +121,8 @@ public sealed class AddRepoContextToolsTests
             {
                 "repocontext_health", "repocontext_recall", "repocontext_scan", "repocontext_list_topics",
                 "repocontext_search", "repocontext_index_status", "repocontext_neighbors",
+                "repocontext_outline", "repocontext_changed", "repocontext_related", "repocontext_context",
+                "repocontext_stats",
                 "repocontext_bootstrap", "repocontext_remember", "repocontext_update", "repocontext_forget",
             }));
     }
@@ -138,6 +142,8 @@ public sealed class AddRepoContextToolsTests
             {
                 "repocontext_health", "repocontext_recall", "repocontext_scan", "repocontext_list_topics",
                 "repocontext_search", "repocontext_index_status", "repocontext_neighbors", "repocontext_list_repos",
+                "repocontext_outline", "repocontext_changed", "repocontext_related", "repocontext_context",
+                "repocontext_stats",
                 "repocontext_add_repo", "repocontext_remove_repo",
                 "repocontext_remember", "repocontext_update", "repocontext_forget",
             }));
@@ -165,5 +171,50 @@ public sealed class AddRepoContextToolsTests
         var guard = provider.GetRequiredService<RepoContextWorkspaceGuard>();
 
         Assert.That(guard.IsEnforcing, Is.False);
+    }
+
+    [Test]
+    public void AddRepoContextTools_registers_the_default_tiktoken_token_counter_as_a_singleton()
+    {
+        var services = new ServiceCollection();
+        services.AddRepoContextTools();
+
+        var descriptor = services.SingleOrDefault(d => d.ServiceType == typeof(IRepoContextTokenCounter));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(descriptor, Is.Not.Null);
+            Assert.That(descriptor!.Lifetime, Is.EqualTo(ServiceLifetime.Singleton));
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var counter = provider.GetRequiredService<IRepoContextTokenCounter>();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(counter, Is.InstanceOf<TiktokenRepoContextTokenCounter>());
+            // Singleton: the same instance is resolved every time.
+            Assert.That(provider.GetRequiredService<IRepoContextTokenCounter>(), Is.SameAs(counter));
+        });
+    }
+
+    [Test]
+    public void AddRepoContextTools_lets_a_host_supplied_token_counter_win()
+    {
+        var host = new FixedTokenCounter();
+        var services = new ServiceCollection();
+        services.AddSingleton<IRepoContextTokenCounter>(host);
+        services.AddRepoContextTools();
+
+        using var provider = services.BuildServiceProvider();
+
+        Assert.That(provider.GetRequiredService<IRepoContextTokenCounter>(), Is.SameAs(host));
+    }
+
+    private sealed class FixedTokenCounter : IRepoContextTokenCounter
+    {
+        public int CountTokens(string text) => 0;
+
+        public int CountTokens(ReadOnlySpan<char> text) => 0;
     }
 }

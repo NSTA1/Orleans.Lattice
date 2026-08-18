@@ -42,6 +42,29 @@ public sealed class RepoContextSearchResultTests
         => Assert.That(new RepoContextSearchHit { Score = 1, Entry = Entry("k") }.VectorId, Is.Null);
 
     [Test]
+    public void Hit_reasons_default_to_an_empty_non_null_list()
+    {
+        // Back-compatible additive surface: a hit constructed without reasons (as
+        // every pre-existing consumer does) exposes an empty list, never null.
+        var hit = new RepoContextSearchHit { Score = 1, Entry = Entry("k") };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(hit.Reasons, Is.Not.Null);
+            Assert.That(hit.Reasons, Is.Empty);
+        });
+    }
+
+    [Test]
+    public void Hit_exposes_the_reasons_it_is_constructed_with()
+    {
+        var reasons = new[] { "semantic", "chunk:file" };
+        var hit = new RepoContextSearchHit { Score = 1, Entry = Entry("k"), Reasons = reasons };
+
+        Assert.That(hit.Reasons, Is.SameAs(reasons));
+    }
+
+    [Test]
     public void Result_exposes_repo_query_mode_and_hits()
     {
         var hits = new[] { new RepoContextSearchHit { Score = 1, Entry = Entry("k") } };

@@ -213,7 +213,13 @@ internal sealed class RepoContextSearchService
                 continue;
             }
 
-            hits.Add(new RepoContextSearchHit { Score = match.Score, Entry = entry, VectorId = match.VectorId });
+            hits.Add(new RepoContextSearchHit
+            {
+                Score = match.Score,
+                Entry = entry,
+                VectorId = match.VectorId,
+                Reasons = RepoContextSearchReasons.ForSemantic(match.SourceKey),
+            });
         }
 
         return hits;

@@ -48,6 +48,21 @@ internal static class RepoContextToolHandlers
     public static RepoContextHealthResult Health() => Healthy;
 
     /// <summary>
+    /// Reports an aggregate roll-up of the repository-context surface's usage over a bounded
+    /// recent window: how many calls were answered, the exact response tokens they spent, the
+    /// whole-file read tokens they conservatively replaced, and the net tokens saved. Read-only
+    /// and behind the fail-closed authorization gate; it returns only summed token figures and
+    /// never any body, query, path, or repository identity.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the usage recorder.</param>
+    /// <returns>The aggregate usage summary.</returns>
+    public static RepoContextStatsResult Stats(RequestContext<CallToolRequestParams> context)
+    {
+        var recorder = ResolveUsageRecorder(context);
+        return RepoContextStatsResult.From(recorder.Summarize(), recorder.Window);
+    }
+
+    /// <summary>
     /// Starts (or re-attaches to) an asynchronous indexing job for a repository:
     /// walks the tree, records a structural node and content digest per file, and
     /// reconciles the scan against the stored records idempotently (unchanged files
@@ -406,6 +421,207 @@ internal static class RepoContextToolHandlers
     }
 
     /// <summary>
+    /// Builds a budgeted, ranked, explained context bundle for a natural-language
+    /// task in a single call, packing as much relevant source as fits under a hard
+    /// token ceiling. The <paramref name="top"/>, <paramref name="responseBudgetTokens"/>,
+    /// and <paramref name="detail"/> inputs are validated and clamped by the bundle
+    /// service, so a wire caller can never drive unbounded work.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the bundle service.</param>
+    /// <param name="repoId">The repository to bundle context from.</param>
+    /// <param name="task">The natural-language task to pack context for.</param>
+    /// <param name="top">The maximum number of files to consider (clamped to [1, 50]).</param>
+    /// <param name="responseBudgetTokens">The hard token ceiling for the bundle (clamped to [1, 200000]).</param>
+    /// <param name="detail">The requested detail level: <c>paths</c>, <c>outline</c>, <c>slices</c>, or <c>auto</c>; an unrecognised value resolves to <c>auto</c>.</param>
+    /// <param name="seen">Opaque unit receipts the caller already holds; each matching unit is suppressed and never re-charged.</param>
+    /// <param name="known">Whole-file possession claims of the form <c>path@hash</c>; each is honoured only for a version the tool actually delivered whole to the same session.</param>
+    /// <param name="session">A named caller session that persists reuse bookkeeping across calls.</param>
+    /// <param name="cancellationToken">Cancels the bundle.</param>
+    /// <returns>The packed bundle, whose exact BPE total never exceeds the clamped budget.</returns>
+    /// <exception cref="McpException">The repository id or task is missing.</exception>
+    public static Task<RepoContextContextResult> ContextAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The repository identifier to bundle context from.")]
+        string repoId,
+        [Description("The natural-language task to pack a ranked, explained context bundle for.")]
+        string task,
+        [Description("The maximum number of files to consider. Clamped to the range [1, 50]; defaults to 10.")]
+        int top = 0,
+        [Description(
+            "The hard token ceiling for the whole bundle, measured with the exact BPE token counter. "
+            + "Clamped to the range [1, 200000]; defaults to 8192. The bundle's reported total never exceeds it.")]
+        int responseBudgetTokens = 0,
+        [Description(
+            "How much of each file to pack: 'paths' (path only, cheapest), 'outline' (declared-symbol skeleton), "
+            + "'slices' (bounded body text, richest), or 'auto' (default) which picks the richest level that fits "
+            + "and reports the level it settled on. An unrecognised value is treated as 'auto'.")]
+        string? detail = null,
+        [Description(
+            "Opaque unit receipts (from a prior bundle's entry units) the caller already holds. Each matching unit "
+            + "is suppressed - the rest of its file still arrives - acknowledged under 'reused', and never charged "
+            + "against 'top' or the token budget.")]
+        string[]? seen = null,
+        [Description(
+            "Whole-file possession claims of the form 'path@hash' (from a prior entry's path and contentHash). A claim "
+            + "is honoured only for a version this tool actually delivered as a complete body to the same 'session'; "
+            + "a partial (outline/paths) delivery can never satisfy it. A honoured claim suppresses the whole file.")]
+        string[]? known = null,
+        [Description(
+            "A named caller session id. Its recorded deliveries auto-suppress units the session already holds and "
+            + "validate 'known' claims, and this call's deliveries are recorded into it, so a session never pays "
+            + "twice for the same context across calls.")]
+        string? session = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(repoId))
+        {
+            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+        }
+
+        if (string.IsNullOrWhiteSpace(task))
+        {
+            throw new McpException("The 'task' parameter is required and must be a non-empty task description.");
+        }
+
+        return ResolveBundleService(context)
+            .BuildAsync(repoId, task, top, responseBudgetTokens, ParseDetail(detail), seen, known, session, cancellationToken);
+    }
+
+    /// <summary>
+    /// Parses the wire <c>detail</c> argument to a <see cref="RepoContextContextDetail"/>,
+    /// case-insensitively and trimming surrounding whitespace. Any unrecognised,
+    /// empty, or null value resolves to <see cref="RepoContextContextDetail.Auto"/>,
+    /// so a wire caller can never fault the tool with a bad level.
+    /// </summary>
+    /// <param name="detail">The raw wire value, or <see langword="null"/>.</param>
+    /// <returns>The parsed detail level, defaulting to auto.</returns>
+    private static RepoContextContextDetail ParseDetail(string? detail)
+        => detail?.Trim().ToLowerInvariant() switch
+        {
+            "paths" => RepoContextContextDetail.Paths,
+            "outline" => RepoContextContextDetail.Outline,
+            "slices" => RepoContextContextDetail.Slices,
+            _ => RepoContextContextDetail.Auto,
+        };
+
+    /// <summary>
+    /// Builds the structural outline of one indexed file - its declared symbols with
+    /// kind, signature, and line span, plus the token cost of reading the whole file -
+    /// so an agent can grasp a file's shape and budget a full read without fetching its
+    /// body. A pure read over stored records; it never touches disk.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the graph service.</param>
+    /// <param name="repoId">The repository the file belongs to.</param>
+    /// <param name="path">The repository-relative file path to outline.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    /// <returns>The file's outline, or an <c>exists=false</c> result when no node is stored.</returns>
+    /// <exception cref="McpException">The repository id or path is missing.</exception>
+    public static Task<RepoContextOutlineResult> OutlineAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The repository identifier the file belongs to.")]
+        string repoId,
+        [Description("The repository-relative file path to outline, for example 'src/foo/Bar.cs'.")]
+        string path,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(repoId))
+        {
+            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+        }
+
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            throw new McpException("The 'path' parameter is required and must be a non-empty file path.");
+        }
+
+        return ResolveGraphService(context).OutlineAsync(repoId, path, cancellationToken);
+    }
+
+    /// <summary>
+    /// Reports the drift between the stored index and the current workspace - the files
+    /// added, updated, and removed by content digest, without git - plus the indexed
+    /// files that depend on the changed ones. The workspace is read only through the
+    /// fail-closed workspace guard, so a caller-supplied path can never escape the
+    /// mounted workspace.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the graph service.</param>
+    /// <param name="repoId">The repository whose index is compared.</param>
+    /// <param name="path">The workspace path to compare against the index.</param>
+    /// <param name="cancellationToken">Cancels the walk and reads.</param>
+    /// <returns>The added, updated, removed, and dependent file lists.</returns>
+    /// <exception cref="McpException">The repository id or path is missing, or the path
+    /// resolves outside the workspace or is not an existing directory.</exception>
+    public static async Task<RepoContextChangedResult> ChangedAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The repository identifier whose stored index is compared.")]
+        string repoId,
+        [Description("The workspace path to walk and compare against the stored index. Resolved through the mounted workspace boundary.")]
+        string path,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(repoId))
+        {
+            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+        }
+
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            throw new McpException("The 'path' parameter is required and must be a non-empty workspace path.");
+        }
+
+        try
+        {
+            return await ResolveGraphService(context).ChangedAsync(repoId, path, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (RepoContextWorkspaceViolationException ex)
+        {
+            throw new McpException(ex.Message);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new McpException(ex.Message);
+        }
+        catch (DirectoryNotFoundException ex)
+        {
+            throw new McpException(ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Resolves the structural neighbourhood of one file: the type-names it references
+    /// (outbound imports), the indexed symbols that reference its declarations (inbound
+    /// dependents), and the test types that cover them. A pure read over stored records;
+    /// it never touches disk.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the graph service.</param>
+    /// <param name="repoId">The repository the file belongs to.</param>
+    /// <param name="path">The repository-relative file path whose neighbourhood to resolve.</param>
+    /// <param name="cancellationToken">Cancels the reads.</param>
+    /// <returns>The related-neighbourhood result, or an <c>exists=false</c> result when no node is stored.</returns>
+    /// <exception cref="McpException">The repository id or path is missing.</exception>
+    public static Task<RepoContextRelatedResult> RelatedAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The repository identifier the file belongs to.")]
+        string repoId,
+        [Description("The repository-relative file path whose related neighbourhood to resolve, for example 'src/foo/Bar.cs'.")]
+        string path,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(repoId))
+        {
+            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+        }
+
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            throw new McpException("The 'path' parameter is required and must be a non-empty file path.");
+        }
+
+        return ResolveGraphService(context).RelatedAsync(repoId, path, cancellationToken);
+    }
+
+    /// <summary>
     /// Registers a repository under the mounted workspace and starts an
     /// asynchronous indexing job for it: it resolves the requested path against the
     /// workspace boundary, then hands a durable job to the background runner that
@@ -649,5 +865,47 @@ internal static class RepoContextToolHandlers
             ?? throw new InvalidOperationException(
                 "The MCP request has no service provider; the repository-context search tool cannot resolve its service.");
         return services.GetRequiredService<RepoContextSearchService>();
+    }
+
+    /// <summary>
+    /// Resolves the <see cref="RepoContextBundleService"/> from the MCP request's
+    /// service provider, failing with a clear message when the provider is absent.
+    /// </summary>
+    /// <param name="context">The MCP request context.</param>
+    /// <returns>The resolved bundle service.</returns>
+    private static RepoContextBundleService ResolveBundleService(RequestContext<CallToolRequestParams> context)
+    {
+        var services = context.Services
+            ?? throw new InvalidOperationException(
+                "The MCP request has no service provider; the repository-context bundle tool cannot resolve its service.");
+        return services.GetRequiredService<RepoContextBundleService>();
+    }
+
+    /// <summary>
+    /// Resolves the <see cref="RepoContextGraphService"/> from the MCP request's
+    /// service provider, failing with a clear message when the provider is absent.
+    /// </summary>
+    /// <param name="context">The MCP request context.</param>
+    /// <returns>The resolved graph service.</returns>
+    private static RepoContextGraphService ResolveGraphService(RequestContext<CallToolRequestParams> context)
+    {
+        var services = context.Services
+            ?? throw new InvalidOperationException(
+                "The MCP request has no service provider; the repository-context graph tool cannot resolve its service.");
+        return services.GetRequiredService<RepoContextGraphService>();
+    }
+
+    /// <summary>
+    /// Resolves the <see cref="IRepoContextUsageRecorder"/> from the MCP request's
+    /// service provider, failing with a clear message when the provider is absent.
+    /// </summary>
+    /// <param name="context">The MCP request context.</param>
+    /// <returns>The resolved usage recorder.</returns>
+    private static IRepoContextUsageRecorder ResolveUsageRecorder(RequestContext<CallToolRequestParams> context)
+    {
+        var services = context.Services
+            ?? throw new InvalidOperationException(
+                "The MCP request has no service provider; the repository-context stats tool cannot resolve its service.");
+        return services.GetRequiredService<IRepoContextUsageRecorder>();
     }
 }

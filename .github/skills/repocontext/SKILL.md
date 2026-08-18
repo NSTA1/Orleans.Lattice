@@ -25,11 +25,15 @@ to drift. It covers:
   present, silently fall back); plus the two guardrails that make leading with it
   safe (locate with `repocontext` but read the real file with `view`; fall back
   when the index is degraded or stale).
-- **Retrieval** - `search` (relevance, and how to read the `mode` field),
-  `scan` (ordered completeness over Files / Packages / Symbols / Memory),
-  `recall` (one record by key, and memory link-staleness `stale` / `staleLinks`),
-  and `neighbors` (walk the knowledge-linking
-  edges out of a memory entry), plus the `repo/{repoId}/...` key shapes.
+- **Retrieval** - `search` (relevance, how to read the `mode` field, and the
+  per-hit `reasons` explaining why a hit ranked), `scan` (ordered completeness over
+  Files / Packages / Symbols / Memory), `recall` (one record by key, and memory
+  link-staleness `stale` / `staleLinks`), `neighbors` (walk the knowledge-linking
+  edges out of a memory entry), the graph-navigation tools `outline` / `related` /
+  `changed` (a file's declared symbols, structural neighbours, and workspace drift
+  without full-file reads), and `context` (a ranked, explained source bundle packed
+  under a hard token budget in one call, with reuse economics) plus `stats` (aggregate
+  token-savings accounting) - plus the `repo/{repoId}/...` key shapes.
 - **Capture** - durable agent memory via `remember` / `update` / `forget`, the
   small stable topic vocabulary, knowledge-linking edges between entries
   (`addLinks` / `removeLinks` with a small `broader` / `narrower` / `related` /

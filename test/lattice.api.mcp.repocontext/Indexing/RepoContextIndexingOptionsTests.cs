@@ -14,6 +14,7 @@ public sealed class RepoContextIndexingOptionsTests
         RepoContextIndexingOptions.ReconcileIntervalSecondsKey,
         RepoContextIndexingOptions.ReconcileJitterSecondsKey,
         RepoContextIndexingOptions.FullWalkIntervalSecondsKey,
+        RepoContextIndexingOptions.TokenizerProfileKey,
     ];
 
     [SetUp]
@@ -78,5 +79,43 @@ public sealed class RepoContextIndexingOptionsTests
         var options = RepoContextIndexingOptions.FromEnvironment();
 
         Assert.That(options.TickInterval, Is.EqualTo(new RepoContextIndexingOptions().TickInterval));
+    }
+
+    [Test]
+    public void FromEnvironment_defaults_the_tokenizer_profile_to_o200k()
+    {
+        var options = RepoContextIndexingOptions.FromEnvironment();
+
+        Assert.That(options.TokenizerProfile, Is.EqualTo(RepoContextIndexingOptions.TokenizerProfileO200k));
+    }
+
+    [Test]
+    [TestCase("cl100k", "cl100k")]
+    [TestCase("CL100K", "cl100k")]
+    [TestCase("  cl100k  ", "cl100k")]
+    [TestCase("o200k", "o200k")]
+    [TestCase("O200K", "o200k")]
+    public void FromEnvironment_resolves_a_recognised_tokenizer_profile(string raw, string expected)
+    {
+        Environment.SetEnvironmentVariable(RepoContextIndexingOptions.TokenizerProfileKey, raw);
+
+        var options = RepoContextIndexingOptions.FromEnvironment();
+
+        Assert.That(options.TokenizerProfile, Is.EqualTo(expected));
+    }
+
+    [Test]
+    [TestCase("")]
+    [TestCase("   ")]
+    [TestCase("gpt2")]
+    [TestCase("p50k")]
+    [TestCase("not-a-profile")]
+    public void FromEnvironment_falls_back_to_the_default_profile_for_an_absent_or_unrecognised_value(string raw)
+    {
+        Environment.SetEnvironmentVariable(RepoContextIndexingOptions.TokenizerProfileKey, raw);
+
+        var options = RepoContextIndexingOptions.FromEnvironment();
+
+        Assert.That(options.TokenizerProfile, Is.EqualTo(RepoContextIndexingOptions.TokenizerProfileO200k));
     }
 }

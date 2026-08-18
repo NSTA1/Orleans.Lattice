@@ -45,6 +45,15 @@ internal sealed class RepoContextContentReconciler
         new HashSet<string>(StringComparer.Ordinal);
 
     /// <summary>
+    /// The empty token-count map returned alongside <see cref="EmptyProcessed"/> on the
+    /// degraded (terminally-stale content tree) path, where no body is projected and so
+    /// no token count is computed. A shared immutable instance keeps that path
+    /// allocation-free.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, int> EmptyTokenCounts =
+        new Dictionary<string, int>(StringComparer.Ordinal);
+
+    /// <summary>
     /// How many additional files must be projected between content-projection
     /// heartbeat log lines. Mirrors the vectorising phase's heartbeat: a large
     /// content back-fill (a repository indexed before the content projection existed
@@ -57,6 +66,7 @@ internal sealed class RepoContextContentReconciler
 
     private readonly IGrainFactory _grainFactory;
     private readonly Serializer<ContentRecord> _contentSerializer;
+    private readonly IRepoContextTokenCounter _tokenCounter;
     private readonly ILogger<RepoContextContentReconciler> _logger;
 
     /// <summary>
@@ -66,18 +76,24 @@ internal sealed class RepoContextContentReconciler
     /// Must not be <see langword="null"/>.</param>
     /// <param name="contentSerializer">The Orleans serializer for
     /// <see cref="ContentRecord"/>. Must not be <see langword="null"/>.</param>
+    /// <param name="tokenCounter">The shared BPE token counter used to measure each
+    /// file's decoded body once while it is in hand. Must not be
+    /// <see langword="null"/>.</param>
     /// <param name="logger">The logger. Must not be <see langword="null"/>.</param>
     public RepoContextContentReconciler(
         IGrainFactory grainFactory,
         Serializer<ContentRecord> contentSerializer,
+        IRepoContextTokenCounter tokenCounter,
         ILogger<RepoContextContentReconciler> logger)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(contentSerializer);
+        ArgumentNullException.ThrowIfNull(tokenCounter);
         ArgumentNullException.ThrowIfNull(logger);
 
         _grainFactory = grainFactory;
         _contentSerializer = contentSerializer;
+        _tokenCounter = tokenCounter;
         _logger = logger;
     }
 
@@ -117,6 +133,7 @@ internal sealed class RepoContextContentReconciler
         ArgumentNullException.ThrowIfNull(backfill);
 
         var processed = new HashSet<string>(StringComparer.Ordinal);
+        var tokenCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         var writes = new List<KeyValuePair<string, byte[]>>();
         var clock = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
         var total = added.Count + updated.Count + backfill.Count;
@@ -142,6 +159,12 @@ internal sealed class RepoContextContentReconciler
             writes.Add(new KeyValuePair<string, byte[]>(
                 RepoContextKeys.Content(repoId, path), _contentSerializer.SerializeToArray(record)));
             processed.Add(path);
+
+            // Count the file's BPE tokens once, while the decoded body is already in
+            // hand, so the per-file token count is stored (not recomputed per call).
+            // The reconciler truncates the body to ContentRecord.MaxContentChars for the
+            // projection but the token count measures the full decoded text.
+            tokenCounts[path] = _tokenCounter.CountTokens(text);
 
             if (processed.Count - lastHeartbeat >= ProgressHeartbeatInterval)
             {
@@ -182,7 +205,7 @@ internal sealed class RepoContextContentReconciler
                 "this pass. {Written} pending record(s) were dropped and their files left unmarked so " +
                 "the back-fill retries them once the content tree is healed.",
                 repoId, writes.Count);
-            return new ContentReconcileResult(EmptyProcessed, 0);
+            return new ContentReconcileResult(EmptyProcessed, 0, EmptyTokenCounts);
         }
 
         if (writes.Count > 0 || deletes.Count > 0)
@@ -192,7 +215,7 @@ internal sealed class RepoContextContentReconciler
                 repoId, writes.Count, deletes.Count, stopwatch.ElapsedMilliseconds);
         }
 
-        return new ContentReconcileResult(processed, writes.Count);
+        return new ContentReconcileResult(processed, writes.Count, tokenCounts);
     }
 
     private async Task CommitAsync(
