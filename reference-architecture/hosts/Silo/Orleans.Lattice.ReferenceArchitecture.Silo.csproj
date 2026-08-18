@@ -39,7 +39,7 @@
   <ItemGroup>
     <PackageReference Include="Orleans.Lattice" Version="9.0.4" />
     <PackageReference Include="Orleans.Lattice.Storage.AzureTable" Version="9.0.0" />
-    <PackageReference Include="Orleans.Lattice.Replication" Version="9.0.1" />
+    <PackageReference Include="Orleans.Lattice.Replication" Version="9.0.2" />
     <PackageReference Include="Orleans.Lattice.Replication.Grpc" Version="9.0.0" />
     <PackageReference Include="Orleans.Lattice.Api.Replication" Version="9.0.0" />
     <PackageReference Include="Orleans.Lattice.Api.Replication.Grpc" Version="9.0.0" />
