@@ -50,14 +50,23 @@ public static class RepoContextHostTrees
     /// <summary>The per-file searchable-content projection tree.</summary>
     public const string Content = "repo-context-content";
 
+    /// <summary>The reverse cross-reference projection tree (inbound dependents and test linkage).</summary>
+    public const string CrossReference = "repo-context-xref";
+
+    /// <summary>The per-session context-bundle reuse-bookkeeping tree.</summary>
+    public const string Session = "repo-context-session";
+
     /// <summary>
     /// The churn trees whose re-embed / prune / forget cycles create tombstones
     /// that must be reaped: memory, the two vector projections, structural (which
     /// the bootstrap prunes), the symbol tree (which the bootstrap re-writes
-    /// and prunes on every re-index of a changed file), and the content projection
+    /// and prunes on every re-index of a changed file), the content projection
     /// (which the bootstrap re-writes on a changed file and deletes on a removed
-    /// file). The content-addressed vector-payload tree is write-once with no
-    /// in-place deletes, so it is excluded - it needs no aggressive compaction.
+    /// file), the reverse cross-reference projection (which the symbol reconciler
+    /// re-writes and deletes as references change), and the per-session reuse
+    /// bookkeeping (whose entries expire and are pruned as sessions lapse). The
+    /// content-addressed vector-payload tree is write-once with no in-place deletes,
+    /// so it is excluded - it needs no aggressive compaction.
     /// </summary>
     public static IReadOnlyList<string> ChurnTrees { get; } = new[]
     {
@@ -67,6 +76,8 @@ public static class RepoContextHostTrees
         Structural,
         Symbol,
         Content,
+        CrossReference,
+        Session,
     };
 
     /// <summary>Every repository-context tree the box grants the local agent access to.</summary>
@@ -79,6 +90,8 @@ public static class RepoContextHostTrees
         VectorMetadata,
         VectorPayload,
         Content,
+        CrossReference,
+        Session,
     };
 }
 

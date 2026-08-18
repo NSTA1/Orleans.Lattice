@@ -111,6 +111,130 @@ public sealed class RepoContextRecordMergeTests
     }
 
     [Test]
+    public void FileNode_cross_referenced_marker_round_trips_as_a_present_register()
+    {
+        var node = new FileNode
+        {
+            RepoId = "acme",
+            Path = "a.cs",
+            CrossReferenced = RepoContextValues.Lww("1", Clock(100)),
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(node.CrossReferenced.HasValue, Is.True);
+            Assert.That(RepoContextValues.ReadString(node.CrossReferenced), Is.EqualTo("1"),
+                "the marker reads back as the stamped sentinel, so a reader detects its presence");
+        });
+    }
+
+    [Test]
+    public void FileNode_cross_referenced_marker_defaults_to_an_absent_register()
+    {
+        var node = new FileNode { RepoId = "acme", Path = "a.cs" };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(node.CrossReferenced.HasValue, Is.False);
+            Assert.That(RepoContextValues.ReadString(node.CrossReferenced), Is.Null,
+                "a node written before the marker existed carries the empty default, so the back-fill selects it");
+        });
+    }
+
+    [Test]
+    public void FileNode_merge_folds_the_cross_referenced_marker_last_writer_wins()
+    {
+        // Mirrors the other presence markers: the later hybrid-clock write wins
+        // regardless of merge order, an absent (pre-migration) register never
+        // overwrites a present one, and re-merging the same node is idempotent.
+        var early = new FileNode
+        {
+            RepoId = "acme",
+            Path = "a.cs",
+            CrossReferenced = RepoContextValues.Lww("1", Clock(100)),
+        };
+        var late = new FileNode
+        {
+            RepoId = "acme",
+            Path = "a.cs",
+            CrossReferenced = RepoContextValues.Lww("1", Clock(200)),
+        };
+        var absent = new FileNode { RepoId = "acme", Path = "a.cs" };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(FileNode.Merge(early, late).CrossReferenced.HasValue, Is.True);
+            Assert.That(FileNode.Merge(late, early).CrossReferenced.HasValue, Is.True,
+                "merge order does not change the outcome");
+            Assert.That(FileNode.Merge(late, absent).CrossReferenced.HasValue, Is.True,
+                "an absent (pre-migration) register never clears a present marker");
+            Assert.That(FileNode.Merge(absent, late).CrossReferenced.HasValue, Is.True,
+                "a present marker wins over an absent register regardless of order");
+            Assert.That(FileNode.Merge(early, early).CrossReferenced.HasValue, Is.True,
+                "re-merging the same node is idempotent");
+        });
+    }
+
+    [Test]
+    public void FileNode_token_count_register_round_trips_through_the_int64_codec()
+    {
+        var node = new FileNode
+        {
+            RepoId = "acme",
+            Path = "a.cs",
+            TokenCount = RepoContextValues.Lww(4096L, Clock(100)),
+        };
+
+        Assert.That(RepoContextValues.ReadInt64(node.TokenCount), Is.EqualTo(4096L));
+    }
+
+    [Test]
+    public void FileNode_token_count_defaults_to_an_absent_register()
+    {
+        var node = new FileNode { RepoId = "acme", Path = "a.cs" };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(node.TokenCount.HasValue, Is.False);
+            Assert.That(RepoContextValues.ReadInt64(node.TokenCount), Is.Null);
+        });
+    }
+
+    [Test]
+    public void FileNode_merge_folds_the_token_count_register_last_writer_wins()
+    {
+        // Mirrors the SizeBytes LWW merge: the later hybrid-clock write wins
+        // regardless of merge order, and an absent register never overwrites a
+        // present one. A node written before the register existed carries the
+        // empty default, so the merge must be migration-safe.
+        var early = new FileNode
+        {
+            RepoId = "acme",
+            Path = "a.cs",
+            TokenCount = RepoContextValues.Lww(10L, Clock(100)),
+        };
+        var late = new FileNode
+        {
+            RepoId = "acme",
+            Path = "a.cs",
+            TokenCount = RepoContextValues.Lww(20L, Clock(200)),
+        };
+        var absent = new FileNode { RepoId = "acme", Path = "a.cs" };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(RepoContextValues.ReadInt64(FileNode.Merge(early, late).TokenCount), Is.EqualTo(20L),
+                "The later write wins.");
+            Assert.That(RepoContextValues.ReadInt64(FileNode.Merge(late, early).TokenCount), Is.EqualTo(20L),
+                "The later write wins regardless of merge order.");
+            Assert.That(RepoContextValues.ReadInt64(FileNode.Merge(late, absent).TokenCount), Is.EqualTo(20L),
+                "An absent (pre-migration) register never overwrites a present count.");
+            Assert.That(RepoContextValues.ReadInt64(FileNode.Merge(absent, late).TokenCount), Is.EqualTo(20L),
+                "A present count wins over an absent register regardless of merge order.");
+        });
+    }
+
+    [Test]
     public void SymbolRecord_preserves_kind_and_merges_references()
     {
         var baseline = new SymbolRecord

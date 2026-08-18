@@ -17,8 +17,10 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// In the default single-repository mode the group contributes the always-on
 /// read-only tools (<c>repocontext_health</c>, <c>repocontext_recall</c>,
 /// <c>repocontext_scan</c>, <c>repocontext_list_topics</c>,
-/// <c>repocontext_search</c>, <c>repocontext_index_status</c>, and
-/// <c>repocontext_neighbors</c>) and - when the
+/// <c>repocontext_search</c>, <c>repocontext_index_status</c>,
+/// <c>repocontext_neighbors</c>, and the structural-graph trio
+/// <c>repocontext_outline</c>, <c>repocontext_changed</c>, and
+/// <c>repocontext_related</c>) and - when the
 /// host opts writes in - the mutating onboarding tool <c>repocontext_bootstrap</c>
 /// together with <c>repocontext_remember</c>, <c>repocontext_update</c>, and
 /// <c>repocontext_forget</c>. In workspace mode the read-only
@@ -58,7 +60,7 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
     /// tools replace the single-repository onboarding tool.</param>
     public RepoContextToolGroup(bool enableWrites = false, bool workspaceMode = false)
     {
-        var capacity = 7
+        var capacity = 12
             + (workspaceMode ? 1 : 0)
             + (enableWrites ? (workspaceMode ? 5 : 4) : 0);
         var tools = new List<McpServerTool>(capacity)
@@ -85,6 +87,11 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
             BuildSearchTool(),
             BuildIndexStatusTool(),
             BuildNeighborsTool(),
+            BuildOutlineTool(),
+            BuildChangedTool(),
+            BuildRelatedTool(),
+            BuildContextTool(),
+            BuildStatsTool(),
         };
 
         if (workspaceMode)
@@ -196,7 +203,12 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     + "vectors are available it runs an exact semantic (nearest-neighbour) search; otherwise it "
                     + "degrades to a deterministic BM25 keyword/structural scan over record names and file content, "
                     + "so a query always returns the best available matches instead of failing. The result's 'mode' "
-                    + "reports which path answered ('semantic', 'keyword', or 'empty'). Read-only.",
+                    + "reports which path answered ('semantic', 'keyword', or 'empty'). Every hit carries a "
+                    + "machine-readable 'reasons' list (server-derived, deterministic, ordinal-ordered, bounded, and "
+                    + "never null) explaining why it ranked: a semantic hit lists 'semantic', the matched chunk kind "
+                    + "('chunk:symbol' or 'chunk:file'), and 'symbol:<fqName>' for a symbol vector; a keyword hit "
+                    + "lists 'path-name-match', 'symbol:<fqName>', 'tag:<tag>', 'topic-match', 'content-match', and "
+                    + "'key-match' for whichever projected fields the query terms hit. Read-only.",
                 ReadOnly = true,
                 Destructive = false,
                 UseStructuredContent = true,
@@ -239,6 +251,131 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     + "entry has its link staleness evaluated ('stale' / 'staleLinks'), as 'repocontext_recall' "
                     + "does, so the walk surfaces which linked concepts point at drifted code. Use it to explore "
                     + "the curated concept graph an agent has captured across sessions. Read-only.",
+                ReadOnly = true,
+                Destructive = false,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildOutlineTool()
+        => McpServerTool.Create(
+            RepoContextToolHandlers.OutlineAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "repocontext_outline",
+                Title = "Outline a file's declared symbols",
+                Description =
+                    "Returns the structural skeleton of one indexed file without reading its body: each symbol "
+                    + "the file declares (its kind, signature, and 1-based start/end line span), ordered by "
+                    + "position, plus the token cost of reading the whole file under the configured tokenizer "
+                    + "profile. It is the cheapest way to grasp a file's shape and decide whether a full read is "
+                    + "worth the tokens - prefer it over fetching the file when you only need to know what the "
+                    + "file contains and where. The token count is read from the indexed per-file count when "
+                    + "present and computed from the stored content projection otherwise; it is reported as null "
+                    + "only when the file was never content-processed. A path with no stored file node returns "
+                    + "'exists=false' so an absent file is distinguishable from an empty one. This is a pure read "
+                    + "over stored records and never touches the workspace on disk. Read-only.",
+                ReadOnly = true,
+                Destructive = false,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildChangedTool()
+        => McpServerTool.Create(
+            RepoContextToolHandlers.ChangedAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "repocontext_changed",
+                Title = "Report workspace drift from the index",
+                Description =
+                    "Reports how the current workspace has drifted from the stored index - the files added, "
+                    + "updated, and removed - by comparing each file's content digest against the indexed digest, "
+                    + "without invoking git, so it works in any checkout regardless of version-control state. It "
+                    + "also lists the indexed files that depend on the changed ones (the reverse-reference impact "
+                    + "set), so an agent can see the blast radius of a set of edits before re-indexing. The "
+                    + "workspace is walked only through the fail-closed workspace boundary, so a supplied path "
+                    + "that resolves outside the mounted workspace is refused. Use it to find what an index needs "
+                    + "to catch up on, or to scope a review to what actually moved. Read-only.",
+                ReadOnly = true,
+                Destructive = false,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildRelatedTool()
+        => McpServerTool.Create(
+            RepoContextToolHandlers.RelatedAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "repocontext_related",
+                Title = "Find a file's structural neighbours",
+                Description =
+                    "Resolves the structural neighbourhood of one file so an agent can navigate the code graph "
+                    + "without full-file reads: the type-names the file references (its outbound imports), the "
+                    + "indexed symbols that reference the file's declarations (its inbound dependents, resolved to "
+                    + "the files that declare them), and the test types that cover it (recorded from the "
+                    + "'{Name}Tests' / '{Name}Test' naming convention). Dependents and tests are maintained "
+                    + "incrementally from a reverse cross-reference projection, so the lookup is a bounded read "
+                    + "rather than a whole-repository scan. Edges are keyed by simple (unqualified) type-name, a "
+                    + "syntactic approximation: two distinct types sharing a simple name are not disambiguated. A "
+                    + "path with no stored file node returns 'exists=false'. This is a pure read over stored "
+                    + "records and never touches the workspace on disk. Read-only.",
+                ReadOnly = true,
+                Destructive = false,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildContextTool()
+        => McpServerTool.Create(
+            RepoContextToolHandlers.ContextAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "repocontext_context",
+                Title = "Bundle budgeted context for a task",
+                Description =
+                    "Returns a ranked, explained bundle of source for a natural-language task, packed under a "
+                    + "HARD token ceiling in a single call - collapsing the search -> recall -> read loop into one "
+                    + "round trip that can never overrun your context budget. It searches the store for the task "
+                    + "(semantic when an embedder and vectors are available, otherwise a degraded keyword scan - a "
+                    + "keyword bundle is still returned), resolves the top hits to unique files, and packs each at a "
+                    + "detail level under the budget: 'paths' (path only), 'outline' (declared-symbol skeleton, "
+                    + "reusing the outline projection), or 'slices' (bounded body text). 'auto' (the default) packs "
+                    + "the richest level that yields a non-empty bundle and reports the concrete level in 'detail'. "
+                    + "Every entry carries its match 'reasons', its exact BPE 'tokenCount', and the whole-file "
+                    + "'fullReadTokenCount'. The bundle's 'totalTokens' is the exact BPE sum and never exceeds "
+                    + "'budgetTokens'. When even the cheapest entry does not fit, it FAILS CLOSED: 'entries' is "
+                    + "empty and 'retryBudgetTokens' reports a budget guaranteed to admit at least one entry on a "
+                    + "retry (null when the search matched nothing, so no larger budget would help). 'truncated' "
+                    + "flags a bundle that dropped lower-ranked candidates. The 'top', 'responseBudgetTokens', and "
+                    + "'detail' arguments are validated and clamped, never trusted to drive unbounded work. "
+                    + "REUSE ECONOMICS: never pay twice for context you already hold. Each delivered unit (a path "
+                    + "pointer, a body span, or an outline symbol) carries a stable opaque 'receipt', and each entry "
+                    + "a per-version 'contentHash'. Hand receipts back in 'seen' to suppress exactly those units (the "
+                    + "rest of the file still arrives), or assert 'known' whole-file possession as 'path@hash'. Pass a "
+                    + "'session' to persist this bookkeeping across calls: the session auto-suppresses units it "
+                    + "already delivered and validates 'known' claims. A whole-file claim is honoured ONLY for a "
+                    + "version actually delivered as a complete body, so partial evidence can never be promoted to "
+                    + "whole-file possession. Suppressed content is acknowledged in 'reused' and is never charged "
+                    + "against 'top' or the token budget. Read-only.",
+                ReadOnly = true,
+                Destructive = false,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildStatsTool()
+        => McpServerTool.Create(
+            RepoContextToolHandlers.Stats,
+            new McpServerToolCreateOptions
+            {
+                Name = "repocontext_stats",
+                Title = "Repository-context usage summary",
+                Description =
+                    "Reports an aggregate summary of the repository-context surface's own usage over a bounded "
+                    + "recent window, so a team can see whether the surface actually reduces context cost. Returns "
+                    + "only summed token figures: how many calls were answered ('calls'), the exact response tokens "
+                    + "they spent ('responseTokens'), the whole-file read tokens they conservatively replaced "
+                    + "('readsReplacedTokens' - credited only for delivered whole-file-equivalent content, never for "
+                    + "discovery or partial detail or content the caller already held), the net tokens saved "
+                    + "('netSavedTokens'), and the window length ('windowSeconds'). It carries no body, query, path, "
+                    + "or repository identity - aggregate figures only. Read-only.",
                 ReadOnly = true,
                 Destructive = false,
                 UseStructuredContent = true,

@@ -221,7 +221,167 @@ internal static class RepoContextKeywordSearch
             return byScore != 0 ? byScore : string.CompareOrdinal(x.Entry.Key, y.Entry.Key);
         });
 
-        return scored.Count > k ? scored.GetRange(0, k) : scored;
+        // Reasons are attached only to the hits actually returned (at most k), not
+        // to every scored candidate, so the explanation pass never touches the
+        // wider bounded scan. The distinct query terms are folded into a single
+        // span-lookup set reused across those hits.
+        var limit = scored.Count > k ? k : scored.Count;
+        if (limit == 0)
+        {
+            return Array.Empty<RepoContextSearchHit>();
+        }
+
+        var queryTerms = new HashSet<string>(termCount, StringComparer.Ordinal);
+        foreach (var term in termIndex.Keys)
+        {
+            queryTerms.Add(term);
+        }
+
+        var queryLookup = queryTerms.GetAlternateLookup<ReadOnlySpan<char>>();
+        var results = new List<RepoContextSearchHit>(limit);
+        for (var i = 0; i < limit; i++)
+        {
+            var hit = scored[i];
+            results.Add(hit with { Reasons = BuildKeywordReasons(hit.Entry, queryLookup) });
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Builds the deterministic, ordinal-ordered reason set for one keyword hit by
+    /// replaying which projected field each distinct query term matched - the
+    /// information BM25 scoring computes and then discards. Reasons are emitted in a
+    /// fixed high-signal-first order (path, symbol, tags, topic, content, key) and
+    /// capped at <see cref="RepoContextSearchReasons.MaxReasons"/>, dropping the
+    /// lowest-signal reasons first. Every reason is derived from the stored record's
+    /// own fields, never from the raw query text.
+    /// </summary>
+    /// <param name="entry">The matched entry. Must not be <see langword="null"/>.</param>
+    /// <param name="queryTerms">The distinct lower-case query terms as a span lookup.</param>
+    /// <returns>The ordered, capped reasons; an empty list when no field is attributable.</returns>
+    internal static IReadOnlyList<string> BuildKeywordReasons(
+        RepoContextEntryView entry, HashSet<string>.AlternateLookup<ReadOnlySpan<char>> queryTerms)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+
+        var reasons = new List<string>(RepoContextSearchReasons.MaxReasons);
+
+        if (ContainsQueryTerm(entry.Path, queryTerms))
+        {
+            reasons.Add(RepoContextSearchReasons.PathNameMatch);
+        }
+
+        if (reasons.Count < RepoContextSearchReasons.MaxReasons
+            && ContainsQueryTerm(entry.FullyQualifiedName, queryTerms))
+        {
+            reasons.Add(RepoContextSearchReasons.SymbolPrefix + entry.FullyQualifiedName);
+        }
+
+        foreach (var tag in entry.Tags)
+        {
+            if (reasons.Count >= RepoContextSearchReasons.MaxReasons)
+            {
+                break;
+            }
+
+            if (ContainsQueryTerm(tag, queryTerms))
+            {
+                reasons.Add(RepoContextSearchReasons.TagPrefix + tag);
+            }
+        }
+
+        if (reasons.Count < RepoContextSearchReasons.MaxReasons
+            && ContainsQueryTerm(entry.Topic, queryTerms))
+        {
+            reasons.Add(RepoContextSearchReasons.TopicMatch);
+        }
+
+        if (reasons.Count < RepoContextSearchReasons.MaxReasons
+            && ContainsContentMatch(entry, queryTerms))
+        {
+            reasons.Add(RepoContextSearchReasons.ContentMatch);
+        }
+
+        if (reasons.Count < RepoContextSearchReasons.MaxReasons
+            && ContainsQueryTerm(entry.Key, queryTerms))
+        {
+            reasons.Add(RepoContextSearchReasons.KeyMatch);
+        }
+
+        return reasons.Count == 0 ? Array.Empty<string>() : reasons;
+    }
+
+    // True when any scored content field (a field with a positive weight, the same
+    // set BM25 folds into the score) contains one of the query terms.
+    private static bool ContainsContentMatch(
+        RepoContextEntryView entry, HashSet<string>.AlternateLookup<ReadOnlySpan<char>> queryTerms)
+    {
+        foreach (var (name, value) in entry.Fields)
+        {
+            if (FieldWeights.TryGetValue(name, out var weight) && weight > 0d
+                && ContainsQueryTerm(value, queryTerms))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // Identifier-aware scan of a single field: tokenizes exactly as the scorer does
+    // (camelCase/letter-digit splitting, lower-casing) and returns on the first
+    // token that is a query term. Tokens are matched against the span lookup with
+    // no per-token string allocation; the stack buffer covers any realistic token,
+    // and an over-long token simply cannot match (never a false positive).
+    private static bool ContainsQueryTerm(
+        string? text, HashSet<string>.AlternateLookup<ReadOnlySpan<char>> queryTerms)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return false;
+        }
+
+        Span<char> buffer = stackalloc char[64];
+        var length = 0;
+        var previous = '\0';
+        for (var i = 0; i <= text.Length; i++)
+        {
+            var atEnd = i == text.Length;
+            var current = atEnd ? '\0' : text[i];
+            if (!atEnd && char.IsLetterOrDigit(current))
+            {
+                if (length > 0 && IsBoundary(previous, current))
+                {
+                    if (length <= buffer.Length && queryTerms.Contains(buffer[..length]))
+                    {
+                        return true;
+                    }
+
+                    length = 0;
+                }
+
+                if (length < buffer.Length)
+                {
+                    buffer[length] = char.ToLowerInvariant(current);
+                }
+
+                length++;
+                previous = current;
+            }
+            else if (length > 0)
+            {
+                if (length <= buffer.Length && queryTerms.Contains(buffer[..length]))
+                {
+                    return true;
+                }
+
+                length = 0;
+                previous = '\0';
+            }
+        }
+
+        return false;
     }
 
     private static void AccumulateEntry(

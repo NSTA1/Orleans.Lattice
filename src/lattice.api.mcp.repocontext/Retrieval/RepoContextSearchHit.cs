@@ -28,4 +28,18 @@ public sealed record RepoContextSearchHit
     /// <see langword="null"/> for a keyword/structural hit.
     /// </summary>
     public string? VectorId { get; init; }
+
+    /// <summary>
+    /// The machine-readable reasons this record ranked, so an agent can tell why a
+    /// hit was returned. A semantic hit carries <c>semantic</c>, the matched chunk
+    /// kind (<c>chunk:symbol</c> or <c>chunk:file</c>), and <c>symbol:&lt;fqName&gt;</c>
+    /// when the matched vector is a symbol vector. A keyword hit carries, in a fixed
+    /// high-signal-first order, <c>path-name-match</c>, <c>symbol:&lt;fqName&gt;</c>,
+    /// <c>tag:&lt;tag&gt;</c> (one per matched tag), <c>topic-match</c>,
+    /// <c>content-match</c>, and <c>key-match</c>. Every reason is derived
+    /// server-side from the stored record (or the matched vector's source key),
+    /// never from the raw query text. The list is deterministic, ordinal-ordered,
+    /// bounded in length, and never <see langword="null"/> (empty at worst).
+    /// </summary>
+    public IReadOnlyList<string> Reasons { get; init; } = Array.Empty<string>();
 }

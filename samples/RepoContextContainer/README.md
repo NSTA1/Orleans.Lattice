@@ -1,11 +1,15 @@
 # RepoContext MCP container - "codebase memory in a box"
 
-This sample runs the RepoContext MCP server (issue #1435) as a single,
+This sample runs the RepoContext MCP server as a single,
 restart-durable container alongside its embedding companion, and demonstrates the
 core durability guarantee end to end:
 
 **start -> add a repo under the mounted workspace -> recall -> restart -> context
 is still present.**
+
+The same box also serves the retrieval and token-economics tools for you to use and
+test: explainable search, the budgeted context bundle, its reuse economics, and
+usage accounting (see [Retrieval and token economics](#retrieval-and-token-economics)).
 
 Two containers, one private network:
 
@@ -16,8 +20,8 @@ Two containers, one private network:
   single SQLite file, plus the file-backed Lattice WAL - all under `/data`, which
   is a named volume, so state survives `docker compose restart`, `docker compose
   down`, and image upgrades. Zero external services.
-- **`embedder`** - the Onyx model-server companion (`apps/embedding/Dockerfile`,
-  issue #1440). It stays a SEPARATE container so the MCP host keeps its
+- **`embedder`** - the Onyx model-server companion (`apps/embedding/Dockerfile`).
+  It stays a SEPARATE container so the MCP host keeps its
   single-listener surface. The host's default embedding provider is pointed at it
   via `LATTICE_EMBEDDING_ENDPOINT`. Its HuggingFace model cache is a named volume.
 
@@ -79,6 +83,54 @@ curl -fsS http://localhost:8080/health/ready
 # 6. Recall again. The context is still present: it was replayed from the WAL and
 #    SQLite state on the /data volume, proving durability across a restart.
 ```
+
+## Retrieval and token economics
+
+Once a repository is registered (step 3 above), the same box exposes the epic's
+retrieval and token-economics tools over the same MCP endpoint - no extra service,
+no second listener. Every call below targets the `demo` repo id from step 3;
+substitute your own. Examples use the reference `mcp` CLI against
+`http://localhost:8080`.
+
+```bash
+# A. Explainable search. Every hit carries a machine-readable `reasons` array
+#    saying WHY it ranked (semantic proximity and matched chunk/symbol, or the
+#    specific keyword fields hit - path/name, symbol, tag, topic, content, key),
+#    so an agent can justify a selection instead of trusting an opaque score.
+mcp call http://localhost:8080 repocontext_search \
+  '{"repoId":"demo","query":"where is the readiness health probe wired","k":5}'
+
+# B. Budgeted context bundle. repocontext_context packs the ranked, explained
+#    source for a task into ONE response under a HARD token ceiling: the reported
+#    `totalTokens` never exceeds `responseBudgetTokens`, and `truncated` /
+#    `retryBudgetTokens` say whether more would fit at a larger budget. `detail`
+#    trades richness for budget - 'paths' (cheapest) -> 'outline' (declared-symbol
+#    skeleton) -> 'slices' (bounded body text, richest), or 'auto' (default) which
+#    picks the richest level that fits. Pass a `session` id so the box remembers
+#    what it delivered.
+mcp call http://localhost:8080 repocontext_context \
+  '{"repoId":"demo","task":"explain the readiness health check","responseBudgetTokens":4000,"detail":"auto","session":"agent-1"}'
+
+# C. Reuse economics. Repeat on the SAME `session`. Units the session already
+#    holds are suppressed - acknowledged under `reused`, never re-charged and never
+#    counted against `top` or the budget - so the second answer pays only for the
+#    NEW context. (You can also feed the prior entries' unit receipts back via
+#    `seen`, or a whole-file 'path@hash' claim via `known`; the server-side
+#    `session` bookkeeping does it for you.)
+mcp call http://localhost:8080 repocontext_context \
+  '{"repoId":"demo","task":"explain the readiness health check and how drain flips it","responseBudgetTokens":4000,"detail":"auto","session":"agent-1"}'
+
+# D. Usage accounting. repocontext_stats reports the aggregate token economics over
+#    a bounded recent window: calls answered, response tokens spent, whole-file
+#    reads replaced, and the NET tokens saved by budgeting plus reuse.
+mcp call http://localhost:8080 repocontext_stats '{}'
+```
+
+With the `embedder` companion healthy, search and the bundle rank semantically;
+with no embedding provider bound they degrade to a deterministic keyword rank - the
+bundle still answers either way. See
+[docs/lattice.api.mcp.repocontext/retrieval-economics.md](../../docs/lattice.api.mcp.repocontext/retrieval-economics.md)
+for the full model.
 
 Tear down (state on the named volumes is preserved unless you pass `-v`):
 

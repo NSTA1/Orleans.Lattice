@@ -172,4 +172,81 @@ public sealed class CSharpSymbolExtractorTests
             Assert.Throws<ArgumentNullException>(() => _extractor.Extract("x.cs", null!));
         });
     }
+
+    private static IReadOnlyList<string> ReferencesOf(IReadOnlyList<ExtractedSymbol> symbols, string fqName)
+        => symbols.Single(s => s.FullyQualifiedName == fqName).ReferencedNames;
+
+    [Test]
+    public void Type_with_no_references_has_an_empty_reference_set()
+    {
+        const string source = "namespace N; public class C { public void M() { } }";
+
+        Assert.That(ReferencesOf(_extractor.Extract("C.cs", source), "N.C"), Is.Empty);
+    }
+
+    [Test]
+    public void References_capture_base_types_members_and_generic_arguments()
+    {
+        const string source = """
+            namespace N;
+            public class Widget : Base, IThing
+            {
+                private Helper _helper;
+                public Gadget Gadget { get; set; }
+                public List<Payload> Load(Request request) => new List<Payload>();
+                public void Make() { var made = new Doohickey(); }
+            }
+            """;
+
+        var references = ReferencesOf(_extractor.Extract("Widget.cs", source), "N.Widget");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(references, Does.Contain("Base"), "a base class is a reference");
+            Assert.That(references, Does.Contain("IThing"), "an implemented interface is a reference");
+            Assert.That(references, Does.Contain("Helper"), "a field type is a reference");
+            Assert.That(references, Does.Contain("Gadget"), "a property type is a reference");
+            Assert.That(references, Does.Contain("Request"), "a parameter type is a reference");
+            Assert.That(references, Does.Contain("List"), "a generic return type is a reference");
+            Assert.That(references, Does.Contain("Payload"), "a generic argument is a reference");
+            Assert.That(references, Does.Contain("Doohickey"), "an object-creation type is a reference");
+        });
+    }
+
+    [Test]
+    public void References_are_sorted_and_deduplicated()
+    {
+        const string source = """
+            namespace N;
+            public class C
+            {
+                public Alpha A { get; set; }
+                public Alpha B { get; set; }
+                public Zeta Z { get; set; }
+            }
+            """;
+
+        Assert.That(ReferencesOf(_extractor.Extract("C.cs", source), "N.C"),
+            Is.EqualTo(new[] { "Alpha", "Zeta" }), "duplicates collapse and the set is ordinal-sorted");
+    }
+
+    [Test]
+    public void References_exclude_the_declaring_type_its_type_parameters_predefined_types_and_var()
+    {
+        const string source = """
+            namespace N;
+            public class Box<T>
+            {
+                public Box<T> Self { get; set; }
+                public T Item { get; set; }
+                public int Count { get; set; }
+                public void Fill() { var x = 1; }
+            }
+            """;
+
+        var references = ReferencesOf(_extractor.Extract("Box.cs", source), "N.Box<T>");
+
+        Assert.That(references, Is.Empty,
+            "the type refers only to itself, its own type parameter, a predefined type, and var - none are edges");
+    }
 }

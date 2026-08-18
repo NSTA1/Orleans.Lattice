@@ -35,6 +35,7 @@ internal sealed class RepoContextSymbolReconciler
 
     private readonly IGrainFactory _grainFactory;
     private readonly Serializer<SymbolRecord> _symbolSerializer;
+    private readonly Serializer<CrossReferenceNode> _crossReferenceSerializer;
     private readonly ISymbolExtractor _extractor;
     private readonly ILogger<RepoContextSymbolReconciler> _logger;
 
@@ -45,22 +46,28 @@ internal sealed class RepoContextSymbolReconciler
     /// Must not be <see langword="null"/>.</param>
     /// <param name="symbolSerializer">The Orleans serializer for
     /// <see cref="SymbolRecord"/>. Must not be <see langword="null"/>.</param>
+    /// <param name="crossReferenceSerializer">The Orleans serializer for
+    /// <see cref="CrossReferenceNode"/>, used to maintain the reverse cross-reference
+    /// projection. Must not be <see langword="null"/>.</param>
     /// <param name="extractor">The language-dispatching symbol extractor. Must not be
     /// <see langword="null"/>.</param>
     /// <param name="logger">The logger. Must not be <see langword="null"/>.</param>
     public RepoContextSymbolReconciler(
         IGrainFactory grainFactory,
         Serializer<SymbolRecord> symbolSerializer,
+        Serializer<CrossReferenceNode> crossReferenceSerializer,
         ISymbolExtractor extractor,
         ILogger<RepoContextSymbolReconciler> logger)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(symbolSerializer);
+        ArgumentNullException.ThrowIfNull(crossReferenceSerializer);
         ArgumentNullException.ThrowIfNull(extractor);
         ArgumentNullException.ThrowIfNull(logger);
 
         _grainFactory = grainFactory;
         _symbolSerializer = symbolSerializer;
+        _crossReferenceSerializer = crossReferenceSerializer;
         _extractor = extractor;
         _logger = logger;
     }
@@ -191,6 +198,138 @@ internal sealed class RepoContextSymbolReconciler
             applied.Captured, declaredByPath, applied.ChangedKeys, applied.PrunedKeys);
     }
 
+    /// <summary>
+    /// Force-seeds the reverse cross-reference index for files that were
+    /// symbol-processed before that index existed. Their <see cref="SymbolRecord"/>s
+    /// already carry fully-populated outbound <see cref="SymbolRecord.References"/>,
+    /// but because their content never changes the incremental delta in
+    /// <see cref="UpdateReferences"/> never fires, so their reverse edges are never
+    /// built and inbound-dependent / test lookups stay permanently empty for the
+    /// repository. This pass reads each declared symbol record and projects its stored
+    /// forward references (and its test-subject relationship) into the reverse index
+    /// directly, treating the prior reverse state as empty so every stored reference
+    /// is emitted as an add. Add-wins edge adds are idempotent, so re-running the seed
+    /// converges on the identical edge set without duplicating or removing anything.
+    /// </summary>
+    /// <param name="repoId">The repository identifier. Must not be
+    /// <see langword="null"/>.</param>
+    /// <param name="files">The content-unchanged, symbol-processed files whose reverse
+    /// edges are not yet built, selected by the cross-reference back-fill. Must not be
+    /// <see langword="null"/>.</param>
+    /// <param name="storedMeta">The pre-run stored file metadata, read for each file's
+    /// declared fully-qualified symbol names. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancels the seed.</param>
+    /// <returns>The repository-relative paths whose reverse edges were seeded this
+    /// pass, so their file nodes can be stamped cross-referenced. Every input file is
+    /// returned - the seed reads only stored records, so it cannot fail per file the
+    /// way a file-reading reconcile can - which keeps a supported file that happens to
+    /// declare nothing (or only symbols with no references) from being re-selected.
+    /// </returns>
+    public async Task<IReadOnlyCollection<string>> SeedCrossReferencesAsync(
+        string repoId,
+        IReadOnlyList<RepoFileEntry> files,
+        IReadOnlyDictionary<string, StoredFileMeta> storedMeta,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentNullException.ThrowIfNull(files);
+        ArgumentNullException.ThrowIfNull(storedMeta);
+
+        var seededPaths = new List<string>(files.Count);
+        if (files.Count == 0)
+        {
+            return seededPaths;
+        }
+
+        // Collect the distinct declared fully-qualified names across the selected
+        // files so each stored symbol record is read at most once, even when a partial
+        // type is declared by several of them. Index-based loops over the read-only
+        // lists avoid the enumerator allocation a foreach over IReadOnlyList incurs.
+        var fqNames = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = 0; i < files.Count; i++)
+        {
+            var path = files[i].RelativePath;
+            seededPaths.Add(path);
+            if (!storedMeta.TryGetValue(path, out var meta))
+            {
+                continue;
+            }
+
+            var declared = meta.DeclaredSymbols;
+            for (var j = 0; j < declared.Count; j++)
+            {
+                fqNames.Add(declared[j]);
+            }
+        }
+
+        if (fqNames.Count == 0)
+        {
+            return seededPaths;
+        }
+
+        var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.Symbol);
+
+        // Adds-only reverse deltas: a force-seed never retires an edge, it only
+        // (re)asserts the ones the stored forward references imply. The removes maps
+        // are passed empty to reuse the same apply pass the incremental reconcile uses.
+        var referrerAdds = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        var testAdds = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+
+        foreach (var fqName in fqNames)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var existing = await tree
+                .GetAsync(RepoContextKeys.Symbol(repoId, fqName), cancellationToken)
+                .ConfigureAwait(false);
+            if (existing is null)
+            {
+                // The declared symbol record was pruned since the file was stored;
+                // there is nothing to project for it.
+                continue;
+            }
+
+            SeedRecordEdges(_symbolSerializer.Deserialize(existing), referrerAdds, testAdds);
+        }
+
+        await ApplyCrossReferenceChangesAsync(
+            repoId,
+            referrerAdds,
+            EmptyEdges,
+            testAdds,
+            EmptyEdges,
+            cancellationToken,
+            operationScope: "xref-seed").ConfigureAwait(false);
+
+        return seededPaths;
+    }
+
+    /// <summary>
+    /// Projects one stored symbol record's outbound references (and its test-subject
+    /// relationship, when it is a test type) into the reverse-edge add maps, matching
+    /// how <see cref="UpdateReferences"/> and the upsert test-linkage block author the
+    /// same edges on the incremental path - but seeded from the record's stored state
+    /// rather than a fresh extraction, so the whole stored reference set is emitted.
+    /// </summary>
+    internal static void SeedRecordEdges(
+        SymbolRecord record,
+        Dictionary<string, HashSet<string>> referrerAdds,
+        Dictionary<string, HashSet<string>> testAdds)
+    {
+        var referrer = record.FullyQualifiedName;
+        foreach (var bytes in record.References.Elements())
+        {
+            AddToSet(referrerAdds, Encoding.UTF8.GetString(bytes), referrer);
+        }
+
+        if (record.Kind == SymbolKind.Type && SymbolNaming.TestSubject(referrer) is { } subject)
+        {
+            AddToSet(testAdds, subject, referrer);
+        }
+    }
+
+    private static readonly Dictionary<string, HashSet<string>> EmptyEdges =
+        new(StringComparer.Ordinal);
+
     private async Task<SymbolApplyOutcome> ApplySymbolChangesAsync(
         string repoId,
         IReadOnlyDictionary<string, (ExtractedSymbol Symbol, string File)> upsertInfo,
@@ -213,6 +352,16 @@ internal sealed class RepoContextSymbolReconciler
         var changedKeys = new List<string>();
         var prunedKeys = new List<string>();
         var captured = 0;
+
+        // Reverse cross-reference deltas accumulated across this batch and applied in a
+        // second phase against the cross-reference tree. Each is keyed by the referenced
+        // simple type-name; the value is the set of referrer / test fully-qualified names
+        // to add or retire. They stay empty (and allocate nothing beyond the empty maps)
+        // for a batch of symbols that neither reference types nor look like tests.
+        var referrerAdds = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        var referrerRemoves = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        var testAdds = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        var testRemoves = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
 
         foreach (var fqName in touched)
         {
@@ -272,24 +421,124 @@ internal sealed class RepoContextSymbolReconciler
                 }
             }
 
+            // A type declaration carries the reference and test-linkage edges; the kind
+            // comes from the fresh extraction on an upsert and from the stored record on
+            // a prune.
+            var kind = isUpsert ? info.Symbol.Kind : record.Kind;
+
             if (record.DeclaringFiles.IsEmpty)
             {
+                // The record is going away: retire every inbound reference edge it
+                // authored and any test edge it contributed, then delete it.
+                foreach (var referenced in DecodeElements(record.References))
+                {
+                    AddToSet(referrerRemoves, referenced, fqName);
+                }
+
+                if (kind == SymbolKind.Type && SymbolNaming.TestSubject(fqName) is { } removedSubject)
+                {
+                    AddToSet(testRemoves, removedSubject, fqName);
+                }
+
                 deletes.Add(key);
                 prunedKeys.Add(key);
+                continue;
             }
-            else
+
+            if (isUpsert)
             {
-                writes.Add(new KeyValuePair<string, byte[]>(key, _symbolSerializer.SerializeToArray(record)));
-                if (isUpsert)
+                // Converge the stored outbound reference set to the freshly extracted
+                // one and record the matching inbound-edge deltas.
+                UpdateReferences(record.References, info.Symbol.ReferencedNames, fqName, referrerAdds, referrerRemoves);
+
+                if (kind == SymbolKind.Type && SymbolNaming.TestSubject(fqName) is { } subject)
                 {
-                    captured++;
-                    changedKeys.Add(key);
+                    AddToSet(testAdds, subject, fqName);
                 }
+            }
+
+            writes.Add(new KeyValuePair<string, byte[]>(key, _symbolSerializer.SerializeToArray(record)));
+            if (isUpsert)
+            {
+                captured++;
+                changedKeys.Add(key);
             }
         }
 
         await CommitAsync(tree, repoId, writes, deletes, cancellationToken).ConfigureAwait(false);
+        await ApplyCrossReferenceChangesAsync(
+            repoId, referrerAdds, referrerRemoves, testAdds, testRemoves, cancellationToken)
+            .ConfigureAwait(false);
         return new SymbolApplyOutcome(captured, changedKeys, prunedKeys);
+    }
+
+    /// <summary>
+    /// Applies the accumulated reverse cross-reference deltas to the cross-reference
+    /// tree in a read-merge-write pass, one node per referenced simple type-name.
+    /// Removes are applied before adds so a name re-added in the same batch wins, and a
+    /// node is deleted once both its referrer and test edge sets are empty so the
+    /// projection does not leak tombstoned nodes.
+    /// <para>
+    /// <paramref name="operationScope"/> namespaces the atomic-commit operation id so a
+    /// force-seed's write is never deduped against a prior incremental commit for the
+    /// same node content. The incremental path leaves it empty (byte-identical operation
+    /// ids to before this parameter existed); the back-fill passes a distinct scope so a
+    /// rebuild - delete the tree, re-seed identical content - always re-applies rather
+    /// than being treated as already-applied and silently dropped.
+    /// </para>
+    /// </summary>
+    private async Task ApplyCrossReferenceChangesAsync(
+        string repoId,
+        Dictionary<string, HashSet<string>> referrerAdds,
+        Dictionary<string, HashSet<string>> referrerRemoves,
+        Dictionary<string, HashSet<string>> testAdds,
+        Dictionary<string, HashSet<string>> testRemoves,
+        CancellationToken cancellationToken,
+        string operationScope = "")
+    {
+        var names = new SortedSet<string>(StringComparer.Ordinal);
+        names.UnionWith(referrerAdds.Keys);
+        names.UnionWith(referrerRemoves.Keys);
+        names.UnionWith(testAdds.Keys);
+        names.UnionWith(testRemoves.Keys);
+        if (names.Count == 0)
+        {
+            return;
+        }
+
+        var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.CrossReference);
+        var writes = new List<KeyValuePair<string, byte[]>>();
+        var deletes = new List<string>();
+
+        foreach (var name in names)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var key = RepoContextKeys.CrossReference(repoId, name);
+            var existing = await tree.GetAsync(key, cancellationToken).ConfigureAwait(false);
+            var node = existing is not null
+                ? _crossReferenceSerializer.Deserialize(existing)
+                : new CrossReferenceNode { RepoId = repoId, Name = name };
+
+            ApplyEdges(node.Referrers, referrerAdds, referrerRemoves, name);
+            ApplyEdges(node.Tests, testAdds, testRemoves, name);
+
+            if (node.Referrers.IsEmpty && node.Tests.IsEmpty)
+            {
+                // Only a stored node needs an explicit delete; a name that resolved to no
+                // node and gained no live edge is simply skipped.
+                if (existing is not null)
+                {
+                    deletes.Add(key);
+                }
+            }
+            else
+            {
+                writes.Add(new KeyValuePair<string, byte[]>(
+                    key, _crossReferenceSerializer.SerializeToArray(node)));
+            }
+        }
+
+        await CommitAsync(tree, repoId, writes, deletes, cancellationToken, operationScope).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -305,7 +554,8 @@ internal sealed class RepoContextSymbolReconciler
         string repoId,
         List<KeyValuePair<string, byte[]>> writes,
         List<string> deletes,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string operationScope = "")
     {
         var chunkIndex = 0;
         var remainingDeletes = deletes;
@@ -314,14 +564,14 @@ internal sealed class RepoContextSymbolReconciler
             var chunk = writes.GetRange(offset, Math.Min(WriteChunkSize, writes.Count - offset));
             var chunkDeletes = remainingDeletes;
             remainingDeletes = [];
-            var operationId = BuildOperationId(repoId, chunkIndex, chunk, chunkDeletes);
+            var operationId = BuildOperationId(operationScope, repoId, chunkIndex, chunk, chunkDeletes);
             await tree.SetManyAtomicAsync(chunk, chunkDeletes, operationId, cancellationToken).ConfigureAwait(false);
             chunkIndex++;
         }
 
         if (remainingDeletes.Count != 0)
         {
-            var operationId = BuildOperationId(repoId, chunkIndex, [], remainingDeletes);
+            var operationId = BuildOperationId(operationScope, repoId, chunkIndex, [], remainingDeletes);
             await tree.SetManyAtomicAsync([], remainingDeletes, operationId, cancellationToken).ConfigureAwait(false);
         }
     }
@@ -365,6 +615,85 @@ internal sealed class RepoContextSymbolReconciler
         set.Add(value);
     }
 
+    /// <summary>
+    /// Converges a symbol's stored outbound reference set to <paramref name="newNames"/>
+    /// and records the inverse edges: a newly referenced name yields a referrer add, a
+    /// dropped name a referrer remove. The prior element set is materialised only when
+    /// the record already carried references, and the new set only when the extraction
+    /// produced any, so a symbol that neither has nor gains references allocates nothing.
+    /// </summary>
+    private static void UpdateReferences(
+        OrSet references,
+        IReadOnlyList<string> newNames,
+        string referrer,
+        Dictionary<string, HashSet<string>> referrerAdds,
+        Dictionary<string, HashSet<string>> referrerRemoves)
+    {
+        HashSet<string>? prior = null;
+        foreach (var bytes in references.Elements())
+        {
+            (prior ??= new HashSet<string>(StringComparer.Ordinal)).Add(Encoding.UTF8.GetString(bytes));
+        }
+
+        var next = newNames.Count == 0 ? null : new HashSet<string>(newNames, StringComparer.Ordinal);
+
+        if (next is not null)
+        {
+            foreach (var name in next)
+            {
+                if (prior is null || !prior.Contains(name))
+                {
+                    references.Add(Encoding.UTF8.GetBytes(name), name, counter: 0);
+                    AddToSet(referrerAdds, name, referrer);
+                }
+            }
+        }
+
+        if (prior is not null)
+        {
+            foreach (var name in prior)
+            {
+                if (next is null || !next.Contains(name))
+                {
+                    references.Remove(Encoding.UTF8.GetBytes(name));
+                    AddToSet(referrerRemoves, name, referrer);
+                }
+            }
+        }
+    }
+
+    private static void ApplyEdges(
+        OrSet set,
+        Dictionary<string, HashSet<string>> adds,
+        Dictionary<string, HashSet<string>> removes,
+        string name)
+    {
+        if (removes.TryGetValue(name, out var toRemove))
+        {
+            foreach (var element in toRemove)
+            {
+                set.Remove(Encoding.UTF8.GetBytes(element));
+            }
+        }
+
+        if (adds.TryGetValue(name, out var toAdd))
+        {
+            foreach (var element in toAdd)
+            {
+                set.Add(Encoding.UTF8.GetBytes(element), element, counter: 0);
+            }
+        }
+    }
+
+    private static IEnumerable<string> DecodeElements(OrSet set)
+    {
+        foreach (var bytes in set.Elements())
+        {
+            yield return Encoding.UTF8.GetString(bytes);
+        }
+    }
+
+
     private static IEnumerable<RepoFileEntry> Concat(
         IReadOnlyList<RepoFileEntry> first,
         IReadOnlyList<RepoFileEntry> second,
@@ -387,13 +716,14 @@ internal sealed class RepoContextSymbolReconciler
     }
 
     private static string BuildOperationId(
+        string operationScope,
         string repoId,
         int chunkIndex,
         IReadOnlyList<KeyValuePair<string, byte[]>> upserts,
         IReadOnlyList<string> deletes)
     {
         var builder = new StringBuilder();
-        builder.Append(repoId).Append('\n').Append(chunkIndex);
+        builder.Append(operationScope).Append('\n').Append(repoId).Append('\n').Append(chunkIndex);
         foreach (var upsert in upserts)
         {
             builder.Append("\nU").Append(upsert.Key).Append('=').Append(FileDigest.Compute(upsert.Value));

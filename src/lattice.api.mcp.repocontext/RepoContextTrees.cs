@@ -53,6 +53,19 @@ internal static class RepoContextTrees
     /// </summary>
     internal const string Content = "repo-context-content";
 
+    /// <summary>
+    /// Tree holding the reverse cross-reference projection: one
+    /// <see cref="CrossReferenceNode"/> per referenced simple type-name, keyed by
+    /// <c>repo/{repoId}/xref/{name}</c>, recording which symbols reference that name
+    /// (its dependents) and which test types cover it. It is a rebuildable projection
+    /// (like the content and vector trees), not store-of-record - the symbol
+    /// reconciler maintains it incrementally on every reconcile so the
+    /// <c>repocontext_related</c> tool can answer inbound-dependent and test lookups
+    /// without a full scan. It churns as symbols and their references change, so the
+    /// host configures finite tombstone compaction here.
+    /// </summary>
+    internal const string CrossReference = "repo-context-xref";
+
     /// <summary>Reserved tree for vector membership (the retrieval surface, built later).</summary>
     internal const string VectorMembership = "repo-context-vector-membership";
 
@@ -61,6 +74,20 @@ internal static class RepoContextTrees
 
     /// <summary>Reserved tree for vector metadata (the retrieval surface, built later).</summary>
     internal const string VectorMetadata = "repo-context-vector-metadata";
+
+    /// <summary>
+    /// Tree holding per-session context-bundle reuse bookkeeping: one
+    /// <see cref="RepoContextSessionRecord"/> per <c>(repoId, sessionId)</c>, keyed
+    /// by <c>repo/{repoId}/session/{sessionId}</c>, recording the opaque receipts of
+    /// units already delivered to that session and the whole-file versions the
+    /// session already possesses. It is a rebuildable, bounded, and <b>expirable</b>
+    /// bookkeeping projection (never store-of-record): entries carry a finite
+    /// time-to-live so an abandoned session's bookkeeping lapses on its own, and each
+    /// record is a grow-only CRDT so concurrent bundle calls sharing a session id
+    /// converge on merge. It churns as sessions are created and expire, so the host
+    /// configures finite tombstone compaction here.
+    /// </summary>
+    internal const string Session = "repo-context-session";
 
     /// <summary>
     /// Every named tree in the layout contract, in a stable order. Includes the
@@ -72,6 +99,8 @@ internal static class RepoContextTrees
         Symbol,
         Memory,
         Content,
+        CrossReference,
+        Session,
         VectorMembership,
         VectorPayload,
         VectorMetadata,

@@ -13,6 +13,12 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// be stamped as content-processed.</param>
 /// <param name="ContentCaptured">The number of content records written live during
 /// the pass.</param>
+/// <param name="TokenCountsByPath">The BPE token count of the decoded body text for
+/// each path in <paramref name="ProcessedPaths"/>, computed once while the body was
+/// in hand. The bootstrap stamps these onto the matching file nodes'
+/// <see cref="FileNode.TokenCount"/> register, so budgets read the count rather than
+/// recomputing it per call.</param>
 internal readonly record struct ContentReconcileResult(
     IReadOnlySet<string> ProcessedPaths,
-    int ContentCaptured);
+    int ContentCaptured,
+    IReadOnlyDictionary<string, int> TokenCountsByPath);

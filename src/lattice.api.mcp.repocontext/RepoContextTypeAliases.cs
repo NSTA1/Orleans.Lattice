@@ -84,4 +84,10 @@ internal static class RepoContextTypeAliases
 
     /// <summary>Alias for <see cref="RepoContextSelfIndexState"/>.</summary>
     internal const string RepoContextSelfIndexState = "ol.rcz";
+
+    /// <summary>Alias for <see cref="CrossReferenceNode"/>.</summary>
+    internal const string CrossReferenceNode = "ol.rce";
+
+    /// <summary>Alias for <see cref="RepoContextSessionRecord"/>.</summary>
+    internal const string SessionRecord = "ol.rcw";
 }

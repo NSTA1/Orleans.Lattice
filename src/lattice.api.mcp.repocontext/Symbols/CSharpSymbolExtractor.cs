@@ -69,7 +69,7 @@ internal sealed class CSharpSymbolExtractor : ILanguageSymbolExtractor
             {
                 var fqName = Combine(prefix, type.Identifier.Text + TypeParameters(type.TypeParameterList));
                 var kind = type is InterfaceDeclarationSyntax ? SymbolKind.Interface : SymbolKind.Type;
-                symbols.Add(Build(fqName, kind, type, TypeSignature(type)));
+                symbols.Add(Build(fqName, kind, type, TypeSignature(type), CollectTypeReferences(type)));
                 WalkMembers(type.Members, fqName, symbols);
                 break;
             }
@@ -167,7 +167,8 @@ internal sealed class CSharpSymbolExtractor : ILanguageSymbolExtractor
         }
     }
 
-    private static ExtractedSymbol Build(string fqName, SymbolKind kind, SyntaxNode node, string signature)
+    private static ExtractedSymbol Build(
+        string fqName, SymbolKind kind, SyntaxNode node, string signature, IReadOnlyList<string>? references = null)
     {
         var span = node.GetLocation().GetLineSpan();
         var digest = FileDigest.Compute(Encoding.UTF8.GetBytes(node.ToString()));
@@ -177,7 +178,170 @@ internal sealed class CSharpSymbolExtractor : ILanguageSymbolExtractor
             span.StartLinePosition.Line + 1,
             span.EndLinePosition.Line + 1,
             signature,
-            digest);
+            digest)
+        {
+            ReferencedNames = references ?? [],
+        };
+    }
+
+    /// <summary>
+    /// Collects the distinct simple type-names a type declaration references
+    /// syntactically: its base types, generic constraints, the types named in its
+    /// members' signatures (parameter, return, field, property, event, and indexer
+    /// types), and the types named in member bodies (object creations, <c>typeof</c>
+    /// and cast/default targets, and local declarations). The walk descends the whole
+    /// type but stops at a nested type declaration so a nested type's references are
+    /// attributed to that nested type's own record, not the outer one. The type's own
+    /// name, its type-parameter names, and predefined language types (<c>int</c>,
+    /// <c>string</c>, ...) are excluded. Names are ordinal-sorted and de-duplicated so
+    /// an unchanged type re-extracts to the same list.
+    /// </summary>
+    private static IReadOnlyList<string> CollectTypeReferences(TypeDeclarationSyntax type)
+    {
+        var exclude = new HashSet<string>(StringComparer.Ordinal) { type.Identifier.Text };
+        if (type.TypeParameterList is { } typeParameters)
+        {
+            foreach (var parameter in typeParameters.Parameters)
+            {
+                exclude.Add(parameter.Identifier.Text);
+            }
+        }
+
+        var names = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var node in type.DescendantNodes(
+            descendIntoChildren: n => ReferenceEquals(n, type) || n is not BaseTypeDeclarationSyntax))
+        {
+            switch (node)
+            {
+                case BaseTypeSyntax baseType:
+                    AddTypeNames(baseType.Type, names, exclude);
+                    break;
+                case TypeParameterConstraintClauseSyntax constraintClause:
+                    foreach (var constraint in constraintClause.Constraints)
+                    {
+                        if (constraint is TypeConstraintSyntax typeConstraint)
+                        {
+                            AddTypeNames(typeConstraint.Type, names, exclude);
+                        }
+                    }
+
+                    break;
+                case ParameterSyntax parameter:
+                    AddTypeNames(parameter.Type, names, exclude);
+                    break;
+                case MethodDeclarationSyntax method:
+                    AddTypeNames(method.ReturnType, names, exclude);
+                    break;
+                case OperatorDeclarationSyntax op:
+                    AddTypeNames(op.ReturnType, names, exclude);
+                    break;
+                case ConversionOperatorDeclarationSyntax conversion:
+                    AddTypeNames(conversion.Type, names, exclude);
+                    break;
+                case PropertyDeclarationSyntax property:
+                    AddTypeNames(property.Type, names, exclude);
+                    break;
+                case IndexerDeclarationSyntax indexer:
+                    AddTypeNames(indexer.Type, names, exclude);
+                    break;
+                case EventDeclarationSyntax evt:
+                    AddTypeNames(evt.Type, names, exclude);
+                    break;
+                case DelegateDeclarationSyntax del:
+                    AddTypeNames(del.ReturnType, names, exclude);
+                    break;
+                case VariableDeclarationSyntax variable:
+                    AddTypeNames(variable.Type, names, exclude);
+                    break;
+                case ObjectCreationExpressionSyntax creation:
+                    AddTypeNames(creation.Type, names, exclude);
+                    break;
+                case TypeOfExpressionSyntax typeOf:
+                    AddTypeNames(typeOf.Type, names, exclude);
+                    break;
+                case CastExpressionSyntax cast:
+                    AddTypeNames(cast.Type, names, exclude);
+                    break;
+                case DefaultExpressionSyntax defaultExpression:
+                    AddTypeNames(defaultExpression.Type, names, exclude);
+                    break;
+                case AttributeSyntax attribute:
+                    AddTypeNames(attribute.Name, names, exclude);
+                    break;
+            }
+        }
+
+        return names.Count == 0 ? [] : [.. names];
+    }
+
+    /// <summary>
+    /// Decomposes a <see cref="TypeSyntax"/> into the simple identifiers it names and
+    /// adds each (unless excluded) to <paramref name="names"/>. Generic arguments,
+    /// array/nullable/pointer element types, tuple element types, and the right side
+    /// of a qualified name are followed so a name like
+    /// <c>System.Collections.Generic.List&lt;Foo&gt;</c> contributes <c>List</c> and
+    /// <c>Foo</c> but no namespace segment. Predefined types and the <c>var</c>
+    /// contextual keyword are ignored.
+    /// </summary>
+    private static void AddTypeNames(TypeSyntax? type, SortedSet<string> names, HashSet<string> exclude)
+    {
+        switch (type)
+        {
+            case null or PredefinedTypeSyntax:
+                return;
+            case IdentifierNameSyntax identifier:
+            {
+                var text = identifier.Identifier.Text;
+                if (text.Length != 0 && text != "var" && !exclude.Contains(text))
+                {
+                    names.Add(text);
+                }
+
+                break;
+            }
+
+            case GenericNameSyntax generic:
+            {
+                var text = generic.Identifier.Text;
+                if (text.Length != 0 && !exclude.Contains(text))
+                {
+                    names.Add(text);
+                }
+
+                foreach (var argument in generic.TypeArgumentList.Arguments)
+                {
+                    AddTypeNames(argument, names, exclude);
+                }
+
+                break;
+            }
+
+            case QualifiedNameSyntax qualified:
+                AddTypeNames(qualified.Right, names, exclude);
+                break;
+            case AliasQualifiedNameSyntax aliasQualified:
+                AddTypeNames(aliasQualified.Name, names, exclude);
+                break;
+            case NullableTypeSyntax nullable:
+                AddTypeNames(nullable.ElementType, names, exclude);
+                break;
+            case ArrayTypeSyntax array:
+                AddTypeNames(array.ElementType, names, exclude);
+                break;
+            case PointerTypeSyntax pointer:
+                AddTypeNames(pointer.ElementType, names, exclude);
+                break;
+            case RefTypeSyntax refType:
+                AddTypeNames(refType.Type, names, exclude);
+                break;
+            case TupleTypeSyntax tuple:
+                foreach (var element in tuple.Elements)
+                {
+                    AddTypeNames(element.Type, names, exclude);
+                }
+
+                break;
+        }
     }
 
     private static string Combine(string prefix, string name) =>
