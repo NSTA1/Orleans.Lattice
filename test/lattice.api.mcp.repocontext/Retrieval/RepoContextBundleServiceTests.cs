@@ -18,7 +18,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Retrieval;
 /// it ran with.
 /// </summary>
 [TestFixture]
-public sealed class RepoContextBundleServiceTests
+public sealed partial class RepoContextBundleServiceTests
 {
     private const string RepoId = "acme";
 
@@ -312,14 +312,60 @@ public sealed class RepoContextBundleServiceTests
             Tree(symbolEntries));
     }
 
+    // Builds a service whose single file declares several symbols (distinct start lines,
+    // so the outline order is deterministic), used by the reuse tests that need an
+    // outline entry carrying more than one independently reusable unit.
+    private static RepoContextBundleService BuildServiceWithSymbols(
+        string path, string body, long storedTokenCount, params (string FullyQualifiedName, string Signature)[] symbols)
+    {
+        var names = symbols.Select(s => s.FullyQualifiedName).ToArray();
+        var node = new FileNode
+        {
+            RepoId = RepoId,
+            Path = path,
+            TokenCount = RepoContextValues.Lww(storedTokenCount, Clock(1)),
+            DeclaredSymbols = RepoContextValues.Lww(DeclaredSymbolNames.Encode(names), Clock(1)),
+        };
+        var structuralEntries = new Dictionary<string, byte[]>(StringComparer.Ordinal)
+        {
+            [RepoContextKeys.File(RepoId, path)] = Serializer.SerializeToArray(node),
+        };
+        var contentEntries = new Dictionary<string, byte[]>(StringComparer.Ordinal)
+        {
+            [RepoContextKeys.Content(RepoId, path)] =
+                Serializer.SerializeToArray(ContentRecord.Create(RepoId, path, body, Clock(1))),
+        };
+        var symbolEntries = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        for (var i = 0; i < symbols.Length; i++)
+        {
+            var record = new SymbolRecord
+            {
+                RepoId = RepoId,
+                FullyQualifiedName = symbols[i].FullyQualifiedName,
+                Signature = RepoContextValues.Lww(symbols[i].Signature, Clock(1)),
+                StartLine = RepoContextValues.Lww(i + 1L, Clock(1)),
+            };
+            symbolEntries[RepoContextKeys.Symbol(RepoId, symbols[i].FullyQualifiedName)] =
+                Serializer.SerializeToArray(record);
+        }
+
+        return Assemble(
+            Tree(structuralEntries),
+            Tree(new Dictionary<string, byte[]>(StringComparer.Ordinal)),
+            Tree(contentEntries),
+            Tree(symbolEntries));
+    }
+
     private static RepoContextBundleService Assemble(
         ILattice structural, ILattice memory, ILattice content, ILattice symbol)
     {
         var grainFactory = Substitute.For<IGrainFactory>();
+        var sessionTree = MutableTree(new Dictionary<string, byte[]>(StringComparer.Ordinal));
         grainFactory.GetGrain<ILattice>(RepoContextTrees.Structural).Returns(structural);
         grainFactory.GetGrain<ILattice>(RepoContextTrees.Memory).Returns(memory);
         grainFactory.GetGrain<ILattice>(RepoContextTrees.Content).Returns(content);
         grainFactory.GetGrain<ILattice>(RepoContextTrees.Symbol).Returns(symbol);
+        grainFactory.GetGrain<ILattice>(RepoContextTrees.Session).Returns(sessionTree);
 
         var store = new RepoContextStore(
             grainFactory,
@@ -340,8 +386,9 @@ public sealed class RepoContextBundleServiceTests
             embeddingProvider: null);
 
         var graph = new RepoContextGraphService(grainFactory, Serializer, Counter, new RepoContextWorkspaceGuard([]));
+        var sessions = new RepoContextSessionStore(grainFactory, Serializer);
 
-        return new RepoContextBundleService(search, graph, grainFactory, Serializer, Counter);
+        return new RepoContextBundleService(search, graph, sessions, grainFactory, Serializer, Counter);
     }
 
     private static ILattice Tree(IReadOnlyDictionary<string, byte[]> map)
@@ -352,6 +399,31 @@ public sealed class RepoContextBundleServiceTests
         tree.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(ci => Task.FromResult<byte[]?>(
                 map.TryGetValue(ci.ArgAt<string>(0), out var value) ? value : null));
+        return tree;
+    }
+
+    // A substitute whose SetAsync writes back into the backing dictionary, so bookkeeping
+    // written by one BuildAsync call is observable by the next call on the same service.
+    // Both the two-arg and the TTL overload persist; TTL itself is not modelled (these are
+    // deterministic unit tests with no wall-clock dependence).
+    private static ILattice MutableTree(Dictionary<string, byte[]> map)
+    {
+        var tree = Substitute.For<ILattice>();
+        tree.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(ci => Task.FromResult<byte[]?>(
+                map.TryGetValue(ci.ArgAt<string>(0), out var value) ? value : null));
+        tree.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                map[ci.ArgAt<string>(0)] = ci.ArgAt<byte[]>(1);
+                return Task.CompletedTask;
+            });
+        tree.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                map[ci.ArgAt<string>(0)] = ci.ArgAt<byte[]>(1);
+                return Task.CompletedTask;
+            });
         return tree;
     }
 

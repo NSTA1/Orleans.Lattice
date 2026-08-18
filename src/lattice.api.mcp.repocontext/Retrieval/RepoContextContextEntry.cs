@@ -51,6 +51,27 @@ public sealed record RepoContextContextEntry
     /// <see cref="RepoContextContextDetail.Paths"/>, the structural skeleton for
     /// <see cref="RepoContextContextDetail.Outline"/>, or the bounded body text for
     /// <see cref="RepoContextContextDetail.Slices"/>. Never <see langword="null"/>.
+    /// When reuse suppressed some of the file's units, this is the newline-joined
+    /// content of only the <see cref="Units"/> that survived - the caller already holds
+    /// the rest.
     /// </summary>
     public required string Content { get; init; }
+
+    /// <summary>
+    /// The stable content hash of the packed file version, or <see langword="null"/>
+    /// when the file body was not available to hash (so no reuse tracking applies to
+    /// this entry). A caller can pair this with the path as a <c>known</c> possession
+    /// claim on a later call - but only a version this tool delivered as a whole body
+    /// (a slices-detail span) will ever be honoured as whole-file possession.
+    /// </summary>
+    public string? ContentHash { get; init; }
+
+    /// <summary>
+    /// The individually reusable units that make up this entry's delivered
+    /// <see cref="Content"/>, each with its own opaque receipt for later suppression.
+    /// A paths or slices entry carries a single unit; an outline entry carries one unit
+    /// per delivered symbol. Empty when reuse tracking did not apply to this call. Never
+    /// <see langword="null"/>.
+    /// </summary>
+    public IReadOnlyList<RepoContextContextUnit> Units { get; init; } = Array.Empty<RepoContextContextUnit>();
 }

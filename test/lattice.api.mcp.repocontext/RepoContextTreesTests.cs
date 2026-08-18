@@ -59,6 +59,7 @@ public sealed class RepoContextTreesTests
                 RepoContextTrees.Content,
                 RepoContextTrees.CrossReference,
                 RepoContextTrees.Memory,
+                RepoContextTrees.Session,
                 RepoContextTrees.VectorMembership,
                 RepoContextTrees.VectorPayload,
                 RepoContextTrees.VectorMetadata,

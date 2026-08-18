@@ -76,6 +76,20 @@ internal static class RepoContextTrees
     internal const string VectorMetadata = "repo-context-vector-metadata";
 
     /// <summary>
+    /// Tree holding per-session context-bundle reuse bookkeeping: one
+    /// <see cref="RepoContextSessionRecord"/> per <c>(repoId, sessionId)</c>, keyed
+    /// by <c>repo/{repoId}/session/{sessionId}</c>, recording the opaque receipts of
+    /// units already delivered to that session and the whole-file versions the
+    /// session already possesses. It is a rebuildable, bounded, and <b>expirable</b>
+    /// bookkeeping projection (never store-of-record): entries carry a finite
+    /// time-to-live so an abandoned session's bookkeeping lapses on its own, and each
+    /// record is a grow-only CRDT so concurrent bundle calls sharing a session id
+    /// converge on merge. It churns as sessions are created and expire, so the host
+    /// configures finite tombstone compaction here.
+    /// </summary>
+    internal const string Session = "repo-context-session";
+
+    /// <summary>
     /// Every named tree in the layout contract, in a stable order. Includes the
     /// reserved vector trees so host wiring can enumerate the full set.
     /// </summary>
@@ -86,6 +100,7 @@ internal static class RepoContextTrees
         Memory,
         Content,
         CrossReference,
+        Session,
         VectorMembership,
         VectorPayload,
         VectorMetadata,

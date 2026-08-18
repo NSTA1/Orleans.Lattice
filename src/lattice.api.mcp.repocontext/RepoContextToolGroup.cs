@@ -345,7 +345,15 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     + "retry (null when the search matched nothing, so no larger budget would help). 'truncated' "
                     + "flags a bundle that dropped lower-ranked candidates. The 'top', 'responseBudgetTokens', and "
                     + "'detail' arguments are validated and clamped, never trusted to drive unbounded work. "
-                    + "Read-only.",
+                    + "REUSE ECONOMICS: never pay twice for context you already hold. Each delivered unit (a path "
+                    + "pointer, a body span, or an outline symbol) carries a stable opaque 'receipt', and each entry "
+                    + "a per-version 'contentHash'. Hand receipts back in 'seen' to suppress exactly those units (the "
+                    + "rest of the file still arrives), or assert 'known' whole-file possession as 'path@hash'. Pass a "
+                    + "'session' to persist this bookkeeping across calls: the session auto-suppresses units it "
+                    + "already delivered and validates 'known' claims. A whole-file claim is honoured ONLY for a "
+                    + "version actually delivered as a complete body, so partial evidence can never be promoted to "
+                    + "whole-file possession. Suppressed content is acknowledged in 'reused' and is never charged "
+                    + "against 'top' or the token budget. Read-only.",
                 ReadOnly = true,
                 Destructive = false,
                 UseStructuredContent = true,

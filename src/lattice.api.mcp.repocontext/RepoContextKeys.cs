@@ -61,6 +61,9 @@ internal static class RepoContextKeys
     /// <summary>The reverse cross-reference segment token.</summary>
     internal const string CrossReferenceSegment = "xref";
 
+    /// <summary>The per-session reuse-bookkeeping segment token.</summary>
+    internal const string SessionSegment = "session";
+
     /// <summary>The vector-metadata segment token.</summary>
     internal const string VectorSegment = "vec";
 
@@ -157,6 +160,15 @@ internal static class RepoContextKeys
         ArgumentNullException.ThrowIfNull(topic);
         ArgumentNullException.ThrowIfNull(id);
         return $"{RepoScanPrefix(repoId)}{MemorySegment}{Separator}{EncodeComponent(topic)}{Separator}{EncodeComponent(id)}";
+    }
+
+    /// <summary>Builds the key for a per-session reuse-bookkeeping record: <c>repo/{repoId}/session/{sessionId}</c>.</summary>
+    /// <param name="repoId">The repository identifier. Must not be <see langword="null"/>.</param>
+    /// <param name="sessionId">The opaque caller session identifier. Must not be <see langword="null"/>.</param>
+    internal static string Session(string repoId, string sessionId)
+    {
+        ArgumentNullException.ThrowIfNull(sessionId);
+        return $"{RepoScanPrefix(repoId)}{SessionSegment}{Separator}{EncodeComponent(sessionId)}";
     }
 
     /// <summary>Builds the key for a vector metadata record: <c>repo/{repoId}/vec/{vectorId}</c>.</summary>

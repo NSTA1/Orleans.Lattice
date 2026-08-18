@@ -75,4 +75,20 @@ public sealed record RepoContextContextResult
     /// the search matched nothing.
     /// </summary>
     public required IReadOnlyList<RepoContextContextEntry> Entries { get; init; }
+
+    /// <summary>
+    /// The caller session this bundle's reuse bookkeeping was recorded under, echoed
+    /// back so the caller can carry it on the next call; <see langword="null"/> when no
+    /// session was supplied and no cross-call reuse state was persisted.
+    /// </summary>
+    public string? Session { get; init; }
+
+    /// <summary>
+    /// The reuse acknowledgements for content the tool suppressed instead of
+    /// re-delivering, because the caller already held it (through a <c>seen</c> receipt,
+    /// a validated <c>known</c> possession claim, or the named <c>session</c>'s recorded
+    /// history). Never counted against <see cref="TotalTokens"/> or the file budget.
+    /// Empty when nothing was suppressed. Never <see langword="null"/>.
+    /// </summary>
+    public IReadOnlyList<RepoContextReuseAck> Reused { get; init; } = Array.Empty<RepoContextReuseAck>();
 }

@@ -26,12 +26,16 @@ internal static class RepoContextBundlePacker
     /// <param name="Reasons">The machine-readable match reasons from the search hit.</param>
     /// <param name="Content">The content already rendered at the target detail level.</param>
     /// <param name="FullReadTokenCount">The whole-file read cost, or <see langword="null"/> when unknown.</param>
+    /// <param name="ContentHash">The packed file version's content hash, or <see langword="null"/> when reuse tracking did not apply.</param>
+    /// <param name="Units">The surviving reusable units backing <paramref name="Content"/>; empty when reuse tracking did not apply.</param>
     internal readonly record struct Candidate(
         string Path,
         double Score,
         IReadOnlyList<string> Reasons,
         string Content,
-        int? FullReadTokenCount);
+        int? FullReadTokenCount,
+        string? ContentHash = null,
+        IReadOnlyList<RepoContextContextUnit>? Units = null);
 
     /// <summary>
     /// The outcome of a pack: the admitted entries, their exact token sum, whether any
@@ -95,6 +99,8 @@ internal static class RepoContextBundlePacker
                     TokenCount = cost,
                     FullReadTokenCount = candidate.FullReadTokenCount,
                     Content = candidate.Content,
+                    ContentHash = candidate.ContentHash,
+                    Units = candidate.Units ?? Array.Empty<RepoContextContextUnit>(),
                 });
                 total += cost;
             }

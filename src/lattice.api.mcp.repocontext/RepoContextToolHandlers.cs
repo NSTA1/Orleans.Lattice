@@ -418,6 +418,9 @@ internal static class RepoContextToolHandlers
     /// <param name="top">The maximum number of files to consider (clamped to [1, 50]).</param>
     /// <param name="responseBudgetTokens">The hard token ceiling for the bundle (clamped to [1, 200000]).</param>
     /// <param name="detail">The requested detail level: <c>paths</c>, <c>outline</c>, <c>slices</c>, or <c>auto</c>; an unrecognised value resolves to <c>auto</c>.</param>
+    /// <param name="seen">Opaque unit receipts the caller already holds; each matching unit is suppressed and never re-charged.</param>
+    /// <param name="known">Whole-file possession claims of the form <c>path@hash</c>; each is honoured only for a version the tool actually delivered whole to the same session.</param>
+    /// <param name="session">A named caller session that persists reuse bookkeeping across calls.</param>
     /// <param name="cancellationToken">Cancels the bundle.</param>
     /// <returns>The packed bundle, whose exact BPE total never exceeds the clamped budget.</returns>
     /// <exception cref="McpException">The repository id or task is missing.</exception>
@@ -438,6 +441,21 @@ internal static class RepoContextToolHandlers
             + "'slices' (bounded body text, richest), or 'auto' (default) which picks the richest level that fits "
             + "and reports the level it settled on. An unrecognised value is treated as 'auto'.")]
         string? detail = null,
+        [Description(
+            "Opaque unit receipts (from a prior bundle's entry units) the caller already holds. Each matching unit "
+            + "is suppressed - the rest of its file still arrives - acknowledged under 'reused', and never charged "
+            + "against 'top' or the token budget.")]
+        string[]? seen = null,
+        [Description(
+            "Whole-file possession claims of the form 'path@hash' (from a prior entry's path and contentHash). A claim "
+            + "is honoured only for a version this tool actually delivered as a complete body to the same 'session'; "
+            + "a partial (outline/paths) delivery can never satisfy it. A honoured claim suppresses the whole file.")]
+        string[]? known = null,
+        [Description(
+            "A named caller session id. Its recorded deliveries auto-suppress units the session already holds and "
+            + "validate 'known' claims, and this call's deliveries are recorded into it, so a session never pays "
+            + "twice for the same context across calls.")]
+        string? session = null,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(repoId))
@@ -451,7 +469,7 @@ internal static class RepoContextToolHandlers
         }
 
         return ResolveBundleService(context)
-            .BuildAsync(repoId, task, top, responseBudgetTokens, ParseDetail(detail), cancellationToken);
+            .BuildAsync(repoId, task, top, responseBudgetTokens, ParseDetail(detail), seen, known, session, cancellationToken);
     }
 
     /// <summary>
