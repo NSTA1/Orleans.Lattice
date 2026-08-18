@@ -45,7 +45,7 @@ namespace Orleans.Lattice.Replication.Tests.Chaos;
 [TestFixture]
 [NonParallelizable]
 [Category("Chaos")]
-public class CrossClusterCrossTreeAtomicBatchDeliveryChaosTests
+public class CrossClusterCrossTreeAtomicCoalescedBatchChaosTests
 {
     private const string TreeA = "chaos-xtb-a";
     private const string TreeB = "chaos-xtb-b";
