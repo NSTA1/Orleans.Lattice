@@ -48,7 +48,13 @@ The two jobs it is your first move for:
 
 A typical retrieval loop: `search` for the question, take the best hit's `path`,
 `view` that file to read the real content, and (optionally) `remember` any
-durable gotcha you uncovered.
+durable gotcha you uncovered. When you need the actual source to *do* a task (not
+just find a file), reach for [`context`](#context---budgeted-context-bundle-in-one-call)
+instead - it packs ranked, explained source under a hard token budget in one call.
+To navigate the code graph (a file's callers, dependents, tests, or declared
+symbols) without full-file reads, use the
+[graph-navigation tools](#graph-navigation---outline--related--changed)
+`outline` / `related` / `changed`.
 
 Two guardrails make it safe to lean on as primary - follow both every time:
 
@@ -139,10 +145,18 @@ mid-task.
     `grep` only if the terms you have are too generic.
   - `empty` - no matches.
 - Hits carry `key`, `path`, `fields` (`digest`, `language`, `sizeBytes`,
-  `lastIngested`), `tags`, and `links` (structural cross-references between
-  records - informational; there is no client tool to set them). **`search` does
-  not return file contents** - `view` the file (or `recall` the record) for the
-  body.
+  `lastIngested`), `tags`, `links` (structural cross-references between
+  records - informational; there is no client tool to set them), and `reasons`
+  (see next bullet). **`search` does not return file contents** - `view` the file
+  (or `recall` the record) for the body.
+- **Every hit carries a `reasons` list explaining why it ranked** - server-derived,
+  deterministic, ordinal-ordered, bounded, and never null. A `semantic` hit lists
+  `semantic`, the matched chunk kind (`chunk:symbol` or `chunk:file`), and
+  `symbol:<fqName>` for a symbol vector; a `keyword` hit lists whichever projected
+  fields the query terms hit (`path-name-match`, `symbol:<fqName>`, `tag:<tag>`,
+  `topic-match`, `content-match`, `key-match`). Use `reasons` to judge whether a hit
+  is relevant for the right reason (a name/path coincidence versus a genuine content
+  or semantic match) before you act on it.
 - Results are verbose - each hit carries full metadata, and the server returns
   every payload as both structured and text content - so keep `k` small and
   prefer a targeted `scan` (with `pathPrefix`) when you want breadth without the
@@ -204,6 +218,79 @@ mid-task.
 - Each walked neighbor that is a memory entry is returned with its link staleness
   evaluated (`stale` / `staleLinks`), exactly as `recall` does, so a graph walk
   surfaces which linked concepts point at drifted code.
+
+### Graph navigation - outline / related / changed
+
+Three read-only tools navigate the structural graph the reconcilers maintain (file,
+symbol, content, and reverse cross-reference records) so you can understand code
+without spending tokens on full-file reads. All are pure reads over stored records;
+`related` and `outline` never touch disk, and `changed` reaches the workspace only
+through the fail-closed boundary.
+
+- **`outline`** - the structural skeleton of one indexed file *without its body*:
+  each declared symbol (kind, signature, 1-based start/end line span), ordered by
+  position, plus the token cost of reading the whole file. It is the cheapest way to
+  grasp a file's shape and decide whether a full `view` is worth the tokens. The
+  token count is null only when the file was never content-processed; a path with no
+  stored file node returns `exists=false`.
+- **`related`** - the structural neighbourhood of one file: the type-names it
+  references (outbound imports), the indexed symbols that reference *its*
+  declarations (inbound dependents, resolved to their declaring files), and the test
+  types that cover it (from the `{Name}Tests` / `{Name}Test` convention). Use it to
+  navigate the code graph (callers, dependents, tests) rather than guessing.
+  **Caveat:** edges are keyed by *simple* (unqualified) type-name, a syntactic
+  approximation - two distinct types sharing a simple name are not disambiguated, so
+  treat a dependent set as a lead to confirm by reading, not a proof.
+- **`changed`** - how the current workspace has drifted from the index (files added,
+  updated, removed), by digest comparison and **without invoking git**, so it works
+  in any checkout. It also lists the indexed files that depend on the changed ones
+  (the reverse-reference impact set / blast radius). Use it to scope a review to what
+  actually moved, or to see what an index needs to catch up on. A supplied path
+  resolving outside the mounted workspace is refused.
+
+### context - budgeted context bundle in one call
+
+`repocontext_context` is the highest-leverage retrieval tool: it returns a ranked,
+explained bundle of source for a natural-language `task`, packed under a **hard token
+ceiling**, collapsing the `search -> recall -> view` loop into one round trip that
+can never overrun your context budget. Prefer it over hand-running that loop when you
+need the actual source to *do* a task (not just locate a file).
+
+- It searches for the `task` (semantic when available, else a keyword bundle),
+  resolves the top hits to unique files, and packs each at a `detail` level:
+  `paths` (path only), `outline` (declared-symbol skeleton), or `slices` (bounded
+  body text). `auto` (default) packs the richest level that yields a non-empty bundle
+  and reports the level it settled on in `detail`.
+- Budgeting: `responseBudgetTokens` is the hard ceiling (the reported `totalTokens`
+  is the exact BPE sum and never exceeds it); `top` bounds how many files are
+  considered. Both are clamped, never trusted to drive unbounded work. `truncated`
+  flags that lower-ranked candidates were dropped. It **fails closed** when even the
+  cheapest entry does not fit: `entries` is empty and `retryBudgetTokens` reports a
+  budget guaranteed to admit at least one entry (null when the search matched
+  nothing).
+- Each entry carries its match `reasons`, its exact BPE `tokenCount`, the whole-file
+  `fullReadTokenCount`, and a per-version `contentHash`. Per guardrail 1, the packed
+  `slices`/`outline` content still reflects the last ingest - `view` the file before
+  editing.
+- **Reuse economics - never pay twice.** Each delivered unit carries a stable opaque
+  `receipt`. Hand receipts back in `seen` to suppress exactly those units (the rest
+  of the file still arrives), or assert whole-file possession in `known` as
+  `path@hash`. Pass a stable `session` id to persist this bookkeeping across calls:
+  the session auto-suppresses units it already delivered and validates `known`
+  claims. A whole-file claim is honoured **only** for a version actually delivered as
+  a complete body, so partial evidence is never promoted to whole-file possession.
+  Suppressed content is acknowledged in `reused` and never charged against `top` or
+  the budget. Reuse the same `session` id across a multi-step task to keep each
+  follow-up bundle cheap.
+
+### stats - usage accounting
+
+`repocontext_stats` reports an aggregate summary of the surface's own usage over a
+bounded recent window (no arguments), so you can see whether it is actually reducing
+context cost. It returns only summed token figures - `calls`, `responseTokens`,
+`readsReplacedTokens` (whole-file reads conservatively replaced, credited only for
+delivered whole-file-equivalent content), `netSavedTokens`, and `windowSeconds` - and
+carries no body, query, path, or repository identity. Read-only.
 
 ## Capture - durable agent memory
 
