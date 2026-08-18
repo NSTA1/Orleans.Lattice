@@ -1,6 +1,6 @@
 # Orleans.Lattice.Api.Mcp
 
-Optional, opt-in **Model Context Protocol (MCP) server** add-on for [`Orleans.Lattice`](https://github.com/NSTA1/Orleans.Lattice). It exposes a cluster's transport-agnostic API facades - state, data, backup, and auth - as MCP tools over the official [`ModelContextProtocol`](https://www.nuget.org/packages/ModelContextProtocol) SDK, so an AI agent can discover and drive the cluster through a standard, authenticated MCP endpoint.
+Optional, opt-in **Model Context Protocol (MCP) server** add-on for [`Orleans.Lattice`](https://github.com/NSTA1/Orleans.Lattice). It exposes a cluster's transport-agnostic API facades as MCP tools over the official [`ModelContextProtocol`](https://www.nuget.org/packages/ModelContextProtocol) SDK, so an AI agent can discover and drive the cluster through a standard, authenticated MCP endpoint.
 
 ## What it gives you
 

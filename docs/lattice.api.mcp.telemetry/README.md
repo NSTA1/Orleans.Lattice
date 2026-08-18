@@ -4,7 +4,7 @@ An optional, opt-in telemetry add-on for [`Orleans.Lattice.Api.Mcp`](../lattice.
 
 ## What is it?
 
-The core [`Orleans.Lattice.Api.Mcp`](../lattice.api.mcp/README.md) server advertises the state, data, backup, and auth facades as MCP tools. This companion package adds a fifth, opt-in tool group - **telemetry** - that turns a caller's PromQL question into a query against the metrics backend the cluster already publishes to (the `orleans.lattice` meter, scraped into Prometheus; see [Metrics](../lattice/metrics.md)).
+The core [`Orleans.Lattice.Api.Mcp`](../lattice.api.mcp/README.md) server advertises the cluster's API facades as MCP tools. This companion package adds a further, opt-in tool group - **telemetry** - that turns a caller's PromQL question into a query against the metrics backend the cluster already publishes to (the `orleans.lattice` meter, scraped into Prometheus; see [Metrics](../lattice/metrics.md)).
 
 It is deliberately a thin, read-only proxy:
 
