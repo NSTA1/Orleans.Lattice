@@ -196,7 +196,12 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     + "vectors are available it runs an exact semantic (nearest-neighbour) search; otherwise it "
                     + "degrades to a deterministic BM25 keyword/structural scan over record names and file content, "
                     + "so a query always returns the best available matches instead of failing. The result's 'mode' "
-                    + "reports which path answered ('semantic', 'keyword', or 'empty'). Read-only.",
+                    + "reports which path answered ('semantic', 'keyword', or 'empty'). Every hit carries a "
+                    + "machine-readable 'reasons' list (server-derived, deterministic, ordinal-ordered, bounded, and "
+                    + "never null) explaining why it ranked: a semantic hit lists 'semantic', the matched chunk kind "
+                    + "('chunk:symbol' or 'chunk:file'), and 'symbol:<fqName>' for a symbol vector; a keyword hit "
+                    + "lists 'path-name-match', 'symbol:<fqName>', 'tag:<tag>', 'topic-match', 'content-match', and "
+                    + "'key-match' for whichever projected fields the query terms hit. Read-only.",
                 ReadOnly = true,
                 Destructive = false,
                 UseStructuredContent = true,
