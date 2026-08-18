@@ -428,4 +428,106 @@ public partial class ReplicationApplierTests
             Arg.Any<int>(),
             Arg.Any<int>());
     }
+
+    [Test]
+    public async Task ApplyBatchAsync_routes_batched_TxCommit_terminal_through_terminal_seam()
+    {
+        // Cross-cluster atomic-visibility regression (issue #1525). The
+        // single-entry ApplyAsync path intercepts saga terminals and routes
+        // them through ApplyTxTerminalAsync, but the multi-entry batch path
+        // (ApplyOriginRunAsync) previously had no terminal branch: a
+        // TxCommit / TxAbort fell through to ApplyPointAsync, whose op
+        // switch has no terminal case and throws "Unsupported point-apply
+        // op". The production shipper coalesces a saga's contiguous WAL
+        // entries (its prepared writes AND its terminal) into one inbound
+        // batch, so the terminal is delivered batched - and the whole batch
+        // then faulted, the terminal was never applied, and the saga's keys
+        // stayed pending (invisible) on the peer forever. This test drives a
+        // batch shaped exactly like that coalesced saga and asserts the
+        // terminal reaches the ApplyTxTerminalAsync seam.
+        var (applier, _, apply, _) = CreateApplier();
+        var txid = Guid.NewGuid();
+        var entries = new[]
+        {
+            PreparedSetEntry("k0", Hlc(10), txid, atomicBatchSize: 2, atomicBatchIndex: 0),
+            PreparedSetEntry("k1", Hlc(20), txid, atomicBatchSize: 2, atomicBatchIndex: 1),
+            TerminalEntry(MutationKind.TxCommit, txid, Hlc(30), shardIndex: 0),
+        };
+
+        var result = await applier.ApplyBatchAsync(entries);
+
+        Assert.That(result.Applied, Is.True);
+        // The prepared entries still park via the prepared-apply seam.
+        await apply.Received(1).ApplyPreparedSetAsync(
+            "k0", Arg.Any<byte[]>(), Hlc(10), RemoteCluster, null, 0, txid, 2, 0);
+        await apply.Received(1).ApplyPreparedSetAsync(
+            "k1", Arg.Any<byte[]>(), Hlc(20), RemoteCluster, null, 0, txid, 2, 1);
+        // The terminal must reach the terminal seam so the receiver's
+        // per-tree TxRegistry mark (and, for cross-tree, the barrier) fires
+        // and the pending saga keys flip visible.
+        await apply.Received(1).ApplyTxTerminalAsync(
+            txid,
+            true,
+            0,
+            Hlc(30),
+            RemoteCluster,
+            Arg.Any<int>(),
+            Arg.Any<string?>(),
+            Arg.Any<IReadOnlyList<string>?>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ApplyBatchAsync_forwards_cross_tree_barrier_metadata_for_batched_terminal()
+    {
+        // Issue #1525, cross-tree specific. A cross-tree atomic write stamps
+        // its terminal with CrossTreeOperationId + CrossTreeParticipants;
+        // the applier turns that into the receiver barrier's wait set
+        // (scoped to trees replicated here). When the terminal is delivered
+        // batched together with its prepared entries, the batch path must
+        // still forward that barrier metadata to ApplyTxTerminalAsync -
+        // otherwise the receiver coordinator never flips the participating
+        // trees together and the peer never sees the cross-tree keys.
+        var (applier, _, apply, _) = CreateApplier();
+        var txid = Guid.NewGuid();
+        const string operationId = "xt-op-1525";
+        const string otherTree = "chaos-xt-b";
+        var participants = new[] { Tree, otherTree };
+
+        var terminal = new WalRecord
+        {
+            TreeId = Tree,
+            Op = MutationKind.TxCommit,
+            Key = "0",
+            Timestamp = Hlc(40),
+            OriginClusterId = RemoteCluster,
+            TransactionId = txid,
+            ShardIndex = 0,
+            AtomicShardCount = 1,
+            CrossTreeOperationId = operationId,
+            CrossTreeParticipants = participants,
+            IsPrepared = false,
+        };
+
+        var entries = new[]
+        {
+            PreparedSetEntry("k0", Hlc(20), txid, atomicBatchSize: 1, atomicBatchIndex: 0),
+            terminal,
+        };
+
+        var result = await applier.ApplyBatchAsync(entries);
+
+        Assert.That(result.Applied, Is.True);
+        await apply.Received(1).ApplyTxTerminalAsync(
+            txid,
+            true,
+            0,
+            Hlc(40),
+            RemoteCluster,
+            1,
+            operationId,
+            Arg.Is<IReadOnlyList<string>?>(w =>
+                w != null && w.Contains(Tree) && w.Contains(otherTree)),
+            Arg.Any<CancellationToken>());
+    }
 }

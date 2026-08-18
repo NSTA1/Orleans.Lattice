@@ -761,6 +761,41 @@ internal sealed partial class ReplicationApplier
                     continue;
                 }
 
+                // Saga terminal-mark records (TxCommit / TxAbort) mirror
+                // the single-entry ApplyAsync path (see the terminal branch
+                // there for the full rationale): they are saga-id-keyed and
+                // idempotent on the receiver, so they bypass the per-origin
+                // HWM check, the shadow-forward dedup cache, and the
+                // causal-park gate below, and route through
+                // ApplyTxTerminalCoreAsync - which drives the per-tree
+                // TxRegistry mark AND, for a cross-tree atomic write, the
+                // receiver-side barrier that flips every participant tree's
+                // pending saga keys into the visible projection together.
+                // WITHOUT this branch a terminal batched together with its
+                // saga's prepared entries (the production shipper coalesces
+                // contiguous WAL entries into one inbound batch) falls
+                // through to ApplyPointAsync, whose op switch has no
+                // TxCommit / TxAbort case and throws "Unsupported
+                // point-apply op": the whole batch faults, the terminal is
+                // never applied, and the cross-tree receiver barrier never
+                // releases, so the saga's keys stay invisible on the peer
+                // forever (issue #1525). Any deferred LWW / CRDT batch must
+                // flush first so the terminal linearizes after every
+                // prepared / plain entry that precedes it in WAL order.
+                // Terminals are HWM-neutral (they never advance the
+                // per-origin high-water mark), so - like the range-delete
+                // branch above - this leaves highestApplied / advancedAtAll
+                // untouched.
+                if (entry.Op is MutationKind.TxCommit or MutationKind.TxAbort)
+                {
+                    await FlushPendingAsync().ConfigureAwait(false);
+                    await FlushPendingCrdtAsync().ConfigureAwait(false);
+                    await ApplyTxTerminalCoreAsync(entry, cancellationToken).ConfigureAwait(false);
+                    anyApplied = true;
+                    outcome = LatticeReplicationMetrics.OutcomeSuccess;
+                    continue;
+                }
+
                 // Phase D1c: saga prepare-phase entries
                 // (IsPrepared && AtomicBatchSize > 0) bypass BOTH the
                 // pinned-floor dedup AND the causal-park gate below.
