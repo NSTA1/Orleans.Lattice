@@ -316,6 +316,16 @@ builder.Host.UseOrleans(silo =>
         options.DefaultEffect = string.Equals(config["Auth:DefaultEffect"], "Allow", StringComparison.OrdinalIgnoreCase)
             ? LatticeEffect.Allow
             : LatticeEffect.Deny;
+        // The AdministratorAccessSeeder grants each bootstrap administrator a single
+        // cluster-wide (all-trees, Tree:*) full-access rule so every MCP facade group
+        // is advertised to them at discovery. Authoring a Tree:*-scoped data-plane rule
+        // requires the all-trees grant tier to be enabled; with it off (the default)
+        // PutRuleAsync rejects the rule and the security administrator is left with no
+        // MCP tools until a grant is authored by hand. Enable the tier so the seed is
+        // authorable. The tier never applies to the reserved authorization namespace and
+        // preserves the data/telemetry operation-bit separation, so this does not weaken
+        // the deny-by-default posture above.
+        options.AllTreesGrantsEnabled = true;
         foreach (var administrator in ParseCsv(config["Auth:BootstrapAdministrators"]))
         {
             options.BootstrapAdministrators.Add(administrator);
