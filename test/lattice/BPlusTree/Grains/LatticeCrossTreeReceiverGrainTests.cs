@@ -57,6 +57,84 @@ public class LatticeCrossTreeReceiverGrainTests
         TerminalHlc = HybridLogicalClock.Zero,
     };
 
+    // Mirrors Azure Table storage's key restriction: the Partition/Row key and
+    // the request URL both reject the control chars 0x00-0x1F. The old key
+    // encoding joined its two halves with the ASCII Unit Separator (0x1F), so
+    // the receiver grain failed to activate (HTTP 400 "Invalid URL") on a real
+    // Azure deployment - invisible to CI because in-memory storage has no such
+    // restriction. A full key-restricted storage fake would need a TestCluster
+    // (the fake persistent state does not see the grain key), which is
+    // disproportionate to the invariant under test; the load-bearing property
+    // is that ComputeKey never emits a control char, asserted directly below.
+    private static bool ContainsControlChar(string value)
+    {
+        foreach (var c in value)
+        {
+            if (c <= '\u001f') return true;
+        }
+        return false;
+    }
+
+    [Test]
+    public void ComputeKey_produces_a_key_free_of_control_characters()
+    {
+        // The live failure used exactly these shapes: a hyphenated cluster id
+        // and a hyphenated operation id.
+        var key = LatticeCrossTreeReceiverGrain.ComputeKey("latticeref2-eus2", "op-xtree-1");
+
+        Assert.That(ContainsControlChar(key), Is.False,
+            "the receiver grain key is carried into an Azure Table request URL and key columns, which reject control chars 0x00-0x1F");
+        // NOTE: an ordinal check via the char overload - NUnit's Does.Not.Contain
+        // (and String.Contains(string) under a culture-sensitive comparer) treats
+        // the Unit Separator as an ignorable character, so it would match any
+        // string; the char overload is ordinal and reports the truth.
+        Assert.That(key.Contains('\u001f'), Is.False,
+            "the key must not embed the ASCII Unit Separator that broke activation on Azure Table storage");
+    }
+
+    [Test]
+    public void ComputeKey_is_unambiguous_across_tricky_boundary_inputs()
+    {
+        // The length prefix must keep the two halves distinguishable even when
+        // the split point is ambiguous under a naive concatenation: here
+        // ("a", "bc") and ("ab", "c") would both concatenate to "abc", and the
+        // underscore separator itself appears inside a half.
+        var pairs = new[]
+        {
+            ("a", "bc"),
+            ("ab", "c"),
+            ("a_b", "c"),
+            ("a", "_bc"),
+            ("1_x", "y"),
+            ("1", "_xy"),
+        };
+
+        var keys = pairs
+            .Select(p => LatticeCrossTreeReceiverGrain.ComputeKey(p.Item1, p.Item2))
+            .ToList();
+
+        Assert.That(keys.Distinct(StringComparer.Ordinal).Count(), Is.EqualTo(pairs.Length),
+            "distinct (originClusterId, operationId) pairs must map to distinct keys regardless of the characters in either half");
+    }
+
+    [Test]
+    public void ComputeKey_is_deterministic()
+    {
+        // The key is derived independently on every region and must match, so
+        // the encoding must be a pure function of its two inputs.
+        var first = LatticeCrossTreeReceiverGrain.ComputeKey("latticeref2-eus2", "op-xtree-1");
+        var second = LatticeCrossTreeReceiverGrain.ComputeKey("latticeref2-eus2", "op-xtree-1");
+
+        Assert.That(second, Is.EqualTo(first));
+    }
+
+    [Test]
+    public void ComputeKey_rejects_empty_halves()
+    {
+        Assert.That(() => LatticeCrossTreeReceiverGrain.ComputeKey("", "op"), Throws.ArgumentException);
+        Assert.That(() => LatticeCrossTreeReceiverGrain.ComputeKey("cluster", ""), Throws.ArgumentException);
+    }
+
     [Test]
     public async Task NotifyTerminalAsync_first_of_two_trees_is_in_flight()
     {

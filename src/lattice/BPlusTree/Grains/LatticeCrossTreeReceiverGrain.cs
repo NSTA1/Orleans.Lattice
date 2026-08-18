@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.State;
@@ -33,9 +34,6 @@ internal sealed class LatticeCrossTreeReceiverGrain(
 {
     private const string RetentionReminderName = "cross-tree-receiver-retention";
 
-    /// <summary>ASCII Unit Separator delimiting the compound key's two halves.</summary>
-    private const string KeyDelimiter = "\u001f";
-
     /// <summary>
     /// In-memory marker, <c>true</c> only while a freshly-computed decision is
     /// mid-flight in <see cref="NotifyTerminalAsync"/> and therefore not yet
@@ -70,15 +68,38 @@ internal sealed class LatticeCrossTreeReceiverGrain(
 
     /// <summary>
     /// Builds the compound grain key for a receiver coordinator from the source
-    /// cluster id and the cross-tree operation id, joined by an ASCII Unit
-    /// Separator so neither half can be confused with the other regardless of
-    /// the characters either contains.
+    /// cluster id and the cross-tree operation id.
+    /// <para>
+    /// The key is length-prefixed - the decimal character length of
+    /// <paramref name="originClusterId"/>, an underscore, then the two halves
+    /// concatenated - rather than joined by a delimiter character. A
+    /// length prefix keeps the two halves unambiguous regardless of the
+    /// characters either contains (the property the old ASCII Unit Separator
+    /// delimiter was chosen for), while producing a key that is free of any
+    /// control character. That matters because this grain persists via a
+    /// storage provider: Azure Table grain storage carries the primary key into
+    /// the request URL and the Partition/Row key columns, both of which reject
+    /// control chars 0x00-0x1F, so a raw Unit Separator (0x1F) in the key made
+    /// the receiver fail to activate with HTTP 400 on a real Azure deployment.
+    /// </para>
+    /// <para>
+    /// The encoding is a pure deterministic function of its two inputs so every
+    /// region derives an identical key for the same operation. Changing the
+    /// encoding changes this grain's identity; that is acceptable here because
+    /// the previous (control-char) key was non-functional on the Azure Table
+    /// path, so there is no live durable state to stay compatible with.
+    /// </para>
     /// </summary>
+    [GrainKeyBuilder]
     public static string ComputeKey(string originClusterId, string operationId)
     {
         ArgumentException.ThrowIfNullOrEmpty(originClusterId);
         ArgumentException.ThrowIfNullOrEmpty(operationId);
-        return string.Concat(originClusterId, KeyDelimiter, operationId);
+        return string.Concat(
+            originClusterId.Length.ToString(CultureInfo.InvariantCulture),
+            "_",
+            originClusterId,
+            operationId);
     }
 
     /// <inheritdoc />
