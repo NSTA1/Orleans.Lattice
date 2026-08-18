@@ -198,6 +198,137 @@ internal sealed class RepoContextSymbolReconciler
             applied.Captured, declaredByPath, applied.ChangedKeys, applied.PrunedKeys);
     }
 
+    /// <summary>
+    /// Force-seeds the reverse cross-reference index for files that were
+    /// symbol-processed before that index existed. Their <see cref="SymbolRecord"/>s
+    /// already carry fully-populated outbound <see cref="SymbolRecord.References"/>,
+    /// but because their content never changes the incremental delta in
+    /// <see cref="UpdateReferences"/> never fires, so their reverse edges are never
+    /// built and inbound-dependent / test lookups stay permanently empty for the
+    /// repository. This pass reads each declared symbol record and projects its stored
+    /// forward references (and its test-subject relationship) into the reverse index
+    /// directly, treating the prior reverse state as empty so every stored reference
+    /// is emitted as an add. Add-wins edge adds are idempotent, so re-running the seed
+    /// converges on the identical edge set without duplicating or removing anything.
+    /// </summary>
+    /// <param name="repoId">The repository identifier. Must not be
+    /// <see langword="null"/>.</param>
+    /// <param name="files">The content-unchanged, symbol-processed files whose reverse
+    /// edges are not yet built, selected by the cross-reference back-fill. Must not be
+    /// <see langword="null"/>.</param>
+    /// <param name="storedMeta">The pre-run stored file metadata, read for each file's
+    /// declared fully-qualified symbol names. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancels the seed.</param>
+    /// <returns>The repository-relative paths whose reverse edges were seeded this
+    /// pass, so their file nodes can be stamped cross-referenced. Every input file is
+    /// returned - the seed reads only stored records, so it cannot fail per file the
+    /// way a file-reading reconcile can - which keeps a supported file that happens to
+    /// declare nothing (or only symbols with no references) from being re-selected.
+    /// </returns>
+    public async Task<IReadOnlyCollection<string>> SeedCrossReferencesAsync(
+        string repoId,
+        IReadOnlyList<RepoFileEntry> files,
+        IReadOnlyDictionary<string, StoredFileMeta> storedMeta,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentNullException.ThrowIfNull(files);
+        ArgumentNullException.ThrowIfNull(storedMeta);
+
+        var seededPaths = new List<string>(files.Count);
+        if (files.Count == 0)
+        {
+            return seededPaths;
+        }
+
+        // Collect the distinct declared fully-qualified names across the selected
+        // files so each stored symbol record is read at most once, even when a partial
+        // type is declared by several of them. Index-based loops over the read-only
+        // lists avoid the enumerator allocation a foreach over IReadOnlyList incurs.
+        var fqNames = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = 0; i < files.Count; i++)
+        {
+            var path = files[i].RelativePath;
+            seededPaths.Add(path);
+            if (!storedMeta.TryGetValue(path, out var meta))
+            {
+                continue;
+            }
+
+            var declared = meta.DeclaredSymbols;
+            for (var j = 0; j < declared.Count; j++)
+            {
+                fqNames.Add(declared[j]);
+            }
+        }
+
+        if (fqNames.Count == 0)
+        {
+            return seededPaths;
+        }
+
+        var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.Symbol);
+
+        // Adds-only reverse deltas: a force-seed never retires an edge, it only
+        // (re)asserts the ones the stored forward references imply. The removes maps
+        // are passed empty to reuse the same apply pass the incremental reconcile uses.
+        var referrerAdds = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        var testAdds = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+
+        foreach (var fqName in fqNames)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var existing = await tree
+                .GetAsync(RepoContextKeys.Symbol(repoId, fqName), cancellationToken)
+                .ConfigureAwait(false);
+            if (existing is null)
+            {
+                // The declared symbol record was pruned since the file was stored;
+                // there is nothing to project for it.
+                continue;
+            }
+
+            SeedRecordEdges(_symbolSerializer.Deserialize(existing), referrerAdds, testAdds);
+        }
+
+        await ApplyCrossReferenceChangesAsync(
+            repoId,
+            referrerAdds,
+            EmptyEdges,
+            testAdds,
+            EmptyEdges,
+            cancellationToken).ConfigureAwait(false);
+
+        return seededPaths;
+    }
+
+    /// <summary>
+    /// Projects one stored symbol record's outbound references (and its test-subject
+    /// relationship, when it is a test type) into the reverse-edge add maps, matching
+    /// how <see cref="UpdateReferences"/> and the upsert test-linkage block author the
+    /// same edges on the incremental path - but seeded from the record's stored state
+    /// rather than a fresh extraction, so the whole stored reference set is emitted.
+    /// </summary>
+    internal static void SeedRecordEdges(
+        SymbolRecord record,
+        Dictionary<string, HashSet<string>> referrerAdds,
+        Dictionary<string, HashSet<string>> testAdds)
+    {
+        var referrer = record.FullyQualifiedName;
+        foreach (var bytes in record.References.Elements())
+        {
+            AddToSet(referrerAdds, Encoding.UTF8.GetString(bytes), referrer);
+        }
+
+        if (record.Kind == SymbolKind.Type && SymbolNaming.TestSubject(referrer) is { } subject)
+        {
+            AddToSet(testAdds, subject, referrer);
+        }
+    }
+
+    private static readonly Dictionary<string, HashSet<string>> EmptyEdges =
+        new(StringComparer.Ordinal);
+
     private async Task<SymbolApplyOutcome> ApplySymbolChangesAsync(
         string repoId,
         IReadOnlyDictionary<string, (ExtractedSymbol Symbol, string File)> upsertInfo,

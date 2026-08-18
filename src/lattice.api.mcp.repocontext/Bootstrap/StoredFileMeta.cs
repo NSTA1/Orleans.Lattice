@@ -45,6 +45,13 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// recorded (a node written before the register existed). A negative value makes the
 /// content back-fill re-select the file so its token count is computed, and is what a
 /// carry-forward rewrite treats as "no count to preserve".</param>
+/// <param name="CrossReferenced">Whether the stored file node carries the
+/// <see cref="FileNode.CrossReferenced"/> marker - that is, whether its declared
+/// symbols' outbound references have already been projected into the reverse
+/// cross-reference index. False for a node written before the reverse index existed,
+/// which - combined with <see cref="SymbolsProcessed"/> being true - is what makes the
+/// background cross-reference back-fill force-seed it from the stored symbol
+/// records.</param>
 internal readonly record struct StoredFileMeta(
     string Digest,
     string Language,
@@ -53,4 +60,5 @@ internal readonly record struct StoredFileMeta(
     IReadOnlyList<string> DeclaredSymbols,
     bool SymbolsProcessed = false,
     bool ContentProcessed = false,
-    long TokenCount = -1);
+    long TokenCount = -1,
+    bool CrossReferenced = false);

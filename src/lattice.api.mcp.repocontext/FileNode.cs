@@ -107,6 +107,24 @@ internal sealed record FileNode
     public BoundedRegister TokenCount { get; init; } = new();
 
     /// <summary>
+    /// Last-writer-wins marker recording that this file has been cross-referenced -
+    /// its declared symbols' outbound references were projected into the reverse
+    /// <see cref="RepoContextTrees.CrossReference"/> index. It is the presence signal
+    /// the background cross-reference back-fill probes: a supported-language file that
+    /// was symbol-processed before the reverse index existed carries the
+    /// <see cref="SymbolsProcessed"/> marker but not this one, so the reconciler
+    /// force-seeds its reverse edges from the already-stored
+    /// <see cref="SymbolRecord.References"/> without re-selecting files that already
+    /// have both markers. Decoupled from <see cref="SymbolsProcessed"/> because a file
+    /// indexed before the reverse index shipped is symbol-processed yet not
+    /// cross-referenced, which an empty-register probe on the symbol marker cannot
+    /// express. A file freshly symbol-processed going forward gets both markers in the
+    /// same pass, so it is never a back-fill candidate.
+    /// </summary>
+    [Id(12)]
+    public BoundedRegister CrossReferenced { get; init; } = new();
+
+    /// <summary>
     /// Lattice merge of two replicas of the same file node. Identity is preserved
     /// from <paramref name="left"/>; every mutable field is folded through its
     /// CRDT join, so the result is commutative, associative, and idempotent.
@@ -131,6 +149,7 @@ internal sealed record FileNode
             SymbolsProcessed = BoundedRegister.Merge(left.SymbolsProcessed, right.SymbolsProcessed),
             ContentProcessed = BoundedRegister.Merge(left.ContentProcessed, right.ContentProcessed),
             TokenCount = BoundedRegister.Merge(left.TokenCount, right.TokenCount),
+            CrossReferenced = BoundedRegister.Merge(left.CrossReferenced, right.CrossReferenced),
         };
     }
 }
