@@ -252,6 +252,10 @@ public sealed partial class RepoContextBundleServiceTests
     }
 
     private static RepoContextBundleService BuildService(params (string Path, string Body, long TokenCount)[] files)
+        => BuildService(NoOpUsageRecorder.Instance, files);
+
+    private static RepoContextBundleService BuildService(
+        IRepoContextUsageRecorder recorder, params (string Path, string Body, long TokenCount)[] files)
     {
         var structuralEntries = new Dictionary<string, byte[]>(StringComparer.Ordinal);
         var contentEntries = new Dictionary<string, byte[]>(StringComparer.Ordinal);
@@ -272,7 +276,8 @@ public sealed partial class RepoContextBundleServiceTests
             Tree(structuralEntries),
             Tree(new Dictionary<string, byte[]>(StringComparer.Ordinal)),
             Tree(contentEntries),
-            Tree(new Dictionary<string, byte[]>(StringComparer.Ordinal)));
+            Tree(new Dictionary<string, byte[]>(StringComparer.Ordinal)),
+            recorder);
     }
 
     private static RepoContextBundleService BuildServiceWithSymbol(
@@ -357,7 +362,8 @@ public sealed partial class RepoContextBundleServiceTests
     }
 
     private static RepoContextBundleService Assemble(
-        ILattice structural, ILattice memory, ILattice content, ILattice symbol)
+        ILattice structural, ILattice memory, ILattice content, ILattice symbol,
+        IRepoContextUsageRecorder? recorder = null)
     {
         var grainFactory = Substitute.For<IGrainFactory>();
         var sessionTree = MutableTree(new Dictionary<string, byte[]>(StringComparer.Ordinal));
@@ -388,7 +394,8 @@ public sealed partial class RepoContextBundleServiceTests
         var graph = new RepoContextGraphService(grainFactory, Serializer, Counter, new RepoContextWorkspaceGuard([]));
         var sessions = new RepoContextSessionStore(grainFactory, Serializer);
 
-        return new RepoContextBundleService(search, graph, sessions, grainFactory, Serializer, Counter);
+        return new RepoContextBundleService(
+            search, graph, sessions, grainFactory, Serializer, Counter, recorder ?? NoOpUsageRecorder.Instance);
     }
 
     private static ILattice Tree(IReadOnlyDictionary<string, byte[]> map)

@@ -48,6 +48,21 @@ internal static class RepoContextToolHandlers
     public static RepoContextHealthResult Health() => Healthy;
 
     /// <summary>
+    /// Reports an aggregate roll-up of the repository-context surface's usage over a bounded
+    /// recent window: how many calls were answered, the exact response tokens they spent, the
+    /// whole-file read tokens they conservatively replaced, and the net tokens saved. Read-only
+    /// and behind the fail-closed authorization gate; it returns only summed token figures and
+    /// never any body, query, path, or repository identity.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the usage recorder.</param>
+    /// <returns>The aggregate usage summary.</returns>
+    public static RepoContextStatsResult Stats(RequestContext<CallToolRequestParams> context)
+    {
+        var recorder = ResolveUsageRecorder(context);
+        return RepoContextStatsResult.From(recorder.Summarize(), recorder.Window);
+    }
+
+    /// <summary>
     /// Starts (or re-attaches to) an asynchronous indexing job for a repository:
     /// walks the tree, records a structural node and content digest per file, and
     /// reconciles the scan against the stored records idempotently (unchanged files
@@ -878,5 +893,19 @@ internal static class RepoContextToolHandlers
             ?? throw new InvalidOperationException(
                 "The MCP request has no service provider; the repository-context graph tool cannot resolve its service.");
         return services.GetRequiredService<RepoContextGraphService>();
+    }
+
+    /// <summary>
+    /// Resolves the <see cref="IRepoContextUsageRecorder"/> from the MCP request's
+    /// service provider, failing with a clear message when the provider is absent.
+    /// </summary>
+    /// <param name="context">The MCP request context.</param>
+    /// <returns>The resolved usage recorder.</returns>
+    private static IRepoContextUsageRecorder ResolveUsageRecorder(RequestContext<CallToolRequestParams> context)
+    {
+        var services = context.Services
+            ?? throw new InvalidOperationException(
+                "The MCP request has no service provider; the repository-context stats tool cannot resolve its service.");
+        return services.GetRequiredService<IRepoContextUsageRecorder>();
     }
 }

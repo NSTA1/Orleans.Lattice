@@ -60,7 +60,7 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
     /// tools replace the single-repository onboarding tool.</param>
     public RepoContextToolGroup(bool enableWrites = false, bool workspaceMode = false)
     {
-        var capacity = 11
+        var capacity = 12
             + (workspaceMode ? 1 : 0)
             + (enableWrites ? (workspaceMode ? 5 : 4) : 0);
         var tools = new List<McpServerTool>(capacity)
@@ -91,6 +91,7 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
             BuildChangedTool(),
             BuildRelatedTool(),
             BuildContextTool(),
+            BuildStatsTool(),
         };
 
         if (workspaceMode)
@@ -354,6 +355,27 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     + "version actually delivered as a complete body, so partial evidence can never be promoted to "
                     + "whole-file possession. Suppressed content is acknowledged in 'reused' and is never charged "
                     + "against 'top' or the token budget. Read-only.",
+                ReadOnly = true,
+                Destructive = false,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildStatsTool()
+        => McpServerTool.Create(
+            RepoContextToolHandlers.Stats,
+            new McpServerToolCreateOptions
+            {
+                Name = "repocontext_stats",
+                Title = "Repository-context usage summary",
+                Description =
+                    "Reports an aggregate summary of the repository-context surface's own usage over a bounded "
+                    + "recent window, so a team can see whether the surface actually reduces context cost. Returns "
+                    + "only summed token figures: how many calls were answered ('calls'), the exact response tokens "
+                    + "they spent ('responseTokens'), the whole-file read tokens they conservatively replaced "
+                    + "('readsReplacedTokens' - credited only for delivered whole-file-equivalent content, never for "
+                    + "discovery or partial detail or content the caller already held), the net tokens saved "
+                    + "('netSavedTokens'), and the window length ('windowSeconds'). It carries no body, query, path, "
+                    + "or repository identity - aggregate figures only. Read-only.",
                 ReadOnly = true,
                 Destructive = false,
                 UseStructuredContent = true,

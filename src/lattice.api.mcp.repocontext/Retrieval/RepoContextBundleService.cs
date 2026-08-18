@@ -48,6 +48,7 @@ internal sealed class RepoContextBundleService
     private readonly IGrainFactory _grainFactory;
     private readonly Orleans.Serialization.Serializer _serializer;
     private readonly IRepoContextTokenCounter _tokenCounter;
+    private readonly IRepoContextUsageRecorder _usage;
 
     /// <summary>Creates the bundle service.</summary>
     /// <param name="search">The search service used to rank source for the task. Must not be <see langword="null"/>.</param>
@@ -56,6 +57,7 @@ internal sealed class RepoContextBundleService
     /// <param name="grainFactory">The grain factory used to hydrate file bodies and token counts. Must not be <see langword="null"/>.</param>
     /// <param name="serializer">The Orleans serializer used to decode stored records. Must not be <see langword="null"/>.</param>
     /// <param name="tokenCounter">The shared exact-BPE token counter used to measure and budget the bundle. Must not be <see langword="null"/>.</param>
+    /// <param name="usage">The recorder that measures the usage figures of each answered call. Must not be <see langword="null"/>.</param>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     public RepoContextBundleService(
         RepoContextSearchService search,
@@ -63,7 +65,8 @@ internal sealed class RepoContextBundleService
         RepoContextSessionStore sessions,
         IGrainFactory grainFactory,
         Orleans.Serialization.Serializer serializer,
-        IRepoContextTokenCounter tokenCounter)
+        IRepoContextTokenCounter tokenCounter,
+        IRepoContextUsageRecorder usage)
     {
         ArgumentNullException.ThrowIfNull(search);
         ArgumentNullException.ThrowIfNull(graph);
@@ -71,6 +74,7 @@ internal sealed class RepoContextBundleService
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(serializer);
         ArgumentNullException.ThrowIfNull(tokenCounter);
+        ArgumentNullException.ThrowIfNull(usage);
 
         _search = search;
         _graph = graph;
@@ -78,6 +82,7 @@ internal sealed class RepoContextBundleService
         _grainFactory = grainFactory;
         _serializer = serializer;
         _tokenCounter = tokenCounter;
+        _usage = usage;
     }
 
     /// <summary>
@@ -150,7 +155,7 @@ internal sealed class RepoContextBundleService
 
         if (pool.Count == 0)
         {
-            return new RepoContextContextResult
+            var empty = new RepoContextContextResult
             {
                 RepoId = repoId,
                 Task = task,
@@ -164,6 +169,10 @@ internal sealed class RepoContextBundleService
                 Session = sessionId,
                 Reused = NoReuse,
             };
+
+            // Side-effect-free recording: measure the answer, then return the exact same instance.
+            _usage.Record(RepoContextUsageFigures.ForContextBundle(empty));
+            return empty;
         }
 
         var levels = LevelsFor(detail);
@@ -201,7 +210,7 @@ internal sealed class RepoContextBundleService
         }
 
         var fitted = packed.Entries.Count > 0;
-        return new RepoContextContextResult
+        var result = new RepoContextContextResult
         {
             RepoId = repoId,
             Task = task,
@@ -218,6 +227,10 @@ internal sealed class RepoContextBundleService
             Session = sessionId,
             Reused = reused,
         };
+
+        // Side-effect-free recording: measure the answer, then return the exact same instance.
+        _usage.Record(RepoContextUsageFigures.ForContextBundle(result));
+        return result;
     }
 
     private static int ClampTop(int top)

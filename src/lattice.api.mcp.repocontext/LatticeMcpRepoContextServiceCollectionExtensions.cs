@@ -130,6 +130,14 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         // test harness can substitute it.
         services.TryAddSingleton<RepoContextSessionStore>();
 
+        // The usage-accounting recorder behind repocontext_stats. It records, per answered
+        // context call, the exact response tokens spent and a conservative estimate of the
+        // whole-file reads replaced, keeps a bounded in-memory window for the read-only stats
+        // tool, and emits the same figures as telemetry counters. TryAdd means a host or test
+        // harness can substitute it (for example with an in-memory capturing double).
+        services.TryAddSingleton<IRepoContextUsageRecorder>(
+            sp => new RepoContextUsageRecorder(sp.GetRequiredService<TimeProvider>()));
+
         // The read-only budgeted context-bundle adapter behind repocontext_context. It
         // composes the search and graph services with the shared token counter to pack a
         // ranked, explained bundle under a hard token ceiling. TryAdd means a host or
