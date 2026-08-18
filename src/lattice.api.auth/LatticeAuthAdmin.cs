@@ -155,6 +155,8 @@ internal sealed class LatticeAuthAdmin(
 
         await ValidateDirectoryPrincipalAsync(
             memberId, ToDirectoryPrincipalKind(memberKind), nameof(memberId), cancellationToken).ConfigureAwait(false);
+        await ValidateDirectoryPrincipalAsync(
+            groupId, DirectoryPrincipalKind.Group, nameof(groupId), cancellationToken).ConfigureAwait(false);
 
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {

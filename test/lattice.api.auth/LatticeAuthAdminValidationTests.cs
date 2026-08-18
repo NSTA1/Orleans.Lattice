@@ -9,8 +9,8 @@ namespace Orleans.Lattice.Api.Auth.Tests;
 /// Unit coverage for the fail-closed identity-directory validation the control
 /// facade applies on its membership-reference create paths
 /// (<see cref="ILatticeAuthAdmin.AddMemberAsync"/> and
-/// <see cref="ILatticeAuthAdmin.UpsertGroupAsync"/>) for issue #1269. Instantiates
-/// <see cref="LatticeAuthAdmin"/> directly over a configurable fake
+/// <see cref="ILatticeAuthAdmin.UpsertGroupAsync"/>) for issues #1269 and #1519.
+/// Instantiates <see cref="LatticeAuthAdmin"/> directly over a configurable fake
 /// <see cref="ILatticeIdentityDirectory"/> and a substitute membership directory,
 /// so no cluster is involved: it proves that when
 /// <see cref="LatticeIdentityDirectoryOptions.ValidationRequired"/> is set and a
@@ -104,12 +104,13 @@ public sealed class LatticeAuthAdminValidationTests
         var directory = new ConfigurableIdentityDirectory
         {
             [MemberId] = new DirectoryPrincipal(MemberId, "Alice", DirectoryPrincipalKind.User),
+            [GroupId] = new DirectoryPrincipal(GroupId, "Admins", DirectoryPrincipalKind.Group),
         };
         var (admin, membershipDirectory) = CreateAdmin(directory, validationRequired: true);
 
         await admin.AddMemberAsync(GroupId, MemberId, MembershipMemberKind.User);
 
-        Assert.That(directory.ResolveCallCount, Is.EqualTo(1));
+        Assert.That(directory.ResolveCallCount, Is.EqualTo(2), "both the member id and the target group id are validated");
         await membershipDirectory.Received(1)
             .AddMemberAsync(GroupId, MemberId, MembershipMemberKind.User, Arg.Any<CancellationToken>());
     }
@@ -120,6 +121,7 @@ public sealed class LatticeAuthAdminValidationTests
         var directory = new ConfigurableIdentityDirectory
         {
             ["nested-g"] = new DirectoryPrincipal("nested-g", "Nested", DirectoryPrincipalKind.Group),
+            [GroupId] = new DirectoryPrincipal(GroupId, "Admins", DirectoryPrincipalKind.Group),
         };
         var (admin, membershipDirectory) = CreateAdmin(directory, validationRequired: true);
 
@@ -127,6 +129,56 @@ public sealed class LatticeAuthAdminValidationTests
 
         await membershipDirectory.Received(1)
             .AddMemberAsync(GroupId, "nested-g", MembershipMemberKind.Group, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public void AddMemberAsync_rejects_an_unresolvable_group_when_validation_is_required()
+    {
+        // The member resolves, so validation reaches the target group id (issue #1519).
+        var directory = new ConfigurableIdentityDirectory
+        {
+            [MemberId] = new DirectoryPrincipal(MemberId, "Alice", DirectoryPrincipalKind.User),
+        };
+        var (admin, membershipDirectory) = CreateAdmin(directory, validationRequired: true);
+
+        var ex = Assert.ThrowsAsync<LatticeDirectoryValidationException>(
+            () => admin.AddMemberAsync(GroupId, MemberId, MembershipMemberKind.User));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.PrincipalId, Is.EqualTo(GroupId));
+            Assert.That(ex.ExpectedKind, Is.EqualTo(DirectoryPrincipalKind.Group));
+            Assert.That(ex.ResolvedKind, Is.Null, "an unresolvable id carries no resolved kind");
+        });
+
+        // Fail-closed: nothing is written once the target group fails validation.
+        membershipDirectory.DidNotReceiveWithAnyArgs()
+            .AddMemberAsync(default!, default!, default, default);
+    }
+
+    [Test]
+    public void AddMemberAsync_rejects_a_wrong_kind_group_when_validation_is_required()
+    {
+        var directory = new ConfigurableIdentityDirectory
+        {
+            [MemberId] = new DirectoryPrincipal(MemberId, "Alice", DirectoryPrincipalKind.User),
+            // The target group id resolves, but to a User where a Group was required.
+            [GroupId] = new DirectoryPrincipal(GroupId, "Bob", DirectoryPrincipalKind.User),
+        };
+        var (admin, membershipDirectory) = CreateAdmin(directory, validationRequired: true);
+
+        var ex = Assert.ThrowsAsync<LatticeDirectoryValidationException>(
+            () => admin.AddMemberAsync(GroupId, MemberId, MembershipMemberKind.User));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.PrincipalId, Is.EqualTo(GroupId));
+            Assert.That(ex.ExpectedKind, Is.EqualTo(DirectoryPrincipalKind.Group));
+            Assert.That(ex.ResolvedKind, Is.EqualTo(DirectoryPrincipalKind.User));
+        });
+
+        membershipDirectory.DidNotReceiveWithAnyArgs()
+            .AddMemberAsync(default!, default!, default, default);
     }
 
     [Test]
