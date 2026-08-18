@@ -101,6 +101,21 @@ var enableBackupControl = config.GetValue("Mcp:EnableBackupControl", false);
 // absent rather than surfacing an unreachable control plane.
 var enableReplicationControl = config.GetValue("Mcp:EnableReplicationControl", false);
 
+// The tree-administration control tool group (lattice_treeadmin_*). Co-hosted on
+// the silo gRPC endpoint (same address as State), so the endpoint defaults to the
+// State endpoint and needs no dedicated Bicep wiring; the MCP head dials one
+// endpoint for both ILatticeTreeAdmin and ILatticeSchemaControl. The lifecycle
+// and schema-control flags default ON so the reference estate exposes the full
+// tree-administration tool set (create / bulk-load / restore / reshard / resize /
+// snapshot / delete-recover-purge and schema mutation). Every mutating call is
+// still gated deny-by-default at the facade on the caller's Entra-resolved
+// subject, so only the seeded bootstrap administrator may drive them. Override
+// via Mcp:TreeAdminEndpoint / Mcp:EnableTreeAdminLifecycle /
+// Mcp:EnableTreeAdminSchemaControl to scope a deployment down.
+var treeAdminEndpoint = config["Mcp:TreeAdminEndpoint"] ?? stateEndpoint;
+var enableTreeAdminLifecycle = config.GetValue("Mcp:EnableTreeAdminLifecycle", true);
+var enableTreeAdminSchemaControl = config.GetValue("Mcp:EnableTreeAdminSchemaControl", true);
+
 // Streamable-HTTP session mode. This head is documented and deployed as a
 // STATELESS MCP server (see the file header): it fronts an active-active Front
 // Door origin group with no session affinity, so a follow-up request can land on
@@ -203,6 +218,7 @@ foreach (var regionSection in config.GetSection("Mcp:Regions").GetChildren())
         Data = RegionEndpoint(regionSection["DataEndpoint"]),
         Backup = RegionEndpoint(regionSection["BackupEndpoint"]),
         Replication = RegionEndpoint(regionSection["ReplicationEndpoint"]),
+        TreeAdmin = RegionEndpoint(regionSection["TreeAdminEndpoint"] ?? peerState),
     });
 }
 
@@ -237,10 +253,17 @@ builder.Services.AddLatticeMcpRemote(options =>
         options.Replication = new LatticeApiMcpRemoteEndpoint { Endpoint = replicationEndpoint, CallInvoker = OriginLockInvoker(replicationEndpoint) };
     }
 
+    // TreeAdmin is co-hosted on the silo gRPC endpoint and defaults to the State
+    // endpoint, so it is always wired (never null) - the MCP head dials it for
+    // both the tree-administration and schema-control services.
+    options.TreeAdmin = new LatticeApiMcpRemoteEndpoint { Endpoint = treeAdminEndpoint, CallInvoker = OriginLockInvoker(treeAdminEndpoint) };
+
     options.EnableDataWrites = enableDataWrites;
     options.EnableBackupControl = enableBackupControl;
     options.EnableReplicationControl = enableReplicationControl;
     options.EnableAuthAdministration = enableAuthAdministration;
+    options.EnableLifecycleControl = enableTreeAdminLifecycle;
+    options.EnableSchemaControl = enableTreeAdminSchemaControl;
     if (!string.IsNullOrWhiteSpace(administratorToken))
     {
         options.AdministratorCredential = new LatticeCredential(administratorToken, administratorScheme);

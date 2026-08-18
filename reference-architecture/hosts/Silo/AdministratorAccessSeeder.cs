@@ -50,16 +50,20 @@ internal sealed class AdministratorAccessSeeder(
     internal const string RuleIdPrefix = "ra-admin-full-access";
 
     /// <summary>
-    /// The union of every operation the six MCP facade groups require - the
+    /// The union of every operation the MCP facade groups require - the
     /// data-plane / lifecycle / backup / schema set
-    /// (<see cref="LatticeAuthOperations.All"/>) plus the two scopeless capability
+    /// (<see cref="LatticeAuthOperations.All"/>) plus the scopeless capability
     /// bits (<see cref="LatticeOperation.Telemetry"/> and
-    /// <see cref="LatticeOperation.Replication"/>) that <c>All</c> deliberately
-    /// excludes. Granting this lights up state, data, backup, auth, telemetry and
-    /// replication tools in MCP discovery.
+    /// <see cref="LatticeOperation.Replication"/>) and the irreversible
+    /// whole-tree <see cref="LatticeOperation.TreeLifecycle"/> capability that
+    /// <c>All</c> deliberately excludes. Granting this lights up state, data,
+    /// backup, auth, telemetry, replication and tree-administration tools in MCP
+    /// discovery, and gives the bootstrap administrator an explicit authored grant
+    /// for the lifecycle-gated tree-administration operations (drop / reshard /
+    /// resize) rather than relying on the bootstrap-admin call-time bypass alone.
     /// </summary>
     internal const LatticeOperation FullAccessOperations =
-        LatticeAuthOperations.All | LatticeOperation.Telemetry | LatticeOperation.Replication;
+        LatticeAuthOperations.All | LatticeOperation.Telemetry | LatticeOperation.Replication | LatticeOperation.TreeLifecycle;
 
     private const int MaxAttempts = 12;
     private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(5);
