@@ -375,10 +375,16 @@ internal sealed partial class BPlusLeafGrain
     /// </para>
     /// <list type="bullet">
     /// <item><description>
-    /// <b>Empty partition</b> (no cache key routes to it): nothing to lose, so
-    /// it releases any block and reports the real <c>(clock, checkpoint)</c>
-    /// frontier exactly as before - keeping WAL trim live for the ubiquitous
-    /// empty-partition pins a multi-partition leaf produces.
+    /// <b>Genuinely empty partition</b> (no cache key routes to it <em>and</em>
+    /// it has never durably checkpointed, so <c>checkpoint &lt; 0</c>): nothing
+    /// to lose, so it releases any block and reports the real
+    /// <c>(clock, checkpoint)</c> frontier exactly as before - keeping WAL trim
+    /// live for the ubiquitous empty-partition pins a multi-partition leaf
+    /// produces. The <c>checkpoint &lt; 0</c> guard is essential: emptiness is
+    /// read from the transient in-memory cache, which does not reflect durable
+    /// data before the cache is hydrated (a cold reactivation with no snapshot,
+    /// or after tombstone reaping / compaction), so a durably-checkpointed
+    /// partition is never released on the strength of a momentarily empty cache.
     /// </description></item>
     /// <item><description>
     /// <b>Data-bearing, not durably recoverable</b>: the partition holds live
@@ -404,22 +410,47 @@ internal sealed partial class BPlusLeafGrain
     {
         var checkpoint = GetCurrentCheckpointForPartition(partition);
 
-        // Empty partition: nothing to protect - report the real frontier and
-        // let WAL trim proceed (preserves #1490's empty-partition narrowness).
-        if (!partitionsWithLiveData[partition])
+        // Genuinely empty partition: it has applied NOTHING durably
+        // (checkpoint < 0) AND holds no live cache row, so there is no
+        // committed prefix to lose. Release any block and report the real
+        // frontier so the ubiquitous empty-partition pins keep WAL trim live
+        // (preserves #1490's empty-partition narrowness).
+        //
+        // The `checkpoint < 0` clause is load-bearing. Emptiness is decided
+        // from the transient per-activation in-memory cache
+        // (ComputePartitionsWithLiveData -> Cache.EnumerateRows), which does
+        // NOT reflect this leaf's durable data in the window between activation
+        // and cache hydration: a leaf can reactivate cold, find no snapshot to
+        // rehydrate from, and report/flush its durable pin while its cache is
+        // still empty even though the persisted projection checkpoint says the
+        // prefix [0, checkpoint] was durably applied (tombstone reaping and
+        // compaction can also empty the cache for a checkpointed partition
+        // while the WAL prefix still has to replay). Trusting that empty cache
+        // to RELEASE the block for a partition whose checkpoint is >= 0 is the
+        // "fall off the log" hole: it authorises the shared-shard WAL GC to
+        // trim a checkpointed, un-snapshotted prefix, after which the next cold
+        // rebuild replays from offset 0 over a WAL whose prefix is gone and the
+        // leaf comes up with its checkpoint below the WAL trim floor
+        // (LeafProjectionStaleException). A partition with a durable checkpoint
+        // must therefore be coverage-gated exactly like a cache-populated one,
+        // regardless of whether the cache momentarily shows it empty.
+        if (!partitionsWithLiveData[partition] && checkpoint < 0)
         {
             return (clock, checkpoint);
         }
 
-        // Data-bearing partition. Authorise trimming only as far as the
-        // checkpointed prefix is durably recoverable from a snapshot.
+        // Data-bearing partition (live cache rows) OR a durably-checkpointed
+        // partition whose in-memory cache is momentarily empty. Either way the
+        // checkpointed prefix's only durable copy - absent a snapshot - is the
+        // WAL, so authorise trimming only as far as a durable snapshot covers.
         var covered = DurableSnapshotCoverageForPartition(partition);
         var safeOffset = Math.Min(checkpoint, covered);
         if (safeOffset < 0)
         {
             // Never checkpointed (checkpoint < 0, #1490) OR checkpointed but
-            // uncovered (covered < 0, the residual): the whole WAL from offset
-            // 0 is the only durable copy - retain the Zero block pin.
+            // uncovered (covered < 0, the residual cold-restart prefix loss and
+            // the empty-cache misclassification): the whole WAL from offset 0
+            // is the only durable copy - retain the Zero block pin.
             return (HybridLogicalClock.Zero, -1L);
         }
 

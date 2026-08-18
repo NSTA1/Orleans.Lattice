@@ -29,10 +29,16 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// no restart). See the WAL GC uncheckpointed-pin durability incident.
 /// </para>
 /// <para>
-/// The fix: a partition whose current checkpoint offset is <c>&lt; 0</c> that
-/// still holds live data in this leaf's cache must retain its Zero block pin;
-/// only genuinely empty partitions release the block via a real
-/// <c>(clock, -1)</c> frontier.
+/// The fix: a partition whose checkpointed prefix has no durable copy other
+/// than the WAL must retain its Zero block pin - this covers a partition that
+/// still holds live cache data but never durably checkpointed
+/// (offset <c>&lt; 0</c>), AND a durably-checkpointed partition
+/// (offset <c>&gt;= 0</c>) whose in-memory cache is momentarily empty and
+/// whose prefix no snapshot covers (the empty-partition coverage-gate
+/// recurrence - emptiness read from the transient cache cannot license
+/// releasing a checkpointed partition). Only a genuinely empty partition that
+/// also never checkpointed releases the block via a real <c>(clock, -1)</c>
+/// frontier, keeping WAL trim live.
 /// </para>
 /// </summary>
 public partial class BPlusLeafGrainTests
@@ -134,8 +140,20 @@ public partial class BPlusLeafGrainTests
             $"empty partition {emptyPartition} must release its block so WAL trim proceeds");
         Assert.That(reports[emptyPartition].CheckpointOffset, Is.EqualTo(-1L));
 
-        // Sanity: the checkpointed partition reports its real advanced frontier.
-        Assert.That(reports[0].Frontier, Is.EqualTo(clock));
-        Assert.That(reports[0].CheckpointOffset, Is.EqualTo(1L));
+        // A checkpointed partition whose cache is momentarily empty must NOT
+        // release its block without snapshot coverage. Partition 0 here has a
+        // durable checkpoint (offset 1) but no cache row and no covering
+        // snapshot: emptiness is read from the transient in-memory cache, which
+        // cannot prove the partition is genuinely dataless during the
+        // pre-hydration window (a cold reactivation mid-replay, or after
+        // tombstone reaping/compaction). Releasing it here is the "fall off the
+        // log" recurrence - it would authorise the offset floor to trim the
+        // un-snapshotted checkpointed prefix. So it retains the Zero block pin;
+        // the block lifts once a snapshot covers partition 0's offset (snapshot
+        // capture stamps every partition's checkpoint as covered, dataless or
+        // not - see CaptureSnapshotAsync). Genuinely empty partitions (never
+        // checkpointed, offset < 0, e.g. `emptyPartition` above) still release.
+        Assert.That(reports[0].Frontier, Is.EqualTo(HybridLogicalClock.Zero));
+        Assert.That(reports[0].CheckpointOffset, Is.EqualTo(-1L));
     }
 }
