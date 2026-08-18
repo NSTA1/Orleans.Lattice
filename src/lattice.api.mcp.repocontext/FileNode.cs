@@ -95,6 +95,18 @@ internal sealed record FileNode
     public BoundedRegister ContentProcessed { get; init; } = new();
 
     /// <summary>
+    /// Last-writer-wins count of BPE tokens in the file's decoded body text, under
+    /// the configured tokenizer profile (integer-encoded scalar). It is computed once
+    /// in <see cref="RepoContextContentReconciler"/> where the body is already in hand
+    /// and stored so budgets and reported counts are read here, not recomputed per
+    /// call. This register is additive and migration-safe: a node written before it
+    /// existed simply carries the empty default until the content back-fill recomputes
+    /// it, exactly like <see cref="ContentProcessed"/>.
+    /// </summary>
+    [Id(11)]
+    public BoundedRegister TokenCount { get; init; } = new();
+
+    /// <summary>
     /// Lattice merge of two replicas of the same file node. Identity is preserved
     /// from <paramref name="left"/>; every mutable field is folded through its
     /// CRDT join, so the result is commutative, associative, and idempotent.
@@ -118,6 +130,7 @@ internal sealed record FileNode
             DeclaredSymbols = BoundedRegister.Merge(left.DeclaredSymbols, right.DeclaredSymbols),
             SymbolsProcessed = BoundedRegister.Merge(left.SymbolsProcessed, right.SymbolsProcessed),
             ContentProcessed = BoundedRegister.Merge(left.ContentProcessed, right.ContentProcessed),
+            TokenCount = BoundedRegister.Merge(left.TokenCount, right.TokenCount),
         };
     }
 }

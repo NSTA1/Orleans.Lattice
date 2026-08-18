@@ -134,6 +134,13 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         services.TryAddSingleton(RepoContextIndexingOptions.FromEnvironment());
         services.TryAddSingleton<RepoContextStore>();
 
+        // The shared BPE token counter: constructs its tiktoken tokenizer once from the
+        // configured tokenizer profile and is reused by the reconcile path (per-file
+        // token counts) and the retrieval surface (token budgets). TryAdd means a host
+        // or test harness that registers its own counter first wins.
+        services.TryAddSingleton<IRepoContextTokenCounter>(sp =>
+            new TiktokenRepoContextTokenCounter(sp.GetRequiredService<RepoContextIndexingOptions>()));
+
         // The background indexing runner runs each onboarding pass off the request
         // thread, bound to the host lifetime, so a client disconnect never aborts an
         // index. The reminder-anchored job grain is auto-discovered by Orleans from

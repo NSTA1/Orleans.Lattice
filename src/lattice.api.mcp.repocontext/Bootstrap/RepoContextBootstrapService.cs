@@ -387,7 +387,7 @@ internal sealed class RepoContextBootstrapService
                 var contentProcessedPaths = contentResult.ProcessedPaths;
 
                 await ApplyPlanAsync(
-                    tree, repoId, plan, backfill, declaredEncoded, symbolProcessedPaths, contentProcessedPaths, storedMeta, progress, cancellationToken)
+                    tree, repoId, plan, backfill, declaredEncoded, symbolProcessedPaths, contentProcessedPaths, contentResult.TokenCountsByPath, storedMeta, progress, cancellationToken)
                     .ConfigureAwait(false);
             }
             else
@@ -532,18 +532,20 @@ internal sealed class RepoContextBootstrapService
 
     /// <summary>
     /// Selects the content back-fill candidates from the content-unchanged set: text
-    /// files whose stored node was never stamped as content-processed. These are
-    /// files indexed before the content projection existed (or a file a prior run
-    /// stopped short of processing), so projecting them lets a pre-existing index
-    /// converge on a complete content projection without re-reading the files that
-    /// already have one. Every walked file is a text file (the walk excludes binary),
-    /// so - unlike the symbol back-fill - there is no language filter. Drawing only
-    /// from the pure-unchanged set guarantees a back-filled node is written exactly
-    /// once per pass.
+    /// files whose stored node was never stamped as content-processed, plus files
+    /// projected before the token-count register existed (their stored token count is
+    /// negative). These are files indexed before the content projection - or the token
+    /// count - existed (or a file a prior run stopped short of processing), so
+    /// projecting them lets a pre-existing index converge on a complete content
+    /// projection and complete token counts without re-reading the files that already
+    /// have both. Every walked file is a text file (the walk excludes binary), so -
+    /// unlike the symbol back-fill - there is no language filter. Drawing only from the
+    /// pure-unchanged set guarantees a back-filled node is written exactly once per
+    /// pass.
     /// </summary>
     /// <param name="unchanged">The content-unchanged files from the plan.</param>
     /// <param name="storedMeta">The stored per-file metadata, consulted for the
-    /// content-processed marker.</param>
+    /// content-processed marker and the stored token count.</param>
     /// <returns>The unchanged files eligible for content back-fill.</returns>
     private static List<RepoFileEntry> SelectContentBackfill(
         IReadOnlyList<RepoFileEntry> unchanged, IReadOnlyDictionary<string, StoredFileMeta> storedMeta)
@@ -551,7 +553,14 @@ internal sealed class RepoContextBootstrapService
         var backfill = new List<RepoFileEntry>();
         foreach (var entry in unchanged)
         {
-            if (!StoredContentProcessed(storedMeta, entry.RelativePath))
+            // Select a file whose content was never projected, and also one that was
+            // projected before the token-count register existed (its stored count is
+            // negative): re-reading it now computes and stamps the missing count, so a
+            // pre-existing index converges on complete token counts. A file already
+            // carrying both markers is skipped, so the migration re-reads each file at
+            // most once.
+            if (!StoredContentProcessed(storedMeta, entry.RelativePath)
+                || StoredTokenCount(storedMeta, entry.RelativePath) is null)
             {
                 backfill.Add(entry);
             }
@@ -727,7 +736,8 @@ internal sealed class RepoContextBootstrapService
                     RepoContextValues.ReadHlcWallTicks(node.Digest) ?? 0,
                     DeclaredSymbolNames.Decode(RepoContextValues.ReadString(node.DeclaredSymbols)),
                     RepoContextValues.ReadString(node.SymbolsProcessed) is not null,
-                    RepoContextValues.ReadString(node.ContentProcessed) is not null);
+                    RepoContextValues.ReadString(node.ContentProcessed) is not null,
+                    RepoContextValues.ReadInt64(node.TokenCount) ?? -1);
             }
         }
 
@@ -742,6 +752,7 @@ internal sealed class RepoContextBootstrapService
         IReadOnlyDictionary<string, string> declaredEncoded,
         IReadOnlySet<string> symbolProcessedPaths,
         IReadOnlySet<string> contentProcessedPaths,
+        IReadOnlyDictionary<string, int> tokenCountsByPath,
         IReadOnlyDictionary<string, StoredFileMeta> storedMeta,
         IRepoIndexProgressSink? progress,
         CancellationToken cancellationToken)
@@ -766,7 +777,9 @@ internal sealed class RepoContextBootstrapService
                 RepoContextKeys.File(repoId, entry.RelativePath),
                 BuildFileNode(repoId, entry, DeclaredFor(declaredEncoded, entry),
                     symbolProcessedPaths.Contains(entry.RelativePath),
-                    contentProcessedPaths.Contains(entry.RelativePath), ingestToken, clock)));
+                    contentProcessedPaths.Contains(entry.RelativePath),
+                    ResolveTokenCount(entry.RelativePath, contentProcessedPaths.Contains(entry.RelativePath), tokenCountsByPath, storedMeta),
+                    ingestToken, clock)));
         }
 
         foreach (var entry in plan.Updated)
@@ -776,7 +789,9 @@ internal sealed class RepoContextBootstrapService
                 RepoContextKeys.File(repoId, entry.RelativePath),
                 BuildFileNode(repoId, entry, DeclaredFor(declaredEncoded, entry),
                     symbolProcessedPaths.Contains(entry.RelativePath),
-                    contentProcessedPaths.Contains(entry.RelativePath), ingestToken, clock)));
+                    contentProcessedPaths.Contains(entry.RelativePath),
+                    ResolveTokenCount(entry.RelativePath, contentProcessedPaths.Contains(entry.RelativePath), tokenCountsByPath, storedMeta),
+                    ingestToken, clock)));
         }
 
         // Metadata-changed files are content-identical, so rewriting their node with
@@ -791,7 +806,9 @@ internal sealed class RepoContextBootstrapService
                 RepoContextKeys.File(repoId, entry.RelativePath),
                 BuildFileNode(repoId, entry, DeclaredFor(declaredEncoded, entry),
                     StoredProcessed(storedMeta, entry.RelativePath),
-                    StoredContentProcessed(storedMeta, entry.RelativePath), ingestToken, clock)));
+                    StoredContentProcessed(storedMeta, entry.RelativePath),
+                    ResolveTokenCount(entry.RelativePath, false, tokenCountsByPath, storedMeta),
+                    ingestToken, clock)));
         }
 
         // Back-fill files are content-unchanged, so rewriting their node stamps
@@ -815,7 +832,9 @@ internal sealed class RepoContextBootstrapService
                 RepoContextKeys.File(repoId, path),
                 BuildFileNode(repoId, entry, DeclaredFor(declaredEncoded, entry),
                     symbolNow || StoredProcessed(storedMeta, path),
-                    contentNow || StoredContentProcessed(storedMeta, path), ingestToken, clock)));
+                    contentNow || StoredContentProcessed(storedMeta, path),
+                    ResolveTokenCount(path, contentNow, tokenCountsByPath, storedMeta),
+                    ingestToken, clock)));
         }
 
         var deletes = new List<string>(plan.RemovedPaths.Count);
@@ -858,7 +877,7 @@ internal sealed class RepoContextBootstrapService
     }
 
     private byte[] BuildFileNode(
-        string repoId, RepoFileEntry entry, string? declaredEncoded, bool symbolsProcessed, bool contentProcessed, string ingestToken, HybridLogicalClock clock)
+        string repoId, RepoFileEntry entry, string? declaredEncoded, bool symbolsProcessed, bool contentProcessed, long? tokenCount, string ingestToken, HybridLogicalClock clock)
     {
         var node = new FileNode
         {
@@ -891,6 +910,15 @@ internal sealed class RepoContextBootstrapService
             node = node with { ContentProcessed = RepoContextValues.Lww("1", clock) };
         }
 
+        // Stamp the per-file token count - either freshly computed this pass or carried
+        // forward from the stored node - so a full-node rewrite never drops it. A null
+        // count (a brand-new file the reconcile could not read, or a legacy node with
+        // none stored) leaves the register empty for the back-fill to fill later.
+        if (tokenCount is { } tokens)
+        {
+            node = node with { TokenCount = RepoContextValues.Lww(tokens, clock) };
+        }
+
         return _fileNodeSerializer.SerializeToArray(node);
     }
 
@@ -911,6 +939,38 @@ internal sealed class RepoContextBootstrapService
     /// </summary>
     private static bool StoredContentProcessed(IReadOnlyDictionary<string, StoredFileMeta> storedMeta, string path) =>
         storedMeta.TryGetValue(path, out var meta) && meta.ContentProcessed;
+
+    /// <summary>
+    /// The token count stored for <paramref name="path"/>'s node, or
+    /// <see langword="null"/> when none was recorded (a node written before the
+    /// token-count register existed, whose stored count is negative). Used both to
+    /// re-select such a node for the content back-fill and to carry its count forward
+    /// when a node is rewritten without re-reading the file.
+    /// </summary>
+    private static long? StoredTokenCount(IReadOnlyDictionary<string, StoredFileMeta> storedMeta, string path) =>
+        storedMeta.TryGetValue(path, out var meta) && meta.TokenCount >= 0 ? meta.TokenCount : null;
+
+    /// <summary>
+    /// Resolves the token count to stamp on a rewritten file node: the count freshly
+    /// computed by the content reconcile this pass when the file was content-processed,
+    /// otherwise the count carried forward from the stored node (which is
+    /// <see langword="null"/> for a legacy or brand-new node with none stored, leaving
+    /// the register empty for a later back-fill).
+    /// </summary>
+    /// <param name="path">The repository-relative file path.</param>
+    /// <param name="contentProcessedThisPass">Whether the content reconcile projected
+    /// this file this pass (so a fresh count exists for it).</param>
+    /// <param name="freshCounts">The per-path token counts computed this pass.</param>
+    /// <param name="storedMeta">The stored per-file metadata, consulted for a
+    /// carry-forward count.</param>
+    private static long? ResolveTokenCount(
+        string path,
+        bool contentProcessedThisPass,
+        IReadOnlyDictionary<string, int> freshCounts,
+        IReadOnlyDictionary<string, StoredFileMeta> storedMeta) =>
+        contentProcessedThisPass && freshCounts.TryGetValue(path, out var fresh)
+            ? fresh
+            : StoredTokenCount(storedMeta, path);
 
     /// <summary>
     /// Resolves the encoded declared-symbol string a file node should carry, or

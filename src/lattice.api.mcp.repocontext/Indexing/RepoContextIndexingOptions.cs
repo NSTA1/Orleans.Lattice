@@ -36,6 +36,15 @@ internal sealed class RepoContextIndexingOptions
     /// <summary>Environment variable overriding <see cref="VectorCacheTtl"/> (in seconds).</summary>
     public const string VectorCacheTtlSecondsKey = "LATTICE_VECTOR_CACHE_TTL_SECONDS";
 
+    /// <summary>Environment variable overriding <see cref="TokenizerProfile"/>.</summary>
+    public const string TokenizerProfileKey = "LATTICE_REPOCONTEXT_TOKENIZER";
+
+    /// <summary>The <see cref="TokenizerProfile"/> value selecting the OpenAI o200k_base BPE encoding (the default).</summary>
+    public const string TokenizerProfileO200k = "o200k";
+
+    /// <summary>The <see cref="TokenizerProfile"/> value selecting the OpenAI cl100k_base BPE encoding.</summary>
+    public const string TokenizerProfileCl100k = "cl100k";
+
     /// <summary>The self-index grain tick cadence; each tick does at most one unit of work.</summary>
     public TimeSpan TickInterval { get; init; } = TimeSpan.FromSeconds(15);
 
@@ -70,6 +79,15 @@ internal sealed class RepoContextIndexingOptions
     public TimeSpan VectorCacheTtl { get; init; } = TimeSpan.FromSeconds(30);
 
     /// <summary>
+    /// The BPE tokenizer profile the token counter uses to measure per-file token
+    /// counts: <see cref="TokenizerProfileO200k"/> (the default, OpenAI o200k_base) or
+    /// <see cref="TokenizerProfileCl100k"/> (OpenAI cl100k_base). Resolved from
+    /// <see cref="TokenizerProfileKey"/>; an absent or unrecognised value falls back
+    /// to the default profile (fail-closed).
+    /// </summary>
+    public string TokenizerProfile { get; init; } = TokenizerProfileO200k;
+
+    /// <summary>
     /// Resolves the options from environment variables, falling back to the defaults (the
     /// original behaviour) for any variable that is absent or malformed.
     /// </summary>
@@ -84,6 +102,25 @@ internal sealed class RepoContextIndexingOptions
             ReconcileIntervalJitter = ReadSeconds(ReconcileJitterSecondsKey, defaults.ReconcileIntervalJitter),
             FullWalkInterval = ReadSeconds(FullWalkIntervalSecondsKey, defaults.FullWalkInterval),
             VectorCacheTtl = ReadSeconds(VectorCacheTtlSecondsKey, defaults.VectorCacheTtl),
+            TokenizerProfile = ReadTokenizerProfile(TokenizerProfileKey, defaults.TokenizerProfile),
+        };
+    }
+
+    private static string ReadTokenizerProfile(string key, string fallback)
+    {
+        var raw = Environment.GetEnvironmentVariable(key);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return fallback;
+        }
+
+        // Fail closed on any unrecognised value: only the two supported profiles are
+        // honoured; anything else falls back to the default.
+        return raw.Trim().ToLowerInvariant() switch
+        {
+            TokenizerProfileO200k => TokenizerProfileO200k,
+            TokenizerProfileCl100k => TokenizerProfileCl100k,
+            _ => fallback,
         };
     }
 

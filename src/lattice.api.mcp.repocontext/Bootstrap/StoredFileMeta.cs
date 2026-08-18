@@ -40,6 +40,11 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// body text has already been projected into the content tree. False for a node
 /// written before the content projection existed, which is what makes the background
 /// content back-fill pick it up.</param>
+/// <param name="TokenCount">The stored BPE token count from the file node's
+/// <see cref="FileNode.TokenCount"/> register, or a negative value when none was
+/// recorded (a node written before the register existed). A negative value makes the
+/// content back-fill re-select the file so its token count is computed, and is what a
+/// carry-forward rewrite treats as "no count to preserve".</param>
 internal readonly record struct StoredFileMeta(
     string Digest,
     string Language,
@@ -47,4 +52,5 @@ internal readonly record struct StoredFileMeta(
     long IngestWallTicks,
     IReadOnlyList<string> DeclaredSymbols,
     bool SymbolsProcessed = false,
-    bool ContentProcessed = false);
+    bool ContentProcessed = false,
+    long TokenCount = -1);
