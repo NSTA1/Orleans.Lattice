@@ -406,6 +406,123 @@ internal static class RepoContextToolHandlers
     }
 
     /// <summary>
+    /// Builds the structural outline of one indexed file - its declared symbols with
+    /// kind, signature, and line span, plus the token cost of reading the whole file -
+    /// so an agent can grasp a file's shape and budget a full read without fetching its
+    /// body. A pure read over stored records; it never touches disk.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the graph service.</param>
+    /// <param name="repoId">The repository the file belongs to.</param>
+    /// <param name="path">The repository-relative file path to outline.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    /// <returns>The file's outline, or an <c>exists=false</c> result when no node is stored.</returns>
+    /// <exception cref="McpException">The repository id or path is missing.</exception>
+    public static Task<RepoContextOutlineResult> OutlineAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The repository identifier the file belongs to.")]
+        string repoId,
+        [Description("The repository-relative file path to outline, for example 'src/foo/Bar.cs'.")]
+        string path,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(repoId))
+        {
+            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+        }
+
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            throw new McpException("The 'path' parameter is required and must be a non-empty file path.");
+        }
+
+        return ResolveGraphService(context).OutlineAsync(repoId, path, cancellationToken);
+    }
+
+    /// <summary>
+    /// Reports the drift between the stored index and the current workspace - the files
+    /// added, updated, and removed by content digest, without git - plus the indexed
+    /// files that depend on the changed ones. The workspace is read only through the
+    /// fail-closed workspace guard, so a caller-supplied path can never escape the
+    /// mounted workspace.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the graph service.</param>
+    /// <param name="repoId">The repository whose index is compared.</param>
+    /// <param name="path">The workspace path to compare against the index.</param>
+    /// <param name="cancellationToken">Cancels the walk and reads.</param>
+    /// <returns>The added, updated, removed, and dependent file lists.</returns>
+    /// <exception cref="McpException">The repository id or path is missing, or the path
+    /// resolves outside the workspace or is not an existing directory.</exception>
+    public static async Task<RepoContextChangedResult> ChangedAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The repository identifier whose stored index is compared.")]
+        string repoId,
+        [Description("The workspace path to walk and compare against the stored index. Resolved through the mounted workspace boundary.")]
+        string path,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(repoId))
+        {
+            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+        }
+
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            throw new McpException("The 'path' parameter is required and must be a non-empty workspace path.");
+        }
+
+        try
+        {
+            return await ResolveGraphService(context).ChangedAsync(repoId, path, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (RepoContextWorkspaceViolationException ex)
+        {
+            throw new McpException(ex.Message);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new McpException(ex.Message);
+        }
+        catch (DirectoryNotFoundException ex)
+        {
+            throw new McpException(ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Resolves the structural neighbourhood of one file: the type-names it references
+    /// (outbound imports), the indexed symbols that reference its declarations (inbound
+    /// dependents), and the test types that cover them. A pure read over stored records;
+    /// it never touches disk.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the graph service.</param>
+    /// <param name="repoId">The repository the file belongs to.</param>
+    /// <param name="path">The repository-relative file path whose neighbourhood to resolve.</param>
+    /// <param name="cancellationToken">Cancels the reads.</param>
+    /// <returns>The related-neighbourhood result, or an <c>exists=false</c> result when no node is stored.</returns>
+    /// <exception cref="McpException">The repository id or path is missing.</exception>
+    public static Task<RepoContextRelatedResult> RelatedAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The repository identifier the file belongs to.")]
+        string repoId,
+        [Description("The repository-relative file path whose related neighbourhood to resolve, for example 'src/foo/Bar.cs'.")]
+        string path,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(repoId))
+        {
+            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+        }
+
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            throw new McpException("The 'path' parameter is required and must be a non-empty file path.");
+        }
+
+        return ResolveGraphService(context).RelatedAsync(repoId, path, cancellationToken);
+    }
+
+    /// <summary>
     /// Registers a repository under the mounted workspace and starts an
     /// asynchronous indexing job for it: it resolves the requested path against the
     /// workspace boundary, then hands a durable job to the background runner that
@@ -649,5 +766,19 @@ internal static class RepoContextToolHandlers
             ?? throw new InvalidOperationException(
                 "The MCP request has no service provider; the repository-context search tool cannot resolve its service.");
         return services.GetRequiredService<RepoContextSearchService>();
+    }
+
+    /// <summary>
+    /// Resolves the <see cref="RepoContextGraphService"/> from the MCP request's
+    /// service provider, failing with a clear message when the provider is absent.
+    /// </summary>
+    /// <param name="context">The MCP request context.</param>
+    /// <returns>The resolved graph service.</returns>
+    private static RepoContextGraphService ResolveGraphService(RequestContext<CallToolRequestParams> context)
+    {
+        var services = context.Services
+            ?? throw new InvalidOperationException(
+                "The MCP request has no service provider; the repository-context graph tool cannot resolve its service.");
+        return services.GetRequiredService<RepoContextGraphService>();
     }
 }

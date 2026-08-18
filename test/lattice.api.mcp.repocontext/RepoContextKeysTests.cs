@@ -39,6 +39,26 @@ public sealed class RepoContextKeysTests
             Is.EqualTo("repo/acme/mem/decisions/0001"));
 
     [Test]
+    public void CrossReference_builds_the_key_from_a_simple_name()
+        => Assert.That(RepoContextKeys.CrossReference("acme", "Widget"),
+            Is.EqualTo("repo/acme/xref/Widget"));
+
+    [Test]
+    public void CrossReferencePrefix_is_the_scan_boundary_for_every_cross_reference()
+        => Assert.That(RepoContextKeys.CrossReferencePrefix("acme"),
+            Is.EqualTo("repo/acme/xref/"));
+
+    [Test]
+    public void CrossReference_keys_fall_under_their_prefix()
+        => Assert.That(RepoContextKeys.CrossReference("acme", "Widget"),
+            Does.StartWith(RepoContextKeys.CrossReferencePrefix("acme")));
+
+    [Test]
+    public void CrossReference_null_name_throws()
+        => Assert.That(() => RepoContextKeys.CrossReference("acme", null!),
+            Throws.InstanceOf<ArgumentNullException>());
+
+    [Test]
     public void Repo_round_trips_through_TryParse()
     {
         var key = RepoContextKeys.Repo("acme");

@@ -17,8 +17,10 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// In the default single-repository mode the group contributes the always-on
 /// read-only tools (<c>repocontext_health</c>, <c>repocontext_recall</c>,
 /// <c>repocontext_scan</c>, <c>repocontext_list_topics</c>,
-/// <c>repocontext_search</c>, <c>repocontext_index_status</c>, and
-/// <c>repocontext_neighbors</c>) and - when the
+/// <c>repocontext_search</c>, <c>repocontext_index_status</c>,
+/// <c>repocontext_neighbors</c>, and the structural-graph trio
+/// <c>repocontext_outline</c>, <c>repocontext_changed</c>, and
+/// <c>repocontext_related</c>) and - when the
 /// host opts writes in - the mutating onboarding tool <c>repocontext_bootstrap</c>
 /// together with <c>repocontext_remember</c>, <c>repocontext_update</c>, and
 /// <c>repocontext_forget</c>. In workspace mode the read-only
@@ -58,7 +60,7 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
     /// tools replace the single-repository onboarding tool.</param>
     public RepoContextToolGroup(bool enableWrites = false, bool workspaceMode = false)
     {
-        var capacity = 7
+        var capacity = 10
             + (workspaceMode ? 1 : 0)
             + (enableWrites ? (workspaceMode ? 5 : 4) : 0);
         var tools = new List<McpServerTool>(capacity)
@@ -85,6 +87,9 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
             BuildSearchTool(),
             BuildIndexStatusTool(),
             BuildNeighborsTool(),
+            BuildOutlineTool(),
+            BuildChangedTool(),
+            BuildRelatedTool(),
         };
 
         if (workspaceMode)
@@ -244,6 +249,73 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     + "entry has its link staleness evaluated ('stale' / 'staleLinks'), as 'repocontext_recall' "
                     + "does, so the walk surfaces which linked concepts point at drifted code. Use it to explore "
                     + "the curated concept graph an agent has captured across sessions. Read-only.",
+                ReadOnly = true,
+                Destructive = false,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildOutlineTool()
+        => McpServerTool.Create(
+            RepoContextToolHandlers.OutlineAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "repocontext_outline",
+                Title = "Outline a file's declared symbols",
+                Description =
+                    "Returns the structural skeleton of one indexed file without reading its body: each symbol "
+                    + "the file declares (its kind, signature, and 1-based start/end line span), ordered by "
+                    + "position, plus the token cost of reading the whole file under the configured tokenizer "
+                    + "profile. It is the cheapest way to grasp a file's shape and decide whether a full read is "
+                    + "worth the tokens - prefer it over fetching the file when you only need to know what the "
+                    + "file contains and where. The token count is read from the indexed per-file count when "
+                    + "present and computed from the stored content projection otherwise; it is reported as null "
+                    + "only when the file was never content-processed. A path with no stored file node returns "
+                    + "'exists=false' so an absent file is distinguishable from an empty one. This is a pure read "
+                    + "over stored records and never touches the workspace on disk. Read-only.",
+                ReadOnly = true,
+                Destructive = false,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildChangedTool()
+        => McpServerTool.Create(
+            RepoContextToolHandlers.ChangedAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "repocontext_changed",
+                Title = "Report workspace drift from the index",
+                Description =
+                    "Reports how the current workspace has drifted from the stored index - the files added, "
+                    + "updated, and removed - by comparing each file's content digest against the indexed digest, "
+                    + "without invoking git, so it works in any checkout regardless of version-control state. It "
+                    + "also lists the indexed files that depend on the changed ones (the reverse-reference impact "
+                    + "set), so an agent can see the blast radius of a set of edits before re-indexing. The "
+                    + "workspace is walked only through the fail-closed workspace boundary, so a supplied path "
+                    + "that resolves outside the mounted workspace is refused. Use it to find what an index needs "
+                    + "to catch up on, or to scope a review to what actually moved. Read-only.",
+                ReadOnly = true,
+                Destructive = false,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildRelatedTool()
+        => McpServerTool.Create(
+            RepoContextToolHandlers.RelatedAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "repocontext_related",
+                Title = "Find a file's structural neighbours",
+                Description =
+                    "Resolves the structural neighbourhood of one file so an agent can navigate the code graph "
+                    + "without full-file reads: the type-names the file references (its outbound imports), the "
+                    + "indexed symbols that reference the file's declarations (its inbound dependents, resolved to "
+                    + "the files that declare them), and the test types that cover it (recorded from the "
+                    + "'{Name}Tests' / '{Name}Test' naming convention). Dependents and tests are maintained "
+                    + "incrementally from a reverse cross-reference projection, so the lookup is a bounded read "
+                    + "rather than a whole-repository scan. Edges are keyed by simple (unqualified) type-name, a "
+                    + "syntactic approximation: two distinct types sharing a simple name are not disambiguated. A "
+                    + "path with no stored file node returns 'exists=false'. This is a pure read over stored "
+                    + "records and never touches the workspace on disk. Read-only.",
                 ReadOnly = true,
                 Destructive = false,
                 UseStructuredContent = true,

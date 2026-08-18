@@ -117,6 +117,13 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         services.TryAddSingleton<RepoContextBootstrapService>();
         services.TryAddSingleton(TimeProvider.System);
 
+        // The read-only structural-graph adapter behind the outline / changed / related
+        // tools. It is a pure projection over the file, symbol, content, and reverse
+        // cross-reference records the reconcilers maintain, and reaches the workspace
+        // (for changed) only through the fail-closed RepoContextWorkspaceGuard. TryAdd
+        // means a host or test harness can substitute it.
+        services.TryAddSingleton<RepoContextGraphService>();
+
         // The symbol-structural reconcile seam: a language-dispatching extractor
         // (only C#/Roslyn is registered today; other languages fall through to no
         // output) and the reconciler that upserts and prunes per-symbol records as

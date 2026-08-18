@@ -25,4 +25,21 @@ internal readonly record struct ExtractedSymbol(
     int StartLine,
     int EndLine,
     string Signature,
-    string BodyDigest);
+    string BodyDigest)
+{
+    /// <summary>
+    /// The simple (unqualified) type-names this symbol references syntactically -
+    /// its base types, and the types named in its members' signatures and bodies
+    /// (parameter, return, field, and property types; generic arguments; object
+    /// creations; <c>typeof</c>/cast targets). Populated only for type-level
+    /// symbols; every other kind carries the empty list. Resolution is purely
+    /// syntactic (no semantic model), so a name is the identifier as written, not a
+    /// fully-qualified symbol - two distinct types sharing a simple name are
+    /// therefore indistinguishable here. The reconciler folds these into the
+    /// symbol record's add-wins reference set and the reverse cross-reference index.
+    /// Never <see langword="null"/> for an extractor-produced value; a
+    /// <c>default</c> struct carries <see langword="null"/>, so readers treat null as
+    /// empty.
+    /// </summary>
+    public IReadOnlyList<string> ReferencedNames { get; init; } = [];
+}

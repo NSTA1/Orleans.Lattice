@@ -75,6 +75,22 @@ public sealed class RepoContextSymbolReconcilerTests
             .Select(e => Encoding.UTF8.GetString(e))
             .ToHashSet(StringComparer.Ordinal);
 
+    private async Task<CrossReferenceNode?> ReadXrefAsync(RepoContextMcpHarness harness, string simpleName)
+    {
+        var tree = harness.GrainFactory.GetGrain<ILattice>(RepoContextTrees.CrossReference);
+        var bytes = await tree.GetAsync(RepoContextKeys.CrossReference(RepoId, simpleName), Ct);
+        if (bytes is null)
+        {
+            return null;
+        }
+
+        return harness.Services.GetRequiredService<Serializer<CrossReferenceNode>>().Deserialize(bytes);
+    }
+
+    private static IReadOnlySet<string> Decode(OrSet set)
+        => set.Elements().Select(e => Encoding.UTF8.GetString(e)).ToHashSet(StringComparer.Ordinal);
+
+
     [Test]
     public async Task Added_file_captures_its_symbols()
     {
@@ -275,5 +291,112 @@ public sealed class RepoContextSymbolReconcilerTests
                 "a supported file with zero symbols is still recorded as processed");
             Assert.That(result.DeclaredByPath["src/Empty.cs"], Is.Empty);
         });
+    }
+
+    [Test]
+    public async Task Reconcile_records_an_inbound_referrer_edge_for_a_referenced_type()
+    {
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+
+        var a = WriteFile("src/A.cs", "namespace N; public class A { public B Dep { get; set; } }");
+        var b = WriteFile("src/B.cs", "namespace N; public class B { }");
+
+        await Reconciler(harness).ReconcileAsync(
+            RepoId, _repoRoot, added: [a, b], updated: [], removedPaths: [], backfill: [],
+            storedMeta: new Dictionary<string, StoredFileMeta>(), Ct);
+
+        var typeA = await ReadSymbolAsync(harness, "N.A");
+        var xrefB = await ReadXrefAsync(harness, "B");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(typeA, Is.Not.Null);
+            Assert.That(Decode(typeA!.References), Does.Contain("B"),
+                "the referencing type stores its outbound reference by simple name");
+            Assert.That(xrefB, Is.Not.Null, "the referenced type gains a cross-reference node");
+            Assert.That(Decode(xrefB!.Referrers), Does.Contain("N.A"),
+                "the reverse index records the referrer's fully-qualified name");
+        });
+    }
+
+    [Test]
+    public async Task Reconcile_records_a_test_linkage_edge_by_naming_convention()
+    {
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+
+        var widget = WriteFile("src/Widget.cs", "namespace N; public class Widget { }");
+        var tests = WriteFile("test/WidgetTests.cs", "namespace N; public class WidgetTests { }");
+
+        await Reconciler(harness).ReconcileAsync(
+            RepoId, _repoRoot, added: [widget, tests], updated: [], removedPaths: [], backfill: [],
+            storedMeta: new Dictionary<string, StoredFileMeta>(), Ct);
+
+        var xrefWidget = await ReadXrefAsync(harness, "Widget");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(xrefWidget, Is.Not.Null);
+            Assert.That(Decode(xrefWidget!.Tests), Does.Contain("N.WidgetTests"),
+                "a {Subject}Tests type is linked to its subject by convention");
+        });
+    }
+
+    [Test]
+    public async Task Removing_a_referrer_file_prunes_its_inbound_edge_and_the_empty_node()
+    {
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+
+        var a = WriteFile("src/A.cs", "namespace N; public class A { public B Dep { get; set; } }");
+        var b = WriteFile("src/B.cs", "namespace N; public class B { }");
+        var reconciler = Reconciler(harness);
+
+        await reconciler.ReconcileAsync(
+            RepoId, _repoRoot, added: [a, b], updated: [], removedPaths: [], backfill: [],
+            storedMeta: new Dictionary<string, StoredFileMeta>(), Ct);
+
+        Assert.That(await ReadXrefAsync(harness, "B"), Is.Not.Null, "precondition: the edge exists");
+
+        // Remove A.cs; its stored declared set carries N.A so the reconciler can retire it.
+        var stored = new Dictionary<string, StoredFileMeta>(StringComparer.Ordinal)
+        {
+            ["src/A.cs"] = new StoredFileMeta(a.Digest, "csharp", a.SizeBytes, 0, ["N", "N.A"]),
+        };
+        await reconciler.ReconcileAsync(
+            RepoId, _repoRoot, added: [], updated: [], removedPaths: ["src/A.cs"], backfill: [],
+            storedMeta: stored, Ct);
+
+        Assert.That(await ReadXrefAsync(harness, "B"), Is.Null,
+            "the node is deleted once its last referrer edge is retired, so the projection does not leak");
+    }
+
+    [Test]
+    public async Task Removing_a_test_file_prunes_its_test_linkage_edge()
+    {
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+
+        var widget = WriteFile("src/Widget.cs", "namespace N; public class Widget { }");
+        var tests = WriteFile("test/WidgetTests.cs", "namespace N; public class WidgetTests { }");
+        var reconciler = Reconciler(harness);
+
+        await reconciler.ReconcileAsync(
+            RepoId, _repoRoot, added: [widget, tests], updated: [], removedPaths: [], backfill: [],
+            storedMeta: new Dictionary<string, StoredFileMeta>(), Ct);
+
+        Assert.That(await ReadXrefAsync(harness, "Widget"), Is.Not.Null, "precondition: the test edge exists");
+
+        var stored = new Dictionary<string, StoredFileMeta>(StringComparer.Ordinal)
+        {
+            ["test/WidgetTests.cs"] = new StoredFileMeta(tests.Digest, "csharp", tests.SizeBytes, 0, ["N", "N.WidgetTests"]),
+        };
+        await reconciler.ReconcileAsync(
+            RepoId, _repoRoot, added: [], updated: [], removedPaths: ["test/WidgetTests.cs"], backfill: [],
+            storedMeta: stored, Ct);
+
+        Assert.That(await ReadXrefAsync(harness, "Widget"), Is.Null,
+            "the node is deleted once its only test edge is retired");
     }
 }

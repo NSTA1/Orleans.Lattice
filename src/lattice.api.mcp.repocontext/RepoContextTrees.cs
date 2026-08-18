@@ -53,6 +53,19 @@ internal static class RepoContextTrees
     /// </summary>
     internal const string Content = "repo-context-content";
 
+    /// <summary>
+    /// Tree holding the reverse cross-reference projection: one
+    /// <see cref="CrossReferenceNode"/> per referenced simple type-name, keyed by
+    /// <c>repo/{repoId}/xref/{name}</c>, recording which symbols reference that name
+    /// (its dependents) and which test types cover it. It is a rebuildable projection
+    /// (like the content and vector trees), not store-of-record - the symbol
+    /// reconciler maintains it incrementally on every reconcile so the
+    /// <c>repocontext_related</c> tool can answer inbound-dependent and test lookups
+    /// without a full scan. It churns as symbols and their references change, so the
+    /// host configures finite tombstone compaction here.
+    /// </summary>
+    internal const string CrossReference = "repo-context-xref";
+
     /// <summary>Reserved tree for vector membership (the retrieval surface, built later).</summary>
     internal const string VectorMembership = "repo-context-vector-membership";
 
@@ -72,6 +85,7 @@ internal static class RepoContextTrees
         Symbol,
         Memory,
         Content,
+        CrossReference,
         VectorMembership,
         VectorPayload,
         VectorMetadata,
