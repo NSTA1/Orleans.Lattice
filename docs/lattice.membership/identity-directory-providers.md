@@ -67,7 +67,7 @@ siloBuilder.Services.Configure<LatticeIdentityDirectoryOptions>(options =>
 When `ValidationRequired` is `true` **and** a real provider is active (any provider other than the default `NullIdentityDirectory`), the administrative create paths on the public `ILatticeAuthAdmin` seam validate the supplied principal id against the identity directory before writing anything:
 
 - `UpsertGroupAsync` requires the group id to resolve to a `Group` principal.
-- `AddMemberAsync` requires the member id to resolve to the kind implied by the member kind - a `User` id for a user member, a `Group` id for a nested-group member.
+- `AddMemberAsync` requires both the member id and the target group id to resolve: the member id to the kind implied by the member kind - a `User` id for a user member, a `Group` id for a nested-group member - and the `groupId` to a `Group` principal.
 
 The check is **fail-closed**: an id that resolves to no principal, or that resolves to a principal of the wrong `DirectoryPrincipalKind` (for example a user id supplied where a group was required), is rejected with the public `LatticeDirectoryValidationException` (which derives from `ArgumentException`) *before* any membership edge is written, so an unresolved or mis-kinded reference never leaves a partial edge behind. Over the gRPC auth binding the exception surfaces as an `InvalidArgument` status.
 
