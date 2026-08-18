@@ -22,6 +22,8 @@ public sealed class RepoContextCompactionTests
                 RepoContextHostTrees.Structural,
                 RepoContextHostTrees.Symbol,
                 RepoContextHostTrees.Content,
+                RepoContextHostTrees.CrossReference,
+                RepoContextHostTrees.Session,
             }));
 
     [Test]
@@ -41,7 +43,19 @@ public sealed class RepoContextCompactionTests
                 RepoContextHostTrees.VectorMembership,
                 RepoContextHostTrees.VectorMetadata,
                 RepoContextHostTrees.VectorPayload,
+                RepoContextHostTrees.CrossReference,
+                RepoContextHostTrees.Session,
             }));
+
+    [Test]
+    public void All_covers_every_library_tree_in_the_layout_contract()
+        => Assert.That(
+            RepoContextHostTrees.All,
+            Is.EquivalentTo(RepoContextTrees.All),
+            "the host's local-agent grant list must cover exactly the library's tree-name "
+            + "layout contract; a tree present in one but not the other means either a new "
+            + "tree is unauthorised for the local agent (its writes are denied) or a grant "
+            + "outlives its tree.");
 
     [Test]
     public void Tree_name_literals_match_the_package_conventions()
@@ -54,6 +68,8 @@ public sealed class RepoContextCompactionTests
             Assert.That(RepoContextHostTrees.VectorMembership, Is.EqualTo("repo-context-vector-membership"));
             Assert.That(RepoContextHostTrees.VectorMetadata, Is.EqualTo("repo-context-vector-metadata"));
             Assert.That(RepoContextHostTrees.VectorPayload, Is.EqualTo("repo-context-vector-payload"));
+            Assert.That(RepoContextHostTrees.CrossReference, Is.EqualTo("repo-context-xref"));
+            Assert.That(RepoContextHostTrees.Session, Is.EqualTo("repo-context-session"));
         });
 
     [Test]
