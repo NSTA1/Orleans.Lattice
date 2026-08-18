@@ -372,6 +372,25 @@ builder.Host.UseOrleans(silo =>
                 options.Audiences.Add(clientId);
                 options.Audiences.Add($"api://{clientId}");
             }
+
+            // Pin the accepted token signature algorithm(s). The authenticator
+            // seeds Algorithms with RS256 by default, so this deployment is
+            // already hardened; we clear and repopulate explicitly so the
+            // allow-list is a first-class, visible configuration point. Pinning
+            // the JWT header `alg` closes the algorithm-confusion gap (CWE-347):
+            // the validator refuses a token advertising any algorithm outside
+            // this set. Override with an Entra:Algorithms CSV; defaults to
+            // RS256 (the algorithm Entra issues v2.0 tokens with) when unset.
+            options.Algorithms.Clear();
+            foreach (var algorithm in ParseCsv(config["Entra:Algorithms"]))
+            {
+                options.Algorithms.Add(algorithm);
+            }
+
+            if (options.Algorithms.Count == 0)
+            {
+                options.Algorithms.Add(LatticeEntraAuthenticatorOptions.DefaultAlgorithm);
+            }
         });
 
         // App-only Microsoft Graph directory backing (subject / group resolution)
