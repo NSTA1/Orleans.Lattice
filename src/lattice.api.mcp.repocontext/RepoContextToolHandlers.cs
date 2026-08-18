@@ -406,6 +406,72 @@ internal static class RepoContextToolHandlers
     }
 
     /// <summary>
+    /// Builds a budgeted, ranked, explained context bundle for a natural-language
+    /// task in a single call, packing as much relevant source as fits under a hard
+    /// token ceiling. The <paramref name="top"/>, <paramref name="responseBudgetTokens"/>,
+    /// and <paramref name="detail"/> inputs are validated and clamped by the bundle
+    /// service, so a wire caller can never drive unbounded work.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the bundle service.</param>
+    /// <param name="repoId">The repository to bundle context from.</param>
+    /// <param name="task">The natural-language task to pack context for.</param>
+    /// <param name="top">The maximum number of files to consider (clamped to [1, 50]).</param>
+    /// <param name="responseBudgetTokens">The hard token ceiling for the bundle (clamped to [1, 200000]).</param>
+    /// <param name="detail">The requested detail level: <c>paths</c>, <c>outline</c>, <c>slices</c>, or <c>auto</c>; an unrecognised value resolves to <c>auto</c>.</param>
+    /// <param name="cancellationToken">Cancels the bundle.</param>
+    /// <returns>The packed bundle, whose exact BPE total never exceeds the clamped budget.</returns>
+    /// <exception cref="McpException">The repository id or task is missing.</exception>
+    public static Task<RepoContextContextResult> ContextAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The repository identifier to bundle context from.")]
+        string repoId,
+        [Description("The natural-language task to pack a ranked, explained context bundle for.")]
+        string task,
+        [Description("The maximum number of files to consider. Clamped to the range [1, 50]; defaults to 10.")]
+        int top = 0,
+        [Description(
+            "The hard token ceiling for the whole bundle, measured with the exact BPE token counter. "
+            + "Clamped to the range [1, 200000]; defaults to 8192. The bundle's reported total never exceeds it.")]
+        int responseBudgetTokens = 0,
+        [Description(
+            "How much of each file to pack: 'paths' (path only, cheapest), 'outline' (declared-symbol skeleton), "
+            + "'slices' (bounded body text, richest), or 'auto' (default) which picks the richest level that fits "
+            + "and reports the level it settled on. An unrecognised value is treated as 'auto'.")]
+        string? detail = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(repoId))
+        {
+            throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
+        }
+
+        if (string.IsNullOrWhiteSpace(task))
+        {
+            throw new McpException("The 'task' parameter is required and must be a non-empty task description.");
+        }
+
+        return ResolveBundleService(context)
+            .BuildAsync(repoId, task, top, responseBudgetTokens, ParseDetail(detail), cancellationToken);
+    }
+
+    /// <summary>
+    /// Parses the wire <c>detail</c> argument to a <see cref="RepoContextContextDetail"/>,
+    /// case-insensitively and trimming surrounding whitespace. Any unrecognised,
+    /// empty, or null value resolves to <see cref="RepoContextContextDetail.Auto"/>,
+    /// so a wire caller can never fault the tool with a bad level.
+    /// </summary>
+    /// <param name="detail">The raw wire value, or <see langword="null"/>.</param>
+    /// <returns>The parsed detail level, defaulting to auto.</returns>
+    private static RepoContextContextDetail ParseDetail(string? detail)
+        => detail?.Trim().ToLowerInvariant() switch
+        {
+            "paths" => RepoContextContextDetail.Paths,
+            "outline" => RepoContextContextDetail.Outline,
+            "slices" => RepoContextContextDetail.Slices,
+            _ => RepoContextContextDetail.Auto,
+        };
+
+    /// <summary>
     /// Builds the structural outline of one indexed file - its declared symbols with
     /// kind, signature, and line span, plus the token cost of reading the whole file -
     /// so an agent can grasp a file's shape and budget a full read without fetching its
@@ -766,6 +832,20 @@ internal static class RepoContextToolHandlers
             ?? throw new InvalidOperationException(
                 "The MCP request has no service provider; the repository-context search tool cannot resolve its service.");
         return services.GetRequiredService<RepoContextSearchService>();
+    }
+
+    /// <summary>
+    /// Resolves the <see cref="RepoContextBundleService"/> from the MCP request's
+    /// service provider, failing with a clear message when the provider is absent.
+    /// </summary>
+    /// <param name="context">The MCP request context.</param>
+    /// <returns>The resolved bundle service.</returns>
+    private static RepoContextBundleService ResolveBundleService(RequestContext<CallToolRequestParams> context)
+    {
+        var services = context.Services
+            ?? throw new InvalidOperationException(
+                "The MCP request has no service provider; the repository-context bundle tool cannot resolve its service.");
+        return services.GetRequiredService<RepoContextBundleService>();
     }
 
     /// <summary>

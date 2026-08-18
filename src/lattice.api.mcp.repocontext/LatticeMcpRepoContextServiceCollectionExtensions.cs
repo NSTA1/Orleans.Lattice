@@ -124,6 +124,12 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         // means a host or test harness can substitute it.
         services.TryAddSingleton<RepoContextGraphService>();
 
+        // The read-only budgeted context-bundle adapter behind repocontext_context. It
+        // composes the search and graph services with the shared token counter to pack a
+        // ranked, explained bundle under a hard token ceiling. TryAdd means a host or
+        // test harness can substitute it.
+        services.TryAddSingleton<RepoContextBundleService>();
+
         // The symbol-structural reconcile seam: a language-dispatching extractor
         // (only C#/Roslyn is registered today; other languages fall through to no
         // output) and the reconciler that upserts and prunes per-symbol records as

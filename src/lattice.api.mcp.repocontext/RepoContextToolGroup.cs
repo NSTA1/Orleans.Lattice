@@ -60,7 +60,7 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
     /// tools replace the single-repository onboarding tool.</param>
     public RepoContextToolGroup(bool enableWrites = false, bool workspaceMode = false)
     {
-        var capacity = 10
+        var capacity = 11
             + (workspaceMode ? 1 : 0)
             + (enableWrites ? (workspaceMode ? 5 : 4) : 0);
         var tools = new List<McpServerTool>(capacity)
@@ -90,6 +90,7 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
             BuildOutlineTool(),
             BuildChangedTool(),
             BuildRelatedTool(),
+            BuildContextTool(),
         };
 
         if (workspaceMode)
@@ -316,6 +317,35 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     + "syntactic approximation: two distinct types sharing a simple name are not disambiguated. A "
                     + "path with no stored file node returns 'exists=false'. This is a pure read over stored "
                     + "records and never touches the workspace on disk. Read-only.",
+                ReadOnly = true,
+                Destructive = false,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildContextTool()
+        => McpServerTool.Create(
+            RepoContextToolHandlers.ContextAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "repocontext_context",
+                Title = "Bundle budgeted context for a task",
+                Description =
+                    "Returns a ranked, explained bundle of source for a natural-language task, packed under a "
+                    + "HARD token ceiling in a single call - collapsing the search -> recall -> read loop into one "
+                    + "round trip that can never overrun your context budget. It searches the store for the task "
+                    + "(semantic when an embedder and vectors are available, otherwise a degraded keyword scan - a "
+                    + "keyword bundle is still returned), resolves the top hits to unique files, and packs each at a "
+                    + "detail level under the budget: 'paths' (path only), 'outline' (declared-symbol skeleton, "
+                    + "reusing the outline projection), or 'slices' (bounded body text). 'auto' (the default) packs "
+                    + "the richest level that yields a non-empty bundle and reports the concrete level in 'detail'. "
+                    + "Every entry carries its match 'reasons', its exact BPE 'tokenCount', and the whole-file "
+                    + "'fullReadTokenCount'. The bundle's 'totalTokens' is the exact BPE sum and never exceeds "
+                    + "'budgetTokens'. When even the cheapest entry does not fit, it FAILS CLOSED: 'entries' is "
+                    + "empty and 'retryBudgetTokens' reports a budget guaranteed to admit at least one entry on a "
+                    + "retry (null when the search matched nothing, so no larger budget would help). 'truncated' "
+                    + "flags a bundle that dropped lower-ranked candidates. The 'top', 'responseBudgetTokens', and "
+                    + "'detail' arguments are validated and clamped, never trusted to drive unbounded work. "
+                    + "Read-only.",
                 ReadOnly = true,
                 Destructive = false,
                 UseStructuredContent = true,
