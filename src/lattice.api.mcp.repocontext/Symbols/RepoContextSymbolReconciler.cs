@@ -297,7 +297,8 @@ internal sealed class RepoContextSymbolReconciler
             EmptyEdges,
             testAdds,
             EmptyEdges,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            operationScope: "xref-seed").ConfigureAwait(false);
 
         return seededPaths;
     }
@@ -477,6 +478,14 @@ internal sealed class RepoContextSymbolReconciler
     /// Removes are applied before adds so a name re-added in the same batch wins, and a
     /// node is deleted once both its referrer and test edge sets are empty so the
     /// projection does not leak tombstoned nodes.
+    /// <para>
+    /// <paramref name="operationScope"/> namespaces the atomic-commit operation id so a
+    /// force-seed's write is never deduped against a prior incremental commit for the
+    /// same node content. The incremental path leaves it empty (byte-identical operation
+    /// ids to before this parameter existed); the back-fill passes a distinct scope so a
+    /// rebuild - delete the tree, re-seed identical content - always re-applies rather
+    /// than being treated as already-applied and silently dropped.
+    /// </para>
     /// </summary>
     private async Task ApplyCrossReferenceChangesAsync(
         string repoId,
@@ -484,7 +493,8 @@ internal sealed class RepoContextSymbolReconciler
         Dictionary<string, HashSet<string>> referrerRemoves,
         Dictionary<string, HashSet<string>> testAdds,
         Dictionary<string, HashSet<string>> testRemoves,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string operationScope = "")
     {
         var names = new SortedSet<string>(StringComparer.Ordinal);
         names.UnionWith(referrerAdds.Keys);
@@ -528,7 +538,7 @@ internal sealed class RepoContextSymbolReconciler
             }
         }
 
-        await CommitAsync(tree, repoId, writes, deletes, cancellationToken).ConfigureAwait(false);
+        await CommitAsync(tree, repoId, writes, deletes, cancellationToken, operationScope).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -544,7 +554,8 @@ internal sealed class RepoContextSymbolReconciler
         string repoId,
         List<KeyValuePair<string, byte[]>> writes,
         List<string> deletes,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string operationScope = "")
     {
         var chunkIndex = 0;
         var remainingDeletes = deletes;
@@ -553,14 +564,14 @@ internal sealed class RepoContextSymbolReconciler
             var chunk = writes.GetRange(offset, Math.Min(WriteChunkSize, writes.Count - offset));
             var chunkDeletes = remainingDeletes;
             remainingDeletes = [];
-            var operationId = BuildOperationId(repoId, chunkIndex, chunk, chunkDeletes);
+            var operationId = BuildOperationId(operationScope, repoId, chunkIndex, chunk, chunkDeletes);
             await tree.SetManyAtomicAsync(chunk, chunkDeletes, operationId, cancellationToken).ConfigureAwait(false);
             chunkIndex++;
         }
 
         if (remainingDeletes.Count != 0)
         {
-            var operationId = BuildOperationId(repoId, chunkIndex, [], remainingDeletes);
+            var operationId = BuildOperationId(operationScope, repoId, chunkIndex, [], remainingDeletes);
             await tree.SetManyAtomicAsync([], remainingDeletes, operationId, cancellationToken).ConfigureAwait(false);
         }
     }
@@ -705,13 +716,14 @@ internal sealed class RepoContextSymbolReconciler
     }
 
     private static string BuildOperationId(
+        string operationScope,
         string repoId,
         int chunkIndex,
         IReadOnlyList<KeyValuePair<string, byte[]>> upserts,
         IReadOnlyList<string> deletes)
     {
         var builder = new StringBuilder();
-        builder.Append(repoId).Append('\n').Append(chunkIndex);
+        builder.Append(operationScope).Append('\n').Append(repoId).Append('\n').Append(chunkIndex);
         foreach (var upsert in upserts)
         {
             builder.Append("\nU").Append(upsert.Key).Append('=').Append(FileDigest.Compute(upsert.Value));
