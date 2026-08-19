@@ -35,6 +35,11 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Mcp.RepoContext.Tests" />
+    <!-- The multi-cluster companion package enrols the internal RepoContextTrees
+         names/layout into replication; sharing internals keeps repo-context's
+         public surface minimal rather than promoting the tree-name map to public. -->
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Mcp.RepoContext.Replication" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Mcp.RepoContext.Replication.Tests" />
     <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
   </ItemGroup>
 

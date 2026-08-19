@@ -41,6 +41,7 @@ internal sealed class RepoContextStore
     private readonly RepoContextVectorWriter _vectorWriter;
     private readonly IOptionsMonitor<RepoContextTtlOptions> _ttlOptions;
     private readonly TimeProvider _timeProvider;
+    private readonly string _replicaId;
 
     /// <summary>Creates the capture/maintenance adapter.</summary>
     /// <param name="grainFactory">The grain factory used to reach the named Lattice trees. Must not be <see langword="null"/>.</param>
@@ -49,13 +50,20 @@ internal sealed class RepoContextStore
     /// <param name="vectorWriter">The vector writer that owns the membership layout, used to read the durable embedded-source count. Must not be <see langword="null"/>.</param>
     /// <param name="ttlOptions">The per-repository TTL policy. Must not be <see langword="null"/>.</param>
     /// <param name="timeProvider">The clock used to project remaining life. Must not be <see langword="null"/>.</param>
+    /// <param name="replicaIdentity">
+    /// The stable replica identity authored onto every agent-memory CRDT write, or
+    /// <see langword="null"/> to use the local single-cluster identity. The
+    /// replication companion registers a cluster-id identity so cross-cluster
+    /// concurrent memory writes mint distinct dots and both survive the merge.
+    /// </param>
     public RepoContextStore(
         IGrainFactory grainFactory,
         IRepoIndexRunner indexRunner,
         Serializer serializer,
         RepoContextVectorWriter vectorWriter,
         IOptionsMonitor<RepoContextTtlOptions> ttlOptions,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IRepoContextReplicaIdentity? replicaIdentity = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(indexRunner);
@@ -70,6 +78,7 @@ internal sealed class RepoContextStore
         _vectorWriter = vectorWriter;
         _ttlOptions = ttlOptions;
         _timeProvider = timeProvider;
+        _replicaId = replicaIdentity?.ReplicaId ?? LocalRepoContextReplicaIdentity.LocalReplicaId;
     }
 
     /// <summary>
@@ -111,9 +120,10 @@ internal sealed class RepoContextStore
 
         if (evaluateStaleness
             && parsed.Kind == RepoContextRecordKind.Memory
-            && versioned.Value is { } bytes)
+            && versioned.Value is { } bytes
+            && RepoContextMemoryCodec.Fold(bytes, _serializer) is { } record)
         {
-            view = await EvaluateStalenessAsync(view, _serializer.Deserialize<MemoryRecord>(bytes), cancellationToken)
+            view = await EvaluateStalenessAsync(view, record, cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -477,9 +487,11 @@ internal sealed class RepoContextStore
         var entryId = string.IsNullOrWhiteSpace(id) ? Guid.NewGuid().ToString("N") : id;
         var key = RepoContextKeys.Memory(repoId, topic, entryId);
         var tree = Tree(RepoContextTrees.Memory);
+        var accessor = RepoContextMemoryCodec.Accessor(tree, key);
         var clock = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
 
-        var existing = await tree.GetAsync(key, cancellationToken).ConfigureAwait(false);
+        var existing = RepoContextMemoryCodec.Fold(
+            await tree.GetAsync(key, cancellationToken).ConfigureAwait(false), _serializer);
         var created = existing is null;
 
         var delta = new MemoryRecord
@@ -499,7 +511,7 @@ internal sealed class RepoContextStore
             delta = delta with { CreatedAt = RepoContextValues.Lww(_timeProvider.GetUtcNow().UtcDateTime.Ticks, clock) };
         }
 
-        var merged = created ? delta : MemoryRecord.Merge(delta, _serializer.Deserialize<MemoryRecord>(existing!));
+        var merged = created ? delta : MemoryRecord.Merge(delta, existing!);
         RepoContextRecordEditor.ApplyTags(merged.Tags, tags, removeTags: null);
         var (linksAdded, linksRemoved) = RepoContextRecordEditor.ApplyLinks(merged.Links, addLinks, removeLinks);
         var capturedDigests = await CaptureLinkDigestsAsync(addLinks, cancellationToken).ConfigureAwait(false);
@@ -509,11 +521,11 @@ internal sealed class RepoContextStore
         var ttl = ResolveTtl(repoId, ttlSeconds, created);
         if (ttl is { } window)
         {
-            await tree.SetAsync(key, bytes, window, cancellationToken).ConfigureAwait(false);
+            await accessor.SetAsync(_replicaId, bytes, window, cancellationToken).ConfigureAwait(false);
         }
         else
         {
-            await tree.SetAsync(key, bytes, cancellationToken).ConfigureAwait(false);
+            await accessor.SetAsync(_replicaId, bytes, cancellationToken).ConfigureAwait(false);
         }
 
         var versioned = await tree.GetWithVersionAsync(key, cancellationToken).ConfigureAwait(false);
@@ -565,11 +577,35 @@ internal sealed class RepoContextStore
 
         var clock = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
         var capturedDigests = await CaptureLinkDigestsAsync(addLinks, cancellationToken).ConfigureAwait(false);
+
+        // For a memory record the stored value is an MvRegister blob whose concurrent
+        // values are serialized MemoryRecords; fold them to a single record and hand
+        // the re-serialized bytes to the patcher, which expects one record. Every
+        // other family stores a single whole record, so its bytes patch directly.
+        var patchInput = parsed.Kind == RepoContextRecordKind.Memory
+            ? _serializer.SerializeToArray(RepoContextMemoryCodec.Fold(existing, _serializer)!)
+            : existing;
+
         var patch = RepoContextRecordEditor.Patch(
-            parsed, existing, fields, addTags, removeTags, addLinks, removeLinks, clock, _serializer, capturedDigests);
+            parsed, patchInput, fields, addTags, removeTags, addLinks, removeLinks, clock, _serializer, capturedDigests);
 
         var remainingTtl = RemainingTtl(versioned.ExpiresAtTicks);
-        if (remainingTtl is { } window)
+        if (parsed.Kind == RepoContextRecordKind.Memory)
+        {
+            // Author the merged record through the multi-value-register accessor so
+            // the patch converges with any concurrent cross-cluster write instead of
+            // overwriting it, preserving whatever remaining life the entry carried.
+            var accessor = RepoContextMemoryCodec.Accessor(tree, key);
+            if (remainingTtl is { } memoryWindow)
+            {
+                await accessor.SetAsync(_replicaId, patch.Merged, memoryWindow, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await accessor.SetAsync(_replicaId, patch.Merged, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        else if (remainingTtl is { } window)
         {
             await tree.SetAsync(key, patch.Merged, window, cancellationToken).ConfigureAwait(false);
         }
@@ -640,7 +676,24 @@ internal sealed class RepoContextStore
             };
         }
 
-        await tree.SetAsync(key, value, TimeSpan.FromSeconds(seconds), cancellationToken).ConfigureAwait(false);
+        if (parsed.Kind == RepoContextRecordKind.Memory)
+        {
+            // Lapse a memory record through the multi-value-register accessor so the
+            // short time-to-live rides the CRDT-TTL join (max-absolute-ticks) and the
+            // soft-delete converges across clusters instead of racing an LWW rewrite.
+            // Fold first so the lapse re-authors the merged record, not one arm of a
+            // conflict set.
+            var accessor = RepoContextMemoryCodec.Accessor(tree, key);
+            var folded = RepoContextMemoryCodec.Fold(value, _serializer);
+            var lapseBytes = folded is null ? value : _serializer.SerializeToArray(folded);
+            await accessor.SetAsync(_replicaId, lapseBytes, TimeSpan.FromSeconds(seconds), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        else
+        {
+            await tree.SetAsync(key, value, TimeSpan.FromSeconds(seconds), cancellationToken).ConfigureAwait(false);
+        }
+
         var lapsed = await tree.GetWithVersionAsync(key, cancellationToken).ConfigureAwait(false);
         return new RepoContextForgetResult
         {

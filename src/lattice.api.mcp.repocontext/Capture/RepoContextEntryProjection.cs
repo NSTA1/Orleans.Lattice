@@ -64,7 +64,15 @@ internal static class RepoContextEntryProjection
                     ProjectSymbol(serializer.Deserialize<SymbolRecord>(value), fields, tags);
                     break;
                 case RepoContextRecordKind.Memory:
-                    ProjectMemory(serializer.Deserialize<MemoryRecord>(value), fields, tags, links);
+                    // The memory value is an MvRegister blob whose concurrent values
+                    // are serialized MemoryRecords; unwrap and fold them so bulk scan,
+                    // keyword search, and recall all project the converged record.
+                    var folded = RepoContextMemoryCodec.Fold(value, serializer);
+                    if (folded is not null)
+                    {
+                        ProjectMemory(folded, fields, tags, links);
+                    }
+
                     break;
                 case RepoContextRecordKind.Content:
                     ProjectContent(serializer.Deserialize<ContentRecord>(value), fields);

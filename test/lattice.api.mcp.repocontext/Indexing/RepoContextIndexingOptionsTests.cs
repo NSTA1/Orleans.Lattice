@@ -15,6 +15,7 @@ public sealed class RepoContextIndexingOptionsTests
         RepoContextIndexingOptions.ReconcileJitterSecondsKey,
         RepoContextIndexingOptions.FullWalkIntervalSecondsKey,
         RepoContextIndexingOptions.TokenizerProfileKey,
+        RepoContextIndexingOptions.IndexingRoleKey,
     ];
 
     [SetUp]
@@ -90,7 +91,80 @@ public sealed class RepoContextIndexingOptionsTests
     }
 
     [Test]
-    [TestCase("cl100k", "cl100k")]
+    public void FromEnvironment_defaults_the_role_to_hub()
+    {
+        var options = RepoContextIndexingOptions.FromEnvironment();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.Role, Is.EqualTo(RepoContextIndexingRole.Hub));
+            Assert.That(options.IndexingEnabled, Is.True, "A hub is the authoritative indexer.");
+        });
+    }
+
+    [Test]
+    [TestCase("hub", true)]
+    [TestCase("HUB", true)]
+    [TestCase("  hub  ", true)]
+    [TestCase("spoke", false)]
+    [TestCase("SPOKE", false)]
+    [TestCase("  spoke  ", false)]
+    public void FromEnvironment_resolves_a_recognised_role(string raw, bool expectHub)
+    {
+        Environment.SetEnvironmentVariable(RepoContextIndexingOptions.IndexingRoleKey, raw);
+
+        var options = RepoContextIndexingOptions.FromEnvironment();
+
+        var expected = expectHub ? RepoContextIndexingRole.Hub : RepoContextIndexingRole.Spoke;
+        Assert.That(options.Role, Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void FromEnvironment_resolving_spoke_disables_indexing()
+    {
+        Environment.SetEnvironmentVariable(RepoContextIndexingOptions.IndexingRoleKey, "spoke");
+
+        var options = RepoContextIndexingOptions.FromEnvironment();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.Role, Is.EqualTo(RepoContextIndexingRole.Spoke));
+            Assert.That(options.IndexingEnabled, Is.False, "A spoke never mutates source-derived index state.");
+        });
+    }
+
+    [Test]
+    [TestCase("")]
+    [TestCase("   ")]
+    [TestCase("primary")]
+    [TestCase("replica")]
+    [TestCase("not-a-role")]
+    public void FromEnvironment_fails_closed_to_hub_for_an_absent_or_unrecognised_role(string raw)
+    {
+        // Fail closed: a typo can never silently turn a cluster into an inert spoke
+        // that indexes nothing. An unrecognised value keeps the default hub role.
+        Environment.SetEnvironmentVariable(RepoContextIndexingOptions.IndexingRoleKey, raw);
+
+        var options = RepoContextIndexingOptions.FromEnvironment();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.Role, Is.EqualTo(RepoContextIndexingRole.Hub));
+            Assert.That(options.IndexingEnabled, Is.True);
+        });
+    }
+
+    [Test]
+    public void IndexingEnabled_reflects_the_role_on_a_directly_constructed_options()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(new RepoContextIndexingOptions { Role = RepoContextIndexingRole.Hub }.IndexingEnabled, Is.True);
+            Assert.That(new RepoContextIndexingOptions { Role = RepoContextIndexingRole.Spoke }.IndexingEnabled, Is.False);
+            Assert.That(new RepoContextIndexingOptions().Role, Is.EqualTo(RepoContextIndexingRole.Hub),
+                "The default role preserves single-cluster behaviour.");
+        });
+    }
     [TestCase("CL100K", "cl100k")]
     [TestCase("  cl100k  ", "cl100k")]
     [TestCase("o200k", "o200k")]

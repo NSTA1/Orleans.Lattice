@@ -75,6 +75,18 @@ internal sealed class RepoContextSelfIndexGrain(
     {
         ArgumentNullException.ThrowIfNull(request);
 
+        // Hub-and-spoke gate: a spoke serves the replicated index records for reads
+        // but must never walk, reconcile, prune, or re-embed source-derived index
+        // state, so two clusters can never race to mutate it. Its self-index pass is
+        // inert - no keep-alive reminder, no scan timer, no runner pass - and it
+        // returns a benign "nothing indexed here" snapshot. Only the hub indexes.
+        if (!options.IndexingEnabled)
+        {
+            logger.LogInformation(
+                "Repo {RepoId}: self-index is inert (spoke role); serving replicated reads only.", RepoId);
+            return SpokeIdleProgress();
+        }
+
         // Arm the durable backstop before starting the run so an interrupted first
         // pass is still healed by this grain's own scan: the keep-alive reactivates
         // the grain after a restart, and the timer drives the gap scan for the life
@@ -97,6 +109,19 @@ internal sealed class RepoContextSelfIndexGrain(
         await state.WriteStateAsync().ConfigureAwait(true);
         return progress;
     }
+
+    /// <summary>
+    /// The benign progress snapshot a spoke returns instead of driving an index
+    /// pass: it asserts no indexing job runs on this cluster (source-derived index
+    /// state arrives only by replication from the hub) without arming any timer,
+    /// reminder, or runner.
+    /// </summary>
+    private RepoIndexProgress SpokeIdleProgress() => new()
+    {
+        RepoId = RepoId,
+        Status = RepoIndexStatus.None,
+        Phase = RepoIndexPhase.Pending,
+    };
 
     /// <inheritdoc />
     public async Task StopAsync()
@@ -127,6 +152,16 @@ internal sealed class RepoContextSelfIndexGrain(
 
     private void ArmTimer()
     {
+        // Defensive spoke gate: a spoke never arms the scan timer even if some other
+        // path reaches here (e.g. a stray reminder), so its reconcile/prune/gap-scan
+        // pass can never run. EnsureRunningAsync already short-circuits, and a spoke
+        // never registers the keep-alive reminder, but the guard keeps the invariant
+        // local to the one method that starts the timer.
+        if (!options.IndexingEnabled)
+        {
+            return;
+        }
+
         if (_timer is not null)
         {
             return;
@@ -144,6 +179,14 @@ internal sealed class RepoContextSelfIndexGrain(
 
     private async Task OnTickAsync(CancellationToken cancellationToken)
     {
+        // Defensive spoke gate: the timer is never armed for a spoke, so a tick can
+        // only reach here on a hub. The guard keeps the "a spoke mutates no index
+        // state" invariant true even if a timer somehow survived a role change.
+        if (!options.IndexingEnabled)
+        {
+            return;
+        }
+
         try
         {
             // Stamp the same fixed run credential the background indexer uses onto
