@@ -126,12 +126,18 @@ a bounded recent window it returns only summed token figures:
 - `readsReplacedTokens` - the whole-file read tokens they conservatively replaced,
   credited only for delivered whole-file-equivalent content (`slices` detail),
   never for discovery, partial detail, or content the caller already held.
-- `netSavedTokens` - the net tokens saved.
+- `netSavedTokens` - the net tokens saved, `readsReplacedTokens - responseTokens` (a
+  signed figure; see below).
 - `windowSeconds` - the length of the reporting window.
 
 Crediting is deliberately conservative so the figure is never inflated: reused or
 suppressed content is structurally excluded, and only `slices` deliveries earn
-read-replacement credit. The figures are recorded per answered context call on a
+read-replacement credit. Because crediting is this conservative, `netSavedTokens` is
+**signed** and routinely negative for discovery-heavy or reuse-light usage - that is
+correct, not a defect. It turns positive as a task delivers real bodies (`slices`) and
+reuses a `session` so repeated context is suppressed and never re-charged, and it is
+deliberately not clamped at zero so the surface can honestly report when it is not yet
+paying for itself. The figures are recorded per answered context call on a
 bounded in-memory window and are also emitted as
 `System.Diagnostics.Metrics` counters carrying a single low-cardinality `command`
 tag, so a host already scraping OpenTelemetry sees them flow through the existing
