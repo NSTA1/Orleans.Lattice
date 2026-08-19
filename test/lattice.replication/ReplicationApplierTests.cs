@@ -517,7 +517,7 @@ public partial class ReplicationApplierTests
         await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
         // Steady-state delta-present writes record a CrdtDelta (member diff +
         // origin) rather than a full-value Set; no read-merge-write fold.
-        await lattice.Received(1).ApplyCrdtDeltaAsync("k", LatticeMergeMode.OrSet, Arg.Any<byte[]>(), Arg.Any<CancellationToken>());
+        await apply.Received(1).ApplyCrdtDeltaWithExpiryAsync("k", LatticeMergeMode.OrSet, Arg.Any<byte[]>(), 0L);
         await lattice.DidNotReceiveWithAnyArgs().GetWithVersionAsync(default!, default);
         await lattice.DidNotReceiveWithAnyArgs().SetIfVersionAsync(default!, default!, default, default);
     }
@@ -536,7 +536,7 @@ public partial class ReplicationApplierTests
         var result = await applier.ApplyAsync(entry);
 
         Assert.That(result.Applied, Is.True);
-        await lattice.Received(1).ApplyCrdtDeltaAsync("k", LatticeMergeMode.PnCounter, Arg.Any<byte[]>(), Arg.Any<CancellationToken>());
+        await apply.Received(1).ApplyCrdtDeltaWithExpiryAsync("k", LatticeMergeMode.PnCounter, Arg.Any<byte[]>(), 0L);
         await lattice.DidNotReceiveWithAnyArgs().SetIfVersionAsync(default!, default!, default, default);
     }
 
@@ -554,7 +554,7 @@ public partial class ReplicationApplierTests
         var result = await applier.ApplyAsync(entry);
 
         Assert.That(result.Applied, Is.True);
-        await lattice.Received(1).ApplyCrdtDeltaAsync("k", LatticeMergeMode.GCounter, Arg.Any<byte[]>(), Arg.Any<CancellationToken>());
+        await apply.Received(1).ApplyCrdtDeltaWithExpiryAsync("k", LatticeMergeMode.GCounter, Arg.Any<byte[]>(), 0L);
         await lattice.DidNotReceiveWithAnyArgs().SetIfVersionAsync(default!, default!, default, default);
     }
 
@@ -573,7 +573,7 @@ public partial class ReplicationApplierTests
         var result = await applier.ApplyAsync(entry);
 
         Assert.That(result.Applied, Is.True);
-        await lattice.Received(1).ApplyCrdtDeltaAsync("k", LatticeMergeMode.VersionVector, Arg.Any<byte[]>(), Arg.Any<CancellationToken>());
+        await apply.Received(1).ApplyCrdtDeltaWithExpiryAsync("k", LatticeMergeMode.VersionVector, Arg.Any<byte[]>(), 0L);
         await lattice.DidNotReceiveWithAnyArgs().SetIfVersionAsync(default!, default!, default, default);
     }
 
@@ -600,7 +600,7 @@ public partial class ReplicationApplierTests
         var result = await applier.ApplyAsync(entry);
 
         Assert.That(result.Applied, Is.True);
-        await lattice.Received(1).ApplyCrdtDeltaAsync("k", LatticeMergeMode.MvRegister, Arg.Any<byte[]>(), Arg.Any<CancellationToken>());
+        await apply.Received(1).ApplyCrdtDeltaWithExpiryAsync("k", LatticeMergeMode.MvRegister, Arg.Any<byte[]>(), 0L);
         await lattice.DidNotReceiveWithAnyArgs().SetIfVersionAsync(default!, default!, default, default);
     }
 
@@ -682,8 +682,32 @@ public partial class ReplicationApplierTests
         var result = await applier.ApplyAsync(entry);
 
         Assert.That(result.Applied, Is.True);
-        await lattice.Received(1).ApplyCrdtDeltaAsync("k", LatticeMergeMode.OrSet, Arg.Any<byte[]>(), Arg.Any<CancellationToken>());
+        await apply.Received(1).ApplyCrdtDeltaWithExpiryAsync("k", LatticeMergeMode.OrSet, Arg.Any<byte[]>(), 0L);
         await lattice.DidNotReceiveWithAnyArgs().SetIfVersionAsync(default!, default!, default, default);
+    }
+
+    [Test]
+    public async Task ApplyAsync_crdt_delta_threads_absolute_expiry_verbatim_to_apply_seam()
+    {
+        // Per-entry receive path: a TTL'd CRDT-delta entry carries an
+        // absolute ExpiresAtTicks on the wire. The receiver must thread that
+        // tick verbatim to ApplyCrdtDeltaWithExpiryAsync - never re-resolve a
+        // relative TTL against a local clock - so the entry expires at the
+        // same instant on every replica under the max-absolute-ticks join.
+        var (applier, _, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
+        var expiresAt = DateTimeOffset.UtcNow.AddHours(1).UtcTicks;
+        var entry = SetEntry("k", Hlc(1)) with
+        {
+            Mode = LatticeMergeMode.OrSet,
+            Value = null,
+            Delta = EncodeOrSetDelta(a => a.Add(new OrSetDeltaDot { Element = OrSetMember, ReplicaId = "site-b", Counter = 1 })),
+            ExpiresAtTicks = expiresAt,
+        };
+
+        var result = await applier.ApplyAsync(entry);
+
+        Assert.That(result.Applied, Is.True);
+        await apply.Received(1).ApplyCrdtDeltaWithExpiryAsync("k", LatticeMergeMode.OrSet, Arg.Any<byte[]>(), expiresAt);
     }
 
     [Test]
@@ -734,7 +758,7 @@ public partial class ReplicationApplierTests
         // Typed CRDT Set rides the CrdtDelta seam, never ApplySetAsync
         // (which would flatten the merge to a full-value Set in history).
         await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
-        await lattice.Received(1).ApplyCrdtDeltaAsync("k", LatticeMergeMode.OrSet, Arg.Any<byte[]>(), Arg.Any<CancellationToken>());
+        await apply.Received(1).ApplyCrdtDeltaWithExpiryAsync("k", LatticeMergeMode.OrSet, Arg.Any<byte[]>(), 0L);
     }
 
     [Test]

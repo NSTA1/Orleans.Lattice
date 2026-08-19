@@ -127,6 +127,49 @@ public readonly record struct OrMapAccessor<TKey, TValue>
     }
 
     /// <summary>
+    /// Writes <paramref name="value"/> at <paramref name="mapKey"/> from
+    /// <paramref name="replicaId"/> and stamps the whole entry with a per-entry
+    /// time-to-live of <paramref name="ttl"/>. The expiry is resolved to an
+    /// absolute UTC instant on the handling silo and folded under the
+    /// max-absolute-ticks convergence rule, so re-writing with a later
+    /// <paramref name="ttl"/> extends the entry's life and a durable (no-TTL)
+    /// write leaves any existing expiry unchanged. Once the instant passes the
+    /// whole map reads as absent and is reaped by tombstone compaction.
+    /// </summary>
+    /// <param name="mapKey">The key inside the map to write under. Must not be <c>null</c>.</param>
+    /// <param name="replicaId">The replica authoring the write. Must be non-empty.</param>
+    /// <param name="value">The CRDT value snapshot to attach. Must not be <c>null</c>.</param>
+    /// <param name="ttl">The positive time-to-live for the entry.</param>
+    /// <param name="cancellationToken">Cancels the read and write hops.</param>
+    /// <param name="maxAttempts">Reserved for API parity; the delta apply does not retry.</param>
+    public Task SetAsync(TKey mapKey, string replicaId, TValue value, TimeSpan ttl, CancellationToken cancellationToken = default, int maxAttempts = DefaultMaxAttempts)
+    {
+        ArgumentNullException.ThrowIfNull(mapKey);
+        ArgumentException.ThrowIfNullOrEmpty(replicaId);
+        ArgumentNullException.ThrowIfNull(value);
+        EnsureInitialised();
+        return MutateAsync(map =>
+        {
+            var counter = NextCounter(map, replicaId);
+            map.Set(mapKey, replicaId, value);
+            return new OrMapDelta<TKey, TValue>
+            {
+                Adds = new[]
+                {
+                    new OrMapDeltaEntry<TKey, TValue>
+                    {
+                        Key = mapKey,
+                        ReplicaId = replicaId,
+                        Counter = counter,
+                        Value = value,
+                    },
+                },
+                Tombstones = Array.Empty<OrMapDeltaTombstone<TKey>>(),
+            };
+        }, cancellationToken, maxAttempts, ttl);
+    }
+
+    /// <summary>
     /// Removes <paramref name="mapKey"/> by tombstoning every dot
     /// currently observed for it. Concurrent writes on other replicas
     /// (with dots not yet observed locally) survive the next merge -
@@ -256,7 +299,8 @@ public readonly record struct OrMapAccessor<TKey, TValue>
     private async Task MutateAsync(
         Func<OrMap<TKey, TValue>, OrMapDelta<TKey, TValue>> mutate,
         CancellationToken cancellationToken,
-        int maxAttempts)
+        int maxAttempts,
+        TimeSpan ttl = default)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
         // CAS-free producer-side delta apply: see
@@ -269,7 +313,10 @@ public readonly record struct OrMapAccessor<TKey, TValue>
         var current = await GetAsync(cancellationToken).ConfigureAwait(false);
         var delta = mutate(current);
         var deltaBytes = JsonLatticeSerializer<OrMapDelta<TKey, TValue>>.Default.Serialize(delta);
-        await _lattice.ApplyCrdtDeltaAsync(_key, LatticeMergeMode.OrMap, deltaBytes, cancellationToken).ConfigureAwait(false);
+        if (ttl <= TimeSpan.Zero)
+            await _lattice.ApplyCrdtDeltaAsync(_key, LatticeMergeMode.OrMap, deltaBytes, cancellationToken).ConfigureAwait(false);
+        else
+            await _lattice.ApplyCrdtDeltaAsync(_key, LatticeMergeMode.OrMap, deltaBytes, ttl, cancellationToken).ConfigureAwait(false);
     }
 
     private static OrMap<TKey, TValue> Decode(byte[]? bytes) =>

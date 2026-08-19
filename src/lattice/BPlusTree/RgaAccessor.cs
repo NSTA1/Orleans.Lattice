@@ -123,6 +123,32 @@ public readonly record struct RgaAccessor<T>
     }
 
     /// <summary>
+    /// Inserts <paramref name="value"/> at the visible <paramref name="index"/>
+    /// and stamps the whole entry with a per-entry time-to-live of
+    /// <paramref name="ttl"/>. The expiry is resolved to an absolute UTC instant
+    /// on the handling silo and folded under the max-absolute-ticks convergence
+    /// rule, so re-writing with a later <paramref name="ttl"/> extends the
+    /// entry's life and a durable (no-TTL) write leaves any existing expiry
+    /// unchanged. Once the instant passes the whole sequence reads as absent and
+    /// is reaped by tombstone compaction.
+    /// </summary>
+    /// <param name="index">The visible position to insert at. Must be in <c>[0, count]</c>.</param>
+    /// <param name="replicaId">The replica authoring the insert. Must be non-empty.</param>
+    /// <param name="value">The value to attach.</param>
+    /// <param name="ttl">The positive time-to-live for the entry.</param>
+    /// <param name="cancellationToken">Cancels the read and write hops.</param>
+    /// <param name="maxAttempts">Reserved for API parity; the delta apply does not retry.</param>
+    public Task<OrSetDot> InsertAtAsync(int index, string replicaId, T value, TimeSpan ttl, CancellationToken cancellationToken = default, int maxAttempts = DefaultMaxAttempts)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(index);
+        ArgumentException.ThrowIfNullOrEmpty(replicaId);
+        EnsureInitialised();
+        var serializer = _serializer;
+        var encoded = serializer.Serialize(value);
+        return ApplyInsertDeltaAsync(rga => InsertAtMutate(rga, index, replicaId, encoded), cancellationToken, maxAttempts, ttl);
+    }
+
+    /// <summary>
     /// Stages an insert at the visible <paramref name="index"/> as a
     /// <see cref="LatticeStagedCrdtWrite"/> for a cross-tree atomic write instead
     /// of applying it now. The minted dot and resolved parent are identical to
@@ -363,7 +389,7 @@ public readonly record struct RgaAccessor<T>
             Tombstones = Array.Empty<OrSetDot>(),
         };
 
-    private async Task<OrSetDot> ApplyInsertDeltaAsync(Func<Rga, (OrSetDot Dot, RgaDelta Delta)> mutate, CancellationToken cancellationToken, int maxAttempts)
+    private async Task<OrSetDot> ApplyInsertDeltaAsync(Func<Rga, (OrSetDot Dot, RgaDelta Delta)> mutate, CancellationToken cancellationToken, int maxAttempts, TimeSpan ttl = default)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
         // CAS-free producer-side delta apply, matching MvRegisterAccessor
@@ -379,7 +405,10 @@ public readonly record struct RgaAccessor<T>
         var current = await GetAsync(cancellationToken).ConfigureAwait(false);
         var (dot, delta) = mutate(current);
         var deltaBytes = JsonLatticeSerializer<RgaDelta>.Default.Serialize(delta);
-        await _lattice.ApplyCrdtDeltaAsync(_key, LatticeMergeMode.Sequence, deltaBytes, cancellationToken).ConfigureAwait(false);
+        if (ttl <= TimeSpan.Zero)
+            await _lattice.ApplyCrdtDeltaAsync(_key, LatticeMergeMode.Sequence, deltaBytes, cancellationToken).ConfigureAwait(false);
+        else
+            await _lattice.ApplyCrdtDeltaAsync(_key, LatticeMergeMode.Sequence, deltaBytes, ttl, cancellationToken).ConfigureAwait(false);
         return dot;
     }
 

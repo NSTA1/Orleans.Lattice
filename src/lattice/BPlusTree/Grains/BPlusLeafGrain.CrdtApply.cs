@@ -109,7 +109,11 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <inheritdoc />
-    public async Task<CrdtApplyResult> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes)
+    public Task<CrdtApplyResult> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes) =>
+        ApplyCrdtDeltaAsync(key, mode, deltaBytes, expiresAtTicks: 0);
+
+    /// <inheritdoc />
+    public async Task<CrdtApplyResult> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks)
     {
         EnsureInternalOrigin(LatticeOperation.CrdtApply);
         ArgumentNullException.ThrowIfNull(key);
@@ -163,6 +167,22 @@ internal sealed partial class BPlusLeafGrain
         var hasExistingRow = Cache.TryPeekRow(key, out var existing, out var existingDeferred)
             && !existing.IsTombstone
             && (existingDeferred || existing.Value is { Length: > 0 });
+
+        // Per-entry (whole-key) expiry convergence: resolve the surviving
+        // absolute expiry as a max-absolute-ticks join with 0 (durable) as
+        // the semilattice bottom. This is a commutative / associative /
+        // idempotent join (refresh-extends-life), so replicas converge on the
+        // same expiry regardless of the order two TTL'd deltas arrive and
+        // regardless of which write wins the row-level HLC merge below. It
+        // deliberately differs from the LWW-TTL path, which resolves the whole
+        // value (expiry included) last-writer-by-HLC via LwwValue.Merge: a
+        // CRDT has no single winning write to carry the expiry (both deltas
+        // fold into the state), so expiry needs its own independent join.
+        // expiresAtTicks == 0 (a no-TTL CRDT write) leaves any existing expiry
+        // unchanged (v1: refresh-only; reverting a TTL'd entry to durable is
+        // out of scope).
+        var existingExpiry = hasExistingRow ? existing.ExpiresAtTicks : 0L;
+        var resolvedExpiry = Math.Max(existingExpiry, expiresAtTicks);
         object typedState;
         if (Cache.TryGetTyped<object>(key, out var shadowed))
         {
@@ -228,6 +248,7 @@ internal sealed partial class BPlusLeafGrain
             {
                 OriginClusterId = LatticeOriginContext.Current,
                 VectorClock = LatticeVectorClockContext.Current,
+                ExpiresAtTicks = resolvedExpiry,
             };
 
             // step 4a (wal) - append a CRDT-flavoured Set whose Delta slot
@@ -257,6 +278,17 @@ internal sealed partial class BPlusLeafGrain
             // freshly merged typed instance immediately afterwards to keep
             // the shadow consistent with the row.
             StoreEntry(key, postMergeEntry);
+
+            // Expiry-join correction. StoreEntry LWW-merges by HLC, so when an
+            // existing row dominates the new stamp (the receive path can fold a
+            // delta whose source HLC is <= the local row's) the merged row
+            // keeps the existing (smaller) expiry, discarding the max-join
+            // result. The typed shadow re-stored below preserves the folded
+            // *value* regardless of who won the HLC merge, so the expiry must
+            // be forced to match, keeping the max-absolute-ticks join intact.
+            // A no-op when the merged row already carries resolvedExpiry (the
+            // common monotonic-HLC case).
+            ForceEntryExpiry(key, resolvedExpiry);
             Cache.StoreTyped(key, typedState);
         }
         else
@@ -271,6 +303,7 @@ internal sealed partial class BPlusLeafGrain
                 IsTombstone = false,
                 OriginClusterId = LatticeOriginContext.Current,
                 VectorClock = LatticeVectorClockContext.Current,
+                ExpiresAtTicks = resolvedExpiry,
             };
 
             // step 4b (wal) - append the same delta-only CRDT Set the eager

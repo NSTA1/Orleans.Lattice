@@ -64,6 +64,27 @@ public readonly record struct GSetAccessor
     }
 
     /// <summary>
+    /// Adds <paramref name="element"/> and stamps the whole entry with a
+    /// per-entry time-to-live of <paramref name="ttl"/>. The expiry is
+    /// resolved to an absolute UTC instant on the handling silo and folded
+    /// under the max-absolute-ticks convergence rule, so re-writing with a
+    /// later <paramref name="ttl"/> extends the entry's life and a durable
+    /// (no-TTL) write leaves any existing expiry unchanged. Once the instant
+    /// passes the whole set reads as absent and is reaped by tombstone
+    /// compaction.
+    /// </summary>
+    /// <param name="element">The element bytes to add. Must not be <c>null</c>.</param>
+    /// <param name="ttl">The positive time-to-live for the entry.</param>
+    /// <param name="cancellationToken">Cancels the read and write hops.</param>
+    /// <param name="maxAttempts">Reserved for API parity; the delta apply does not retry.</param>
+    public Task AddAsync(byte[] element, TimeSpan ttl, CancellationToken cancellationToken = default, int maxAttempts = DefaultMaxAttempts)
+    {
+        ArgumentNullException.ThrowIfNull(element);
+        EnsureInitialised();
+        return MutateAsync(AddDelta(element), cancellationToken, maxAttempts, ttl);
+    }
+
+    /// <summary>
     /// Stages an add as a <see cref="LatticeStagedCrdtWrite"/> for a cross-tree
     /// atomic write instead of applying it now. Add the returned token to a
     /// builder slice via
@@ -131,7 +152,7 @@ public readonly record struct GSetAccessor
         return result;
     }
 
-    private async Task MutateAsync(GSetDelta delta, CancellationToken cancellationToken, int maxAttempts)
+    private async Task MutateAsync(GSetDelta delta, CancellationToken cancellationToken, int maxAttempts, TimeSpan ttl = default)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
         // Producer-side delta apply: the leaf grain is the single writer
@@ -142,7 +163,10 @@ public readonly record struct GSetAccessor
         _ = maxAttempts;
         cancellationToken.ThrowIfCancellationRequested();
         var deltaBytes = JsonLatticeSerializer<GSetDelta>.Default.Serialize(delta);
-        await _lattice.ApplyCrdtDeltaAsync(_key, LatticeMergeMode.GSet, deltaBytes, cancellationToken).ConfigureAwait(false);
+        if (ttl <= TimeSpan.Zero)
+            await _lattice.ApplyCrdtDeltaAsync(_key, LatticeMergeMode.GSet, deltaBytes, cancellationToken).ConfigureAwait(false);
+        else
+            await _lattice.ApplyCrdtDeltaAsync(_key, LatticeMergeMode.GSet, deltaBytes, ttl, cancellationToken).ConfigureAwait(false);
     }
 
     private static GSet Decode(byte[]? bytes) =>

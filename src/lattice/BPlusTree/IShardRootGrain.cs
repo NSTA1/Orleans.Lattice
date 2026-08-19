@@ -119,6 +119,19 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<HybridLogicalClock> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes);
 
     /// <summary>
+    /// Expiry-carrying overload of
+    /// <see cref="ApplyCrdtDeltaAsync(string, LatticeMergeMode, byte[])"/> that
+    /// routes an absolute per-entry expiry (UTC
+    /// <see cref="System.DateTime.Ticks"/>, already resolved on the handling
+    /// silo) to the owning leaf. See
+    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.ApplyCrdtDeltaAsync(string, LatticeMergeMode, byte[], long)"/>
+    /// for the max-absolute-ticks expiry-join contract. An
+    /// <paramref name="expiresAtTicks"/> of <c>0</c> leaves any existing
+    /// expiry unchanged.
+    /// </summary>
+    Task<HybridLogicalClock> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks);
+
+    /// <summary>
     /// Inserts or updates multiple key-value pairs in a single traversal batch.
     /// <para>
     /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> so multiple producer

@@ -201,19 +201,28 @@ public partial class ReplicationApplierTests
     }
 
     [Test]
-    public async Task ApplyBatchAsync_crdt_batch_flush_failure_propagates()
+    public async Task ApplyBatchAsync_crdt_batch_threads_per_entry_absolute_expiry_into_dispatch_items()
     {
+        // Batch receive path: a TTL'd CRDT-delta entry folded into the
+        // coalesced ApplyCrdtDeltaManyAsync run must carry its absolute
+        // ExpiresAtTicks verbatim on the corresponding ApplyCrdtDeltaItem,
+        // so a batched TTL'd CRDT write expires on every replica exactly as
+        // the per-entry path does. A durable sibling in the same run keeps
+        // ExpiresAtTicks == 0 (the semilattice bottom).
         var (applier, _, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
-        apply.ApplyCrdtDeltaManyAsync(Arg.Any<IReadOnlyList<ApplyCrdtDeltaItem>>())
-            .Returns(_ => Task.FromException(new InvalidOperationException("boom")));
+        var expiresAt = DateTimeOffset.UtcNow.AddHours(1).UtcTicks;
         var entries = new[]
         {
-            OrSetEntry("a", Hlc(10), new byte[] { 1 }),
+            OrSetEntry("a", Hlc(10), new byte[] { 1 }) with { ExpiresAtTicks = expiresAt },
             OrSetEntry("b", Hlc(20), new byte[] { 2 }),
         };
 
-        Assert.That(
-            async () => await applier.ApplyBatchAsync(entries),
-            Throws.InstanceOf<InvalidOperationException>());
+        await applier.ApplyBatchAsync(entries);
+
+        await apply.Received(1).ApplyCrdtDeltaManyAsync(
+            Arg.Is<IReadOnlyList<ApplyCrdtDeltaItem>>(items =>
+                items.Count == 2
+                && items[0].Key == "a" && items[0].ExpiresAtTicks == expiresAt
+                && items[1].Key == "b" && items[1].ExpiresAtTicks == 0L));
     }
 }

@@ -195,6 +195,28 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
     Task ApplyCrdtDeltaManyAsync(IReadOnlyList<ApplyCrdtDeltaItem> items);
 
     /// <summary>
+    /// Off-batch per-entry fallback for a steady-state delta-carrying CRDT
+    /// entry that also carries a per-entry absolute expiry. Mirrors the
+    /// public <see cref="Orleans.Lattice.ILattice.ApplyCrdtDeltaAsync(string, LatticeMergeMode, byte[], System.Threading.CancellationToken)"/>
+    /// seam the non-expiry per-entry path uses (the receiver advances its own
+    /// clock and stamps the ambient remote origin), but folds the merged row's
+    /// <paramref name="expiresAtTicks"/> under the max-absolute-ticks expiry
+    /// join so a TTL'd CRDT write expires on this replica too. The expiry is an
+    /// absolute UTC <see cref="System.DateTime.Ticks"/> value applied verbatim
+    /// (never re-resolved from a relative TTL), keeping it strictly convergent
+    /// across replicas. An <paramref name="expiresAtTicks"/> of <c>0</c> leaves
+    /// any existing expiry unchanged.
+    /// </summary>
+    /// <param name="key">The key the remote CRDT delta targeted.</param>
+    /// <param name="mode">The CRDT convergence rule to fold the delta under.</param>
+    /// <param name="deltaBytes">The remote typed CRDT delta bytes.</param>
+    /// <param name="expiresAtTicks">
+    /// The absolute UTC expiry tick to fold onto the merged row, or <c>0</c>
+    /// for a durable entry.
+    /// </param>
+    Task ApplyCrdtDeltaWithExpiryAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks);
+
+    /// <summary>
     /// Installs a single saga prepare-phase Set authored on a remote
     /// cluster into this tree's per-leaf pending-transaction map. The
     /// receiver leaf sees the same ambient context stack the source
