@@ -73,6 +73,18 @@ internal sealed partial class BPlusLeafGrain(
             }
             await ((ILeafProjection)this).FlushCheckpointAsync(cancellationToken);
 
+            // Liveness barrier (issue #1537): before the durable pin flush,
+            // capture a snapshot for any checkpointed-but-uncovered partition
+            // so a short-lived bursty activation that never reached the
+            // periodic snapshot cadence still leaves durable coverage behind.
+            // Without this the leaf's Zero block pin (the safe side of #1535's
+            // coverage gate) would retain the shared WAL forever. Ordered
+            // before FlushDurableMaterialiserFrontierAsync so the pin resolves
+            // to the now-covered frontier and the WAL GC can trim the prefix;
+            // best-effort, so a capture failure simply leaves the block pin in
+            // place (retained, never trimmed ahead of coverage).
+            await TryCaptureSnapshotOnDeactivateAsync();
+
             // Retention barrier: after the final checkpoint flush, AWAIT a
             // durable write of this leaf's checkpoint frontier into the
             // cluster-wide pin store so a leaf can never go dormant on a

@@ -257,6 +257,15 @@ internal sealed partial class BPlusLeafGrain
                 SetPersistedCheckpointForPartition(partition, offset);
             }
             _pendingCheckpointOffsetsByPartition = null;
+            // A forward checkpoint advance here is driven by cache-resident
+            // applies (foreground writes or WAL tail replay folded into the
+            // in-memory cache before SetCheckpointOffsetAsync queued the
+            // advance). Latch that so the graceful-deactivation snapshot
+            // capture knows this activation produced cache-backed coverage it
+            // may safely persist - as opposed to a cold reactivation whose
+            // checkpoint was merely restored from state (see
+            // TryCaptureSnapshotOnDeactivateAsync and the #1535 no-loss gate).
+            _checkpointAdvancedThisActivation = true;
             // The checkpoint offset is a field of the published
             // ChildDigestSnapshot, so an advance must propagate upward
             // even when the projection hash itself is unchanged - the

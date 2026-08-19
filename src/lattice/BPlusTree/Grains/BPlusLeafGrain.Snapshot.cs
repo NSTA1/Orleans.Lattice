@@ -62,6 +62,26 @@ internal sealed partial class BPlusLeafGrain
     private int _checkpointPersistCountSinceRecheck;
 
     /// <summary>
+    /// Set once this activation genuinely advances a per-partition projection
+    /// checkpoint over cache-resident applies - i.e. the pending-advance branch
+    /// of <see cref="FlushPendingCheckpointAsync"/> runs, which only happens
+    /// after foreground writes or a WAL tail replay have folded new entries
+    /// into the in-memory cache and moved the checkpoint forward. It is the
+    /// safety precondition for the graceful-deactivation snapshot capture
+    /// (<see cref="TryCaptureSnapshotOnDeactivateAsync"/>): a checkpoint that
+    /// advanced this way is, by construction, backed by data the cache holds,
+    /// so capturing that cache and stamping the new checkpoint truthfully
+    /// records coverage. A leaf that merely reactivated cold - its persisted
+    /// checkpoint restored from state or a rehydrate that reset uncovered
+    /// partitions to <c>-1</c>, with no forward apply this activation - never
+    /// sets this, so the deactivation hook does not capture an empty/partial
+    /// cache and falsely claim coverage of a prefix the WAL alone still holds
+    /// (the #1535 no-loss invariant). Reset to <c>false</c> on every fresh
+    /// activation because it is a plain instance field, never persisted.
+    /// </summary>
+    private bool _checkpointAdvancedThisActivation;
+
+    /// <summary>
     /// Byte-accurate footprint of the most recently persisted snapshot
     /// for this leaf, or <c>0</c> when no snapshot has been captured this
     /// activation. Mirrors the value written into
@@ -357,6 +377,91 @@ internal sealed partial class BPlusLeafGrain
         // (invariant b) while the coverage gate keeps it lossless
         // (invariant a). The single-flight guard above and the SaveAsync
         // best-effort try/catch bound the cost of a slow snapshot store.
+        await TryCaptureSnapshotForAdvisoryAsync();
+    }
+
+    /// <summary>
+    /// Graceful-deactivation snapshot-capture hook (issue #1537), invoked
+    /// from <c>OnDeactivateAsync</c> after the final checkpoint flush and
+    /// immediately before the durable materialiser-pin flush.
+    /// <para>
+    /// The two standing proactive-capture drivers - the activation-time
+    /// advisory (<see cref="_activationSnapshotPending"/>) and the periodic
+    /// recheck (<see cref="MaybeRunPeriodicSnapshotRecheckAsync"/>) - both
+    /// require the leaf to stay activated long enough to either cross the
+    /// activation-time WAL-tail margin or accumulate
+    /// <see cref="LatticeOptions.LeafSnapshotReClassifyEveryNCheckpoints"/>
+    /// checkpoint persists. A short-lived bursty activation (activate, take a
+    /// few writes and checkpoints, then deactivate before the cadence
+    /// threshold) fires neither, so a data-bearing leaf can checkpoint, go
+    /// dormant, and leave its <see cref="HybridLogicalClock.Zero"/> block pin
+    /// held forever - the shared-shard WAL is then retained without bound.
+    /// This is the liveness gap on the safe side of the #1535 coverage gate:
+    /// the block pin never loses data, but nothing lifts it.
+    /// </para>
+    /// <para>
+    /// Capturing here closes the gap. Any checkpointed-but-uncovered partition
+    /// gets a durable snapshot before the leaf goes dormant, so the durable
+    /// pin flush that follows resolves the pin to
+    /// <c>min(checkpoint, coveredOffset) == checkpoint</c>
+    /// (<see cref="ResolveDurablePinForPartition"/>) and the WAL GC can trim
+    /// the now-covered prefix. The capture is best-effort by construction
+    /// (<see cref="TryCaptureSnapshotForAdvisoryAsync"/> swallows storage
+    /// faults, and <see cref="CaptureSnapshotAsync"/> advances coverage only
+    /// after a confirmed <c>SaveAsync</c>): if it fails, coverage does not
+    /// advance, the pin stays a Zero block pin, and the WAL is retained rather
+    /// than trimmed ahead of durable coverage - so the #1535 no-loss
+    /// invariant is preserved. Crash deactivations bypass
+    /// <c>OnDeactivateAsync</c> (and thus this hook) by design; the persisted
+    /// checkpoint still bounds the next activation's replay cost.
+    /// </para>
+    /// </summary>
+    private async Task TryCaptureSnapshotOnDeactivateAsync()
+    {
+        if (state.State.TreeId is null)
+        {
+            return;
+        }
+
+        // Safety gate (the #1535 no-loss invariant). Capture only when this
+        // activation actually advanced a checkpoint over cache-resident applies
+        // (foreground writes or a completed tail replay). A leaf that only
+        // reactivated cold - persisted checkpoint restored from state, or a
+        // rehydrate that reset uncovered partitions to -1 - has an in-memory
+        // cache that does NOT faithfully hold every checkpointed prefix it
+        // would stamp; capturing then would write a snapshot claiming coverage
+        // of data the cache never held, advancing the coverage view and
+        // authorising the WAL GC to trim an unrecoverable prefix. Requiring a
+        // real forward advance this activation restricts the capture to exactly
+        // the bursty short-activation case #1537 targets, where the cache holds
+        // the freshly-checkpointed data.
+        if (!_checkpointAdvancedThisActivation)
+        {
+            return;
+        }
+
+        // "Already covered" debounce, mirroring the periodic recheck's
+        // per-partition check: only pay for a cache copy plus blob write when
+        // some partition's checkpoint has actually advanced beyond the offset
+        // a durable snapshot already covers for it. A leaf that already reached
+        // full coverage on the periodic cadence (the long-lived case that does
+        // not hit this gap) short-circuits here with no allocation.
+        var resolved = await GetOptionsAsync();
+        var partitionCount = Math.Max(1, resolved.WalPartitions);
+        var anyPartitionNeedsCapture = false;
+        for (var p = 0; p < partitionCount; p++)
+        {
+            if (GetCurrentCheckpointForPartition(p) > DurableSnapshotCoverageForPartition(p))
+            {
+                anyPartitionNeedsCapture = true;
+                break;
+            }
+        }
+        if (!anyPartitionNeedsCapture)
+        {
+            return;
+        }
+
         await TryCaptureSnapshotForAdvisoryAsync();
     }
 
