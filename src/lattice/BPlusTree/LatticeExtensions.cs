@@ -261,12 +261,13 @@ public static class LatticeExtensions
         var budget = maxAttempts ?? DefaultScanReconnectAttempts;
         if (budget < 0) budget = 0;
 
-        // See ScanEntriesAsyncCore: a caller-established system-origin scope is
-        // reset by Orleans in this iterator's execution flow after the first
-        // physical segment completes, so it must be re-asserted around every
-        // reopen or a resumed segment resolves to an anonymous subject and a
-        // fail-closed gate silently truncates the scan.
+        // See ScanEntriesAsyncCore: a caller-established system-origin scope OR
+        // credential scope is reset by Orleans in this iterator's execution flow
+        // after the first physical segment completes, so each must be re-asserted
+        // around every reopen or a resumed segment resolves to an anonymous subject
+        // and a fail-closed gate silently truncates the scan.
         var reassertSystemOrigin = LatticeAccessGateContext.IsSystemOrigin;
+        var reassertCredential = LatticeCredentialContext.Current;
 
         string? lastKey = null;
         var attempt = 0;
@@ -276,6 +277,9 @@ public static class LatticeExtensions
             cancellationToken.ThrowIfCancellationRequested();
             var (s, e) = ComputeScanBounds(startInclusive, endExclusive, lastKey, reverse);
             using var originScope = reassertSystemOrigin ? LatticeAccessGateContext.EnterSystemOrigin() : null;
+            using var credentialScope = reassertCredential is { } entryCredential
+                ? LatticeCredentialContext.With(entryCredential)
+                : null;
             var enumerator = (predicate is null
                 ? lattice.KeysAsync(s, e, reverse, prefetch, cancellationToken)
                 : lattice.KeysWherePredicateAsync(predicate.Value, s, e, reverse, prefetch, cancellationToken))
@@ -395,18 +399,22 @@ public static class LatticeExtensions
         // EnumerationAbortedException (raised, for example, when a concurrent scan
         // over the same activation evicts this enumerator). Each physical segment
         // is a fresh grain call whose server-side authorization identity is
-        // resolved from the ambient RequestContext at send time. When the caller
-        // wraps the whole scan in a system-origin scope (see
-        // LatticeAccessGateContext.EnterSystemOrigin), Orleans resets the
-        // caller-established RequestContext in THIS iterator's execution flow once
-        // the first segment's call completes, so the scope is lost on every
-        // reopen. A resumed segment would then resolve to an anonymous subject; a
-        // fail-closed access gate denies its range-read and returns a reject-all
-        // key-filter, so the segment completes normally with zero rows and the
-        // scan is silently truncated at the resume point. Capture the caller's
-        // system-origin intent once and re-assert it around every segment so all
-        // segments share one stable identity.
+        // resolved from the ambient RequestContext at send time. Both the caller's
+        // system-origin scope (see LatticeAccessGateContext.EnterSystemOrigin) and
+        // the caller's credential scope (see LatticeCredentialContext.With) live on
+        // that same RequestContext, and Orleans resets the caller-established
+        // RequestContext in THIS iterator's execution flow once the first segment's
+        // call completes, so either scope is lost on every reopen. A resumed
+        // segment would then resolve to an anonymous subject; a fail-closed access
+        // gate denies its range-read and returns a reject-all key-filter, so the
+        // segment completes normally with zero rows and the scan is silently
+        // truncated at the resume point. This bites either identity independently:
+        // a system-origin infrastructure scan, or a credential-scoped scan such as
+        // the repository-context background reconcile (which stamps a fixed run
+        // credential but no system-origin). Capture both once and re-assert them
+        // around every segment so all segments share one stable identity.
         var reassertSystemOrigin = LatticeAccessGateContext.IsSystemOrigin;
+        var reassertCredential = LatticeCredentialContext.Current;
 
         string? lastKey = null;
         var attempt = 0;
@@ -416,6 +424,9 @@ public static class LatticeExtensions
             cancellationToken.ThrowIfCancellationRequested();
             var (s, e) = ComputeScanBounds(startInclusive, endExclusive, lastKey, reverse);
             using var originScope = reassertSystemOrigin ? LatticeAccessGateContext.EnterSystemOrigin() : null;
+            using var credentialScope = reassertCredential is { } entryCredential
+                ? LatticeCredentialContext.With(entryCredential)
+                : null;
             var enumerator = (predicate is null
                 ? lattice.EntriesAsync(s, e, reverse, prefetch, cancellationToken)
                 : lattice.EntriesWherePredicateAsync(predicate.Value, s, e, reverse, prefetch, cancellationToken))
@@ -622,9 +633,10 @@ public static class LatticeExtensions
     /// a reopened cursor resumes at the first surviving key with no double
     /// counting, so the returned total reflects keys actually deleted by this
     /// call. A caller-established system-origin scope (see
-    /// <c>LatticeAccessGateContext.EnterSystemOrigin</c>) is re-asserted around
-    /// every step so a reopened cursor resolves to the same subject a fail-closed
-    /// gate authorized on the first step.
+    /// <c>LatticeAccessGateContext.EnterSystemOrigin</c>) or credential scope (see
+    /// <c>LatticeCredentialContext.With</c>) is re-asserted around every step so a
+    /// reopened cursor resolves to the same subject a fail-closed gate authorized
+    /// on the first step.
     /// <para>
     /// Prefer this over the raw
     /// <see cref="ILattice.OpenDeleteRangeCursorAsync"/> /
@@ -662,6 +674,7 @@ public static class LatticeExtensions
         if (budget < 0) budget = 0;
 
         var reassertSystemOrigin = LatticeAccessGateContext.IsSystemOrigin;
+        var reassertCredential = LatticeCredentialContext.Current;
 
         var total = 0;
         var attempt = 0;
@@ -672,6 +685,7 @@ public static class LatticeExtensions
 
             string cursorId;
             using (reassertSystemOrigin ? LatticeAccessGateContext.EnterSystemOrigin() : null)
+            using (reassertCredential is { } openCredential ? LatticeCredentialContext.With(openCredential) : null)
             {
                 cursorId = await lattice
                     .OpenDeleteRangeCursorAsync(startInclusive, endExclusive, cancellationToken)
@@ -689,6 +703,7 @@ public static class LatticeExtensions
                     try
                     {
                         using (reassertSystemOrigin ? LatticeAccessGateContext.EnterSystemOrigin() : null)
+                        using (reassertCredential is { } stepCredential ? LatticeCredentialContext.With(stepCredential) : null)
                         {
                             progress = await lattice
                                 .DeleteRangeStepAsync(cursorId, stepSize, cancellationToken)
