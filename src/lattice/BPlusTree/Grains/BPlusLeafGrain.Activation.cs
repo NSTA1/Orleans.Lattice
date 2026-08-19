@@ -496,6 +496,24 @@ internal sealed partial class BPlusLeafGrain
                         "prefix and advance the materialiser pin past unrecoverable data. " +
                         "Operator-driven projection rebuild is required.");
                 }
+
+                // Residual liveness signal (#1542). Reaching here means this
+                // partition is a genuine cold rebuild over a pre-existing durable
+                // checkpoint (persistedCheckpoint > 0) whose full prefix still
+                // survives in the readable WAL - the guard above ruled out a
+                // fallen-off prefix, and no snapshot rehydrated (step 0.5 chose
+                // the -1 override only when the cache started empty and
+                // unhydrated). The replay below therefore reconstructs the entire
+                // readable window into the cache, so the cache faithfully holds
+                // the checkpointed prefix and a graceful-deactivation capture may
+                // safely stamp coverage. This closes the gap #1537 leaves for an
+                // already-converged, snapshot-less leaf (checkpoint already at
+                // head, so no forward advance sets _checkpointAdvancedThisActivation)
+                // that would otherwise hold its Zero block pin - and its shared
+                // WAL - forever. A brand-new leaf has no pre-existing checkpoint
+                // (persistedCheckpoint == 0), never enters this block, and so its
+                // foreground writes are never auto-covered on deactivation.
+                _cacheRebuiltFromWalStartThisActivation = true;
             }
 
 #if LATTICE_DIAG
