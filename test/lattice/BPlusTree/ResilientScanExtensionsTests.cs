@@ -521,6 +521,133 @@ public class ResilientScanExtensionsTests
             "Second reconnect must apply at least ~20 ms of linear backoff (15 ms floor to absorb timer jitter).");
     }
 
+    // ── Credential re-assertion across reopen (regression) ─────
+
+    [Test]
+    public async Task ScanEntriesAsync_reasserts_caller_credential_across_reopen()
+    {
+        // Regression: a resilient scan driven under a pure credential scope (no
+        // system-origin) must re-assert that credential on every reopened segment.
+        // Orleans resets the caller-established RequestContext in the iterator's
+        // execution flow after the first segment completes; before the fix only the
+        // system-origin scope was re-asserted, so a credential-scoped scan (e.g. the
+        // repository-context background reconcile) lost its credential on reopen,
+        // the resumed segment resolved to an anonymous subject, and a fail-closed
+        // gate silently truncated the scan to zero rows. The reset is simulated here
+        // by clearing the ambient credential inside the aborting first segment.
+        var credential = new LatticeCredential("run-subject", "test", "run-subject");
+        var observed = new List<LatticeCredential?>();
+        var callIndex = 0;
+        var lattice = Substitute.For<ILattice>();
+        lattice.EntriesAsync(
+            Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<bool?>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                observed.Add(LatticeCredentialContext.Current);
+                var idx = callIndex++;
+                if (idx == 0)
+                {
+                    // Simulate Orleans resetting the caller-established RequestContext
+                    // in the core iterator's execution flow once the first segment's
+                    // call completes. This must be a synchronous mutation in the core
+                    // loop's own context: an AsyncLocal change inside a nested async
+                    // enumerator would flow only to its children, not back up here.
+                    LatticeCredentialContext.Current = null;
+                    return ScriptedEntries(Array.Empty<(string, int)>(), abortAfter: 0);
+                }
+                return ScriptedEntries(new[] { ("c", 3) }, abortAfter: int.MaxValue);
+            });
+
+        List<KeyValuePair<string, byte[]>> entries;
+        using (LatticeCredentialContext.With(credential))
+        {
+            entries = new List<KeyValuePair<string, byte[]>>();
+            await foreach (var e in lattice.ScanEntriesAsync()) entries.Add(e);
+        }
+
+        Assert.That(callIndex, Is.EqualTo(2), "the scan must reopen once after the abort");
+        Assert.That(observed[0], Is.EqualTo(credential), "the first segment carries the caller credential");
+        Assert.That(observed[1], Is.EqualTo(credential),
+            "the reopened segment must re-assert the caller credential; before the fix it resolved to null "
+            + "(anonymous) and a fail-closed gate would silently truncate the scan");
+        Assert.That(entries.Select(e => e.Key), Is.EqualTo(new[] { "c" }));
+    }
+
+    [Test]
+    public async Task ScanKeysAsync_reasserts_caller_credential_across_reopen()
+    {
+        var credential = new LatticeCredential("run-subject", "test", "run-subject");
+        var observed = new List<LatticeCredential?>();
+        var callIndex = 0;
+        var lattice = Substitute.For<ILattice>();
+        lattice.KeysAsync(
+            Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<bool?>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                observed.Add(LatticeCredentialContext.Current);
+                var idx = callIndex++;
+                if (idx == 0)
+                {
+                    LatticeCredentialContext.Current = null; // simulate the RequestContext reset (see entries test)
+                    return ScriptedKeys(Array.Empty<string>(), abortAfter: 0);
+                }
+                return ScriptedKeys(new[] { "c" }, abortAfter: int.MaxValue);
+            });
+
+        List<string> keys;
+        using (LatticeCredentialContext.With(credential))
+        {
+            keys = await CollectAsync(lattice.ScanKeysAsync());
+        }
+
+        Assert.That(callIndex, Is.EqualTo(2), "the scan must reopen once after the abort");
+        Assert.That(observed[0], Is.EqualTo(credential), "the first segment carries the caller credential");
+        Assert.That(observed[1], Is.EqualTo(credential),
+            "the reopened segment must re-assert the caller credential (anonymous before the fix)");
+        Assert.That(keys, Is.EqualTo(new[] { "c" }));
+    }
+
+    [Test]
+    public async Task DeleteRangeAsync_reasserts_caller_credential_across_reopen()
+    {
+        var credential = new LatticeCredential("run-subject", "test", "run-subject");
+        var observed = new List<LatticeCredential?>();
+        var openIndex = 0;
+        var lattice = Substitute.For<ILattice>();
+
+        // Two cursors: the first step aborts (clearing the ambient credential to
+        // simulate the RequestContext reset), forcing a reopen; the reopened cursor
+        // completes. Each OpenDeleteRangeCursorAsync records the credential visible
+        // at open time - it must remain the caller credential across the reopen.
+        lattice.OpenDeleteRangeCursorAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns<string>(_ =>
+            {
+                observed.Add(LatticeCredentialContext.Current);
+                return $"cursor-{openIndex++}";
+            });
+        lattice.DeleteRangeStepAsync("cursor-0", Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns<LatticeCursorDeleteProgress>(_ =>
+            {
+                LatticeCredentialContext.Current = null; // simulate Orleans RequestContext reset
+                throw new EnumerationAbortedException();
+            });
+        lattice.DeleteRangeStepAsync("cursor-1", Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(new LatticeCursorDeleteProgress { DeletedThisStep = 2, IsComplete = true });
+
+        int deleted;
+        using (LatticeCredentialContext.With(credential))
+        {
+            deleted = await lattice.DeleteRangeAsync("a", "z", stepSize: 100);
+        }
+
+        Assert.That(openIndex, Is.EqualTo(2), "the drain must reopen the cursor once after the abort");
+        Assert.That(deleted, Is.EqualTo(2));
+        Assert.That(observed[0], Is.EqualTo(credential), "the first cursor opens under the caller credential");
+        Assert.That(observed[1], Is.EqualTo(credential),
+            "the reopened cursor must re-assert the caller credential (anonymous before the fix)");
+    }
+
     // ── Helpers ────────────────────────────────────────────────
 
     private static void StubKeys(ILattice lattice, Func<string?, IAsyncEnumerable<string>> producer)
