@@ -36,6 +36,7 @@ internal static class CoreDocsSnippetScope
         "docs/lattice.api.data",
         "docs/lattice.api.mcp",
         "docs/lattice.api.mcp.repocontext",
+        "docs/lattice.api.mcp.repocontext.replication",
         "docs/lattice.api.mcp.telemetry",
         "docs/lattice.api.mcp.telemetry.azure",
         "docs/lattice.api.state",

@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>Orleans.Lattice.Api.Mcp.RepoContext.Replication</PackageId>
+    <Version>8.0.0</Version>
+    <Description>Optional, opt-in multi-cluster add-on for Orleans.Lattice.Api.Mcp.RepoContext. Adds EnableRepoContextMultiCluster(...), a single guardrail helper that turns on cross-cluster replication for the repository-context trees with the correct per-tree merge mode - the vector-membership presence tree is pinned to the add-wins OrFlag CRDT so active-active convergence can never silently drop an embedding, while the store-of-record and rebuildable-projection trees default to last-writer-wins. Depends on Orleans.Lattice.Replication for the replication engine; single-cluster repo-context users never take that dependency.</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Mcp.RepoContext.Replication.Tests" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\lattice\Orleans.Lattice.csproj" />
+    <ProjectReference Include="..\lattice.replication\Orleans.Lattice.Replication.csproj" />
+    <ProjectReference Include="..\lattice.api.mcp.repocontext\Orleans.Lattice.Api.Mcp.RepoContext.csproj" />
+    <PackageReference Include="Microsoft.Orleans.Sdk" Version="10.2.0" />
+  </ItemGroup>
+
+</Project>
