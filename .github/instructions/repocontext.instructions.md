@@ -459,8 +459,14 @@ normal, not a contradiction (embeddings also require a healthy vector projection
 
 - `repocontext_health` - is the surface registered and reachable.
 - `repocontext_index_status {repoId}` - `status` / `phase` / counters
-  (`filesScanned`, `filesEmbedded`, `chunksCommitted`, `updatedAt`). Read it two
-  ways:
+  (`filesScanned`, `filesEmbedded`, `chunksCommitted`, `updatedAt`, `attempt`).
+  Note `attempt` is a **cumulative run-start tally**, not a retry or failure
+  count: it rises by one on the initial onboarding and on every re-drive (each
+  periodic reconcile that picks up edits and deletions, each gap back-fill, each
+  re-drive of a failed run, each reminder-driven resume), so it climbs steadily
+  on a healthy, actively-maintained repository - a high value is normal and is
+  never on its own a degradation signal (use `status` / `updatedAt` for that).
+  Read it two ways:
   - **Degraded:** `status: Failed`, or `filesEmbedded: 0` alongside a
     stale-projection error, means semantic search has degraded to `keyword` -
     retrieval still works but ranking is literal. Report it and fall back to

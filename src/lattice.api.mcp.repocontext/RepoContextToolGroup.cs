@@ -224,7 +224,9 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                 Description =
                     "Reports the progress of a repository's asynchronous indexing job: its status (none, "
                     + "running, completed, or failed), the phase it is executing (walking, reconciling, "
-                    + "applying, or vectorising), the running file and chunk counters, the attempt number, and "
+                    + "applying, or vectorising), the running file and chunk counters, the cumulative "
+                    + "index-run count (a run-start tally that rises on every reconcile and back-fill, not a "
+                    + "retry counter), and "
                     + "timing. Because onboarding runs in the background and survives a client disconnect or a "
                     + "host restart, poll this tool with the repository id to follow a long onboarding pass to "
                     + "completion. A repository that was never onboarded reports status 'none'. Read-only.",
