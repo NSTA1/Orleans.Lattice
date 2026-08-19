@@ -234,6 +234,21 @@ internal sealed partial class BPlusLeafGrain
             replayPermit?.Release();
         }
 
+        // Latch the cold-rebuild safety signal for the graceful-deactivation
+        // capture (#1542). The -1 override means step 0.5 drove the replay from
+        // the start of the readable WAL, so the cache now holds the entire
+        // readable window of every partition - a faithful superset of every
+        // checkpointed prefix. This is what lets an already-converged, snapshot-
+        // less leaf (checkpoint at head, so no forward advance sets
+        // _checkpointAdvancedThisActivation) still capture on deactivation and
+        // lift its Zero block pin. Reaching here means the replay completed
+        // without throwing the #945 fall-off guard, so a trimmed prefix with no
+        // covering snapshot has already been ruled out.
+        if (replayCheckpointOverride is -1L)
+        {
+            _cacheRebuiltFromWalStartThisActivation = true;
+        }
+
         // Step 1.5 - if the fall-off-log detector raised the
         // SnapshotPending advisory while classifying the replay path,
         // proactively capture the leaf's projection into the dedicated

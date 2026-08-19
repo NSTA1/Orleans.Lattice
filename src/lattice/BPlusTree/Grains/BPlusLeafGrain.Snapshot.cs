@@ -82,6 +82,31 @@ internal sealed partial class BPlusLeafGrain
     private bool _checkpointAdvancedThisActivation;
 
     /// <summary>
+    /// Set once this activation fully rebuilt the in-memory cache from the start
+    /// of the readable WAL - the cold-cache override path in
+    /// <c>OnActivateAsync</c> (step 0.5), where the per-activation cache started
+    /// empty and no snapshot rehydrated it, so the replay ran from the
+    /// <c>-1</c> sentinel and reconstructed the entire readable window of every
+    /// partition. Like <see cref="_checkpointAdvancedThisActivation"/> this is a
+    /// safety precondition for the graceful-deactivation snapshot capture
+    /// (<see cref="TryCaptureSnapshotOnDeactivateAsync"/>): a full rebuild from
+    /// the WAL start leaves the cache holding a superset of every checkpointed
+    /// prefix, so capturing that cache and stamping each partition's checkpoint
+    /// truthfully records coverage. It closes the residual liveness gap #1537
+    /// leaves open - an already-converged leaf (its checkpoint already at head)
+    /// cold-reactivates, rebuilds its full cache, but advances no checkpoint, so
+    /// <see cref="_checkpointAdvancedThisActivation"/> alone stays <c>false</c>
+    /// and the block pin would never lift. The one shape that could make a
+    /// <c>-1</c> rebuild unfaithful - a trimmed WAL prefix with no covering
+    /// snapshot - throws <c>LeafProjectionStaleException</c> at activation (the
+    /// #945 durable-frontier fall-off guard) before this flag is read, so it can
+    /// never authorise a capture over a lost prefix (the #1535 no-loss
+    /// invariant). Reset to <c>false</c> on every fresh activation because it is
+    /// a plain instance field, never persisted.
+    /// </summary>
+    private bool _cacheRebuiltFromWalStartThisActivation;
+
+    /// <summary>
     /// Byte-accurate footprint of the most recently persisted snapshot
     /// for this leaf, or <c>0</c> when no snapshot has been captured this
     /// activation. Mirrors the value written into
@@ -423,19 +448,28 @@ internal sealed partial class BPlusLeafGrain
             return;
         }
 
-        // Safety gate (the #1535 no-loss invariant). Capture only when this
-        // activation actually advanced a checkpoint over cache-resident applies
-        // (foreground writes or a completed tail replay). A leaf that only
-        // reactivated cold - persisted checkpoint restored from state, or a
-        // rehydrate that reset uncovered partitions to -1 - has an in-memory
-        // cache that does NOT faithfully hold every checkpointed prefix it
-        // would stamp; capturing then would write a snapshot claiming coverage
-        // of data the cache never held, advancing the coverage view and
-        // authorising the WAL GC to trim an unrecoverable prefix. Requiring a
-        // real forward advance this activation restricts the capture to exactly
-        // the bursty short-activation case #1537 targets, where the cache holds
-        // the freshly-checkpointed data.
-        if (!_checkpointAdvancedThisActivation)
+        // Safety gate (the #1535 no-loss invariant). Capture only when the
+        // in-memory cache faithfully holds every checkpointed prefix it would
+        // stamp as covered. Two independent activations satisfy that:
+        //   (a) this activation advanced a checkpoint over cache-resident applies
+        //       (foreground writes or a completed tail replay) -
+        //       _checkpointAdvancedThisActivation; or
+        //   (b) this activation fully rebuilt the cache from the WAL start (the
+        //       cold-cache override, replay from -1), so the cache holds the
+        //       entire readable window, a superset of the checkpointed prefix -
+        //       _cacheRebuiltFromWalStartThisActivation.
+        // Signal (b) is what closes the residual #1537 gap: an already-converged
+        // leaf (checkpoint already at head) cold-reactivates and rebuilds its
+        // full cache but advances no checkpoint, so (a) alone stays false and the
+        // Zero block pin would never lift. A leaf that merely reactivated cold
+        // WITHOUT a full rebuild (its persisted checkpoint restored from state
+        // with a non-empty cache, or a rehydrate that reset uncovered partitions
+        // to -1 with no forward apply) satisfies neither and does not capture, so
+        // it can never write a snapshot claiming coverage of data the cache never
+        // held. The one shape that could make a -1 rebuild unfaithful - a trimmed
+        // WAL prefix with no covering snapshot - throws at activation (the #945
+        // fall-off guard) before this hook runs.
+        if (!_checkpointAdvancedThisActivation && !_cacheRebuiltFromWalStartThisActivation)
         {
             return;
         }
