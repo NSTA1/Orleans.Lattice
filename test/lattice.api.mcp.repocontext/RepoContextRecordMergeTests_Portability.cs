@@ -63,15 +63,44 @@ public sealed class RepoContextRecordMergeTests_Portability
         var tags = new OrSet();
         tags.Add(Encoding.UTF8.GetBytes("core"), "A", 1);
         var record = new MemoryRecord { RepoId = "acme", Topic = "notes", Id = "n1", Tags = tags };
-        var bytes = _serializer.SerializeToArray(record);
 
-        // Merging a state with itself yields the same logical state (CRDT idempotency),
-        // which is exactly what a re-import of the same snapshot does.
+        // A memory value is stored as the MvRegister envelope, not a bare record, so a
+        // re-import folds two envelopes: merging one with itself yields the same
+        // logical state (CRDT idempotency), which is exactly a re-import of the same
+        // snapshot.
+        var bytes = MemoryRegisterTestEncoding.EncodeSingle(_serializer, "A", record);
         var mergedBytes = merge(key, bytes, bytes);
-        var merged = _serializer.Deserialize<MemoryRecord>(mergedBytes);
+        var folded = RepoContextMemoryCodec.Fold(mergedBytes, _serializer);
 
-        var elements = merged.Tags.Elements().Select(e => Encoding.UTF8.GetString(e)).ToList();
+        Assert.That(folded, Is.Not.Null);
+        var elements = folded!.Tags.Elements().Select(e => Encoding.UTF8.GetString(e)).ToList();
         Assert.That(elements, Is.EqualTo(new[] { "core" }));
+    }
+
+    [Test]
+    public void Default_merge_of_memory_unions_two_concurrent_cross_cluster_envelopes()
+    {
+        var merge = RepoContextRecordMerge.Default(_serializer);
+        var key = RepoContextKeys.Memory("acme", "notes", "n1");
+
+        // Two clusters each imported a snapshot that captured their own concurrent
+        // write. A re-import that folds the two envelopes must keep both writes' tags,
+        // never collapse to one - the portability equivalent of the live read fold.
+        var aTags = new OrSet();
+        aTags.Add(Encoding.UTF8.GetBytes("from-a"), "A", 1);
+        var bTags = new OrSet();
+        bTags.Add(Encoding.UTF8.GetBytes("from-b"), "B", 1);
+        var a = MemoryRegisterTestEncoding.EncodeSingle(
+            _serializer, "clusterA", new MemoryRecord { RepoId = "acme", Topic = "notes", Id = "n1", Tags = aTags });
+        var b = MemoryRegisterTestEncoding.EncodeSingle(
+            _serializer, "clusterB", new MemoryRecord { RepoId = "acme", Topic = "notes", Id = "n1", Tags = bTags });
+
+        var folded = RepoContextMemoryCodec.Fold(merge(key, a, b), _serializer);
+
+        Assert.That(folded, Is.Not.Null);
+        var elements = folded!.Tags.Elements().Select(e => Encoding.UTF8.GetString(e)).ToList();
+        Assert.That(elements, Is.EquivalentTo(new[] { "from-a", "from-b" }),
+            "Both concurrent cross-cluster writes survive the re-import fold.");
     }
 
     [Test]
