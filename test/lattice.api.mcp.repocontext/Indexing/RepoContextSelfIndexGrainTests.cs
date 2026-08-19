@@ -265,10 +265,46 @@ public sealed class RepoContextSelfIndexGrainTests
         });
     }
 
+    [Test]
+    public async Task EnsureRunningAsync_on_a_spoke_stays_inert_and_indexes_nothing()
+    {
+        const string RepoId = "acme";
+        var root = NewRepo(("a.cs", "class A {}"), ("b.cs", "class B {}"));
+
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions
+            {
+                Posture = RepoContextMcpAuthPosture.Writer,
+                // Declare this cluster a spoke: it serves replicated index records for
+                // reads but must never walk, reconcile, prune, or re-embed source-derived
+                // index state, so onboarding is inert and nothing is ingested from disk.
+                ConfigureServices = services =>
+                    services.AddSingleton(new RepoContextIndexingOptions
+                    {
+                        Role = RepoContextIndexingRole.Spoke,
+                    }),
+            },
+            Ct);
+        var grain = harness.GrainFactory.GetGrain<IRepoContextSelfIndexGrain>(RepoId);
+
+        var accepted = await grain.EnsureRunningAsync(new RepoIndexJobRequest { RepoRoot = root, RepoId = RepoId });
+        Assert.Multiple(() =>
+        {
+            Assert.That(accepted.RepoId, Is.EqualTo(RepoId));
+            Assert.That(accepted.Status, Is.EqualTo(RepoIndexStatus.None),
+                "A spoke drives no run, so it returns the benign never-started snapshot.");
+            Assert.That(accepted.Phase, Is.EqualTo(RepoIndexPhase.Pending));
+        });
+
+        // The runner index pass was never driven, so the job grain never left the
+        // never-started state: the spoke mutated no index state.
+        var job = harness.GrainFactory.GetGrain<IRepoIndexJobGrain>(RepoId);
+        var progress = await job.GetProgressAsync();
+        Assert.That(progress.Status, Is.EqualTo(RepoIndexStatus.None),
+            "A spoke never drives the runner, so no indexing job runs on this cluster.");
+    }
+
     /// <summary>
-    /// A test vectorisation seam that throws on its first ingest (to fail the first
-    /// run) and is inert thereafter, so a re-drive succeeds.
-    /// </summary>
     private sealed class FailOnceVectorIngestor : IRepoContextVectorIngestor
     {
         private int _invocations;

@@ -46,7 +46,7 @@ public sealed class RepoContextEntryProjectionTests
         record.Links.Set("relatesTo", "a", targets);
 
         var view = RepoContextEntryProjection.Project(
-            key, Serializer.SerializeToArray(record), Serializer, RepoContextRemainingLife.NeverExpires);
+            key, MemoryRegisterTestEncoding.EncodeSingle(Serializer, "r", record), Serializer, RepoContextRemainingLife.NeverExpires);
 
         Assert.Multiple(() =>
         {
@@ -62,6 +62,37 @@ public sealed class RepoContextEntryProjectionTests
             Assert.That(view.Links["relatesTo"], Is.EqualTo(new[] { "repo/acme/file/a.cs" }));
             Assert.That(view.Expires, Is.False);
             Assert.That(view.RemainingSeconds, Is.Null);
+        });
+    }
+
+    [Test]
+    public void Project_folds_two_concurrent_memory_writes_from_the_mv_register_envelope()
+    {
+        var key = Parse(RepoContextKeys.Memory("acme", "decisions", "42"));
+
+        // Two clusters wrote the same memory key concurrently: the stored value is an
+        // MvRegister envelope carrying both records. The projection must unwrap and
+        // fold the conflict set so a scan / recall sees the converged record, not one
+        // arm of it. Cluster A set the title; cluster B added a tag; both must survive.
+        var a = new MemoryRecord
+        {
+            RepoId = "acme",
+            Topic = "decisions",
+            Id = "42",
+            Title = RepoContextValues.Lww("Adopt hub-and-spoke", Clock(1)),
+        };
+        var b = new MemoryRecord { RepoId = "acme", Topic = "decisions", Id = "42" };
+        b.Tags.Add(Encoding.UTF8.GetBytes("topology"), "b", 0);
+        var stored = MemoryRegisterTestEncoding.EncodeConcurrent(Serializer, ("clusterA", a), ("clusterB", b));
+
+        var view = RepoContextEntryProjection.Project(
+            key, stored, Serializer, RepoContextRemainingLife.NeverExpires);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(view.Exists, Is.True);
+            Assert.That(view.Fields["title"], Is.EqualTo("Adopt hub-and-spoke"), "Cluster A's write survives the fold.");
+            Assert.That(view.Tags, Is.EqualTo(new[] { "topology" }), "Cluster B's write survives the fold.");
         });
     }
 
@@ -118,7 +149,7 @@ public sealed class RepoContextEntryProjectionTests
         var life = RepoContextRemainingLife.FromExpiry(now.AddMinutes(5).Ticks, now);
 
         var view = RepoContextEntryProjection.Project(
-            key, Serializer.SerializeToArray(record), Serializer, life);
+            key, MemoryRegisterTestEncoding.EncodeSingle(Serializer, "r", record), Serializer, life);
 
         Assert.Multiple(() =>
         {
@@ -138,7 +169,7 @@ public sealed class RepoContextEntryProjectionTests
         // A bulk scan / keyword search passes life: null - expiry was not evaluated,
         // so every expiry field is null ("not evaluated"), not a false durable claim.
         var view = RepoContextEntryProjection.Project(
-            key, Serializer.SerializeToArray(record), Serializer, life: null);
+            key, MemoryRegisterTestEncoding.EncodeSingle(Serializer, "r", record), Serializer, life: null);
 
         Assert.Multiple(() =>
         {

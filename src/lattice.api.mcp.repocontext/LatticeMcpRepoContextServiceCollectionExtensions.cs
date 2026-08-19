@@ -159,6 +159,13 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         // over file content. TryAdd means a host or test harness can substitute it.
         services.TryAddSingleton<RepoContextContentReconciler>();
         services.TryAddSingleton(RepoContextIndexingOptions.FromEnvironment());
+
+        // The stable replica identity authored onto every agent-memory CRDT write.
+        // The base default is the single-cluster local id; the replication companion
+        // (EnableRepoContextMultiCluster) registers a cluster-id identity so
+        // cross-cluster concurrent memory writes mint distinct dots and both survive
+        // the merge. TryAdd means the companion's registration wins when present.
+        services.TryAddSingleton<IRepoContextReplicaIdentity, LocalRepoContextReplicaIdentity>();
         services.TryAddSingleton<RepoContextStore>();
 
         // The shared BPE token counter: constructs its tiktoken tokenizer once from the

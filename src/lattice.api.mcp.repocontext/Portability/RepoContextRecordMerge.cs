@@ -1,3 +1,4 @@
+using Orleans.Lattice.Primitives;
 using Orleans.Serialization;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext;
@@ -45,10 +46,28 @@ internal static class RepoContextRecordMerge
             RepoContextRecordKind.Package => Fold<PackageNode>(serializer, existing, incoming, PackageNode.Merge),
             RepoContextRecordKind.File => Fold<FileNode>(serializer, existing, incoming, FileNode.Merge),
             RepoContextRecordKind.Symbol => Fold<SymbolRecord>(serializer, existing, incoming, SymbolRecord.Merge),
-            RepoContextRecordKind.Memory => Fold<MemoryRecord>(serializer, existing, incoming, MemoryRecord.Merge),
+            RepoContextRecordKind.Memory => FoldMemory(existing, incoming),
             RepoContextRecordKind.Content => Fold<ContentRecord>(serializer, existing, incoming, ContentRecord.Merge),
             _ => incoming,
         };
+    }
+
+    /// <summary>
+    /// Folds two stored memory values. A memory value is not a bare
+    /// <see cref="MemoryRecord"/> but the <see cref="MvRegister"/> envelope the
+    /// store authors (concurrent per-replica <see cref="MemoryRecord"/> bytes), so a
+    /// re-import must converge at the register level - <see cref="MvRegister.Merge"/>
+    /// unions the dot-tagged values and drops observed ones - not by decoding one
+    /// whole record. Reducing the register's values (as a read does) would collapse a
+    /// live conflict set to a single value and lose the losing replica's dot on the
+    /// next write.
+    /// </summary>
+    private static byte[] FoldMemory(byte[] existing, byte[] incoming)
+    {
+        var merged = MvRegister.Merge(
+            RepoContextMemoryCodec.DecodeRegister(existing),
+            RepoContextMemoryCodec.DecodeRegister(incoming));
+        return JsonLatticeSerializer<MvRegister>.Default.Serialize(merged);
     }
 
     private static byte[] Fold<T>(

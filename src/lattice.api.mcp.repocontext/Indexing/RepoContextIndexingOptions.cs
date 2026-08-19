@@ -39,6 +39,9 @@ internal sealed class RepoContextIndexingOptions
     /// <summary>Environment variable overriding <see cref="TokenizerProfile"/>.</summary>
     public const string TokenizerProfileKey = "LATTICE_REPOCONTEXT_TOKENIZER";
 
+    /// <summary>Environment variable overriding <see cref="Role"/>.</summary>
+    public const string IndexingRoleKey = "LATTICE_REPOCONTEXT_INDEXING_ROLE";
+
     /// <summary>The <see cref="TokenizerProfile"/> value selecting the OpenAI o200k_base BPE encoding (the default).</summary>
     public const string TokenizerProfileO200k = "o200k";
 
@@ -88,6 +91,26 @@ internal sealed class RepoContextIndexingOptions
     public string TokenizerProfile { get; init; } = TokenizerProfileO200k;
 
     /// <summary>
+    /// The indexing role this cluster plays. <see cref="RepoContextIndexingRole.Hub"/>
+    /// (the default, preserving single-cluster behaviour) is the authoritative
+    /// indexer; <see cref="RepoContextIndexingRole.Spoke"/> is a read-only replica
+    /// whose self-index grain never walks, reconciles, prunes, or re-embeds.
+    /// Resolved from <see cref="IndexingRoleKey"/>; an absent or unrecognised value
+    /// falls back to <see cref="RepoContextIndexingRole.Hub"/> (fail-closed to the
+    /// original single-cluster behaviour).
+    /// </summary>
+    public RepoContextIndexingRole Role { get; init; } = RepoContextIndexingRole.Hub;
+
+    /// <summary>
+    /// Whether this cluster's self-index grain may mutate source-derived index
+    /// state (walk, reconcile, prune, re-embed). True only for a
+    /// <see cref="RepoContextIndexingRole.Hub"/>; a
+    /// <see cref="RepoContextIndexingRole.Spoke"/> serves replicated reads but its
+    /// index pass is inert.
+    /// </summary>
+    public bool IndexingEnabled => Role == RepoContextIndexingRole.Hub;
+
+    /// <summary>
     /// Resolves the options from environment variables, falling back to the defaults (the
     /// original behaviour) for any variable that is absent or malformed.
     /// </summary>
@@ -103,6 +126,26 @@ internal sealed class RepoContextIndexingOptions
             FullWalkInterval = ReadSeconds(FullWalkIntervalSecondsKey, defaults.FullWalkInterval),
             VectorCacheTtl = ReadSeconds(VectorCacheTtlSecondsKey, defaults.VectorCacheTtl),
             TokenizerProfile = ReadTokenizerProfile(TokenizerProfileKey, defaults.TokenizerProfile),
+            Role = ReadIndexingRole(IndexingRoleKey, defaults.Role),
+        };
+    }
+
+    private static RepoContextIndexingRole ReadIndexingRole(string key, RepoContextIndexingRole fallback)
+    {
+        var raw = Environment.GetEnvironmentVariable(key);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return fallback;
+        }
+
+        // Fail closed on any unrecognised value: only the two supported roles are
+        // honoured; anything else falls back to the default (Hub), so a typo can
+        // never silently turn a cluster into an inert spoke that indexes nothing.
+        return raw.Trim().ToLowerInvariant() switch
+        {
+            "hub" => RepoContextIndexingRole.Hub,
+            "spoke" => RepoContextIndexingRole.Spoke,
+            _ => fallback,
         };
     }
 

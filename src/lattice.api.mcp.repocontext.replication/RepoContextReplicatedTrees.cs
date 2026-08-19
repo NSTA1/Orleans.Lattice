@@ -28,14 +28,27 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Replication;
 ///   </item>
 ///   <item>
 ///     <description>
-///     Every other tree - the structural, symbol, and memory stores of record, the
+///     <see cref="RepoContextTrees.Memory"/> is authored as an
+///     <see cref="Orleans.Lattice.LatticeMergeMode.MvRegister"/> (a multi-value
+///     register whose concurrent values are serialized memory records), so it enrols
+///     under <see cref="LatticeMergeMode.MvRegister"/>. This is the second
+///     load-bearing choice: two clusters writing the same memory key concurrently
+///     must both survive and fold back through the record model's CRDT merge, never
+///     last-writer-wins, otherwise active-active convergence silently drops one
+///     write (and its CRDT sub-state) entirely. The helper <b>force-pins</b> this
+///     mode even over a host that mis-declared it.
+///     </description>
+///   </item>
+///   <item>
+///     <description>
+///     Every other tree - the structural and symbol stores of record, the
 ///     rebuildable content and cross-reference projections, the per-session reuse
 ///     bookkeeping, and the vector payload and metadata projections - is authored as a
 ///     plain last-writer-wins value through <c>ILattice.SetAsync</c>, so each enrols
 ///     under <see cref="LatticeMergeMode.LwwRegister"/> by default. The helper lets a
 ///     host override any of these (they are per-key LWW or immutable and
 ///     content-addressed, so a deployment with a single authoritative writer per key
-///     may pick a different mode), but never membership.
+///     may pick a different mode), but never membership or memory.
 ///     </description>
 ///   </item>
 /// </list>
@@ -56,6 +69,15 @@ internal static class RepoContextReplicatedTrees
     /// survives a prune on another instead of being lost delete-wins.
     /// </summary>
     internal const LatticeMergeMode MembershipMode = LatticeMergeMode.OrFlag;
+
+    /// <summary>
+    /// The convergence rule the <see cref="RepoContextTrees.Memory"/> agent-memory
+    /// tree is pinned to. Multi-value so two clusters' concurrent writes to the same
+    /// memory key both survive (each mints its own dot) and fold back through the
+    /// record model's own CRDT merge, instead of one whole record - and its CRDT
+    /// sub-state - being lost delete-wins the way a last-writer-wins register would.
+    /// </summary>
+    internal const LatticeMergeMode MemoryMode = LatticeMergeMode.MvRegister;
 
     /// <summary>
     /// The default convergence rule for every non-membership repository-context tree.
@@ -79,7 +101,7 @@ internal static class RepoContextReplicatedTrees
         {
             [RepoContextTrees.Structural] = DefaultMode,
             [RepoContextTrees.Symbol] = DefaultMode,
-            [RepoContextTrees.Memory] = DefaultMode,
+            [RepoContextTrees.Memory] = MemoryMode,
             [RepoContextTrees.Content] = DefaultMode,
             [RepoContextTrees.CrossReference] = DefaultMode,
             [RepoContextTrees.Session] = DefaultMode,

@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Orleans.Hosting;
 using Orleans.Lattice.Api.Mcp.RepoContext;
 using Orleans.Lattice.Replication;
@@ -103,12 +104,14 @@ public static class RepoContextReplicationServiceCollectionExtensions
 
             foreach (var kv in reserved)
             {
-                if (kv.Key == RepoContextTrees.VectorMembership)
+                if (kv.Key == RepoContextTrees.VectorMembership || kv.Key == RepoContextTrees.Memory)
                 {
-                    // Pinned: force the add-wins membership mode over any host
-                    // declaration. A LwwRegister membership tree silently loses an
-                    // embedding when a source is embedded on one cluster and pruned
-                    // on another - the exact misconfiguration this guardrail prevents.
+                    // Pinned: force the add-wins membership mode and the multi-value
+                    // memory mode over any host declaration. A LwwRegister membership
+                    // tree silently loses an embedding embedded on one cluster and
+                    // pruned on another; a LwwRegister memory tree silently loses one
+                    // of two concurrent cross-cluster writes to the same key. Both are
+                    // the exact misconfigurations these guardrails prevent.
                     merged[kv.Key] = kv.Value;
                 }
                 else
@@ -121,6 +124,18 @@ public static class RepoContextReplicationServiceCollectionExtensions
 
             options.ReplicatedTrees = merged;
         });
+
+        // Author every agent-memory CRDT write under this cluster's replication id, so
+        // two clusters' concurrent writes to the same memory key mint distinct dots and
+        // both survive the merge. Appended after the base local-identity registration,
+        // so it wins for the single resolve regardless of the two calls' order.
+        builder.Services.AddSingleton<IRepoContextReplicaIdentity, ClusterRepoContextReplicaIdentity>();
+
+        // Fail startup fast when the resolved enrolment is inconsistent with the
+        // hub-and-spoke topology (a memory tree that is not multi-master, a membership
+        // tree that is not add-wins, or an index-plane tree enrolled under a CRDT mode
+        // that implies active-active indexing), rather than silently racing at runtime.
+        builder.Services.AddSingleton<IValidateOptions<LatticeReplicationOptions>, RepoContextTopologyOptionsValidator>();
 
         return builder;
     }
