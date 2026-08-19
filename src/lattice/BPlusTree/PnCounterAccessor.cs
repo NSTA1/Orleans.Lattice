@@ -71,6 +71,29 @@ public readonly record struct PnCounterAccessor
     }
 
     /// <summary>
+    /// Increments the positive component for <paramref name="replicaId"/> by
+    /// <paramref name="amount"/> and stamps the whole entry with a per-entry
+    /// time-to-live of <paramref name="ttl"/>. The expiry is resolved to an
+    /// absolute UTC instant on the handling silo and folded under the
+    /// max-absolute-ticks convergence rule, so re-writing with a later
+    /// <paramref name="ttl"/> extends the entry's life and a durable (no-TTL)
+    /// write leaves any existing expiry unchanged. Once the instant passes the
+    /// whole counter reads as absent and is reaped by tombstone compaction.
+    /// </summary>
+    /// <param name="replicaId">The replica authoring the increment. Must be non-empty.</param>
+    /// <param name="amount">The non-negative amount to add to the positive component.</param>
+    /// <param name="ttl">The positive time-to-live for the entry.</param>
+    /// <param name="cancellationToken">Cancels the read and write hops.</param>
+    /// <param name="maxAttempts">Reserved for API parity; the delta apply does not retry.</param>
+    public Task IncrementAsync(string replicaId, long amount, TimeSpan ttl, CancellationToken cancellationToken = default, int maxAttempts = DefaultMaxAttempts)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(replicaId);
+        ArgumentOutOfRangeException.ThrowIfNegative(amount);
+        EnsureInitialised();
+        return MutateAsync(c => IncrementDelta(c, replicaId, amount), cancellationToken, maxAttempts, ttl);
+    }
+
+    /// <summary>
     /// Stages an increment as a <see cref="LatticeStagedCrdtWrite"/> for a
     /// cross-tree atomic write instead of applying it now. The per-replica
     /// component advance is identical to
@@ -176,7 +199,8 @@ public readonly record struct PnCounterAccessor
     private async Task MutateAsync<TDelta>(
         Func<PnCounter, TDelta> mutate,
         CancellationToken cancellationToken,
-        int maxAttempts)
+        int maxAttempts,
+        TimeSpan ttl = default)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
         // Producer-side delta apply: replaced the read-modify-write
@@ -196,7 +220,10 @@ public readonly record struct PnCounterAccessor
         var current = await GetAsync(cancellationToken).ConfigureAwait(false);
         var delta = mutate(current);
         var deltaBytes = JsonLatticeSerializer<TDelta>.Default.Serialize(delta);
-        await _lattice.ApplyCrdtDeltaAsync(_key, LatticeMergeMode.PnCounter, deltaBytes, cancellationToken).ConfigureAwait(false);
+        if (ttl <= TimeSpan.Zero)
+            await _lattice.ApplyCrdtDeltaAsync(_key, LatticeMergeMode.PnCounter, deltaBytes, cancellationToken).ConfigureAwait(false);
+        else
+            await _lattice.ApplyCrdtDeltaAsync(_key, LatticeMergeMode.PnCounter, deltaBytes, ttl, cancellationToken).ConfigureAwait(false);
     }
 
     private static PnCounter Decode(byte[]? bytes) =>

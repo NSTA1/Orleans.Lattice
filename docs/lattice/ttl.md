@@ -1,8 +1,8 @@
-# TTL on `SetAsync`
+# Per-entry TTL (time-to-live)
 
-Orleans.Lattice supports **per-entry time-to-live (TTL)** on writes. An entry written with a TTL is visible to every read until its absolute expiry instant, after which it becomes invisible to reads and is eventually reaped by tombstone compaction.
+Orleans.Lattice supports **per-entry time-to-live (TTL)** on writes. An entry written with a TTL is visible to every read until its absolute expiry instant, after which it becomes invisible to reads and is eventually reaped by tombstone compaction. TTL is available on the last-writer-wins `SetAsync` path (below) and on typed CRDT writes ([Per-entry TTL on CRDT writes](#per-entry-ttl-on-crdt-writes)); both share the same absolute-expiry storage and read-filtering rules.
 
-## Top-level behaviour
+## TTL on `SetAsync`
 
 The public API is an overload on `ILattice`:
 
@@ -26,6 +26,33 @@ Behavior:
 - **Validation.** `SetAsync` throws `ArgumentOutOfRangeException` if `ttl` is zero, negative, or large enough to overflow `DateTimeOffset.MaxValue` when added to `DateTimeOffset.UtcNow`.
 - **Non-TTL writes are unaffected.** Existing `SetAsync(key, value)` calls and bulk-load entries carry no expiry (`ExpiresAtTicks == 0`) and never expire on their own.
 - **Overwrite semantics.** A later `SetAsync` on the same key wins by hybrid-logical-clock timestamp regardless of whether either write carried a TTL. Writing a non-TTL value over a TTL value clears the expiry; writing a TTL value over a non-TTL value introduces one.
+
+## Per-entry TTL on CRDT writes
+
+The same absolute-expiry model applies to typed CRDT writes. Every typed accessor's primary mutating method has a TTL overload, and the low-level `ILattice.ApplyCrdtDeltaAsync` seam gains one:
+
+```csharp verify
+await tree.OrSet("cart:42").AddAsync(new byte[] { 1 }, "cluster-A", TimeSpan.FromMinutes(30), cancellationToken);
+```
+
+```csharp verify
+Task<HybridLogicalClock> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, TimeSpan ttl, CancellationToken ct = default);
+```
+
+The TTL overload is available on the primary write of all thirteen accessors: `GCounter.IncrementAsync`, `GSet.AddAsync`, `MaxRegister.SetAsync`, `MinRegister.SetAsync`, `MvRegister.SetAsync`, `OrFlag.EnableAsync`, `OrMap.SetAsync`, `OrSet.AddAsync`, `PnCounter.IncrementAsync`, `Sequence.InsertAtAsync`, `RwFlag.EnableAsync`, `RwSet.AddAsync`, and `VersionVector.TickAsync`.
+
+Behavior:
+
+- **Absolute UTC expiry, resolved server-side**, exactly as for `SetAsync`: the handling silo computes `DateTimeOffset.UtcNow.Add(ttl).UtcTicks` and stores it on the entry. Validation is identical - the `ILattice` seam throws `ArgumentOutOfRangeException` if `ttl` is zero, negative, or large enough to overflow.
+- **Expiry converges by a max-absolute-ticks join, not last-writer-wins.** When two TTL'd CRDT writes to the same key are merged, the resolved expiry is `Math.Max(existingExpiry, incomingExpiry)`, with `0` (durable) as the semilattice bottom. This join is commutative, associative, and idempotent, so every replica converges on the same expiry regardless of the order in which it observes the writes, and a later or concurrent TTL'd write extends (never shortens) the entry's life - refresh-extends-life.
+- **Why this differs from the LWW-TTL path.** An `LwwValue` resolves its whole value - expiry included - by the single last-writer-by-HLC. A CRDT has no single winning write: both deltas fold into the converged state, so the expiry needs its own independent commutative join, applied regardless of which write wins the row-level HLC merge.
+- **A durable (no-TTL) CRDT write leaves any existing expiry unchanged.** Writing without a TTL contributes `0` (the bottom element), which the max-join ignores, so it neither introduces nor clears an expiry. Clearing a TTL'd entry back to durable is out of scope for this version.
+
+### Replication and cold rebuild
+
+The resolved absolute expiry ships on the wire with each replicated CRDT delta (`ApplyCrdtDeltaItem.ExpiresAtTicks`) and is applied verbatim by the receiver - the absolute tick is never re-resolved from a relative TTL on receive, so inter-cluster clock skew cannot shift a replicated entry's lifetime. The batched receive path threads the same per-entry absolute expiry into each coalesced dispatch item. On a cold projection rebuild, each WAL record carries the cumulative-max expiry and replay re-applies the same `max(priorExpiry, recordExpiry)` join, so the rebuilt entry's expiry is reconstructed independently of HLC replay order.
+
+Read filtering, scans, counts, cursors, caching, and tombstone compaction treat a TTL'd CRDT entry exactly like a TTL'd `SetAsync` entry - the expiry lives on the stored row (`LwwValue.ExpiresAtTicks`), not on the value shape, so all the [read-path](#read-paths) and [tombstone-compaction](#tombstone-compaction) rules below apply unchanged.
 
 ## Internal representation
 

@@ -663,14 +663,14 @@ internal sealed partial class ShardRootGrain
         }
     }
 
-    private async Task<CrdtApplyResult> TraverseForCrdtApplyAsync(string key, LatticeMergeMode mode, byte[] deltaBytes)
+    private async Task<CrdtApplyResult> TraverseForCrdtApplyAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks)
     {
         var path = StackPool.Get();
         try
         {
             var leafId = await ResolveWriteLeafAsync(key, path);
             var leafGrain = ResolveLeafGrain(leafId);
-            var result = await leafGrain.ApplyCrdtDeltaAsync(key, mode, deltaBytes);
+            var result = await leafGrain.ApplyCrdtDeltaAsync(key, mode, deltaBytes, expiresAtTicks);
 
             // Propagate splits up the tree.
             var splitResult = result.Split;

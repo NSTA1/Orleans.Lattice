@@ -57,4 +57,16 @@ internal readonly record struct ApplyCrdtDeltaItem
     /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}.VectorClock"/>.
     /// </summary>
     [Id(5)] public VersionVector? SourceVectorClock { get; init; }
+
+    /// <summary>
+    /// Absolute UTC expiry tick (<see cref="System.DateTime.Ticks"/>) the
+    /// remote cluster stamped on the merged entry, or <c>0</c> when the entry
+    /// is durable (never expires). Applied verbatim by the receiver so a
+    /// TTL'd CRDT write expires on every replica; the receiver folds it under
+    /// the max-absolute-ticks expiry join, exactly as a locally-authored TTL'd
+    /// CRDT apply. Carrying the absolute tick (rather than a relative TTL)
+    /// keeps the expiry strictly convergent across replicas - a relative
+    /// re-resolution on receive would drift by the inter-cluster clock skew.
+    /// </summary>
+    [Id(6)] public long ExpiresAtTicks { get; init; }
 }

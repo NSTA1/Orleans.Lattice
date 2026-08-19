@@ -1631,7 +1631,25 @@ internal sealed partial class LatticeGrain(
             cancellationToken);
     }
 
-    public async Task<HybridLogicalClock> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, CancellationToken cancellationToken = default)
+    public Task<HybridLogicalClock> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, CancellationToken cancellationToken = default) =>
+        ApplyCrdtDeltaGuardedAsync(key, mode, deltaBytes, expiresAtTicks: 0, cancellationToken);
+
+    public Task<HybridLogicalClock> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, TimeSpan ttl, CancellationToken cancellationToken = default)
+    {
+        if (ttl <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(ttl), "TTL must be positive.");
+        var nowUtc = DateTimeOffset.UtcNow;
+        if (ttl > DateTimeOffset.MaxValue - nowUtc)
+            throw new ArgumentOutOfRangeException(nameof(ttl),
+                "TTL is too large - absolute expiry would exceed DateTimeOffset.MaxValue.");
+        // Resolve the absolute expiry on the silo handling this call so
+        // per-entry lifetimes are not shifted by client-clock skew, mirroring
+        // SetAsync(key, value, ttl).
+        var expiresAtTicks = nowUtc.Add(ttl).UtcTicks;
+        return ApplyCrdtDeltaGuardedAsync(key, mode, deltaBytes, expiresAtTicks, cancellationToken);
+    }
+
+    private async Task<HybridLogicalClock> ApplyCrdtDeltaGuardedAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks, CancellationToken cancellationToken)
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
@@ -1655,20 +1673,20 @@ internal sealed partial class LatticeGrain(
         await EnsureMonitorAsync();
         cancellationToken.ThrowIfCancellationRequested();
         var version = LatticeIdempotencyContext.IsActive
-            ? await RunMutationAsync(ct => ApplyCrdtDeltaAsyncCore(key, mode, deltaBytes, ct), cancellationToken)
-            : await ApplyCrdtDeltaAsyncCore(key, mode, deltaBytes, cancellationToken);
+            ? await RunMutationAsync(ct => ApplyCrdtDeltaAsyncCore(key, mode, deltaBytes, expiresAtTicks, ct), cancellationToken)
+            : await ApplyCrdtDeltaAsyncCore(key, mode, deltaBytes, expiresAtTicks, cancellationToken);
         await PublishEventAsync(LatticeTreeEventKind.Set, key);
         return version;
     }
 
-    private Task<HybridLogicalClock> ApplyCrdtDeltaAsyncCore(string key, LatticeMergeMode mode, byte[] deltaBytes, CancellationToken cancellationToken)
+    private Task<HybridLogicalClock> ApplyCrdtDeltaAsyncCore(string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks, CancellationToken cancellationToken)
     {
         return RetryOnStaleRoutingAsync(
-            (self: this, key, mode, deltaBytes),
+            (self: this, key, mode, deltaBytes, expiresAtTicks),
             static async args =>
             {
                 var shard = await args.self.GetShardGrainAsync(args.key);
-                return await shard.ApplyCrdtDeltaAsync(args.key, args.mode, args.deltaBytes);
+                return await shard.ApplyCrdtDeltaAsync(args.key, args.mode, args.deltaBytes, args.expiresAtTicks);
             },
             cancellationToken);
     }

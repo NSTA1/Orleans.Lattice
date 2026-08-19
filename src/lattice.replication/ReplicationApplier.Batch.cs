@@ -972,6 +972,7 @@ internal sealed partial class ReplicationApplier
                         SourceHlc = entry.Timestamp,
                         OriginClusterId = entry.OriginClusterId!,
                         SourceVectorClock = null,
+                        ExpiresAtTicks = entry.ExpiresAtTicks,
                     });
                     pendingCrdtApplies.Add((k, startTs));
                     // Ownership of the cache reservation transfers to

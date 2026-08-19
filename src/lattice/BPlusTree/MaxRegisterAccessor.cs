@@ -70,6 +70,28 @@ public readonly record struct MaxRegisterAccessor<T>
     }
 
     /// <summary>
+    /// Advances the register towards <paramref name="value"/> and stamps the
+    /// whole entry with a per-entry time-to-live of <paramref name="ttl"/>. The
+    /// expiry is resolved to an absolute UTC instant on the handling silo and
+    /// folded under the max-absolute-ticks convergence rule, so re-writing with
+    /// a later <paramref name="ttl"/> extends the entry's life and a durable
+    /// (no-TTL) write leaves any existing expiry unchanged. Once the instant
+    /// passes the register reads as never-written and is reaped by tombstone
+    /// compaction.
+    /// </summary>
+    /// <param name="value">The candidate value to store.</param>
+    /// <param name="ttl">The positive time-to-live for the entry.</param>
+    /// <param name="cancellationToken">Cancels the write hop.</param>
+    /// <param name="maxAttempts">Reserved for API parity; the blind-delta write does not retry.</param>
+    public Task SetAsync(T value, TimeSpan ttl, CancellationToken cancellationToken = default, int maxAttempts = DefaultMaxAttempts)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
+        EnsureInitialised();
+        var deltaBytes = BoundedRegisterAccessorHelper.EncodeDelta(_serializer, _orderKeySelector, value);
+        return _lattice.ApplyCrdtDeltaAsync(_key, LatticeMergeMode.MaxRegister, deltaBytes, ttl, cancellationToken);
+    }
+
+    /// <summary>
     /// Reads the current value, or <see langword="default"/> when the register
     /// has never been written.
     /// </summary>

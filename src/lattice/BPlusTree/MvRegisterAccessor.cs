@@ -99,6 +99,29 @@ public readonly record struct MvRegisterAccessor<T>
     }
 
     /// <summary>
+    /// Writes <paramref name="value"/> from <paramref name="replicaId"/> and
+    /// stamps the whole entry with a per-entry time-to-live of
+    /// <paramref name="ttl"/>. The expiry is resolved to an absolute UTC
+    /// instant on the handling silo and folded under the max-absolute-ticks
+    /// convergence rule, so re-writing with a later <paramref name="ttl"/>
+    /// extends the entry's life and a durable (no-TTL) write leaves any
+    /// existing expiry unchanged. Once the instant passes the whole register
+    /// reads as absent and is reaped by tombstone compaction.
+    /// </summary>
+    /// <param name="replicaId">The replica authoring the write. Must be non-empty.</param>
+    /// <param name="value">The value to store. May be <c>null</c> only when <typeparamref name="T"/> permits it.</param>
+    /// <param name="ttl">The positive time-to-live for the entry.</param>
+    /// <param name="cancellationToken">Cancels the read and write hops.</param>
+    /// <param name="maxAttempts">Reserved for API parity; the delta apply does not retry.</param>
+    public Task SetAsync(string replicaId, T value, TimeSpan ttl, CancellationToken cancellationToken = default, int maxAttempts = DefaultMaxAttempts)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(replicaId);
+        EnsureInitialised();
+        var serializer = _serializer;
+        return MutateAsync(register => SetDelta(register, serializer, replicaId, value), cancellationToken, maxAttempts, ttl);
+    }
+
+    /// <summary>
     /// Stages a write as a <see cref="LatticeStagedCrdtWrite"/> for a cross-tree
     /// atomic write instead of applying it now. The minted dot and dropped
     /// observed entries are identical to
@@ -164,7 +187,8 @@ public readonly record struct MvRegisterAccessor<T>
     private async Task MutateAsync<TDelta>(
         Func<MvRegister, TDelta> mutate,
         CancellationToken cancellationToken,
-        int maxAttempts)
+        int maxAttempts,
+        TimeSpan ttl = default)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
         // CAS-free producer-side delta apply: see
@@ -180,7 +204,10 @@ public readonly record struct MvRegisterAccessor<T>
         var current = await GetAsync(cancellationToken).ConfigureAwait(false);
         var delta = mutate(current);
         var deltaBytes = JsonLatticeSerializer<TDelta>.Default.Serialize(delta);
-        await _lattice.ApplyCrdtDeltaAsync(_key, LatticeMergeMode.MvRegister, deltaBytes, cancellationToken).ConfigureAwait(false);
+        if (ttl <= TimeSpan.Zero)
+            await _lattice.ApplyCrdtDeltaAsync(_key, LatticeMergeMode.MvRegister, deltaBytes, cancellationToken).ConfigureAwait(false);
+        else
+            await _lattice.ApplyCrdtDeltaAsync(_key, LatticeMergeMode.MvRegister, deltaBytes, ttl, cancellationToken).ConfigureAwait(false);
     }
 
     private static MvRegister Decode(byte[]? bytes) =>
