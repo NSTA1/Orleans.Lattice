@@ -292,6 +292,16 @@ context cost. It returns only summed token figures - `calls`, `responseTokens`,
 delivered whole-file-equivalent content), `netSavedTokens`, and `windowSeconds` - and
 carries no body, query, path, or repository identity. Read-only.
 
+`netSavedTokens` (= `readsReplacedTokens - responseTokens`) is **signed**, and a
+negative value is expected, not a defect: read-replacement credit is awarded only for
+whole-file-equivalent (`slices`) delivery, so a discovery-heavy window - cheap
+`paths` / `outline` calls, or `context` used only to locate - spends response tokens
+while earning little credit and nets negative. Net trends positive as a task moves to
+reading real bodies (`slices`) and reuses a stable `session` so repeated context is
+suppressed and never re-charged. Treat it as a deliberately conservative floor on the
+true saving - it never credits the `search -> recall -> view` round trips it also
+removed - not a live figure you must keep above zero.
+
 ## Capture - durable agent memory
 
 ### remember
