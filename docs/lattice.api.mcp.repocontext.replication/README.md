@@ -45,16 +45,51 @@ The map is deliberately explicit rather than a blanket "everything is last-write
 
 ## Indexing roles: hub and spoke
 
-Replication converges the *data* of the repository-context trees across clusters; it does not coordinate the *indexing work* that produces that data. Letting every cluster walk, reconcile, prune, and re-embed the same sources independently is active-active indexing, and it has no ownership arbitration: two clusters can race to prune and re-add the same membership bits, recompute divergent projections, and drive the embedding-gap scanner in a loop. The safe topology is therefore **single-indexer hub-and-spoke** - exactly one cluster indexes, the rest serve replicated reads.
-
-Each cluster's role is selected by the `LATTICE_REPOCONTEXT_INDEXING_ROLE` environment variable:
+Because hub-and-spoke is mandatory (see below), every cluster must be told which role it plays. **This is configured with one environment variable, `LATTICE_REPOCONTEXT_INDEXING_ROLE`, read once at startup:**
 
 | Value | Role | Behaviour |
 |-------|------|-----------|
 | `hub` (default) | Authoritative indexer | Walks, reconciles, prunes, and re-embeds. This is the original single-cluster behaviour, so an existing deployment is unchanged. |
 | `spoke` | Read-only replica | Serves retrieval and memory from the replicated trees. Its self-index grain still activates and answers reads, but never arms its timer or reminder, never walks or reconciles, and never re-embeds - the index pass is inert. |
 
-The value is resolved fail-closed: an absent, blank, or unrecognised value falls back to `hub`, so a typo can never silently turn a cluster into an inert spoke that indexes nothing. A spoke that is later promoted to hub simply starts indexing on its next activation; because membership converges add-wins and memory converges multi-master, it inherits every presence bit and memory record without loss.
+The value is matched case-insensitively after trimming, and resolved **fail-closed**: an absent, blank, or unrecognised value falls back to `hub`, so a typo can never silently turn a cluster into an inert spoke that indexes nothing. Deploy exactly one cluster as `hub` and the rest as `spoke`.
+
+Three properties of this knob matter operationally:
+
+- **It is per cluster (per process), not per repository.** Indexing ownership is a cluster-level property; there is no per-repository role override.
+- **It is startup-fixed.** The role is resolved once when the host is composed and read at grain activation, so changing a cluster's role means restarting it with a different value - it cannot be flipped at runtime. A spoke promoted to hub simply starts indexing on its next activation and inherits every presence bit and memory record without loss (membership converges add-wins, memory multi-master).
+- **The environment variable is the supported knob.** The container host and any environment-configured deployment set it directly; it is the intended and only configuration surface for the role.
+
+### Example: a two-cluster deployment
+
+Set the variable in the environment of each cluster's host process - one hub, the rest spokes. `hub` is the default, so the hub can leave it unset, but setting it explicitly documents intent:
+
+```bash
+# Cluster A - the indexer
+export LATTICE_REPOCONTEXT_INDEXING_ROLE=hub
+
+# Cluster B (and any further clusters) - read-only replicas
+export LATTICE_REPOCONTEXT_INDEXING_ROLE=spoke
+```
+
+With the container host, the same variable is a normal container environment entry - for example in Docker Compose:
+
+```yaml
+services:
+  repocontext-hub:      # cluster A: does all indexing
+    image: orleans-lattice-repocontext
+    environment:
+      LATTICE_REPOCONTEXT_INDEXING_ROLE: hub
+      # ... cluster id, replication transport/peers, etc.
+
+  repocontext-spoke:    # cluster B: serves replicated reads, never indexes
+    image: orleans-lattice-repocontext
+    environment:
+      LATTICE_REPOCONTEXT_INDEXING_ROLE: spoke
+      # ... cluster id, replication transport/peers, etc.
+```
+
+An unset, blank, or misspelled value resolves to `hub`, so forgetting the variable on a would-be spoke makes it a (redundant) second indexer rather than silently disabling indexing - deliberately fail-closed. Set exactly one cluster to `hub`.
 
 ## Startup topology guard
 
@@ -66,12 +101,16 @@ The value is resolved fail-closed: an absent, blank, or unrecognised value falls
 
 A violation aborts startup with a message naming the offending tree, its declared mode, and the required mode, so a misconfigured topology never reaches serving traffic.
 
-## Topologies
+## Hub-and-spoke is the only valid topology
 
-Both common deployment shapes work, because this helper governs which trees ship, how they converge, and which cluster indexes:
+There is exactly one valid multi-cluster indexing topology: **single-indexer hub-and-spoke**. One cluster is the hub and does all indexing; every other cluster is a spoke that serves replicated reads and never indexes. This is not one option among several - it is the only safe arrangement, and the role gate and the startup guard exist to enforce it.
 
-- **Single-indexer (embed once, replicate).** The hub runs the indexer, computes the expensive embedding index, and replicates all repository-context trees. Spokes serve retrieval from the replicated data without re-embedding. The membership tree still converges add-wins and the memory tree multi-master, so a spoke that is later promoted to hub loses no presence bits or memory records.
-- **Active-active *data* plane, single-indexer control plane.** Every cluster accepts agent-memory writes and serves reads; concurrent memory writes to the same key on different clusters both survive and fold through `MemoryRecord.Merge`, and membership presence reconciles add-wins. Indexing itself is *not* active-active: exactly one hub owns the walk/reconcile/embed work while the rest run as spokes. This is the shape the role gate and the startup guard exist to enforce.
+**Active-active indexing is invalid and is rejected at startup.** Letting more than one cluster walk, reconcile, prune, and re-embed the same sources has no ownership arbitration: clusters race to prune and re-add the same membership bits, compute divergent projections, and drive the embedding-gap scanner in a loop. There is deliberately no configuration that turns this on; enrolling a single-writer index-plane tree under a CRDT merge mode - the only way to express "more than one concurrent indexer" - fails the startup topology guard.
+
+"Active-active" therefore only ever describes the **data plane**, never indexing:
+
+- **Indexing (control plane) is always single-writer.** Exactly one hub owns the walk / reconcile / prune / embed work. Spokes replicate its output and serve retrieval without re-embedding. A spoke that is later promoted to hub loses nothing, because membership converges add-wins and memory converges multi-master.
+- **Reads and agent-memory writes (data plane) may be served by every cluster.** A spoke still accepts `remember` / `update` / `forget` and serves search and recall from the replicated trees; concurrent memory writes to the same key on different clusters both survive and fold through `MemoryRecord.Merge`, and membership presence reconciles add-wins. This is the CRDT data-plane convergence the pinned tree modes provide - it does not make indexing active-active.
 
 ## The gap scanner stays local
 
