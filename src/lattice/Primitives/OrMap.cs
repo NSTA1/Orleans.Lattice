@@ -551,7 +551,12 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
             // copies are unchanged.
             Adds = new Dictionary<TKey, List<OrMapEntry<TValue>>>(Adds.Count),
             Tombstones = new Dictionary<TKey, List<OrSetDot>>(Tombstones.Count),
-            Context = new Dictionary<string, long>(Context, StringComparer.Ordinal),
+            // Copy the dot-context through its own comparer so the Dictionary
+            // copy constructor bulk-copies the backing store instead of
+            // rehashing every replica key. A fresh StringComparer.Ordinal is
+            // ordinally identical but reference-distinct from the source
+            // comparer, defeating that fast path. Mirrors Rga.Clone.
+            Context = new Dictionary<string, long>(Context, Context.Comparer),
         };
         foreach (var (key, entries) in Adds)
         {

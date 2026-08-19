@@ -3250,6 +3250,12 @@ public class LatticeMicroBenchmarks
     // it entry-by-entry into a fresh identity (which resizes the value's backing
     // dictionary repeatedly as replica components accumulate).
     private OrMap<string, PnCounter> _orMapGetTarget = null!;
+    // OrMap whose dot-context (replica -> counter) spans many distinct author
+    // replicas, so the Context dictionary copy dominates Clone. Isolates the
+    // comparer-preserving fast-copy path: a source-comparer bulk Array.Copy
+    // versus the forced per-entry rehash a mismatched fresh comparer imposes.
+    // Sized by BENCH_MICROBENCH_ORMAP_CONTEXT_REPLICAS (default 128).
+    private OrMap<string, PnCounter> _orMapCloneContextTarget = null!;
     private OrSet _orSetLeft = null!;
     private OrSet _orSetRight = null!;
 
@@ -3679,6 +3685,20 @@ public class LatticeMicroBenchmarks
         }
         _orMapGetTarget = new OrMap<string, PnCounter>();
         _orMapGetTarget.Set("key-0000", "replica-author", value);
+
+        // Multi-replica dot-context clone target: one key authored by a distinct
+        // replica so Context accumulates BENCH_MICROBENCH_ORMAP_CONTEXT_REPLICAS
+        // entries. Clone copies that dictionary; preserving the source comparer
+        // keeps the copy a bulk Array.Copy instead of a per-entry rehash.
+        var contextReplicas = ReadIntEnv("BENCH_MICROBENCH_ORMAP_CONTEXT_REPLICAS", 128);
+        if (contextReplicas < 1) contextReplicas = 1;
+        _orMapCloneContextTarget = new OrMap<string, PnCounter>();
+        for (var i = 0; i < contextReplicas; i++)
+        {
+            var counter = new PnCounter();
+            counter.Increment($"replica-{i:D3}", i + 1);
+            _orMapCloneContextTarget.Set($"key-{i:D4}", $"replica-{i:D3}", counter);
+        }
     }
 
     /// <summary>
@@ -3710,6 +3730,16 @@ public class LatticeMicroBenchmarks
     /// </summary>
     [Benchmark(Description = "OrMap clone")]
     public OrMap<string, PnCounter> OrMap_Clone() => _orMapLeft.Clone();
+
+    /// <summary>
+    /// Deep copy of an OR-map whose dot-context spans many distinct author
+    /// replicas, so the <see cref="OrMap{TKey, TValue}"/> Context dictionary
+    /// copy dominates Clone. Isolates the comparer-preserving fast copy: cloning
+    /// the Context through the source's own comparer is a single bulk Array.Copy,
+    /// where a mismatched fresh comparer forces a per-entry rehash of every dot.
+    /// </summary>
+    [Benchmark(Description = "OrMap clone (multi-replica context)")]
+    public OrMap<string, PnCounter> OrMap_CloneContext() => _orMapCloneContextTarget.Clone();
 
     /// <summary>
     /// Steady-state read: <see cref="OrMap{TKey, TValue}.Get"/> on a key with a
