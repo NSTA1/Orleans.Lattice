@@ -152,6 +152,28 @@ public sealed class RepoContextEmbeddingGapScannerTests
     }
 
     [Test]
+    public async Task ScanFilePageAsync_reports_no_gap_for_a_contentless_marked_file()
+    {
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+
+        await SeedFileAsync(harness, "src/A.cs");
+        await SeedFileAsync(harness, "src/empty.cs");
+        // A carries a real embedding; empty.cs was considered and found contentless, so
+        // it is recorded as a marker rather than an embedded member. Neither is a gap -
+        // this is the #1553 fix: an empty file must stop being an eternal gap.
+        await Writer(harness).AddMembersAsync(RepoId, new[] { RepoContextKeys.File(RepoId, "src/A.cs") }, Ct);
+        await Writer(harness).MarkContentlessAsync(RepoId, new[] { RepoContextKeys.File(RepoId, "src/empty.cs") }, Ct);
+
+        var scanner = Scanner(harness);
+        var embedded = await scanner.LoadEmbeddedAsync(RepoId, Ct);
+        var page = await scanner.ScanFilePageAsync(RepoId, embedded, resumeKeyInclusive: null, pageSize: 100, Ct);
+
+        Assert.That(page.GapFound, Is.False,
+            "A contentless-marked file is covered, so the gap sweep no longer treats it as a missing embedding.");
+    }
+
+    [Test]
     public async Task ScanFilePageAsync_rejects_a_non_positive_page_size()
     {
         await using var harness = await RepoContextMcpHarness.StartAsync(

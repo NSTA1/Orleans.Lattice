@@ -53,6 +53,22 @@ internal sealed class RepoContextVectorWriter
     private const string LocalReplicaFallback = "local";
 
     /// <summary>
+    /// The reserved prefix that distinguishes a "considered, no passages" marker
+    /// from a real embedded-source flag inside the shared membership tree. A marker
+    /// records that a structural file was read and found to carry no embeddable
+    /// content (an empty or whitespace-only file, or one that chunks to zero
+    /// passages), so the always-on gap sweep and the unchanged-file selection stop
+    /// classifying it as a missing embedding and re-driving the index forever.
+    /// Because a source identifier is always 16 lower-case hex characters (see
+    /// <see cref="VectorCodec.SourceId(string)"/>), a non-hex prefix can never
+    /// collide with one, and the distinction is read from the decoded collection so
+    /// the on-key encoding is irrelevant. A marker carries no vector and is excluded
+    /// from <see cref="CountEmbeddedAsync"/>, so <c>embeddedVectorCount</c> stays an
+    /// honest count of sources that actually have a landed embedding.
+    /// </summary>
+    internal const string ContentlessMarkerPrefix = "nil-";
+
+    /// <summary>
     /// The width, in digits, of the zero-padded unit ordinal embedded in a
     /// presence key. Fixed-width so the lexical key order matches the numeric unit
     /// order, and wide enough for the chunker's per-file cap.
@@ -188,6 +204,11 @@ internal sealed class RepoContextVectorWriter
 
         await DeleteVectorsAsync(repoId, sourceId, cancellationToken).ConfigureAwait(false);
         await RemoveMemberAsync(repoId, sourceId, cancellationToken).ConfigureAwait(false);
+
+        // Also clear any "considered, no passages" marker: a pruned file that was
+        // contentless carries a marker but no vectors and no real membership flag,
+        // so its marker must be retired too or it lingers past the file's deletion.
+        await UnmarkContentlessAsync(repoId, sourceId, cancellationToken).ConfigureAwait(false);
 
         // The metadata tree the exact-kNN gather scans just lost this source's
         // vectors, so drop any warm cached candidate set precisely and immediately.
@@ -346,13 +367,149 @@ internal sealed class RepoContextVectorWriter
     }
 
     /// <summary>
-    /// Loads the set of embedded source identifiers for <paramref name="repoId"/> so
+    /// Records a "considered, no passages" marker for each contentless source in a
+    /// batch - one enable-wins flag per source at the reserved
+    /// <see cref="ContentlessMarkerPrefix"/> collection, so it shares the membership
+    /// tree's convergence and durability without being counted as an embedded
+    /// vector. A marked file is treated as covered by the gap sweep and by
+    /// unchanged-file selection, which is what stops an empty or whitespace-only file
+    /// from being re-scanned and re-read on every reconcile. Re-marking an already
+    /// marked source is idempotent.
+    /// </summary>
+    /// <param name="repoId">The repository the sources belong to. Must not be <see langword="null"/>.</param>
+    /// <param name="sourceKeys">The canonical record keys of the files found contentless. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancels the write.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="repoId"/> or <paramref name="sourceKeys"/> is null.</exception>
+    public async Task MarkContentlessAsync(
+        string repoId, IReadOnlyList<string> sourceKeys, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentNullException.ThrowIfNull(sourceKeys);
+
+        if (sourceKeys.Count == 0)
+        {
+            return;
+        }
+
+        var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
+        var replicaId = ReplicaId();
+        foreach (var sourceKey in sourceKeys)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var key = RepoContextKeys.VectorMembership(
+                repoId, ContentlessMarkerPrefix + VectorCodec.SourceId(sourceKey));
+            await tree.OrFlag(key).EnableAsync(replicaId, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Clears the "considered, no passages" marker for a single source identifier -
+    /// used when a previously contentless file gains embeddable content (so it stops
+    /// being covered by the marker and its real embedding takes over) and when a
+    /// contentless file is pruned. Disabling an absent marker is a harmless no-op.
+    /// </summary>
+    /// <param name="repoId">The repository the source belongs to. Must not be <see langword="null"/>.</param>
+    /// <param name="sourceId">The 16-character source identifier whose marker to clear. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancels the write.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="repoId"/> or <paramref name="sourceId"/> is null.</exception>
+    public async Task UnmarkContentlessAsync(
+        string repoId, string sourceId, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentNullException.ThrowIfNull(sourceId);
+
+        var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
+        var key = RepoContextKeys.VectorMembership(repoId, ContentlessMarkerPrefix + sourceId);
+        await tree.OrFlag(key).DisableAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Loads the repository's membership coverage in a single scan, separating the
+    /// two kinds of enabled flag the tree holds: real embedded sources (a landed
+    /// vector) and contentless markers (a file considered and found to have no
+    /// embeddable passage). Both sets carry plain 16-character source identifiers -
+    /// the marker's <see cref="ContentlessMarkerPrefix"/> is stripped - so a caller
+    /// probes either set with the same identifier produced by
+    /// <see cref="VectorCodec.SourceId(string)"/>. A file is "covered" (not a gap)
+    /// when it is in either set; see <see cref="RepoContextEmbeddingCoverage.IsCovered"/>.
+    /// Returns empty sets when the repository has embedded and considered nothing yet.
+    /// </summary>
+    /// <param name="repoId">The repository whose coverage to load. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    /// <returns>The embedded and contentless-marker source-identifier sets.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="repoId"/> is null.</exception>
+    public async Task<RepoContextEmbeddingCoverage> LoadCoverageAsync(
+        string repoId, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+
+        var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
+        var prefix = RepoContextKeys.VectorMembershipsPrefix(repoId);
+        var endExclusive = RepoContextPortability.PrefixUpperBound(prefix);
+        var embedded = new HashSet<string>(StringComparer.Ordinal);
+        var contentless = new HashSet<string>(StringComparer.Ordinal);
+        if (endExclusive is null)
+        {
+            return new RepoContextEmbeddingCoverage(embedded, contentless);
+        }
+
+        await foreach (var entry in tree
+            .ScanEntriesAsync(prefix, endExclusive, cancellationToken: cancellationToken)
+            .ConfigureAwait(false))
+        {
+            if (!JsonLatticeSerializer<OrFlag>.Default.Deserialize(entry.Value).IsEnabled
+                || !TryReadSourceId(entry.Key, out var collection))
+            {
+                continue;
+            }
+
+            if (collection.StartsWith(ContentlessMarkerPrefix, StringComparison.Ordinal))
+            {
+                contentless.Add(collection[ContentlessMarkerPrefix.Length..]);
+            }
+            else
+            {
+                embedded.Add(collection);
+            }
+        }
+
+        return new RepoContextEmbeddingCoverage(embedded, contentless);
+    }
+
+    /// <summary>
+    /// Loads the repository's covered source identifiers - real embedded sources
+    /// unioned with contentless markers - so the always-on gap sweep probes one set
+    /// and treats a considered-but-contentless file as covered rather than a missing
+    /// embedding. Returns an empty set when nothing is embedded or considered yet.
+    /// </summary>
+    /// <param name="repoId">The repository whose covered set to load. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    /// <returns>The union of embedded and contentless-marker source identifiers.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="repoId"/> is null.</exception>
+    public async Task<IReadOnlySet<string>> LoadCoveredSourceIdsAsync(
+        string repoId, CancellationToken cancellationToken)
+    {
+        var coverage = await LoadCoverageAsync(repoId, cancellationToken).ConfigureAwait(false);
+        if (coverage.Contentless.Count == 0)
+        {
+            return coverage.Embedded;
+        }
+
+        var covered = new HashSet<string>(coverage.Embedded, StringComparer.Ordinal);
+        covered.UnionWith(coverage.Contentless);
+        return covered;
+    }
+
+    /// <summary>
+    /// Loads the repository's live embedded source identifiers into a set so
     /// a caller can probe presence with <see cref="IReadOnlySet{T}.Contains(string)"/>.
     /// Presence is an enable-wins flag, so the read decodes each row and keeps only the
     /// enabled ones (a disabled flag still occupies a key until the compactor reclaims
     /// it). The membership tree carries only 16-character source identifiers, never the
-    /// embeddings themselves. Returns an empty set when the repository has embedded
-    /// nothing yet.
+    /// embeddings themselves. Contentless "considered, no passages" markers (see
+    /// <see cref="ContentlessMarkerPrefix"/>) share the tree but are excluded here, so
+    /// this returns only sources that carry a real landed vector. Returns an empty set
+    /// when the repository has embedded nothing yet.
     /// </summary>
     /// <param name="repoId">The repository whose embedded source identifiers to load. Must not be <see langword="null"/>.</param>
     /// <param name="cancellationToken">Cancels the read.</param>
@@ -376,7 +533,8 @@ internal sealed class RepoContextVectorWriter
             .ConfigureAwait(false))
         {
             if (JsonLatticeSerializer<OrFlag>.Default.Deserialize(entry.Value).IsEnabled
-                && TryReadSourceId(entry.Key, out var sourceId))
+                && TryReadSourceId(entry.Key, out var sourceId)
+                && !sourceId.StartsWith(ContentlessMarkerPrefix, StringComparison.Ordinal))
             {
                 members.Add(sourceId);
             }
@@ -387,9 +545,12 @@ internal sealed class RepoContextVectorWriter
 
     /// <summary>
     /// Counts the live embedded sources for <paramref name="repoId"/> - the number of
-    /// enabled membership flags. A disabled flag still occupies a key until the
-    /// compactor reclaims it, so the count decodes each row rather than counting keys.
-    /// Returns zero when nothing is embedded.
+    /// enabled membership flags that carry a real vector. A disabled flag still occupies
+    /// a key until the compactor reclaims it, so the count decodes each row rather than
+    /// counting keys, and it excludes contentless "considered, no passages" markers (see
+    /// <see cref="ContentlessMarkerPrefix"/>) so <c>embeddedVectorCount</c> stays an
+    /// honest count of sources that actually have a landed embedding. Returns zero when
+    /// nothing is embedded.
     /// </summary>
     /// <param name="repoId">The repository whose embedded source count to read. Must not be <see langword="null"/>.</param>
     /// <param name="cancellationToken">Cancels the read.</param>
@@ -412,7 +573,9 @@ internal sealed class RepoContextVectorWriter
             .ScanEntriesAsync(prefix, endExclusive, cancellationToken: cancellationToken)
             .ConfigureAwait(false))
         {
-            if (JsonLatticeSerializer<OrFlag>.Default.Deserialize(entry.Value).IsEnabled)
+            if (JsonLatticeSerializer<OrFlag>.Default.Deserialize(entry.Value).IsEnabled
+                && TryReadSourceId(entry.Key, out var sourceId)
+                && !sourceId.StartsWith(ContentlessMarkerPrefix, StringComparison.Ordinal))
             {
                 enabled++;
             }
