@@ -143,6 +143,32 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// Forces the stored entry for <paramref name="key"/> to carry the given
+    /// absolute <paramref name="expiresAtTicks"/>, XOR-folding the resulting
+    /// contribution change into the running projection digest. Used by the
+    /// eager CRDT-apply path to keep the max-absolute-ticks expiry join intact
+    /// when the row-level LWW merge (<see cref="StoreEntry"/>) kept an existing
+    /// row whose expiry differs from the resolved join. A no-op when the key is
+    /// absent or the stored expiry already matches. The stored value bytes,
+    /// timestamp, origin, and vector clock are preserved verbatim - only the
+    /// expiry field changes.
+    /// </summary>
+    private void ForceEntryExpiry(string key, long expiresAtTicks)
+    {
+        if (!Cache.TryGetRow(key, out var current) || current.ExpiresAtTicks == expiresAtTicks)
+        {
+            return;
+        }
+        var corrected = current with { ExpiresAtTicks = expiresAtTicks };
+        Cache.StoreRow(key, corrected);
+        if (_maintainProjectionDigest)
+        {
+            EnsureProjectionHashInitialized();
+            UpdateProjectionHash(key, current, corrected);
+        }
+    }
+
+    /// <summary>
     /// Test-only accessor for the persisted projection-hash slot. Exposed
     /// internal so the walk-state oracle can compare the running
     /// XOR-fold against a fresh walk of <c>Entries</c>.

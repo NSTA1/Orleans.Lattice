@@ -9,7 +9,8 @@ namespace Orleans.Lattice.Replication.Tests;
 /// Regression coverage for the cross-cluster CRDT history-fidelity fix: a
 /// steady-state delta-carrying replicated CRDT entry that falls onto the
 /// per-entry applier path must be recorded as a <c>CrdtDelta</c> (member
-/// diff + origin) through <see cref="ILattice.ApplyCrdtDeltaAsync"/>,
+/// diff + origin) through
+/// <see cref="Grains.IReplicationApplyGrain.ApplyCrdtDeltaWithExpiryAsync"/>,
 /// not flattened to a full-value <see cref="MutationKind.Set"/> via a
 /// read-merge-write fold. Bootstrap committed-projection rows (no Delta)
 /// keep their full-state merge.
@@ -31,8 +32,8 @@ public partial class ReplicationApplierTests
 
         await applier.ApplyAsync(entry);
 
-        await lattice.Received(1).ApplyCrdtDeltaAsync(
-            "k", LatticeMergeMode.PnCounter, Arg.Any<byte[]>(), Arg.Any<CancellationToken>());
+        await apply.Received(1).ApplyCrdtDeltaWithExpiryAsync(
+            "k", LatticeMergeMode.PnCounter, Arg.Any<byte[]>(), 0L);
         await apply.DidNotReceiveWithAnyArgs().ApplyCrdtDeltaManyAsync(default!);
         await lattice.DidNotReceiveWithAnyArgs().SetIfVersionAsync(default!, default!, default, default);
     }
@@ -52,7 +53,7 @@ public partial class ReplicationApplierTests
         var result = await applier.ApplyAsync(entry);
 
         Assert.That(result.Applied, Is.True);
-        await lattice.DidNotReceiveWithAnyArgs().ApplyCrdtDeltaAsync(default!, default, default!, default);
+        await apply.DidNotReceiveWithAnyArgs().ApplyCrdtDeltaWithExpiryAsync(default!, default, default!, default);
         await lattice.Received(1).SetIfVersionAsync(
             "k", Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>());
     }

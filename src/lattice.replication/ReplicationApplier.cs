@@ -1238,9 +1238,14 @@ internal sealed partial class ReplicationApplier(
     /// </summary>
     private async Task ApplyCrdtDeltaThroughGrainAsync(WalRecord entry)
     {
-        var lattice = grainFactory.GetGrain<ILattice>(entry.TreeId);
+        var apply = grainFactory.GetGrain<IReplicationApplyGrain>(entry.TreeId);
         using var scope = LatticeOriginContext.With(entry.OriginClusterId);
-        await lattice.ApplyCrdtDeltaAsync(entry.Key, entry.Mode, entry.Delta!).ConfigureAwait(true);
+        // Carry the record's absolute per-entry expiry so a TTL'd CRDT write
+        // expires on this replica too. The expiry rides the same origin-scoped,
+        // receiver-advances-clock semantics as the non-expiry per-entry path;
+        // it is applied verbatim (never re-resolved from a relative TTL) under
+        // the max-absolute-ticks join. Durable entries carry ExpiresAtTicks == 0.
+        await apply.ApplyCrdtDeltaWithExpiryAsync(entry.Key, entry.Mode, entry.Delta!, entry.ExpiresAtTicks).ConfigureAwait(true);
     }
 
     /// <summary>

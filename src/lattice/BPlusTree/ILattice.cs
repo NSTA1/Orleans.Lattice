@@ -95,6 +95,38 @@ public interface ILattice : IGrainWithStringKey
     Task<HybridLogicalClock> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Time-to-live overload of
+    /// <see cref="ApplyCrdtDeltaAsync(string, LatticeMergeMode, byte[], CancellationToken)"/>
+    /// that gives the merged CRDT entry a per-entry (whole-key) expiry. The
+    /// handling silo resolves <paramref name="ttl"/> to an absolute UTC expiry
+    /// (mirroring <see cref="SetAsync(string, byte[], System.TimeSpan, CancellationToken)"/>),
+    /// so per-entry lifetimes are not shifted by client-clock skew and every
+    /// replica applies the identical absolute tick.
+    /// <para>
+    /// Expiry converges across replicas by a max-absolute-ticks join
+    /// (refresh-extends-life): a later or concurrent TTL'd write extends the
+    /// entry's life to the larger absolute expiry, and the fold is commutative,
+    /// associative, and idempotent. This intentionally differs from the LWW-TTL
+    /// path, whose whole value (expiry included) is resolved
+    /// last-writer-by-HLC - a CRDT has no single winning write to carry the
+    /// expiry, so expiry needs its own independent join. A plain
+    /// <see cref="ApplyCrdtDeltaAsync(string, LatticeMergeMode, byte[], CancellationToken)"/>
+    /// write (no TTL) leaves any existing expiry unchanged. Once the wall clock
+    /// passes the expiry the entry is read-hidden and later reaped by tombstone
+    /// compaction, exactly as an LWW-TTL entry.
+    /// </para>
+    /// </summary>
+    /// <param name="key">The key to apply the delta against.</param>
+    /// <param name="mode">The CRDT merge mode declaring the delta's typed shape.</param>
+    /// <param name="deltaBytes">The Orleans-serialised typed delta DTO bytes.</param>
+    /// <param name="ttl">
+    /// The positive time-to-live after which the entry expires. Must be greater
+    /// than <see cref="System.TimeSpan.Zero"/>.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the per-key dispatch.</param>
+    Task<HybridLogicalClock> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, TimeSpan ttl, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Sets <paramref name="key"/> to <paramref name="value"/> only if the key does not
     /// already exist (or is tombstoned). Returns the existing value when the key is
     /// already live, or <c>null</c> when the value was newly written.

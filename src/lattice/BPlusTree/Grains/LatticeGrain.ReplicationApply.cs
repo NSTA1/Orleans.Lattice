@@ -353,9 +353,26 @@ internal sealed partial class LatticeGrain
             using (LatticeVectorClockContext.With(item.SourceVectorClock))
             using (LatticeHlcOverrideContext.With(item.SourceHlc))
             {
-                await ApplyCrdtDeltaAsync(item.Key, item.Mode, item.Delta);
+                // Route through the guarded flow (not the public no-TTL
+                // overload) so the item's absolute expiry rides the fold. The
+                // ambient HLC override makes the leaf re-stamp the source HLC;
+                // the absolute expiry is applied verbatim (never re-resolved
+                // from a relative TTL) so it stays strictly convergent.
+                await ApplyCrdtDeltaGuardedAsync(item.Key, item.Mode, item.Delta, item.ExpiresAtTicks, CancellationToken.None);
             }
         }
+    }
+
+    /// <inheritdoc />
+    public Task ApplyCrdtDeltaWithExpiryAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks)
+    {
+        ThrowIfSystemTree();
+        ArgumentNullException.ThrowIfNull(key);
+        ArgumentNullException.ThrowIfNull(deltaBytes);
+        // Same guarded flow the public no-TTL per-entry apply takes (the caller
+        // sets only the ambient origin scope, so the receiver advances its own
+        // clock), with the absolute expiry threaded through the fold.
+        return ApplyCrdtDeltaGuardedAsync(key, mode, deltaBytes, expiresAtTicks, CancellationToken.None);
     }
 
     /// <inheritdoc />

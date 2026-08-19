@@ -167,7 +167,7 @@ public partial class LatticeGrainTests
 
         await grain.ApplyCrdtDeltaAsync("k1", LatticeMergeMode.OrSet, new byte[] { 1 });
 
-        await shardRoot.Received(1).ApplyCrdtDeltaAsync("k1", LatticeMergeMode.OrSet, Arg.Any<byte[]>());
+        await shardRoot.Received(1).ApplyCrdtDeltaAsync("k1", LatticeMergeMode.OrSet, Arg.Any<byte[]>(), 0L);
     }
 
     // --- Replication applies re-enter the seam under a foreign origin scope
@@ -199,7 +199,7 @@ public partial class LatticeGrainTests
             await grain.ApplyCrdtDeltaAsync("k1", LatticeMergeMode.OrSet, new byte[] { 1 });
         }
 
-        await shardRoot.Received(1).ApplyCrdtDeltaAsync("k1", LatticeMergeMode.OrSet, Arg.Any<byte[]>());
+        await shardRoot.Received(1).ApplyCrdtDeltaAsync("k1", LatticeMergeMode.OrSet, Arg.Any<byte[]>(), 0L);
     }
 
     // --- Atomic-write-saga commits re-enter the LWW seam under a prepare scope

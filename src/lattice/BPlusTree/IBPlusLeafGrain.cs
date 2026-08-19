@@ -140,6 +140,37 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<CrdtApplyResult> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes);
 
     /// <summary>
+    /// Expiry-carrying overload of
+    /// <see cref="ApplyCrdtDeltaAsync(string, LatticeMergeMode, byte[])"/> that
+    /// stamps a per-entry (whole-key) absolute expiry on the merged CRDT row.
+    /// <paramref name="expiresAtTicks"/> is an absolute UTC
+    /// <see cref="System.DateTime.Ticks"/> value already resolved on the
+    /// handling silo (never a relative TTL), so per-entry lifetimes are not
+    /// shifted by client-clock skew and every replica applies the identical
+    /// absolute tick.
+    /// <para>
+    /// The expiry converges across replicas by a max-absolute-ticks join
+    /// (refresh-extends-life): the leaf resolves
+    /// <c>max(existingExpiry, expiresAtTicks)</c> with <c>0</c> (durable) as
+    /// the semilattice bottom, so the fold is commutative, associative, and
+    /// idempotent regardless of which write wins the row-level HLC merge. This
+    /// deliberately differs from the LWW-TTL path, whose whole value (expiry
+    /// included) is resolved last-writer-by-HLC; a CRDT has no single winning
+    /// write to carry the expiry, so expiry needs its own independent join.
+    /// An <paramref name="expiresAtTicks"/> of <c>0</c> leaves any existing
+    /// expiry unchanged.
+    /// </para>
+    /// </summary>
+    /// <param name="key">The key to apply the delta against.</param>
+    /// <param name="mode">The CRDT merge mode declaring the delta's typed shape.</param>
+    /// <param name="deltaBytes">The Orleans-serialised typed delta DTO bytes.</param>
+    /// <param name="expiresAtTicks">
+    /// Absolute UTC expiry tick to fold onto the merged row, or <c>0</c> to
+    /// leave any existing expiry unchanged.
+    /// </param>
+    Task<CrdtApplyResult> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks);
+
+    /// <summary>
     /// Inserts or updates multiple key-value pairs.
     /// Returns the last <see cref="SplitResult"/> if any split occurred, otherwise <c>null</c>.
     /// <para>

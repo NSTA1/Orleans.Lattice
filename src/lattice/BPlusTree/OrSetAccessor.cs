@@ -67,6 +67,28 @@ public readonly record struct OrSetAccessor
     }
 
     /// <summary>
+    /// Adds <paramref name="element"/> and stamps the whole entry with a
+    /// per-entry time-to-live of <paramref name="ttl"/>. The expiry is resolved
+    /// to an absolute UTC instant on the handling silo and folded under the
+    /// max-absolute-ticks convergence rule, so re-writing with a later
+    /// <paramref name="ttl"/> extends the entry's life and a durable (no-TTL)
+    /// write leaves any existing expiry unchanged. Once the instant passes the
+    /// whole set reads as absent and is reaped by tombstone compaction.
+    /// </summary>
+    /// <param name="element">The element bytes to add. Must not be <c>null</c>.</param>
+    /// <param name="replicaId">The replica authoring the add. Must be non-empty.</param>
+    /// <param name="ttl">The positive time-to-live for the entry.</param>
+    /// <param name="cancellationToken">Cancels the read and write hops.</param>
+    /// <param name="maxAttempts">Reserved for API parity; the delta apply does not retry.</param>
+    public Task AddAsync(byte[] element, string replicaId, TimeSpan ttl, CancellationToken cancellationToken = default, int maxAttempts = DefaultMaxAttempts)
+    {
+        ArgumentNullException.ThrowIfNull(element);
+        ArgumentException.ThrowIfNullOrEmpty(replicaId);
+        EnsureInitialised();
+        return MutateAsync(set => AddDelta(set, element, replicaId), cancellationToken, maxAttempts, ttl);
+    }
+
+    /// <summary>
     /// Stages an add as a <see cref="LatticeStagedCrdtWrite"/> for a cross-tree
     /// atomic write instead of applying it now. The minted add dot is identical
     /// to <see cref="AddAsync(byte[], string, CancellationToken, int)"/>'s; add
@@ -231,7 +253,8 @@ public readonly record struct OrSetAccessor
     private async Task MutateAsync<TDelta>(
         Func<OrSet, TDelta> mutate,
         CancellationToken cancellationToken,
-        int maxAttempts)
+        int maxAttempts,
+        TimeSpan ttl = default)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
         // Producer-side delta apply: replaced the read-merge-write CAS
@@ -251,7 +274,10 @@ public readonly record struct OrSetAccessor
         var current = await GetAsync(cancellationToken).ConfigureAwait(false);
         var delta = mutate(current);
         var deltaBytes = JsonLatticeSerializer<TDelta>.Default.Serialize(delta);
-        await _lattice.ApplyCrdtDeltaAsync(_key, LatticeMergeMode.OrSet, deltaBytes, cancellationToken).ConfigureAwait(false);
+        if (ttl <= TimeSpan.Zero)
+            await _lattice.ApplyCrdtDeltaAsync(_key, LatticeMergeMode.OrSet, deltaBytes, cancellationToken).ConfigureAwait(false);
+        else
+            await _lattice.ApplyCrdtDeltaAsync(_key, LatticeMergeMode.OrSet, deltaBytes, ttl, cancellationToken).ConfigureAwait(false);
     }
 
     private static OrSet Decode(byte[]? bytes) =>

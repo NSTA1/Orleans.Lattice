@@ -329,6 +329,11 @@ internal sealed partial class BPlusLeafGrain
             // applies MergeDelta, and re-serialises the post-fold bytes -
             // exactly the reconstruction this replay path needs.
             var foldedBytes = FoldPreparedCrdtDelta(mutation.Key, mutation.Delta, mutation.Mode);
+            // Capture the prior row's expiry before the merge so the expiry
+            // can be re-forced to the running max afterwards (see below).
+            var priorExpiry = Cache.TryPeekRow(mutation.Key, out var priorRow, out _)
+                ? priorRow.ExpiresAtTicks
+                : 0L;
             var folded = new LwwValue<byte[]>
             {
                 Value = foldedBytes,
@@ -339,6 +344,16 @@ internal sealed partial class BPlusLeafGrain
                 VectorClock = mutation.VectorClock,
             };
             MergeIntoProjection(mutation.Key, folded);
+            // Re-force the per-entry expiry to the max-absolute-ticks join of
+            // the prior row's expiry and this record's expiry. MergeIntoProjection
+            // resolves the row by HLC (StoreEntry), so when the prior row's HLC
+            // dominates this record's it keeps the prior (possibly smaller)
+            // expiry, discarding the join result. Each WAL record carries the
+            // running max expiry stamped at foreground apply time and replay is
+            // offset-ordered, so folding max(priorExpiry, record.expiry) here
+            // reconstructs exactly the foreground cumulative-max result,
+            // independent of the HLC ordering of the interleaved records.
+            ForceEntryExpiry(mutation.Key, Math.Max(priorExpiry, mutation.ExpiresAtTicks));
             // Record the per-key CRDT merge mode so a snapshot capture built
             // from this replayed projection labels the key faithfully. Set
             // after MergeIntoProjection because its StoreRow write evicts any
