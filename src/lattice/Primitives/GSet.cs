@@ -130,9 +130,17 @@ public sealed class GSet : ICrdt<GSet>
     {
         ArgumentNullException.ThrowIfNull(left);
         ArgumentNullException.ThrowIfNull(right);
-        var result = left.Clone();
-        result.MergeFrom(right);
-        return result;
+
+        // Build the union presized to the combined element-count upper bound and
+        // fill it once, instead of cloning the left operand (a set sized to
+        // left.Count) and then growing it through UnionWith - which reallocates
+        // the backing store one or more times and discards the clone's arrays.
+        // A single presized allocation replaces that clone-then-grow churn; the
+        // resulting union is identical.
+        var union = new HashSet<string>(left.Elements.Count + right.Elements.Count, StringComparer.Ordinal);
+        union.UnionWith(left.Elements);
+        union.UnionWith(right.Elements);
+        return new GSet { Elements = union };
     }
 
     /// <summary>

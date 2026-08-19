@@ -307,7 +307,12 @@ public sealed class MvRegister : ICrdt<MvRegister>
         new()
         {
             Entries = new List<MvRegisterEntry>(Entries),
-            Context = new Dictionary<string, long>(Context, StringComparer.Ordinal),
+            // Copy the dot-context through its own comparer so the Dictionary
+            // copy constructor bulk-copies the backing store instead of
+            // rehashing every replica key. A fresh StringComparer.Ordinal is
+            // ordinally identical but reference-distinct from the source
+            // comparer, defeating that fast path. Mirrors Rga.Clone.
+            Context = new Dictionary<string, long>(Context, Context.Comparer),
         };
 
     private long NextCounter(string replicaId) =>
