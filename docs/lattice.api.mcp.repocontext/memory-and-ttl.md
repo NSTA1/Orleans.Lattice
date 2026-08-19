@@ -53,3 +53,7 @@ services.Configure<RepoContextTtlOptions>("durable-repo", options =>
 | `StructuralRecordsNeverExpire` | `true` | Guarantees structural records (repo, package, file, symbol) never carry an expiry, so the durable model of the codebase is not silently reaped alongside ephemeral notes. |
 
 The validator runs at first resolve, so an invalid TTL policy fails at startup rather than on the first write.
+
+## Multi-cluster convergence
+
+In a single cluster, memory entries are stored as whole last-writer-wins values, so a later write to a key replaces the earlier one. Across clusters that is unsafe: two clusters writing the same memory key concurrently would let one write win outright and silently discard the other whole record - and any CRDT sub-state it carried. The opt-in [`Orleans.Lattice.Api.Mcp.RepoContext.Replication`](../lattice.api.mcp.repocontext.replication/README.md) add-on therefore pins the agent-memory tree to the multi-value `MvRegister` merge mode: each cluster mints its own dot, so concurrent writes both survive and are folded back through the record model's own CRDT merge on read. TTL is preserved through this path - a replicated memory entry keeps the absolute expiry resolved on the writing cluster. Enabling multi-cluster replication changes only how concurrent cross-cluster writes converge; a single-cluster deployment is unaffected and takes no replication dependency.
