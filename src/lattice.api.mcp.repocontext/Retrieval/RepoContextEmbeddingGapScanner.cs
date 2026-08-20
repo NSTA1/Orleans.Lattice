@@ -34,18 +34,20 @@ internal sealed class RepoContextEmbeddingGapScanner
     }
 
     /// <summary>
-    /// Loads the repository's live embedded-source membership set once, so a whole
-    /// sweep of file pages can probe presence in memory against it without a read
-    /// per file. The set carries only source identifiers, never embeddings.
+    /// Loads the repository's covered source identifiers once - real embedded sources
+    /// unioned with contentless "considered, no passages" markers - so a whole sweep of
+    /// file pages can probe coverage in memory against it without a read per file. The
+    /// set carries only source identifiers, never embeddings; a contentless file is
+    /// covered so the sweep no longer re-drives it as a missing embedding.
     /// </summary>
-    /// <param name="repoId">The repository whose membership to load. Must not be <see langword="null"/>.</param>
+    /// <param name="repoId">The repository whose coverage to load. Must not be <see langword="null"/>.</param>
     /// <param name="cancellationToken">Cancels the read.</param>
-    /// <returns>The set of live embedded source identifiers.</returns>
+    /// <returns>The set of covered source identifiers (embedded or contentless-marked).</returns>
     /// <exception cref="ArgumentNullException"><paramref name="repoId"/> is null.</exception>
     public Task<IReadOnlySet<string>> LoadEmbeddedAsync(string repoId, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(repoId);
-        return _writer.LoadEmbeddedMembersAsync(repoId, cancellationToken);
+        return _writer.LoadCoveredSourceIdsAsync(repoId, cancellationToken);
     }
 
     /// <summary>

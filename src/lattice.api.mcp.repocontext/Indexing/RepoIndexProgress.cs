@@ -63,14 +63,19 @@ public sealed record RepoIndexProgress
     public int FilesEmbedded { get; init; }
 
     /// <summary>
-    /// How many times this job has been started or resumed. A value above one
-    /// means an earlier attempt was interrupted (for example by a host restart)
-    /// and the reminder resumed it.
+    /// The cumulative number of index runs that have been started for this
+    /// repository. It counts run starts, not retries or failures: the first
+    /// onboarding is one, and every subsequent re-drive adds one - each periodic
+    /// reconcile that picks up on-disk edits and deletions, each gap back-fill,
+    /// each re-drive of a failed run, and each reminder-driven resume after a
+    /// host restart. Because the self-index grain reconciles on a schedule, this
+    /// value rises steadily on a healthy, actively-maintained repository, so a
+    /// high value is normal and is not by itself a sign of interruption or error.
     /// </summary>
     [Id(11)]
     public int Attempt { get; init; }
 
-    /// <summary>When the current (or most recent) attempt started, in UTC.</summary>
+    /// <summary>When the current (or most recent) index run started, in UTC.</summary>
     [Id(12)]
     public DateTimeOffset? StartedAt { get; init; }
 

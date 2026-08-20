@@ -262,4 +262,121 @@ public sealed class EmbeddingRepoContextVectorIngestorBackfillTests
             Assert.That(progress[^1], Is.EqualTo(3), "The final progress callback carries the total embedded count.");
         });
     }
+
+    [Test]
+    public async Task Ingest_marks_a_contentless_file_so_a_re_offer_as_unchanged_embeds_nothing()
+    {
+        var root = NewRepo();
+        var empty = Write(root, "empty.cs", "   \n\t  ");
+
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+        var ingestor = Ingestor(harness, new FakeEmbeddingProvider());
+        var writer = harness.Services.GetRequiredService<RepoContextVectorWriter>();
+
+        // First pass: the whitespace-only file carries no passage, so nothing embeds,
+        // but it is recorded as a "considered, no passages" marker.
+        var first = await ingestor.IngestAsync(
+            RepoId, root, new[] { empty }, Array.Empty<RepoFileEntry>(), onProgress: null, Ct);
+
+        // Second pass offers it as unchanged (the reconcile the bug looped on). Because
+        // it is now covered by the marker, it is not re-selected and nothing re-reads it.
+        var second = await ingestor.IngestAsync(
+            RepoId, root, Array.Empty<RepoFileEntry>(), new[] { empty }, onProgress: null, Ct);
+
+        var coverage = await writer.LoadCoverageAsync(RepoId, Ct);
+        var sourceId = VectorCodec.SourceId(RepoContextKeys.File(RepoId, "empty.cs"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(first, Is.EqualTo(0), "A contentless file embeds no vector.");
+            Assert.That(second, Is.EqualTo(0),
+                "The marked contentless file is covered, so a reconcile re-offer stops re-driving it (the #1553 loop).");
+            Assert.That(coverage.Contentless, Does.Contain(sourceId),
+                "The file is recorded as considered-but-contentless.");
+            Assert.That(coverage.IsCovered(sourceId), Is.True, "A marked file is covered, not a gap.");
+        });
+    }
+
+    [Test]
+    public async Task Ingest_does_not_count_a_contentless_marker_as_an_embedded_vector()
+    {
+        var root = NewRepo();
+        var real = Write(root, "a.cs", "class A { void Alpha() {} }");
+        var empty = Write(root, "empty.cs", string.Empty);
+
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+        var ingestor = Ingestor(harness, new FakeEmbeddingProvider());
+        var writer = harness.Services.GetRequiredService<RepoContextVectorWriter>();
+
+        await ingestor.IngestAsync(RepoId, root, new[] { real, empty }, Array.Empty<RepoFileEntry>(), onProgress: null, Ct);
+
+        var emptyId = VectorCodec.SourceId(RepoContextKeys.File(RepoId, "empty.cs"));
+        var count = await writer.CountEmbeddedAsync(RepoId, Ct);
+        var members = await writer.LoadEmbeddedMembersAsync(RepoId, Ct);
+        var covered = await writer.LoadCoveredSourceIdsAsync(RepoId, Ct);
+        Assert.Multiple(() =>
+        {
+            Assert.That(count, Is.EqualTo(1),
+                "embeddedVectorCount counts only sources with a real landed vector, not contentless markers.");
+            Assert.That(members, Does.Not.Contain(emptyId), "A marker is not a real embedded member.");
+            Assert.That(covered, Does.Contain(emptyId), "But the covered set the gap sweep reads includes the marker.");
+        });
+    }
+
+    [Test]
+    public async Task Ingest_clears_the_contentless_marker_when_the_file_gains_content()
+    {
+        var root = NewRepo();
+        var empty = Write(root, "grows.cs", string.Empty);
+
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+        var ingestor = Ingestor(harness, new FakeEmbeddingProvider());
+        var writer = harness.Services.GetRequiredService<RepoContextVectorWriter>();
+
+        // Considered contentless first, so it is marked.
+        await ingestor.IngestAsync(RepoId, root, new[] { empty }, Array.Empty<RepoFileEntry>(), onProgress: null, Ct);
+
+        // The file gains content and is re-offered as changed: it now embeds for real,
+        // and the stale marker is cleared so the real embedding - not the marker - covers it.
+        var grown = Write(root, "grows.cs", "class Grows { void Now() {} }");
+        var embedded = await ingestor.IngestAsync(
+            RepoId, root, new[] { grown }, Array.Empty<RepoFileEntry>(), onProgress: null, Ct);
+
+        var sourceId = VectorCodec.SourceId(RepoContextKeys.File(RepoId, "grows.cs"));
+        var coverage = await writer.LoadCoverageAsync(RepoId, Ct);
+        Assert.Multiple(() =>
+        {
+            Assert.That(embedded, Is.EqualTo(1), "The now-content-ful file embeds a real vector.");
+            Assert.That(coverage.Embedded, Does.Contain(sourceId), "It is a real embedded member.");
+            Assert.That(coverage.Contentless, Does.Not.Contain(sourceId),
+                "The stale contentless marker is cleared on the content-gain transition.");
+        });
+    }
+
+    [Test]
+    public async Task Retire_clears_a_contentless_marker()
+    {
+        var root = NewRepo();
+        var empty = Write(root, "empty.cs", string.Empty);
+
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+        var ingestor = Ingestor(harness, new FakeEmbeddingProvider());
+        var writer = harness.Services.GetRequiredService<RepoContextVectorWriter>();
+
+        await ingestor.IngestAsync(RepoId, root, new[] { empty }, Array.Empty<RepoFileEntry>(), onProgress: null, Ct);
+        var sourceId = VectorCodec.SourceId(RepoContextKeys.File(RepoId, "empty.cs"));
+        var before = await writer.LoadCoverageAsync(RepoId, Ct);
+        Assert.That(before.Contentless, Does.Contain(sourceId), "Precondition: the empty file is marked.");
+
+        // Deleting the file retires it: the marker must go too, or it lingers past the
+        // file's deletion and keeps the source falsely covered.
+        await ingestor.RetireAsync(RepoId, new[] { "empty.cs" }, Ct);
+
+        var after = await writer.LoadCoverageAsync(RepoId, Ct);
+        Assert.That(after.Contentless, Does.Not.Contain(sourceId),
+            "Retiring a contentless file clears its marker so it is no longer covered.");
+    }
 }
