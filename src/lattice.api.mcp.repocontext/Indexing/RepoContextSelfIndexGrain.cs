@@ -63,13 +63,6 @@ internal sealed class RepoContextSelfIndexGrain(
 
     private IGrainTimer? _timer;
 
-    /// <summary>
-    /// The repository's membership set, loaded once at the start of a scan and
-    /// reused across the scan's pages so a multi-page scan does not re-read it every
-    /// tick. Cleared when a scan ends so the next scan sees fresh membership.
-    /// </summary>
-    private IReadOnlySet<string>? _embedded;
-
     /// <inheritdoc />
     public async Task<RepoIndexProgress> EnsureRunningAsync(RepoIndexJobRequest request)
     {
@@ -128,7 +121,6 @@ internal sealed class RepoContextSelfIndexGrain(
     {
         _timer?.Dispose();
         _timer = null;
-        _embedded = null;
 
         await UnregisterKeepaliveAsync().ConfigureAwait(true);
         await state.ClearStateAsync().ConfigureAwait(true);
@@ -280,12 +272,10 @@ internal sealed class RepoContextSelfIndexGrain(
             }
         }
 
-        // Load the membership set once per scan and reuse it across the scan's
-        // pages. After a restart mid-scan the in-memory copy is gone, so reload it.
-        _embedded ??= await gapScanner.LoadEmbeddedAsync(RepoId, cancellationToken).ConfigureAwait(true);
-
+        // Probe coverage for exactly this page's files with a bounded point-read, so
+        // no read in the sweep scales with the membership tree size (issue #1556).
         var page = await gapScanner
-            .ScanFilePageAsync(RepoId, _embedded, state.State.ResumeKey, PageSize, cancellationToken)
+            .ScanFilePageAsync(RepoId, state.State.ResumeKey, PageSize, cancellationToken)
             .ConfigureAwait(true);
 
         if (page.GapFound)
@@ -327,7 +317,6 @@ internal sealed class RepoContextSelfIndexGrain(
         var jitterTicks = (long)(Random.Shared.NextDouble() * ScanCooldownJitter.Ticks);
         state.State.ResumeKey = null;
         state.State.NextSweepAfterTicks = nowTicks + ScanCooldown.Ticks + jitterTicks;
-        _embedded = null;
     }
 
     private void ScheduleNextReconcile(long nowTicks)

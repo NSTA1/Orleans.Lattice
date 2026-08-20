@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Orleans.Serialization;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext;
@@ -74,6 +75,15 @@ internal sealed class RepoContextVectorWriter
     /// order, and wide enough for the chunker's per-file cap.
     /// </summary>
     internal const int UnitDigits = 4;
+
+    /// <summary>
+    /// The maximum number of distinct source identifiers folded into a single
+    /// bounded <see cref="ILattice.GetManyAsync(System.Collections.Generic.List{string}, CancellationToken)"/>
+    /// point-probe. Chosen to match the paged-scan page size so a probe RPC touches
+    /// a comparable, bounded key count and can never approach the response deadline,
+    /// no matter how large or churn-bloated the membership tree has grown.
+    /// </summary>
+    private const int MembershipProbeBatchSize = 256;
 
     private readonly IGrainFactory _grainFactory;
     private readonly Serializer _serializer;
@@ -424,6 +434,194 @@ internal sealed class RepoContextVectorWriter
     }
 
     /// <summary>
+    /// Point-probes the membership coverage of a <b>bounded candidate set</b> of
+    /// source keys, returning only the coverage of those candidates rather than
+    /// scanning the whole membership tree. Each candidate key is reduced to its
+    /// <see cref="VectorCodec.SourceId(string)"/> and looked up directly with a
+    /// batched <see cref="ILattice.GetManyAsync(System.Collections.Generic.List{string}, CancellationToken)"/>,
+    /// so the read never gathers a sorted range and its cost is a function of the
+    /// candidate count, not the tree size. Membership is an enable-wins
+    /// <see cref="OrFlag"/>, so a point read is strictly at least as current as a
+    /// whole-set scan; a candidate absent from the probe simply re-embeds
+    /// idempotently. Both the embedded flag and the contentless marker are probed
+    /// for each candidate, mirroring <see cref="LoadCoverageAsync"/>.
+    /// </summary>
+    /// <param name="repoId">The repository whose coverage to probe. Must not be <see langword="null"/>.</param>
+    /// <param name="candidateSourceKeys">The bounded set of canonical record keys to probe coverage for. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancels the probe.</param>
+    /// <returns>The embedded and contentless-marker source identifiers, restricted to the probed candidates.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="repoId"/> or <paramref name="candidateSourceKeys"/> is null.</exception>
+    public Task<RepoContextEmbeddingCoverage> ProbeCoverageAsync(
+        string repoId, IReadOnlyList<string> candidateSourceKeys, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentNullException.ThrowIfNull(candidateSourceKeys);
+        return ProbeMembershipAsync(repoId, candidateSourceKeys, includeContentless: true, cancellationToken);
+    }
+
+    /// <summary>
+    /// Point-probes the live <b>embedded</b> source identifiers of a bounded
+    /// candidate set, so the symbol-ingest path can decide re-embedding per page
+    /// without scanning the whole membership tree. Only the plain embedded flag is
+    /// probed - contentless markers live under a different key and are naturally
+    /// excluded - mirroring <see cref="LoadEmbeddedMembersAsync"/> on the candidate
+    /// subset. See <see cref="ProbeCoverageAsync"/> for the bounding rationale.
+    /// </summary>
+    /// <param name="repoId">The repository whose embedded members to probe. Must not be <see langword="null"/>.</param>
+    /// <param name="candidateSourceKeys">The bounded set of canonical record keys to probe. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancels the probe.</param>
+    /// <returns>The live embedded source identifiers restricted to the probed candidates.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="repoId"/> or <paramref name="candidateSourceKeys"/> is null.</exception>
+    public async Task<IReadOnlySet<string>> ProbeEmbeddedMembersAsync(
+        string repoId, IReadOnlyList<string> candidateSourceKeys, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentNullException.ThrowIfNull(candidateSourceKeys);
+        var coverage = await ProbeMembershipAsync(
+            repoId, candidateSourceKeys, includeContentless: false, cancellationToken).ConfigureAwait(false);
+        return coverage.Embedded;
+    }
+
+    /// <summary>
+    /// Point-probes the <b>covered</b> source identifiers of a bounded candidate set
+    /// - real embedded sources unioned with contentless markers - so the always-on
+    /// gap sweep can classify exactly the files on the page it is walking without
+    /// scanning the whole membership tree. See <see cref="ProbeCoverageAsync"/> for
+    /// the bounding rationale and <see cref="LoadCoveredSourceIdsAsync"/> for the
+    /// whole-set equivalent.
+    /// </summary>
+    /// <param name="repoId">The repository whose covered set to probe. Must not be <see langword="null"/>.</param>
+    /// <param name="candidateSourceKeys">The bounded set of canonical record keys to probe. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancels the probe.</param>
+    /// <returns>The union of embedded and contentless-marker source identifiers restricted to the probed candidates.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="repoId"/> or <paramref name="candidateSourceKeys"/> is null.</exception>
+    public async Task<IReadOnlySet<string>> ProbeCoveredSourceIdsAsync(
+        string repoId, IReadOnlyList<string> candidateSourceKeys, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentNullException.ThrowIfNull(candidateSourceKeys);
+        var coverage = await ProbeMembershipAsync(
+            repoId, candidateSourceKeys, includeContentless: true, cancellationToken).ConfigureAwait(false);
+        if (coverage.Contentless.Count == 0)
+        {
+            return coverage.Embedded;
+        }
+
+        var covered = new HashSet<string>(coverage.Embedded, StringComparer.Ordinal);
+        covered.UnionWith(coverage.Contentless);
+        return covered;
+    }
+
+    /// <summary>
+    /// Shared bounded point-probe: reduces the candidate keys to distinct source
+    /// identifiers, batches them through <see cref="ILattice.GetManyAsync(System.Collections.Generic.List{string}, CancellationToken)"/>
+    /// in <see cref="MembershipProbeBatchSize"/>-sized chunks, and decodes each
+    /// returned row exactly as a whole-set scan would.
+    /// </summary>
+    private async Task<RepoContextEmbeddingCoverage> ProbeMembershipAsync(
+        string repoId,
+        IReadOnlyList<string> candidateSourceKeys,
+        bool includeContentless,
+        CancellationToken cancellationToken)
+    {
+        var embedded = new HashSet<string>(StringComparer.Ordinal);
+        var contentless = new HashSet<string>(StringComparer.Ordinal);
+        if (candidateSourceKeys.Count == 0)
+        {
+            return new RepoContextEmbeddingCoverage(embedded, contentless);
+        }
+
+        var sourceIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var key in candidateSourceKeys)
+        {
+            sourceIds.Add(VectorCodec.SourceId(key));
+        }
+
+        var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
+        var batch = new List<string>(MembershipProbeBatchSize);
+        foreach (var sourceId in sourceIds)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            batch.Add(RepoContextKeys.VectorMembership(repoId, sourceId));
+            if (includeContentless)
+            {
+                batch.Add(RepoContextKeys.VectorMembership(repoId, ContentlessMarkerPrefix + sourceId));
+            }
+
+            if (batch.Count >= MembershipProbeBatchSize)
+            {
+                await ProbeBatchAsync(tree, batch, embedded, contentless, cancellationToken).ConfigureAwait(false);
+                batch.Clear();
+            }
+        }
+
+        if (batch.Count > 0)
+        {
+            await ProbeBatchAsync(tree, batch, embedded, contentless, cancellationToken).ConfigureAwait(false);
+        }
+
+        return new RepoContextEmbeddingCoverage(embedded, contentless);
+    }
+
+    private static async Task ProbeBatchAsync(
+        ILattice tree,
+        List<string> keys,
+        HashSet<string> embedded,
+        HashSet<string> contentless,
+        CancellationToken cancellationToken)
+    {
+        var found = await tree.GetManyAsync(keys, cancellationToken).ConfigureAwait(false);
+        foreach (var (key, value) in found)
+        {
+            if (!JsonLatticeSerializer<OrFlag>.Default.Deserialize(value).IsEnabled
+                || !TryReadSourceId(key, out var collection))
+            {
+                continue;
+            }
+
+            if (collection.StartsWith(ContentlessMarkerPrefix, StringComparison.Ordinal))
+            {
+                contentless.Add(collection[ContentlessMarkerPrefix.Length..]);
+            }
+            else
+            {
+                embedded.Add(collection);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Enumerates a repository's membership rows in bounded pages, so a whole-set
+    /// read never holds a single unbounded sorted-range scan open long enough to
+    /// approach the response deadline. Each page reads at most
+    /// <see cref="RepoContextPortability.DefaultPageSize"/> live rows and reopens
+    /// from a continuation token, yielding only non-null values.
+    /// </summary>
+    private static async IAsyncEnumerable<KeyValuePair<string, byte[]>> EnumerateMembershipPagedAsync(
+        ILattice tree,
+        string prefix,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        string? token = null;
+        do
+        {
+            var page = await RepoContextPortability
+                .EnumerateAsync(tree, prefix, token, RepoContextPortability.DefaultPageSize, vectorExport: null, cancellationToken)
+                .ConfigureAwait(false);
+            foreach (var record in page.Records)
+            {
+                if (record.Value is not null)
+                {
+                    yield return new KeyValuePair<string, byte[]>(record.Key, record.Value);
+                }
+            }
+
+            token = page.HasMore ? page.ContinuationToken : null;
+        }
+        while (token is not null);
+    }
+
+    /// <summary>
     /// Loads the repository's membership coverage in a single scan, separating the
     /// two kinds of enabled flag the tree holds: real embedded sources (a landed
     /// vector) and contentless markers (a file considered and found to have no
@@ -453,8 +651,7 @@ internal sealed class RepoContextVectorWriter
             return new RepoContextEmbeddingCoverage(embedded, contentless);
         }
 
-        await foreach (var entry in tree
-            .ScanEntriesAsync(prefix, endExclusive, cancellationToken: cancellationToken)
+        await foreach (var entry in EnumerateMembershipPagedAsync(tree, prefix, cancellationToken)
             .ConfigureAwait(false))
         {
             if (!JsonLatticeSerializer<OrFlag>.Default.Deserialize(entry.Value).IsEnabled
@@ -528,8 +725,7 @@ internal sealed class RepoContextVectorWriter
             return members;
         }
 
-        await foreach (var entry in tree
-            .ScanEntriesAsync(prefix, endExclusive, cancellationToken: cancellationToken)
+        await foreach (var entry in EnumerateMembershipPagedAsync(tree, prefix, cancellationToken)
             .ConfigureAwait(false))
         {
             if (JsonLatticeSerializer<OrFlag>.Default.Deserialize(entry.Value).IsEnabled
@@ -569,8 +765,7 @@ internal sealed class RepoContextVectorWriter
         }
 
         var enabled = 0L;
-        await foreach (var entry in tree
-            .ScanEntriesAsync(prefix, endExclusive, cancellationToken: cancellationToken)
+        await foreach (var entry in EnumerateMembershipPagedAsync(tree, prefix, cancellationToken)
             .ConfigureAwait(false))
         {
             if (JsonLatticeSerializer<OrFlag>.Default.Deserialize(entry.Value).IsEnabled
