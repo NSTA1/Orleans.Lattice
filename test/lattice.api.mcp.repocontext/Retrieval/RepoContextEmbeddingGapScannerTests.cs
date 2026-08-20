@@ -52,8 +52,7 @@ public sealed class RepoContextEmbeddingGapScannerTests
             Ct);
 
         var scanner = Scanner(harness);
-        var embedded = await scanner.LoadEmbeddedAsync(RepoId, Ct);
-        var page = await scanner.ScanFilePageAsync(RepoId, embedded, resumeKeyInclusive: null, pageSize: 100, Ct);
+        var page = await scanner.ScanFilePageAsync(RepoId, resumeKeyInclusive: null, pageSize: 100, Ct);
 
         Assert.Multiple(() =>
         {
@@ -75,8 +74,7 @@ public sealed class RepoContextEmbeddingGapScannerTests
         await Writer(harness).AddMembersAsync(RepoId, new[] { RepoContextKeys.File(RepoId, "src/A.cs") }, Ct);
 
         var scanner = Scanner(harness);
-        var embedded = await scanner.LoadEmbeddedAsync(RepoId, Ct);
-        var page = await scanner.ScanFilePageAsync(RepoId, embedded, resumeKeyInclusive: null, pageSize: 100, Ct);
+        var page = await scanner.ScanFilePageAsync(RepoId, resumeKeyInclusive: null, pageSize: 100, Ct);
 
         Assert.Multiple(() =>
         {
@@ -93,8 +91,7 @@ public sealed class RepoContextEmbeddingGapScannerTests
             new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
 
         var scanner = Scanner(harness);
-        var embedded = await scanner.LoadEmbeddedAsync(RepoId, Ct);
-        var page = await scanner.ScanFilePageAsync(RepoId, embedded, resumeKeyInclusive: null, pageSize: 100, Ct);
+        var page = await scanner.ScanFilePageAsync(RepoId, resumeKeyInclusive: null, pageSize: 100, Ct);
 
         Assert.Multiple(() =>
         {
@@ -122,14 +119,13 @@ public sealed class RepoContextEmbeddingGapScannerTests
         await Writer(harness).AddMembersAsync(RepoId, keys, Ct);
 
         var scanner = Scanner(harness);
-        var embedded = await scanner.LoadEmbeddedAsync(RepoId, Ct);
 
         string? resume = null;
         var pages = 0;
         var sawMore = false;
         while (true)
         {
-            var page = await scanner.ScanFilePageAsync(RepoId, embedded, resume, pageSize: 2, Ct);
+            var page = await scanner.ScanFilePageAsync(RepoId, resume, pageSize: 2, Ct);
             pages++;
             Assert.That(page.GapFound, Is.False, "Every file is embedded, so no page finds a gap.");
 
@@ -166,8 +162,7 @@ public sealed class RepoContextEmbeddingGapScannerTests
         await Writer(harness).MarkContentlessAsync(RepoId, new[] { RepoContextKeys.File(RepoId, "src/empty.cs") }, Ct);
 
         var scanner = Scanner(harness);
-        var embedded = await scanner.LoadEmbeddedAsync(RepoId, Ct);
-        var page = await scanner.ScanFilePageAsync(RepoId, embedded, resumeKeyInclusive: null, pageSize: 100, Ct);
+        var page = await scanner.ScanFilePageAsync(RepoId, resumeKeyInclusive: null, pageSize: 100, Ct);
 
         Assert.That(page.GapFound, Is.False,
             "A contentless-marked file is covered, so the gap sweep no longer treats it as a missing embedding.");
@@ -179,10 +174,9 @@ public sealed class RepoContextEmbeddingGapScannerTests
         await using var harness = await RepoContextMcpHarness.StartAsync(
             new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
         var scanner = Scanner(harness);
-        var embedded = await scanner.LoadEmbeddedAsync(RepoId, Ct);
 
         Assert.That(
-            () => scanner.ScanFilePageAsync(RepoId, embedded, resumeKeyInclusive: null, pageSize: 0, Ct),
+            () => scanner.ScanFilePageAsync(RepoId, resumeKeyInclusive: null, pageSize: 0, Ct),
             Throws.InstanceOf<ArgumentOutOfRangeException>());
     }
 }

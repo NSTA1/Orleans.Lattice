@@ -112,7 +112,23 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             return 0;
         }
 
-        var coverage = await _writer.LoadCoverageAsync(repoId, cancellationToken).ConfigureAwait(false);
+        // Probe coverage for exactly the candidate files (changed + unchanged) with a
+        // bounded point-read, so a churn-bloated membership tree can never force an
+        // unbounded sorted-range scan past the response deadline (issue #1556). Every
+        // source id consulted downstream - SelectFilesToEmbed's unchanged-file check
+        // and the contentless mark/unmark below - is drawn from this candidate set.
+        var candidateKeys = new List<string>(changedFiles.Count + unchangedFiles.Count);
+        foreach (var file in changedFiles)
+        {
+            candidateKeys.Add(RepoContextKeys.File(repoId, file.RelativePath));
+        }
+
+        foreach (var file in unchangedFiles)
+        {
+            candidateKeys.Add(RepoContextKeys.File(repoId, file.RelativePath));
+        }
+
+        var coverage = await _writer.ProbeCoverageAsync(repoId, candidateKeys, cancellationToken).ConfigureAwait(false);
         var toEmbed = SelectFilesToEmbed(repoId, coverage, changedFiles, unchangedFiles);
         if (toEmbed.Count == 0)
         {
@@ -229,10 +245,11 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         // A symbol is (re-)embedded when its declaration changed this pass or when
         // it has no live embedding yet (a new symbol, or a back-fill of symbols
         // captured before symbol embedding existed). Presence is judged from the
-        // add-wins membership set, probed in memory, so an already-embedded,
-        // unchanged symbol is skipped without a read per symbol.
+        // add-wins membership set, probed per page with a bounded point-read so a
+        // churn-bloated membership tree can never force an unbounded sorted-range
+        // scan past the response deadline (issue #1556); an already-embedded,
+        // unchanged symbol is skipped without a payload read.
         var changed = new HashSet<string>(changedSymbolKeys, StringComparer.Ordinal);
-        var embeddedMembers = await _writer.LoadEmbeddedMembersAsync(repoId, cancellationToken).ConfigureAwait(false);
 
         var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.Symbol);
         var prefix = RepoContextKeys.SymbolsPrefix(repoId);
@@ -244,6 +261,19 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             cancellationToken.ThrowIfCancellationRequested();
             var page = await RepoContextPortability
                 .EnumerateAsync(tree, prefix, token, RepoContextPortability.DefaultPageSize, vectorExport: null, cancellationToken)
+                .ConfigureAwait(false);
+
+            var pageKeys = new List<string>(page.Records.Count);
+            foreach (var record in page.Records)
+            {
+                if (record.Value is not null)
+                {
+                    pageKeys.Add(record.Key);
+                }
+            }
+
+            var embeddedMembers = await _writer
+                .ProbeEmbeddedMembersAsync(repoId, pageKeys, cancellationToken)
                 .ConfigureAwait(false);
 
             foreach (var record in page.Records)

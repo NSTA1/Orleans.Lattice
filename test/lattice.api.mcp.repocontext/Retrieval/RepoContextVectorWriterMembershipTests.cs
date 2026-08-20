@@ -306,6 +306,172 @@ public sealed class RepoContextVectorWriterMembershipTests
             "The unit ordinal is fixed-width so lexical order matches numeric order under the shared source prefix.");
     }
 
+    [Test]
+    public async Task ProbeCoverageAsync_separates_embedded_and_contentless_over_the_candidate_set()
+    {
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+        var (writer, _) = Resolve(harness);
+
+        var embeddedKey = RepoContextKeys.File(RepoId, "src/A.cs");
+        var contentlessKey = RepoContextKeys.File(RepoId, "src/empty.cs");
+        var uncoveredKey = RepoContextKeys.File(RepoId, "src/C.cs");
+        await writer.AddMembersAsync(RepoId, new[] { embeddedKey }, Ct);
+        await writer.MarkContentlessAsync(RepoId, new[] { contentlessKey }, Ct);
+
+        var coverage = await writer.ProbeCoverageAsync(
+            RepoId, new[] { embeddedKey, contentlessKey, uncoveredKey }, Ct);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(coverage.Embedded, Does.Contain(SourceId(embeddedKey)),
+                "A real embedded candidate lands in the embedded set.");
+            Assert.That(coverage.Contentless, Does.Contain(SourceId(contentlessKey)),
+                "A contentless-marked candidate lands in the contentless set, with the marker prefix stripped.");
+            Assert.That(coverage.IsCovered(SourceId(embeddedKey)), Is.True);
+            Assert.That(coverage.IsCovered(SourceId(contentlessKey)), Is.True);
+            Assert.That(coverage.IsCovered(SourceId(uncoveredKey)), Is.False,
+                "An unembedded candidate is never falsely reported as covered.");
+        });
+    }
+
+    [Test]
+    public async Task ProbeCoverageAsync_never_reports_a_member_outside_the_candidate_set()
+    {
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+        var (writer, _) = Resolve(harness);
+
+        var candidate = RepoContextKeys.File(RepoId, "src/A.cs");
+        var offList = RepoContextKeys.File(RepoId, "src/B.cs");
+        await writer.AddMembersAsync(RepoId, new[] { candidate, offList }, Ct);
+
+        var coverage = await writer.ProbeCoverageAsync(RepoId, new[] { candidate }, Ct);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(coverage.Embedded, Does.Contain(SourceId(candidate)));
+            Assert.That(coverage.Embedded, Does.Not.Contain(SourceId(offList)),
+                "A point-probe is candidate-scoped: an embedded member not in the candidate set is never returned.");
+        });
+    }
+
+    [Test]
+    public async Task ProbeCoverageAsync_returns_empty_for_an_empty_candidate_set()
+    {
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+        var (writer, _) = Resolve(harness);
+
+        await writer.AddMembersAsync(RepoId, new[] { RepoContextKeys.File(RepoId, "src/A.cs") }, Ct);
+
+        var coverage = await writer.ProbeCoverageAsync(RepoId, Array.Empty<string>(), Ct);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(coverage.Embedded, Is.Empty, "No candidate means no probe and an empty coverage.");
+            Assert.That(coverage.Contentless, Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task ProbeEmbeddedMembersAsync_excludes_contentless_markers()
+    {
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+        var (writer, _) = Resolve(harness);
+
+        var embeddedKey = RepoContextKeys.File(RepoId, "src/A.cs");
+        var contentlessKey = RepoContextKeys.File(RepoId, "src/empty.cs");
+        await writer.AddMembersAsync(RepoId, new[] { embeddedKey }, Ct);
+        await writer.MarkContentlessAsync(RepoId, new[] { contentlessKey }, Ct);
+
+        var embedded = await writer.ProbeEmbeddedMembersAsync(
+            RepoId, new[] { embeddedKey, contentlessKey }, Ct);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(embedded, Does.Contain(SourceId(embeddedKey)), "The real embedded source is a member.");
+            Assert.That(embedded, Does.Not.Contain(SourceId(contentlessKey)),
+                "A contentless marker is not an embedded member (it carries no vector).");
+        });
+    }
+
+    [Test]
+    public async Task ProbeEmbeddedMembersAsync_matches_the_whole_set_load_over_the_candidate_subset()
+    {
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+        var (writer, _) = Resolve(harness);
+
+        var keyA = RepoContextKeys.File(RepoId, "src/A.cs");
+        var keyB = RepoContextKeys.File(RepoId, "src/B.cs");
+        await writer.AddMembersAsync(RepoId, new[] { keyA, keyB }, Ct);
+
+        var probed = await writer.ProbeEmbeddedMembersAsync(RepoId, new[] { keyA }, Ct);
+        var whole = await writer.LoadEmbeddedMembersAsync(RepoId, Ct);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(probed, Is.EquivalentTo(new[] { SourceId(keyA) }),
+                "The probe reports exactly the candidate subset's membership.");
+            Assert.That(whole, Is.EquivalentTo(new[] { SourceId(keyA), SourceId(keyB) }),
+                "The paged whole-set load still reports every live member.");
+        });
+    }
+
+    [Test]
+    public async Task ProbeCoveredSourceIdsAsync_unions_embedded_and_contentless_candidates()
+    {
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+        var (writer, _) = Resolve(harness);
+
+        var embeddedKey = RepoContextKeys.File(RepoId, "src/A.cs");
+        var contentlessKey = RepoContextKeys.File(RepoId, "src/empty.cs");
+        var uncoveredKey = RepoContextKeys.File(RepoId, "src/C.cs");
+        await writer.AddMembersAsync(RepoId, new[] { embeddedKey }, Ct);
+        await writer.MarkContentlessAsync(RepoId, new[] { contentlessKey }, Ct);
+
+        var covered = await writer.ProbeCoveredSourceIdsAsync(
+            RepoId, new[] { embeddedKey, contentlessKey, uncoveredKey }, Ct);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(covered, Does.Contain(SourceId(embeddedKey)));
+            Assert.That(covered, Does.Contain(SourceId(contentlessKey)),
+                "A contentless-marked file is covered so the gap sweep does not re-drive it.");
+            Assert.That(covered, Does.Not.Contain(SourceId(uncoveredKey)));
+        });
+    }
+
+    [Test]
+    public async Task CountEmbeddedAsync_counts_every_member_across_multiple_pages()
+    {
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+        var (writer, _) = Resolve(harness);
+
+        // Seed more members than a single scan page holds, so the paged count must
+        // walk several pages to reach the right total (issue #1556: the read is
+        // bounded per page but still complete).
+        const int count = RepoContextPortability.DefaultPageSize + 17;
+        var keys = new List<string>(count);
+        for (var i = 0; i < count; i++)
+        {
+            keys.Add(RepoContextKeys.File(RepoId, $"src/f{i}.cs"));
+        }
+
+        await writer.AddMembersAsync(RepoId, keys, Ct);
+        // A contentless marker shares the tree but must not be counted as embedded.
+        await writer.MarkContentlessAsync(RepoId, new[] { RepoContextKeys.File(RepoId, "src/empty.cs") }, Ct);
+
+        var embeddedCount = await writer.CountEmbeddedAsync(RepoId, Ct);
+
+        Assert.That(embeddedCount, Is.EqualTo(count),
+            "The paged count spans multiple pages and excludes the contentless marker.");
+    }
+
     private static async Task<List<string>> LiveVectorKeysAsync(RepoContextMcpHarness harness, string sourceKey)
     {
         var sourceId = VectorCodec.SourceId(sourceKey);
